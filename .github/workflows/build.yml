@@ -1000,11 +1000,25 @@ jobs:
           echo ""
           echo "--- Rebuilding DMG with stapled app ---"
           rm -f "$DMG"
-          hdiutil create \
-            -volname "FlySight Viewer ${FLYSIGHT_VERSION_DISPLAY}" \
-            -srcfolder "$STAGING_DIR" \
-            -ov -format UDZO \
-            "$DMG"
+          # hdiutil create intermittently fails with "Resource busy" on GitHub
+          # runners when Spotlight/XProtect is still scanning the source folder,
+          # so retry a few times before giving up
+          for attempt in 1 2 3 4 5; do
+            if hdiutil create \
+              -volname "FlySight Viewer ${FLYSIGHT_VERSION_DISPLAY}" \
+              -srcfolder "$STAGING_DIR" \
+              -ov -format UDZO \
+              "$DMG"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "ERROR: hdiutil create failed after $attempt attempts"
+              exit 1
+            fi
+            echo "hdiutil create failed (attempt $attempt), retrying in 10s..."
+            rm -f "$DMG"
+            sleep 10
+          done
           echo "DMG rebuilt: $DMG ($(ls -lh "$DMG" | awk '{print $5}'))"
 
           echo ""
