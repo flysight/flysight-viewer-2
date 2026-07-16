@@ -301,7 +301,9 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          # Must exist in the python-build-standalone release pinned in
+          # cmake/BundlePythonMacOS.cmake and cmake/BundlePythonLinux.cmake
+          python-version: '3.13.14'
 
       - name: Verify Python configuration
         shell: bash

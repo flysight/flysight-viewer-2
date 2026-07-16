@@ -86,12 +86,13 @@ endif()
 if(DEFINED FLYSIGHT_PYTHON_FULL_VERSION)
     set(BUNDLE_PYTHON_FULL_VERSION "${FLYSIGHT_PYTHON_FULL_VERSION}" CACHE STRING "Full Python version")
 else()
-    set(BUNDLE_PYTHON_FULL_VERSION "3.13.1" CACHE STRING "Full Python version")
+    set(BUNDLE_PYTHON_FULL_VERSION "3.13.14" CACHE STRING "Full Python version")
 endif()
 
 # python-build-standalone release tag
-# Check https://github.com/indygreg/python-build-standalone/releases for latest
-set(PBS_RELEASE_TAG "20241206" CACHE STRING "python-build-standalone release tag")
+# Check https://github.com/astral-sh/python-build-standalone/releases for latest
+# NOTE: This release must contain the Python version pinned in .github/workflows/build.yml
+set(PBS_RELEASE_TAG "20260623" CACHE STRING "python-build-standalone release tag")
 
 # Note: BUNDLE_PYTHON_VERSION and BUNDLE_PYTHON_FULL_VERSION define the Python to bundle.
 # These should match PYTHON_STANDALONE_PYTHON_VERSION in BundlePythonMacOS.cmake.
@@ -128,7 +129,7 @@ endif()
 # Build the download URL
 # Format: cpython-{version}+{tag}-{arch}-unknown-linux-gnu-install_only_stripped.tar.gz
 set(PBS_FILENAME "cpython-${BUNDLE_PYTHON_FULL_VERSION}+${PBS_RELEASE_TAG}-${PBS_ARCH}-unknown-linux-gnu-install_only_stripped.tar.gz")
-set(PBS_URL "https://github.com/indygreg/python-build-standalone/releases/download/${PBS_RELEASE_TAG}/${PBS_FILENAME}")
+set(PBS_URL "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE_TAG}/${PBS_FILENAME}")
 
 # =============================================================================
 # Pre-download URL validation
@@ -138,7 +139,7 @@ if(NOT BUNDLE_PYTHON_FULL_VERSION MATCHES "^3\\.(1[0-9]|[89])\\.[0-9]+$")
     message(WARNING
         "Python version ${BUNDLE_PYTHON_FULL_VERSION} may not be available in python-build-standalone.\n"
         "Supported versions are typically 3.8.x through 3.13.x.\n"
-        "Check https://github.com/indygreg/python-build-standalone/releases for available versions."
+        "Check https://github.com/astral-sh/python-build-standalone/releases for available versions."
     )
 endif()
 
@@ -152,7 +153,7 @@ endif()
 
 # Note: PBS_RELEASE_TAG must correspond to a release that includes the requested Python version
 # If the download fails with 404, check:
-# 1. The release tag exists: https://github.com/indygreg/python-build-standalone/releases
+# 1. The release tag exists: https://github.com/astral-sh/python-build-standalone/releases
 # 2. The Python version is included in that release
 # 3. The architecture is supported for that Python version
 

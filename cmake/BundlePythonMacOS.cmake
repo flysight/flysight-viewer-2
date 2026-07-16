@@ -70,20 +70,21 @@ endfunction()
 
 # Python-build-standalone release information
 # PBS_RELEASE_TAG corresponds to the release date from python-build-standalone
-set(PYTHON_STANDALONE_VERSION "20260211" CACHE STRING "python-build-standalone release date")
+# NOTE: This release must contain the Python version pinned in .github/workflows/build.yml
+set(PYTHON_STANDALONE_VERSION "20260623" CACHE STRING "python-build-standalone release date")
 
 # Use build-time Python version for consistency with pybind11
 # Fall back to default if called before find_package(Python)
 if(DEFINED FLYSIGHT_PYTHON_FULL_VERSION)
     set(PYTHON_STANDALONE_PYTHON_VERSION "${FLYSIGHT_PYTHON_FULL_VERSION}" CACHE STRING "Python version in the standalone build")
 else()
-    set(PYTHON_STANDALONE_PYTHON_VERSION "3.13.12" CACHE STRING "Python version in the standalone build")
+    set(PYTHON_STANDALONE_PYTHON_VERSION "3.13.14" CACHE STRING "Python version in the standalone build")
     message(WARNING "BundlePythonMacOS: Using default Python version. Call find_package(Python) first for consistency.")
 endif()
 
 # Base URL for python-build-standalone releases
 set(PYTHON_STANDALONE_BASE_URL
-    "https://github.com/indygreg/python-build-standalone/releases/download/${PYTHON_STANDALONE_VERSION}"
+    "https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_STANDALONE_VERSION}"
 )
 
 # NumPy version (optional pin for reproducibility)
@@ -172,7 +173,7 @@ function(bundle_python_macos)
         message(WARNING
             "Python version ${PYTHON_STANDALONE_PYTHON_VERSION} may not be available in python-build-standalone.\n"
             "Supported versions are typically 3.10.x through 3.14.x.\n"
-            "Check https://github.com/indygreg/python-build-standalone/releases for available versions."
+            "Check https://github.com/astral-sh/python-build-standalone/releases for available versions."
         )
     endif()
 
@@ -186,7 +187,7 @@ function(bundle_python_macos)
 
     # Note: PBS_RELEASE_TAG must correspond to a release that includes the requested Python version
     # If the download fails with 404, check:
-    # 1. The release tag exists: https://github.com/indygreg/python-build-standalone/releases
+    # 1. The release tag exists: https://github.com/astral-sh/python-build-standalone/releases
     # 2. The Python version is included in that release
     # 3. The architecture is supported for that Python version
 

@@ -115,7 +115,7 @@ cmake ... -DBOOST_ROOT=/usr
 
 ### Python
 
-Python 3.10+ with development headers is required for pybind11 embedding. The build downloads a matching [python-build-standalone](https://github.com/indygreg/python-build-standalone) release to bundle with the application, so the build-time Python version must be available in that project's releases.
+Python 3.10+ with development headers is required for pybind11 embedding. The build downloads a matching [python-build-standalone](https://github.com/astral-sh/python-build-standalone) release to bundle with the application, so the build-time Python version must be available in that project's releases.
 
 - **Windows:** Install from [python.org](https://www.python.org/downloads/). Check "Download debug binaries" during installation if you plan to build Debug configurations.
 - **macOS:** The system Python (`/usr/bin/python3`, typically 3.9.6) is too old — python-build-standalone no longer publishes 3.9.x builds. Install a modern Python via MacPorts (`port install python313`) or Homebrew (`brew install python`), then point CMake at it (see below).
