@@ -827,7 +827,7 @@ jobs:
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
         run: |
-          echo "=== Creating AppImage (diagnostic mode) ==="
+          echo "=== Creating AppImage ==="
 
           # Log memory and disk every 30s so resource starvation is visible
           # in the log if the runner dies
