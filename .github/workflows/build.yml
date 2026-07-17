@@ -967,12 +967,40 @@ jobs:
             --password "$MACOS_NOTARIZATION_PASSWORD" \
             --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
             --wait \
-            --timeout 30m
+            --timeout 30m \
+            2>&1 | tee "$RUNNER_TEMP/notary-submit.log"
 
-          # Staple the notarization ticket to the .app
+          # notarytool --wait exits 0 even when the submission is rejected,
+          # so check the status ourselves and surface Apple's reasons
+          SUBMISSION_ID=$(awk '/^  id: /{print $2; exit}' "$RUNNER_TEMP/notary-submit.log")
+          NOTARY_STATUS=$(awk '/^  status: /{print $2}' "$RUNNER_TEMP/notary-submit.log" | tail -1)
+          echo ""
+          echo "Submission $SUBMISSION_ID finished with status: $NOTARY_STATUS"
+          if [ "$NOTARY_STATUS" != "Accepted" ]; then
+            echo ""
+            echo "--- Notary log (rejection reasons) ---"
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
+              --password "$MACOS_NOTARIZATION_PASSWORD" \
+              --team-id "$MACOS_NOTARIZATION_TEAM_ID" || true
+            exit 1
+          fi
+
+          # Staple the notarization ticket to the .app. Freshly issued tickets
+          # can lag Apple's CDN, so retry a few times before giving up.
           echo ""
           echo "--- Stapling notarization ticket ---"
-          xcrun stapler staple "$APP_BUNDLE"
+          for attempt in 1 2 3; do
+            if xcrun stapler staple "$APP_BUNDLE"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "ERROR: stapling failed after $attempt attempts"
+              exit 1
+            fi
+            echo "Stapling failed (attempt $attempt), retrying in 30s..."
+            sleep 30
+          done
 
           # Validate
           echo ""
@@ -1056,11 +1084,38 @@ jobs:
             --password "$MACOS_NOTARIZATION_PASSWORD" \
             --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
             --wait \
-            --timeout 30m
+            --timeout 30m \
+            2>&1 | tee "$RUNNER_TEMP/notary-dmg-submit.log"
+
+          # notarytool --wait exits 0 even when the submission is rejected,
+          # so check the status ourselves and surface Apple's reasons
+          SUBMISSION_ID=$(awk '/^  id: /{print $2; exit}' "$RUNNER_TEMP/notary-dmg-submit.log")
+          NOTARY_STATUS=$(awk '/^  status: /{print $2}' "$RUNNER_TEMP/notary-dmg-submit.log" | tail -1)
+          echo ""
+          echo "Submission $SUBMISSION_ID finished with status: $NOTARY_STATUS"
+          if [ "$NOTARY_STATUS" != "Accepted" ]; then
+            echo ""
+            echo "--- Notary log (rejection reasons) ---"
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
+              --password "$MACOS_NOTARIZATION_PASSWORD" \
+              --team-id "$MACOS_NOTARIZATION_TEAM_ID" || true
+            exit 1
+          fi
 
           echo ""
           echo "=== Stapling notarization ticket ==="
-          xcrun stapler staple "$DMG"
+          for attempt in 1 2 3; do
+            if xcrun stapler staple "$DMG"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "ERROR: stapling failed after $attempt attempts"
+              exit 1
+            fi
+            echo "Stapling failed (attempt $attempt), retrying in 30s..."
+            sleep 30
+          done
 
           echo ""
           echo "=== Verifying notarization ==="
