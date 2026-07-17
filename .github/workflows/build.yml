@@ -827,29 +827,22 @@ jobs:
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
         run: |
-          echo "=== Creating AppImage ==="
+          echo "=== Creating AppImage (diagnostic mode) ==="
 
-          # Run the appimage target if available, otherwise create manually
-          if cmake --build build --target appimage 2>/dev/null; then
-            echo "AppImage created via CMake target"
-          else
-            echo "Creating AppImage manually..."
+          # Log memory and disk every 30s so resource starvation is visible
+          # in the log if the runner dies
+          ( while true; do
+              echo "[monitor] $(date -u +%H:%M:%S) $(free -m | awk '/^Mem:/ {print "mem used " $3 "/" $2 " MB"}'), disk free $(df -h / | awk 'NR==2 {print $4}')"
+              sleep 30
+            done ) &
+          MONITOR_PID=$!
+          trap 'kill $MONITOR_PID 2>/dev/null || true' EXIT
 
-            # Download appimagetool
-            APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
-            wget -q -O appimagetool "$APPIMAGETOOL_URL"
-            chmod +x appimagetool
-
-            # Create AppImage
-            APPDIR="build/install/FlySightViewer.AppDir"
-            if [ -d "$APPDIR" ]; then
-              ./appimagetool "$APPDIR" "FlySightViewer-${FLYSIGHT_VERSION_DISPLAY}-Linux-${{ matrix.arch }}.AppImage"
-              mv "FlySightViewer-${FLYSIGHT_VERSION_DISPLAY}-Linux-${{ matrix.arch }}.AppImage" build/
-            else
-              echo "ERROR: AppDir not found at $APPDIR"
-              exit 1
-            fi
-          fi
+          # Run the two halves of the 'appimage' CMake target directly so
+          # output streams live instead of being buffered by ninja, and
+          # stderr is not discarded
+          cmake --install build
+          bash build/create_appimage.sh
 
           echo "AppImage creation complete"
           ls -la build/*.AppImage || true

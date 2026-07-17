@@ -257,9 +257,24 @@ export APPIMAGE_EXTRACT_AND_RUN=1
 # Remove old AppImage if it exists
 rm -f "${OUTPUT_PATH}"
 
-# Run appimagetool
+# Record which appimagetool build we are running (continuous is a moving tag)
+echo "appimagetool version:"
+timeout 2m "${APPIMAGETOOL}" --version || echo "(--version failed with exit code $?)"
+
+# Run appimagetool with a hard timeout so a hang fails the step with logs
+# intact instead of starving the runner until it loses communication
 echo "Running appimagetool..."
-"${APPIMAGETOOL}" "${APPDIR}" "${OUTPUT_PATH}"
+set +e
+timeout 15m "${APPIMAGETOOL}" "${APPDIR}" "${OUTPUT_PATH}"
+APPIMAGETOOL_RC=$?
+set -e
+if [ "${APPIMAGETOOL_RC}" -eq 124 ]; then
+    echo "ERROR: appimagetool timed out after 15 minutes"
+    exit 1
+elif [ "${APPIMAGETOOL_RC}" -ne 0 ]; then
+    echo "ERROR: appimagetool failed with exit code ${APPIMAGETOOL_RC}"
+    exit 1
+fi
 
 # Verify output
 if [ -f "${OUTPUT_PATH}" ]; then
