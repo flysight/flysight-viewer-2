@@ -11,6 +11,7 @@ A desktop application for viewing and analyzing FlySight GPS data with advanced 
   - [Third-Party Only Build](#third-party-only-build)
   - [Application Only Build](#application-only-build)
   - [Build Options](#build-options)
+  - [Running the Tests](#running-the-tests)
   - [Build Output Locations](#build-output-locations)
 - [Clean Targets](#clean-targets)
   - [Individual Clean Targets](#individual-clean-targets)
@@ -212,6 +213,7 @@ cmake --build build
 | `FLYSIGHT_BUILD_APP` | `ON` | Build the main FlySight Viewer application |
 | `FLYSIGHT_THIRD_PARTY_ONLY` | `OFF` | Build only third-party dependencies (automatically disables app build) |
 | `GOOGLE_MAPS_API_KEY` | (none) | Google Maps JavaScript API key for the map view |
+| `FLYSIGHT_BUILD_TESTS` | `OFF` | Build the Qt Test suite under `tests/`; run with CTest |
 
 **Path Variables:**
 
@@ -221,6 +223,28 @@ cmake --build build
 | `GEOGRAPHIC_INSTALL_DIR` | `<third-party>/GeographicLib-install` | GeographicLib installation directory |
 | `KDDW_INSTALL_DIR` | `<third-party>/KDDockWidgets-install` | KDDockWidgets installation directory |
 | `BOOST_ROOT` | Platform-dependent | Boost root directory |
+
+### Running the Tests
+
+The test suite is opt-in. Add `-DFLYSIGHT_BUILD_TESTS=ON` to any of the configure commands above, build as usual, then run CTest against the application build tree:
+
+**Windows:**
+
+```bash
+cmake -G "Visual Studio 17 2022" -A x64 -B build -S . -DCMAKE_PREFIX_PATH="C:/Qt/6.9.3/msvc2022_64" -DGOOGLE_MAPS_API_KEY="your-api-key" -DFLYSIGHT_BUILD_THIRD_PARTY=OFF -DFLYSIGHT_BUILD_TESTS=ON
+cmake --build build --config Release
+ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure
+```
+
+**macOS / Linux:**
+
+```bash
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DGOOGLE_MAPS_API_KEY="your-api-key" -DFLYSIGHT_BUILD_THIRD_PARTY=OFF -DFLYSIGHT_BUILD_TESTS=ON
+cmake --build build
+ctest --test-dir build/FlySightViewer-build --output-on-failure
+```
+
+The tests use temporary directories and isolated settings; they never touch your preferences or logbook. On Windows only the Release configuration is supported. See [tests/README.md](tests/README.md) for running a single test, the isolation guarantees, and how to write a new test.
 
 ### Build Output Locations
 
@@ -296,7 +320,18 @@ flysight-viewer-2/
 │   ├── fix_macos_rpaths.sh                # Post-install rpath repair for macOS bundles
 │   └── diagnose_macos_bundle.sh           # Diagnostic tool for macOS bundle issues
 ├── src/
-│   └── CMakeLists.txt                     # Main application build configuration
+│   └── CMakeLists.txt                     # Main application build configuration; defines the
+│                                          #   flysight_model library (session data + calculation
+│                                          #   engine, Qt Core only, also linked by the Python
+│                                          #   bridge), the flysight_core library (import/export,
+│                                          #   logbook, session model, registries, calculations;
+│                                          #   Qt Core + Gui, no UI), and the FlySightViewer
+│                                          #   executable (UI, docks, plugin host)
+├── tests/
+│   ├── CMakeLists.txt                     # Test targets (built when FLYSIGHT_BUILD_TESTS=ON)
+│   ├── README.md                          # How to build, run, and write tests
+│   ├── support/                           # Shared test support: isolation, fixture builders
+│   └── tst_*.cpp                          # One Qt Test class per executable, linked to flysight_core
 ├── third-party/
 │   ├── CMakeLists.txt                     # Standalone third-party build
 │   ├── GeographicLib/                     # GeographicLib source

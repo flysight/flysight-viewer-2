@@ -3,7 +3,6 @@
 #include <algorithm>
 
 #include <QDateTime>
-#include <QMessageBox>
 #include <QTimeZone>
 
 #include "attributeregistry.h"

@@ -25,6 +25,10 @@ public:
     // Returns parsed sessions if fallback CSV scan was used, empty list otherwise.
     QList<SessionData> initialize();
 
+    // Drops all in-memory index state so the next initialize() re-reads the current
+    // logbook folder. Used by tests to simulate an application restart.
+    void reset();
+
     // Writes a session to disk as a UUID-based .csv file; returns true on success
     bool saveSession(const SessionData& session);
 

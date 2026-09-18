@@ -19,6 +19,11 @@
 #   cmake -G "Visual Studio 17 2022" -A x64 -B build -S . -DFLYSIGHT_BUILD_THIRD_PARTY=OFF
 #   cmake --build build --config Release
 #
+#   # Also build the test suite, then run it (see tests/README.md):
+#   cmake -G "Visual Studio 17 2022" -A x64 -B build -S . -DFLYSIGHT_BUILD_TESTS=ON
+#   cmake --build build --config Release
+#   ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure
+#
 # =============================================================================
 
 cmake_minimum_required(VERSION 3.18)
@@ -59,10 +64,15 @@ endif()
 #   - When ON, automatically disables FLYSIGHT_BUILD_APP
 #   - Equivalent to: -DFLYSIGHT_BUILD_THIRD_PARTY=ON -DFLYSIGHT_BUILD_APP=OFF
 #
+# FLYSIGHT_BUILD_TESTS: Build the Qt Test suite under tests/ as part of the application build
+#   - Forwarded to the application project (src/CMakeLists.txt), which owns the option
+#   - Run with: ctest --test-dir <build>/FlySightViewer-build -C Release --output-on-failure
+#
 
 option(FLYSIGHT_BUILD_THIRD_PARTY "Build third-party dependencies" ON)
 option(FLYSIGHT_BUILD_APP "Build the main FlySight Viewer application" ON)
 option(FLYSIGHT_THIRD_PARTY_ONLY "Build only third-party dependencies (skip application)" OFF)
+option(FLYSIGHT_BUILD_TESTS "Build the FlySight Viewer test suite" OFF)
 
 # Handle option interaction: THIRD_PARTY_ONLY implies no app build
 if(FLYSIGHT_THIRD_PARTY_ONLY)
@@ -144,6 +154,9 @@ if(FLYSIGHT_BUILD_APP)
         -DTHIRD_PARTY_DIR=${THIRD_PARTY_DIR}
         -DGEOGRAPHIC_ROOT=${GEOGRAPHIC_INSTALL_DIR}
         -DKDDW_ROOT=${KDDW_INSTALL_DIR}
+        # Forwarded unconditionally so that turning the option back OFF also
+        # reaches the inner cache.
+        -DFLYSIGHT_BUILD_TESTS=${FLYSIGHT_BUILD_TESTS}
     )
     if(CMAKE_PREFIX_PATH)
         list(APPEND _APP_CMAKE_ARGS "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}")
@@ -214,6 +227,7 @@ message(STATUS "Build Options:")
 message(STATUS "  FLYSIGHT_BUILD_THIRD_PARTY: ${FLYSIGHT_BUILD_THIRD_PARTY}")
 message(STATUS "  FLYSIGHT_BUILD_APP:         ${FLYSIGHT_BUILD_APP}")
 message(STATUS "  FLYSIGHT_THIRD_PARTY_ONLY:  ${FLYSIGHT_THIRD_PARTY_ONLY}")
+message(STATUS "  FLYSIGHT_BUILD_TESTS:       ${FLYSIGHT_BUILD_TESTS}")
 message(STATUS "")
 message(STATUS "Path Variables:")
 message(STATUS "  THIRD_PARTY_DIR:       ${THIRD_PARTY_DIR}")

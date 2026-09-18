@@ -10,7 +10,6 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QMessageBox>
 #include <QRegularExpression>
 #include <QStringTokenizer>
 #include <QTextStream>

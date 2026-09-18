@@ -37,6 +37,10 @@ endif()
 #
 # Build configuration variables:
 #   GOOGLE_MAPS_API_KEY  - Google Maps JavaScript API key (CACHE STRING)
+#   FLYSIGHT_BUILD_TESTS - Build the Qt Test suite under ../tests and register
+#                          it with CTest (option, default OFF; defined next to
+#                          the add_subdirectory call near the end of the
+#                          target definitions)
 #
 # These are defined as CACHE PATH/STRING variables at the start of this file.
 # Do not redefine these variables elsewhere - CMake's cache ensures
@@ -94,7 +98,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/../cmake/BoostDiscovery.cmake")
 
 # ─────────────────────────────── Qt
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Widgets PrintSupport QuickWidgets Quick Qml WebEngineWidgets WebChannel Multimedia MultimediaWidgets)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets PrintSupport QuickWidgets Quick Qml WebEngineWidgets WebChannel Multimedia MultimediaWidgets)
 
 if(QT_VERSION_MAJOR GREATER_EQUAL 6)
   # Nice-to-have; safe to omit if you prefer older style
@@ -236,19 +240,62 @@ add_library(flysight_model STATIC
   sessiondata.cpp            sessiondata.h
   dependencymanager.cpp      dependencymanager.h
   calculatedvalue.cpp        calculatedvalue.h
+  dependencykey.h
 )
 target_include_directories(flysight_model PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(flysight_model PUBLIC Qt${QT_VERSION_MAJOR}::Core)
+
+# ─────────────────────────────── C++ core library
+# Everything non-UI that sits on top of flysight_model: import/export, logbook,
+# session model, registries, unit conversion, and the built-in calculations.
+# It needs Qt Core + Gui (QColor) only, so test executables can link it without
+# Widgets, WebEngine, KDDockWidgets, QCustomPlot, Multimedia, or Python.
+# flysight_model stays separate because flysight_cpp_bridge links it and must
+# not acquire these dependencies.
+add_library(flysight_core STATIC
+  dataimporter.cpp           dataimporter.h
+  dataexporter.cpp           dataexporter.h
+  logbookmanager.cpp         logbookmanager.h
+  logbookcolumn.cpp          logbookcolumn.h
+  sessionmodel.cpp           sessionmodel.h
+  idlescheduler.cpp          idlescheduler.h
+  attributeregistry.cpp      attributeregistry.h
+  markerregistry.cpp         markerregistry.h
+  plotregistry.cpp           plotregistry.h
+  momentmodel.cpp            momentmodel.h
+  altitudemarkerfeature.cpp  altitudemarkerfeature.h
+  # Header-only Q_OBJECT singleton: must be listed in exactly one target so
+  # AUTOMOC generates its meta-object once.
+  preferences/preferencesmanager.h
+  preferences/preferencekeys.h
+  units/unitdefinitions.h
+  units/unitconversion.h
+  units/unitconverter.cpp    units/unitconverter.h
+  calculations/calculatedvalueregistry.cpp    calculations/calculatedvalueregistry.h
+  calculations/attributecalculations.cpp      calculations/attributecalculations.h
+  calculations/attributeregistration.cpp     calculations/attributeregistration.h
+  calculations/gnsscalculations.cpp           calculations/gnsscalculations.h
+  calculations/imucalculations.cpp            calculations/imucalculations.h
+  calculations/magcalculations.cpp            calculations/magcalculations.h
+  calculations/barocalculations.cpp           calculations/barocalculations.h
+  calculations/humcalculations.cpp            calculations/humcalculations.h
+  calculations/vbatcalculations.cpp           calculations/vbatcalculations.h
+  calculations/timecalculations.cpp           calculations/timecalculations.h
+  calculations/simplificationcalculations.cpp calculations/simplificationcalculations.h
+  calculations/wspcalculations.cpp            calculations/wspcalculations.h
+  calculations/spcalculations.cpp             calculations/spcalculations.h
+  calculations/derivativehelper.cpp            calculations/derivativehelper.h
+  calculations/isadensity.cpp                  calculations/isadensity.h
+)
+target_link_libraries(flysight_core
+  PUBLIC  flysight_model Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui
+  PRIVATE ${GeographicLib_LIBRARIES} Boost::boost)
 
 # ─────────────────────────────── application
 set(PROJECT_SOURCES
   main.cpp
   mainwindow.cpp             mainwindow.h          mainwindow.ui
-  sessionmodel.h             sessionmodel.cpp
-  idlescheduler.h            idlescheduler.cpp
   plotviewsettingsmodel.cpp  plotviewsettingsmodel.h
-  dataimporter.cpp           dataimporter.h
-  dataexporter.cpp           dataexporter.h
   plottool/pantool.h
   plottool/plottool.h
   plottool/selecttool.cpp    plottool/selecttool.h
@@ -259,8 +306,6 @@ set(PROJECT_SOURCES
   plottool/setcoursetool.h   plottool/setcoursetool.cpp
   plottool/measuretool.h     plottool/measuretool.cpp
   measuremodel.h
-  preferences/preferencesmanager.h
-  preferences/preferencekeys.h
   preferences/preferencesdialog.h  preferences/preferencesdialog.cpp
   preferences/generalsettingspage.h preferences/generalsettingspage.cpp
   preferences/importsettingspage.h  preferences/importsettingspage.cpp
@@ -273,28 +318,18 @@ set(PROJECT_SOURCES
   preferences/plotssettingspage.h  preferences/plotssettingspage.cpp
   preferences/zoomsettingspage.h   preferences/zoomsettingspage.cpp
   preferences/aerodynamicssettingspage.h preferences/aerodynamicssettingspage.cpp
-  units/unitdefinitions.h
-  units/unitconverter.h            units/unitconverter.cpp
-  dependencykey.h
   crosshairmanager.h         crosshairmanager.cpp
   graphinfo.h
   plotutils.cpp              plotutils.h
   pluginhost.h               pluginhost.cpp
-  plotregistry.cpp           plotregistry.h
-  attributeregistry.cpp      attributeregistry.h
-  logbookcolumn.cpp          logbookcolumn.h
   profile.cpp                profile.h
-  logbookmanager.cpp         logbookmanager.h
   profilemanager.cpp         profilemanager.h
   profilestatebridge.cpp     profilestatebridge.h
   manageprofilesdialog.cpp   manageprofilesdialog.h
   python_output_redirector.h
   plotmodel.cpp              plotmodel.h
   plotrangemodel.cpp         plotrangemodel.h
-  markerregistry.cpp         markerregistry.h
   markermodel.cpp            markermodel.h
-  momentmodel.cpp            momentmodel.h
-  altitudemarkerfeature.cpp  altitudemarkerfeature.h
   ui/docks/AppContext.h
   ui/docks/DockFeature.h
   ui/docks/DockRegistry.h    ui/docks/DockRegistry.cpp
@@ -323,21 +358,6 @@ set(PROJECT_SOURCES
   ui/docks/map/MapPreferencesBridge.h    ui/docks/map/MapPreferencesBridge.cpp
   ui/docks/plot/PlotDockFeature.h    ui/docks/plot/PlotDockFeature.cpp
   ui/docks/plot/PlotWidget.h    ui/docks/plot/PlotWidget.cpp
-  calculations/calculatedvalueregistry.cpp    calculations/calculatedvalueregistry.h
-  calculations/attributecalculations.cpp      calculations/attributecalculations.h
-  calculations/attributeregistration.cpp     calculations/attributeregistration.h
-  calculations/gnsscalculations.cpp           calculations/gnsscalculations.h
-  calculations/imucalculations.cpp            calculations/imucalculations.h
-  calculations/magcalculations.cpp            calculations/magcalculations.h
-  calculations/barocalculations.cpp           calculations/barocalculations.h
-  calculations/humcalculations.cpp            calculations/humcalculations.h
-  calculations/vbatcalculations.cpp           calculations/vbatcalculations.h
-  calculations/timecalculations.cpp           calculations/timecalculations.h
-  calculations/simplificationcalculations.cpp calculations/simplificationcalculations.h
-  calculations/wspcalculations.cpp            calculations/wspcalculations.h
-  calculations/spcalculations.cpp             calculations/spcalculations.h
-  calculations/derivativehelper.cpp            calculations/derivativehelper.h
-  calculations/isadensity.cpp                  calculations/isadensity.h
   resources.qrc
 )
 
@@ -380,6 +400,7 @@ qt_add_resources(FlySightViewer profile_resources
 )
 
 target_link_libraries(FlySightViewer PRIVATE
+  flysight_core
   flysight_model
   qcustomplot
   ${GeographicLib_LIBRARIES}
@@ -420,6 +441,18 @@ flysight_msvc_fix_python_debug_autolink(flysight_cpp_bridge)
 
 if(QT_VERSION_MAJOR EQUAL 6)
   qt_finalize_executable(FlySightViewer)
+endif()
+
+# ─────────────────────────────── tests (opt-in)
+# tests/ lives outside this source tree, hence the explicit binary directory.
+# It is added from here (not as a standalone project) so that flysight_core,
+# pybind11::embed, Python::Python and flysight_cpp_bridge are all in scope.
+# enable_testing() must be called at the top of this build tree or
+# `ctest --test-dir <build>` finds nothing.
+option(FLYSIGHT_BUILD_TESTS "Build the FlySight Viewer test suite" OFF)
+if(FLYSIGHT_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../tests" "${CMAKE_BINARY_DIR}/tests")
 endif()
 
 # ─────────────────────────────── install rules

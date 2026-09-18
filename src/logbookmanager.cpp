@@ -223,6 +223,21 @@ QList<SessionData> LogbookManager::initialize()
 }
 
 // ============================================================================
+// Reset
+// ============================================================================
+
+void LogbookManager::reset()
+{
+    // In-memory state only; no file is touched.
+    m_sessionIdToUuid.clear();
+    m_lastAccessed.clear();
+    m_cachedValues.clear();
+    m_scannedUuids.clear();
+    m_hasIndexData = false;
+    m_deferredScan = false;
+}
+
+// ============================================================================
 // Index data accessors
 // ============================================================================
 
