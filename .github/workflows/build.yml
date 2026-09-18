@@ -491,6 +491,7 @@ jobs:
             ${FLYSIGHT_VERSION:+-DFLYSIGHT_VERSION_OVERRIDE="$FLYSIGHT_VERSION"} \
             -DFLYSIGHT_CODESIGN_IDENTITY="${FLYSIGHT_CODESIGN_IDENTITY:--}" \
             -DFLYSIGHT_CODESIGN_ENTITLEMENTS="${GITHUB_WORKSPACE}/src/FlySightViewer.entitlements" \
+            -DFLYSIGHT_BUILD_TESTS=ON \
             $CMAKE_EXTRA_ARGS
 
       # =========================================================================
@@ -531,6 +532,10 @@ jobs:
         shell: bash
         run: |
           cmake --build build --parallel --config Release
+
+      - name: Run tests
+        shell: bash
+        run: ctest --test-dir build --output-on-failure -C Release
 
       # =========================================================================
       # Task 4.7: Implement Installation and Deployment Steps
