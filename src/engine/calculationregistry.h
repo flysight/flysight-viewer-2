@@ -1,0 +1,130 @@
+#ifndef FLYSIGHT_ENGINE_CALCULATIONREGISTRY_H
+#define FLYSIGHT_ENGINE_CALCULATIONREGISTRY_H
+
+#include <functional>
+#include <memory>
+#include <optional>
+
+#include <QHash>
+#include <QList>
+#include <QString>
+
+#include "calctypes.h"
+#include "calculationdescriptor.h"
+#include "sessionstate.h"
+
+namespace FlySight {
+
+class CalculationEngine;
+
+/// What the engine consumes: one concrete calculation, either a plain
+/// registration or one instance of a family.
+struct CalculationInstance {
+    QString       instanceId;       ///< id, or "<familyId>#<instanceKey>"
+    CalculationId registrationId;   ///< id or familyId (run counters, unregister)
+    std::shared_ptr<const CalculationDescriptor> descriptor;   ///< descriptor->id == instanceId
+    bool          sourceConversion = false;
+};
+
+/// Describes one successful register / unregister to the enrolled engines.
+struct RegistryChange {
+    enum class Kind { Calculation, Family, SourceConversion };
+
+    CalculationId registrationId;
+    bool added = true;
+    Kind kind = Kind::Calculation;
+    QList<DependencyKey> outputs;   ///< Calculation: its explicit output names
+    /// Family / SourceConversion: the family's instantiate function
+    std::function<std::optional<CalculationDescriptor>(const DependencyKey &name)> instantiate;
+};
+
+/// Global, session-free registrations in deterministic order.
+///
+/// The registry holds no per-session data and never runs a calculation. It
+/// knows which engines (one per loaded session) are using it so that registry
+/// and preference changes can invalidate affected results in every session.
+///
+/// Order: every successful registration takes the next value of an increasing
+/// sequence; candidates for a name are tried in that order. There are no
+/// priorities. Re-registering after unregister() goes to the end.
+///
+/// A registry must outlive the engines bound to it. Single-threaded.
+class CalculationRegistry {
+public:
+    /// Process-wide registry used by the application.
+    static CalculationRegistry &instance();
+
+    CalculationRegistry();      ///< tests construct private registries
+    ~CalculationRegistry();     ///< asserts that no engine is still enrolled
+    Q_DISABLE_COPY_MOVE(CalculationRegistry)
+
+    // Each returns false, warns, and registers nothing when the registration is
+    // invalid: empty id; '#' in the id; id already registered (as any kind);
+    // no outputs; duplicate outputs; null compute / instantiate; an output that
+    // is also one of the calculation's own Attribute / Measurement inputs; a
+    // SourceMeasurement / SourceUnit input on anything that is not a source
+    // conversion; or a call made while an engine is evaluating.
+    bool registerCalculation(const CalculationDescriptor &d);
+    bool registerFamily(const CalculationFamily &f);
+    /// Source conversions are the ordered candidates for a measurement that has
+    /// source data. `instantiate` receives DependencyKey::measurement(sensor, name).
+    bool registerSourceConversion(const CalculationFamily &f);
+    bool unregister(const CalculationId &id);   ///< calculation, family, or conversion family
+
+    bool contains(const CalculationId &id) const;
+    bool hasCandidateFor(const DependencyKey &name) const;
+    /// Plain calculations declaring `name` and family instances accepting it,
+    /// in registration order. Source conversions are not included.
+    QList<CalculationInstance> candidatesFor(const DependencyKey &name) const;
+    QList<CalculationInstance> sourceConversionsFor(const QString &sensor, const QString &name) const;
+    bool hasSourceConversions() const;
+    /// A plain calculation by id, or - with `instanceOutput` - the family
+    /// instance that produces that name.
+    std::optional<CalculationInstance> instance(const CalculationId &id,
+                                                const DependencyKey &instanceOutput = DependencyKey::attribute(QString())) const;
+
+    void setPreferenceProvider(const IPreferenceProvider *p);   ///< not owned; may be null
+    const IPreferenceProvider *preferenceProvider() const;
+    /// Broadcast to every enrolled engine. Call after the preference changed.
+    void notifyPreferenceChanged(const QString &key);
+
+    // Introspection used by tests
+    int enrolledEngineCount() const { return int(m_engines.size()); }
+    int memoizedInstanceCount(const CalculationId &familyId) const;
+
+private:
+    friend class CalculationEngine;
+
+    enum class EntryKind { Calculation, Family, SourceConversion };
+
+    struct Entry {
+        quint64 sequence = 0;
+        EntryKind kind = EntryKind::Calculation;
+        CalculationId id;
+        std::shared_ptr<const CalculationDescriptor> descriptor;    // Calculation
+        CalculationFamily family;                                   // Family / SourceConversion
+        // Registration-derived, not session state: instances by instance key.
+        mutable QHash<QString, CalculationInstance> memo;
+    };
+
+    void enrol(CalculationEngine *e);       // called by the engine constructor
+    void withdraw(CalculationEngine *e);    // called by the engine destructor
+    void evaluationStarted() { ++m_activeEvaluations; }
+    void evaluationFinished() { --m_activeEvaluations; }
+
+    bool checkMutable(const char *what, const CalculationId &id) const;
+    bool validate(const CalculationDescriptor &d, bool allowSourceInputs, const QString &label) const;
+    bool addFamily(const CalculationFamily &f, EntryKind kind);
+    std::optional<CalculationInstance> instantiate(const Entry &entry, const DependencyKey &name) const;
+    void broadcast(const RegistryChange &change);
+
+    QList<Entry> m_entries;                 // in sequence order
+    quint64 m_nextSequence = 1;
+    QList<CalculationEngine *> m_engines;
+    const IPreferenceProvider *m_preferenceProvider = nullptr;
+    int m_activeEvaluations = 0;
+};
+
+} // namespace FlySight
+
+#endif // FLYSIGHT_ENGINE_CALCULATIONREGISTRY_H

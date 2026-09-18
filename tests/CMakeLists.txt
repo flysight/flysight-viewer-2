@@ -31,6 +31,7 @@ set(FLYSIGHT_SRC_DIR "${CMAKE_CURRENT_LIST_DIR}/../src")
 add_library(flysight_test_support STATIC
   support/testenvironment.cpp  support/testenvironment.h
   support/fixturebuilder.cpp   support/fixturebuilder.h
+  support/fakesessionstate.cpp support/fakesessionstate.h
   support/testmain.h
 )
 target_include_directories(flysight_test_support PUBLIC "${CMAKE_CURRENT_LIST_DIR}/support")
@@ -93,3 +94,9 @@ endfunction()
 # ─────────────────────────────── tests
 flysight_add_test(tst_harness SOURCES tst_harness.cpp)
 flysight_add_test(tst_smoke   SOURCES tst_smoke.cpp)
+
+# Calculation engine (synthetic calculations against a fake session state)
+flysight_add_test(tst_calcregistry      SOURCES tst_calcregistry.cpp)
+flysight_add_test(tst_calcengine        SOURCES tst_calcengine.cpp)
+flysight_add_test(tst_calcengine_safety SOURCES tst_calcengine_safety.cpp)
+flysight_add_test(tst_calcengine_oracle SOURCES tst_calcengine_oracle.cpp)

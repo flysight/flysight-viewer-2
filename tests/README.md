@@ -16,6 +16,15 @@ packages are the same whether or not the option is set.
 |------|--------|
 | `tst_harness` | The test-support code itself: settings and logbook isolation, fixture builders |
 | `tst_smoke` | Baseline characterization of importer, session, calculations, exporter, logbook, and model |
+| `tst_calcregistry` | Calculation engine: value types, registration order and validation, family instances, private registries |
+| `tst_calcengine` | Calculation engine: resolution, caching, dependency recording, invalidation across sessions, explicit policy, preferences, families, measurement layers |
+| `tst_calcengine_safety` | Calculation engine: nested scopes, cycles, exceptions, re-entrancy guards |
+| `tst_calcengine_oracle` | Calculation engine: randomized (seeded) sequences compared against a fresh evaluation |
+
+The `tst_calc*` tests drive `src/engine/` with synthetic calculations against
+`FakeSessionState` / `FakePreferenceProvider` (`support/fakesessionstate.h`).
+Each builds its own `CalculationRegistry`; none registers anything in
+`CalculationRegistry::instance()`.
 
 ## Configure / build / run
 

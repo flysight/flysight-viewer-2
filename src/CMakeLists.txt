@@ -241,6 +241,15 @@ add_library(flysight_model STATIC
   dependencymanager.cpp      dependencymanager.h
   calculatedvalue.cpp        calculatedvalue.h
   dependencykey.h
+
+  # Calculation engine (Qt Core only; not yet used by the application)
+  engine/calctypes.h
+  engine/sessionstate.h
+  engine/calculationdescriptor.h
+  engine/calculationresult.cpp     engine/calculationresult.h
+  engine/evaluationcontext.cpp     engine/evaluationcontext.h
+  engine/calculationregistry.cpp   engine/calculationregistry.h
+  engine/calculationengine.cpp     engine/calculationengine.h
 )
 target_include_directories(flysight_model PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(flysight_model PUBLIC Qt${QT_VERSION_MAJOR}::Core)
