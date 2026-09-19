@@ -359,7 +359,8 @@ void SessionModelEngineTest::mergeEmitsDependencyChanged()
     // Make the fixture's IMU data differ, and have a dependent cached.
     SessionData sensorOnly = DescentFixture::loadSensorOnly("s1");
     sensorOnly.setMeasurement("IMU", "wx", {30.0, 60.0, 90.0});
-    QCOMPARE(session("s1").getMeasurement("IMU", "wTotal").value(0), 5.0);
+    // The fixture declares no SCHEMA_VER: derived from the legacy-corrected gyro, 5 x 1.14688.
+    QVERIFY(qAbs(session("s1").getMeasurement("IMU", "wTotal").value(0) - 5.7344) <= 1e-9);
 
     QSignalSpy spy(m_model.get(), &SessionModel::dependencyChanged);
     m_model->mergeSessions({sensorOnly});
@@ -369,8 +370,8 @@ void SessionModelEngineTest::mergeEmitsDependencyChanged()
     QVERIFY(spyHasMeasurement(spy, "s1", "IMU", "wTotal"));
     QVERIFY(!spyHasMeasurement(spy, "s2", "IMU", "wx"));
 
-    // sqrt(30^2 + 4^2)
-    QVERIFY(qAbs(session("s1").getMeasurement("IMU", "wTotal").value(0) - 30.265491900843113) <= 1e-12);
+    // sqrt(30^2 + 4^2) x 1.14688 = 30.265491900843113 x 1.14688
+    QVERIFY(qAbs(session("s1").getMeasurement("IMU", "wTotal").value(0) - 34.710887351239) <= 1e-9);
 }
 
 // Rows move when the model sorts; the listener travels with the session's

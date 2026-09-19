@@ -115,6 +115,9 @@ void BuiltinsEngineTest::cleanup()
 void BuiltinsEngineTest::inventory()
 {
     const QStringList expected = {
+        // the conversion layer (source conversions, in candidate order)
+        "builtin.conversion.schema",
+        "builtin.conversion.default",
         // attributecalculations
         "builtin.attr.analysisRange",
         "builtin.attr.exitTime",
@@ -195,10 +198,13 @@ void BuiltinsEngineTest::inventory()
 
     const QStringList ids = m_world->registry.registeredIds();
     QCOMPARE(ids, expected);
-    QCOMPARE(ids.size(), 68);   // 67 calculations + 1 family
+    QCOMPARE(ids.size(), 70);   // 2 conversion families + 67 calculations + 1 family
 
+    const QStringList families = {"builtin.conversion.schema", "builtin.conversion.default",
+                                  "builtin.interpolation"};
     for (const QString &id : ids)
-        QCOMPARE(m_world->registry.isFamily(id), id == QStringLiteral("builtin.interpolation"));
+        QCOMPARE(m_world->registry.isFamily(id), families.contains(id));
+    QVERIFY(m_world->registry.hasSourceConversions());
 
     // Registering the built-ins touches no process-wide registry, so it can be
     // repeated on any number of private registries.

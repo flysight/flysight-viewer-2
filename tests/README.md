@@ -15,7 +15,7 @@ packages are the same whether or not the option is set.
 | Test | Covers |
 |------|--------|
 | `tst_harness` | The test-support code itself: settings and logbook isolation, fixture builders |
-| `tst_smoke` | Baseline characterization of importer, session, calculations, exporter, logbook, and model |
+| `tst_smoke` | End-to-end characterization of importer, session, calculations, exporter, logbook, and model (started as a pin of v2026.04.1; expectations a phase changed on purpose were rewritten with that phase) |
 | `tst_calcregistry` | Calculation engine: value types, registration order and validation, family instances, private registries |
 | `tst_calcengine` | Calculation engine: resolution, caching, dependency recording, invalidation across sessions, explicit policy, preferences, families, measurement layers |
 | `tst_calcengine_safety` | Calculation engine: nested scopes, cycles, exceptions, re-entrancy guards |
@@ -24,6 +24,10 @@ packages are the same whether or not the option is set.
 | `tst_builtins_engine` | The built-ins on a private registry and `FakeSessionState`: golden values, registration inventory, declared inputs only, multi-output groups, candidate order, the declared preference, interpolation family, altitude descriptor |
 | `tst_session_engine` | `SessionData` on the engine with the real built-ins: run-once, invalidation, candidate replacement, overrides, preferences, the fresh-evaluation oracle, copy/move semantics |
 | `tst_session_model_engine` | `SessionModel` + `AltitudeMarkerManager`: registry and preference broadcasts reaching `dependencyChanged`, coalescing, merges, rows surviving sort |
+| `tst_schema_units` | The two tables behind the conversion layer: the schema table (`SCHEMA_VER` validation, which measurements each version corrects) and the unit normalization table (silent, identity for unknown text) |
+| `tst_conversion_engine` | The conversion families on a private registry and `FakeSessionState`: legacy gyro correction, `SCHEMA_VER` 1 / 2 / absent / unsupported, unit normalization, schema-then-unit order, buffer sharing for identity conversions, the dependencies that make the choice follow the attribute |
+| `tst_importer` | `DataImporter`: data stored exactly as recorded, nothing stamped, `SCHEMA_VER` and structural errors rejected without touching the target session, `$VAR` values kept verbatim, malformed rows skipped with one summary warning, FS1, custom columns, CRLF |
+| `tst_source_layer` | Session-level acceptance for the source / effective split on real `SessionData`, importer, exporter, logbook and model: acceptance 1, 2, 4, 6 (load), 16; enumeration and source access never compute; lazy conversion; buffer sharing; exporter and merge use the source layer |
 
 The `tst_calc*` tests drive `src/engine/` with synthetic calculations against
 `FakeSessionState` / `FakePreferenceProvider` (`support/fakesessionstate.h`).
@@ -39,6 +43,18 @@ others were derived by hand. `tst_builtins_engine` uses private registries;
 the process-wide registry through `TestEnvironment::registerBuiltIns()`, and
 must leave it as they found it (altitude-marker registrations are removed in
 `cleanup()`).
+
+Ordinary reads (`getMeasurement`) return *effective* values: the recorded data
+passed through the conversion layer, which `registerBuiltIns()` registers along
+with the other built-ins. A test that asserts effective values must therefore
+call `TestEnvironment::registerBuiltIns()`; without it no conversion family
+exists and effective == source. Corrected gyro values are compared with an
+absolute tolerance of `1e-9` (`62.5 * 1.14688` is not the double nearest
+`71.68`); values whose conversion is exact (`1 g`, `1 gauss`, identities) are
+compared with `==`. Test helpers that move data between sessions
+(`DescentFixture::load`, `copyStoredState`) use the source accessors, so the
+copies carry the data as recorded. Tests that count warnings install their
+message handler after `registerBuiltIns()`.
 
 ## Configure / build / run
 

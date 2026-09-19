@@ -3,85 +3,59 @@
 
 #include <QHash>
 #include <QString>
-#include <QVector>
-#include <QDebug>
 
 namespace FlySight {
 
 /**
- * @brief Specification for converting a unit to SI.
+ * @brief How one recorded unit text maps onto Viewer's internal unit.
  *
- * Conversion formula: SI_value = raw_value * scale + offset
+ * internal_value = recorded_value * scale + offset
  */
 struct ConversionSpec {
-    double scale;      // raw * scale + offset = SI
+    double scale;      // recorded * scale + offset = internal
     double offset;     // for affine transforms (unused for current units)
-    QString siUnit;    // resulting SI unit (for debugging/logging)
+    QString siUnit;    // normalized label: the unit the converted values are expressed in
 };
 
 /**
- * @brief Static class providing unit text to SI conversion lookup and batch conversion.
+ * @brief The unit normalization table: recorded unit text -> Viewer's internal unit.
  *
- * This class uses unit text strings from file headers (e.g., "g", "gauss", "(m/s)")
- * to drive SI normalization during import. Rather than hardcoding sensor/field names,
- * the lookup table maps unit text to conversion factors.
+ * Used by the conversion layer at read time (src/conversion/sourceconversion.cpp),
+ * never at import: the source layer keeps the unit text exactly as recorded.
+ * The table is keyed on unit text (e.g. "g", "gauss", "(m/s)"), not on sensor
+ * or column names. It also lists the labels released Viewer versions wrote into
+ * logbook files ("m/s^2", "T", "degC"), which are already internal.
  */
 class UnitConversion {
 public:
     /**
      * @brief Get the conversion specification for a unit string.
      *
-     * @param unitText The unit text from the file header (e.g., "g", "gauss", "(m/s)")
-     * @return ConversionSpec with scale, offset, and resulting SI unit.
-     *         Returns identity conversion (scale=1, offset=0) for unknown units.
+     * The lookup ignores surrounding whitespace. Unknown unit text is the
+     * normal case for custom columns and is silent: the result is the identity
+     * with the label returned verbatim (untrimmed).
+     *
+     * @param unitText The recorded unit text (e.g., "g", "gauss", "(m/s)")
+     * @return ConversionSpec with scale, offset, and the normalized label.
      */
     static ConversionSpec getConversion(const QString& unitText) {
         const auto& table = lookup();
-        auto it = table.constFind(unitText);
+        auto it = table.constFind(unitText.trimmed());
         if (it != table.constEnd()) {
             return it.value();
-        }
-
-        // Unknown unit - log warning and return identity conversion
-        if (!unitText.isEmpty()) {
-            qWarning() << "UnitConversion: Unknown unit text:" << unitText << "- using identity conversion";
         }
         return {1.0, 0.0, unitText};
     }
 
     /**
-     * @brief Check if a unit requires conversion (not already in SI).
+     * @brief Check whether a unit changes values (not only the label).
      *
-     * This provides a fast path to skip conversion for already-SI units.
-     *
-     * @param unitText The unit text from the file header
+     * @param unitText The recorded unit text
      * @return true if scale != 1.0 or offset != 0.0
      */
     static bool requiresConversion(const QString& unitText) {
         ConversionSpec spec = getConversion(unitText);
         return (spec.scale != 1.0) || (spec.offset != 0.0);
-    }
-
-    /**
-     * @brief Convert an entire vector of values to SI in-place.
-     *
-     * This is an optimized batch operation for converting all values in a measurement column.
-     *
-     * @param values The vector of raw values to convert (modified in-place)
-     * @param unitText The unit text from the file header
-     */
-    static void toSI(QVector<double>& values, const QString& unitText) {
-        ConversionSpec spec = getConversion(unitText);
-
-        // Fast path: if no conversion needed, return immediately
-        if (spec.scale == 1.0 && spec.offset == 0.0) {
-            return;
-        }
-
-        // Apply conversion: SI = raw * scale + offset
-        for (int i = 0; i < values.size(); ++i) {
-            values[i] = values[i] * spec.scale + spec.offset;
-        }
     }
 
 private:
@@ -94,7 +68,7 @@ private:
         static QHash<QString, ConversionSpec> table = []() {
             QHash<QString, ConversionSpec> t;
 
-            // === Units already in SI (scale=1, offset=0) ===
+            // === Units already internal (scale=1, offset=0) ===
             t["m"]      = {1.0, 0.0, "m"};
             t["m/s"]    = {1.0, 0.0, "m/s"};
             t["Pa"]     = {1.0, 0.0, "Pa"};
@@ -105,6 +79,11 @@ private:
             t["%"]      = {1.0, 0.0, "%"};
             t[""]       = {1.0, 0.0, ""};           // dimensionless (time, numSV, week)
             t["deg C"]  = {1.0, 0.0, "degC"};       // keep Celsius, don't convert to Kelvin
+
+            // === Internal labels written by released Viewer versions into logbook files ===
+            t["m/s^2"]  = {1.0, 0.0, "m/s^2"};
+            t["T"]      = {1.0, 0.0, "T"};
+            t["degC"]   = {1.0, 0.0, "degC"};
 
             // === Units requiring conversion ===
             t["g"]      = {9.80665, 0.0, "m/s^2"};  // acceleration: g -> m/s^2

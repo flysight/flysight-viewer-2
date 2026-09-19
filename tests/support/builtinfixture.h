@@ -28,7 +28,8 @@ Fs2FileBuilder sensorFile(const QByteArray &sessionId = "descent");
 
 /// Imports both files from a fresh temp dir with DataImporter and merges the
 /// sensor session into the track session using only public API (setAttribute
-/// for keys the target lacks, setMeasurement + setUnit for every measurement).
+/// for keys the target lacks, mergeSourceData for the measurements, so the
+/// merged session holds the data as recorded).
 FlySight::SessionData load(const QByteArray &sessionId = "descent");
 
 /// The sensor file alone, imported.
@@ -63,8 +64,8 @@ QString goldenTag(const FlySight::DependencyKey &name);
 QString compareToGolden(const GoldenValue &golden, const QVariant &attribute,
                         const QVector<double> &samples);
 
-/// Copies the stored state (attributeKeys / sensorKeys / measurementKeys /
-/// getUnit) of a session into a fake session state.
+/// Copies the stored state (stored attributes and the source layer: recorded
+/// samples and unit text) of a session into a fake session state.
 void copyStoredState(const FlySight::SessionData &from, FakeSessionState &to);
 
 } // namespace FlySightTest

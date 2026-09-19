@@ -111,3 +111,10 @@ flysight_add_test(tst_builtins_engine SOURCES tst_builtins_engine.cpp)
 # SessionData / SessionModel on the engine (real built-ins, global registry)
 flysight_add_test(tst_session_engine       SOURCES tst_session_engine.cpp)
 flysight_add_test(tst_session_model_engine SOURCES tst_session_model_engine.cpp)
+
+# Source layer and conversion layer: the schema and unit tables, the conversion
+# families on a private registry, the importer, and the session-level suite
+flysight_add_test(tst_schema_units      SOURCES tst_schema_units.cpp)
+flysight_add_test(tst_conversion_engine SOURCES tst_conversion_engine.cpp)
+flysight_add_test(tst_importer          SOURCES tst_importer.cpp)
+flysight_add_test(tst_source_layer      SOURCES tst_source_layer.cpp)

@@ -94,7 +94,7 @@ bool DataExporter::exportSession(const QString &filePath, const SessionData &ses
         // $UNIT line
         stream << "$UNIT," << sensorKey;
         for (const QString &col : columns) {
-            stream << "," << sessionData.getUnit(sensorKey, col);
+            stream << "," << sessionData.sourceUnit(sensorKey, col);
         }
         stream << "\n";
     }
@@ -118,14 +118,14 @@ bool DataExporter::exportSession(const QString &filePath, const SessionData &ses
         const QByteArray sensorPrefix = QByteArray("$") + sensorKey.toUtf8();
 
         // Determine sample count from the first column
-        const QVector<double> firstCol = sessionData.getMeasurement(sensorKey, columns.first());
+        const QVector<double> firstCol = sessionData.sourceMeasurement(sensorKey, columns.first());
         const int sampleCount = firstCol.size();
 
         // Gather all column vectors to avoid repeated lookups
         QVector<QVector<double>> columnData;
         columnData.reserve(columns.size());
         for (const QString &col : columns) {
-            columnData.append(sessionData.getMeasurement(sensorKey, col));
+            columnData.append(sessionData.sourceMeasurement(sensorKey, col));
         }
 
         const int numCols = columnData.size();

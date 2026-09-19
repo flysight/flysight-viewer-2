@@ -317,22 +317,28 @@ void SessionEngineTest::derivedWTotalFollowsSource()
     session.setMeasurement("IMU", "wy", {4.0});
     session.setMeasurement("IMU", "wz", {0.0});
 
-    // BASELINE: no gyro correction - Phase 4 (5.0 becomes 5.0 * 1.14688)
-    QCOMPARE(session.getMeasurement("IMU", "wTotal"), QVector<double>({5.0}));
+    // No SCHEMA_VER: the gyro is legacy-scaled, so the derived magnitude is
+    // 5 x 1.14688 (compared with a tolerance; the product is not exact).
+    QVector<double> wTotal = session.getMeasurement("IMU", "wTotal");
+    QCOMPARE(wTotal.size(), 1);
+    QVERIFY(qAbs(wTotal.at(0) - 5.7344) <= 1e-9);
     QVERIFY(!session.hasMeasurement("IMU", "wTotal"));
 
     const QSet<DependencyKey> invalidated = session.setMeasurement("IMU", "wx", {6.0});
     QVERIFY(invalidated.contains(meas("IMU", "wTotal")));
     session.setMeasurement("IMU", "wy", {8.0});
 
-    // BASELINE: no gyro correction - Phase 4 (10.0 becomes 10.0 * 1.14688)
-    QCOMPARE(session.getMeasurement("IMU", "wTotal"), QVector<double>({10.0}));
+    wTotal = session.getMeasurement("IMU", "wTotal");
+    QCOMPARE(wTotal.size(), 1);
+    QVERIFY(qAbs(wTotal.at(0) - 11.4688) <= 1e-9);
     QVERIFY(!session.hasMeasurement("IMU", "wTotal"));
 
     CalculationEngine &engine = session.calculationEngine();
     const int runs = engine.runCount("builtin.imu.wTotal");
     QCOMPARE(runs, 2);
 
+    // A supplied wTotal wins and is never corrected: only wx / wy / wz are in
+    // the schema table.
     session.setMeasurement("IMU", "wTotal", {42.0});
     QCOMPARE(session.getMeasurement("IMU", "wTotal"), QVector<double>({42.0}));
     QCOMPARE(engine.runCount("builtin.imu.wTotal"), runs);
@@ -350,14 +356,15 @@ void SessionEngineTest::interpolatedAttributeFollows()
     session.setAttribute("_M", 1704110415.0);
 
     const QString key = SessionData::interpolationKey("_M", "IMU", "_time", "wx");
-    QVERIFY(qAbs(session.getAttribute(key).toDouble() - 1.5) <= 1e-9);
+    // The interpolation reads the effective (legacy-corrected) gyro: 1.5 x 1.14688.
+    QVERIFY(qAbs(session.getAttribute(key).toDouble() - 1.72032) <= 1e-9);
     QVERIFY(!session.hasAttribute(key));
 
     QVERIFY(session.setMeasurement("IMU", "wx", {10, 20, 30}).contains(DependencyKey::attribute(key)));
-    QVERIFY(qAbs(session.getAttribute(key).toDouble() - 15.0) <= 1e-9);
+    QVERIFY(qAbs(session.getAttribute(key).toDouble() - 17.2032) <= 1e-9);
 
     QVERIFY(session.setAttribute("_M", 1704110425.0).contains(DependencyKey::attribute(key)));
-    QVERIFY(qAbs(session.getAttribute(key).toDouble() - 25.0) <= 1e-9);
+    QVERIFY(qAbs(session.getAttribute(key).toDouble() - 28.672) <= 1e-9);
 
     session.setAttribute("_M", 1704110500.0);   // beyond the last sample
     QVERIFY(!session.getAttribute(key).isValid());

@@ -530,18 +530,16 @@ void SessionModel::mergeSessions(const QList<SessionData>& sessions)
                 // model reset is complete.
                 QSet<DependencyKey> &invalidated = mergeInvalidations[newSessionID];
 
+                // Stored values only: a merge never consults the engine.
                 for (const QString &attributeKey : newSession.attributeKeys()) {
                     invalidated.unite(
-                        existingSession.setAttribute(attributeKey, newSession.getAttribute(attributeKey)));
+                        existingSession.setAttribute(attributeKey, newSession.storedAttribute(attributeKey)));
                 }
 
-                for (const QString &sensorKey : newSession.sensorKeys()) {
-                    for (const QString &measurementKey : newSession.measurementKeys(sensorKey)) {
-                        invalidated.unite(
-                            existingSession.setMeasurement(sensorKey, measurementKey,
-                                newSession.getMeasurement(sensorKey, measurementKey)));
-                    }
-                }
+                // Source data only, samples and unit text together. Copying
+                // effective values here would store already-converted numbers
+                // as if they had been recorded, and convert them again on read.
+                invalidated.unite(existingSession.mergeSourceData(newSession.sourceData()));
 
                 if (!rowIt->dirty) {
                     rowIt->dirty = true;

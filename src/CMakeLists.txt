@@ -280,6 +280,10 @@ add_library(flysight_core STATIC
   units/unitdefinitions.h
   units/unitconversion.h
   units/unitconverter.cpp    units/unitconverter.h
+  # Conversion layer: source -> effective values (schema correction, then
+  # unit normalization), registered with the engine as source conversions
+  conversion/schematable.cpp       conversion/schematable.h
+  conversion/sourceconversion.cpp  conversion/sourceconversion.h
   calculations/builtincalculations.cpp        calculations/builtincalculations.h
   calculations/registration.h
   calculations/interpolationcalculations.cpp  calculations/interpolationcalculations.h

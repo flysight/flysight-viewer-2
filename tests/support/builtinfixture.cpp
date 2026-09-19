@@ -112,14 +112,10 @@ SessionData load(const QByteArray &sessionId)
 
     for (const QString &key : sensor.attributeKeys()) {
         if (!track.hasAttribute(key))
-            track.setAttribute(key, sensor.getAttribute(key));
+            track.setAttribute(key, sensor.storedAttribute(key));
     }
-    for (const QString &sensorKey : sensor.sensorKeys()) {
-        for (const QString &name : sensor.measurementKeys(sensorKey)) {
-            track.setMeasurement(sensorKey, name, sensor.getMeasurement(sensorKey, name));
-            track.setUnit(sensorKey, name, sensor.getUnit(sensorKey, name));
-        }
-    }
+    // Source layer only: the merged session carries the data as recorded.
+    track.mergeSourceData(sensor.sourceData());
     return track;
 }
 
@@ -246,8 +242,10 @@ QList<GoldenValue> goldenValues()
     g << meas("IMU", "_system_time", 3, {{0, 10.0}, {1, 20.0}, {2, 30.0}});
 
     // ---- imucalculations / magcalculations
-    // BASELINE: no gyro correction - Phase 4 scales by 1.14688
-    g << meas("IMU", "wTotal", 3, {{0, 5.0}, {1, 10.0}, {2, 15.0}})
+    // Recorded gyro (3, 4, 0), (6, 8, 0), (9, 12, 0) deg/s without SCHEMA_VER:
+    // the legacy correction makes the magnitudes 5, 10, 15 x 1.14688. aTotal
+    // and MAG/total come through the conversion from recorded 1 g / gauss.
+    g << meas("IMU", "wTotal", 3, {{0, 5.7344}, {1, 11.4688}, {2, 17.2032}})
       << meas("IMU", "aTotal", 3, {{0, 9.80665}, {1, 9.80665}, {2, 9.80665}})
       << meas("MAG", "total", 3, {{0, 0.0005}, {1, 0.0005}, {2, 0.0005}}, 1e-15);
 
@@ -318,12 +316,15 @@ QString compareToGolden(const GoldenValue &golden, const QVariant &attribute,
 
 void copyStoredState(const SessionData &from, FakeSessionState &to)
 {
+    // Stored state only, never effective values: the copy must carry the data
+    // as recorded (e.g. 1 "g"), not what the conversion layer makes of it.
     for (const QString &key : from.attributeKeys())
-        to.setAttribute(key, from.getAttribute(key));
-    for (const QString &sensor : from.sensorKeys()) {
-        for (const QString &name : from.measurementKeys(sensor))
-            to.setMeasurement(sensor, name, from.getMeasurement(sensor, name),
-                              from.getUnit(sensor, name));
+        to.setAttribute(key, from.storedAttribute(key));
+
+    const SourceData source = from.sourceData();
+    for (auto sensorIt = source.constBegin(); sensorIt != source.constEnd(); ++sensorIt) {
+        for (auto it = sensorIt.value().constBegin(); it != sensorIt.value().constEnd(); ++it)
+            to.setMeasurement(sensorIt.key(), it.key(), it.value().samples, it.value().unit);
     }
 }
 

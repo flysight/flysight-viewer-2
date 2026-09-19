@@ -8,11 +8,18 @@
 #include "wspcalculations.h"
 #include "spcalculations.h"
 #include "interpolationcalculations.h"
+#include "../conversion/sourceconversion.h"
 
 namespace FlySight {
 
 void registerBuiltInCalculations(CalculationRegistry &registry)
 {
+    // The conversion layer (source -> effective values) first. Source
+    // conversions are kept in their own ordered list, so their position among
+    // the built-ins does not affect any candidate order; it only keeps
+    // registeredIds() readable.
+    Calculations::registerSourceConversions(registry);
+
     // The order is fixed: it decides which of several candidates for one output
     // is tried first (only _START_TIME / _DURATION have several). Interpolation
     // comes last, after every calculation with an explicit output name.

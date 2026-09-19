@@ -1,7 +1,10 @@
-// Baseline characterization ("smoke") suite.
+// Characterization ("smoke") suite.
 //
 // Drives importer, session, calculations, exporter, logbook and model end to
-// end and pins the behavior of v2026.04.1. Every expectation is a literal.
+// end. It started as a pin of v2026.04.1; expectations that a phase changed on
+// purpose were rewritten with that phase. Every expectation is a literal.
+// Corrected gyro values (recorded x 1.14688) are compared with an absolute
+// tolerance of 1e-9: 62.5 * 1.14688 is not the double nearest 71.68.
 // A test whose expectation a later phase is known to change carries a
 //     // BASELINE: <what> - changes in Phase <n>
 // comment, so the later implementer finds it with `git grep -n "BASELINE:" tests/`.
@@ -108,26 +111,35 @@ void SmokeTest::importFs2Sensor()
 
     QCOMPARE(session.getMeasurement("IMU", "time"), QVector<double>({3.0}));
 
-    // BASELINE: gyro rates are stored and read exactly as recorded, with no
-    // legacy-scale correction - changes in Phase 4 (effective wx/wy become
-    // 71.68 / -143.36; source access keeps 62.5 / -125).
-    QCOMPARE(session.getMeasurement("IMU", "wx"), QVector<double>({62.5}));
-    QCOMPARE(session.getMeasurement("IMU", "wy"), QVector<double>({-125.0}));
+    // The file declares no SCHEMA_VER, so its gyro rates are legacy-scaled:
+    // ordinary (effective) reads are corrected by 1.14688, the source layer
+    // keeps what was recorded.
+    const QVector<double> wx = session.getMeasurement("IMU", "wx");
+    const QVector<double> wy = session.getMeasurement("IMU", "wy");
+    QCOMPARE(wx.size(), 1);
+    QCOMPARE(wy.size(), 1);
+    QVERIFY(qAbs(wx.at(0) - 71.68) <= 1e-9);
+    QVERIFY(qAbs(wy.at(0) - -143.36) <= 1e-9);
     QCOMPARE(session.getMeasurement("IMU", "wz"), QVector<double>({0.0}));
-    QCOMPARE(session.getUnit("IMU", "wx"), QStringLiteral("deg/s"));
+    QCOMPARE(session.effectiveUnit("IMU", "wx"), QStringLiteral("deg/s"));
+    QCOMPARE(session.sourceMeasurement("IMU", "wx"), QVector<double>({62.5}));
+    QCOMPARE(session.sourceMeasurement("IMU", "wy"), QVector<double>({-125.0}));
+    QCOMPARE(session.sourceUnit("IMU", "wx"), QStringLiteral("deg/s"));
 
-    // BASELINE: g -> m/s^2 is applied in place at import and the stored unit
-    // is relabelled - changes in Phase 4 (source keeps 1 and "g"; the
-    // conversion layer produces 9.80665 m/s^2).
+    // g -> m/s^2 happens in the conversion layer; nothing is converted at import.
     QCOMPARE(session.getMeasurement("IMU", "ax"), QVector<double>({9.80665}));
-    QCOMPARE(session.getUnit("IMU", "ax"), QStringLiteral("m/s^2"));
+    QCOMPARE(session.effectiveUnit("IMU", "ax"), QStringLiteral("m/s^2"));
+    QCOMPARE(session.sourceMeasurement("IMU", "ax"), QVector<double>({1.0}));
+    QCOMPARE(session.sourceUnit("IMU", "ax"), QStringLiteral("g"));
 
-    // BASELINE: gauss -> T and "deg C" -> "degC" are likewise applied at
-    // import - changes in Phase 4.
+    // Likewise gauss -> T and the "deg C" -> "degC" label.
     QCOMPARE(session.getMeasurement("MAG", "x"), QVector<double>({0.0001}));
-    QCOMPARE(session.getUnit("MAG", "x"), QStringLiteral("T"));
+    QCOMPARE(session.effectiveUnit("MAG", "x"), QStringLiteral("T"));
+    QCOMPARE(session.sourceMeasurement("MAG", "x"), QVector<double>({1.0}));
+    QCOMPARE(session.sourceUnit("MAG", "x"), QStringLiteral("gauss"));
     QCOMPARE(session.getMeasurement("IMU", "temperature"), QVector<double>({40.0}));
-    QCOMPARE(session.getUnit("IMU", "temperature"), QStringLiteral("degC"));
+    QCOMPARE(session.effectiveUnit("IMU", "temperature"), QStringLiteral("degC"));
+    QCOMPARE(session.sourceUnit("IMU", "temperature"), QStringLiteral("deg C"));
 
     // Header attributes are kept as recorded and nothing is stamped.
     QVERIFY(!session.hasAttribute("SCHEMA_VER"));
@@ -172,7 +184,7 @@ void SmokeTest::importFs2Track()
     QCOMPARE(session.getMeasurement("GNSS", "hMSL"), QVector<double>({4000.0, 3999.0, 3998.0}));
     QCOMPARE(session.getMeasurement("GNSS", "velN"), QVector<double>({10.0, 10.5, 11.0}));
     QCOMPARE(session.getMeasurement("GNSS", "numSV"), QVector<double>({12.0, 12.0, 13.0}));
-    QCOMPARE(session.getUnit("GNSS", "hMSL"), QStringLiteral("m"));
+    QCOMPARE(session.sourceUnit("GNSS", "hMSL"), QStringLiteral("m"));
 
     // ISO "Z" timestamps become seconds since the epoch at millisecond precision.
     const QVector<double> time = session.getMeasurement("GNSS", "time");
@@ -212,10 +224,12 @@ void SmokeTest::importFs1()
     QVERIFY(qAbs(time.at(0) - 1704110400.0) < 1e-6);
     QVERIFY(qAbs(time.at(1) - 1704110400.2) < 1e-6);
 
-    // BASELINE: the parenthesized FS1 unit text is normalized at import
-    // ("(m/s)" -> "m/s") - changes in Phase 4 (source keeps the recorded text).
-    QCOMPARE(session.getUnit("GNSS", "velN"), QStringLiteral("m/s"));
-    QCOMPARE(session.getUnit("GNSS", "hMSL"), QStringLiteral("m"));
+    // The parenthesized FS1 unit text is kept as recorded; the conversion
+    // layer normalizes the label.
+    QCOMPARE(session.sourceUnit("GNSS", "velN"), QStringLiteral("(m/s)"));
+    QCOMPARE(session.sourceUnit("GNSS", "hMSL"), QStringLiteral("(m)"));
+    QCOMPARE(session.effectiveUnit("GNSS", "velN"), QStringLiteral("m/s"));
+    QCOMPARE(session.effectiveUnit("GNSS", "hMSL"), QStringLiteral("m"));
 
     // FS1 files carry no SESSION_ID; one is synthesized from the MD5 of the file.
     const QString sessionId = session.getAttribute("SESSION_ID").toString();
@@ -242,16 +256,16 @@ void SmokeTest::derivedMeasurement()
     SessionData session;
     QVERIFY(importSensor(session));
 
-    // BASELINE: derived IMU/wTotal is computed from the uncorrected gyro
-    // rates, sqrt(62.5^2 + 125^2 + 0^2) - changes in Phase 4 (scaled by
-    // 1.14688 once ordinary reads return corrected values).
+    // Derived IMU/wTotal is computed from the corrected gyro rates:
+    // sqrt(71.68^2 + 143.36^2 + 0^2) = 139.75424859373686 x 1.14688.
     const QVector<double> wTotal = session.getMeasurement("IMU", "wTotal");
     QCOMPARE(wTotal.size(), 1);
-    QVERIFY(qAbs(wTotal.at(0) - 139.75424859373686) < 1e-9);
+    QVERIFY(qAbs(wTotal.at(0) - 160.28135262718) <= 1e-9);
 
-    // A derived value never shows up as stored data.
+    // A derived value never shows up as stored data, and has no source.
     QVERIFY(!session.hasMeasurement("IMU", "wTotal"));
     QVERIFY(!session.measurementKeys("IMU").contains(QStringLiteral("wTotal")));
+    QVERIFY(session.sourceMeasurement("IMU", "wTotal").isEmpty());
 }
 
 void SmokeTest::exportReloadRoundTrip()
@@ -281,28 +295,35 @@ void SmokeTest::exportReloadRoundTrip()
     QCOMPARE(reloaded.measurementKeys("MAG"),
              QStringList({"temperature", "time", "x", "y", "z"}));
 
-    // BASELINE: a saved file holds already-normalized values under normalized
-    // unit labels - changes in Phases 4/5 (the exporter writes source values
-    // and source unit text: 1 "g", 1 "gauss", "deg C").
-    struct Expected { const char *sensor; const char *name; double value; const char *unit; };
+    // A saved file holds the source layer: the recorded values under the
+    // recorded unit text. Effective values are the same before and after.
+    struct Expected { const char *sensor; const char *name; double source; const char *sourceUnit;
+                      double effective; const char *effectiveUnit; };
     const Expected expected[] = {
-        {"IMU", "time",        3.0,      "s"},
-        {"IMU", "wx",          62.5,     "deg/s"},
-        {"IMU", "wy",          -125.0,   "deg/s"},
-        {"IMU", "wz",          0.0,      "deg/s"},
-        {"IMU", "ax",          9.80665,  "m/s^2"},
-        {"IMU", "temperature", 40.0,     "degC"},
-        {"MAG", "time",        3.0,      "s"},
-        {"MAG", "x",           0.0001,   "T"},
-        {"MAG", "y",           0.0,      "T"},
-        {"MAG", "z",           -0.00005, "T"},
-        {"MAG", "temperature", 40.0,     "degC"},
+        {"IMU", "time",        3.0,    "s",     3.0,      "s"},
+        {"IMU", "wx",          62.5,   "deg/s", 71.68,    "deg/s"},
+        {"IMU", "wy",          -125.0, "deg/s", -143.36,  "deg/s"},
+        {"IMU", "wz",          0.0,    "deg/s", 0.0,      "deg/s"},
+        {"IMU", "ax",          1.0,    "g",     9.80665,  "m/s^2"},
+        {"IMU", "temperature", 40.0,   "deg C", 40.0,     "degC"},
+        {"MAG", "time",        3.0,    "s",     3.0,      "s"},
+        {"MAG", "x",           1.0,    "gauss", 0.0001,   "T"},
+        {"MAG", "y",           0.0,    "gauss", 0.0,      "T"},
+        {"MAG", "z",           -0.5,   "gauss", -0.00005, "T"},
+        {"MAG", "temperature", 40.0,   "deg C", 40.0,     "degC"},
     };
     for (const Expected &e : expected) {
-        const QVector<double> values = reloaded.getMeasurement(e.sensor, e.name);
-        QVERIFY2(values.size() == 1, e.name);
-        QVERIFY2(qAbs(values.at(0) - e.value) < 1e-12, e.name);
-        QCOMPARE(reloaded.getUnit(e.sensor, e.name), QString::fromLatin1(e.unit));
+        const QVector<double> source = reloaded.sourceMeasurement(e.sensor, e.name);
+        QVERIFY2(source.size() == 1, e.name);
+        QVERIFY2(qAbs(source.at(0) - e.source) < 1e-12, e.name);
+        QCOMPARE(reloaded.sourceUnit(e.sensor, e.name), QString::fromLatin1(e.sourceUnit));
+
+        const QVector<double> effective = reloaded.getMeasurement(e.sensor, e.name);
+        QVERIFY2(effective.size() == 1, e.name);
+        QVERIFY2(qAbs(effective.at(0) - e.effective) <= 1e-9, e.name);
+        QCOMPARE(reloaded.effectiveUnit(e.sensor, e.name), QString::fromLatin1(e.effectiveUnit));
+        QCOMPARE(effective, session.getMeasurement(e.sensor, e.name));
+        QCOMPARE(reloaded.effectiveUnit(e.sensor, e.name), session.effectiveUnit(e.sensor, e.name));
     }
 
     QCOMPARE(reloaded.getAttribute("FIRMWARE_VER").toString(), QStringLiteral("v2023.09.22"));
@@ -344,8 +365,11 @@ void SmokeTest::logbookSaveReload()
     const std::optional<SessionData> loaded = logbook.loadSession(QStringLiteral("test-session"));
     QVERIFY(loaded.has_value());
 
-    // BASELINE: reads return the recorded gyro rate - changes in Phase 4.
-    QCOMPARE(loaded->getMeasurement("IMU", "wx"), QVector<double>({62.5}));
+    // The saved file holds the recorded rate; reads return the corrected one.
+    const QVector<double> wx = loaded->getMeasurement("IMU", "wx");
+    QCOMPARE(wx.size(), 1);
+    QVERIFY(qAbs(wx.at(0) - 71.68) <= 1e-9);
+    QCOMPARE(loaded->sourceMeasurement("IMU", "wx"), QVector<double>({62.5}));
     QCOMPARE(loaded->getAttribute("FIRMWARE_VER").toString(), QStringLiteral("v2023.09.22"));
     QVERIFY(!loaded->hasAttribute("SCHEMA_VER"));
 

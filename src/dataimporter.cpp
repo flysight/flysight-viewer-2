@@ -1,22 +1,56 @@
 // import.cpp
 
 #include "dataimporter.h"
+#include "conversion/schematable.h"
 #include "preferences/preferencesmanager.h"
 #include "preferences/preferencekeys.h"
-#include "units/unitconversion.h"
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QPair>
 #include <QRegularExpression>
 #include <QStringTokenizer>
 #include <QTextStream>
+#include <utility>
 
 namespace FlySight {
 
+// ---- staging ---------------------------------------------------------------
+// Everything parsed from a file lives here until the whole file has been
+// accepted. Nothing reaches a SessionData before publish().
+
+struct DataImporter::StagedSensor {
+    QVector<QString> columns;               // labels, verbatim, in file order
+    QVector<QString> units;                 // unit text, verbatim; same size as columns
+    QVector<QVector<double>> samples;       // one vector per column
+    bool hasUnitLine = false;
+};
+
+struct DataImporter::StagedFile {
+    QVector<QPair<QString, QString>> attributes;    // file order; conflicts already rejected
+    QMap<QString, StagedSensor> sensors;
+    int skippedRows = 0;
+};
+
+namespace {
+
+// Splits on ',' keeping empty parts.
+QVector<QString> splitFields(QStringView text)
+{
+    QVector<QString> fields;
+    for (QStringView part : QStringTokenizer(text, u','))
+        fields.append(part.toString());
+    return fields;
+}
+
+} // namespace
+
 bool DataImporter::importFile(const QString& fileName, SessionData& sessionData) {
+    m_lastError.clear();
+
     QByteArray fileData;
     if (!readFile(fileName, sessionData, &fileData)) {
         return false;
@@ -26,15 +60,7 @@ bool DataImporter::importFile(const QString& fileName, SessionData& sessionData)
 }
 
 bool DataImporter::readFile(const QString& fileName, SessionData& sessionData, QByteArray* fileData) {
-    // The importer writes measurements straight into the session's storage
-    // (friend access), bypassing the setters that notify the calculation
-    // engine. Whatever path leaves this function, drop every calculated value
-    // so nothing computed from the previous contents survives. With a fresh
-    // target session this is a no-op.
-    struct InvalidateOnExit {
-        SessionData &session;
-        ~InvalidateOnExit() { session.invalidateAllCalculations(); }
-    } invalidateOnExit{sessionData};
+    m_lastError.clear();
 
     QFile file(fileName);
     if (!file.open(QIODevice::ReadOnly)) {
@@ -48,11 +74,6 @@ bool DataImporter::readFile(const QString& fileName, SessionData& sessionData, Q
     if (localData.isEmpty()) {
         m_lastError = "Empty file";
         return false;
-    }
-
-    // Optionally copy raw bytes to the caller
-    if (fileData) {
-        *fileData = localData;
     }
 
     // Extract the first line directly from QByteArray
@@ -78,17 +99,62 @@ bool DataImporter::readFile(const QString& fileName, SessionData& sessionData, Q
     // Create a QTextStream from the QByteArray
     QTextStream in(&localData, QIODevice::ReadOnly);
 
-    // Use the fileType to choose the import method
+    // Parse and validate into the staging structure. The session is not
+    // touched until the whole file has been accepted.
+    StagedFile staged;
+    bool ok = false;
     switch (fileType) {
     case FS_FileType::FS1:
-        importSimple(in, sessionData, "GNSS");
+        ok = importSimple(in, staged, DefaultSensorId);
         break;
     case FS_FileType::FS2:
-        importFS2(in, sessionData);
+        ok = importFS2(in, staged);
         break;
+    }
+    if (!ok) {
+        return false;
+    }
+
+    // Real recordings end in a truncated line after power loss and now and
+    // then contain a glitched row: tolerated, and reported once per file.
+    if (staged.skippedRows > 0) {
+        qWarning("%s: skipped %d malformed data row(s)", qPrintable(fileName), staged.skippedRows);
+    }
+
+    // ---- publication: nothing below this line can fail ----
+    publish(staged, sessionData);
+
+    // Optionally copy raw bytes to the caller
+    if (fileData) {
+        *fileData = localData;
     }
 
     return true;
+}
+
+void DataImporter::publish(const StagedFile& staged, SessionData& sessionData) {
+    // Header attributes exactly as recorded, unknown keys included. Nothing is
+    // added: a file that does not declare SCHEMA_VER yields a session without it.
+    for (const auto &attribute : staged.attributes) {
+        sessionData.setAttribute(attribute.first, attribute.second);
+    }
+
+    // Each staged vector is handed over, not copied (implicit sharing). Declared
+    // columns of a file without rows are published as empty source measurements.
+    SourceData source;
+    for (auto sensorIt = staged.sensors.constBegin(); sensorIt != staged.sensors.constEnd(); ++sensorIt) {
+        const StagedSensor &sensor = sensorIt.value();
+        SourceSensor &columns = source[sensorIt.key()];
+        for (int i = 0; i < sensor.columns.size(); ++i) {
+            columns.insert(sensor.columns[i], SourceColumn{ sensor.samples[i], sensor.units[i] });
+        }
+    }
+    sessionData.mergeSourceData(source);
+}
+
+bool DataImporter::structuralError(int lineNumber, const QString& reason) {
+    m_lastError = QStringLiteral("Line %1: %2").arg(lineNumber).arg(reason);
+    return false;
 }
 
 void DataImporter::initializeFromDevice(const QString& fileName, const QByteArray& fileData, SessionData& sessionData) {
@@ -145,232 +211,247 @@ void DataImporter::initializeFromDevice(const QString& fileName, const QByteArra
     }
 }
 
-void DataImporter::importSimple(QTextStream& in, SessionData& sessionData, const QString &sensorName) {
-    QMap<QString, QVector<QString>> columnOrder;
+bool DataImporter::importSimple(QTextStream& in, StagedFile& staged, const QString &sensorName) {
+    StagedSensor sensor;
 
-    // Read the first line (column names)
-    QString columnLine = in.readLine();
-    QVector<QString> columns = columnLine.split(',', Qt::SkipEmptyParts).toVector().toList().toVector();
-    columnOrder[sensorName] = columns;
-
-    // Initialize the data map in sensors
-    QMap<QString, QVector<double>>& sensor = sessionData.m_sensors[sensorName];
-    for (const QString& colName : columns) {
-        sensor[colName]; // Initialize empty QVector<double> for each column
-    }
-
-    // Read the second line (units) and capture for SI conversion
-    if (in.atEnd()) {
-        return;
-    }
-    QString unitLine = in.readLine();
-    QVector<QString> columnUnits;
-    for (const auto& part : unitLine.split(',')) {
-        columnUnits.append(part.trimmed());
-    }
-
-    // Process data lines
-    while (!in.atEnd()) {
-        QString dataLine = in.readLine();
-        importDataRow(dataLine, columnOrder, sessionData, sensorName);
-    }
-
-    // Store initial unit strings in SessionData
-    const QVector<QString>& cols = columnOrder[sensorName];
-    for (int i = 0; i < cols.size() && i < columnUnits.size(); ++i) {
-        sessionData.setUnit(sensorName, cols[i], columnUnits[i]);
-    }
-
-    // Apply SI normalization based on unit text
-    for (int i = 0; i < cols.size() && i < columnUnits.size(); ++i) {
-        const QString& unitText = columnUnits[i];
-        if (UnitConversion::requiresConversion(unitText)) {
-            QVector<double>& data = sessionData.m_sensors[sensorName][cols[i]];
-            UnitConversion::toSI(data, unitText);
+    // Line 1: column names. Empty parts are kept: dropping one would silently
+    // shift every later column under the wrong name.
+    sensor.columns = splitFields(in.readLine());
+    for (int i = 0; i < sensor.columns.size(); ++i) {
+        const QString &column = sensor.columns[i];
+        if (column.isEmpty()) {
+            return structuralError(1, QStringLiteral("column header has an empty name"));
         }
-        // Update stored unit to the post-conversion SI unit
-        ConversionSpec spec = UnitConversion::getConversion(unitText);
-        sessionData.setUnit(sensorName, cols[i], spec.siUnit);
+        if (sensor.columns.indexOf(column) != i) {
+            return structuralError(1, QStringLiteral("column header repeats '") + column + QLatin1Char('\''));
+        }
     }
+    sensor.samples.resize(sensor.columns.size());
+
+    // Line 2: units, verbatim (the parenthesized FS1 form included). A file
+    // that ends after the column line is valid and has no rows.
+    if (!in.atEnd()) {
+        sensor.units = splitFields(in.readLine());
+        sensor.hasUnitLine = true;
+        if (sensor.units.size() > sensor.columns.size()) {
+            return structuralError(2, QStringLiteral("unit line has more units than columns"));
+        }
+    }
+    sensor.units.resize(sensor.columns.size());     // missing units are ""
+
+    staged.sensors.insert(sensorName, sensor);
+
+    // Data lines
+    while (!in.atEnd()) {
+        importDataRow(in.readLine(), staged, sensorName);
+    }
+
+    return true;
 }
 
-void DataImporter::importFS2(QTextStream& in, SessionData& sessionData) {
+bool DataImporter::importFS2(QTextStream& in, StagedFile& staged) {
     FS_Section section = FS_Section::HEADER;
+    int lineNumber = 0;
 
-    // Temporary map to store column order per sensor
-    QMap<QString, QVector<QString>> columnOrder;
-
-    // Temporary map to store unit text per sensor (for SI conversion)
-    QMap<QString, QVector<QString>> columnUnits;
-
-    // Read and process header lines
+    // Header lines, up to and including $DATA
     while (!in.atEnd() && (section == FS_Section::HEADER)) {
-        QString line = in.readLine();
-        section = importHeaderRow(line, columnOrder, columnUnits, sessionData);
+        const QString line = in.readLine();
+        ++lineNumber;
+        if (!importHeaderRow(line, lineNumber, staged, section)) {
+            return false;
+        }
     }
 
-    // Process data lines
+    if (section != FS_Section::DATA) {
+        m_lastError = "Missing $DATA section";
+        return false;
+    }
+
+    // Validate the declared schema before reading any data row: only
+    // SCHEMA_VER decides the schema, and a value Viewer does not understand
+    // rejects the file. An absent SCHEMA_VER is not an error and stays absent.
+    for (const auto &attribute : std::as_const(staged.attributes)) {
+        if (attribute.first == QLatin1String(Schema::AttributeKey)
+            && !Schema::parseVersion(attribute.second).has_value()) {
+            m_lastError = Schema::unsupportedMessage(attribute.second);
+            return false;
+        }
+    }
+
+    // Data lines
     while (!in.atEnd()) {
-        QString line = in.readLine();
-        importDataRow(line, columnOrder, sessionData, "");
+        importDataRow(in.readLine(), staged, QString());
     }
 
-    // Apply SI normalization based on unit text
-    for (auto sensorIt = columnUnits.constBegin();
-         sensorIt != columnUnits.constEnd(); ++sensorIt) {
-        const QString& sensor = sensorIt.key();
-        const QVector<QString>& units = sensorIt.value();
-        const QVector<QString>& cols = columnOrder.value(sensor);
-
-        for (int i = 0; i < cols.size() && i < units.size(); ++i) {
-            const QString& unitText = units[i];
-            if (UnitConversion::requiresConversion(unitText)) {
-                QVector<double>& data = sessionData.m_sensors[sensor][cols[i]];
-                UnitConversion::toSI(data, unitText);
-            }
-            // Update stored unit to the post-conversion SI unit
-            ConversionSpec spec = UnitConversion::getConversion(unitText);
-            sessionData.setUnit(sensor, cols[i], spec.siUnit);
-        }
-    }
+    return true;
 }
 
-DataImporter::FS_Section DataImporter::importHeaderRow(
-    const QString& line,
-    QMap<QString, QVector<QString>>& columnOrder,
-    QMap<QString, QVector<QString>>& columnUnits,
-    SessionData& sessionData)
+bool DataImporter::importHeaderRow(const QString& line, int lineNumber, StagedFile& staged, FS_Section& section)
 {
-    // By default, stay in HEADER section
-    FS_Section section = FS_Section::HEADER;
-
-    if (line == "$DATA") {
+    if (line.trimmed() == QLatin1String("$DATA")) {
         section = FS_Section::DATA;
-    } else {
-        QStringView lineView(line);
-        QStringTokenizer tokenizer(lineView, u',');
-        auto it = tokenizer.begin();
-
-        if (it != tokenizer.end()) {
-            QStringView token0 = *it++;
-            if (token0 == u"$VAR") {
-                if (it != tokenizer.end()) {
-                    QStringView attributeName = *it++;
-                    if (it != tokenizer.end()) {
-                        QStringView attributeValue = *it;
-                        sessionData.setAttribute(attributeName.toString(), attributeValue.toString());
-                    }
-                }
-            } else if (token0 == u"$COL") {
-                if (it != tokenizer.end()) {
-                    QStringView sensorName = *it++;
-                    QVector<QString> columns;
-
-                    for (; it != tokenizer.end(); ++it) {
-                        columns.append(it->toString());
-                    }
-
-                    columnOrder[sensorName.toString()] = columns;
-
-                    // Initialize sensor measurements as empty
-                    for (const QString &colName : columns) {
-                        sessionData.setMeasurement(sensorName.toString(), colName, {});
-                    }
-                }
-            } else if (token0 == u"$UNIT") {
-                // Parse and store unit text per sensor for SI conversion
-                if (it != tokenizer.end()) {
-                    QString sensorName = (*it++).toString();
-                    QVector<QString> units;
-                    for (; it != tokenizer.end(); ++it) {
-                        units.append(it->toString());
-                    }
-                    columnUnits[sensorName] = units;
-
-                    // Store unit strings in SessionData for later export
-                    const QVector<QString>& cols = columnOrder.value(sensorName);
-                    for (int i = 0; i < cols.size() && i < units.size(); ++i) {
-                        sessionData.setUnit(sensorName, cols[i], units[i]);
-                    }
-                }
-            }
-        }
+        return true;
     }
 
-    return section;
+    const qsizetype firstComma = line.indexOf(u',');
+    const QStringView lineView(line);
+    const QStringView token0 = (firstComma < 0) ? lineView : lineView.left(firstComma);
+    const QStringView rest = (firstComma < 0) ? QStringView() : lineView.mid(firstComma + 1);
+
+    if (token0 == u"$VAR") {
+        // $VAR,<key>,<value>: the value is everything after the second comma,
+        // verbatim, commas included. No second comma: the value is "".
+        const qsizetype secondComma = rest.indexOf(u',');
+        const QString key = ((secondComma < 0) ? rest : rest.left(secondComma)).toString();
+        const QString value = (secondComma < 0) ? QString() : rest.mid(secondComma + 1).toString();
+
+        if (key.isEmpty()) {
+            return structuralError(lineNumber, QStringLiteral("$VAR with empty name"));
+        }
+        for (const auto &attribute : std::as_const(staged.attributes)) {
+            if (attribute.first != key)
+                continue;
+            if (attribute.second != value) {
+                return structuralError(lineNumber, QStringLiteral("conflicting values for $VAR ") + key);
+            }
+            return true;    // the same key with an equal value collapses
+        }
+        staged.attributes.append(qMakePair(key, value));
+        return true;
+    }
+
+    if (token0 == u"$COL") {
+        const QVector<QString> fields = splitFields(rest);
+        const QString sensorName = fields.isEmpty() ? QString() : fields.first();
+        if (firstComma < 0 || sensorName.isEmpty()) {
+            return structuralError(lineNumber, QStringLiteral("$COL without sensor name"));
+        }
+        if (staged.sensors.contains(sensorName)) {
+            return structuralError(lineNumber, QStringLiteral("duplicate $COL for sensor ") + sensorName);
+        }
+        if (fields.size() < 2) {
+            return structuralError(lineNumber, QStringLiteral("$COL ") + sensorName + QStringLiteral(" has no columns"));
+        }
+
+        StagedSensor sensor;
+        for (int i = 1; i < fields.size(); ++i) {
+            const QString &column = fields[i];
+            if (column.isEmpty()) {
+                return structuralError(lineNumber, QStringLiteral("$COL ") + sensorName
+                                                   + QStringLiteral(" has an empty column name"));
+            }
+            // A repeated label would receive every row twice.
+            if (sensor.columns.contains(column)) {
+                return structuralError(lineNumber, QStringLiteral("$COL ") + sensorName
+                                                   + QStringLiteral(" repeats column '") + column + QLatin1Char('\''));
+            }
+            sensor.columns.append(column);  // verbatim, custom columns included
+        }
+        sensor.units.resize(sensor.columns.size());     // "" until a $UNIT line says otherwise
+        sensor.samples.resize(sensor.columns.size());
+        staged.sensors.insert(sensorName, sensor);
+        return true;
+    }
+
+    if (token0 == u"$UNIT") {
+        const QVector<QString> fields = splitFields(rest);
+        const QString sensorName = fields.isEmpty() ? QString() : fields.first();
+
+        auto sensorIt = staged.sensors.find(sensorName);
+        if (firstComma < 0 || sensorIt == staged.sensors.end()) {
+            return structuralError(lineNumber, QStringLiteral("$UNIT for unknown sensor ") + sensorName);
+        }
+        StagedSensor &sensor = sensorIt.value();
+        if (sensor.hasUnitLine) {
+            return structuralError(lineNumber, QStringLiteral("duplicate $UNIT for sensor ") + sensorName);
+        }
+        if (fields.size() - 1 > sensor.columns.size()) {
+            return structuralError(lineNumber, QStringLiteral("$UNIT ") + sensorName
+                                               + QStringLiteral(" has more units than columns"));
+        }
+
+        // Verbatim, not trimmed. Fewer units than columns: the rest stay "".
+        for (int i = 1; i < fields.size(); ++i) {
+            sensor.units[i - 1] = fields[i];
+        }
+        sensor.hasUnitLine = true;
+        return true;
+    }
+
+    // Blank lines, $FLYS, and anything else: ignored, for forward compatibility.
+    return true;
 }
 
-void DataImporter::importDataRow(const QString& line, const QMap<QString, QVector<QString>>& columnOrder, SessionData& sessionData, QString key) {
+void DataImporter::importDataRow(const QString& line, StagedFile& staged, const QString& fixedSensor) {
+    if (line.isEmpty()) {
+        return;     // a blank line is not a row
+    }
+
     QStringView lineView(line);
     QStringTokenizer tokenizer(lineView, u',');
     auto it = tokenizer.begin();
 
-    // For FS2 format, the first token is the sensor key
-    if (line.startsWith("$")) {
-        if (it == tokenizer.end()) return;
-        QStringView token0 = *it++;
-        key = token0.mid(1).toString(); // Remove the '$' at the start
-    }
-
-    // Get the column order for this sensor
-    const QVector<QString>& cols = columnOrder.value(key);
-    if (cols.isEmpty()) {
-        // Unknown sensor or no columns defined
-        return;
-    }
-
-    QVector<QStringView> dataFields;
-    for (; it != tokenizer.end(); ++it) {
-        dataFields.append(*it);
-    }
-
-    if (dataFields.size() != cols.size()) {
-        // Handle error: number of data fields does not match number of columns
-        return;
-    }
-
-    // Temporary storage for parsed values
-    QVector<double> tempValues(cols.size());
-
-    // Iterate through each field once
-    for (int i = 0; i < cols.size(); ++i) {
-        const QString& colName = cols[i];
-        const QStringView& dataValueView = dataFields[i];
-
-        if (dataValueView.isEmpty()) {
-            // Empty field, skip the entire row
-            qWarning() << "Skipping row due to empty field:" << line;
+    // FS2: the first token is "$<sensor>". FS1: every row belongs to one sensor.
+    QString key = fixedSensor;
+    if (fixedSensor.isEmpty()) {
+        if (it == tokenizer.end() || !(*it).startsWith(u'$')) {
+            ++staged.skippedRows;
             return;
         }
-        else if (dataValueView.endsWith(u'Z')) {
-            // Attempt to parse date
-            QDateTime dt = QDateTime::fromString(dataValueView.toString(), Qt::ISODate);
-            if (!dt.isValid()) {
-                // Invalid date found, skip the entire row
-                qWarning() << "Skipping row due to invalid date:" << line;
-                return;
-            }
-            // Convert to seconds since epoch
-            tempValues[i] = dt.toMSecsSinceEpoch() / 1000.0;
+        key = (*it).mid(1).toString();
+        ++it;
+    }
+
+    auto sensorIt = staged.sensors.find(key);
+    if (sensorIt == staged.sensors.end()) {
+        // No $COL declared this sensor
+        ++staged.skippedRows;
+        return;
+    }
+    StagedSensor &sensor = sensorIt.value();
+    const int columnCount = int(sensor.columns.size());
+
+    // A row is appended only when every field parsed: all or nothing.
+    QVector<double> values;
+    values.reserve(columnCount);
+
+    for (; it != tokenizer.end(); ++it) {
+        const QStringView field = *it;
+
+        if (values.size() == columnCount || field.isEmpty()) {
+            // Too many fields, or an empty one
+            ++staged.skippedRows;
+            return;
         }
-        else {
-            // Attempt to parse as double
-            bool ok;
-            double val = dataValueView.toDouble(&ok);
-            if (!ok) {
-                // Invalid value found, skip the entire row
-                qWarning() << "Skipping row due to invalid value:" << line;
+
+        if (field.endsWith(u'Z')) {
+            // ISO-8601 UTC date-time -> seconds since the epoch, millisecond precision
+            const QDateTime dt = QDateTime::fromString(field.toString(), Qt::ISODate);
+            if (!dt.isValid()) {
+                ++staged.skippedRows;
                 return;
             }
-            tempValues[i] = val;
+            values.append(dt.toMSecsSinceEpoch() / 1000.0);
+        } else {
+            // Correctly rounded double; no further processing
+            bool ok = false;
+            const double value = field.toDouble(&ok);
+            if (!ok) {
+                ++staged.skippedRows;
+                return;
+            }
+            values.append(value);
         }
     }
 
-    // All fields are valid, append to SessionData
-    QMap<QString, QVector<double>>& sensor = sessionData.m_sensors[key];
-    for (int i = 0; i < cols.size(); ++i) {
-        const QString& colName = cols[i];
-        sensor[colName].append(tempValues[i]);
+    if (values.size() != columnCount) {
+        // Too few fields: typically the last line of a recording cut short by power loss
+        ++staged.skippedRows;
+        return;
+    }
+
+    for (int i = 0; i < columnCount; ++i) {
+        sensor.samples[i].append(values[i]);
     }
 }
 
