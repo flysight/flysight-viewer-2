@@ -292,20 +292,18 @@ void PlotWidget::revertToPrimaryTool()
 
 void PlotWidget::zoomToExtent()
 {
-    // Use all visible sessions. Pointers to the model's live sessions, not
-    // copies: a copied SessionData has no engine cache, so every read of a copy
-    // would recompute conversion, time fit and markers and throw them away.
-    // Nothing between here and the end of the call loads, evicts or moves rows.
-    QVector<const SessionData *> visible;
+    // Use all visible sessions, named by id: the sessions themselves are
+    // looked up in the model when they are read.
+    QStringList visible;
     for (int i = 0; i < model->rowCount(); ++i) {
         const SessionRow &row = model->rowAt(i);
         if (!row.isLoaded() || !row.visible) continue;
-        visible.append(&row.session.value());
+        visible.append(row.sessionId);
     }
     zoomToExtent(visible);
 }
 
-void PlotWidget::zoomToExtent(const QVector<const SessionData *> &sessions)
+void PlotWidget::zoomToExtent(const QStringList &sessionIds)
 {
     PreferencesManager &prefs = PreferencesManager::instance();
     const QString mode = prefs.getValue(PreferenceKeys::ZoomExtentMode).toString();
@@ -317,13 +315,17 @@ void PlotWidget::zoomToExtent(const QVector<const SessionData *> &sessions)
     double maxX = std::numeric_limits<double>::lowest();
     bool hasData = false;
 
-    for (const SessionData *sessionPtr : sessions) {
-        if (!sessionPtr)
-            continue;
-        const SessionData &session = *sessionPtr;
+    // The model's live sessions, not copies: a copied SessionData has no
+    // engine cache, so every read of a copy would recompute conversion, time
+    // fit and markers and throw them away. The model resolves each id to its
+    // row as it is visited and holds a RowStabilityGuard meanwhile, so no
+    // session reference outlives one call of the lambda, and anything that
+    // loaded, evicted or moved a row during these reads would assert. Ids that
+    // are unknown or not loaded are skipped; nothing is loaded for a zoom.
+    model->forEachLoadedSession(sessionIds, [&](const SessionData &session) {
         auto offset = referenceOffsetForSession(session);
         if (!offset.has_value())
-            continue;
+            return;
 
         // Try marker range if configured
         if (mode == "markerRange") {
@@ -337,7 +339,7 @@ void PlotWidget::zoomToExtent(const QVector<const SessionData *> &sessions)
                 minX = std::min(minX, aMin);
                 maxX = std::max(maxX, aMax);
                 hasData = true;
-                continue;
+                return;
             }
             // Fallback to full data extent for this session
         }
@@ -359,8 +361,9 @@ void PlotWidget::zoomToExtent(const QVector<const SessionData *> &sessions)
             maxX = std::max(maxX, *maxIt);
             hasData = true;
         }
-    }
+    });
 
+    // The guard is gone: setting the range emits, and slots may use the model.
     if (!hasData || minX >= maxX)
         return;
 

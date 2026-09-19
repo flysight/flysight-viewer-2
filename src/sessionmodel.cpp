@@ -548,6 +548,7 @@ QList<MergeResult> SessionModel::mergeSessions(const QList<ParsedFile> &files)
     QList<MergeResult> results;
     if (files.isEmpty())
         return results;
+    assertRowsMutable("SessionModel::mergeSessions");
     results.reserve(files.size());
 
     LogbookManager &logbook = LogbookManager::instance();
@@ -754,6 +755,7 @@ void SessionModel::populateFromIndex(const QMap<QString, QMap<int, QVariant>> &c
                                      const QMap<QString, double> &lastAccessed)
 {
     Q_UNUSED(lastAccessed);
+    assertRowsMutable("SessionModel::populateFromIndex");
 
     beginResetModel();
     m_rows.clear();
@@ -773,6 +775,8 @@ void SessionModel::populateFromIndex(const QMap<QString, QMap<int, QVariant>> &c
 
 void SessionModel::populateFromUuids(const QStringList &uuids)
 {
+    assertRowsMutable("SessionModel::populateFromUuids");
+
     beginResetModel();
     m_rows.clear();
 
@@ -898,6 +902,7 @@ bool SessionModel::removeSessions(const QList<QString> &sessionIds)
 {
     if (sessionIds.isEmpty())
         return false;
+    assertRowsMutable("SessionModel::removeSessions");
 
     bool anyRemoved = false;
 
@@ -979,11 +984,25 @@ SessionRow& SessionModel::rowAt(int row)
     return m_rows[row];
 }
 
+void SessionModel::forEachLoadedSession(const QStringList &sessionIds,
+                                        const std::function<void(const SessionData &)> &fn) const
+{
+    const RowStabilityGuard guard(*this);
+    for (const QString &sessionId : sessionIds) {
+        // Resolved per visit: no row or session reference outlives one call of fn
+        const int row = getSessionRow(sessionId);
+        if (row < 0 || !m_rows.at(row).isLoaded())
+            continue;
+        fn(m_rows.at(row).session.value());
+    }
+}
+
 SessionData &SessionModel::sessionRef(int row)
 {
     Q_ASSERT(row >= 0 && row < m_rows.size());
     SessionRow &sr = m_rows[row];
     if (!sr.isLoaded()) {
+        assertRowsMutable("SessionModel::sessionRef (load)");   // loads, and may evict another row
         auto loaded = LogbookManager::instance().loadSession(sr.sessionId);
         if (loaded.has_value()) {
             // Remap UUID-based session ID to real SESSION_ID if needed
@@ -1541,6 +1560,7 @@ void SessionModel::loadNextVisibleSession()
     int row = getSessionRow(sessionId);
 
     // Load one session
+    assertRowsMutable("SessionModel::loadNextVisibleSession");
     sessionRef(row);
     m_loadedDuringBatch.insert(sessionId);
 
@@ -1584,6 +1604,8 @@ void SessionModel::evictIfNeeded()
 
 bool SessionModel::evictSession(const QString &sessionId)
 {
+    assertRowsMutable("SessionModel::evictSession");
+
     // Find the row
     int row = getSessionRow(sessionId);
     if (row < 0) {
@@ -1861,6 +1883,7 @@ void SessionModel::processNextBulkEdit()
                 // loadNextVisibleSession (it is loaded by then) without being
                 // added to m_loadedDuringBatch, so no visibilityChanged is
                 // emitted for it when the load batch completes.
+                assertRowsMutable("SessionModel::processNextBulkEdit (row becomes loaded)");
                 sr.session = std::move(loaded.value());
                 sr.session->setVisible(sr.visible);
                 sr.dirty = true;
@@ -1978,6 +2001,7 @@ void SessionModel::sort(int column, Qt::SortOrder order)
             useStringCompare = true;
     }
 
+    assertRowsMutable("SessionModel::sort");
     beginResetModel();
 
     std::sort(m_rows.begin(), m_rows.end(),

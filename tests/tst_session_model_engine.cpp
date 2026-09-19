@@ -81,6 +81,9 @@ private slots:
     void rowsSurviveSort();
     void deviceIdIsReadOnly();
     void altitudeMarkerOnlyForRegisteredCalculation();
+    void rowStabilityGuardNests();
+    void forEachLoadedSessionVisitsInIdOrder();
+    void forEachLoadedSessionIsAPlainRead();
 
 private:
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
@@ -455,6 +458,129 @@ void SessionModelEngineTest::rowsSurviveSort()
     QCOMPARE(session("s2").getAttribute("_EXIT_TIME").toDouble(), T0 + 9.0);
     QCOMPARE(session("s1").getAttribute("_GROUND_ELEV").toDouble(), 100.0);
     QCOMPARE(session("s2").getAttribute("_GROUND_ELEV").toDouble(), 0.0);
+}
+
+// The guard is a counter: it nests, and it is released on every way out of a
+// scope. (What it guards - the debug-build assertion in every operation that
+// moves rows or loads, replaces or evicts a session - aborts the process, so it
+// is not exercised here.)
+void SessionModelEngineTest::rowStabilityGuardNests()
+{
+    QCOMPARE(m_model->rowStabilityDepth(), 0);
+    {
+        const auto outer = m_model->stableRows();
+        QCOMPARE(m_model->rowStabilityDepth(), 1);
+        {
+            const SessionModel::RowStabilityGuard inner(*m_model);
+            QCOMPARE(m_model->rowStabilityDepth(), 2);
+        }
+        QCOMPARE(m_model->rowStabilityDepth(), 1);
+    }
+    QCOMPARE(m_model->rowStabilityDepth(), 0);
+
+    // Early return from a guarded scope
+    const auto guardedRead = [this](bool leaveEarly) {
+        const auto guard = m_model->stableRows();
+        if (leaveEarly)
+            return m_model->rowStabilityDepth();
+        return -1;
+    };
+    QCOMPARE(guardedRead(true), 1);
+    QCOMPARE(m_model->rowStabilityDepth(), 0);
+
+    // forEachLoadedSession holds a guard while it reads, nests inside a
+    // caller's guard, and releases it when the callback throws.
+    {
+        const auto outer = m_model->stableRows();
+        int depthInside = -1;
+        m_model->forEachLoadedSession({QStringLiteral("s1")}, [&](const SessionData &) {
+            depthInside = m_model->rowStabilityDepth();
+        });
+        QCOMPARE(depthInside, 2);
+        QCOMPARE(m_model->rowStabilityDepth(), 1);
+    }
+    bool thrown = false;
+    try {
+        m_model->forEachLoadedSession({QStringLiteral("s1"), QStringLiteral("s2")},
+                                      [](const SessionData &) { throw 1; });
+    } catch (int) {
+        thrown = true;
+    }
+    QVERIFY(thrown);
+    QCOMPARE(m_model->rowStabilityDepth(), 0);
+
+    // With no guard alive the model mutates as usual.
+    m_model->sort(0, Qt::DescendingOrder);
+    QVERIFY(m_model->removeSessions({QStringLiteral("s2")}));
+    QCOMPARE(m_model->rowCount(), 1);
+}
+
+// Loaded rows only, in the order of the ids, each the model's own session.
+void SessionModelEngineTest::forEachLoadedSessionVisitsInIdOrder()
+{
+    QStringList visited;
+    QList<const SessionData *> addresses;
+    const auto record = [&](const SessionData &s) {
+        visited.append(s.storedAttribute(SessionKeys::SessionId).toString());
+        addresses.append(&s);       // compared below, never dereferenced
+    };
+
+    m_model->forEachLoadedSession({"s2", "no-such-session", "s1", QString()}, record);
+    QCOMPARE(visited, QStringList({"s2", "s1"}));
+    QCOMPARE(addresses.at(0), &m_model->rowAt(m_model->getSessionRow("s2")).session.value());
+    QCOMPARE(addresses.at(1), &m_model->rowAt(m_model->getSessionRow("s1")).session.value());
+
+    // The live session: a value computed through the callback is cached in the
+    // model's engine, not in a copy.
+    const int runsBefore = session("s1").calculationEngine().totalRunCount();
+    m_model->forEachLoadedSession({"s1"}, [](const SessionData &s) { s.getAttribute("_EXIT_TIME"); });
+    const int runsAfter = session("s1").calculationEngine().totalRunCount();
+    QVERIFY(runsAfter > runsBefore);
+    QCOMPARE(session("s1").getAttribute("_EXIT_TIME").toDouble(), T0 + 9.0);
+    QCOMPARE(session("s1").calculationEngine().totalRunCount(), runsAfter);
+
+    visited.clear();
+    m_model->forEachLoadedSession({}, record);
+    m_model->forEachLoadedSession({"no-such-session"}, record);
+    QVERIFY(visited.isEmpty());
+}
+
+// It does not count as a use for the LRU, and it never loads a stub.
+void SessionModelEngineTest::forEachLoadedSessionIsAPlainRead()
+{
+    QVERIFY(waitForIdle(*m_model));
+    session("s1");
+    session("s2");                  // s1 is now the least recently used
+
+    int visits = 0;
+    m_model->forEachLoadedSession({"s1"}, [&visits](const SessionData &) { ++visits; });
+    QCOMPARE(visits, 1);
+
+    // Room for one session: had the read touched the LRU, s2 would go.
+    const auto restoreCapacity = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    });
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 1);
+    const int row1 = m_model->getSessionRow("s1");
+    const int row2 = m_model->getSessionRow("s2");
+    QVERIFY(!m_model->rowAt(row1).isLoaded());
+    QVERIFY(m_model->rowAt(row2).isLoaded());
+    QVERIFY(waitForIdle(*m_model));
+
+    // s1 is a stub now: skipped, and still a stub afterwards.
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+    m_model->resetColumnWorkStats();
+    QStringList visited;
+    m_model->forEachLoadedSession({"s1", "s2"}, [&visited](const SessionData &s) {
+        visited.append(s.storedAttribute(SessionKeys::SessionId).toString());
+    });
+    QCOMPARE(visited, QStringList({"s2"}));
+    QVERIFY(!m_model->rowAt(row1).isLoaded());
+    QVERIFY(m_model->rowAt(row2).isLoaded());
+    QCOMPARE(loadedSpy.count(), 0);
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+    QCOMPARE(m_model->columnWorkStats().valuesComputed, 0);
+    QCOMPARE(m_model->columnWorkStats().calculationRuns, 0);
 }
 
 FLYSIGHT_TEST_MAIN(SessionModelEngineTest)

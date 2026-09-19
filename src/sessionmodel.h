@@ -1,6 +1,7 @@
 #ifndef SESSIONMODEL_H
 #define SESSIONMODEL_H
 
+#include <functional>
 #include <optional>
 
 #include <QAbstractTableModel>
@@ -88,6 +89,16 @@ struct MergeResult {
 /// they discard the cached values of ALL rows, loaded or not, and the column
 /// worker recomputes them; nothing is marked dirty or unsaved and no session
 /// file is rewritten.
+///
+/// ROW STABILITY. A reference to a row, or to a loaded row's session, is valid
+/// only until the next operation that appends, erases, reorders or resets rows,
+/// or that loads, replaces or evicts a row's session. A reader that needs such
+/// references to stay valid holds a RowStabilityGuard (stableRows()) for as
+/// long as it uses them: while a guard is alive every such operation asserts in
+/// debug builds (in release builds the guard only counts). Release the guard
+/// before anything that can emit or mutate; do not hold one across a return to
+/// the event loop. forEachLoadedSession() is the guarded way to read several
+/// sessions by id.
 class SessionModel : public QAbstractTableModel
 {
     Q_OBJECT
@@ -107,6 +118,29 @@ public:
     ~SessionModel() override;       ///< removes the registry observer
 
     IdleScheduler& scheduler() { return m_scheduler; }
+
+    /// See ROW STABILITY in the class comment. Guards nest.
+    class RowStabilityGuard
+    {
+    public:
+        explicit RowStabilityGuard(const SessionModel &model) : m_model(model) { ++m_model.m_rowStabilityDepth; }
+        ~RowStabilityGuard() { --m_model.m_rowStabilityDepth; }
+        RowStabilityGuard(const RowStabilityGuard &) = delete;
+        RowStabilityGuard &operator=(const RowStabilityGuard &) = delete;
+    private:
+        const SessionModel &m_model;
+    };
+    RowStabilityGuard stableRows() const { return RowStabilityGuard(*this); }
+    int rowStabilityDepth() const { return m_rowStabilityDepth; }   ///< live guards; 0 outside guarded reads
+
+    /// Calls `fn` with the live session of each id that names a loaded row, in
+    /// the order given; ids without a row, and rows that are not loaded, are
+    /// skipped. A plain read: it never loads or evicts a session and does not
+    /// count as a use for the LRU. Each id is resolved to its row at the moment
+    /// it is visited, under a RowStabilityGuard, so `fn` must only read; the
+    /// reference it receives is not valid after it returns.
+    void forEachLoadedSession(const QStringList &sessionIds,
+                              const std::function<void(const SessionData &)> &fn) const;
 
     /// Work done maintaining cached column values. A test seam: the temporary
     /// sessions (and engines) behind stub rows are gone by the time a test
@@ -217,6 +251,16 @@ public:
 private:
     QVector<SessionRow> m_rows;
     QVector<LogbookColumn> m_columns;
+
+    // Live RowStabilityGuards. Every operation that can invalidate a reference
+    // into m_rows, or to a row's session, calls assertRowsMutable() first.
+    mutable int m_rowStabilityDepth = 0;
+    void assertRowsMutable(const char *operation) const
+    {
+        Q_ASSERT_X(m_rowStabilityDepth == 0, operation,
+                   "rows or sessions would change while a RowStabilityGuard is held");
+        Q_UNUSED(operation);
+    }
     QString m_hoveredSessionId;
     QString m_focusedSessionId;
 

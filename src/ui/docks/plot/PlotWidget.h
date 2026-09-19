@@ -126,11 +126,10 @@ public slots:
     void onXVariableChanged(const QString &newXVariable);
     void onReferenceMarkerKeyChanged(const QString &oldKey, const QString &newKey);
     void zoomToExtent();
-    /// Frames the given sessions. The pointers are the model's own live (warm)
-    /// sessions, so reads hit their caches; they are used only during the call
-    /// and never stored. Callers must not hold them across anything that can
-    /// load, evict, sort, or remove rows.
-    void zoomToExtent(const QVector<const SessionData *> &sessions);
+    /// Frames the given sessions. Each id is resolved to the model's own live
+    /// (warm) session when it is read (SessionModel::forEachLoadedSession); ids
+    /// without a loaded row are skipped, and nothing is loaded or evicted.
+    void zoomToExtent(const QStringList &sessionIds);
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;

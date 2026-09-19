@@ -615,17 +615,9 @@ void MainWindow::importFiles(
         // the single file, is what should be framed.
         auto* pf = findFeature<PlotDockFeature>();
         if (pf && pf->plotWidget()) {
-            // Pointers to the model's live sessions (a copy would have a cold
-            // cache); rowAt() is a plain read, so nothing here loads, evicts or
-            // moves a row before zoomToExtent has used them.
-            QVector<const SessionData *> imported;
-            for (const QString &sessionId : importedIdList) {
-                const int row = model->getSessionRow(sessionId);
-                if (row >= 0 && model->rowAt(row).isLoaded())
-                    imported.append(&model->rowAt(row).session.value());
-            }
-            if (!imported.isEmpty())
-                pf->plotWidget()->zoomToExtent(imported);
+            // By id: the plot reads the model's live sessions (a copy would
+            // have a cold cache) and skips ids that are not loaded.
+            pf->plotWidget()->zoomToExtent(importedIdList);
         }
     }
 
