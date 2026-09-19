@@ -212,6 +212,22 @@ bool CalculationRegistry::contains(const CalculationId &id) const
                        [&id](const Entry &e) { return e.id == id; });
 }
 
+QList<CalculationId> CalculationRegistry::registeredIds() const
+{
+    QList<CalculationId> ids;
+    ids.reserve(m_entries.size());
+    for (const Entry &e : m_entries)    // m_entries is kept in sequence order
+        ids.append(e.id);
+    return ids;
+}
+
+bool CalculationRegistry::isFamily(const CalculationId &id) const
+{
+    return std::any_of(m_entries.cbegin(), m_entries.cend(), [&id](const Entry &e) {
+        return e.id == id && e.kind != EntryKind::Calculation;
+    });
+}
+
 std::optional<CalculationInstance> CalculationRegistry::instantiate(const Entry &entry,
                                                                    const DependencyKey &name) const
 {

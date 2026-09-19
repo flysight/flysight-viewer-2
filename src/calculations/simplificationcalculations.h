@@ -2,12 +2,14 @@
 #define SIMPLIFICATIONCALCULATIONS_H
 
 namespace FlySight {
+
+class CalculationRegistry;
+
 namespace Calculations {
 
-/// Register track simplification calculations.
-/// Uses Ramer-Douglas-Peucker algorithm to simplify GNSS track data.
-/// Depends on GNSS sensor data.
-void registerSimplificationCalculations();
+/// Register the simplified track (builtin.simplified.track: one calculation,
+/// four measurement outputs) with the calculation engine.
+void registerSimplificationCalculations(CalculationRegistry &registry);
 
 } // namespace Calculations
 } // namespace FlySight

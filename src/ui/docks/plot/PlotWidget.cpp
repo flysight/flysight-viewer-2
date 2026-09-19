@@ -31,6 +31,7 @@
 #include "plottool/measuretool.h"
 #include "plotutils.h"
 #include "calculations/timecalculations.h"
+#include "engine/calculationregistry.h"
 
 namespace {
 
@@ -1599,7 +1600,7 @@ void PlotWidget::showBubbleContextMenu(QCPItemText *bubble, const QPoint &global
         return;
     if (meta.count != 1)
         return;
-    if (!SessionData::hasRegisteredCalculation(meta.attributeKey))
+    if (!CalculationRegistry::instance().hasCandidateFor(DependencyKey::attribute(meta.attributeKey)))
         return;
 
     int row = model->getSessionRow(meta.sessionId);

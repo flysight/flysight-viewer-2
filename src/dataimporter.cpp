@@ -26,6 +26,16 @@ bool DataImporter::importFile(const QString& fileName, SessionData& sessionData)
 }
 
 bool DataImporter::readFile(const QString& fileName, SessionData& sessionData, QByteArray* fileData) {
+    // The importer writes measurements straight into the session's storage
+    // (friend access), bypassing the setters that notify the calculation
+    // engine. Whatever path leaves this function, drop every calculated value
+    // so nothing computed from the previous contents survives. With a fresh
+    // target session this is a no-op.
+    struct InvalidateOnExit {
+        SessionData &session;
+        ~InvalidateOnExit() { session.invalidateAllCalculations(); }
+    } invalidateOnExit{sessionData};
+
     QFile file(fileName);
     if (!file.open(QIODevice::ReadOnly)) {
         m_lastError = "Couldn't read file";

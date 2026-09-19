@@ -2,11 +2,14 @@
 #define MAGCALCULATIONS_H
 
 namespace FlySight {
+
+class CalculationRegistry;
+
 namespace Calculations {
 
-/// Register all MAG-based calculated measurements.
-/// Depends only on MAG sensor data.
-void registerMagCalculations();
+/// Register the MAG-based measurements with the calculation engine (ids
+/// builtin.mag.<measurement>).
+void registerMagCalculations(CalculationRegistry &registry);
 
 } // namespace Calculations
 } // namespace FlySight

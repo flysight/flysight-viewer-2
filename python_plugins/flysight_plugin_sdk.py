@@ -82,7 +82,11 @@ def attr(name: str) -> DependencyKey:
 
 # ─── base classes for plug-ins ─────────────────────────────────────────
 class AttributePlugin:
-    """Return a single QVariant-compatible value or small NumPy array."""
+    """Return a single QVariant-compatible value or small NumPy array.
+
+    `compute()` may read only the keys returned by `inputs()`; any other read
+    makes the result unavailable.
+    """
     name:  str
     units: Optional[str] = None
 
@@ -96,7 +100,11 @@ def register_attribute(plugin: AttributePlugin) -> None:
     _attributes.append(plugin)
 
 class MeasurementPlugin:
-    """Return a full-length NumPy array (one value per sample)."""
+    """Return a full-length NumPy array (one value per sample).
+
+    `compute()` may read only the keys returned by `inputs()`; any other read
+    makes the result unavailable.
+    """
     name:   str
     units:  Optional[str] = None
     sensor: str

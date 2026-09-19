@@ -32,6 +32,7 @@ add_library(flysight_test_support STATIC
   support/testenvironment.cpp  support/testenvironment.h
   support/fixturebuilder.cpp   support/fixturebuilder.h
   support/fakesessionstate.cpp support/fakesessionstate.h
+  support/builtinfixture.cpp   support/builtinfixture.h
   support/testmain.h
 )
 target_include_directories(flysight_test_support PUBLIC "${CMAKE_CURRENT_LIST_DIR}/support")
@@ -100,3 +101,13 @@ flysight_add_test(tst_calcregistry      SOURCES tst_calcregistry.cpp)
 flysight_add_test(tst_calcengine        SOURCES tst_calcengine.cpp)
 flysight_add_test(tst_calcengine_safety SOURCES tst_calcengine_safety.cpp)
 flysight_add_test(tst_calcengine_oracle SOURCES tst_calcengine_oracle.cpp)
+
+# Built-in calculations (golden values on the generated descent fixture)
+flysight_add_test(tst_builtins_golden SOURCES tst_builtins_golden.cpp)
+
+# Built-in calculations on the engine (fake session state, private registry)
+flysight_add_test(tst_builtins_engine SOURCES tst_builtins_engine.cpp)
+
+# SessionData / SessionModel on the engine (real built-ins, global registry)
+flysight_add_test(tst_session_engine       SOURCES tst_session_engine.cpp)
+flysight_add_test(tst_session_model_engine SOURCES tst_session_model_engine.cpp)

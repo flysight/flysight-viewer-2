@@ -72,6 +72,11 @@ public:
     bool unregister(const CalculationId &id);   ///< calculation, family, or conversion family
 
     bool contains(const CalculationId &id) const;
+    /// Every registration (plain calculations, families, and conversion
+    /// families) in sequence order.
+    QList<CalculationId> registeredIds() const;
+    /// True when `id` is registered as a family or a source-conversion family.
+    bool isFamily(const CalculationId &id) const;
     bool hasCandidateFor(const DependencyKey &name) const;
     /// Plain calculations declaring `name` and family instances accepting it,
     /// in registration order. Source conversions are not included.

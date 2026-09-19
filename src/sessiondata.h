@@ -6,13 +6,15 @@
 #include <QString>
 #include <QVector>
 #include <QVariant>
-#include <optional>
-#include <functional>
-#include "calculatedvalue.h"
+#include <QSet>
+#include <QStringList>
+#include <memory>
 #include "dependencykey.h"
-#include "dependencymanager.h"
+#include "engine/sessionstate.h"
 
 namespace FlySight {
+
+class CalculationEngine;
 
 namespace SessionKeys {
     constexpr char DeviceId[] = "DEVICE_ID";
@@ -84,73 +86,78 @@ namespace SessionKeys {
     constexpr char PlanformArea[] = "_PLANFORM_AREA";
 }
 
-class SessionData {
+/// One session: stored attributes, stored measurements with their unit text,
+/// and - through a per-session CalculationEngine - every calculated value.
+///
+/// Ordinary reads (getAttribute / getMeasurement) are resolved by the engine:
+/// stored data first, then the registered calculations. Enumeration and
+/// presence queries describe stored data only.
+///
+/// Copying copies the stored state only; the copy computes its own values on
+/// demand. Moving carries the engine (its cache and its invalidation listener)
+/// to the new object.
+class SessionData : public ISessionState {
 public:
-    using AttributeFunction = std::function<std::optional<QVariant>(SessionData&)>;
-    using MeasurementFunction = std::function<std::optional<QVector<double>>(SessionData&)>;
-    using MeasurementKey = QPair<QString, QString>;
-
-    SessionData() = default;
+    SessionData();
+    SessionData(const SessionData &other);                 ///< state only: no engine, no cache, no listener
+    SessionData(SessionData &&other) noexcept;             ///< state and engine
+    SessionData &operator=(const SessionData &other);      ///< state only; keeps its own engine, cleared
+    SessionData &operator=(SessionData &&other) noexcept;  ///< state and engine
+    ~SessionData() override;
 
     bool isVisible() const;
     void setVisible(bool visible);
 
+    // Attributes. attributeKeys / hasAttribute describe stored attributes only.
     QStringList attributeKeys() const;
     bool hasAttribute(const QString &key) const;
-    QVariant getAttribute(const QString &key) const;
+    QVariant getAttribute(const QString &key) const;        ///< stored, else calculated
     QSet<DependencyKey> setAttribute(const QString &key, const QVariant &value);
     QSet<DependencyKey> removeAttribute(const QString &key);
 
-    /// Removes a dynamically-registered calculated attribute's global registration
-    /// and flushes this session's cached value for that key.
-    void unregisterCalculatedAttribute(const QString &key);
-
+    // Measurements. The enumeration and presence queries describe stored data only.
     QStringList sensorKeys() const;
     bool hasSensor(const QString &key) const;
     QStringList measurementKeys(const QString &sensorKey) const;
     bool hasMeasurement(const QString& sensorKey, const QString& measurementKey) const;
-    QVector<double> getMeasurement(const QString& sensorKey, const QString& measurementKey) const;
+    QVector<double> getMeasurement(const QString& sensorKey, const QString& measurementKey) const;  ///< stored, else calculated
     QSet<DependencyKey> setMeasurement(const QString& sensorKey, const QString& measurementKey, const QVector<double>& data);
 
-    void setUnit(const QString& sensorKey, const QString& measurementKey, const QString& unitString);
+    QSet<DependencyKey> setUnit(const QString& sensorKey, const QString& measurementKey, const QString& unitString);
     QString getUnit(const QString& sensorKey, const QString& measurementKey) const;
     QMap<QString, QString> units(const QString& sensorKey) const;
-    void setCalculatedAttribute(const QString &key, const QVariant &value);
-    void setCalculatedMeasurement(const QString& sensorKey, const QString& measurementKey, const QVector<double>& data);
 
-    static bool hasRegisteredCalculation(const QString &key);
+    /// Drops every calculated value. For code that changed the stored state
+    /// without going through the setters (DataImporter).
+    QSet<DependencyKey> invalidateAllCalculations();
 
-    static void registerCalculatedAttribute(const QString &key,
-                                            const QList<DependencyKey>& dependencies, AttributeFunction func);
-    static void registerCalculatedMeasurement(const QString &sensorKey, const QString &measurementKey,
-                                              const QList<DependencyKey>& dependencies, MeasurementFunction func);
+    /// This session's engine, created on first use and bound to
+    /// CalculationRegistry::instance(). For SessionModel (invalidation
+    /// listener) and tests (run counts, the fresh-evaluation oracle).
+    CalculationEngine &calculationEngine() const;
 
-    void addDependencies(const DependencyKey& thisKey,
-                         const QList<DependencyKey>& deps) {
-        m_dependencyManager.registerDependencies(thisKey, deps);
-    }
+    /// Builds an interpolation key: "{timeAttr}:{sensor}/{timeVector}/{dataVector}"
+    static QString interpolationKey(const QString &timeAttr,
+                                    const QString &sensor,
+                                    const QString &timeVector,
+                                    const QString &dataVector);
+
+    // ISessionState: pure reads of the stored state, for the engine.
+    bool hasStoredAttribute(const QString &key) const override;
+    QVariant storedAttribute(const QString &key) const override;
+    bool hasSourceMeasurement(const QString &sensor, const QString &name) const override;
+    QVector<double> sourceMeasurement(const QString &sensor, const QString &name) const override;
+    QString sourceUnit(const QString &sensor, const QString &name) const override;
+
 private:
     bool m_visible = false;
     QMap<QString, QVariant> m_attributes;
     QMap<QString, QMap<QString, QVector<double>>> m_sensors;
     QMap<QString, QMap<QString, QString>> m_units;
 
-    CalculatedValue<QString, QVariant> m_calculatedAttributes;
-    CalculatedValue<MeasurementKey, QVector<double>> m_calculatedMeasurements;
-
-    DependencyManager m_dependencyManager;
-
-    QVariant computeAttribute(const QString &key) const;
-    QVariant synthesizeInterpolation(const QString &key) const;
-
-public:
-    /// Builds an interpolation key: "{timeAttr}:{sensor}/{timeVector}/{dataVector}"
-    static QString interpolationKey(const QString &timeAttr,
-                                    const QString &sensor,
-                                    const QString &timeVector,
-                                    const QString &dataVector);
-private:
-    QVector<double> computeMeasurement(const QString &sensorKey, const QString &measurementKey) const;
+    // Lazily created. It points back at this object, so it is rebound when it
+    // moves with the session and is never shared or copied.
+    mutable std::unique_ptr<CalculationEngine> m_engine;
 
     friend class DataImporter;
 };

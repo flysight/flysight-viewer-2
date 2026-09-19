@@ -6,6 +6,7 @@
 #include <QTimeZone>
 
 #include "attributeregistry.h"
+#include "engine/calculationengine.h"
 #include "logbookcolumn.h"
 #include "logbookmanager.h"
 #include "preferences/preferencekeys.h"
@@ -486,8 +487,7 @@ bool SessionModel::setData(const QModelIndex &index, const QVariant &value, int 
             emit modelChanged();
         }
         if (attributeChanged) {
-            for (const DependencyKey &key : visitedKeys)
-                emit dependencyChanged(sr.sessionId, key);
+            publishInvalidation(index.row(), visitedKeys);
             if (!sr.sessionId.isEmpty())
                 scheduleSave(sr.sessionId);
         }
@@ -501,6 +501,9 @@ void SessionModel::mergeSessions(const QList<SessionData>& sessions)
 {
     if (sessions.isEmpty())
         return;
+
+    // Names invalidated in sessions that were already loaded, by session id
+    QHash<QString, QSet<DependencyKey>> mergeInvalidations;
 
     beginResetModel();
     for (const SessionData& newSession : sessions) {
@@ -523,14 +526,20 @@ void SessionModel::mergeSessions(const QList<SessionData>& sessions)
                 // Merge into existing loaded session
                 SessionData &existingSession = rowIt->session.value();
 
+                // Everything the merge invalidates is published once the
+                // model reset is complete.
+                QSet<DependencyKey> &invalidated = mergeInvalidations[newSessionID];
+
                 for (const QString &attributeKey : newSession.attributeKeys()) {
-                    existingSession.setAttribute(attributeKey, newSession.getAttribute(attributeKey));
+                    invalidated.unite(
+                        existingSession.setAttribute(attributeKey, newSession.getAttribute(attributeKey)));
                 }
 
                 for (const QString &sensorKey : newSession.sensorKeys()) {
                     for (const QString &measurementKey : newSession.measurementKeys(sensorKey)) {
-                        existingSession.setMeasurement(sensorKey, measurementKey,
-                            newSession.getMeasurement(sensorKey, measurementKey));
+                        invalidated.unite(
+                            existingSession.setMeasurement(sensorKey, measurementKey,
+                                newSession.getMeasurement(sensorKey, measurementKey)));
                     }
                 }
 
@@ -545,6 +554,7 @@ void SessionModel::mergeSessions(const QList<SessionData>& sessions)
                 rowIt->session = newSession;
                 rowIt->visible = newSession.isVisible();
                 rowIt->session->setVisible(rowIt->visible);
+                attachSession(*rowIt);
 
                 rowIt->dirty = true;
                 m_saveHighWater++;
@@ -562,10 +572,17 @@ void SessionModel::mergeSessions(const QList<SessionData>& sessions)
             m_saveHighWater++;
             m_saveRemaining++;
             m_rows.append(std::move(newRow));
+            attachSession(m_rows.last());   // the element in m_rows, not the local
             qDebug() << "Added new SessionData with SESSION_ID:" << newSessionID;
         }
     }
     endResetModel();
+
+    // Tell subscribers what the merge invalidated in already-loaded sessions
+    for (auto it = mergeInvalidations.cbegin(); it != mergeInvalidations.cend(); ++it) {
+        for (const DependencyKey &key : it.value())
+            emit dependencyChanged(it.key(), key);
+    }
 
     // Cache column values for all loaded sessions so the index is populated
     LogbookManager &logbook = LogbookManager::instance();
@@ -832,6 +849,10 @@ SessionData &SessionModel::sessionRef(int row)
         // Sync visibility from SessionRow to the newly loaded SessionData
         sr.session->setVisible(sr.visible);
 
+        // Listen for broadcast invalidations (after the id remap above, so the
+        // listener captures the final session id)
+        attachSession(sr);
+
         // Emit sessionLoaded for consistency
         emit sessionLoaded(sr.sessionId);
 
@@ -961,18 +982,11 @@ bool SessionModel::updateAttribute(const QString &sessionId,
     // 5. Update the attribute in SessionData (captures all BFS-visited keys)
     QSet<DependencyKey> visitedKeys = session.setAttribute(attributeKey, newValue);
 
-    // 6. Notify views that data has changed
-    QModelIndex topLeft = index(row, 0);
-    QModelIndex bottomRight = index(row, columnCount() - 1);
-    emit dataChanged(topLeft, bottomRight,
-                     {Qt::DisplayRole, Qt::EditRole, Qt::CheckStateRole});
+    // 6. Notify views that data has changed, and emit fine-grained
+    //    dependencyChanged for each invalidated name
+    publishInvalidation(row, visitedKeys);
 
-    // 7. Emit fine-grained dependencyChanged for each key visited during BFS invalidation
-    for (const DependencyKey &key : visitedKeys) {
-        emit dependencyChanged(sessionId, key);
-    }
-
-    // 8. Schedule deferred logbook save
+    // 7. Schedule deferred logbook save
     scheduleSave(sessionId);
 
     return true;
@@ -999,21 +1013,84 @@ bool SessionModel::removeAttribute(const QString &sessionId,
     // 4. Remove the attribute and capture all BFS-visited keys
     QSet<DependencyKey> visitedKeys = session.removeAttribute(attributeKey);
 
-    // 5. Notify views that data has changed
-    QModelIndex topLeft = index(row, 0);
-    QModelIndex bottomRight = index(row, columnCount() - 1);
-    emit dataChanged(topLeft, bottomRight,
-                     {Qt::DisplayRole, Qt::EditRole, Qt::CheckStateRole});
+    // 5. Notify views that data has changed, and emit fine-grained
+    //    dependencyChanged for each invalidated name
+    publishInvalidation(row, visitedKeys);
 
-    // 6. Emit fine-grained dependencyChanged for each key visited during BFS invalidation
-    for (const DependencyKey &key : visitedKeys) {
-        emit dependencyChanged(sessionId, key);
-    }
-
-    // 7. Schedule deferred logbook save
+    // 6. Schedule deferred logbook save
     scheduleSave(sessionId);
 
     return true;
+}
+
+// ---- Invalidation ------------------------------------------------------
+
+void SessionModel::attachSession(SessionRow &sr)
+{
+    if (!sr.isLoaded())
+        return;
+
+    // The listener captures the model and the session id, never the address of
+    // a row or a session: rows move when the vector grows or is sorted, and
+    // the listener travels with the session's engine.
+    const QString sessionId = sr.sessionId;
+    sr.session->calculationEngine().setInvalidationListener(
+        [this, sessionId](const QSet<DependencyKey> &keys) {
+            queueInvalidation(sessionId, keys);
+        });
+}
+
+void SessionModel::queueInvalidation(const QString &sessionId, const QSet<DependencyKey> &keys)
+{
+    // The values are already invalid: a read before the flush returns the new
+    // value. The flush only tells views to read again, so it can be deferred
+    // and coalesced.
+    m_pendingInvalidations[sessionId].unite(keys);
+
+    if (!m_invalidationFlushQueued) {
+        m_invalidationFlushQueued = true;
+        QMetaObject::invokeMethod(this, &SessionModel::flushPendingInvalidations, Qt::QueuedConnection);
+    }
+}
+
+void SessionModel::flushPendingInvalidations()
+{
+    m_invalidationFlushQueued = false;
+
+    QHash<QString, QSet<DependencyKey>> pending;
+    pending.swap(m_pendingInvalidations);
+
+    bool published = false;
+    for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
+        const int row = getSessionRow(it.key());
+        if (row < 0 || !m_rows[row].isLoaded())
+            continue;   // removed or evicted in the meantime
+
+        publishInvalidation(row, it.value());
+
+        // The cached logbook columns may be stale; the idle column worker
+        // recomputes them from the in-memory session and updates the index.
+        // Persistent state did not change, so the session is not marked dirty.
+        m_rows[row].cachedValues.clear();
+        published = true;
+    }
+
+    if (published) {
+        startColumnWorker();
+        emit modelChanged();
+    }
+}
+
+void SessionModel::publishInvalidation(int row, const QSet<DependencyKey> &keys)
+{
+    Q_ASSERT(row >= 0 && row < m_rows.size());
+    const QString sessionId = m_rows[row].sessionId;
+
+    emit dataChanged(index(row, 0), index(row, columnCount() - 1),
+                     {Qt::DisplayRole, Qt::EditRole, Qt::CheckStateRole});
+
+    for (const DependencyKey &key : keys)
+        emit dependencyChanged(sessionId, key);
 }
 
 // ---- Deferred logbook persistence ------------------------------------

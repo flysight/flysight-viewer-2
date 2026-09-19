@@ -90,6 +90,7 @@ private slots:
     void resultBundleAvailability();
     void candidatesInRegistrationOrder();
     void reRegisteringGoesToTheEnd();
+    void registeredIdsInSequenceOrder();
     void validationRejections_data();
     void validationRejections();
     void duplicateIdRejected();
@@ -208,6 +209,44 @@ void CalcRegistryTest::reRegisteringGoesToTheEnd()
     QVERIFY(!registry.unregister("c1"));    // already gone
     QVERIFY(registry.registerCalculation(simple("c1", "x")));
     QCOMPARE(ids(registry.candidatesFor(attr("x"))), QStringList({"c2", "c3", "c1"}));
+}
+
+void CalcRegistryTest::registeredIdsInSequenceOrder()
+{
+    CalculationRegistry registry;
+    QVERIFY(registry.registeredIds().isEmpty());
+
+    CalculationFamily conv;
+    conv.id = QStringLiteral("conv");
+    conv.instantiate = [](const DependencyKey &) -> std::optional<CalculationDescriptor> {
+        return std::nullopt;
+    };
+
+    QVERIFY(registry.registerCalculation(simple("c1", "x")));
+    QVERIFY(registry.registerFamily(prefixFamily("fam", "k:")));
+    QVERIFY(registry.registerSourceConversion(conv));
+    QVERIFY(registry.registerCalculation(simple("c2", "x")));
+    QCOMPARE(registry.registeredIds(), QStringList({"c1", "fam", "conv", "c2"}));
+
+    QVERIFY(!registry.isFamily("c1"));
+    QVERIFY(registry.isFamily("fam"));
+    QVERIFY(registry.isFamily("conv"));
+    QVERIFY(!registry.isFamily("missing"));
+
+    // Unregistering removes the id; re-registering moves it to the end.
+    QVERIFY(registry.unregister("c1"));
+    QCOMPARE(registry.registeredIds(), QStringList({"fam", "conv", "c2"}));
+    QVERIFY(registry.registerCalculation(simple("c1", "x")));
+    QCOMPARE(registry.registeredIds(), QStringList({"fam", "conv", "c2", "c1"}));
+
+    QVERIFY(registry.unregister("fam"));
+    QVERIFY(!registry.isFamily("fam"));
+    QVERIFY(registry.registerFamily(prefixFamily("fam", "k:")));
+    QCOMPARE(registry.registeredIds(), QStringList({"conv", "c2", "c1", "fam"}));
+
+    // A rejected registration takes no place in the sequence.
+    QVERIFY(!registry.registerCalculation(simple("c2", "y")));
+    QCOMPARE(registry.registeredIds(), QStringList({"conv", "c2", "c1", "fam"}));
 }
 
 void CalcRegistryTest::validationRejections_data()

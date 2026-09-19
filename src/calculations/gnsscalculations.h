@@ -2,11 +2,14 @@
 #define GNSSCALCULATIONS_H
 
 namespace FlySight {
+
+class CalculationRegistry;
+
 namespace Calculations {
 
-/// Register all GNSS-based calculated measurements.
-/// Depends only on GNSS sensor data.
-void registerGnssCalculations();
+/// Register the GNSS-based measurements with the calculation engine (ids
+/// builtin.gnss.<measurement>).
+void registerGnssCalculations(CalculationRegistry &registry);
 
 } // namespace Calculations
 } // namespace FlySight

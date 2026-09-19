@@ -7,8 +7,12 @@
 #include <QSettings>
 #include <QtTest>
 
+#include "engine/calculationengine.h"
+#include "engine/calculationregistry.h"
+#include "fakesessionstate.h"
 #include "fixturebuilder.h"
 #include "logbookmanager.h"
+#include "preferences/enginepreferenceprovider.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "testenvironment.h"
@@ -30,6 +34,7 @@ private slots:
     void fileHelpersRoundTrip();
     void preferencesRegistered();
     void resetPreferencesKeepsLogbookFolder();
+    void preferenceProviderAdapter();
 };
 
 void HarnessTest::settingsAreIsolated()
@@ -236,6 +241,65 @@ void HarnessTest::resetPreferencesKeepsLogbookFolder()
     QCOMPARE(prefs.getValue(PreferenceKeys::GeneralUnits).toString(), QStringLiteral("Metric"));
     QCOMPARE(prefs.getValue(PreferenceKeys::AeroMass).toDouble(), 1.0);
     QCOMPARE(env.logbookFolder(), folder);
+}
+
+// EnginePreferenceProvider: PreferencesManager as the engine's preference
+// source, with synchronous invalidation on change.
+void HarnessTest::preferenceProviderAdapter()
+{
+    TestEnvironment::instance().resetPreferencesToDefaults();
+    PreferencesManager &prefs = PreferencesManager::instance();
+
+    const QString key = PreferenceKeys::ImportDescentPauseSeconds;
+    const QString output = QStringLiteral("_PAUSE");
+
+    CalculationRegistry registry;
+    EnginePreferenceProvider::install(registry);
+    EnginePreferenceProvider::install(registry);    // idempotent
+    QVERIFY(registry.preferenceProvider() != nullptr);
+
+    CalculationDescriptor d;
+    d.id = QStringLiteral("test.pause");
+    d.inputs = {CalcInput::preference(key)};
+    d.outputs = {DependencyKey::attribute(output)};
+    d.compute = [key, output](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(output, ctx.preference(key));
+    };
+    QVERIFY(registry.registerCalculation(d));
+
+    {
+        FakeSessionState state;
+        CalculationEngine engine(&state, &registry);
+
+        QList<QSet<DependencyKey>> delivered;
+        engine.setInvalidationListener([&delivered](const QSet<DependencyKey> &keys) {
+            delivered.append(keys);
+        });
+
+        QCOMPARE(engine.attribute(output).toDouble(), 30.0);
+        QCOMPARE(engine.runCount(d.id), 1);
+
+        // The change is delivered synchronously, inside setValue.
+        prefs.setValue(key, 5.0);
+        QCOMPARE(delivered.size(), 1);
+        QCOMPARE(delivered.first(), QSet<DependencyKey>({DependencyKey::attribute(output)}));
+        QCOMPARE(engine.attribute(output).toDouble(), 5.0);
+        QCOMPARE(engine.runCount(d.id), 2);
+
+        // A preference nothing declared invalidates nothing.
+        prefs.setValue(PreferenceKeys::AeroMass, 85.5);
+        QCOMPARE(delivered.size(), 1);
+
+        // An unregistered key is "no such preference", without an assert.
+        QVERIFY(!registry.preferenceProvider()->preferenceValue(QStringLiteral("no/such/key")).isValid());
+    }
+
+    // The private registry is about to die: detach it from PreferencesManager.
+    EnginePreferenceProvider::uninstall(registry);
+    QVERIFY(registry.preferenceProvider() == nullptr);
+    prefs.setValue(key, 30.0);      // must not reach the dead adapter
+
+    TestEnvironment::instance().resetPreferencesToDefaults();
 }
 
 FLYSIGHT_TEST_MAIN(HarnessTest)

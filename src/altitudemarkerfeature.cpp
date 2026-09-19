@@ -1,12 +1,14 @@
 #include "altitudemarkerfeature.h"
-#include "calculatedvalue.h"
 #include "sessionmodel.h"
 #include "sessiondata.h"
 #include "dependencykey.h"
 #include "markerregistry.h"
+#include "engine/calculationregistry.h"
 #include "preferences/preferencesmanager.h"
 #include "preferences/preferencekeys.h"
 #include <QColor>
+#include <QSet>
+#include <QSettings>
 #include <algorithm>
 
 using namespace FlySight;
@@ -31,7 +33,89 @@ AltitudeMarkerManager::AltitudeMarkerManager(SessionModel *sessionModel, QObject
     });
 }
 
+AltitudeMarkerManager::~AltitudeMarkerManager()
+{
+    // The registrations belong to this object; each removal invalidates the
+    // attribute in every loaded session.
+    CalculationRegistry &registry = CalculationRegistry::instance();
+    for (const QString &key : std::as_const(m_registeredKeys))
+        registry.unregister(calculationId(key));
+}
+
+CalculationId AltitudeMarkerManager::calculationId(const QString &attributeKey)
+{
+    return QStringLiteral("builtin.altitude.") + attributeKey;
+}
+
+CalculationDescriptor AltitudeMarkerManager::makeDescriptor(const QString &attributeKey,
+                                                            double thresholdMetres)
+{
+    CalculationDescriptor d;
+    d.id = calculationId(attributeKey);
+    d.inputs = {
+        CalcInput::attribute(SessionKeys::AnalysisStartTime),
+        CalcInput::attribute(SessionKeys::AnalysisEndTime),
+        CalcInput::measurement("GNSS", "z"),
+        CalcInput::measurement("GNSS", SessionKeys::Time)
+    };
+    d.outputs = { DependencyKey::attribute(attributeKey) };
+    d.compute = [attributeKey, thresholdMetres](const EvaluationContext &ctx) -> CalculationResult {
+        // Retrieve analysis window bounds
+        QVariant asVar = ctx.attribute(SessionKeys::AnalysisStartTime);
+        if (!asVar.canConvert<double>())
+            return CalculationResult::unavailable();
+        double analysisStartSec = asVar.toDouble();
+
+        QVariant aeVar = ctx.attribute(SessionKeys::AnalysisEndTime);
+        if (!aeVar.canConvert<double>())
+            return CalculationResult::unavailable();
+        double analysisEndSec = aeVar.toDouble();
+
+        // Retrieve GNSS altitude AGL and time vectors
+        QVector<double> z    = ctx.measurement("GNSS", "z");
+        QVector<double> time = ctx.measurement("GNSS", SessionKeys::Time);
+
+        if (z.isEmpty() || time.isEmpty() || z.size() != time.size())
+            return CalculationResult::unavailable();
+
+        // Find the last downward crossing of thresholdMetres within the analysis window
+        double lastCrossingTime = -1.0;
+        bool   foundCrossing    = false;
+
+        for (int i = 1; i < z.size(); ++i) {
+            if (time[i] < analysisStartSec) continue;
+            if (time[i - 1] > analysisEndSec) break;
+
+            // Downward crossing: z[i-1] >= threshold AND z[i] < threshold
+            if (z[i - 1] >= thresholdMetres && z[i] < thresholdMetres) {
+                // Linear interpolation to find precise crossing time
+                double t_cross = time[i - 1]
+                    + (thresholdMetres - z[i - 1]) / (z[i] - z[i - 1])
+                    * (time[i] - time[i - 1]);
+                lastCrossingTime = t_cross;
+                foundCrossing    = true;
+            }
+        }
+
+        if (!foundCrossing)
+            return CalculationResult::unavailable();
+
+        return CalculationResult().setAttribute(attributeKey, lastCrossingTime);
+    };
+    return d;
+}
+
 void AltitudeMarkerManager::registerAll()
+{
+    apply();
+}
+
+void AltitudeMarkerManager::refresh()
+{
+    apply();
+}
+
+void AltitudeMarkerManager::apply()
 {
     // Step 1: Read current preferences
     PreferencesManager &prefs = PreferencesManager::instance();
@@ -49,77 +133,30 @@ void AltitudeMarkerManager::registerAll()
     }
     settings.endArray();
 
-    // Sort ascending so markers appear in order in the dock
+    // Sort ascending so markers appear in order in the dock. An altitude
+    // listed twice is one marker: its attribute key identifies it.
     std::sort(altitudes.begin(), altitudes.end());
+    altitudes.erase(std::unique(altitudes.begin(), altitudes.end()), altitudes.end());
 
     // Step 3: Build unit labels
     QString unitSuffix = isImperial ? QStringLiteral("FT") : QStringLiteral("M");
     QString unitLabel  = isImperial ? QStringLiteral("ft") : QStringLiteral("m");
 
-    // Step 4 & 5: For each altitude, register a calculated attribute and build a MarkerDefinition
+    // Step 4: Work out the wanted attribute keys, their thresholds, and the marker definitions
+    QStringList wantedKeys;
+    QHash<QString, double> thresholds;
     QVector<MarkerDefinition> defs;
     for (int value : altitudes) {
         QString attributeKey = QStringLiteral("_ALTITUDE_%1_%2").arg(value).arg(unitSuffix);
         QString displayName  = QStringLiteral("%1 %2 AGL").arg(value).arg(unitLabel);
         QString shortLabel   = QStringLiteral("%1%2").arg(value).arg(unitLabel);
 
-        // Convert threshold to SI metres at registration time (captured by lambda)
+        // Convert threshold to SI metres at registration time (baked into the calculation)
         double thresholdMetres = isImperial ? value * 0.3048 : static_cast<double>(value);
 
-        // Register the calculated attribute lambda
-        SessionData::registerCalculatedAttribute(
-            attributeKey,
-            {
-                DependencyKey::attribute(SessionKeys::AnalysisStartTime),
-                DependencyKey::attribute(SessionKeys::AnalysisEndTime),
-                DependencyKey::measurement("GNSS", "z"),
-                DependencyKey::measurement("GNSS", SessionKeys::Time)
-            },
-            [thresholdMetres](SessionData &session) -> std::optional<QVariant> {
-                // Retrieve analysis window bounds
-                QVariant asVar = session.getAttribute(SessionKeys::AnalysisStartTime);
-                if (!asVar.canConvert<double>())
-                    return std::nullopt;
-                double analysisStartSec = asVar.toDouble();
+        wantedKeys.append(attributeKey);
+        thresholds.insert(attributeKey, thresholdMetres);
 
-                QVariant aeVar = session.getAttribute(SessionKeys::AnalysisEndTime);
-                if (!aeVar.canConvert<double>())
-                    return std::nullopt;
-                double analysisEndSec = aeVar.toDouble();
-
-                // Retrieve GNSS altitude AGL and time vectors
-                QVector<double> z    = session.getMeasurement("GNSS", "z");
-                QVector<double> time = session.getMeasurement("GNSS", SessionKeys::Time);
-
-                if (z.isEmpty() || time.isEmpty() || z.size() != time.size())
-                    return std::nullopt;
-
-                // Find the last downward crossing of thresholdMetres within the analysis window
-                double lastCrossingTime = -1.0;
-                bool   foundCrossing    = false;
-
-                for (int i = 1; i < z.size(); ++i) {
-                    if (time[i] < analysisStartSec) continue;
-                    if (time[i - 1] > analysisEndSec) break;
-
-                    // Downward crossing: z[i-1] >= threshold AND z[i] < threshold
-                    if (z[i - 1] >= thresholdMetres && z[i] < thresholdMetres) {
-                        // Linear interpolation to find precise crossing time
-                        double t_cross = time[i - 1]
-                            + (thresholdMetres - z[i - 1]) / (z[i] - z[i - 1])
-                            * (time[i] - time[i - 1]);
-                        lastCrossingTime = t_cross;
-                        foundCrossing    = true;
-                    }
-                }
-
-                if (!foundCrossing)
-                    return std::nullopt;
-
-                return QVariant(lastCrossingTime);
-            });
-
-        // Build the MarkerDefinition
         MarkerDefinition def;
         def.category     = QStringLiteral("Altitude");
         def.displayName  = displayName;
@@ -131,41 +168,50 @@ void AltitudeMarkerManager::registerAll()
         def.groupId        = QStringLiteral("altitude");
         def.defaultEnabled = true;
         defs.append(def);
+    }
 
-        // Step 6: Write the shared marker colour so plot rendering finds it via the
-        // standard per-marker key lookup (goes through PreferencesManager like all
-        // other marker colour writes).
-        PreferencesManager::instance().setValue(
-            PreferenceKeys::markerColorKey(attributeKey),
-            color);
+    // Step 5: Diff against what is registered. The key encodes the altitude
+    // and unit, so an unchanged key is an unchanged calculation and is left
+    // alone (a colour-only change touches no registration and invalidates
+    // nothing). Every unregister / register is broadcast by the registry to
+    // the engine of every loaded session, which drops the affected results.
+    CalculationRegistry &registry = CalculationRegistry::instance();
+    const QSet<QString> wanted(wantedKeys.begin(), wantedKeys.end());
+    const QSet<QString> registered(m_registeredKeys.begin(), m_registeredKeys.end());
 
-        m_registeredKeys.append(attributeKey);
+    QStringList removedKeys;
+    for (const QString &key : std::as_const(m_registeredKeys)) {
+        if (!wanted.contains(key)) {
+            registry.unregister(calculationId(key));
+            removedKeys.append(key);
+        }
+    }
+
+    QStringList nowRegistered;
+    for (const QString &key : std::as_const(wantedKeys)) {
+        if (registered.contains(key)) {
+            nowRegistered.append(key);
+        } else if (registry.registerCalculation(makeDescriptor(key, thresholds.value(key)))) {
+            nowRegistered.append(key);
+        } else {
+            qWarning() << "AltitudeMarkerManager: could not register the calculation for" << key;
+        }
+    }
+    m_registeredKeys = nowRegistered;
+
+    // Step 6: Write the shared marker colour so plot rendering finds it via the
+    // standard per-marker key lookup (goes through PreferencesManager like all
+    // other marker colour writes).
+    for (const QString &key : std::as_const(wantedKeys)) {
+        PreferencesManager::instance().setValue(PreferenceKeys::markerColorKey(key), color);
     }
 
     // Atomically replace the altitude group so markersChanged() fires only once
     MarkerRegistry::instance()->replaceMarkerGroup(QStringLiteral("altitude"), defs);
-}
-
-void AltitudeMarkerManager::refresh()
-{
-    QSet<QString> oldKeys(m_registeredKeys.begin(), m_registeredKeys.end());
-
-    // Unregister calculated attribute recipes (global, not per-session)
-    for (const QString &key : std::as_const(m_registeredKeys)) {
-        CalculatedValue<QString, QVariant>::unregisterCalculation(key);
-    }
-    m_registeredKeys.clear();
-
-    // Re-register with current preferences (uses atomic replaceMarkerGroup)
-    registerAll();
 
     // Clear saved enabled state for removed markers so that re-adding
     // them later falls through to defaultEnabled = true.
-    QSet<QString> newKeys(m_registeredKeys.begin(), m_registeredKeys.end());
-    QSettings settings;
-    for (const QString &key : oldKeys) {
-        if (!newKeys.contains(key)) {
-            settings.remove(QStringLiteral("state/markers/") + key);
-        }
+    for (const QString &key : std::as_const(removedKeys)) {
+        settings.remove(QStringLiteral("state/markers/") + key);
     }
 }

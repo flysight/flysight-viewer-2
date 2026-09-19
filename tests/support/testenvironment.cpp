@@ -10,9 +10,10 @@
 #include <QTimer>
 
 #include "calculations/attributeregistration.h"
-#include "calculations/calculatedvalueregistry.h"
+#include "calculations/builtincalculations.h"
 #include "idlescheduler.h"
 #include "logbookmanager.h"
+#include "preferences/enginepreferenceprovider.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessionmodel.h"
@@ -204,7 +205,9 @@ void TestEnvironment::registerBuiltIns()
     registered = true;
 
     FlySight::registerBuiltInAttributes();
-    CalculatedValueRegistry::instance().registerBuiltInCalculations();
+    EnginePreferenceProvider::install();
+    FlySight::registerBuiltInCalculations();
+    FlySight::registerBuiltInCalculationMetadata();
 }
 
 void TestEnvironment::resetPreferencesToDefaults()

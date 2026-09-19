@@ -37,8 +37,10 @@
 
 /* FlySight headers */
 #include "pluginhost.h"
-#include "sessiondata.h"
+#include "pluginsessionview.h"
 #include "dependencykey.h"
+#include "engine/calculationdescriptor.h"
+#include "engine/calculationregistry.h"
 #include "plotregistry.h"
 #include "markerregistry.h"
 #include "python_output_redirector.h"
@@ -55,6 +57,44 @@ static QString pyStatusToString(const PyStatus& s)
                QString::fromUtf8(s.err_msg ? s.err_msg : "unknown") :
                QStringLiteral("success");
 }
+
+/* ------------------------------------------------------------------------
+ *  Calculation adapters
+ * ---------------------------------------------------------------------- */
+
+// The declared inputs of a plug-in: the DependencyKey objects returned by its
+// inputs() method, decoded by their .kind.
+static QList<CalcInput> decodeInputs(const py::object& plugin)
+{
+    QList<CalcInput> inputs;
+    for (py::handle hi : plugin.attr("inputs")().cast<py::list>()) {
+        py::object dk = hi.cast<py::object>();
+        int kind      = dk.attr("kind").cast<int>();
+
+        if (kind == static_cast<int>(DependencyKey::Type::Attribute)) {
+            inputs.append(CalcInput::attribute(
+                QString::fromStdString(dk.attr("attributeKey").cast<std::string>())));
+        } else {
+            inputs.append(CalcInput::measurement(
+                QString::fromStdString(dk.attr("sensorKey").cast<std::string>()),
+                QString::fromStdString(dk.attr("measurementKey").cast<std::string>())));
+        }
+    }
+    return inputs;
+}
+
+// The "session" handed to one compute() call. The view is made inert when the
+// call ends, whether it returns or throws, so a plug-in that keeps the object
+// never holds a pointer to a dead evaluation context.
+struct ViewScope {
+    explicit ViewScope(const EvaluationContext* ctx)
+        : view(std::make_shared<PluginSessionView>(ctx)) {}
+    ~ViewScope() { view->invalidate(); }
+    ViewScope(const ViewScope&) = delete;
+    ViewScope& operator=(const ViewScope&) = delete;
+
+    std::shared_ptr<PluginSessionView> view;
+};
 
 /* ────────────────────────────────────────────────────────────────────────────
  *  Singleton
@@ -274,58 +314,58 @@ void PluginHost::initialise(const QString& pluginDir)
     /* ------------------------------------------------------------------ */
     /* 4.  Register calculated attributes                                 */
     /* ------------------------------------------------------------------ */
+    // Each plug-in becomes one single-output calculation in the process-wide
+    // registry. This runs before the built-ins are registered, so a plug-in
+    // that declares a built-in output is tried first.
+    CalculationRegistry &registry = CalculationRegistry::instance();
+
+    int attributeIndex = 0;
     for (py::handle h : sdk.attr("_attributes")) {
         py::object plugin = h.cast<py::object>();
         const QString key =
             QString::fromStdString(plugin.attr("name").cast<std::string>());
 
-        QList<DependencyKey> deps;
-        for (py::handle hi : plugin.attr("inputs")().cast<py::list>()) {
-            py::object dk = hi.cast<py::object>();
-            int kind      = dk.attr("kind").cast<int>();
+        CalculationDescriptor d;
+        d.id = QStringLiteral("plugin.attr.%1.%2").arg(attributeIndex++).arg(key);
+        d.inputs = decodeInputs(plugin);
+        d.outputs = { DependencyKey::attribute(key) };
+        d.compute = [plugin, key](const EvaluationContext &ctx) -> CalculationResult {
+            py::gil_scoped_acquire gil;
+            ViewScope scope(&ctx);
+            py::object out = plugin.attr("compute")(py::cast(scope.view));
+            if (out.is_none()) return CalculationResult::unavailable();
 
-            if (kind == static_cast<int>(DependencyKey::Type::Attribute)) {
-                deps.append(DependencyKey::attribute(
-                    QString::fromStdString(dk.attr("attributeKey").cast<std::string>())));
-            } else {
-                deps.append(DependencyKey::measurement(
-                    QString::fromStdString(dk.attr("sensorKey").cast<std::string>()),
-                    QString::fromStdString(dk.attr("measurementKey").cast<std::string>())));
-            }
-        }
+            if (py::isinstance<py::float_>(out) ||
+                py::isinstance<py::int_>(out))
+                return CalculationResult().setAttribute(
+                    key, QVariant::fromValue(out.cast<double>()));
 
-        SessionData::registerCalculatedAttribute(
-            key, deps,
-            [plugin](SessionData& s) -> std::optional<QVariant> {
-                py::gil_scoped_acquire gil;
-                py::object out = plugin.attr("compute")(py::cast(&s,
-                                                                 py::return_value_policy::reference));
-                if (out.is_none()) return std::nullopt;
-
-                if (py::isinstance<py::float_>(out) ||
-                    py::isinstance<py::int_>(out))
-                    return QVariant::fromValue(out.cast<double>());
-
-                if (py::isinstance<py::str>(out)) {
-                    const QString txt =
-                        QString::fromStdString(out.cast<std::string>());
-                    const QDateTime dt =
-                        QDateTime::fromString(txt, Qt::ISODateWithMs);
-                    if (dt.isValid()) {
-                        // Store as UTC-seconds double so the value participates
-                        // in the interpolation system's canConvert<double>() check.
-                        return QVariant::fromValue(
-                            dt.toMSecsSinceEpoch() / 1000.0);
-                    }
-                    return QVariant::fromValue(txt);
+            if (py::isinstance<py::str>(out)) {
+                const QString txt =
+                    QString::fromStdString(out.cast<std::string>());
+                const QDateTime dt =
+                    QDateTime::fromString(txt, Qt::ISODateWithMs);
+                if (dt.isValid()) {
+                    // Store as UTC-seconds double so the value participates
+                    // in the interpolation system's canConvert<double>() check.
+                    return CalculationResult().setAttribute(
+                        key, QVariant::fromValue(dt.toMSecsSinceEpoch() / 1000.0));
                 }
-                return std::nullopt;
-            });
+                return CalculationResult().setAttribute(key, QVariant::fromValue(txt));
+            }
+            return CalculationResult::unavailable();
+        };
+
+        if (!registry.registerCalculation(d)) {
+            qWarning().noquote() << "[PluginHost] Attribute plug-in" << key
+                                 << "could not be registered as" << d.id;
+        }
     }
 
     /* ------------------------------------------------------------------ */
     /* 5.  Register calculated measurements                               */
     /* ------------------------------------------------------------------ */
+    int measurementIndex = 0;
     for (py::handle h : sdk.attr("_measurements")) {
         py::object plugin = h.cast<py::object>();
         const QString sensor =
@@ -333,34 +373,28 @@ void PluginHost::initialise(const QString& pluginDir)
         const QString name =
             QString::fromStdString(plugin.attr("name").cast<std::string>());
 
-        QList<DependencyKey> deps;
-        for (py::handle hi : plugin.attr("inputs")().cast<py::list>()) {
-            py::object dk = hi.cast<py::object>();
-            int kind      = dk.attr("kind").cast<int>();
+        CalculationDescriptor d;
+        d.id = QStringLiteral("plugin.meas.%1.%2/%3").arg(measurementIndex++).arg(sensor, name);
+        d.inputs = decodeInputs(plugin);
+        d.outputs = { DependencyKey::measurement(sensor, name) };
+        d.compute = [plugin, sensor, name](const EvaluationContext &ctx) -> CalculationResult {
+            py::gil_scoped_acquire gil;
+            ViewScope scope(&ctx);
+            py::object out = plugin.attr("compute")(py::cast(scope.view));
+            if (out.is_none()) return CalculationResult::unavailable();
 
-            if (kind == static_cast<int>(DependencyKey::Type::Attribute)) {
-                deps.append(DependencyKey::attribute(
-                    QString::fromStdString(dk.attr("attributeKey").cast<std::string>())));
-            } else {
-                deps.append(DependencyKey::measurement(
-                    QString::fromStdString(dk.attr("sensorKey").cast<std::string>()),
-                    QString::fromStdString(dk.attr("measurementKey").cast<std::string>())));
-            }
+            auto buf = out.cast<
+                py::array_t<double,
+                            py::array::c_style | py::array::forcecast>>();
+            // The copy into the QVector detaches the result from the NumPy buffer.
+            return CalculationResult().setMeasurement(
+                sensor, name, QVector<double>(buf.data(), buf.data() + buf.shape(0)));
+        };
+
+        if (!registry.registerCalculation(d)) {
+            qWarning().noquote() << "[PluginHost] Measurement plug-in" << (sensor + "/" + name)
+                                 << "could not be registered as" << d.id;
         }
-
-        SessionData::registerCalculatedMeasurement(
-            sensor, name, deps,
-            [plugin](SessionData& s) -> std::optional<QVector<double>> {
-                py::gil_scoped_acquire gil;
-                py::object out = plugin.attr("compute")(py::cast(&s,
-                                                                 py::return_value_policy::reference));
-                if (out.is_none()) return std::nullopt;
-
-                auto buf = out.cast<
-                    py::array_t<double,
-                                py::array::c_style | py::array::forcecast>>();
-                return QVector<double>(buf.data(), buf.data() + buf.shape(0));
-            });
     }
 
     /* ------------------------------------------------------------------ */

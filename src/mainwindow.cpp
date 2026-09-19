@@ -45,7 +45,8 @@
 #include "plotrangemodel.h"
 #include "measuremodel.h"
 #include "units/unitconverter.h"
-#include "calculations/calculatedvalueregistry.h"
+#include "calculations/builtincalculations.h"
+#include "preferences/enginepreferenceprovider.h"
 #include "calculations/attributeregistration.h"
 #include "altitudemarkerfeature.h"
 #include "logbookcolumn.h"
@@ -158,8 +159,15 @@ MainWindow::MainWindow(QWidget *parent)
     // Initialize preferences (must come AFTER plots and markers are registered)
     initializePreferences();
 
-    // Initialize calculated values
-    CalculatedValueRegistry::instance().registerBuiltInCalculations();
+    // Let calculations read the preferences they declare as inputs, and have
+    // preference changes invalidate their results (after the preferences are
+    // registered).
+    EnginePreferenceProvider::install();
+
+    // Register the built-in calculations. Plugins registered theirs above, so
+    // a plugin that declares a built-in output is tried first.
+    registerBuiltInCalculations();
+    registerBuiltInCalculationMetadata();
 
     // Instantiate and register altitude markers (must come after calculations are registered)
     m_altitudeMarkerManager = new AltitudeMarkerManager(model, this);
@@ -582,8 +590,6 @@ void MainWindow::importFiles(
         SessionData tempSessionData;
 
         if (importer.importFile(filePath, tempSessionData)) {
-            // Force groundElev calculation on the temp session
-            tempSessionData.getAttribute(SessionKeys::GroundElev);
             importedSessions.append(tempSessionData);
         } else {
             QString errorMessage = importer.getLastError();

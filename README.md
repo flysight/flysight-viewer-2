@@ -320,13 +320,18 @@ flysight-viewer-2/
 │   ├── fix_macos_rpaths.sh                # Post-install rpath repair for macOS bundles
 │   └── diagnose_macos_bundle.sh           # Diagnostic tool for macOS bundle issues
 ├── src/
-│   └── CMakeLists.txt                     # Main application build configuration; defines the
+│   ├── CMakeLists.txt                     # Main application build configuration; defines the
 │                                          #   flysight_model library (session data + calculation
 │                                          #   engine, Qt Core only, also linked by the Python
 │                                          #   bridge), the flysight_core library (import/export,
 │                                          #   logbook, session model, registries, calculations;
 │                                          #   Qt Core + Gui, no UI), and the FlySightViewer
 │                                          #   executable (UI, docks, plugin host)
+│   ├── engine/                            # Calculation engine: registered calculations with
+│   │                                      #   declared inputs/outputs, one per-session cache and
+│   │                                      #   dependency graph behind every SessionData read
+│   └── calculations/                      # Built-in calculations registered with the engine
+│                                          #   (builtincalculations.cpp is the entry point)
 ├── tests/
 │   ├── CMakeLists.txt                     # Test targets (built when FLYSIGHT_BUILD_TESTS=ON)
 │   ├── README.md                          # How to build, run, and write tests

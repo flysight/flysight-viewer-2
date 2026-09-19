@@ -29,6 +29,8 @@ public:
         }
     }
 
+    bool hasPreference(const QString &key) const { return m_preferences.contains(key); }
+
     QVariant getValue(const QString &key) const {
         if (!m_preferences.contains(key)) {
             qWarning() << "Requested value for an unregistered preference:" << key;

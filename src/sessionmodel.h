@@ -4,6 +4,7 @@
 #include <optional>
 
 #include <QAbstractTableModel>
+#include <QHash>
 #include <QMap>
 #include <QSet>
 #include <QVector>
@@ -93,6 +94,13 @@ public:
     // Flush dirty sessions to disk (public so MainWindow can call on shutdown)
     void flushDirtySessions();
 
+    /// Delivers, now, the invalidations that registry and preference changes
+    /// caused in loaded sessions: dataChanged + dependencyChanged per session,
+    /// and a refresh of its cached logbook columns. Normally this runs by
+    /// itself on the next event-loop pass; tests (and shutdown) call it
+    /// directly.
+    void flushPendingInvalidations();
+
 signals:
     void modelChanged();
     void sessionLoaded(const QString &sessionId);
@@ -122,6 +130,18 @@ private:
     void lruInsert(const QString &sessionId);
     void evictIfNeeded();
     void evictSession(const QString &sessionId);
+
+    // Invalidation. Edits made through the model return their invalidated
+    // names to the caller, which publishes them at once. Invalidation that
+    // originates elsewhere (a calculation registered or unregistered, a
+    // declared preference changed) reaches a loaded session through its
+    // engine's listener; it is queued per session and published once per
+    // event-loop pass, because one user action can cause many registry changes.
+    void attachSession(SessionRow &sr);
+    void queueInvalidation(const QString &sessionId, const QSet<DependencyKey> &keys);
+    void publishInvalidation(int row, const QSet<DependencyKey> &keys);
+    QHash<QString, QSet<DependencyKey>> m_pendingInvalidations;
+    bool m_invalidationFlushQueued = false;
 
     // Idle scheduler (replaces per-worker QTimers)
     IdleScheduler m_scheduler;

@@ -1,608 +1,605 @@
 #include "attributecalculations.h"
 #include "../sessiondata.h"
 #include "../dependencykey.h"
-#include "../preferences/preferencesmanager.h"
 #include "../preferences/preferencekeys.h"
+#include "registration.h"
 #include <QVector>
 #include <algorithm>
+#include <cmath>
+#include <limits>
+#include <optional>
+#include <utility>
 
 using namespace FlySight;
 
-void Calculations::registerAttributeCalculations()
+namespace {
+
+// Analysis range: the largest monotonic descent in elevation, where a descent
+// ends after `timeout` seconds without a new low, padded by `timeout` on each
+// side. Returns (start, end) in UTC seconds, or nullopt when there is no descent.
+std::optional<std::pair<double, double>> computeAnalysisRange(const QVector<double> &hMSL,
+                                                              const QVector<double> &time,
+                                                              double timeout)
 {
-    // Analysis range: find the largest monotonic descent in elevation.
-    // Both attributes are computed by the same shared function (like the
-    // simplified-track pattern in simplificationcalculations.cpp).
-    auto computeAnalysisRange = [](SessionData& session, const QString& outputKey) -> std::optional<QVariant> {
-        // Read the pause timeout from preferences at compute time
-        PreferencesManager &prefs = PreferencesManager::instance();
-        double timeout = prefs.getValue(PreferenceKeys::ImportDescentPauseSeconds).toDouble();
-
-        QVector<double> hMSL = session.getMeasurement("GNSS", "hMSL");
-        QVector<double> time = session.getMeasurement("GNSS", SessionKeys::Time);
-
-        if (hMSL.isEmpty() || time.isEmpty() || hMSL.size() != time.size())
-            return std::nullopt;
-
-        const int n = hMSL.size();
-
-        // Initialize current-descent tracking from the first sample
-        double currentHigh = hMSL[0];
-        int currentHighIdx = 0;
-        double currentLow = hMSL[0];
-        int currentLowIdx = 0;
-
-        // Best descent found so far
-        double bestDrop = 0.0;
-        int bestHighIdx = -1;
-        int bestLowIdx = -1;
-
-        for (int i = 1; i < n; ++i) {
-            if (hMSL[i] > currentHigh) {
-                // New high found: reset descent tracking
-                currentHigh = hMSL[i];
-                currentHighIdx = i;
-                currentLow = hMSL[i];
-                currentLowIdx = i;
-            } else if (hMSL[i] <= currentLow) {
-                // New low found (equal or below)
-                currentLow = hMSL[i];
-                currentLowIdx = i;
-            } else if (time[i] - time[currentLowIdx] > timeout) {
-                // Descent has ended due to pause timeout
-                double drop = currentHigh - currentLow;
-                if (drop > bestDrop) {
-                    bestDrop = drop;
-                    bestHighIdx = currentHighIdx;
-                    bestLowIdx = currentLowIdx;
-                }
-                // Reset all current-state variables to this sample
-                currentHigh = hMSL[i];
-                currentHighIdx = i;
-                currentLow = hMSL[i];
-                currentLowIdx = i;
-            }
-        }
-
-        // Finalize: compare the last descent against bestDrop
-        double drop = currentHigh - currentLow;
-        if (drop > bestDrop) {
-            bestDrop = drop;
-            bestHighIdx = currentHighIdx;
-            bestLowIdx = currentLowIdx;
-        }
-
-        if (bestDrop > 0 && bestHighIdx >= 0) {
-            // Add a grace period (equal to the pause timeout) on each side
-            double startSec = std::max(time[bestHighIdx] - timeout, time[0]);
-            double endSec = std::min(time[bestLowIdx] + timeout, time[n - 1]);
-
-            // Store both results as double (UTC seconds)
-            session.setCalculatedAttribute(SessionKeys::AnalysisStartTime, startSec);
-            session.setCalculatedAttribute(SessionKeys::AnalysisEndTime, endSec);
-
-            return session.getAttribute(outputKey);
-        }
-
+    if (hMSL.isEmpty() || time.isEmpty() || hMSL.size() != time.size())
         return std::nullopt;
-    };
 
-    // Register both analysis range attributes with the same dependencies and shared function
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::AnalysisStartTime,
-        {
-            DependencyKey::measurement("GNSS", "hMSL"),
-            DependencyKey::measurement("GNSS", SessionKeys::Time)
-        },
-        [computeAnalysisRange](SessionData& session) -> std::optional<QVariant> {
-        return computeAnalysisRange(session, SessionKeys::AnalysisStartTime);
-    });
+    const int n = hMSL.size();
 
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::AnalysisEndTime,
-        {
-            DependencyKey::measurement("GNSS", "hMSL"),
-            DependencyKey::measurement("GNSS", SessionKeys::Time)
-        },
-        [computeAnalysisRange](SessionData& session) -> std::optional<QVariant> {
-        return computeAnalysisRange(session, SessionKeys::AnalysisEndTime);
-    });
+    // Initialize current-descent tracking from the first sample
+    double currentHigh = hMSL[0];
+    int currentHighIdx = 0;
+    double currentLow = hMSL[0];
+    int currentLowIdx = 0;
+
+    // Best descent found so far
+    double bestDrop = 0.0;
+    int bestHighIdx = -1;
+    int bestLowIdx = -1;
+
+    for (int i = 1; i < n; ++i) {
+        if (hMSL[i] > currentHigh) {
+            // New high found: reset descent tracking
+            currentHigh = hMSL[i];
+            currentHighIdx = i;
+            currentLow = hMSL[i];
+            currentLowIdx = i;
+        } else if (hMSL[i] <= currentLow) {
+            // New low found (equal or below)
+            currentLow = hMSL[i];
+            currentLowIdx = i;
+        } else if (time[i] - time[currentLowIdx] > timeout) {
+            // Descent has ended due to pause timeout
+            double drop = currentHigh - currentLow;
+            if (drop > bestDrop) {
+                bestDrop = drop;
+                bestHighIdx = currentHighIdx;
+                bestLowIdx = currentLowIdx;
+            }
+            // Reset all current-state variables to this sample
+            currentHigh = hMSL[i];
+            currentHighIdx = i;
+            currentLow = hMSL[i];
+            currentLowIdx = i;
+        }
+    }
+
+    // Finalize: compare the last descent against bestDrop
+    double drop = currentHigh - currentLow;
+    if (drop > bestDrop) {
+        bestDrop = drop;
+        bestHighIdx = currentHighIdx;
+        bestLowIdx = currentLowIdx;
+    }
+
+    if (bestDrop > 0 && bestHighIdx >= 0) {
+        // Add a grace period (equal to the pause timeout) on each side
+        double startSec = std::max(time[bestHighIdx] - timeout, time[0]);
+        double endSec = std::min(time[bestLowIdx] + timeout, time[n - 1]);
+        return std::make_pair(startSec, endSec);
+    }
+
+    return std::nullopt;
+}
+
+// Flare detection: the ascending segment in hMSL with the greatest elevation
+// gain between exit and landing, tolerating small dips within the vertical
+// position accuracy band. Returns (start, end) in UTC seconds.
+std::optional<std::pair<double, double>> computeFlare(double exitSec, double landingSec,
+                                                      const QVector<double> &hMSL,
+                                                      const QVector<double> &vAcc,
+                                                      const QVector<double> &time)
+{
+    const int n = hMSL.size();
+    if (n == 0 || vAcc.size() != n || time.size() != n)
+        return std::nullopt;
+
+    // Find the index range [iStart, iEnd) covering exit..landing
+    int iStart = -1, iEnd = n;
+    for (int i = 0; i < n; ++i) {
+        if (iStart < 0 && time[i] >= exitSec) iStart = i;
+        if (time[i] > landingSec) { iEnd = i; break; }
+    }
+    if (iStart < 0 || iStart >= iEnd)
+        return std::nullopt;
+
+    // Track ascending segments: look for the one with the greatest elevation gain.
+    // A segment ends when elevation drops below the running high by more than 2*vAcc.
+    double currentLow  = hMSL[iStart];
+    int    currentLowIdx  = iStart;
+    double currentHigh = hMSL[iStart];
+    int    currentHighIdx = iStart;
+
+    double bestGain = 0.0;
+    int    bestLowIdx  = -1;
+    int    bestHighIdx = -1;
+
+    for (int i = iStart + 1; i < iEnd; ++i) {
+        if (hMSL[i] < currentLow) {
+            // New low: reset the ascending segment
+            currentLow = hMSL[i];
+            currentLowIdx = i;
+            currentHigh = hMSL[i];
+            currentHighIdx = i;
+        } else if (hMSL[i] > currentHigh) {
+            // Extending the ascent
+            currentHigh = hMSL[i];
+            currentHighIdx = i;
+        } else if (hMSL[i] < currentHigh - 2.0 * vAcc[i]) {
+            // Confidently below the high: ascending segment has ended
+            double gain = currentHigh - currentLow;
+            if (gain > bestGain) {
+                bestGain = gain;
+                bestLowIdx = currentLowIdx;
+                bestHighIdx = currentHighIdx;
+            }
+            // Reset from this sample
+            currentLow = hMSL[i];
+            currentLowIdx = i;
+            currentHigh = hMSL[i];
+            currentHighIdx = i;
+        }
+    }
+
+    // Finalize: check the last segment
+    double gain = currentHigh - currentLow;
+    if (gain > bestGain) {
+        bestGain = gain;
+        bestLowIdx = currentLowIdx;
+        bestHighIdx = currentHighIdx;
+    }
+
+    if (bestGain <= 0 || bestLowIdx < 0)
+        return std::nullopt;
+
+    return std::make_pair(time[bestLowIdx], time[bestHighIdx]);
+}
+
+// Time of the peak of `values` between manoeuvre start and landing.
+std::optional<double> timeOfMaximum(double msSec, double landingSec,
+                                    const QVector<double> &values,
+                                    const QVector<double> &time)
+{
+    if (values.isEmpty() || time.isEmpty() || values.size() != time.size())
+        return std::nullopt;
+
+    double maxValue = -std::numeric_limits<double>::max();
+    int maxIdx = -1;
+    for (int i = 0; i < values.size(); ++i) {
+        if (time[i] < msSec) continue;
+        if (time[i] > landingSec) break;
+        if (values[i] > maxValue) {
+            maxValue = values[i];
+            maxIdx = i;
+        }
+    }
+
+    if (maxIdx < 0)
+        return std::nullopt;
+
+    return time[maxIdx];
+}
+
+} // namespace
+
+void Calculations::registerAttributeCalculations(CalculationRegistry &registry)
+{
+    // Analysis range: one computation, two outputs. The pause timeout is a
+    // declared preference input, so changing it re-evaluates the range.
+    {
+        CalculationDescriptor d;
+        d.id = QStringLiteral("builtin.attr.analysisRange");
+        d.inputs = {
+            CalcInput::measurement("GNSS", "hMSL"),
+            CalcInput::measurement("GNSS", SessionKeys::Time),
+            CalcInput::preference(PreferenceKeys::ImportDescentPauseSeconds)
+        };
+        d.outputs = {
+            DependencyKey::attribute(SessionKeys::AnalysisStartTime),
+            DependencyKey::attribute(SessionKeys::AnalysisEndTime)
+        };
+        d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
+            const double timeout = ctx.preference(PreferenceKeys::ImportDescentPauseSeconds).toDouble();
+            const auto range = computeAnalysisRange(ctx.measurement("GNSS", "hMSL"),
+                                                    ctx.measurement("GNSS", SessionKeys::Time),
+                                                    timeout);
+            if (!range)
+                return CalculationResult::unavailable();
+            return CalculationResult()
+                .setAttribute(SessionKeys::AnalysisStartTime, range->first)
+                .setAttribute(SessionKeys::AnalysisEndTime, range->second);
+        };
+        addCalculation(registry, d);
+    }
 
     // Exit time calculation based on GNSS vertical speed threshold
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::ExitTime,
-        {
-            DependencyKey::attribute(SessionKeys::AnalysisStartTime),
-            DependencyKey::attribute(SessionKeys::AnalysisEndTime),
-            DependencyKey::measurement("GNSS", "velD"),
-            DependencyKey::measurement("GNSS", "sAcc"),
-            DependencyKey::measurement("GNSS", "accD"),
-            DependencyKey::measurement("GNSS", SessionKeys::Time)
-        },
-        [](SessionData& session) -> std::optional<QVariant> {
-        // Retrieve analysis window to constrain the search
-        QVariant asVar = session.getAttribute(SessionKeys::AnalysisStartTime);
-        if (!asVar.canConvert<double>())
-            return std::nullopt;
-        double analysisStartSec = asVar.toDouble();
+    {
+        CalculationDescriptor d;
+        d.id = QStringLiteral("builtin.attr.exitTime");
+        d.inputs = {
+            CalcInput::attribute(SessionKeys::AnalysisStartTime),
+            CalcInput::attribute(SessionKeys::AnalysisEndTime),
+            CalcInput::measurement("GNSS", "velD"),
+            CalcInput::measurement("GNSS", "sAcc"),
+            CalcInput::measurement("GNSS", "accD"),
+            CalcInput::measurement("GNSS", SessionKeys::Time)
+        };
+        d.outputs = { DependencyKey::attribute(SessionKeys::ExitTime) };
+        d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
+            // Retrieve analysis window to constrain the search
+            QVariant asVar = ctx.attribute(SessionKeys::AnalysisStartTime);
+            if (!asVar.canConvert<double>())
+                return CalculationResult::unavailable();
+            double analysisStartSec = asVar.toDouble();
 
-        QVariant aeVar = session.getAttribute(SessionKeys::AnalysisEndTime);
-        if (!aeVar.canConvert<double>())
-            return std::nullopt;
-        double analysisEndSec = aeVar.toDouble();
+            QVariant aeVar = ctx.attribute(SessionKeys::AnalysisEndTime);
+            if (!aeVar.canConvert<double>())
+                return CalculationResult::unavailable();
+            double analysisEndSec = aeVar.toDouble();
 
-        // Find the first timestamp where vertical speed drops below a threshold
-        QVector<double> velD = session.getMeasurement("GNSS", "velD");
-        QVector<double> sAcc = session.getMeasurement("GNSS", "sAcc");
-        QVector<double> accD = session.getMeasurement("GNSS", "accD");
-        QVector<double> time = session.getMeasurement("GNSS", SessionKeys::Time);
+            // Find the first timestamp where vertical speed drops below a threshold
+            QVector<double> velD = ctx.measurement("GNSS", "velD");
+            QVector<double> sAcc = ctx.measurement("GNSS", "sAcc");
+            QVector<double> accD = ctx.measurement("GNSS", "accD");
+            QVector<double> time = ctx.measurement("GNSS", SessionKeys::Time);
 
-        if (velD.isEmpty() || time.isEmpty() || velD.size() != time.size()) {
-            qWarning() << "Insufficient data to calculate exit time.";
-            return std::nullopt;
-        }
+            if (velD.isEmpty() || time.isEmpty() || velD.size() != time.size()
+                || sAcc.size() != velD.size() || accD.size() != velD.size()) {
+                qWarning() << "Insufficient data to calculate exit time.";
+                return CalculationResult::unavailable();
+            }
 
-        const double vThreshold = 10.0; // Vertical speed threshold in m/s
-        const double maxAccuracy = 1.0; // Maximum speed acccuracy in m/s
-        const double minAcceleration = 2.5; // Minimum vertical accleration in m/s^2
+            const double vThreshold = 10.0; // Vertical speed threshold in m/s
+            const double maxAccuracy = 1.0; // Maximum speed acccuracy in m/s
+            const double minAcceleration = 2.5; // Minimum vertical accleration in m/s^2
 
-        for (int i = 1; i < velD.size(); ++i) {
-            if (time[i] < analysisStartSec) continue;
-            if (time[i] > analysisEndSec) break;
+            for (int i = 1; i < velD.size(); ++i) {
+                if (time[i] < analysisStartSec) continue;
+                if (time[i] > analysisEndSec) break;
 
-            // Get interpolation coefficient
-            const double a = (vThreshold - velD[i - 1]) / (velD[i] - velD[i - 1]);
+                // Get interpolation coefficient
+                const double a = (vThreshold - velD[i - 1]) / (velD[i] - velD[i - 1]);
 
-            // Check vertical speed
-            if (a < 0 || 1 < a) continue;
+                // Check vertical speed
+                if (a < 0 || 1 < a) continue;
 
-            // Check accuracy
-            const double acc = sAcc[i - 1] + a * (sAcc[i] - sAcc[i - 1]);
-            if (acc > maxAccuracy) continue;
+                // Check accuracy
+                const double acc = sAcc[i - 1] + a * (sAcc[i] - sAcc[i - 1]);
+                if (acc > maxAccuracy) continue;
 
-            // Check acceleration
-            const double az = accD[i - 1] + a * (accD[i] - accD[i - 1]);
-            if (az < minAcceleration) continue;
+                // Check acceleration
+                const double az = accD[i - 1] + a * (accD[i] - accD[i - 1]);
+                if (az < minAcceleration) continue;
 
-            // Determine exit
-            const double tExit = time[i - 1] + a * (time[i] - time[i - 1]) - vThreshold / az;
-            return QVariant(tExit);
-        }
+                // Determine exit
+                const double tExit = time[i - 1] + a * (time[i] - time[i - 1]) - vThreshold / az;
+                return CalculationResult().setAttribute(SessionKeys::ExitTime, tExit);
+            }
 
-        qWarning() << "Exit time could not be determined based on current data.";
-        return std::nullopt;
-    });
+            qWarning() << "Exit time could not be determined based on current data.";
+            return CalculationResult::unavailable();
+        };
+        addCalculation(registry, d);
+    }
 
-    // Video sync time: defaults to exit time when not explicitly set by user
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::SyncTime,
-        { DependencyKey::attribute(SessionKeys::ExitTime) },
-        [](SessionData& session) -> std::optional<QVariant> {
-            QVariant exitVar = session.getAttribute(SessionKeys::ExitTime);
+    // Video sync time and course reference: each defaults to exit time when
+    // not explicitly set by the user. Two unrelated outputs, so two calculations.
+    const QList<QPair<QString, QString>> exitTimeDefaults = {
+        { QStringLiteral("builtin.attr.syncTime"),  QString::fromLatin1(SessionKeys::SyncTime) },
+        { QStringLiteral("builtin.attr.courseRef"), QString::fromLatin1(SessionKeys::CourseRef) }
+    };
+    for (const auto &entry : exitTimeDefaults) {
+        const QString outputKey = entry.second;
+        CalculationDescriptor d;
+        d.id = entry.first;
+        d.inputs = { CalcInput::attribute(SessionKeys::ExitTime) };
+        d.outputs = { DependencyKey::attribute(outputKey) };
+        d.compute = [outputKey](const EvaluationContext &ctx) -> CalculationResult {
+            QVariant exitVar = ctx.attribute(SessionKeys::ExitTime);
             if (!exitVar.canConvert<double>())
-                return std::nullopt;
-            return exitVar;
-        });
-
-    // Course reference: defaults to exit time when not explicitly set by user
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::CourseRef,
-        { DependencyKey::attribute(SessionKeys::ExitTime) },
-        [](SessionData& session) -> std::optional<QVariant> {
-            QVariant exitVar = session.getAttribute(SessionKeys::ExitTime);
-            if (!exitVar.canConvert<double>())
-                return std::nullopt;
-            return exitVar;
-        });
+                return CalculationResult::unavailable();
+            return CalculationResult().setAttribute(outputKey, exitVar);
+        };
+        addCalculation(registry, d);
+    }
 
     // Manoeuvre start time: walk backward from the last 10 m/s crossing
     // to the local minimum in vertical speed
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::ManoeuvreStartTime,
-        {
-            DependencyKey::attribute(SessionKeys::ExitTime),
-            DependencyKey::attribute(SessionKeys::LandingTime),
-            DependencyKey::measurement("GNSS", "velD"),
-            DependencyKey::measurement("GNSS", "sAcc"),
-            DependencyKey::measurement("GNSS", SessionKeys::Time)
-        },
-        [](SessionData& session) -> std::optional<QVariant> {
-        // Retrieve exit time and landing time to bound the search
-        QVariant exitVar = session.getAttribute(SessionKeys::ExitTime);
-        if (!exitVar.canConvert<double>())
-            return std::nullopt;
-        double exitSec = exitVar.toDouble();
+    {
+        CalculationDescriptor d;
+        d.id = QStringLiteral("builtin.attr.manoeuvreStart");
+        d.inputs = {
+            CalcInput::attribute(SessionKeys::ExitTime),
+            CalcInput::attribute(SessionKeys::LandingTime),
+            CalcInput::measurement("GNSS", "velD"),
+            CalcInput::measurement("GNSS", "sAcc"),
+            CalcInput::measurement("GNSS", SessionKeys::Time)
+        };
+        d.outputs = { DependencyKey::attribute(SessionKeys::ManoeuvreStartTime) };
+        d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
+            // Retrieve exit time and landing time to bound the search
+            QVariant exitVar = ctx.attribute(SessionKeys::ExitTime);
+            if (!exitVar.canConvert<double>())
+                return CalculationResult::unavailable();
+            double exitSec = exitVar.toDouble();
 
-        QVariant landVar = session.getAttribute(SessionKeys::LandingTime);
-        if (!landVar.canConvert<double>())
-            return std::nullopt;
-        double landingSec = landVar.toDouble();
+            QVariant landVar = ctx.attribute(SessionKeys::LandingTime);
+            if (!landVar.canConvert<double>())
+                return CalculationResult::unavailable();
+            double landingSec = landVar.toDouble();
 
-        QVector<double> velD = session.getMeasurement("GNSS", "velD");
-        QVector<double> sAcc = session.getMeasurement("GNSS", "sAcc");
-        QVector<double> time = session.getMeasurement("GNSS", SessionKeys::Time);
+            QVector<double> velD = ctx.measurement("GNSS", "velD");
+            QVector<double> sAcc = ctx.measurement("GNSS", "sAcc");
+            QVector<double> time = ctx.measurement("GNSS", SessionKeys::Time);
 
-        if (velD.isEmpty() || time.isEmpty() || sAcc.isEmpty()
-            || velD.size() != time.size() || velD.size() != sAcc.size())
-            return std::nullopt;
+            if (velD.isEmpty() || time.isEmpty() || sAcc.isEmpty()
+                || velD.size() != time.size() || velD.size() != sAcc.size())
+                return CalculationResult::unavailable();
 
-        const double vThreshold = 10.0; // m/s
+            const double vThreshold = 10.0; // m/s
 
-        // Find the LAST upward crossing of the threshold between exit and landing
-        int crossingIdx = -1;
+            // Find the LAST upward crossing of the threshold between exit and landing
+            int crossingIdx = -1;
 
-        for (int i = 1; i < velD.size(); ++i) {
-            if (time[i] < exitSec) continue;
-            if (time[i] > landingSec) break;
-            if (velD[i - 1] < vThreshold && velD[i] >= vThreshold) {
-                crossingIdx = i;
-            }
-        }
-
-        if (crossingIdx < 0)
-            return std::nullopt;
-
-        // Walk backward from the crossing to find the minimum in velD,
-        // tolerating small bumps within the speed accuracy band
-        int minIdx = crossingIdx - 1;
-        for (int j = crossingIdx - 2; j >= 0; --j) {
-            if (time[j] < exitSec) break;
-            if (velD[j] < velD[minIdx]) {
-                minIdx = j;
-            } else if (velD[j] > velD[minIdx] + 2.0 * sAcc[j]) {
-                break; // confidently above the minimum
-            }
-        }
-
-        return QVariant(time[minIdx]);
-    });
-
-    // Flare detection: longest ascending segment in hMSL between exit and landing,
-    // tolerating small dips within the vertical position accuracy band.
-    // Both FlareStartTime and FlareEndTime are computed by the same shared function.
-    auto computeFlare = [](SessionData& session, const QString& outputKey) -> std::optional<QVariant> {
-        QVariant exitVar = session.getAttribute(SessionKeys::ExitTime);
-        if (!exitVar.canConvert<double>())
-            return std::nullopt;
-        double exitSec = exitVar.toDouble();
-
-        QVariant landVar = session.getAttribute(SessionKeys::LandingTime);
-        if (!landVar.canConvert<double>())
-            return std::nullopt;
-        double landingSec = landVar.toDouble();
-
-        QVector<double> hMSL = session.getMeasurement("GNSS", "hMSL");
-        QVector<double> vAcc = session.getMeasurement("GNSS", "vAcc");
-        QVector<double> time = session.getMeasurement("GNSS", SessionKeys::Time);
-
-        const int n = hMSL.size();
-        if (n == 0 || vAcc.size() != n || time.size() != n)
-            return std::nullopt;
-
-        // Find the index range [iStart, iEnd) covering exit..landing
-        int iStart = -1, iEnd = n;
-        for (int i = 0; i < n; ++i) {
-            if (iStart < 0 && time[i] >= exitSec) iStart = i;
-            if (time[i] > landingSec) { iEnd = i; break; }
-        }
-        if (iStart < 0 || iStart >= iEnd)
-            return std::nullopt;
-
-        // Track ascending segments: look for the one with the greatest elevation gain.
-        // A segment ends when elevation drops below the running high by more than 2*vAcc.
-        double currentLow  = hMSL[iStart];
-        int    currentLowIdx  = iStart;
-        double currentHigh = hMSL[iStart];
-        int    currentHighIdx = iStart;
-
-        double bestGain = 0.0;
-        int    bestLowIdx  = -1;
-        int    bestHighIdx = -1;
-
-        for (int i = iStart + 1; i < iEnd; ++i) {
-            if (hMSL[i] < currentLow) {
-                // New low: reset the ascending segment
-                currentLow = hMSL[i];
-                currentLowIdx = i;
-                currentHigh = hMSL[i];
-                currentHighIdx = i;
-            } else if (hMSL[i] > currentHigh) {
-                // Extending the ascent
-                currentHigh = hMSL[i];
-                currentHighIdx = i;
-            } else if (hMSL[i] < currentHigh - 2.0 * vAcc[i]) {
-                // Confidently below the high: ascending segment has ended
-                double gain = currentHigh - currentLow;
-                if (gain > bestGain) {
-                    bestGain = gain;
-                    bestLowIdx = currentLowIdx;
-                    bestHighIdx = currentHighIdx;
+            for (int i = 1; i < velD.size(); ++i) {
+                if (time[i] < exitSec) continue;
+                if (time[i] > landingSec) break;
+                if (velD[i - 1] < vThreshold && velD[i] >= vThreshold) {
+                    crossingIdx = i;
                 }
-                // Reset from this sample
-                currentLow = hMSL[i];
-                currentLowIdx = i;
-                currentHigh = hMSL[i];
-                currentHighIdx = i;
             }
-        }
 
-        // Finalize: check the last segment
-        double gain = currentHigh - currentLow;
-        if (gain > bestGain) {
-            bestGain = gain;
-            bestLowIdx = currentLowIdx;
-            bestHighIdx = currentHighIdx;
-        }
+            if (crossingIdx < 0)
+                return CalculationResult::unavailable();
 
-        if (bestGain <= 0 || bestLowIdx < 0)
-            return std::nullopt;
+            // Walk backward from the crossing to find the minimum in velD,
+            // tolerating small bumps within the speed accuracy band
+            int minIdx = crossingIdx - 1;
+            for (int j = crossingIdx - 2; j >= 0; --j) {
+                if (time[j] < exitSec) break;
+                if (velD[j] < velD[minIdx]) {
+                    minIdx = j;
+                } else if (velD[j] > velD[minIdx] + 2.0 * sAcc[j]) {
+                    break; // confidently above the minimum
+                }
+            }
 
-        session.setCalculatedAttribute(SessionKeys::FlareStartTime, time[bestLowIdx]);
-        session.setCalculatedAttribute(SessionKeys::FlareEndTime,   time[bestHighIdx]);
+            return CalculationResult().setAttribute(SessionKeys::ManoeuvreStartTime, time[minIdx]);
+        };
+        addCalculation(registry, d);
+    }
 
-        return session.getAttribute(outputKey);
-    };
+    // Flare detection: one computation, two outputs. A user override of one
+    // output (a stored attribute) coexists with the other calculated output.
+    {
+        CalculationDescriptor d;
+        d.id = QStringLiteral("builtin.attr.flare");
+        d.inputs = {
+            CalcInput::attribute(SessionKeys::ExitTime),
+            CalcInput::attribute(SessionKeys::LandingTime),
+            CalcInput::measurement("GNSS", "hMSL"),
+            CalcInput::measurement("GNSS", "vAcc"),
+            CalcInput::measurement("GNSS", SessionKeys::Time)
+        };
+        d.outputs = {
+            DependencyKey::attribute(SessionKeys::FlareStartTime),
+            DependencyKey::attribute(SessionKeys::FlareEndTime)
+        };
+        d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
+            QVariant exitVar = ctx.attribute(SessionKeys::ExitTime);
+            if (!exitVar.canConvert<double>())
+                return CalculationResult::unavailable();
 
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::FlareStartTime,
-        {
-            DependencyKey::attribute(SessionKeys::ExitTime),
-            DependencyKey::attribute(SessionKeys::LandingTime),
-            DependencyKey::measurement("GNSS", "hMSL"),
-            DependencyKey::measurement("GNSS", "vAcc"),
-            DependencyKey::measurement("GNSS", SessionKeys::Time)
-        },
-        [computeFlare](SessionData& session) -> std::optional<QVariant> {
-        return computeFlare(session, SessionKeys::FlareStartTime);
-    });
+            QVariant landVar = ctx.attribute(SessionKeys::LandingTime);
+            if (!landVar.canConvert<double>())
+                return CalculationResult::unavailable();
 
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::FlareEndTime,
-        {
-            DependencyKey::attribute(SessionKeys::ExitTime),
-            DependencyKey::attribute(SessionKeys::LandingTime),
-            DependencyKey::measurement("GNSS", "hMSL"),
-            DependencyKey::measurement("GNSS", "vAcc"),
-            DependencyKey::measurement("GNSS", SessionKeys::Time)
-        },
-        [computeFlare](SessionData& session) -> std::optional<QVariant> {
-        return computeFlare(session, SessionKeys::FlareEndTime);
-    });
+            const auto flare = computeFlare(exitVar.toDouble(), landVar.toDouble(),
+                                            ctx.measurement("GNSS", "hMSL"),
+                                            ctx.measurement("GNSS", "vAcc"),
+                                            ctx.measurement("GNSS", SessionKeys::Time));
+            if (!flare)
+                return CalculationResult::unavailable();
+            return CalculationResult()
+                .setAttribute(SessionKeys::FlareStartTime, flare->first)
+                .setAttribute(SessionKeys::FlareEndTime, flare->second);
+        };
+        addCalculation(registry, d);
+    }
 
     // Landing time: first flying-to-walking transition within the analysis window
     // "Walking" = vertical speed < 2*sAcc AND horizontal speed < 10 km/h
     //             AND elevation within 10 m of ground
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::LandingTime,
-        {
-            DependencyKey::attribute(SessionKeys::AnalysisStartTime),
-            DependencyKey::attribute(SessionKeys::AnalysisEndTime),
-            DependencyKey::attribute(SessionKeys::GroundElev),
-            DependencyKey::measurement("GNSS", "velD"),
-            DependencyKey::measurement("GNSS", "velH"),
-            DependencyKey::measurement("GNSS", "sAcc"),
-            DependencyKey::measurement("GNSS", "hMSL"),
-            DependencyKey::measurement("GNSS", SessionKeys::Time)
-        },
-        [](SessionData& session) -> std::optional<QVariant> {
-        // Retrieve analysis window to constrain the search
-        QVariant asVar = session.getAttribute(SessionKeys::AnalysisStartTime);
-        if (!asVar.canConvert<double>())
-            return std::nullopt;
-        double analysisStartSec = asVar.toDouble();
-
-        QVariant aeVar = session.getAttribute(SessionKeys::AnalysisEndTime);
-        if (!aeVar.canConvert<double>())
-            return std::nullopt;
-        double analysisEndSec = aeVar.toDouble();
-
-        QVariant geVar = session.getAttribute(SessionKeys::GroundElev);
-        if (!geVar.canConvert<double>())
-            return std::nullopt;
-        double groundElev = geVar.toDouble();
-
-        QVector<double> velD = session.getMeasurement("GNSS", "velD");
-        QVector<double> velH = session.getMeasurement("GNSS", "velH");
-        QVector<double> sAcc = session.getMeasurement("GNSS", "sAcc");
-        QVector<double> hMSL = session.getMeasurement("GNSS", "hMSL");
-        QVector<double> time = session.getMeasurement("GNSS", SessionKeys::Time);
-
-        const int n = velD.size();
-        if (n == 0 || velH.size() != n || sAcc.size() != n
-            || hMSL.size() != n || time.size() != n)
-            return std::nullopt;
-
-        const double hSpeedThreshold = 10.0 / 3.6; // 10 km/h in m/s
-        const double elevThreshold = 10.0; // metres above ground
-
-        // "Walking" when all conditions are met:
-        //   abs(velD) < 2*sAcc  AND  velH < 10 km/h  AND  within 10 m of ground
-        auto isWalking = [&](int i) {
-            return std::abs(velD[i]) < 2.0 * sAcc[i]
-                && velH[i] < hSpeedThreshold
-                && (hMSL[i] - groundElev) < elevThreshold;
+    {
+        CalculationDescriptor d;
+        d.id = QStringLiteral("builtin.attr.landingTime");
+        d.inputs = {
+            CalcInput::attribute(SessionKeys::AnalysisStartTime),
+            CalcInput::attribute(SessionKeys::AnalysisEndTime),
+            CalcInput::attribute(SessionKeys::GroundElev),
+            CalcInput::measurement("GNSS", "velD"),
+            CalcInput::measurement("GNSS", "velH"),
+            CalcInput::measurement("GNSS", "sAcc"),
+            CalcInput::measurement("GNSS", "hMSL"),
+            CalcInput::measurement("GNSS", SessionKeys::Time)
         };
+        d.outputs = { DependencyKey::attribute(SessionKeys::LandingTime) };
+        d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
+            // Retrieve analysis window to constrain the search
+            QVariant asVar = ctx.attribute(SessionKeys::AnalysisStartTime);
+            if (!asVar.canConvert<double>())
+                return CalculationResult::unavailable();
+            double analysisStartSec = asVar.toDouble();
 
-        // Find the FIRST flying-to-walking transition within the analysis window
-        for (int i = 1; i < n; ++i) {
-            if (time[i] < analysisStartSec) continue;
-            if (time[i] > analysisEndSec) break;
-            if (!isWalking(i - 1) && isWalking(i)) {
-                return QVariant(time[i]);
+            QVariant aeVar = ctx.attribute(SessionKeys::AnalysisEndTime);
+            if (!aeVar.canConvert<double>())
+                return CalculationResult::unavailable();
+            double analysisEndSec = aeVar.toDouble();
+
+            QVariant geVar = ctx.attribute(SessionKeys::GroundElev);
+            if (!geVar.canConvert<double>())
+                return CalculationResult::unavailable();
+            double groundElev = geVar.toDouble();
+
+            QVector<double> velD = ctx.measurement("GNSS", "velD");
+            QVector<double> velH = ctx.measurement("GNSS", "velH");
+            QVector<double> sAcc = ctx.measurement("GNSS", "sAcc");
+            QVector<double> hMSL = ctx.measurement("GNSS", "hMSL");
+            QVector<double> time = ctx.measurement("GNSS", SessionKeys::Time);
+
+            const int n = velD.size();
+            if (n == 0 || velH.size() != n || sAcc.size() != n
+                || hMSL.size() != n || time.size() != n)
+                return CalculationResult::unavailable();
+
+            const double hSpeedThreshold = 10.0 / 3.6; // 10 km/h in m/s
+            const double elevThreshold = 10.0; // metres above ground
+
+            // "Walking" when all conditions are met:
+            //   abs(velD) < 2*sAcc  AND  velH < 10 km/h  AND  within 10 m of ground
+            auto isWalking = [&](int i) {
+                return std::abs(velD[i]) < 2.0 * sAcc[i]
+                    && velH[i] < hSpeedThreshold
+                    && (hMSL[i] - groundElev) < elevThreshold;
+            };
+
+            // Find the FIRST flying-to-walking transition within the analysis window
+            for (int i = 1; i < n; ++i) {
+                if (time[i] < analysisStartSec) continue;
+                if (time[i] > analysisEndSec) break;
+                if (!isWalking(i - 1) && isWalking(i)) {
+                    return CalculationResult().setAttribute(SessionKeys::LandingTime, time[i]);
+                }
             }
-        }
 
-        return std::nullopt;
-    });
+            return CalculationResult::unavailable();
+        };
+        addCalculation(registry, d);
+    }
 
-    // Register start time and duration for all sensors
-    QStringList all_sensors = {"GNSS", "BARO", "HUM", "MAG", "IMU", "TIME", "VBAT"};
+    // Start time and duration: one candidate per sensor, tried in this order.
+    // One scan of the sensor's time produces both outputs.
+    const QStringList all_sensors = {"GNSS", "BARO", "HUM", "MAG", "IMU", "TIME", "VBAT"};
     for (const QString &sens : all_sensors) {
-        SessionData::registerCalculatedAttribute(
-            SessionKeys::StartTime,
-            {
-                DependencyKey::measurement(sens, SessionKeys::Time)
-            },
-            [sens](SessionData &session) -> std::optional<QVariant> {
-            // Retrieve sensor time measurement
-            QVector<double> times = session.getMeasurement(sens, SessionKeys::Time);
+        CalculationDescriptor d;
+        d.id = QStringLiteral("builtin.attr.timeExtent.") + sens;
+        d.inputs = { CalcInput::measurement(sens, SessionKeys::Time) };
+        d.outputs = {
+            DependencyKey::attribute(SessionKeys::StartTime),
+            DependencyKey::attribute(SessionKeys::Duration)
+        };
+        d.compute = [sens](const EvaluationContext &ctx) -> CalculationResult {
+            QVector<double> times = ctx.measurement(sens, SessionKeys::Time);
             if (times.isEmpty()) {
-                qWarning() << "No " << sens << "/time data available to calculate start time.";
-                return std::nullopt;
-            }
-
-            double startTime = *std::min_element(times.begin(), times.end());
-            return QVariant(startTime);
-        });
-
-        SessionData::registerCalculatedAttribute(
-            SessionKeys::Duration,
-            {
-                DependencyKey::measurement(sens, SessionKeys::Time)
-            },
-            [sens](SessionData &session) -> std::optional<QVariant> {
-            QVector<double> times = session.getMeasurement(sens, SessionKeys::Time);
-            if (times.isEmpty()) {
-                qWarning() << "No " << sens << "/time data available to calculate duration.";
-                return std::nullopt;
+                qWarning() << "No " << sens << "/time data available to calculate start time and duration.";
+                return CalculationResult::unavailable();
             }
 
             double minTime = *std::min_element(times.begin(), times.end());
             double maxTime = *std::max_element(times.begin(), times.end());
+
+            CalculationResult result;
+            result.setAttribute(SessionKeys::StartTime, minTime);
+
             double durationSec = maxTime - minTime;
             if (durationSec < 0) {
                 qWarning() << "Invalid " << sens << "/time data (max < min).";
-                return std::nullopt;
+                result.setUnavailable(DependencyKey::attribute(SessionKeys::Duration));
+            } else {
+                result.setAttribute(SessionKeys::Duration, durationSec);
             }
-
-            return durationSec;
-        });
+            return result;
+        };
+        addCalculation(registry, d);
     }
 
-    // Maximum vertical speed time (time of peak velD between manoeuvre start and landing)
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::MaxVelDTime,
-        {
-            DependencyKey::attribute(SessionKeys::ManoeuvreStartTime),
-            DependencyKey::attribute(SessionKeys::LandingTime),
-            DependencyKey::measurement("GNSS", "velD"),
-            DependencyKey::measurement("GNSS", SessionKeys::Time)
-        },
-        [](SessionData& session) -> std::optional<QVariant> {
-        QVariant msVar = session.getAttribute(SessionKeys::ManoeuvreStartTime);
-        if (!msVar.canConvert<double>())
-            return std::nullopt;
-        double msSec = msVar.toDouble();
+    // Maximum vertical / horizontal speed time (time of the peak between
+    // manoeuvre start and landing)
+    struct MaxSpeedTime {
+        QString id;
+        QString measurement;
+        QString outputKey;
+    };
+    const QList<MaxSpeedTime> maxSpeedTimes = {
+        { QStringLiteral("builtin.attr.maxVelDTime"), QStringLiteral("velD"),
+          QString::fromLatin1(SessionKeys::MaxVelDTime) },
+        { QStringLiteral("builtin.attr.maxVelHTime"), QStringLiteral("velH"),
+          QString::fromLatin1(SessionKeys::MaxVelHTime) }
+    };
+    for (const MaxSpeedTime &entry : maxSpeedTimes) {
+        const QString measurement = entry.measurement;
+        const QString outputKey = entry.outputKey;
 
-        QVariant landVar = session.getAttribute(SessionKeys::LandingTime);
-        if (!landVar.canConvert<double>())
-            return std::nullopt;
-        double landingSec = landVar.toDouble();
+        CalculationDescriptor d;
+        d.id = entry.id;
+        d.inputs = {
+            CalcInput::attribute(SessionKeys::ManoeuvreStartTime),
+            CalcInput::attribute(SessionKeys::LandingTime),
+            CalcInput::measurement("GNSS", measurement),
+            CalcInput::measurement("GNSS", SessionKeys::Time)
+        };
+        d.outputs = { DependencyKey::attribute(outputKey) };
+        d.compute = [measurement, outputKey](const EvaluationContext &ctx) -> CalculationResult {
+            QVariant msVar = ctx.attribute(SessionKeys::ManoeuvreStartTime);
+            if (!msVar.canConvert<double>())
+                return CalculationResult::unavailable();
 
-        QVector<double> velD = session.getMeasurement("GNSS", "velD");
-        QVector<double> time = session.getMeasurement("GNSS", SessionKeys::Time);
+            QVariant landVar = ctx.attribute(SessionKeys::LandingTime);
+            if (!landVar.canConvert<double>())
+                return CalculationResult::unavailable();
 
-        if (velD.isEmpty() || time.isEmpty() || velD.size() != time.size())
-            return std::nullopt;
-
-        double maxVelD = -std::numeric_limits<double>::max();
-        int maxIdx = -1;
-        for (int i = 0; i < velD.size(); ++i) {
-            if (time[i] < msSec) continue;
-            if (time[i] > landingSec) break;
-            if (velD[i] > maxVelD) {
-                maxVelD = velD[i];
-                maxIdx = i;
-            }
-        }
-
-        if (maxIdx < 0)
-            return std::nullopt;
-
-        return QVariant(time[maxIdx]);
-    });
-
-    // Maximum horizontal speed time (time of peak velH between manoeuvre start and landing)
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::MaxVelHTime,
-        {
-            DependencyKey::attribute(SessionKeys::ManoeuvreStartTime),
-            DependencyKey::attribute(SessionKeys::LandingTime),
-            DependencyKey::measurement("GNSS", "velH"),
-            DependencyKey::measurement("GNSS", SessionKeys::Time)
-        },
-        [](SessionData& session) -> std::optional<QVariant> {
-        QVariant msVar = session.getAttribute(SessionKeys::ManoeuvreStartTime);
-        if (!msVar.canConvert<double>())
-            return std::nullopt;
-        double msSec = msVar.toDouble();
-
-        QVariant landVar = session.getAttribute(SessionKeys::LandingTime);
-        if (!landVar.canConvert<double>())
-            return std::nullopt;
-        double landingSec = landVar.toDouble();
-
-        QVector<double> velH = session.getMeasurement("GNSS", "velH");
-        QVector<double> time = session.getMeasurement("GNSS", SessionKeys::Time);
-
-        if (velH.isEmpty() || time.isEmpty() || velH.size() != time.size())
-            return std::nullopt;
-
-        double maxVelH = -std::numeric_limits<double>::max();
-        int maxIdx = -1;
-        for (int i = 0; i < velH.size(); ++i) {
-            if (time[i] < msSec) continue;
-            if (time[i] > landingSec) break;
-            if (velH[i] > maxVelH) {
-                maxVelH = velH[i];
-                maxIdx = i;
-            }
-        }
-
-        if (maxIdx < 0)
-            return std::nullopt;
-
-        return QVariant(time[maxIdx]);
-    });
+            const auto peak = timeOfMaximum(msVar.toDouble(), landVar.toDouble(),
+                                            ctx.measurement("GNSS", measurement),
+                                            ctx.measurement("GNSS", SessionKeys::Time));
+            if (!peak)
+                return CalculationResult::unavailable();
+            return CalculationResult().setAttribute(outputKey, *peak);
+        };
+        addCalculation(registry, d);
+    }
 
     // Ground elevation: automatic calculation by interpolating hMSL at analysis end time.
     // This serves as the data-derived default. If the user sets a value (via the
-    // SetGround tool, logbook editing, or "Fixed" mode at import), that value in
-    // m_attributes takes precedence over this calculated fallback.
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::GroundElev,
-        {
-            DependencyKey::attribute(SessionKeys::AnalysisEndTime),
-            DependencyKey::measurement("GNSS", "hMSL"),
-            DependencyKey::measurement("GNSS", SessionKeys::Time)
-        },
-        [](SessionData &session) -> std::optional<QVariant> {
-        QVariant aeVar = session.getAttribute(SessionKeys::AnalysisEndTime);
-        if (!aeVar.canConvert<double>())
-            return std::nullopt;
-        double analysisEndSec = aeVar.toDouble();
+    // SetGround tool, logbook editing, or "Fixed" mode at import), that stored
+    // attribute takes precedence over this calculated fallback.
+    {
+        CalculationDescriptor d;
+        d.id = QStringLiteral("builtin.attr.groundElev");
+        d.inputs = {
+            CalcInput::attribute(SessionKeys::AnalysisEndTime),
+            CalcInput::measurement("GNSS", "hMSL"),
+            CalcInput::measurement("GNSS", SessionKeys::Time)
+        };
+        d.outputs = { DependencyKey::attribute(SessionKeys::GroundElev) };
+        d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
+            QVariant aeVar = ctx.attribute(SessionKeys::AnalysisEndTime);
+            if (!aeVar.canConvert<double>())
+                return CalculationResult::unavailable();
+            double analysisEndSec = aeVar.toDouble();
 
-        QVector<double> hMSL = session.getMeasurement("GNSS", "hMSL");
-        QVector<double> time = session.getMeasurement("GNSS", SessionKeys::Time);
+            QVector<double> hMSL = ctx.measurement("GNSS", "hMSL");
+            QVector<double> time = ctx.measurement("GNSS", SessionKeys::Time);
 
-        if (hMSL.isEmpty() || time.isEmpty() || hMSL.size() != time.size())
-            return std::nullopt;
+            if (hMSL.isEmpty() || time.isEmpty() || hMSL.size() != time.size())
+                return CalculationResult::unavailable();
 
-        int n = time.size();
-        if (analysisEndSec <= time[0])
-            return hMSL[0];
-        if (analysisEndSec >= time[n - 1])
-            return hMSL[n - 1];
+            int n = time.size();
+            if (analysisEndSec <= time[0])
+                return CalculationResult().setAttribute(SessionKeys::GroundElev, hMSL[0]);
+            if (analysisEndSec >= time[n - 1])
+                return CalculationResult().setAttribute(SessionKeys::GroundElev, hMSL[n - 1]);
 
-        for (int i = 1; i < n; ++i) {
-            if (time[i] >= analysisEndSec) {
-                double t0 = time[i - 1];
-                double t1 = time[i];
-                double a = (analysisEndSec - t0) / (t1 - t0);
-                double groundElev = hMSL[i - 1] + a * (hMSL[i] - hMSL[i - 1]);
-                return groundElev;
+            for (int i = 1; i < n; ++i) {
+                if (time[i] >= analysisEndSec) {
+                    double t0 = time[i - 1];
+                    double t1 = time[i];
+                    double a = (analysisEndSec - t0) / (t1 - t0);
+                    double groundElev = hMSL[i - 1] + a * (hMSL[i] - hMSL[i - 1]);
+                    return CalculationResult().setAttribute(SessionKeys::GroundElev, groundElev);
+                }
             }
-        }
-        return std::nullopt;
-    });
+            return CalculationResult::unavailable();
+        };
+        addCalculation(registry, d);
+    }
 }

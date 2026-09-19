@@ -16,7 +16,7 @@ public:
     // Singleton accessor
     static PluginHost& instance();
 
-    // Call once—before you register your built-in CalculatedValues,
+    // Call once—before you register the built-in calculations,
     // but after Qt application is up.
     // `pluginDir` is where your .py files live (e.g. "<exe>/plugins")
     void initialise(const QString& pluginDir);

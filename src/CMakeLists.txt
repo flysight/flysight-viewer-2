@@ -238,11 +238,10 @@ endif()
 # ─────────────────────────────── C++ model library
 add_library(flysight_model STATIC
   sessiondata.cpp            sessiondata.h
-  dependencymanager.cpp      dependencymanager.h
-  calculatedvalue.cpp        calculatedvalue.h
   dependencykey.h
 
-  # Calculation engine (Qt Core only; not yet used by the application)
+  # Calculation engine (Qt Core only): the one cache and dependency graph
+  # behind every SessionData read
   engine/calctypes.h
   engine/sessionstate.h
   engine/calculationdescriptor.h
@@ -277,18 +276,18 @@ add_library(flysight_core STATIC
   # AUTOMOC generates its meta-object once.
   preferences/preferencesmanager.h
   preferences/preferencekeys.h
+  preferences/enginepreferenceprovider.cpp preferences/enginepreferenceprovider.h
   units/unitdefinitions.h
   units/unitconversion.h
   units/unitconverter.cpp    units/unitconverter.h
-  calculations/calculatedvalueregistry.cpp    calculations/calculatedvalueregistry.h
+  calculations/builtincalculations.cpp        calculations/builtincalculations.h
+  calculations/registration.h
+  calculations/interpolationcalculations.cpp  calculations/interpolationcalculations.h
   calculations/attributecalculations.cpp      calculations/attributecalculations.h
   calculations/attributeregistration.cpp     calculations/attributeregistration.h
   calculations/gnsscalculations.cpp           calculations/gnsscalculations.h
   calculations/imucalculations.cpp            calculations/imucalculations.h
   calculations/magcalculations.cpp            calculations/magcalculations.h
-  calculations/barocalculations.cpp           calculations/barocalculations.h
-  calculations/humcalculations.cpp            calculations/humcalculations.h
-  calculations/vbatcalculations.cpp           calculations/vbatcalculations.h
   calculations/timecalculations.cpp           calculations/timecalculations.h
   calculations/simplificationcalculations.cpp calculations/simplificationcalculations.h
   calculations/wspcalculations.cpp            calculations/wspcalculations.h
@@ -438,6 +437,7 @@ pybind11_add_module(flysight_cpp_bridge
   cpp_bridge.cpp
   dependencykey_bindings.cpp
   sessiondata_bindings.cpp
+  pluginsessionview.h
 )
 
 target_link_libraries(flysight_cpp_bridge PRIVATE

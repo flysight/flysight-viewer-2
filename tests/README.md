@@ -20,11 +20,25 @@ packages are the same whether or not the option is set.
 | `tst_calcengine` | Calculation engine: resolution, caching, dependency recording, invalidation across sessions, explicit policy, preferences, families, measurement layers |
 | `tst_calcengine_safety` | Calculation engine: nested scopes, cycles, exceptions, re-entrancy guards |
 | `tst_calcengine_oracle` | Calculation engine: randomized (seeded) sequences compared against a fresh evaluation |
+| `tst_builtins_golden` | Every built-in calculation read through `SessionData` on the generated descent fixture, against hand-derived golden literals |
+| `tst_builtins_engine` | The built-ins on a private registry and `FakeSessionState`: golden values, registration inventory, declared inputs only, multi-output groups, candidate order, the declared preference, interpolation family, altitude descriptor |
+| `tst_session_engine` | `SessionData` on the engine with the real built-ins: run-once, invalidation, candidate replacement, overrides, preferences, the fresh-evaluation oracle, copy/move semantics |
+| `tst_session_model_engine` | `SessionModel` + `AltitudeMarkerManager`: registry and preference broadcasts reaching `dependencyChanged`, coalescing, merges, rows surviving sort |
 
 The `tst_calc*` tests drive `src/engine/` with synthetic calculations against
 `FakeSessionState` / `FakePreferenceProvider` (`support/fakesessionstate.h`).
 Each builds its own `CalculationRegistry`; none registers anything in
 `CalculationRegistry::instance()`.
+
+The built-in calculations are pinned by one golden table
+(`support/builtinfixture.*`: `DescentFixture` generates a 296-row jump plus a
+three-row sensor file; `goldenValues()` holds literals only). Rows marked
+"captured" were recorded from the v2026.04.1 engine before the migration; all
+others were derived by hand. `tst_builtins_engine` uses private registries;
+`tst_builtins_golden`, `tst_session_engine` and `tst_session_model_engine` use
+the process-wide registry through `TestEnvironment::registerBuiltIns()`, and
+must leave it as they found it (altitude-marker registrations are removed in
+`cleanup()`).
 
 ## Configure / build / run
 
