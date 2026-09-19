@@ -71,6 +71,18 @@ QString logbookColumnDisplayName(const LogbookColumn &col);
 /// Returns customLabel if non-empty, otherwise logbookColumnDisplayName(col)
 QString logbookColumnLabel(const LogbookColumn &col);
 
+/// Identity of a column's DEFINITION: the type and the fields that type reads.
+/// Display-only fields (enabled, customLabel) and fields the type ignores are
+/// not part of it. Cached column values in the logbook index are keyed by this
+/// string, so two columns with the same key share one cached value.
+QString logbookColumnDefinitionKey(const LogbookColumn &col);
+
+/// Collapses columns with the same definition key into one, keeping the first
+/// occurrence (its position and label). The kept column is enabled if any of
+/// the collapsed ones was, so a visible column never disappears. Columns with
+/// distinct definitions are returned untouched and in order.
+QVector<LogbookColumn> uniqueLogbookColumns(const QVector<LogbookColumn> &columns);
+
 // ============================================================================
 // LogbookColumnStore — QObject singleton for persistence
 // ============================================================================

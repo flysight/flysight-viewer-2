@@ -143,6 +143,11 @@ private slots:
     void newEditRetriesFailedSave();
     void lineBreaksAreFlattenedAtEdit();
 
+    void uniqueColumnsKeepsFirstOccurrence();
+    void storeCollapsesDuplicatesOnLoad();
+    void indexValueReachesEveryColumnOfItsDefinition();
+    void duplicateColumnCausesNoWorkAfterRestart();
+
 private:
     // A model whose rows were merged, saved, and indexed.
     void startWithLoadedSessions(const QList<SessionData> &sessions);
@@ -1122,6 +1127,147 @@ void ColumnCacheTest::lineBreaksAreFlattenedAtEdit()
     QVERIFY(waitForIdle(*m_model));
     QVERIFY(readFileBytes(sessionFilePath("g1")).contains("$VAR,_DESCRIPTION,c d\n"));
     QCOMPARE(indexValue(readIndex(), "g1", m_d).toString(), QStringLiteral("c d"));
+}
+
+// Columns with one definition collapse into the first of them; everything
+// else keeps its place.
+void ColumnCacheTest::uniqueColumnsKeepsFirstOccurrence()
+{
+    LogbookColumn delta;
+    delta.type = ColumnType::Delta;
+    delta.sensorID = QStringLiteral("IMU");
+    delta.measurementID = QStringLiteral("wx");
+    delta.measurementType = QStringLiteral("rotation");
+    delta.markerAttributeKey = QStringLiteral("_M");
+    delta.marker2AttributeKey = QStringLiteral("_N");
+
+    LogbookColumn deltaReversed = delta;
+    deltaReversed.markerAttributeKey = QStringLiteral("_N");
+    deltaReversed.marker2AttributeKey = QStringLiteral("_M");
+
+    // Nothing to collapse: returned as given. m_g and delta share the
+    // measurement and first marker and differ in type.
+    const QVector<LogbookColumn> distinct = {m_g, m_d, delta, m_e, deltaReversed};
+    QCOMPARE(uniqueLogbookColumns(distinct), distinct);
+    QCOMPARE(uniqueLogbookColumns({}), QVector<LogbookColumn>());
+
+    // One duplicate of each column type; display-only fields do not make a
+    // column a different one.
+    LogbookColumn dRelabelled = m_d;
+    dRelabelled.customLabel = QStringLiteral("Notes");
+    LogbookColumn gDisabled = m_g;
+    gDisabled.enabled = false;
+
+    QVector<LogbookColumn> unique = uniqueLogbookColumns({m_d, m_g, dRelabelled, delta, m_e, gDisabled, delta, m_d});
+    QCOMPARE(unique, (QVector<LogbookColumn>{m_d, m_g, delta, m_e}));
+    QVERIFY(unique[0].customLabel.isEmpty());       // the first occurrence's label
+    QVERIFY(unique[1].enabled);
+
+    unique = uniqueLogbookColumns({dRelabelled, m_d});
+    QCOMPARE(unique.size(), 1);
+    QCOMPARE(unique[0].customLabel, QStringLiteral("Notes"));
+
+    // A hidden first occurrence takes over the visibility of a shown duplicate
+    unique = uniqueLogbookColumns({gDisabled, m_d, m_g});
+    QCOMPARE(unique, (QVector<LogbookColumn>{m_g, m_d}));
+
+    QCOMPARE(logbookColumnDefinitionKey(m_d), logbookColumnDefinitionKey(dRelabelled));
+    QVERIFY(logbookColumnDefinitionKey(delta) != logbookColumnDefinitionKey(deltaReversed));
+    QVERIFY(logbookColumnDefinitionKey(delta) != logbookColumnDefinitionKey(m_g));
+}
+
+// Settings that hold the same column twice are cleaned when they are read,
+// and the cleaned list is written back.
+void ColumnCacheTest::storeCollapsesDuplicatesOnLoad()
+{
+    const auto storedAttributeKeys = []() {
+        QStringList keys;
+        QSettings settings;
+        const int count = settings.beginReadArray(QStringLiteral("logbook/columns"));
+        for (int i = 0; i < count; ++i) {
+            settings.setArrayIndex(i);
+            keys.append(settings.value(QStringLiteral("attributeKey")).toString());
+        }
+        settings.endArray();
+        return keys;
+    };
+
+    {
+        const QStringList keys = {m_e.attributeKey, m_d.attributeKey, m_e.attributeKey};
+        QSettings settings;
+        settings.remove(QStringLiteral("logbook/columns"));
+        settings.beginWriteArray(QStringLiteral("logbook/columns"), int(keys.size()));
+        for (int i = 0; i < keys.size(); ++i) {
+            settings.setArrayIndex(i);
+            settings.setValue(QStringLiteral("type"), int(ColumnType::SessionAttribute));
+            settings.setValue(QStringLiteral("attributeKey"), keys[i]);
+            settings.setValue(QStringLiteral("enabled"), true);
+        }
+        settings.endArray();
+    }
+    QCOMPARE(storedAttributeKeys().size(), 3);
+
+    LogbookColumnStore &store = LogbookColumnStore::instance();
+    store.load();
+    QCOMPARE(store.columns(), (QVector<LogbookColumn>{m_e, m_d}));
+    QCOMPARE(storedAttributeKeys(), (QStringList{m_e.attributeKey, m_d.attributeKey}));
+
+    // The setter collapses as well
+    store.setColumns({m_d, m_g, m_d, m_e, m_g});
+    QCOMPARE(store.columns(), (QVector<LogbookColumn>{m_d, m_g, m_e}));
+    QCOMPARE(storedAttributeKeys().size(), 3);
+}
+
+// The index stores one value per column definition. Live columns that share a
+// definition each receive it, so a row never comes back with fewer values than
+// there are columns just because two columns are the same.
+void ColumnCacheTest::indexValueReachesEveryColumnOfItsDefinition()
+{
+    startWithLoadedSessions({gyroSession()});
+
+    LogbookManager &logbook = LogbookManager::instance();
+    m_model.reset();
+    TestEnvironment::instance().reopenLogbook();
+    logbook.initialize();
+
+    const QMap<int, QVariant> values = logbook.cachedColumnValues({m_d, m_g, m_e, m_d, m_g}).value(QStringLiteral("g1"));
+    QCOMPARE(values.size(), 5);
+    QCOMPARE(values.value(0).toString(), QStringLiteral("first"));
+    QCOMPARE(values.value(3).toString(), QStringLiteral("first"));
+    QVERIFY(isNear(values.value(1).toDouble(), 1.72032));
+    QVERIFY(isNear(values.value(4).toDouble(), 1.72032));
+}
+
+// The same column enabled twice must not make every start reload every
+// session: after one full column pass and a restart there is nothing to do.
+void ColumnCacheTest::duplicateColumnCausesNoWorkAfterRestart()
+{
+    LogbookColumnStore::instance().setColumns({m_d, m_g, m_e, m_d});    // restored in cleanup()
+
+    startWithLoadedSessions({gyroSession(QStringLiteral("g1")), gyroSession(QStringLiteral("g2"))});
+
+    // First start: every row is a stub and whatever is missing gets computed
+    restartAsStubs();
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(!LogbookManager::instance().indexNeedsFlush());
+
+    // Second start: the index has it all
+    restartAsStubs();
+    const int columnCount = m_model->columnCount();
+    for (int row = 0; row < m_model->rowCount(); ++row)
+        QCOMPARE(m_model->rowAt(row).cachedValues.size(), columnCount);
+
+    const QByteArray indexBefore = readFileBytes(TestEnvironment::instance().indexPath());
+    m_model->resetColumnWorkStats();
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+    QCOMPARE(m_model->columnWorkStats().valuesComputed, 0);
+    QVERIFY(!m_model->rowAt(0).isLoaded());
+    QVERIFY(!m_model->rowAt(1).isLoaded());
+    QCOMPARE(readFileBytes(TestEnvironment::instance().indexPath()), indexBefore);
 }
 
 FLYSIGHT_TEST_MAIN(ColumnCacheTest)

@@ -83,28 +83,10 @@ LogbookColumn columnFromJson(const QJsonObject &obj)
     return col;
 }
 
-// Build a deterministic string key from column definition fields.
-// Used for m_cachedValues internal storage.
+// Key of m_cachedValues' per-session maps.
 QString columnDefinitionKey(const LogbookColumn &col)
 {
-    switch (col.type) {
-    case ColumnType::SessionAttribute:
-        return QStringLiteral("SessionAttribute|") + col.attributeKey;
-    case ColumnType::MeasurementAtMarker:
-        return QStringLiteral("MeasurementAtMarker|")
-               + col.sensorID + QStringLiteral("|")
-               + col.measurementID + QStringLiteral("|")
-               + col.measurementType + QStringLiteral("|")
-               + col.markerAttributeKey;
-    case ColumnType::Delta:
-        return QStringLiteral("Delta|")
-               + col.sensorID + QStringLiteral("|")
-               + col.measurementID + QStringLiteral("|")
-               + col.measurementType + QStringLiteral("|")
-               + col.markerAttributeKey + QStringLiteral("|")
-               + col.marker2AttributeKey;
-    }
-    return QString();
+    return logbookColumnDefinitionKey(col);
 }
 
 // Cached value -> JSON: null = "computed, no value"; numbers stay numbers.
@@ -318,10 +300,13 @@ QMap<QString, QMap<int, QVariant>> LogbookManager::cachedColumnValues(
 {
     QMap<QString, QMap<int, QVariant>> result;
 
-    // Build mapping: definition key → live column index
-    QMap<QString, int> defKeyToLiveIndex;
+    // Build mapping: definition key → live column indices. Live columns that
+    // share a definition share the one stored value, and each of them gets it:
+    // a row that came back with fewer values than columns would be taken for
+    // an uncomputed one and loaded from disk on every start.
+    QMap<QString, QVector<int>> defKeyToLiveIndices;
     for (int i = 0; i < liveColumns.size(); ++i)
-        defKeyToLiveIndex[columnDefinitionKey(liveColumns[i])] = i;
+        defKeyToLiveIndices[columnDefinitionKey(liveColumns[i])].append(i);
 
     // For each session, translate definition-key-keyed values to index-keyed
     for (auto sit = m_cachedValues.constBegin(); sit != m_cachedValues.constEnd(); ++sit) {
@@ -330,18 +315,16 @@ QMap<QString, QMap<int, QVariant>> LogbookManager::cachedColumnValues(
 
         QMap<int, QVariant> columnValues;
         for (auto vit = sessionValues.constBegin(); vit != sessionValues.constEnd(); ++vit) {
-            auto liveIt = defKeyToLiveIndex.constFind(vit.key());
-            if (liveIt != defKeyToLiveIndex.constEnd()) {
-                const QJsonValue &jv = vit.value();
-                if (jv.isDouble()) {
-                    columnValues[liveIt.value()] = QVariant(jv.toDouble());
-                } else if (jv.isString()) {
-                    columnValues[liveIt.value()] = QVariant(jv.toString());
-                } else if (jv.isNull()) {
-                    // Null means "computed but no value" — store invalid QVariant
-                    columnValues[liveIt.value()] = QVariant();
-                }
-            }
+            auto liveIt = defKeyToLiveIndices.constFind(vit.key());
+            if (liveIt == defKeyToLiveIndices.constEnd())
+                continue;
+            const QJsonValue &jv = vit.value();
+            // Null means "computed but no value" — store invalid QVariant
+            if (!jv.isDouble() && !jv.isString() && !jv.isNull())
+                continue;
+            const QVariant value = jsonToVariant(jv);
+            for (int liveIndex : liveIt.value())
+                columnValues[liveIndex] = value;
         }
         result[sessionId] = columnValues;
     }
