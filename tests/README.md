@@ -11,6 +11,8 @@
 9. [Acceptance traceability](#9-acceptance-traceability)
 10. [Cleanup audit](#10-cleanup-audit)
 
+[Appendix A. The acceptance items](#appendix-a-the-acceptance-items)
+
 ## 1. What this is
 
 Qt Test executables that link the `flysight_core` static library (session
@@ -32,7 +34,7 @@ There are 24 executables plus the audit.
 | Test | Covers |
 |------|--------|
 | `tst_harness` | The test-support code itself: settings and logbook isolation, fixture builders |
-| `tst_smoke` | End-to-end characterization of importer, session, calculations, exporter, logbook, and model (started as a pin of v2026.04.1; expectations a phase changed on purpose were rewritten with that phase) |
+| `tst_smoke` | End-to-end characterization of importer, session, calculations, exporter, logbook, and model (started as a pin of v2026.04.1; expectations the rework changed on purpose were rewritten with the change that altered them) |
 
 **Calculation engine (synthetic calculations)**
 
@@ -50,7 +52,7 @@ There are 24 executables plus the audit.
 | `tst_builtins_golden` | Every built-in calculation read through `SessionData` on the generated descent fixture, against hand-derived golden literals |
 | `tst_builtins_engine` | The built-ins on a private registry and `FakeSessionState`: golden values, registration inventory, declared inputs only, multi-output groups, candidate order, the declared preference, interpolation family, altitude descriptor |
 | `tst_session_engine` | `SessionData` on the engine with the real built-ins: run-once, invalidation, candidate replacement, overrides, preferences, the fresh-evaluation oracle, copy/move semantics; an explicit-policy calculation and a throwing / nested / cyclic set of calculations registered temporarily on the global registry (acceptance 14, 12) |
-| `tst_session_model_engine` | `SessionModel` + `AltitudeMarkerManager`: registry and preference broadcasts reaching `dependencyChanged`, coalescing, merges, rows surviving sort |
+| `tst_session_model_engine` | `SessionModel` + `AltitudeMarkerManager`: registry and preference broadcasts reaching `dependencyChanged`, coalescing, merges, rows surviving sort, the read-only `DEVICE_ID` column, a marker only for an altitude whose calculation registered |
 | `tst_session_oracle` | The session-level idempotency oracle (section 7): randomized, seeded sequences of reads, edits, merges, preference and registry changes on real `SessionData` objects (part A) and on the real `SessionModel` / `LogbookManager` through the application's import path, with restarts, simulated crashes and a persisted-state check (part B), compared against a fresh evaluation |
 
 **Source layer, conversion layer, importer**
@@ -69,13 +71,13 @@ There are 24 executables plus the audit.
 | `tst_csvformat` | `CsvFormat`, the one definition of the on-disk text forms: shortest round-trip doubles (a 200 000-value bit-pattern sweep), `-0`, `nan` / `inf` / `-inf`, attribute values by `QVariant` type, line-break flattening, valid names and units |
 | `tst_persistence_roundtrip` | Save / reload on the real importer, exporter and logbook: acceptance 5 (bit-identical samples, units and header attributes preserved, `SCHEMA_VER` only if recorded, effective values unchanged, second cycle byte-identical, independent of any cache) and acceptance 6 (a released logbook file is not rescaled, relabelled or stamped by a save; the `loadSession` backfill is additive and idempotent); non-finite samples, ragged sensors, unrepresentable text; the file writer and the in-memory writer agree (also across the 4 MB flush boundary); an unsupported stored `SCHEMA_VER` is never written |
 | `tst_logbook_index` | `LogbookManager`'s `index.json` column cache: the calculation-compatibility marker and environment fingerprint gate the cached values (acceptance 18 at the storage level), unsaved-column tracking and save ordering (an interrupted save never leaves a cached column that disagrees with the session file), orphan session files adopted, marks follow remap / remove / reset; the raw load with its failure reason, the legacy backfill as a separate step, identity-entry queries, a legacy flat index coming up as stubs without rewriting a session file |
-| `tst_column_cache` | The same through `SessionModel`: upgrade discards and lazily recomputes (acceptance 18), an edit refreshes only the affected columns with a warm and a cold engine, merges and bulk edits, interrupted saves, environment changes (declared preference, altitude-marker registrations) discarding loaded and unloaded rows without saving, save failures, line breaks flattened at edit |
+| `tst_column_cache` | The same through `SessionModel`: upgrade discards and lazily recomputes (acceptance 18), an edit refreshes only the affected columns with a warm and a cold engine, merges and bulk edits, interrupted saves, environment changes (declared preference, altitude-marker registrations) discarding loaded and unloaded rows without saving, save failures (the row stays dirty and loaded, is skipped by the idle saver and the LRU, stays out of the index, and is saved by a later edit or the shutdown flush), line breaks flattened at edit |
 
 **Import and merge, workflows**
 
 | Test | Covers |
 |------|--------|
-| `tst_session_merge` | `SessionMerge`, the pure plan-then-apply merge of spec 6.3 / 6.4 on programmatic sessions: absent attributes added, equal ones ignored, different header attributes conflict (all reported, sorted, with the delete-and-re-import hint), `_` attributes keep the session's value, the `n/a` device placeholder counts as absent, equality on the on-disk text form, columns replaced / added / kept with samples and unit together, bitwise column comparison (NaN, `-0`), the ragged rule, purity of `plan()`, the invalidation set of `apply()` |
+| `tst_session_merge` | `SessionMerge`, the pure plan-then-apply merge (attribute conflict rule, measurement merge) on programmatic sessions: absent attributes added, equal ones ignored, different header attributes conflict (all reported, sorted, with the delete-and-re-import hint), `_` attributes keep the session's value, the `n/a` device placeholder counts as absent, equality on the on-disk text form, columns replaced / added / kept with samples and unit together, bitwise column comparison (NaN, `-0`), the ragged rule, purity of `plan()`, the invalidation set of `apply()` |
 | `tst_import_merge` | The import path (`SessionImport::importFiles` -> `SessionModel::mergeSessions`) against a temporary logbook: acceptance 3 (a rejected file leaves the session untouched), 7 (TRACK/SENSOR order independence loaded, unloaded and in one batch; conflicts change nothing; edits and unmatched measurements survive), 8 (the `SCHEMA_VER` escape hatch), 10 and 18 (merge parts); defaults only at creation, failed loads are errors, failed-load placeholders are never saved, identity stubs are matched, identical re-imports are no-ops |
 | `tst_import_batch` | `SessionImport`: one result per file in input order with parse failures included, cancellation through the progress callback, and the text of the import-failure dialog with each file's error |
 | `tst_workflow` | End-to-end workflows on the application's own code path (acceptance 19): import through `SessionImport::importFiles`, rows and columns, marker and attribute edits, save, reopen as stubs served from `index.json`; the model's warm save equals a cold export (acceptance 5); a released session file together with a released `index.json` (acceptance 6, 18) |
@@ -90,7 +92,7 @@ There are 24 executables plus the audit.
 
 | Test | Covers |
 |------|--------|
-| `audit_cleanup` | No old mechanism remains, no new UI, and every line of `tests/acceptance_map.txt` names an existing test function (section 10) |
+| `audit_cleanup` | No old mechanism remains, each fact has one authority, and every line of `tests/acceptance_map.txt` names an existing test function (section 10) |
 
 The `tst_calc*` tests drive `src/engine/` with synthetic calculations against
 `FakeSessionState` / `FakePreferenceProvider` (`support/fakesessionstate.h`).
@@ -327,7 +329,7 @@ before a test run, and compare afterwards. Both are unchanged.
 
 ## 7. The idempotency oracle
 
-The invariant (spec 7.4): the value returned for any name is a pure function of
+The invariant (idempotency): the value returned for any name is a pure function of
 the session's persistent state and the registry. The order of reads, and what
 happens to be cached, may change the work that is done, never the answer.
 `CalculationEngine::verifyAgainstFresh(names)` reads each name the ordinary way
@@ -410,6 +412,19 @@ missing invalidation in the code under test.
   `resetPreferencesToDefaults()` in `init()`, `newTempDir()` for input and
   output files, and `waitForIdle(model)` to let a `SessionModel` finish its
   deferred saves and column fills.
+- Shared helpers live in the support library; use them instead of a local
+  copy. `testutil.h`: `isNear` (absolute 1e-9), `sameBits`, and
+  `WarningCapture`, which collects warnings while it lives (`count()`,
+  `messages()`, `matching(fragment)`, `count(fragment)`). `logbookprobe.h`:
+  what is on disk in the test logbook (`readIndex`, `writeIndex`,
+  `indexValue`, `sessionFilePath`, which is empty for an unknown session,
+  `sessionCsvFiles`), the shared logbook columns (`descriptionColumn`,
+  `gyroColumn`, `exitTimeColumn`), `writeAltitudes`, and the
+  `dependencyChanged` spy checks (`spyHasAttribute`, `spyHasMeasurement`).
+  `Synthetic::attr` / `Synthetic::measKey` (`fakesessionstate.h`) are the
+  shorthand for public names.
+- `FLYSIGHT_TEST_MAIN` fixes the global `QHash` seed, so `QSet` / `QHash`
+  iteration order is the same in every run, by hand or under CTest.
 - If a test exercises core code that reads a preference not yet registered,
   add the key and its literal default to
   `TestEnvironment::registerCorePreferences()`.
@@ -439,7 +454,8 @@ missing invalidation in the code under test.
 
 ## 9. Acceptance traceability
 
-Every acceptance item of the specification (section 11, items 1-19), clause by
+Every acceptance item (items 1-19, stated in full in
+[appendix A](#appendix-a-the-acceptance-items)), clause by
 clause, and the test functions that assert it with literal expectations. The
 machine-checked form of this table is `tests/acceptance_map.txt` (section 10);
 keep the two in sync.
@@ -495,13 +511,15 @@ keep the two in sync.
 | 19 | plugin workflow end to end | `tst_python_bridge::pluginWorkflowThroughModel`; manual check |
 | 19 | plot, marker, and other GUI workflows | manual checks - widgets are outside the test library boundary |
 | 19 | no remaining use of the old engine or direct cache setters | `audit_cleanup` |
-| spec 12 | only `SCHEMA_VER` decides (not firmware, file name, date) | `tst_source_layer::onlySchemaVerDecides`; `audit_cleanup` |
+| - | (not a numbered item) only `SCHEMA_VER` decides (not firmware, file name, date) | `tst_source_layer::onlySchemaVerDecides`; `audit_cleanup` |
 
 ## 10. Cleanup audit
 
 `audit_cleanup` runs `tests/audit/cleanup_audit.cmake`, a CMake script over
-`git grep` and `git diff` that needs nothing but git. It fails, listing **all**
-violations, when
+`git grep` that needs nothing but git. Every rule is a permanent invariant of
+the working tree: nothing is compared with an earlier revision, so the result
+does not depend on which tags or history a checkout has, and the whole audit
+takes about a second. It fails, listing **all** violations, when
 
 - a name of the old per-value engine, the old registration API, or a direct
   cache setter appears anywhere in `src`, `tests`, `python_plugins`, `cmake`;
@@ -516,11 +534,6 @@ violations, when
 - there is more than one `emit dependencyChanged`, a second caller of
   `exportSession`, `mergeSessions`, or `importFile` in `src`, or a C++ file other
   than the plugin host sets `allowSourceInputs`;
-- compared with tag `v2026.04.1` (skipped with a message when the tag is not
-  available): an added line carries an unfinished-work marker, a UI file
-  outside a short allow-list changed, a preference key was added, or
-  `mainwindow.cpp` / `src/ui` gained an action, menu, dialog, label, or
-  preference registration;
 - a line of `tests/acceptance_map.txt` names a test function that does not
   exist, or an acceptance item 1-19 has no line.
 
@@ -535,3 +548,81 @@ It is registered only when the source tree is a git checkout. To add a rule,
 add one `expect_none` / `expect_only` / `expect_count` line to the script;
 `tests/audit` itself and `python_plugins/README.md` (whose "What was removed"
 section names removed APIs on purpose) are excluded from every search.
+
+The rules are text searches, so a legitimate change can trip one (a comment
+that quotes the gyro factor, a new caller of `exportSession`, an unrelated
+`units()` accessor). Each rule that is likely to do so carries an `Allow:`
+comment in the script saying what to edit: add a `:!path` exclusion to an
+`expect_none` rule, add the file to the allowed-file regex of an `expect_only`
+rule, and change an `expect_count` number only when the fact really has gained
+a second authority.
+
+## Appendix A. The acceptance items
+
+The numbered acceptance list that section 9, `tests/acceptance_map.txt`, and
+the "acceptance N" comments on test functions refer to. All of it must be
+demonstrated by automated tests that use generated fixtures in temporary
+directories, never the user's logbook or preferences, with expected values
+stated independently rather than computed by the code under test.
+
+1. Importing an unmarked file with `wx=62.5, wy=-125, wz=0` yields effective
+   `71.68, -143.36, 0` deg/s. Source access returns the recorded values and
+   the recorded unit text. `SCHEMA_VER` is absent from the session.
+2. The same values in a file declaring `SCHEMA_VER,2` are unchanged in the
+   effective layer.
+3. A file declaring `SCHEMA_VER,3` or `SCHEMA_VER,abc` is rejected with an
+   error and an existing session with that `SESSION_ID` is unmodified.
+4. Recorded `1 g` reads as `9.80665 m/s^2` effective; recorded `1 gauss` reads
+   as `0.0001 T`; the source retains `1` and `g` / `gauss`. A custom column
+   with unknown unit text passes through unchanged with its label.
+5. Save then reload: every source sample is bit-identical, unit text and all
+   header attributes are preserved, `SCHEMA_VER` is present only if it was
+   recorded, and effective values are identical before and after. Repeating
+   the cycle changes nothing. Saving with warm and cold caches produces the
+   same file.
+6. A released-format logbook file (normalized units, no `SCHEMA_VER`) loads,
+   its gyro is corrected once, and saving it does not rescale or relabel it.
+7. `TRACK.CSV` and `SENSOR.CSV` merge in either order, whether or not the
+   session is loaded, with the same result. A merge whose header attribute
+   conflicts with the session fails and changes nothing. Session edits and
+   unmatched measurements survive a merge.
+8. Adding `SCHEMA_VER,2` to an unmarked file and re-importing it updates the
+   session's attribute and its effective gyro values, without a new session
+   and without losing edits.
+9. A three-output calculation runs once when its outputs are read in any
+   order across repeated reads. A change to a declared input causes exactly
+   one new run on the next read; an unrelated change causes none.
+10. A candidate that could not run because a declared input was absent is
+    selected on the next read once that input is added, replacing a cached
+    fallback. For randomized sequences of reads, edits, and merges, every
+    value returned equals the value from a fresh evaluation with caches
+    cleared (idempotency: the value of a name is a pure function of the
+    session's persistent state, the declared preferences, and the registry).
+11. A user override of one output of a multi-output calculation coexists with
+    the calculation's remaining outputs and causes no cycle.
+12. Nested calculations, cycles, and thrown exceptions leave no partial
+    results and no corrupted evaluation state.
+13. Two sessions using one registration have independent results.
+    Unregistering a calculation invalidates its results in every session.
+14. An explicit-policy calculation reports unavailable until requested, and
+    requesting it publishes all outputs at once.
+15. Changing a declared preference input invalidates dependents; changing a
+    preference that is only snapshotted at import does not affect existing
+    sessions.
+16. Derived `IMU/wTotal` and an interpolated gyro attribute reflect the
+    corrected values and follow source changes; a file-supplied `wTotal`
+    keeps precedence over the derived one.
+17. Existing single-output Python plugins work through the real bridge with
+    effective reads; a multi-output plugin runs once across its outputs;
+    source access from Python matches C++; a Python exception yields a clean
+    unavailable result.
+18. Upgrading a logbook with cached gyro-dependent column values discards and
+    recomputes them; a session edit refreshes only the affected columns.
+19. The full application builds and ordinary import, plot, marker, logbook,
+    and plugin workflows work end to end with no remaining use of the old
+    per-value cache engine or direct cache setters.
+
+One further rule is traced in section 9 although it is not one of the 19 items
+(`tests/acceptance_map.txt` files it under item 19): only the recorded
+`SCHEMA_VER` attribute selects a schema correction - never the firmware
+version, a file name, a date, or the data.

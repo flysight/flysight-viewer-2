@@ -6,7 +6,7 @@
 // Acceptance 3 (a file declaring SCHEMA_VER 3 / abc is rejected and the target
 // session is unmodified) is demonstrated here at the importer level.
 //
-// Parsing versus creation (spec 6.2): parseFile() carries nothing the file did
+// Parsing versus creation: parseFile() carries nothing the file did
 // not say; applyCreationDefaults() is the one writer of import-time defaults
 // and only fills keys that are absent.
 
@@ -27,39 +27,12 @@
 #include "sessiondata.h"
 #include "testenvironment.h"
 #include "testmain.h"
+#include "testutil.h"
 
 using namespace FlySight;
 using namespace FlySightTest;
 
 namespace {
-
-int g_warningCount = 0;
-QStringList g_warnings;
-
-void countingHandler(QtMsgType type, const QMessageLogContext &, const QString &message)
-{
-    if (type == QtWarningMsg || type == QtCriticalMsg) {
-        ++g_warningCount;
-        g_warnings.append(message);
-    }
-}
-
-// Counts warnings for as long as it lives.
-class WarningCounter {
-public:
-    WarningCounter()
-    {
-        g_warningCount = 0;
-        g_warnings.clear();
-        m_previous = qInstallMessageHandler(countingHandler);
-    }
-    ~WarningCounter() { qInstallMessageHandler(m_previous); }
-    int count() const { return g_warningCount; }
-    QStringList messages() const { return g_warnings; }
-
-private:
-    QtMessageHandler m_previous = nullptr;
-};
 
 // Writes the bytes to a file in a fresh temp dir and returns its path.
 QString writeTemp(const QByteArray &bytes, const QString &fileName = QStringLiteral("file.csv"))
@@ -258,7 +231,7 @@ void ImporterTest::neverStampsSchema()
            .row("2024-01-01T12:00:00.00Z,45.5,-73.25,4000.5");
         const QString path = writeTemp(fs1.toBytes());
 
-        WarningCounter quiet;   // FS1 has no DEVICE_ID: the FLYSIGHT.TXT search warns
+        WarningCapture quiet;   // FS1 has no DEVICE_ID: the FLYSIGHT.TXT search warns
         DataImporter importer;
         SessionData session;
         QVERIFY(importer.importFile(path, session));
@@ -442,7 +415,7 @@ void ImporterTest::unknownHeaderLinesIgnored()
                                    "$COL,A,time,x\n"
                                    "$DATA\n"
                                    "$A,1,2\n");
-    WarningCounter warnings;
+    WarningCapture warnings;
     DataImporter importer;
     SessionData session;
     QVERIFY2(importer.readFile(path, session), qPrintable(importer.getLastError()));
@@ -469,7 +442,7 @@ void ImporterTest::malformedRowsAreSkipped()
         .rawDataLine("$IMU,9,-12");                  // truncated by power loss
     const QString path = writeTemp(file.toBytes());
 
-    WarningCounter warnings;
+    WarningCapture warnings;
     DataImporter importer;
     SessionData session;
     QVERIFY2(importer.readFile(path, session), qPrintable(importer.getLastError()));
@@ -495,7 +468,7 @@ void ImporterTest::cleanFileIsSilent()
     const QString sensorPath = writeTemp(Fixtures::sensorFile().toBytes());
     const QString trackPath = writeTemp(Fixtures::trackFile().toBytes());
 
-    WarningCounter warnings;
+    WarningCapture warnings;
     DataImporter importer;
     SessionData sensor;
     SessionData track;
@@ -546,7 +519,7 @@ void ImporterTest::storesAsRecorded()
     QCOMPARE(session.calculationEngine().totalRunCount(), 0);
 }
 
-// Spec 9.2: the exporter writes non-finite source samples as "nan", "inf",
+// The exporter writes non-finite source samples as "nan", "inf",
 // "-inf"; the importer reads them back in place instead of skipping the row.
 void ImporterTest::nonFiniteTokens()
 {
@@ -558,7 +531,7 @@ void ImporterTest::nonFiniteTokens()
         .toBytes();
     const QString path = writeTemp(bytes);
 
-    WarningCounter warnings;
+    WarningCapture warnings;
     DataImporter importer;
     SessionData session;
     QVERIFY2(importer.importFile(path, session), qPrintable(importer.getLastError()));
@@ -634,7 +607,7 @@ void ImporterTest::customColumnsAndSensors()
         .sensor("FOO", {"time", "bar#1", "baz"}, {"s", "furlongs", ""})
         .row("FOO", "3,7,-1.5e3");
 
-    WarningCounter warnings;
+    WarningCapture warnings;
     DataImporter importer;
     SessionData session;
     QVERIFY2(importer.importFile(writeTemp(file.toBytes()), session), qPrintable(importer.getLastError()));
@@ -849,7 +822,7 @@ void ImporterTest::creationDefaultsDeviceId()
         ParsedFile file;
         QVERIFY(importer.parseFile(path, file));
 
-        WarningCounter warnings;
+        WarningCapture warnings;
         SessionData session = file.data;
         DataImporter::applyCreationDefaults(file, session);
         QCOMPARE(session.storedAttribute("DEVICE_ID").toString(), QStringLiteral("n/a"));

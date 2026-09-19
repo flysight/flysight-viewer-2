@@ -357,7 +357,7 @@ flysight-viewer-2/
 │   ├── CMakeLists.txt                     # Test targets (built when FLYSIGHT_BUILD_TESTS=ON)
 │   ├── README.md                          # How to build, run, and write tests; acceptance matrix
 │   ├── acceptance_map.txt                 # Acceptance item -> test function (machine-checked)
-│   ├── support/                           # Shared test support: isolation, fixture builders
+│   ├── support/                           # Shared test support: isolation, fixture builders, shared helpers
 │   ├── python_plugins/                    # Plugins loaded by tst_python_bridge
 │   ├── audit/                             # cleanup_audit.cmake (the audit_cleanup test)
 │   └── tst_*.cpp                          # One Qt Test class per executable, linked to flysight_core

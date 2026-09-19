@@ -6,21 +6,11 @@
 
 #include "conversion/schematable.h"
 #include "testmain.h"
+#include "testutil.h"
 #include "units/unitconversion.h"
 
 using namespace FlySight;
-
-namespace {
-
-int g_warningCount = 0;
-
-void countingHandler(QtMsgType type, const QMessageLogContext &, const QString &)
-{
-    if (type == QtWarningMsg || type == QtCriticalMsg)
-        ++g_warningCount;
-}
-
-} // namespace
+using FlySightTest::WarningCapture;
 
 class SchemaUnitsTest : public QObject {
     Q_OBJECT
@@ -220,17 +210,17 @@ void SchemaUnitsTest::requiresConversion()
 
 void SchemaUnitsTest::lookupsAreSilent()
 {
-    g_warningCount = 0;
-    const QtMessageHandler previous = qInstallMessageHandler(countingHandler);
-
-    for (const char *unit : {"g", "gauss", "deg C", "m/s^2", "T", "degC", "deg/s", "", "(m/s)",
-                             "percent", "furlongs", " odd unit "}) {
-        UnitConversion::getConversion(QString::fromLatin1(unit));
-        UnitConversion::requiresConversion(QString::fromLatin1(unit));
+    int warningCount = -1;
+    {
+        WarningCapture warnings;
+        for (const char *unit : {"g", "gauss", "deg C", "m/s^2", "T", "degC", "deg/s", "", "(m/s)",
+                                 "percent", "furlongs", " odd unit "}) {
+            UnitConversion::getConversion(QString::fromLatin1(unit));
+            UnitConversion::requiresConversion(QString::fromLatin1(unit));
+        }
+        warningCount = warnings.count();
     }
-
-    qInstallMessageHandler(previous);
-    QCOMPARE(g_warningCount, 0);
+    QCOMPARE(warningCount, 0);
 }
 
 FLYSIGHT_TEST_MAIN(SchemaUnitsTest)

@@ -298,7 +298,7 @@ void BuiltinsEngineTest::timeFitRunsOnce()
     QCOMPARE(engine.runCount("builtin.time.fit"), 1);
 }
 
-// Spec 7.8 / acceptance 15: the descent pause is a declared preference input.
+// Acceptance 15: the descent pause is a declared preference input.
 void BuiltinsEngineTest::analysisRangeFollowsPreference()
 {
     World world;
@@ -413,7 +413,7 @@ void BuiltinsEngineTest::simplifiedRunsOnce()
     QCOMPARE(engine.measurementUnit("Simplified", "lat"), QString());
 }
 
-// Spec 7.6: one family registration, one instance per distinct expression.
+// One family registration, one instance per distinct expression.
 void BuiltinsEngineTest::interpolationInstances()
 {
     CalculationEngine &engine = *m_world->engine;

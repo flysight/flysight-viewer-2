@@ -69,7 +69,7 @@ void BuiltinsGoldenTest::sessionDataMatchesGolden()
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
 }
 
-// Spec 4: enumeration and presence describe stored data only; a calculation
+// Enumeration and presence describe stored data only; a calculation
 // output does not appear because it happened to be computed.
 void BuiltinsGoldenTest::storedEnumerationUnaffected()
 {

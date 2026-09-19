@@ -1,5 +1,6 @@
-# Acceptance traceability (spec section 11, items 1-19; "12" rows of spec
-# section 12 are filed under item 19).
+# Acceptance traceability. The acceptance items 1-19 are stated in full in
+# tests/README.md, appendix A. (The rule "only SCHEMA_VER decides", which is
+# not one of the 19 items, is filed under item 19.)
 #
 # One line per demonstrated clause: <item> <target> <function>
 # Checked by the audit_cleanup test (tests/audit/cleanup_audit.cmake): the file
@@ -102,6 +103,7 @@
 12 tst_calcengine_safety nestedChainFromOneRead
 12 tst_calcengine_safety cycleFallsBackIndependentOfReadOrder
 12 tst_calcengine_safety pureCycleTerminates
+12 tst_calcengine_safety requestThroughOwnOutputIsCycle
 12 tst_calcengine_safety exceptionLeavesNoPartialResult
 12 tst_calcengine_safety innerExceptionKeepsUnrelatedResults
 12 tst_calcengine_safety foreignExceptionPublishesNothing

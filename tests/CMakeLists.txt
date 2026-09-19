@@ -5,8 +5,11 @@
 # Not a standalone project: this directory is added by src/CMakeLists.txt when
 # FLYSIGHT_BUILD_TESTS=ON, so every target of the application project
 # (flysight_core, flysight_model, pybind11::embed, flysight_cpp_bridge, ...) is
-# in scope. Application sources are never compiled into a test; tests link
-# flysight_core through flysight_test_support.
+# in scope. Tests link flysight_core through flysight_test_support rather than
+# compiling application sources. The one exception is tst_python_bridge, which
+# compiles pluginhost.cpp and pluginadapters.cpp directly: they belong to the
+# application executable, not to flysight_core, because they need the embedded
+# interpreter.
 #
 # Conventions:
 #   - one QObject test class per executable
@@ -23,8 +26,8 @@ endif()
 
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Test)
 
-# Application source directory, for later phases that must compile a single
-# application source (e.g. pluginhost.cpp) directly into a test.
+# Application source directory, for the test that must compile application
+# sources directly (tst_python_bridge: pluginhost.cpp, pluginadapters.cpp).
 set(FLYSIGHT_SRC_DIR "${CMAKE_CURRENT_LIST_DIR}/../src")
 
 # ─────────────────────────────── shared test support
@@ -34,7 +37,8 @@ add_library(flysight_test_support STATIC
   support/fakesessionstate.cpp support/fakesessionstate.h
   support/builtinfixture.cpp   support/builtinfixture.h
   support/oraclecatalogue.cpp  support/oraclecatalogue.h
-  support/testmain.h
+  support/logbookprobe.cpp     support/logbookprobe.h
+  support/testmain.h           support/testutil.h
 )
 target_include_directories(flysight_test_support PUBLIC "${CMAKE_CURRENT_LIST_DIR}/support")
 target_link_libraries(flysight_test_support
@@ -136,14 +140,16 @@ flysight_add_test(tst_import_batch  SOURCES tst_import_batch.cpp)
 # Session-level idempotency oracle: randomized reads, edits, merges, preference
 # and registry changes on real sessions against a fresh evaluation.
 # QT_HASH_SEED=0 makes QSet / QHash iteration order reproducible, so a failure
-# that depends on invalidation order reproduces from its seed.
+# that depends on invalidation order reproduces from its seed. (FLYSIGHT_TEST_MAIN
+# also fixes the seed in every test executable, so a run by hand reproduces too;
+# the variable is kept so that the CTest run does not depend on that.)
 flysight_add_test(tst_session_oracle SOURCES tst_session_oracle.cpp ENVIRONMENT "QT_HASH_SEED=0")
 set_tests_properties(tst_session_oracle PROPERTIES TIMEOUT 300 LABELS "core;oracle")
 
 # End-to-end workflows on the application's import path (acceptance 19)
 flysight_add_test(tst_workflow SOURCES tst_workflow.cpp)
 
-# ---- Phase 7: embedded-Python bridge test --------------------------------
+# ---- embedded-Python bridge test -----------------------------------------
 # tst_python_bridge boots the real embedded interpreter, imports the real
 # flysight_cpp_bridge module from the build tree, and loads the SDK, the test
 # plugins under tests/python_plugins/ and the bundled example. It is the only
@@ -209,10 +215,10 @@ if(FLYSIGHT_BUILD_PYTHON_TESTS)
   endif()
 endif()
 
-# ---- Phase 8: cleanup audit ------------------------------------------------
-# "No old mechanism remains", "no new UI", and the acceptance traceability map
-# (tests/acceptance_map.txt) as one repeatable command. A CMake script over
-# `git grep` / `git diff`; registered only when this is a git checkout.
+# ---- cleanup audit ---------------------------------------------------------
+# "No old mechanism remains", "one authority per fact", and the acceptance
+# traceability map (tests/acceptance_map.txt) as one repeatable command. A
+# CMake script over `git grep`; registered only when this is a git checkout.
 find_package(Git QUIET)
 if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_LIST_DIR}/../.git")
   add_test(NAME audit_cleanup COMMAND "${CMAKE_COMMAND}"

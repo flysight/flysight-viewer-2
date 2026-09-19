@@ -1,8 +1,9 @@
 // Characterization ("smoke") suite.
 //
 // Drives importer, session, calculations, exporter, logbook and model end to
-// end. It started as a pin of v2026.04.1; expectations that a phase changed on
-// purpose were rewritten with that phase. Every expectation is a literal.
+// end. It started as a pin of v2026.04.1; expectations that the source /
+// conversion / calculation-engine rework changed on purpose were rewritten
+// with the change that altered them. Every expectation is a literal.
 // Corrected gyro values (recorded x 1.14688) are compared with an absolute
 // tolerance of 1e-9: 62.5 * 1.14688 is not the double nearest 71.68.
 
@@ -17,6 +18,7 @@
 #include "dataimporter.h"
 #include "fixturebuilder.h"
 #include "logbookmanager.h"
+#include "logbookprobe.h"
 #include "sessiondata.h"
 #include "sessionmodel.h"
 #include "testenvironment.h"
@@ -31,12 +33,6 @@ bool isUnderRoot(const QString &path)
 {
     const QString root = TestEnvironment::instance().rootPath() + QLatin1Char('/');
     return QDir::cleanPath(path).startsWith(root, Qt::CaseInsensitive);
-}
-
-QStringList sessionCsvFiles()
-{
-    return QDir(TestEnvironment::instance().sessionsDir())
-        .entryList({QStringLiteral("*.csv")}, QDir::Files, QDir::Name);
 }
 
 } // namespace
@@ -314,7 +310,7 @@ void SmokeTest::exportReloadRoundTrip()
     for (const Expected &e : expected) {
         const QVector<double> source = reloaded.sourceMeasurement(e.sensor, e.name);
         QVERIFY2(source.size() == 1, e.name);
-        // Bit equality: a saved sample reloads exactly (spec 9.2).
+        // Bit equality: a saved sample reloads exactly.
         const double reloadedSource = source.at(0);
         QVERIFY2(std::memcmp(&reloadedSource, &e.source, sizeof(double)) == 0, e.name);
         QCOMPARE(reloaded.sourceUnit(e.sensor, e.name), QString::fromLatin1(e.sourceUnit));

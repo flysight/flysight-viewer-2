@@ -21,6 +21,7 @@
 #include "engine/calculationregistry.h"
 #include "fakesessionstate.h"
 #include "testmain.h"
+#include "testutil.h"
 
 using namespace FlySight;
 using namespace FlySightTest;
@@ -29,41 +30,8 @@ using Synthetic::measKey;
 
 namespace {
 
-bool isNear(double a, double b)
-{
-    return qAbs(a - b) <= 1e-9;
-}
-
 const QString kSchemaFamily = QStringLiteral("builtin.conversion.schema");
 const QString kDefaultFamily = QStringLiteral("builtin.conversion.default");
-
-int g_warningCount = 0;
-QStringList g_warnings;
-
-void countingHandler(QtMsgType type, const QMessageLogContext &, const QString &message)
-{
-    if (type == QtWarningMsg || type == QtCriticalMsg) {
-        ++g_warningCount;
-        g_warnings.append(message);
-    }
-}
-
-// Counts warnings for as long as it lives.
-class WarningCounter {
-public:
-    WarningCounter()
-    {
-        g_warningCount = 0;
-        g_warnings.clear();
-        m_previous = qInstallMessageHandler(countingHandler);
-    }
-    ~WarningCounter() { qInstallMessageHandler(m_previous); }
-    int count() const { return g_warningCount; }
-    QStringList messages() const { return g_warnings; }
-
-private:
-    QtMessageHandler m_previous = nullptr;
-};
 
 // A private registry holding only the conversion layer, a fake session state,
 // and an engine over them. Members are destroyed in reverse order, so the
@@ -143,7 +111,7 @@ void ConversionEngineTest::registration()
              QStringLiteral("builtin.conversion.default#IMU/ax"));
 
     // Source inputs stay reserved for the conversion layer.
-    WarningCounter warnings;
+    WarningCapture warnings;
     CalculationDescriptor plain;
     plain.id = QStringLiteral("test.readsSource");
     plain.inputs = { CalcInput::sourceMeasurement("IMU", "wx") };
@@ -281,7 +249,7 @@ void ConversionEngineTest::unsupportedInMemory()
     w.state.setAttribute("SCHEMA_VER", QStringLiteral("3"));
 
     {
-        WarningCounter warnings;
+        WarningCapture warnings;
         QCOMPARE(w.engine->measurement("IMU", "wx"), QVector<double>({62.5}));
         QCOMPARE(w.engine->measurement("IMU", "wx"), QVector<double>({62.5}));   // cached: no second warning
         QCOMPARE(warnings.count(), 1);
@@ -293,7 +261,7 @@ void ConversionEngineTest::unsupportedInMemory()
 
     w.state.setAttribute(*w.engine, "SCHEMA_VER", QStringLiteral("abc"));
     {
-        WarningCounter warnings;
+        WarningCapture warnings;
         QCOMPARE(w.engine->measurement("IMU", "wx"), QVector<double>({62.5}));
         QCOMPARE(warnings.count(), 1);
         QVERIFY(warnings.messages().at(0).contains(QStringLiteral("'abc'")));
@@ -301,7 +269,7 @@ void ConversionEngineTest::unsupportedInMemory()
     QCOMPARE(w.engine->runCountForInstance("builtin.conversion.default#IMU/wx"), 0);
 
     {
-        WarningCounter warnings;   // the fresh evaluation warns again; not counted above
+        WarningCapture warnings;   // the fresh evaluation warns again; not counted above
         QVERIFY(w.engine->verifyAgainstFresh({measKey("IMU", "wx")}).isEmpty());
     }
 }
@@ -316,7 +284,7 @@ void ConversionEngineTest::unitNormalization()
     w.state.setMeasurement("X", "c", {7.0}, "furlongs");
     w.state.setMeasurement("BARO", "pressure", {90000.0}, "Pa");
 
-    WarningCounter warnings;
+    WarningCapture warnings;
 
     QVERIFY(w.first("IMU", "ax") == 9.80665);
     QCOMPARE(w.engine->measurementUnit("IMU", "ax"), QStringLiteral("m/s^2"));

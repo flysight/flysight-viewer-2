@@ -1,5 +1,6 @@
 // CsvFormat: the on-disk text forms of numbers and attribute values, and the
-// exact-round-trip guarantee (spec 9.2). Expectations are literals; "bits"
+// exact-round-trip guarantee (a saved double reloads bit-identical).
+// Expectations are literals; "bits"
 // means std::memcmp of the two doubles. The one exception is roundTripSweep,
 // where the expectation is the input itself - that is the property under test.
 
@@ -16,17 +17,10 @@
 
 #include "csvformat.h"
 #include "testmain.h"
+#include "testutil.h"
 
 using namespace FlySight;
-
-namespace {
-
-bool sameBits(double a, double b)
-{
-    return std::memcmp(&a, &b, sizeof(double)) == 0;
-}
-
-} // namespace
+using FlySightTest::sameBits;
 
 class CsvFormatTest : public QObject {
     Q_OBJECT
@@ -151,10 +145,10 @@ void CsvFormatTest::nonFinite()
     QVERIFY(!CsvFormat::parseDouble(u"1,2", &parsed));
     QCOMPARE(parsed, 7.0);      // a failed parse leaves *out alone
 
-    // Everything QStringView::toDouble accepts still loads (Phase 4's rule for
+    // Everything QStringView::toDouble accepts still loads (the importer's rule for
     // data rows). That includes surrounding whitespace, which toDouble itself
     // ignores; parseDouble adds no trimming of its own and no stricter check,
-    // so a file that loaded before this phase loads the same way now.
+    // so a file that loaded with the previous parser loads the same way now.
     QVERIFY(CsvFormat::parseDouble(u" 1", &parsed));
     QCOMPARE(parsed, 1.0);
     QVERIFY(CsvFormat::parseDouble(u"NaN", &parsed));

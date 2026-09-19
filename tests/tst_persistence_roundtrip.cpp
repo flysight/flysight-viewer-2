@@ -1,5 +1,5 @@
 // Save / reload round trip on the real importer, exporter and logbook
-// (spec 9.1 - 9.3):
+// (session files, precision, existing logbooks):
 //
 //   acceptance 5 - source samples bit-identical, source units and header
 //                  attributes preserved, SCHEMA_VER absent if it was absent,
@@ -34,11 +34,13 @@
 #include "engine/calculationengine.h"
 #include "fixturebuilder.h"
 #include "logbookmanager.h"
+#include "logbookprobe.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
 #include "testenvironment.h"
 #include "testmain.h"
+#include "testutil.h"
 
 using namespace FlySight;
 using namespace FlySightTest;
@@ -47,11 +49,6 @@ namespace {
 
 const double kInf = std::numeric_limits<double>::infinity();
 const double kNaN = std::numeric_limits<double>::quiet_NaN();
-
-bool sameBits(double a, double b)
-{
-    return std::memcmp(&a, &b, sizeof(double)) == 0;
-}
 
 bool bitsEqual(const QVector<double> &actual, std::initializer_list<double> expected)
 {
@@ -75,40 +72,6 @@ bool bitsEqual(const QVector<double> &a, const QVector<double> &b)
     }
     return true;
 }
-
-bool isNear(double a, double b)
-{
-    return qAbs(a - b) <= 1e-9;
-}
-
-QStringList g_warnings;
-
-void collectingHandler(QtMsgType type, const QMessageLogContext &, const QString &message)
-{
-    if (type == QtWarningMsg || type == QtCriticalMsg)
-        g_warnings.append(message);
-}
-
-// Collects warnings for as long as it lives. Installed after registerBuiltIns().
-class WarningCollector {
-public:
-    WarningCollector()
-    {
-        g_warnings.clear();
-        m_previous = qInstallMessageHandler(collectingHandler);
-    }
-    ~WarningCollector() { qInstallMessageHandler(m_previous); }
-    int count(const QString &fragment) const
-    {
-        int n = 0;
-        for (const QString &w : std::as_const(g_warnings))
-            n += w.contains(fragment) ? 1 : 0;
-        return n;
-    }
-
-private:
-    QtMessageHandler m_previous = nullptr;
-};
 
 QString tempFile(const QString &stem)
 {
@@ -202,12 +165,6 @@ QByteArray releasedFile(bool withAeroAndWind, const QByteArray &magX = "0.25")
     return r;
 }
 
-QStringList sessionCsvFiles()
-{
-    return QDir(TestEnvironment::instance().sessionsDir())
-        .entryList({QStringLiteral("*.csv")}, QDir::Files, QDir::Name);
-}
-
 // Lets the logbook create the index entry for "rel", then replaces the file
 // with `bytes`. Returns the path of the session file.
 QString installReleasedFile(const QByteArray &bytes)
@@ -255,7 +212,7 @@ private slots:
     void typedAttributesRoundTrip();
     void warmAndColdCachesSameFile();
 
-    // spec 9.2: non-finite values; what cannot be written
+    // Precision: non-finite values; what cannot be written
     void nonFiniteRoundTrip();
     void raggedSensorIsRejected();
     void headerOnlySensor();
@@ -527,7 +484,7 @@ void PersistenceRoundTripTest::typedAttributesRoundTrip()
 }
 
 // Acceptance 5: the result does not depend on the state of any cache. Also
-// Task 5.3: a save neither computes nor creates anything in the engine.
+// A save neither computes nor creates anything in the engine.
 void PersistenceRoundTripTest::warmAndColdCachesSameFile()
 {
     SessionData cold;
@@ -584,7 +541,7 @@ void PersistenceRoundTripTest::warmAndColdCachesSameFile()
     QVERIFY(!coldBytes.contains("m/s^2"));
 }
 
-// Spec 9.2: a non-finite sample survives save and reload in place; it is
+// A non-finite sample survives save and reload in place; it is
 // never written as zero and never dropped. The same for a double attribute.
 void PersistenceRoundTripTest::nonFiniteRoundTrip()
 {
@@ -608,7 +565,7 @@ void PersistenceRoundTripTest::nonFiniteRoundTrip()
     QCOMPARE(bytes, expected);
     QVERIFY(!bytes.contains(",0\n"));
 
-    WarningCollector warnings;
+    WarningCapture warnings;
     SessionData reloaded;
     QVERIFY(reload(bytes, reloaded));
     QCOMPARE(warnings.count(QStringLiteral("skipped")), 0);
@@ -702,7 +659,7 @@ void PersistenceRoundTripTest::unrepresentableText()
     session.setSourceMeasurement("X", "time", {1.0}, "s");
 
     {
-        WarningCollector warnings;
+        WarningCapture warnings;
         const QByteArray bytes = exportBytes(session);
         const QByteArray expected =
             "$FLYS,1\n"
@@ -739,7 +696,7 @@ void PersistenceRoundTripTest::unrepresentableText()
     QCOMPARE(readFileBytes(path), QByteArray("keep"));
 }
 
-// Phase 8 (F9): the exporter never writes a file that DataImporter would
+// The exporter never writes a file that DataImporter would
 // reject. An unsupported SCHEMA_VER can only be stored programmatically.
 void PersistenceRoundTripTest::unsupportedSchemaIsNotSaved()
 {
@@ -901,7 +858,7 @@ void PersistenceRoundTripTest::releasedValueWithDifferentText()
 // Acceptance 6 / the loadSession backfill: a released file older than the
 // per-session mass / area / wind attributes gains exactly those four lines on
 // its next save and nothing else changes.
-// Phase 6 owns the backfill policy; this pins that it is additive and idempotent.
+// The legacy backfill (LogbookManager::applyLegacyBackfill) is additive and idempotent.
 void PersistenceRoundTripTest::releasedLogbookBackfillIsAdditive()
 {
     PreferencesManager &prefs = PreferencesManager::instance();

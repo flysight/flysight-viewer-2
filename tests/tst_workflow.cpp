@@ -32,6 +32,7 @@
 #include "fixturebuilder.h"
 #include "logbookcolumn.h"
 #include "logbookmanager.h"
+#include "logbookprobe.h"
 #include "oraclecatalogue.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
@@ -40,6 +41,7 @@
 #include "sessionmodel.h"
 #include "testenvironment.h"
 #include "testmain.h"
+#include "testutil.h"
 
 using namespace FlySight;
 using namespace FlySightTest;
@@ -57,54 +59,11 @@ using Outcome = MergeResult::Outcome;
 
 const QString kId = QStringLiteral("descent");
 
-bool isNear(double a, double b)
-{
-    return qAbs(a - b) <= 1e-9;
-}
-
-LogbookColumn descriptionColumn()
-{
-    LogbookColumn col;
-    col.type = ColumnType::SessionAttribute;
-    col.attributeKey = QStringLiteral("_DESCRIPTION");
-    return col;
-}
-
-LogbookColumn exitTimeColumn()
-{
-    LogbookColumn col;
-    col.type = ColumnType::SessionAttribute;
-    col.attributeKey = QStringLiteral("_EXIT_TIME");
-    return col;
-}
-
-LogbookColumn gyroColumn()
-{
-    LogbookColumn col;
-    col.type = ColumnType::MeasurementAtMarker;
-    col.sensorID = QStringLiteral("IMU");
-    col.measurementID = QStringLiteral("wx");
-    col.measurementType = QStringLiteral("rotation");
-    col.markerAttributeKey = QStringLiteral("_M");
-    return col;
-}
-
-QStringList sessionCsvFiles()
-{
-    return QDir(TestEnvironment::instance().sessionsDir())
-        .entryList({QStringLiteral("*.csv")}, QDir::Files, QDir::Name);
-}
-
 QString onlySessionFile()
 {
     const QStringList files = sessionCsvFiles();
     return files.size() == 1 ? TestEnvironment::instance().sessionsDir() + QLatin1Char('/') + files.first()
                              : QString();
-}
-
-QJsonObject readIndex()
-{
-    return QJsonDocument::fromJson(readFileBytes(TestEnvironment::instance().indexPath())).object();
 }
 
 QSet<QByteArray> lineSet(const QByteArray &bytes)
@@ -115,17 +74,6 @@ QSet<QByteArray> lineSet(const QByteArray &bytes)
             lines.insert(line);
     }
     return lines;
-}
-
-bool spyHasAttribute(const QSignalSpy &spy, const QString &sessionId, const char *key)
-{
-    for (const QList<QVariant> &args : spy) {
-        const DependencyKey name = args.at(1).value<DependencyKey>();
-        if (args.at(0).toString() == sessionId && name.type == DependencyKey::Type::Attribute
-            && name.attributeKey == QLatin1String(key))
-            return true;
-    }
-    return false;
 }
 
 // A session file as a released Viewer version wrote it: exporter order,

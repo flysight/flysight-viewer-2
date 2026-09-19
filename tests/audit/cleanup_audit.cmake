@@ -1,17 +1,32 @@
 # =============================================================================
-# Cleanup audit (spec 12: "remove the old mechanisms rather than leaving them
-# alongside the new ones"; spec 2: no new UI; acceptance 19: no remaining use of
-# the old per-value cache engine or direct cache setters) and the machine check
+# Cleanup audit: permanent invariants of the source tree, and the machine check
 # of the acceptance traceability map.
+#
+#   - the mechanisms that were replaced (the per-value cache engine, the direct
+#     cache setters, import-time unit conversion, the old plugin bridge) stay
+#     removed rather than living alongside their replacements (acceptance 19);
+#   - each fact has exactly one authority (one gyro factor, one schema-version
+#     attribute name, one compatibility marker, one number formatter, one
+#     emitter of dependencyChanged, one saver, one import path).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
-# Needs only git. Every rule is a `git grep -E` (tracked AND untracked,
-# non-ignored files) or a `git diff` against the baseline tag. ALL violations
+# Needs only git. Every rule is a `git grep -E` over the working tree (tracked
+# AND untracked, non-ignored files); nothing is compared with an earlier
+# revision, so the result depends on the checked-out files alone. ALL violations
 # are collected and reported together; the script fails if there is any.
 #
 # Adding a rule: one expect_none / expect_only / expect_count line below. This
 # directory is excluded from every search, so a pattern never matches itself.
+#
+# Allowing a legitimate hit. The rules are text searches, so a correct change
+# can trip one. Each rule that is likely to do so carries an "Allow:" comment
+# saying what to edit. The general forms are:
+#   expect_none   append a ":!path/to/file" exclusion to that rule's pathspec
+#                 (or narrow the regex so it no longer matches the new text);
+#   expect_only   add the file to the rule's allowed-file regex;
+#   expect_count  change the expected number - and only if the fact really has
+#                 gained a second authority, which is usually the bug.
 # =============================================================================
 
 cmake_minimum_required(VERSION 3.16)
@@ -27,7 +42,6 @@ if(NOT GIT)
 endif()
 get_filename_component(REPO "${REPO}" ABSOLUTE)
 
-set(BASELINE_TAG "v2026.04.1")
 set(VIOLATIONS "")
 set(RULES 0)
 
@@ -117,6 +131,8 @@ expect_none("friend / back doors"
   src tests)
 
 # ─────────────────────────────── ambiguous unit API (not tests: Fs1FileBuilder::units)
+# Allow: this matches ANY `.units(` / `->units(` call in src. A new, unrelated
+# accessor of that name needs a ":!src/<file>" exclusion here (or another name).
 expect_none("ambiguous unit API" "\\bgetUnit\\(|[.>]units\\(" src)
 
 # ─────────────────────────────── dead bridge code
@@ -130,10 +146,18 @@ expect_none("superseded import-time correction"
   "GyroScaling|ImportGyroScaling|DataSchema\\b|dataSchemaVersion|SchemaVersion\\b"
   ${P} docs README.md)
 
-# ─────────────────────────────── renamed-column conventions (spec 3.1)
+# ─────────────────────────────── renamed-column conventions
+# A source column and its converted value share one name; no "<name>_source" or
+# "source:<name>" spelling may appear.
+# Allow: a string literal that merely ends in `_source"` for another reason
+# needs a ":!path" exclusion on this rule.
 expect_none("alternate column names" "\"[A-Za-z]*_source\"|\"source:|_source\"" src python_plugins tests)
 
 # ─────────────────────────────── one authority per fact
+# Allow: these count LINES, comments included. Quoting the gyro factor or the
+# "SCHEMA_VER" literal in a comment or log message in src trips the count -
+# refer to the named constant instead. Raise a count only for a real second
+# authority (and then ask whether it should exist).
 expect_count("one authority: gyro factor" "1\\.14688" 1 src)
 expect_only("one authority: gyro factor" "1\\.14688" "^src/conversion/schematable\\.cpp$" src)
 expect_count("one authority: SCHEMA_VER literal" "\"SCHEMA_VER\"" 1 src)
@@ -143,111 +167,46 @@ expect_only("one authority: number formatting" "FloatingPointShortest" "^src/csv
 expect_none("one authority: number formatting" "<charconv>" src)
 
 # ─────────────────────────────── nothing infers the schema
+# Allow: the first rule bans file-name/date vocabulary (fileName, filePath,
+# QFileInfo, QDate) from src/conversion and src/engine wholesale. Code there
+# that needs such a type for a reason unrelated to choosing a schema takes a
+# ":!src/<dir>/<file>" exclusion on that rule.
 expect_none("no schema inference (conversion, engine)"
   "FIRMWARE_VER|FirmwareVer|fileName|filePath|QFileInfo|QDate" src/conversion src/engine)
 expect_none("no schema inference (importer, merge, calculations)"
   "FIRMWARE_VER|FirmwareVer" src/dataimporter.cpp src/sessionmerge.cpp src/calculations)
 
 # ─────────────────────────────── compute functions are pure
+# Allow: a file under these directories that is NOT a compute function (for
+# example registration glue that reads a preference default) takes a
+# ":!src/<dir>/<file>" exclusion; a compute function never does.
 expect_none("pure compute functions"
   "PreferencesManager|QSettings|QDateTime::current|std::rand|QRandomGenerator|_SESSION_ID"
   src/calculations src/conversion src/engine)
 
-# ─────────────────────────────── source-input opt-in (F2): the plugin host only
+# ─────────────────────────────── source-input opt-in: the plugin host only
+# Allow: another legitimate setter is added to the allowed-file regex.
 expect_only("source-input opt-in" "allowSourceInputs *= *" "^src/pluginadapters\\.cpp$|^src/engine/calculationdescriptor\\.h$" src)
 expect_count("source-input opt-in (default)" "allowSourceInputs *= *false" 1 src/engine/calculationdescriptor.h)
 
 # ─────────────────────────────── one mutation path, one emission path
+# Allow: a new legitimate caller of exportSession( / mergeSessions( /
+# importFile( is added to that rule's allowed-file regex. These match the bare
+# call text, so an unrelated function of the same name trips them too - the
+# same edit applies. "emit dependencyChanged" stays at exactly one line.
 expect_count("one emitter" "emit dependencyChanged" 1 src)
 expect_only("one emitter" "emit dependencyChanged" "^src/sessionmodel\\.cpp$" src)
 expect_only("one saver" "exportSession\\(" "^src/logbookmanager\\.(cpp|h)$|^src/dataexporter\\.(cpp|h)$" src)
 expect_only("one import path" "mergeSessions\\(" "^src/sessionmodel\\.(cpp|h)$|^src/sessionimport\\.(cpp|h)$" src)
 expect_only("one import path" "importFile\\(" "^src/dataimporter\\.(cpp|h)$" src)
+# Allow: none expected - the exporter and the merge must not read converted or
+# calculated values. A differently-meant identifier containing one of these
+# words needs the regex narrowed, not the file excluded.
 expect_none("exporter and merge read stored state only"
   "getAttribute|getMeasurement|effectiveUnit|calculationEngine" src/dataexporter.cpp src/sessionmerge.cpp)
 
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
-
-# ─────────────────────────────── checks against the baseline tag
-execute_process(COMMAND "${GIT}" rev-parse --verify --quiet "${BASELINE_TAG}^{commit}"
-  WORKING_DIRECTORY "${REPO}" RESULT_VARIABLE tag_rc OUTPUT_QUIET ERROR_QUIET)
-
-# _added_lines(<out-var> <pathspec>...): the added lines of `git diff <tag>`
-function(_added_lines out)
-  execute_process(COMMAND "${GIT}" -c core.quotepath=off diff --no-color "${BASELINE_TAG}" -- ${ARGN}
-    WORKING_DIRECTORY "${REPO}" RESULT_VARIABLE rc OUTPUT_VARIABLE stdout ERROR_QUIET)
-  if(NOT rc EQUAL 0)
-    message(FATAL_ERROR "cleanup audit: git diff failed (${rc})")
-  endif()
-  string(REPLACE ";" "<semicolon>" stdout "${stdout}")
-  string(REPLACE "[" "<" stdout "${stdout}")
-  string(REPLACE "]" ">" stdout "${stdout}")
-  string(REGEX REPLACE "\r?\n" ";" lines "${stdout}")
-  set(added "")
-  foreach(line IN LISTS lines)
-    if(line MATCHES "^\\+" AND NOT line MATCHES "^\\+\\+\\+")
-      list(APPEND added "${line}")
-    endif()
-  endforeach()
-  set(${out} "${added}" PARENT_SCOPE)
-endfunction()
-
-if(tag_rc EQUAL 0)
-  # No unfinished work was added
-  math(EXPR RULES "${RULES} + 1")
-  _added_lines(added src tests python_plugins ":!tests/audit")
-  foreach(line IN LISTS added)
-    if(line MATCHES "TODO|FIXME")
-      _violation("[leftover markers] added line: ${line}")
-    endif()
-  endforeach()
-
-  # No new UI (spec 2): the only UI-side files that changed at all
-  math(EXPR RULES "${RULES} + 1")
-  execute_process(COMMAND "${GIT}" -c core.quotepath=off diff --name-only "${BASELINE_TAG}" --
-                          src/preferences src/mainwindow.ui src/qml src/resources.qrc src/ui
-    WORKING_DIRECTORY "${REPO}" OUTPUT_VARIABLE changed ERROR_QUIET)
-  string(REGEX REPLACE "\r?\n$" "" changed "${changed}")
-  string(REGEX REPLACE "\r?\n" ";" changed "${changed}")
-  set(allowed_ui
-    src/preferences/preferencesmanager.h            # adds hasPreference()
-    src/preferences/enginepreferenceprovider.h
-    src/preferences/enginepreferenceprovider.cpp
-    src/ui/docks/plot/PlotWidget.cpp)               # "reset to default" uses the registry query
-  foreach(file IN LISTS changed)
-    list(FIND allowed_ui "${file}" index)
-    if(index EQUAL -1)
-      _violation("[no new UI] ${file} changed since ${BASELINE_TAG}")
-    endif()
-  endforeach()
-
-  # No preference was added
-  math(EXPR RULES "${RULES} + 1")
-  _added_lines(added src/preferences/preferencekeys.h)
-  foreach(line IN LISTS added)
-    _violation("[no new UI] preferencekeys.h: ${line}")
-  endforeach()
-
-  # No action, menu, dialog, label, status text or preference was added; the
-  # one QMessageBox is the existing import-failure box.
-  math(EXPR RULES "${RULES} + 1")
-  _added_lines(added src/mainwindow.cpp src/ui)
-  set(message_boxes 0)
-  foreach(line IN LISTS added)
-    if(line MATCHES "new QAction|addAction\\(|addMenu\\(|QDialog|QLabel|statusBar\\(\\)|QInputDialog|registerPreference\\(")
-      _violation("[no new UI] added line: ${line}")
-    endif()
-    if(line MATCHES "QMessageBox::")
-      math(EXPR message_boxes "${message_boxes} + 1")
-    endif()
-  endforeach()
-  if(message_boxes GREATER 1)
-    _violation("[no new UI] ${message_boxes} added QMessageBox:: lines (at most 1: the import-failure box)")
-  endif()
-else()
-  message(STATUS "cleanup audit: tag ${BASELINE_TAG} not available - baseline diff checks skipped")
-endif()
 
 # ─────────────────────────────── acceptance traceability
 math(EXPR RULES "${RULES} + 1")

@@ -20,50 +20,21 @@
 #include "dataimporter.h"
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
+#include "fakesessionstate.h"
 #include "fixturebuilder.h"
 #include "logbookmanager.h"
+#include "logbookprobe.h"
 #include "sessiondata.h"
 #include "sessionmodel.h"
 #include "testenvironment.h"
 #include "testmain.h"
+#include "testutil.h"
 
 using namespace FlySight;
 using namespace FlySightTest;
+using Synthetic::measKey;
 
 namespace {
-
-bool isNear(double a, double b)
-{
-    return qAbs(a - b) <= 1e-9;
-}
-
-DependencyKey meas(const char *sensor, const char *name)
-{
-    return DependencyKey::measurement(QString::fromLatin1(sensor), QString::fromLatin1(name));
-}
-
-int g_warningCount = 0;
-
-void countingHandler(QtMsgType type, const QMessageLogContext &, const QString &)
-{
-    if (type == QtWarningMsg || type == QtCriticalMsg)
-        ++g_warningCount;
-}
-
-// Counts warnings for as long as it lives. Installed after registerBuiltIns().
-class WarningCounter {
-public:
-    WarningCounter()
-    {
-        g_warningCount = 0;
-        m_previous = qInstallMessageHandler(countingHandler);
-    }
-    ~WarningCounter() { qInstallMessageHandler(m_previous); }
-    int count() const { return g_warningCount; }
-
-private:
-    QtMessageHandler m_previous = nullptr;
-};
 
 QString writeTemp(const Fs2FileBuilder &file, const QString &stem)
 {
@@ -87,14 +58,8 @@ double first(const SessionData &session, const char *sensor, const char *name)
     return values.size() == 1 ? values.at(0) : qQNaN();
 }
 
-QStringList sessionCsvFiles()
-{
-    return QDir(TestEnvironment::instance().sessionsDir())
-        .entryList({QStringLiteral("*.csv")}, QDir::Files, QDir::Name);
-}
-
 const QList<DependencyKey> gyroAndFriends = {
-    meas("IMU", "wx"), meas("IMU", "wy"), meas("IMU", "wz"), meas("IMU", "wTotal"), meas("IMU", "ax")};
+    measKey("IMU", "wx"), measKey("IMU", "wy"), measKey("IMU", "wz"), measKey("IMU", "wTotal"), measKey("IMU", "ax")};
 
 } // namespace
 
@@ -193,7 +158,7 @@ void SourceLayerTest::unitNormalization()
         .row("FOO", "3,7");
     const QString path = writeTemp(file, QStringLiteral("units"));
 
-    WarningCounter warnings;
+    WarningCapture warnings;
 
     DataImporter importer;
     SessionData session;
@@ -308,9 +273,9 @@ void SourceLayerTest::derivedWTotalUsesCorrectedGyro()
     QVERIFY(isNear(first(session, "IMU", "wTotal"), 160.28135262718));
 
     const QSet<DependencyKey> invalidated = session.setMeasurement("IMU", "wx", {0.0});
-    QVERIFY(invalidated.contains(meas("IMU", "wx")));
-    QVERIFY(invalidated.contains(meas("IMU", "wTotal")));
-    QVERIFY(!invalidated.contains(meas("IMU", "ax")));
+    QVERIFY(invalidated.contains(measKey("IMU", "wx")));
+    QVERIFY(invalidated.contains(measKey("IMU", "wTotal")));
+    QVERIFY(!invalidated.contains(measKey("IMU", "ax")));
 
     QVERIFY(isNear(first(session, "IMU", "wTotal"), 143.36));
     QVERIFY(!session.hasMeasurement("IMU", "wTotal"));
@@ -370,18 +335,18 @@ void SourceLayerTest::schemaAttributeFlipsGyro()
 
     // The gyro columns and what is derived from them depend on SCHEMA_VER; nothing else does.
     QSet<DependencyKey> invalidated = session.setAttribute("SCHEMA_VER", QStringLiteral("2"));
-    QVERIFY(invalidated.contains(meas("IMU", "wx")));
-    QVERIFY(invalidated.contains(meas("IMU", "wTotal")));
-    QVERIFY(!invalidated.contains(meas("IMU", "ax")));
+    QVERIFY(invalidated.contains(measKey("IMU", "wx")));
+    QVERIFY(invalidated.contains(measKey("IMU", "wTotal")));
+    QVERIFY(!invalidated.contains(measKey("IMU", "ax")));
 
     QCOMPARE(session.getMeasurement("IMU", "wx"), QVector<double>({62.5}));
     QVERIFY(isNear(first(session, "IMU", "wTotal"), 139.75424859373686));
     QVERIFY(engine.verifyAgainstFresh(gyroAndFriends).isEmpty());
 
     invalidated = session.removeAttribute("SCHEMA_VER");
-    QVERIFY(invalidated.contains(meas("IMU", "wx")));
-    QVERIFY(invalidated.contains(meas("IMU", "wTotal")));
-    QVERIFY(!invalidated.contains(meas("IMU", "ax")));
+    QVERIFY(invalidated.contains(measKey("IMU", "wx")));
+    QVERIFY(invalidated.contains(measKey("IMU", "wTotal")));
+    QVERIFY(!invalidated.contains(measKey("IMU", "ax")));
 
     QVERIFY(isNear(first(session, "IMU", "wx"), 71.68));
     QVERIFY(isNear(first(session, "IMU", "wTotal"), 160.28135262718));
@@ -391,7 +356,7 @@ void SourceLayerTest::schemaAttributeFlipsGyro()
     QCOMPARE(engine.runCountForInstance("builtin.conversion.default#IMU/ax"), 1);
 }
 
-// Spec section 4: enumeration describes stored source data and stored
+// Enumeration describes stored source data and stored
 // attributes; a calculation output does not appear because it was computed.
 void SourceLayerTest::enumerationIgnoresComputed()
 {
@@ -440,7 +405,7 @@ void SourceLayerTest::enumerationIgnoresComputed()
     QVERIFY(!track.hasMeasurement("GNSS", "velH"));
 }
 
-// Spec section 4: source access never runs a calculation and never falls back
+// Source access never runs a calculation and never falls back
 // to a derived value.
 void SourceLayerTest::sourceAccessNeverComputes()
 {
@@ -532,7 +497,7 @@ void SourceLayerTest::setUnitNeedsSourceData()
     session.getMeasurement("IMU", "wTotal");    // warm engine
 
     {
-        WarningCounter warnings;
+        WarningCapture warnings;
         QVERIFY(session.setUnit("IMU", "wTotal", "deg/s").isEmpty());
         QCOMPARE(warnings.count(), 1);
     }
@@ -541,7 +506,7 @@ void SourceLayerTest::setUnitNeedsSourceData()
     QVERIFY(!session.hasMeasurement("IMU", "wTotal"));
 
     // With source data the unit is replaced and the effective value follows.
-    QVERIFY(session.setUnit("IMU", "ax", "m/s^2").contains(meas("IMU", "ax")));
+    QVERIFY(session.setUnit("IMU", "ax", "m/s^2").contains(measKey("IMU", "ax")));
     QVERIFY(first(session, "IMU", "ax") == 1.0);
     QCOMPARE(session.effectiveUnit("IMU", "ax"), QStringLiteral("m/s^2"));
 
@@ -551,7 +516,7 @@ void SourceLayerTest::setUnitNeedsSourceData()
     QVERIFY(first(session, "MAG", "x") == 0.0002);
 }
 
-// Spec 5.3: effective values are computed on first read, not at import.
+// Effective values are computed on first read, not at import.
 void SourceLayerTest::lazyConversion()
 {
     SessionData session;
@@ -570,7 +535,7 @@ void SourceLayerTest::lazyConversion()
     QCOMPARE(engine.totalRunCount(), 1);
 }
 
-// Spec 5.3: a column whose conversion is the identity needs no second copy of
+// A column whose conversion is the identity needs no second copy of
 // its samples; a converted column costs one buffer.
 void SourceLayerTest::identitySharesBuffer()
 {
@@ -618,7 +583,7 @@ void SourceLayerTest::identitySharesBuffer()
     }
 }
 
-// Spec 9.1: the writer reads only the source layer, warm cache or not.
+// The writer reads only the source layer, warm cache or not.
 void SourceLayerTest::exporterWritesSource()
 {
     SessionData session;
@@ -704,7 +669,7 @@ void SourceLayerTest::registryStartsWithConversionLayer()
     QVERIFY(CalculationRegistry::instance().hasSourceConversions());
 }
 
-// Spec 12: nothing infers the schema from the firmware version, the file name,
+// Nothing infers the schema from the firmware version, the file name,
 // a date, or the data. Only SCHEMA_VER decides.
 void SourceLayerTest::onlySchemaVerDecides()
 {

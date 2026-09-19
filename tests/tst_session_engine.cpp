@@ -11,6 +11,7 @@
 #include "builtinfixture.h"
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
+#include "fakesessionstate.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
@@ -19,20 +20,12 @@
 
 using namespace FlySight;
 using namespace FlySightTest;
+using Synthetic::attr;
+using Synthetic::measKey;
 
 namespace {
 
 constexpr double T0 = DescentFixture::T0;
-
-DependencyKey attr(const char *key)
-{
-    return DependencyKey::attribute(QString::fromLatin1(key));
-}
-
-DependencyKey meas(const char *sensor, const char *name)
-{
-    return DependencyKey::measurement(QString::fromLatin1(sensor), QString::fromLatin1(name));
-}
 
 // TIME/time, tow, week whose fit is exactly a = 1, b = T0.
 void addTimeData(SessionData &session)
@@ -96,7 +89,7 @@ private slots:
     void oracleOnFixture();
     void copyAndMoveSemantics();
 
-    // Phase 8: acceptance clauses on a real session with temporary global registrations
+    // Acceptance clauses on a real session with temporary global registrations
     void explicitPolicyOnSession();
     void safetyOnRealSession();
 
@@ -182,11 +175,11 @@ void SessionEngineTest::declaredInputChangeRunsOnceMore()
 
     const QSet<DependencyKey> invalidated =
         session.setMeasurement("TIME", "tow", {129611, 129621, 129631});
-    QVERIFY(invalidated.contains(meas("TIME", "tow")));
+    QVERIFY(invalidated.contains(measKey("TIME", "tow")));
     QVERIFY(invalidated.contains(attr("_TIME_FIT_A")));
     QVERIFY(invalidated.contains(attr("_TIME_FIT_B")));
-    QVERIFY(invalidated.contains(meas("IMU", "_time")));
-    QVERIFY(!invalidated.contains(meas("Simplified", "lat")));
+    QVERIFY(invalidated.contains(measKey("IMU", "_time")));
+    QVERIFY(!invalidated.contains(measKey("Simplified", "lat")));
 
     QCOMPARE(session.getAttribute("_TIME_FIT_B").toString(), QStringLiteral("1704110401"));
     QCOMPARE(session.getAttribute("_TIME_FIT_A").toString(), QStringLiteral("1"));
@@ -260,7 +253,7 @@ void SessionEngineTest::overrideOneOutput()
 
     // Removing the override brings the calculated value back without a new run.
     const QSet<DependencyKey> invalidated = session.removeAttribute("_TIME_FIT_A");
-    QVERIFY(invalidated.contains(meas("BARO", "_time")));
+    QVERIFY(invalidated.contains(measKey("BARO", "_time")));
     QCOMPARE(session.getAttribute("_TIME_FIT_A").toString(), QStringLiteral("1"));
     QCOMPARE(engine.runCount("builtin.time.fit"), 1);
     QCOMPARE(session.getMeasurement("BARO", "_time").value(0), 1704110410.0);
@@ -355,7 +348,7 @@ void SessionEngineTest::derivedWTotalFollowsSource()
     QVERIFY(!session.hasMeasurement("IMU", "wTotal"));
 
     const QSet<DependencyKey> invalidated = session.setMeasurement("IMU", "wx", {6.0});
-    QVERIFY(invalidated.contains(meas("IMU", "wTotal")));
+    QVERIFY(invalidated.contains(measKey("IMU", "wTotal")));
     session.setMeasurement("IMU", "wy", {8.0});
 
     wTotal = session.getMeasurement("IMU", "wTotal");
@@ -432,7 +425,7 @@ void SessionEngineTest::noUndeclaredReadsAcrossBuiltIns()
     }
 }
 
-// Spec 7.4: after any sequence of reads and edits, every value equals the value
+// Idempotency: after any sequence of reads and edits, every value equals the value
 // of a fresh evaluation with caches cleared.
 void SessionEngineTest::oracleOnFixture()
 {
@@ -520,7 +513,7 @@ void SessionEngineTest::copyAndMoveSemantics()
 
     // The engine reads the state at its new address, and kept its listener.
     const QSet<DependencyKey> invalidated = c.setAttribute("_GROUND_ELEV", 50.0);
-    QVERIFY(invalidated.contains(meas("GNSS", "z")));
+    QVERIFY(invalidated.contains(measKey("GNSS", "z")));
     QCOMPARE(c.getMeasurement("GNSS", "z").value(0), 3950.0);
     PreferencesManager::instance().setValue(PreferenceKeys::ImportDescentPauseSeconds, 5.0);
     QCOMPARE(deliveries, 1);
@@ -528,7 +521,7 @@ void SessionEngineTest::copyAndMoveSemantics()
     // Move assignment behaves the same way.
     SessionData d;
     d = std::move(c);
-    QCOMPARE(d.calculationEngine().cachedState(meas("GNSS", "z")), CalculationEngine::CachedState::Available);
+    QCOMPARE(d.calculationEngine().cachedState(measKey("GNSS", "z")), CalculationEngine::CachedState::Available);
     QCOMPARE(d.getMeasurement("GNSS", "z").value(0), 3950.0);
 
     // A moved-from session is empty but usable.
