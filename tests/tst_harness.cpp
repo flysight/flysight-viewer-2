@@ -71,8 +71,7 @@ void HarnessTest::logbookIsIsolated()
     QCOMPARE(env.indexPath(), env.logbookDir() + QStringLiteral("/index.json"));
 
     LogbookManager &logbook = LogbookManager::instance();
-    const QList<SessionData> parsed = logbook.initialize();
-    QVERIFY(parsed.isEmpty());
+    logbook.initialize();
     QVERIFY(!logbook.hasIndexData());
     QVERIFY(logbook.hasDeferredScan());
     QVERIFY(logbook.scannedUuids().isEmpty());

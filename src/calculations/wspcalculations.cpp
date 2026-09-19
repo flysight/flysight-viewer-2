@@ -119,7 +119,8 @@ WspResults computeWspResults(double topAlt, double bottomAlt, double exitTime,
     // Compute max SEP within the validation window.
     // Start: Lane Reference 1 (9 s after vertical speed first reaches 10 m/s).
     // End:   20 m below the bottom of the competition window.
-    if (ref1Var.canConvert<double>() && hAcc.size() == n && vAcc.size() == n) {
+    // (Ref1 time is a declared input, so it is always present here.)
+    if (hAcc.size() == n && vAcc.size() == n) {
         double ref1Time = ref1Var.toDouble();
 
         // Find first sample at or after Ref1 time
@@ -240,6 +241,7 @@ void Calculations::registerWspCalculations(CalculationRegistry &registry)
             CalcInput::attribute(SessionKeys::WspTopAlt),
             CalcInput::attribute(SessionKeys::WspBottomAlt),
             CalcInput::attribute(SessionKeys::ExitTime),
+            // Carried over from the previous dependency list; not read by compute.
             CalcInput::attribute(SessionKeys::GroundElev),
             CalcInput::measurement("GNSS", "z"),
             CalcInput::measurement("GNSS", "lat"),
@@ -273,10 +275,6 @@ void Calculations::registerWspCalculations(CalculationRegistry &registry)
 
             QVariant exitVar = ctx.attribute(SessionKeys::ExitTime);
             if (!exitVar.canConvert<double>())
-                return CalculationResult::unavailable();
-
-            QVariant geVar = ctx.attribute(SessionKeys::GroundElev);
-            if (!geVar.canConvert<double>())
                 return CalculationResult::unavailable();
 
             const WspResults r = computeWspResults(
@@ -351,7 +349,7 @@ void Calculations::registerWspMetadata()
 
     MarkerRegistry::instance()->replaceMarkerGroup(QStringLiteral("wsp"), defs);
 
-    // ── Group D: Attribute registry entries (3 registrations) ─────────
+    // ── Group D: Attribute registry entries (5 registrations) ─────────
 
     auto& reg = AttributeRegistry::instance();
 

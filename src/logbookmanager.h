@@ -40,8 +40,13 @@ namespace FlySight {
 /// omits unsaved columns even when a new value is already cached in memory;
 /// saveSession() first flushes the index if the on-disk index may still hold
 /// a value for a marked column, then writes the CSV, then clears the marks, so
-/// that the next flush publishes the new values. See saveSession() in the
-/// .cpp for the crash analysis.
+/// that the next flush publishes the new values. A save that FAILS clears
+/// nothing: the marks stay, so every later flush keeps omitting the affected
+/// columns (whatever is cached for them in memory), and the previous session
+/// file is intact. SessionModel then keeps the row loaded and dirty
+/// (SessionRow::saveFailed) and retries at the next edit or at shutdown; the
+/// marks are cleared by the save that finally succeeds. See saveSession() in
+/// the .cpp for the crash analysis.
 class LogbookManager : public QObject {
     Q_OBJECT
 
@@ -50,7 +55,7 @@ public:
 
     // Creates sessions directory if missing, loads index.json or scans *.csv
     // file names. No session file is parsed: every session comes up as a stub.
-    QList<SessionData> initialize();    // always empty; kept for source compatibility
+    void initialize();
 
     // Drops all in-memory index state so the next initialize() re-reads the current
     // logbook folder. Used by tests to simulate an application restart.

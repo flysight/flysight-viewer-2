@@ -22,6 +22,12 @@ struct SessionRow {
     std::optional<SessionData> session; // std::nullopt = stub, has_value = loaded
     bool visible = false;  // all sessions default to not visible
     bool dirty = false;    // true when in-memory data has not been persisted
+    // The last attempt to save this row failed. The row stays dirty (its
+    // in-memory state is the only copy of the edit), the idle saver skips it so
+    // that a persistent failure cannot spin the scheduler, and the LRU never
+    // evicts it. Cleared by a successful save; a new edit clears it too, so the
+    // idle saver tries again; flushDirtySessions() (shutdown) always retries.
+    bool saveFailed = false;
     // The session file could not be loaded and `session` is an empty
     // placeholder (sessionRef() must return a reference). A placeholder is
     // never attached, never saved, and never merged into; eviction resets the
@@ -124,7 +130,8 @@ public:
 
     Qt::ItemFlags flags(const QModelIndex &index) const override;
 
-    /// The import path (spec 6.2-6.5). One result per input, in input order.
+    /// The import path: new session versus merge, attribute conflicts, the
+    /// measurement merge, and its effects. One result per input, in input order.
     /// A file whose match id has no row CREATES a session (import-time defaults
     /// are applied here and only here); any other file MERGES into the existing
     /// session, loaded or not, as a validated all-or-nothing operation on
@@ -220,7 +227,8 @@ private:
     void lruRemove(const QString &sessionId);
     void lruInsert(const QString &sessionId);
     void evictIfNeeded();
-    void evictSession(const QString &sessionId);
+    bool evictSession(const QString &sessionId);   // false: the row must stay loaded (its save failed)
+    bool saveLoadedRow(SessionRow &sr);             // the one place a loaded row is saved; see the .cpp
 
     // Invalidation. Edits made through the model return their invalidated
     // names to the caller, which publishes them at once. Invalidation that

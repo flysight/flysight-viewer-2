@@ -1,4 +1,4 @@
-// SessionMerge: the merge rules of spec 6.3 (attribute conflicts) and 6.4
+// SessionMerge: the merge rules for attributes (conflicts) and for
 // (measurement merge) as a pure plan-then-apply function on two SessionData,
 // without a model or a logbook. Sessions are built programmatically; every
 // expected value and message is a literal.
@@ -56,7 +56,7 @@ class SessionMergeTest : public QObject {
 private slots:
     void initTestCase();
 
-    // attributes (spec 6.3)
+    // attributes
     void absentAttributeIsAdded();
     void equalAttributeIsNoop();
     void differentAttributeConflicts();
@@ -67,7 +67,7 @@ private slots:
     void viewerAttributesExistingWins();
     void deviceIdPlaceholder();
 
-    // measurements (spec 6.4)
+    // measurements
     void columnsReplaceAddKeep();
     void unitOnlyChangeIsAChange();
     void identicalIsEmpty();

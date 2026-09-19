@@ -301,7 +301,10 @@ gyro-dependent columns changed for every legacy session.
 
 An edit or a merge refreshes only the columns that can depend on the change,
 and an interrupted save cannot leave cached values that disagree with the
-saved session file.
+saved session file. A save that fails (a full disk, say) loses nothing: the
+session stays in memory with its changes, its affected columns stay out of
+`index.json`, and the save is tried again at the next edit and when the
+application closes.
 
 Developers: when to change the marker is described in
 [CALCULATIONS.md](CALCULATIONS.md#9-when-to-bump-calculationcompatibilityversion).
@@ -309,7 +312,8 @@ Developers: when to change the marker is described in
 ## 12. What Viewer never does
 
 - Infer the schema from the firmware version, a file name, a date, or the data.
-- Rewrite recorded header attributes.
+- Rewrite recorded header attributes. None of them is editable in the logbook
+  (the Device Name column, `DEVICE_ID`, is read-only); only `_` attributes are.
 - Rename measurements or add prefixed / suffixed copies of them.
 - Rescale stored data.
 - Show a dialog, badge, or warning for legacy files.

@@ -501,13 +501,8 @@ void Calculations::registerAttributeCalculations(CalculationRegistry &registry)
             CalculationResult result;
             result.setAttribute(SessionKeys::StartTime, minTime);
 
-            double durationSec = maxTime - minTime;
-            if (durationSec < 0) {
-                qWarning() << "Invalid " << sens << "/time data (max < min).";
-                result.setUnavailable(DependencyKey::attribute(SessionKeys::Duration));
-            } else {
-                result.setAttribute(SessionKeys::Duration, durationSec);
-            }
+            // max >= min by construction, so the duration is never negative
+            result.setAttribute(SessionKeys::Duration, maxTime - minTime);
             return result;
         };
         addCalculation(registry, d);

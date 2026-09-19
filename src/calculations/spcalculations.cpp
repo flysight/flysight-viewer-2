@@ -255,6 +255,7 @@ void Calculations::registerSpCalculations(CalculationRegistry &registry)
             CalcInput::attribute(SessionKeys::SpPerfWindowHeight),
             CalcInput::attribute(SessionKeys::SpValWindowHeight),
             CalcInput::attribute(SessionKeys::SpBreakoffAlt),
+            // Carried over from the previous dependency list; not read by compute.
             CalcInput::attribute(SessionKeys::ExitTime),
             CalcInput::attribute(SessionKeys::SpWindowStartTime),
             CalcInput::attribute(SessionKeys::SpWindowStartAlt),

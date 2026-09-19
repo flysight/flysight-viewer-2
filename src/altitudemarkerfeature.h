@@ -8,8 +8,6 @@
 
 namespace FlySight {
 
-class SessionModel;
-
 /// Owns the altitude markers configured in preferences: one marker definition
 /// and one registered calculation ("builtin.altitude.<attributeKey>") per
 /// altitude. The only component that registers calculations at run time.
@@ -18,10 +16,13 @@ class AltitudeMarkerManager : public QObject
     Q_OBJECT
 
 public:
-    explicit AltitudeMarkerManager(SessionModel *sessionModel, QObject *parent = nullptr);
+    explicit AltitudeMarkerManager(QObject *parent = nullptr);
     ~AltitudeMarkerManager() override;  ///< unregisters the calculations it registered
 
-    void registerAll();
+    /// Brings registrations and marker definitions in line with preferences.
+    /// Called once at startup and again, by the manager itself, whenever an
+    /// altitude-marker preference changes. A marker exists only for an
+    /// altitude whose calculation is registered.
     void refresh();
 
     /// Identity of the calculation behind an altitude marker attribute,
@@ -35,10 +36,6 @@ public:
     static CalculationDescriptor makeDescriptor(const QString &attributeKey, double thresholdMetres);
 
 private:
-    /// Brings registrations and marker definitions in line with preferences.
-    void apply();
-
-    SessionModel *m_sessionModel;
     QStringList   m_registeredKeys;
 };
 

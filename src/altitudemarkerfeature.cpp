@@ -1,5 +1,4 @@
 #include "altitudemarkerfeature.h"
-#include "sessionmodel.h"
 #include "sessiondata.h"
 #include "dependencykey.h"
 #include "markerregistry.h"
@@ -7,15 +6,15 @@
 #include "preferences/preferencesmanager.h"
 #include "preferences/preferencekeys.h"
 #include <QColor>
+#include <QHash>
 #include <QSet>
 #include <QSettings>
 #include <algorithm>
 
 using namespace FlySight;
 
-AltitudeMarkerManager::AltitudeMarkerManager(SessionModel *sessionModel, QObject *parent)
+AltitudeMarkerManager::AltitudeMarkerManager(QObject *parent)
     : QObject(parent)
-    , m_sessionModel(sessionModel)
 {
     // Register altitude-marker preferences with their defaults
     PreferencesManager &prefs = PreferencesManager::instance();
@@ -105,17 +104,7 @@ CalculationDescriptor AltitudeMarkerManager::makeDescriptor(const QString &attri
     return d;
 }
 
-void AltitudeMarkerManager::registerAll()
-{
-    apply();
-}
-
 void AltitudeMarkerManager::refresh()
-{
-    apply();
-}
-
-void AltitudeMarkerManager::apply()
 {
     // Step 1: Read current preferences
     PreferencesManager &prefs = PreferencesManager::instance();
@@ -142,10 +131,11 @@ void AltitudeMarkerManager::apply()
     QString unitSuffix = isImperial ? QStringLiteral("FT") : QStringLiteral("M");
     QString unitLabel  = isImperial ? QStringLiteral("ft") : QStringLiteral("m");
 
-    // Step 4: Work out the wanted attribute keys, their thresholds, and the marker definitions
+    // Step 4: Work out the wanted attribute keys, their thresholds, and the
+    // marker definition each key would get
     QStringList wantedKeys;
     QHash<QString, double> thresholds;
-    QVector<MarkerDefinition> defs;
+    QHash<QString, MarkerDefinition> wantedDefs;
     for (int value : altitudes) {
         QString attributeKey = QStringLiteral("_ALTITUDE_%1_%2").arg(value).arg(unitSuffix);
         QString displayName  = QStringLiteral("%1 %2 AGL").arg(value).arg(unitLabel);
@@ -167,7 +157,7 @@ void AltitudeMarkerManager::apply()
         def.editable       = false;
         def.groupId        = QStringLiteral("altitude");
         def.defaultEnabled = true;
-        defs.append(def);
+        wantedDefs.insert(attributeKey, def);
     }
 
     // Step 5: Diff against what is registered. The key encodes the altitude
@@ -199,10 +189,14 @@ void AltitudeMarkerManager::apply()
     }
     m_registeredKeys = nowRegistered;
 
-    // Step 6: Write the shared marker colour so plot rendering finds it via the
-    // standard per-marker key lookup (goes through PreferencesManager like all
-    // other marker colour writes).
-    for (const QString &key : std::as_const(wantedKeys)) {
+    // Step 6: Markers only for the keys whose calculation is registered (in
+    // altitude order): a marker whose calculation was refused could never have
+    // a value. Write the shared marker colour so plot rendering finds it via
+    // the standard per-marker key lookup (goes through PreferencesManager like
+    // all other marker colour writes).
+    QVector<MarkerDefinition> defs;
+    for (const QString &key : std::as_const(m_registeredKeys)) {
+        defs.append(wantedDefs.value(key));
         PreferencesManager::instance().setValue(PreferenceKeys::markerColorKey(key), color);
     }
 

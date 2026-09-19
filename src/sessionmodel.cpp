@@ -36,7 +36,7 @@ SessionModel::SessionModel(QObject *parent)
         /*priority*/    1,
         /*step*/        [this]() { saveNextSession(); },
         /*hasWork*/     [this]() { return std::any_of(m_rows.cbegin(), m_rows.cend(),
-                                       [](const SessionRow &r) { return r.dirty; }); },
+                                       [](const SessionRow &r) { return r.dirty && !r.saveFailed; }); },
         /*progress*/    [this]() -> Progress { return {m_saveRemaining, m_saveHighWater}; },
         /*onComplete*/  [this](bool /*cancelled*/) {
                             LogbookManager::instance().flushIndex();
@@ -436,7 +436,7 @@ bool SessionModel::setData(const QModelIndex &index, const QVariant &value, int 
 
     bool somethingChanged = false;
     bool attributeChanged = false;
-    QSet<DependencyKey> visitedKeys;
+    QSet<DependencyKey> changedNames;
 
     if (role == Qt::CheckStateRole && index.column() == 0) {
         // Update visibility based on the checkbox
@@ -483,7 +483,7 @@ bool SessionModel::setData(const QModelIndex &index, const QVariant &value, int 
             QString newVal = CsvFormat::singleLine(value.toString());
             QString oldVal = item.getAttribute(col.attributeKey).toString();
             if (oldVal != newVal) {
-                visitedKeys = item.setAttribute(col.attributeKey, newVal);
+                changedNames = item.setAttribute(col.attributeKey, newVal);
                 invalidateColumns(index.row(), {DependencyKey::attribute(col.attributeKey)});
                 somethingChanged = true;
                 attributeChanged = true;
@@ -497,7 +497,7 @@ bool SessionModel::setData(const QModelIndex &index, const QVariant &value, int 
                 newVal = UnitConverter::instance().reverseConvert(displayVal, def->measurementType);
             double oldVal = item.getAttribute(col.attributeKey).toDouble();
             if (oldVal != newVal) {
-                visitedKeys = item.setAttribute(col.attributeKey, newVal);
+                changedNames = item.setAttribute(col.attributeKey, newVal);
                 invalidateColumns(index.row(), {DependencyKey::attribute(col.attributeKey)});
                 somethingChanged = true;
                 attributeChanged = true;
@@ -524,7 +524,7 @@ bool SessionModel::setData(const QModelIndex &index, const QVariant &value, int 
             emit modelChanged();
         }
         if (attributeChanged) {
-            publishInvalidation(index.row(), visitedKeys);
+            publishInvalidation(index.row(), changedNames);
             if (!sr.sessionId.isEmpty())
                 scheduleSave(sr.sessionId);
         }
@@ -700,7 +700,8 @@ QList<MergeResult> SessionModel::mergeSessions(const QList<ParsedFile> &files)
 
     endResetModel();
 
-    // ---- effects (spec 6.5), through the model's normal paths. Column
+    // ---- effects of a merge (columns invalidated, the session saved, views
+    // notified of every changed name), through the model's normal paths. Column
     // invalidation comes before scheduleSave: the unsaved marks must exist
     // before the save runs.
     for (const QString &sessionId : std::as_const(createdIds)) {
@@ -914,8 +915,9 @@ bool SessionModel::removeSessions(const QList<QString> &sessionIds)
             // Remove from LRU list before erasing
             lruRemove(sessionId);
 
-            // Update save counters if this session is dirty
-            if (it->dirty) {
+            // Update save counters if this session is queued for saving (a
+            // row whose save failed is dirty but no longer counted)
+            if (it->dirty && !it->saveFailed) {
                 m_saveHighWater--;
                 m_saveRemaining--;
             }
@@ -1141,12 +1143,12 @@ bool SessionModel::updateAttribute(const QString &sessionId,
     }
 
     // 5. Update the attribute in SessionData (captures all BFS-visited keys)
-    QSet<DependencyKey> visitedKeys = session.setAttribute(attributeKey, value);
+    QSet<DependencyKey> changedNames = session.setAttribute(attributeKey, value);
     invalidateColumns(row, {DependencyKey::attribute(attributeKey)});
 
     // 6. Notify views that data has changed, and emit fine-grained
     //    dependencyChanged for each invalidated name
-    publishInvalidation(row, visitedKeys);
+    publishInvalidation(row, changedNames);
 
     // 7. Schedule deferred logbook save
     scheduleSave(sessionId);
@@ -1173,12 +1175,12 @@ bool SessionModel::removeAttribute(const QString &sessionId,
     }
 
     // 4. Remove the attribute and capture all BFS-visited keys
-    QSet<DependencyKey> visitedKeys = session.removeAttribute(attributeKey);
+    QSet<DependencyKey> changedNames = session.removeAttribute(attributeKey);
     invalidateColumns(row, {DependencyKey::attribute(attributeKey)});
 
     // 5. Notify views that data has changed, and emit fine-grained
     //    dependencyChanged for each invalidated name
-    publishInvalidation(row, visitedKeys);
+    publishInvalidation(row, changedNames);
 
     // 6. Schedule deferred logbook save
     scheduleSave(sessionId);
@@ -1404,8 +1406,11 @@ void SessionModel::scheduleSave(const QString &sessionId)
     if (sr.loadFailed)
         return;
 
-    if (!sr.dirty) {
+    if (!sr.dirty || sr.saveFailed) {
+        // A row whose last save failed is dirty but no longer queued (nor
+        // counted): a new edit queues it again.
         sr.dirty = true;
+        sr.saveFailed = false;
         m_saveHighWater++;
         m_saveRemaining++;
     }
@@ -1413,6 +1418,29 @@ void SessionModel::scheduleSave(const QString &sessionId)
     // saver will save the current (modified) version when it reaches this row
 
     m_scheduler.wake();
+}
+
+// Saves a loaded row. On success the row is clean. On failure the warning is
+// logged (once per failed attempt), the previous session file is intact, and
+// the row stays DIRTY with saveFailed set: its in-memory state is the only
+// copy of the unsaved change, so it is neither forgotten nor evicted. The
+// logbook keeps the affected columns marked unsaved (LogbookManager::
+// saveSession clears the marks only on success), so whatever is cached for
+// them in memory stays out of index.json. Callers own the progress counters.
+bool SessionModel::saveLoadedRow(SessionRow &sr)
+{
+    Q_ASSERT(sr.isLoaded() && !sr.loadFailed);
+    LogbookManager &logbook = LogbookManager::instance();
+    if (logbook.saveSession(sr.session.value())) {
+        sr.dirty = false;
+        sr.saveFailed = false;
+        return true;
+    }
+    qWarning("SessionModel: session %s was not saved: %s",
+             qPrintable(sr.sessionId), qPrintable(logbook.lastSaveError()));
+    sr.dirty = true;
+    sr.saveFailed = true;
+    return false;
 }
 
 void SessionModel::flushDirtySessions()
@@ -1439,12 +1467,11 @@ void SessionModel::flushDirtySessions()
             sr.dirty = false;       // a placeholder is never saved
             continue;
         }
-        if (!logbook.saveSession(session)) {
-            qWarning("SessionModel: session %s was not saved: %s",
-                     qPrintable(sr.sessionId), qPrintable(logbook.lastSaveError()));
-        }
+        // Rows whose earlier save failed are retried here (shutdown or an
+        // explicit flush). One that fails again stays dirty and marked.
+        if (!saveLoadedRow(sr))
+            continue;
         fillMissingColumns(i, session);
-        sr.dirty = false;
         anySaved = true;
     }
     // Also when nothing was dirty: a cache discarded at startup is rewritten
@@ -1460,10 +1487,10 @@ void SessionModel::flushDirtySessions()
 
 void SessionModel::saveNextSession()
 {
-    // Find the first dirty row
+    // Find the first dirty row that is still queued (see SessionRow::saveFailed)
     int dirtyIdx = -1;
     for (int i = 0; i < m_rows.size(); ++i) {
-        if (m_rows[i].dirty) {
+        if (m_rows[i].dirty && !m_rows[i].saveFailed) {
             dirtyIdx = i;
             break;
         }
@@ -1473,11 +1500,11 @@ void SessionModel::saveNextSession()
         return;
 
     SessionRow &sr = m_rows[dirtyIdx];
-    LogbookManager &logbook = LogbookManager::instance();
 
-    // Not retried on failure (a full disk would otherwise spin the idle
-    // scheduler); the unsaved marks keep index.json consistent with the file
-    // that is still on disk.
+    // Not retried by this task on failure (a full disk would otherwise spin the
+    // idle scheduler): the row stays dirty with saveFailed set, which takes it
+    // out of this task's work until it is edited again or flushed. The unsaved
+    // marks keep index.json consistent with the file that is still on disk.
     const SessionData &session = sessionRef(dirtyIdx);
     if (sr.loadFailed) {
         // A placeholder is never saved
@@ -1485,14 +1512,10 @@ void SessionModel::saveNextSession()
         m_saveRemaining--;
         return;
     }
-    if (!logbook.saveSession(session)) {
-        qWarning("SessionModel: session %s was not saved: %s",
-                 qPrintable(sr.sessionId), qPrintable(logbook.lastSaveError()));
-    }
-    fillMissingColumns(dirtyIdx, session);
-    sr.dirty = false;
+    if (saveLoadedRow(sr))
+        fillMissingColumns(dirtyIdx, session);
 
-    m_saveRemaining--;
+    m_saveRemaining--;      // saved, or no longer queued
 }
 
 // ---- Background visibility loader --------------------------------------
@@ -1550,29 +1573,37 @@ void SessionModel::lruInsert(const QString &sessionId)
 
 void SessionModel::evictIfNeeded()
 {
-    while (m_lruList.size() > m_cacheCapacity) {
-        QString sessionId = m_lruList.last();
-        evictSession(sessionId);
+    // Least recently used first. A row that cannot be evicted (its save
+    // failed) keeps its place in the list and is passed over, so the cache may
+    // exceed its capacity by the number of such rows.
+    for (qsizetype i = m_lruList.size() - 1; i >= 0 && m_lruList.size() > m_cacheCapacity; --i) {
+        const QString sessionId = m_lruList.at(i);
+        evictSession(sessionId);    // on success removes entry i; i - 1 is next either way
     }
 }
 
-void SessionModel::evictSession(const QString &sessionId)
+bool SessionModel::evictSession(const QString &sessionId)
 {
-    // Remove from LRU list first
-    lruRemove(sessionId);
-
     // Find the row
     int row = getSessionRow(sessionId);
-    if (row < 0)
-        return;
+    if (row < 0) {
+        lruRemove(sessionId);
+        return true;
+    }
 
     SessionRow &sr = m_rows[row];
 
     // Already a stub -- nothing to do
-    if (!sr.isLoaded())
-        return;
+    if (!sr.isLoaded()) {
+        lruRemove(sessionId);
+        return true;
+    }
 
-    LogbookManager &logbook = LogbookManager::instance();
+    // The in-memory session is the only copy of a change that could not be
+    // saved: it stays loaded (and in the LRU list). No retry here, so a
+    // persistent failure is not reported again on every eviction pass.
+    if (sr.saveFailed)
+        return false;
 
     // A failed-load placeholder holds nothing worth keeping: it is never saved
     // and caches no column values. Back to a stub, so that a later access
@@ -1585,21 +1616,20 @@ void SessionModel::evictSession(const QString &sessionId)
         }
         sr.session = std::nullopt;
         sr.loadFailed = false;
-        return;
+        lruRemove(sessionId);
+        return true;
     }
 
     // Save if dirty
     if (sr.dirty) {
-        if (!logbook.saveSession(sr.session.value())) {
-            qWarning("SessionModel: session %s was not saved: %s",
-                     qPrintable(sr.sessionId), qPrintable(logbook.lastSaveError()));
-        }
-        sr.dirty = false;
+        const bool saved = saveLoadedRow(sr);
 
-        // Update saver progress if saves are in flight
+        // Update saver progress if saves are in flight: saved, or no longer queued
         if (m_saveRemaining > 0) {
             m_saveRemaining--;
         }
+        if (!saved)
+            return false;       // not evicted: see saveFailed above
     }
 
     // Complete the cached column values before eviction: the stub displays them
@@ -1607,6 +1637,8 @@ void SessionModel::evictSession(const QString &sessionId)
 
     // Reset to stub
     sr.session = std::nullopt;
+    lruRemove(sessionId);
+    return true;
 }
 
 // ---- Dirty column worker ----------------------------------------------
@@ -1788,20 +1820,15 @@ void SessionModel::processNextBulkEdit()
         session.setAttribute(col.attributeKey, newVal);
         invalidateColumns(item.row, {DependencyKey::attribute(col.attributeKey)});
 
-        // Save inline
-        if (!logbook.saveSession(session)) {
-            qWarning("SessionModel: session %s was not saved: %s",
-                     qPrintable(sr.sessionId), qPrintable(logbook.lastSaveError()));
+        // Save inline. A row that was already queued for the idle saver
+        // (dirty, not failed) leaves that queue either way: saved, or failed.
+        const bool wasQueued = sr.dirty && !sr.saveFailed;
+        if (saveLoadedRow(sr)) {
+            // Recompute only what the edit removed
+            fillMissingColumns(item.row, session);
         }
-
-        // Recompute only what the edit removed
-        fillMissingColumns(item.row, session);
-
-        // Clear dirty flag if set — we just saved
-        if (sr.dirty) {
-            sr.dirty = false;
+        if (wasQueued)
             m_saveRemaining--;
-        }
     } else {
         // --- STUB PATH (avoids LRU/eviction) ---
         auto loaded = logbook.loadSession(sr.sessionId);
@@ -1820,15 +1847,28 @@ void SessionModel::processNextBulkEdit()
             invalidateColumns(item.row, {DependencyKey::attribute(col.attributeKey)});
 
             // Save
-            if (!logbook.saveSession(loaded.value())) {
+            if (logbook.saveSession(loaded.value())) {
+                // Recompute only what the edit removed
+                fillMissingColumns(item.row, loaded.value());
+                // loaded goes out of scope: the session stays a stub
+            } else {
                 qWarning("SessionModel: session %s was not saved: %s",
                          qPrintable(sr.sessionId), qPrintable(logbook.lastSaveError()));
+                // The temporary session holds the only copy of the edit: the
+                // row becomes loaded, dirty and saveFailed instead of losing it.
+                // Known corner: a VISIBLE stub that is still in m_loadQueue when
+                // it is promoted here is later dropped from the queue by
+                // loadNextVisibleSession (it is loaded by then) without being
+                // added to m_loadedDuringBatch, so no visibilityChanged is
+                // emitted for it when the load batch completes.
+                sr.session = std::move(loaded.value());
+                sr.session->setVisible(sr.visible);
+                sr.dirty = true;
+                sr.saveFailed = true;
+                attachSession(sr);
+                if (!sr.visible && sr.sessionId != m_focusedSessionId)
+                    lruInsert(sr.sessionId);
             }
-
-            // Recompute only what the edit removed
-            fillMissingColumns(item.row, loaded.value());
-
-            // loaded goes out of scope — session stays a stub
         }
         // If load failed, silently skip
     }

@@ -170,8 +170,8 @@ MainWindow::MainWindow(QWidget *parent)
     registerBuiltInCalculationMetadata();
 
     // Instantiate and register altitude markers (must come after calculations are registered)
-    m_altitudeMarkerManager = new AltitudeMarkerManager(model, this);
-    m_altitudeMarkerManager->registerAll();
+    m_altitudeMarkerManager = new AltitudeMarkerManager(this);
+    m_altitudeMarkerManager->refresh();
 
     // Bring up the logbook. Every session starts as a stub - also those of a
     // legacy flat index, which knows real SESSION_IDs but caches no column
@@ -615,11 +615,14 @@ void MainWindow::importFiles(
         // the single file, is what should be framed.
         auto* pf = findFeature<PlotDockFeature>();
         if (pf && pf->plotWidget()) {
-            QVector<SessionData> imported;
+            // Pointers to the model's live sessions (a copy would have a cold
+            // cache); rowAt() is a plain read, so nothing here loads, evicts or
+            // moves a row before zoomToExtent has used them.
+            QVector<const SessionData *> imported;
             for (const QString &sessionId : importedIdList) {
                 const int row = model->getSessionRow(sessionId);
                 if (row >= 0 && model->rowAt(row).isLoaded())
-                    imported.append(model->sessionRef(row));
+                    imported.append(&model->rowAt(row).session.value());
             }
             if (!imported.isEmpty())
                 pf->plotWidget()->zoomToExtent(imported);

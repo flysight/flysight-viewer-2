@@ -12,7 +12,10 @@ SessionData::~SessionData() = default;
 
 // A copy has the same stored state and nothing else: it gets its own engine,
 // cold, on its first calculated read. The original's cache and invalidation
-// listener stay with the original.
+// listener stay with the original. A copy is therefore COLD: every calculated
+// read of it (unit conversion, time fit, markers) recomputes from scratch. Do
+// not copy a session in order to read it; pass a pointer or reference to the
+// live one.
 SessionData::SessionData(const SessionData &other)
     : m_visible(other.m_visible)
     , m_attributes(other.m_attributes)
@@ -45,7 +48,10 @@ SessionData &SessionData::operator=(const SessionData &other)
     m_sensors = other.m_sensors;
     m_units = other.m_units;
 
-    // Still this session (same engine, same listener), with new contents.
+    // Still this session (same engine, same listener), with new contents, and
+    // COLD like a copy. clear() returns the set of names that were cached; it
+    // is discarded here and the listener is NOT called, so whoever assigns over
+    // a session that others observe must publish the invalidation itself.
     if (m_engine)
         m_engine->clear();
     return *this;

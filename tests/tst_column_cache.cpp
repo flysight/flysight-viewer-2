@@ -1,4 +1,4 @@
-// The logbook column cache seen through SessionModel (spec 9.4):
+// The logbook column cache seen through SessionModel:
 //
 //  - acceptance 18: an index.json without the calculation-compatibility marker
 //    has its cached column values discarded and lazily recomputed (so the
@@ -35,12 +35,14 @@
 #include "fixturebuilder.h"
 #include "logbookcolumn.h"
 #include "logbookmanager.h"
+#include "logbookprobe.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
 #include "sessionmodel.h"
 #include "testenvironment.h"
 #include "testmain.h"
+#include "testutil.h"
 
 using namespace FlySight;
 using namespace FlySightTest;
@@ -52,38 +54,6 @@ constexpr double T0 = 1704110400.0;     // 2024-01-01T12:00:00Z
 constexpr int kD = 0;   // column indices
 constexpr int kG = 1;
 constexpr int kE = 2;
-
-bool isNear(double a, double b)
-{
-    return qAbs(a - b) <= 1e-9;
-}
-
-LogbookColumn descriptionColumn()
-{
-    LogbookColumn col;
-    col.type = ColumnType::SessionAttribute;
-    col.attributeKey = QStringLiteral("_DESCRIPTION");
-    return col;
-}
-
-LogbookColumn gyroColumn()
-{
-    LogbookColumn col;
-    col.type = ColumnType::MeasurementAtMarker;
-    col.sensorID = QStringLiteral("IMU");
-    col.measurementID = QStringLiteral("wx");
-    col.measurementType = QStringLiteral("rotation");
-    col.markerAttributeKey = QStringLiteral("_M");
-    return col;
-}
-
-LogbookColumn exitTimeColumn()
-{
-    LogbookColumn col;
-    col.type = ColumnType::SessionAttribute;
-    col.attributeKey = QStringLiteral("_EXIT_TIME");
-    return col;
-}
 
 SessionData gyroSession(const QString &id = QStringLiteral("g1"))
 {
@@ -105,45 +75,6 @@ SessionData gyroSession(const QString &id = QStringLiteral("g1"))
     return s;
 }
 
-QJsonObject readIndex()
-{
-    return QJsonDocument::fromJson(readFileBytes(TestEnvironment::instance().indexPath())).object();
-}
-
-bool writeIndex(const QJsonObject &root)
-{
-    return writeFile(TestEnvironment::instance().indexPath(), QJsonDocument(root).toJson());
-}
-
-// The ephemeral id index.json uses for a column; empty when it has none.
-QString indexColumnId(const QJsonObject &root, const LogbookColumn &col)
-{
-    const QJsonObject columns = root[QStringLiteral("columns")].toObject();
-    for (auto it = columns.constBegin(); it != columns.constEnd(); ++it) {
-        const QJsonObject def = it.value().toObject();
-        const bool match = col.type == ColumnType::SessionAttribute
-            ? def[QStringLiteral("type")].toString() == QLatin1String("SessionAttribute")
-                  && def[QStringLiteral("attributeKey")].toString() == col.attributeKey
-            : def[QStringLiteral("type")].toString() == QLatin1String("MeasurementAtMarker")
-                  && def[QStringLiteral("sensorID")].toString() == col.sensorID
-                  && def[QStringLiteral("measurementID")].toString() == col.measurementID
-                  && def[QStringLiteral("markerAttributeKey")].toString() == col.markerAttributeKey;
-        if (match)
-            return it.key();
-    }
-    return QString();
-}
-
-// The value index.json holds for (session, column): Undefined when absent.
-QJsonValue indexValue(const QJsonObject &root, const QString &sessionId, const LogbookColumn &col)
-{
-    const QString columnId = indexColumnId(root, col);
-    if (columnId.isEmpty())
-        return QJsonValue(QJsonValue::Undefined);
-    return root[QStringLiteral("sessions")].toObject()[sessionId].toObject()
-               [QStringLiteral("values")].toObject().value(columnId);
-}
-
 bool setIndexValue(QJsonObject &root, const QString &sessionId, const LogbookColumn &col, const QJsonValue &value)
 {
     const QString columnId = indexColumnId(root, col);
@@ -158,65 +89,6 @@ bool setIndexValue(QJsonObject &root, const QString &sessionId, const LogbookCol
     root[QStringLiteral("sessions")] = sessions;
     return true;
 }
-
-QString sessionFilePath(const QString &sessionId)
-{
-    const QString uuid = readIndex()[QStringLiteral("sessions")].toObject()[sessionId].toObject()
-                             [QStringLiteral("uuid")].toString();
-    return TestEnvironment::instance().sessionsDir() + QLatin1Char('/') + uuid + QStringLiteral(".csv");
-}
-
-// Same as tst_session_model_engine: the QSettings array first, then a bump of
-// the version preference, which makes an existing AltitudeMarkerManager refresh.
-void writeAltitudes(const QList<int> &altitudes)
-{
-    {
-        QSettings settings;
-        settings.beginWriteArray(QStringLiteral("altitudeMarkers"), altitudes.size());
-        for (int i = 0; i < altitudes.size(); ++i) {
-            settings.setArrayIndex(i);
-            settings.setValue(QStringLiteral("value"), altitudes.at(i));
-        }
-        settings.endArray();
-    }
-
-    PreferencesManager &prefs = PreferencesManager::instance();
-    if (prefs.hasPreference(PreferenceKeys::AltitudeMarkersVersion)) {
-        const int version = prefs.getValue(PreferenceKeys::AltitudeMarkersVersion).toInt();
-        prefs.setValue(PreferenceKeys::AltitudeMarkersVersion, version + 1);
-    }
-}
-
-QStringList g_warnings;
-
-void collectingHandler(QtMsgType type, const QMessageLogContext &, const QString &message)
-{
-    if (type == QtWarningMsg || type == QtCriticalMsg)
-        g_warnings.append(message);
-}
-
-// Collects warnings for as long as it lives. Installed after registerBuiltIns().
-class WarningCollector {
-public:
-    WarningCollector()
-    {
-        g_warnings.clear();
-        m_previous = qInstallMessageHandler(collectingHandler);
-    }
-    ~WarningCollector() { qInstallMessageHandler(m_previous); }
-    QStringList matching(const QString &fragment) const
-    {
-        QStringList result;
-        for (const QString &w : std::as_const(g_warnings)) {
-            if (w.contains(fragment))
-                result.append(w);
-        }
-        return result;
-    }
-
-private:
-    QtMessageHandler m_previous = nullptr;
-};
 
 // dataChanged emissions that span every row: the environment handler's one
 // "everything may have changed" notification (the column worker reports rows
@@ -262,6 +134,8 @@ private slots:
     void altitudeMarkerRemovalDiscardsStubValues();
 
     void saveFailureIsReported();
+    void failedSaveRowIsNotEvicted();
+    void newEditRetriesFailedSave();
     void lineBreaksAreFlattenedAtEdit();
 
 private:
@@ -509,7 +383,7 @@ void ColumnCacheTest::mergeRefreshesWrittenNamesOnly()
     startWithLoadedSessions({gyroSession(QStringLiteral("g1")), gyroSession(QStringLiteral("g2"))});
     m_model->resetColumnWorkStats();
 
-    // Phase 6 merge rules: a Viewer attribute the session already has is kept
+    // Merge rule: a Viewer ("_") attribute the session already has is kept
     // (_DESCRIPTION stays "first"), an absent one is added. _EXIT_TIME feeds
     // column E and nothing else.
     SessionData incoming;
@@ -569,7 +443,7 @@ void ColumnCacheTest::bulkEditOnStubComputesOneColumn()
     QVERIFY(!LogbookManager::instance().hasUnsavedColumns("g1"));
 }
 
-// Spec 9.4: an interrupted save cannot leave cached columns that disagree
+// An interrupted save cannot leave cached columns that disagree
 // with the saved session file. Here the process "dies" right after the
 // session file was written, before the index flush that normally follows.
 void ColumnCacheTest::interruptedSaveViaModel()
@@ -726,9 +600,9 @@ void ColumnCacheTest::altitudeMarkerChangeDiscards()
     restartAsStubs();
     QCOMPARE(m_model->rowCount(), 2);
 
-    m_altitudes = std::make_unique<AltitudeMarkerManager>(m_model.get());
+    m_altitudes = std::make_unique<AltitudeMarkerManager>();
     PreferencesManager::instance().setValue(PreferenceKeys::AltitudeMarkersUnits, QStringLiteral("Metric"));
-    m_altitudes->registerAll();     // nothing configured: registers nothing
+    m_altitudes->refresh();     // nothing configured: registers nothing
     m_model->flushPendingInvalidations();
     QVERIFY(waitForIdle(*m_model));
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
@@ -775,10 +649,10 @@ void ColumnCacheTest::altitudeMarkerRemovalDiscardsStubValues()
     QVERIFY(m_model->rowAt(row1).isLoaded());
     QVERIFY(!m_model->rowAt(row2).isLoaded());
 
-    m_altitudes = std::make_unique<AltitudeMarkerManager>(m_model.get());
+    m_altitudes = std::make_unique<AltitudeMarkerManager>();
     writeAltitudes({1000});
     PreferencesManager::instance().setValue(PreferenceKeys::AltitudeMarkersUnits, QStringLiteral("Metric"));
-    m_altitudes->registerAll();
+    m_altitudes->refresh();
     m_model->flushPendingInvalidations();
     QVERIFY(waitForIdle(*m_model));
 
@@ -820,36 +694,175 @@ void ColumnCacheTest::altitudeMarkerRemovalDiscardsStubValues()
     QCOMPARE(cached(row2, kE).toDouble(), T0 + 9.0);
 }
 
-// A failed save is reported once with the exporter's reason, is not retried,
-// leaves the previous file intact, and keeps the affected values out of the index.
+// A failed save is reported once with the exporter's reason and is not retried
+// by the idle saver (the scheduler goes idle). The previous file is intact, the
+// row STAYS DIRTY (flagged saveFailed) because its in-memory state is the only
+// copy of the edit, and the affected values stay out of the index. Once the
+// cause is gone, a flush (what shutdown does) saves it and clears the flag.
 void ColumnCacheTest::saveFailureIsReported()
 {
     startWithLoadedSessions({gyroSession()});
     const QString csvPath = sessionFilePath("g1");
     const QByteArray csvBytes = readFileBytes(csvPath);
 
-    // Make the loaded session ragged behind the model's back
+    // Make the loaded session ragged behind the model's back: the exporter
+    // refuses it, which fails the save without any file-system trick.
     m_model->sessionRef(0).setMeasurement("IMU", "wx", {1.0, 2.0});
 
-    WarningCollector warnings;
-    QVERIFY(m_model->updateAttribute("g1", "_DESCRIPTION", QStringLiteral("unsaved")));
-    QVERIFY(waitForIdle(*m_model));     // goes idle: no retry loop
+    {
+        WarningCapture warnings;
+        QVERIFY(m_model->updateAttribute("g1", "_DESCRIPTION", QStringLiteral("unsaved")));
+        QVERIFY(waitForIdle(*m_model));     // goes idle: no retry loop
 
-    const QStringList reported = warnings.matching(QStringLiteral("was not saved"));
-    QCOMPARE(reported.size(), 1);
-    QVERIFY2(reported.first().contains(QStringLiteral("g1")), qPrintable(reported.first()));
-    QVERIFY2(reported.first().contains(
-                 QStringLiteral("Sensor 'IMU' has columns of unequal length (time: 3, wx: 2)")),
-             qPrintable(reported.first()));
+        const QStringList reported = warnings.matching(QStringLiteral("was not saved"));
+        QCOMPARE(reported.size(), 1);
+        QVERIFY2(reported.first().contains(QStringLiteral("g1")), qPrintable(reported.first()));
+        QVERIFY2(reported.first().contains(
+                     QStringLiteral("Sensor 'IMU' has columns of unequal length (time: 3, wx: 2)")),
+                 qPrintable(reported.first()));
 
-    QVERIFY(!m_model->rowAt(0).dirty);
+        // Still idle and still exactly one report after more event-loop time
+        QTest::qWait(50);
+        QVERIFY(waitForIdle(*m_model));
+        QCOMPARE(warnings.matching(QStringLiteral("was not saved")).size(), 1);
+    }
+
+    QVERIFY(m_model->rowAt(0).dirty);
+    QVERIFY(m_model->rowAt(0).saveFailed);
+    QVERIFY(m_model->rowAt(0).isLoaded());
+    QCOMPARE(m_model->sessionRef(0).storedAttribute("_DESCRIPTION"), QVariant(QStringLiteral("unsaved")));
     QCOMPARE(readFileBytes(csvPath), csvBytes);
 
-    // index.json still describes the file on disk: no value for the edited column
+    // index.json still describes the file on disk: no value for the edited
+    // column, although the new value is cached in memory for display
     QVERIFY(LogbookManager::instance().hasUnsavedColumns("g1"));
+    QCOMPARE(cached(0, kD).toString(), QStringLiteral("unsaved"));
+    LogbookManager::instance().flushIndex();
     const QJsonObject root = readIndex();
     QVERIFY(indexValue(root, "g1", m_d).isUndefined());
     QVERIFY(isNear(indexValue(root, "g1", m_g).toDouble(), 1.72032));
+
+    // A flush while the cause persists fails again: reported once more, and
+    // the row is still dirty.
+    {
+        WarningCapture warnings;
+        m_model->flushDirtySessions();
+        QCOMPARE(warnings.matching(QStringLiteral("was not saved")).size(), 1);
+    }
+    QVERIFY(m_model->rowAt(0).dirty);
+    QVERIFY(m_model->rowAt(0).saveFailed);
+    QCOMPARE(readFileBytes(csvPath), csvBytes);
+    QVERIFY(indexValue(readIndex(), "g1", m_d).isUndefined());
+
+    // The cause is removed; the flush at shutdown saves the edit.
+    m_model->sessionRef(0).setMeasurement("IMU", "wx", {1.0, 2.0, 3.0});
+    {
+        WarningCapture warnings;
+        m_model->flushDirtySessions();
+        QCOMPARE(warnings.count(), 0);
+    }
+    QVERIFY(!m_model->rowAt(0).dirty);
+    QVERIFY(!m_model->rowAt(0).saveFailed);
+    QVERIFY(!LogbookManager::instance().hasUnsavedColumns("g1"));
+    QVERIFY(readFileBytes(csvPath).contains("$VAR,_DESCRIPTION,unsaved\n"));
+    QCOMPARE(indexValue(readIndex(), "g1", m_d).toString(), QStringLiteral("unsaved"));
+}
+
+// The in-memory session of a row whose save failed is the only copy of the
+// edit: the LRU passes over it, whatever the capacity, and evicts the others.
+void ColumnCacheTest::failedSaveRowIsNotEvicted()
+{
+    startWithLoadedSessions({gyroSession("g1"), gyroSession("g2"), gyroSession("g3")});
+    const int row1 = m_model->getSessionRow("g1");
+    const int row2 = m_model->getSessionRow("g2");
+    const int row3 = m_model->getSessionRow("g3");
+    const QByteArray csvBytes = readFileBytes(sessionFilePath("g1"));
+
+    m_model->sessionRef(row1).setMeasurement("IMU", "wx", {1.0, 2.0});
+    m_model->sessionRef(row2);      // g1 is now the least recently used
+    m_model->sessionRef(row3);
+
+    WarningCapture warnings;
+    QVERIFY(m_model->updateAttribute("g1", "_DESCRIPTION", QStringLiteral("only copy")));
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(m_model->rowAt(row1).saveFailed);
+    m_model->sessionRef(row2);
+    m_model->sessionRef(row3);
+
+    // Room for one session. g1 is the least recently used row but cannot go;
+    // the evictable rows are evicted until the capacity is met, and g1 stays.
+    const auto restoreCapacity = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    });
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 1);
+    QVERIFY(m_model->rowAt(row1).isLoaded());
+    QVERIFY(m_model->rowAt(row1).dirty);
+    QVERIFY(m_model->rowAt(row1).saveFailed);
+    QVERIFY(!m_model->rowAt(row2).isLoaded());
+    QVERIFY(!m_model->rowAt(row3).isLoaded());
+    QCOMPARE(m_model->sessionRef(row1).storedAttribute("_DESCRIPTION"), QVariant(QStringLiteral("only copy")));
+
+    // Not saved behind our back, and not reported again by the eviction pass.
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(warnings.matching(QStringLiteral("was not saved")).size(), 1);
+    QCOMPARE(readFileBytes(sessionFilePath("g1")), csvBytes);
+    QVERIFY(indexValue(readIndex(), "g1", m_d).isUndefined());
+
+    // Once it can be saved it is an ordinary row again: saved by the flush,
+    // and evictable.
+    m_model->sessionRef(row1).setMeasurement("IMU", "wx", {1.0, 2.0, 3.0});
+    m_model->flushDirtySessions();
+    QVERIFY(!m_model->rowAt(row1).dirty);
+    QVERIFY(!m_model->rowAt(row1).saveFailed);
+    QVERIFY(readFileBytes(sessionFilePath("g1")).contains("$VAR,_DESCRIPTION,only copy\n"));
+    m_model->sessionRef(row2);      // loading another row evicts g1 (capacity 1)
+    QVERIFY(!m_model->rowAt(row1).isLoaded());
+    QCOMPARE(cached(row1, kD).toString(), QStringLiteral("only copy"));
+}
+
+// A new edit to a row whose save failed queues it for the idle saver again;
+// a save that then succeeds clears the flag. The bulk edit follows the same
+// contract as a single edit.
+void ColumnCacheTest::newEditRetriesFailedSave()
+{
+    startWithLoadedSessions({gyroSession()});
+    const QString csvPath = sessionFilePath("g1");
+    m_model->sessionRef(0).setMeasurement("IMU", "wx", {1.0, 2.0});
+
+    {
+        WarningCapture warnings;
+        m_model->startBulkEdit({0}, kD, QStringLiteral("bulk"));
+        QVERIFY(waitForIdle(*m_model));
+        QCOMPARE(warnings.matching(QStringLiteral("was not saved")).size(), 1);
+    }
+    QVERIFY(m_model->rowAt(0).dirty);
+    QVERIFY(m_model->rowAt(0).saveFailed);
+    QVERIFY(readFileBytes(csvPath).contains("$VAR,_DESCRIPTION,first\n"));
+    QVERIFY(indexValue(readIndex(), "g1", m_d).isUndefined());
+
+    // Another edit while the cause persists: one more attempt, one more report.
+    {
+        WarningCapture warnings;
+        QVERIFY(m_model->updateAttribute("g1", "_DESCRIPTION", QStringLiteral("second try")));
+        QVERIFY(!m_model->rowAt(0).saveFailed);     // queued again
+        QVERIFY(waitForIdle(*m_model));
+        QCOMPARE(warnings.matching(QStringLiteral("was not saved")).size(), 1);
+    }
+    QVERIFY(m_model->rowAt(0).dirty);
+    QVERIFY(m_model->rowAt(0).saveFailed);
+
+    // The cause is removed and the row is edited again: the idle saver saves it.
+    m_model->sessionRef(0).setMeasurement("IMU", "wx", {1.0, 2.0, 3.0});
+    {
+        WarningCapture warnings;
+        QVERIFY(m_model->updateAttribute("g1", "_DESCRIPTION", QStringLiteral("third try")));
+        QVERIFY(waitForIdle(*m_model));
+        QCOMPARE(warnings.count(), 0);
+    }
+    QVERIFY(!m_model->rowAt(0).dirty);
+    QVERIFY(!m_model->rowAt(0).saveFailed);
+    QVERIFY(readFileBytes(csvPath).contains("$VAR,_DESCRIPTION,third try\n"));
+    QCOMPARE(indexValue(readIndex(), "g1", m_d).toString(), QStringLiteral("third try"));
 }
 
 // A session file is a line format: text edits are flattened on entry, so that

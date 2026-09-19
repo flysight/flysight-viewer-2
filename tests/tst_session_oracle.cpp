@@ -1,4 +1,4 @@
-// Session-level idempotency oracle (spec 7.4): after any sequence of reads,
+// Session-level idempotency oracle: after any sequence of reads,
 // edits, merges, preference changes, and registry changes on REAL sessions,
 // the value returned for every name equals the value obtained by clearing all
 // caches and evaluating from scratch.
@@ -46,6 +46,7 @@
 #include "fixturebuilder.h"
 #include "logbookcolumn.h"
 #include "logbookmanager.h"
+#include "logbookprobe.h"
 #include "oraclecatalogue.h"
 #include "parsedfile.h"
 #include "preferences/preferencekeys.h"
@@ -56,6 +57,7 @@
 #include "sessionmodel.h"
 #include "testenvironment.h"
 #include "testmain.h"
+#include "testutil.h"
 
 using namespace FlySight;
 using namespace FlySightTest;
@@ -67,11 +69,6 @@ constexpr int kSampleNames = 8;         // names verified after every mutation
 constexpr int kCheckpointEvery = 25;    // full-catalogue verification
 
 using Outcome = MergeResult::Outcome;
-
-bool isNear(double a, double b)
-{
-    return qAbs(a - b) <= 1e-9;
-}
 
 // An in-memory SCHEMA_VER of "3" is part of the operation mix; the conversion
 // layer warns about it on every read.
@@ -130,41 +127,6 @@ QString valueText(const QVariant &value)
         return QStringLiteral("remove");
     return value.userType() == QMetaType::Double ? QString::number(value.toDouble(), 'g', 17)
                                                  : value.toString();
-}
-
-// The QSettings array first, then a bump of the version preference, which
-// makes an existing AltitudeMarkerManager refresh (as tst_column_cache does).
-void writeAltitudes(const QList<int> &altitudes)
-{
-    {
-        QSettings settings;
-        settings.beginWriteArray(QStringLiteral("altitudeMarkers"), altitudes.size());
-        for (int i = 0; i < altitudes.size(); ++i) {
-            settings.setArrayIndex(i);
-            settings.setValue(QStringLiteral("value"), altitudes.at(i));
-        }
-        settings.endArray();
-    }
-
-    PreferencesManager &prefs = PreferencesManager::instance();
-    if (prefs.hasPreference(PreferenceKeys::AltitudeMarkersVersion)) {
-        const int version = prefs.getValue(PreferenceKeys::AltitudeMarkersVersion).toInt();
-        prefs.setValue(PreferenceKeys::AltitudeMarkersVersion, version + 1);
-    }
-}
-
-QJsonObject readIndex()
-{
-    return QJsonDocument::fromJson(readFileBytes(TestEnvironment::instance().indexPath())).object();
-}
-
-QString sessionFilePath(const QString &sessionId)
-{
-    const QString uuid = readIndex()[QStringLiteral("sessions")].toObject()[sessionId].toObject()
-                             [QStringLiteral("uuid")].toString();
-    if (uuid.isEmpty())
-        return QString();
-    return TestEnvironment::instance().sessionsDir() + QLatin1Char('/') + uuid + QStringLiteral(".csv");
 }
 
 // The attribute each logbook column of part B shows, in column order (D, X, G, A).
@@ -429,7 +391,7 @@ bool SessionRun::prefix(Subject &s, bool sensorFirst)
     return true;
 }
 
-// Spec 4: calculation outputs never appear in enumeration because they
+// Calculation outputs never appear in enumeration because they
 // happened to be computed.
 bool SessionRun::enumerationIsStoredOnly(const Subject &s)
 {
@@ -663,7 +625,7 @@ private:
     std::unique_ptr<AltitudeMarkerManager> m_altitudes;
 
     // A subscriber, as the plot and the docks are: it keeps what it read until
-    // SessionModel::dependencyChanged names it (spec 6.5: every change reaches
+    // SessionModel::dependencyChanged names it (every change of a merge reaches
     // consumers through the model's one notification path). Invalidations that
     // originate in the registry or a preference are delivered on the next
     // event-loop pass, so the mirror is only checked when none is outstanding.
@@ -718,10 +680,10 @@ bool ModelRun::start()
 
     m_model = std::make_unique<SessionModel>();
     connectMirror();
-    m_altitudes = std::make_unique<AltitudeMarkerManager>(m_model.get());
+    m_altitudes = std::make_unique<AltitudeMarkerManager>();
     writeAltitudes({});
     PreferencesManager::instance().setValue(PreferenceKeys::AltitudeMarkersUnits, QStringLiteral("Metric"));
-    m_altitudes->registerAll();
+    m_altitudes->refresh();
 
     const QString root = env.newTempDir(QStringLiteral("oracle-model"));
     for (const QString &id : m_ids) {
@@ -733,7 +695,7 @@ bool ModelRun::start()
         }
     }
 
-    // Fixed prefix, through the application's import path (F10). Fragment 0 is
+    // Fixed prefix, through the application's import path. Fragment 0 is
     // TRACK, fragment 1 is SENSOR; o2 gets them in reverse order.
     for (int i = 0; i < m_ids.size(); ++i) {
         const QStringList &paths = m_paths[m_ids.at(i)];
@@ -768,7 +730,7 @@ bool ModelRun::start()
 // An application restart: every row is a stub again; the next read or merge
 // loads it. `crash` = the process dies instead of shutting down: index.json is
 // as the last column task left it, dirty sessions are NOT saved, their edits
-// are lost. Spec 9.4: even then the cached columns on disk must not disagree
+// are lost. Even then the cached columns on disk must not disagree
 // with the session files on disk.
 bool ModelRun::restart(bool crash)
 {
@@ -791,8 +753,8 @@ bool ModelRun::restart(bool crash)
                                logbook.lastAccessedMap());
     m_model->startColumnWorker();
     connectMirror();
-    m_altitudes = std::make_unique<AltitudeMarkerManager>(m_model.get());
-    m_altitudes->registerAll();
+    m_altitudes = std::make_unique<AltitudeMarkerManager>();
+    m_altitudes->refresh();
 
     // The index the crash left behind is valid for the environment it names.
     // Where that is the current one, none of its values may disagree with the
@@ -940,7 +902,7 @@ bool ModelRun::operation()
     return verifyLoadedRows();
 }
 
-// Acceptance 5 under random histories, and spec 9.4: what is on disk is what is
+// Acceptance 5 under random histories, and the column-cache rule: what is on disk is what is
 // in memory, effective values survive the reload, and the cached columns never
 // disagree with the saved file.
 bool ModelRun::persistedState()
@@ -1112,7 +1074,7 @@ void SessionOracleTest::modelSequences_data()
         QTest::newRow(qPrintable(QStringLiteral("seed %1").arg(seed))) << seed;
 }
 
-// Acceptance 10 and 5 (and spec 9.4)
+// Acceptance 10 and 5 (and the column-cache rule of acceptance 18)
 void SessionOracleTest::modelSequences()
 {
     runSeed<ModelRun>(120);

@@ -4,6 +4,7 @@
 
 #include <memory>
 
+#include <QRegularExpression>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QtTest>
@@ -13,6 +14,8 @@
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
 #include "logbookcolumn.h"
+#include "logbookprobe.h"
+#include "markerregistry.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
@@ -29,50 +32,6 @@ constexpr double T0 = DescentFixture::T0;
 
 const QString kAltitudeKey = QStringLiteral("_ALTITUDE_1000_M");
 const QString kAltitudeId = QStringLiteral("builtin.altitude._ALTITUDE_1000_M");
-
-// Writes the altitude list the way the preferences page does: the QSettings
-// array first, then a bump of the version preference, which is what makes an
-// existing AltitudeMarkerManager refresh.
-void writeAltitudes(const QList<int> &altitudes)
-{
-    {
-        QSettings settings;
-        settings.beginWriteArray(QStringLiteral("altitudeMarkers"), altitudes.size());
-        for (int i = 0; i < altitudes.size(); ++i) {
-            settings.setArrayIndex(i);
-            settings.setValue(QStringLiteral("value"), altitudes.at(i));
-        }
-        settings.endArray();
-    }
-
-    PreferencesManager &prefs = PreferencesManager::instance();
-    if (prefs.hasPreference(PreferenceKeys::AltitudeMarkersVersion)) {
-        const int version = prefs.getValue(PreferenceKeys::AltitudeMarkersVersion).toInt();
-        prefs.setValue(PreferenceKeys::AltitudeMarkersVersion, version + 1);
-    }
-}
-
-// (sessionId, attribute key) pairs seen by a dependencyChanged spy
-bool spyHasAttribute(const QSignalSpy &spy, const QString &sessionId, const QString &key)
-{
-    for (const QList<QVariant> &args : spy) {
-        const DependencyKey name = args.at(1).value<DependencyKey>();
-        if (args.at(0).toString() == sessionId && name == DependencyKey::attribute(key))
-            return true;
-    }
-    return false;
-}
-
-bool spyHasMeasurement(const QSignalSpy &spy, const QString &sessionId,
-                       const QString &sensor, const QString &measurement)
-{
-    for (const QList<QVariant> &args : spy) {
-        const DependencyKey name = args.at(1).value<DependencyKey>();
-        if (args.at(0).toString() == sessionId && name == DependencyKey::measurement(sensor, measurement))
-            return true;
-    }
-    return false;
-}
 
 // dataChanged emissions that publish an invalidation of `row`. They carry the
 // edit and check-state roles; the column worker's refresh is display-only.
@@ -120,6 +79,8 @@ private slots:
     void evictedSessionIsIgnored();
     void mergeEmitsDependencyChanged();
     void rowsSurviveSort();
+    void deviceIdIsReadOnly();
+    void altitudeMarkerOnlyForRegisteredCalculation();
 
 private:
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
@@ -157,10 +118,10 @@ void SessionModelEngineTest::init()
     QCOMPARE(m_model->rowCount(), 2);
     QVERIFY(m_model->updateAttribute("s2", "_GROUND_ELEV", 0.0));
 
-    m_altitudes = std::make_unique<AltitudeMarkerManager>(m_model.get());
+    m_altitudes = std::make_unique<AltitudeMarkerManager>();
     writeAltitudes({1000});
     PreferencesManager::instance().setValue(PreferenceKeys::AltitudeMarkersUnits, QStringLiteral("Metric"));
-    m_altitudes->registerAll();
+    m_altitudes->refresh();
     m_model->flushPendingInvalidations();
 }
 
@@ -277,7 +238,7 @@ void SessionModelEngineTest::preferenceBroadcastReachesModel()
     QCOMPARE(publicationCount(dataSpy, row1), 1);
     QCOMPARE(publicationCount(dataSpy, m_model->getSessionRow("s2")), 1);
 
-    // Cleared by SessionModel::checkCalculationEnvironment (Phase 5), not by flushPendingInvalidations.
+    // Cleared by SessionModel::checkCalculationEnvironment, not by flushPendingInvalidations.
     QVERIFY(m_model->rowAt(row1).cachedValues.isEmpty());
     QVERIFY(!m_model->rowAt(row1).dirty);
     QVERIFY(!m_model->rowAt(m_model->getSessionRow("s2")).dirty);
@@ -379,6 +340,93 @@ void SessionModelEngineTest::mergeEmitsDependencyChanged()
 
 // Rows move when the model sorts; the listener travels with the session's
 // engine and identifies the session by id, not by address.
+// DEVICE_ID is a header attribute recorded by the device. Rewriting it would
+// make the session's other file fail to merge (attribute conflict), so no
+// model path may edit it: not flags(), not setData(), not the bulk edit.
+void SessionModelEngineTest::deviceIdIsReadOnly()
+{
+    LogbookColumn description;
+    description.type = ColumnType::SessionAttribute;
+    description.attributeKey = QString::fromLatin1(SessionKeys::Description);
+    LogbookColumn device;
+    device.type = ColumnType::SessionAttribute;
+    device.attributeKey = QString::fromLatin1(SessionKeys::DeviceId);
+    const auto restoreColumns = qScopeGuard([description] {
+        LogbookColumnStore::instance().setColumns({description});
+    });
+    LogbookColumnStore::instance().setColumns({description, device});
+    QCOMPARE(m_model->columnCount(), 2);
+
+    const int row = m_model->getSessionRow("s1");
+    const QModelIndex deviceIndex = m_model->index(row, 1);
+    const QModelIndex descriptionIndex = m_model->index(row, 0);
+    QCOMPARE(session("s1").storedAttribute("DEVICE_ID").toString(), QStringLiteral("test-device"));
+    QCOMPARE(m_model->data(deviceIndex, Qt::DisplayRole).toString(), QStringLiteral("test-device"));
+
+    QVERIFY(!(m_model->flags(deviceIndex) & Qt::ItemIsEditable));
+    QVERIFY(m_model->flags(descriptionIndex) & Qt::ItemIsEditable);      // control: an editable column
+
+    QSignalSpy spy(m_model.get(), &SessionModel::dependencyChanged);
+    QVERIFY(!m_model->setData(deviceIndex, QStringLiteral("renamed"), Qt::EditRole));
+    m_model->startBulkEdit({row}, 1, QStringLiteral("renamed"));
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(session("s1").storedAttribute("DEVICE_ID").toString(), QStringLiteral("test-device"));
+    QCOMPARE(m_model->data(deviceIndex, Qt::DisplayRole).toString(), QStringLiteral("test-device"));
+    QVERIFY(!spyHasAttribute(spy, "s1", "DEVICE_ID"));
+
+    // Control: the same call on the description column is accepted.
+    QVERIFY(m_model->setData(descriptionIndex, QStringLiteral("renamed"), Qt::EditRole));
+    QCOMPARE(session("s1").storedAttribute("_DESCRIPTION").toString(), QStringLiteral("renamed"));
+    QVERIFY(waitForIdle(*m_model));
+}
+
+// A marker exists only for an altitude whose calculation was registered. The
+// id of the 2000 m calculation is taken by another registration here, so the
+// manager's registration of it is refused: no marker and no colour preference
+// for it, while the 1000 m marker is untouched.
+void SessionModelEngineTest::altitudeMarkerOnlyForRegisteredCalculation()
+{
+    const auto altitudeMarkerKeys = [] {
+        QStringList keys;
+        for (const MarkerDefinition &def : MarkerRegistry::instance()->allMarkers()) {
+            if (def.groupId == QLatin1String("altitude"))
+                keys.append(def.attributeKey);
+        }
+        return keys;
+    };
+    QCOMPARE(altitudeMarkerKeys(), QStringList({"_ALTITUDE_1000_M"}));
+
+    CalculationDescriptor squatter;
+    squatter.id = QStringLiteral("builtin.altitude._ALTITUDE_2000_M");
+    squatter.outputs = {DependencyKey::attribute("_SQUATTER")};
+    squatter.compute = [](const EvaluationContext &) { return CalculationResult::unavailable(); };
+    CalculationRegistry &registry = CalculationRegistry::instance();
+    QVERIFY(registry.registerCalculation(squatter));
+    bool squatting = true;      // so that a failing assertion below still frees the id
+    const auto removeSquatter = qScopeGuard([&registry, &squatting] {
+        if (squatting)
+            registry.unregister(QStringLiteral("builtin.altitude._ALTITUDE_2000_M"));
+    });
+
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("id already registered")));
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("could not register the calculation for")));
+    writeAltitudes({1000, 2000});       // the manager refreshes
+
+    QCOMPARE(altitudeMarkerKeys(), QStringList({"_ALTITUDE_1000_M"}));
+    QVERIFY(!registry.hasCandidateFor(DependencyKey::attribute("_ALTITUDE_2000_M")));
+    QSettings settings;
+    QVERIFY(settings.contains(QStringLiteral("markers/_ALTITUDE_1000_M/color")));
+    QVERIFY(!settings.contains(QStringLiteral("markers/_ALTITUDE_2000_M/color")));
+
+    // Control: with the id free again, the next refresh adds the marker.
+    QVERIFY(registry.unregister(QStringLiteral("builtin.altitude._ALTITUDE_2000_M")));
+    squatting = false;
+    writeAltitudes({1000, 2000});
+    QCOMPARE(altitudeMarkerKeys(), QStringList({"_ALTITUDE_1000_M", "_ALTITUDE_2000_M"}));
+    QVERIFY(QSettings().contains(QStringLiteral("markers/_ALTITUDE_2000_M/color")));
+    m_model->flushPendingInvalidations();
+}
+
 void SessionModelEngineTest::rowsSurviveSort()
 {
     QCOMPARE(session("s1").getAttribute("_EXIT_TIME").toDouble(), T0 + 9.0);

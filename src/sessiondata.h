@@ -120,7 +120,9 @@ using SourceData   = QMap<QString, SourceSensor>;   ///< sensor name -> columns
 /// source data and stored attributes only.
 ///
 /// Copying copies the stored state only; the copy computes its own values on
-/// demand. Moving carries the engine (its cache and its invalidation listener)
+/// demand, from a cold cache (so never copy a session just to read it). Copy
+/// assignment clears the target's cache without notifying its invalidation
+/// listener. Moving carries the engine (its cache and its invalidation listener)
 /// to the new object.
 class SessionData : public ISessionState {
 public:

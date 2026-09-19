@@ -157,7 +157,7 @@ QString LogbookManager::sessionsDirectory() const
 // Initialize
 // ============================================================================
 
-QList<SessionData> LogbookManager::initialize()
+void LogbookManager::initialize()
 {
     // Attempt to read index.json
     const QString indexPath = logbookDirectory() + QStringLiteral("/index.json");
@@ -243,7 +243,7 @@ QList<SessionData> LogbookManager::initialize()
 
                 m_cacheEnvironment = currentEnvironment;
                 m_hasIndexData = true;
-                return {};
+                return;
             } else {
                 // --- Legacy flat format ---
                 for (auto it = root.constBegin(); it != root.constEnd(); ++it) {
@@ -255,7 +255,7 @@ QList<SessionData> LogbookManager::initialize()
                     }
                 }
                 m_cacheEnvironment = calculationEnvironmentFingerprint();
-                return {};
+                return;
             }
         }
     }
@@ -265,7 +265,6 @@ QList<SessionData> LogbookManager::initialize()
     m_scannedUuids = scanSessionFilenames();
     m_deferredScan = true;
     m_cacheEnvironment = calculationEnvironmentFingerprint();
-    return {};
 }
 
 // ============================================================================
@@ -600,6 +599,13 @@ std::optional<QString> LogbookManager::peekSessionId(const QString &sessionId) c
 //   after a ColumnTask / SaveTask flush while
 //     the row is still unsaved                    absent   old   same (flushIndex skips unsaved columns)
 //   after the post-save flush                     new      new   computed from the state that was saved
+//   step b fails (index not writable)             old      old   nothing changed on disk; the marks stay
+//   step c fails (session file not written)       absent   old   the marks stay: every later flush still omits
+//                                                                the columns, until a save succeeds
+//
+// A failed save is therefore the same on-disk state as a crash at that point,
+// except that the process lives on: the caller (SessionModel) keeps the session
+// in memory, dirty, and retries - it never treats the row as saved.
 //
 // Columns that were NOT marked keep their values throughout: by the static
 // dependency closure they cannot depend on the change, so one value is right

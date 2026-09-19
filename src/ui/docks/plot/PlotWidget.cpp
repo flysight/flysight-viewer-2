@@ -292,17 +292,20 @@ void PlotWidget::revertToPrimaryTool()
 
 void PlotWidget::zoomToExtent()
 {
-    // Use all visible sessions
-    QVector<SessionData> visible;
+    // Use all visible sessions. Pointers to the model's live sessions, not
+    // copies: a copied SessionData has no engine cache, so every read of a copy
+    // would recompute conversion, time fit and markers and throw them away.
+    // Nothing between here and the end of the call loads, evicts or moves rows.
+    QVector<const SessionData *> visible;
     for (int i = 0; i < model->rowCount(); ++i) {
         const SessionRow &row = model->rowAt(i);
         if (!row.isLoaded() || !row.visible) continue;
-        visible.append(row.session.value());
+        visible.append(&row.session.value());
     }
     zoomToExtent(visible);
 }
 
-void PlotWidget::zoomToExtent(const QVector<SessionData> &sessions)
+void PlotWidget::zoomToExtent(const QVector<const SessionData *> &sessions)
 {
     PreferencesManager &prefs = PreferencesManager::instance();
     const QString mode = prefs.getValue(PreferenceKeys::ZoomExtentMode).toString();
@@ -314,7 +317,10 @@ void PlotWidget::zoomToExtent(const QVector<SessionData> &sessions)
     double maxX = std::numeric_limits<double>::lowest();
     bool hasData = false;
 
-    for (const SessionData &session : sessions) {
+    for (const SessionData *sessionPtr : sessions) {
+        if (!sessionPtr)
+            continue;
+        const SessionData &session = *sessionPtr;
         auto offset = referenceOffsetForSession(session);
         if (!offset.has_value())
             continue;
@@ -338,8 +344,7 @@ void PlotWidget::zoomToExtent(const QVector<SessionData> &sessions)
 
         // Full data extent: scan all sensors for x-variable data
         for (const QString &sensorKey : session.sensorKeys()) {
-            QVector<double> xData = const_cast<SessionData &>(session)
-                .getMeasurement(sensorKey, m_xVariable);
+            QVector<double> xData = session.getMeasurement(sensorKey, m_xVariable);
             if (xData.isEmpty())
                 continue;
 
