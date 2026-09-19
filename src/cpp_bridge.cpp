@@ -4,8 +4,22 @@
 namespace py = pybind11;
 using namespace FlySight;
 
-// Forward declare the registration functions defined in other files
-void register_dependencykey(py::module_ &m);
+// flysight_cpp_bridge: the types the embedded interpreter needs from C++.
+//
+// The module exports exactly:
+//   SessionData                 - the read-only view a plugin's compute() receives
+//                                 (sessiondata_bindings.cpp / pluginsessionview.h)
+//   UndeclaredInputError        - raised by that view for a read outside inputs()
+//   PythonOutputRedirector_CPP  - sys.stdout / sys.stderr -> qDebug()
+//
+// Dependency keys are NOT bound here: they are the pure-Python `Key` dataclass
+// of flysight_plugin_sdk, decoded by the host (pluginadapters.cpp).
+//
+// This module has its own copy of every flysight_model static. Code compiled
+// into it must never reach the calculation registry, an engine, or a session;
+// it only operates on the objects it is handed.
+
+// Defined in sessiondata_bindings.cpp
 void register_sessiondata(py::module_ &m);
 
 // Register PythonOutputRedirector
@@ -16,17 +30,13 @@ void register_python_output_redirector(py::module_ &m) {
         .def("flush", &PythonOutputRedirector::flush);
 }
 
-// Define the module - NO problematic includes here!
 #pragma push_macro("slots")
 #undef slots
 PYBIND11_MODULE(flysight_cpp_bridge, m) {
-    m.doc() = "C++ bridge module for FlySight Python plugins";
+    m.doc() = "C++ bridge module for FlySight Python plugins: the SessionData view, "
+              "UndeclaredInputError, and the stdout/stderr redirector";
 
-    // Call registration functions from other files
-    register_dependencykey(m);
     register_sessiondata(m);
     register_python_output_redirector(m);
-
-    // Add any module-level functions or submodules here if needed
 }
 #pragma pop_macro("slots")

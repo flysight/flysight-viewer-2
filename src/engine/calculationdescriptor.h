@@ -30,6 +30,11 @@ struct CalculationDescriptor {
     QList<DependencyKey> outputs;       ///< at least one; attributes and/or measurements
     EvaluationPolicy     policy = EvaluationPolicy::OnDemand;
     ComputeFunction      compute;
+    /// Opt-in for calculations that read the recorded (source) layer explicitly.
+    /// Set only by the Python plugin host for plugins that declare `source()`
+    /// inputs. Built-in calculations must never set it: only the conversion
+    /// layer and explicit plugin source access depend on source nodes.
+    bool                 allowSourceInputs = false;
 };
 
 /// One registration that stands for a whole set of calculations, instantiated

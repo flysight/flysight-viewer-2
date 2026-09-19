@@ -35,6 +35,12 @@ public:
     QVector<double> sourceMeasurement(const QString &sensor, const QString &name) const;
     QString         sourceUnit(const QString &sensor, const QString &name) const;
 
+    /// Whether `input` is one of the calculation's declared inputs. Silent: it
+    /// records nothing, warns nothing, and does not mark the evaluation. It
+    /// exists because an empty value can be legitimate (a recorded unit may be
+    /// empty), so "empty return" cannot be used to detect an undeclared read.
+    bool            isDeclared(const CalcInput &input) const;
+
 private:
     friend class CalculationEngine;
 

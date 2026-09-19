@@ -71,8 +71,9 @@ public:
     // invalid: empty id; '#' in the id; id already registered (as any kind);
     // no outputs; duplicate outputs; null compute / instantiate; an output that
     // is also one of the calculation's own Attribute / Measurement inputs; a
-    // SourceMeasurement / SourceUnit input on anything that is not a source
-    // conversion; or a call made while an engine is evaluating.
+    // SourceMeasurement / SourceUnit input on anything that is neither a source
+    // conversion nor a descriptor with the plugin-host opt-in; or a call
+    // made while an engine is evaluating.
     bool registerCalculation(const CalculationDescriptor &d);
     bool registerFamily(const CalculationFamily &f);
     /// Source conversions are the ordered candidates for a measurement that has
@@ -160,7 +161,7 @@ private:
     void evaluationFinished() { --m_activeEvaluations; }
 
     bool checkMutable(const char *what, const CalculationId &id) const;
-    bool validate(const CalculationDescriptor &d, bool allowSourceInputs, const QString &label) const;
+    bool validate(const CalculationDescriptor &d, bool sourceInputsPermitted, const QString &label) const;
     bool addFamily(const CalculationFamily &f, EntryKind kind);
     std::optional<CalculationInstance> instantiate(const Entry &entry, const DependencyKey &name) const;
     void broadcast(const RegistryChange &change);

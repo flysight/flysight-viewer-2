@@ -9,7 +9,6 @@
 /* Qt headers – compile with _DEBUG still defined */
 #include <QCoreApplication>
 #include <QDir>
-#include <QDateTime>
 #include <QVariant>
 #include <QDebug>
 
@@ -37,8 +36,7 @@
 
 /* FlySight headers */
 #include "pluginhost.h"
-#include "pluginsessionview.h"
-#include "dependencykey.h"
+#include "pluginadapters.h"
 #include "engine/calculationdescriptor.h"
 #include "engine/calculationregistry.h"
 #include "plotregistry.h"
@@ -59,42 +57,60 @@ static QString pyStatusToString(const PyStatus& s)
 }
 
 /* ------------------------------------------------------------------------
- *  Calculation adapters
+ *  Per-plugin registration
+ *
+ *  Decoding, marshalling and the adapters themselves live in
+ *  pluginadapters.cpp. Here: one loop used for all three SDK lists, so that a
+ *  problem with one plugin rejects that plugin only.
  * ---------------------------------------------------------------------- */
+namespace {
 
-// The declared inputs of a plug-in: the DependencyKey objects returned by its
-// inputs() method, decoded by their .kind.
-static QList<CalcInput> decodeInputs(const py::object& plugin)
+struct RegistrationCount {
+    int registered = 0;
+    int rejected = 0;
+};
+
+// `makeAdapter(index, plugin)` builds the descriptor. The index is the position
+// in the SDK list, so a rejected plugin still consumes its index and the ids of
+// the others do not depend on it.
+template <typename Fn>
+RegistrationCount registerEach(py::handle sdkList, PluginLoadReport &report, Fn makeAdapter)
 {
-    QList<CalcInput> inputs;
-    for (py::handle hi : plugin.attr("inputs")().cast<py::list>()) {
-        py::object dk = hi.cast<py::object>();
-        int kind      = dk.attr("kind").cast<int>();
+    RegistrationCount count;
+    CalculationRegistry &registry = CalculationRegistry::instance();
 
-        if (kind == static_cast<int>(DependencyKey::Type::Attribute)) {
-            inputs.append(CalcInput::attribute(
-                QString::fromStdString(dk.attr("attributeKey").cast<std::string>())));
-        } else {
-            inputs.append(CalcInput::measurement(
-                QString::fromStdString(dk.attr("sensorKey").cast<std::string>()),
-                QString::fromStdString(dk.attr("measurementKey").cast<std::string>())));
+    int index = 0;
+    for (py::handle h : sdkList) {
+        const py::object plugin = py::reinterpret_borrow<py::object>(h);
+        const QString label = PluginBridge::pluginLabel(plugin);    // never throws
+
+        QString reason;
+        try {
+            const CalculationDescriptor d = makeAdapter(index, plugin);
+            if (!registry.registerCalculation(d))
+                throw PluginBridge::PluginError(
+                    "registration refused by the calculation registry (see previous warning)");
+            report.registeredIds << d.id;
+            ++count.registered;
+        } catch (const PluginBridge::PluginError &e) {
+            reason = QString::fromUtf8(e.what());
+        } catch (const py::error_already_set &e) {     // e.g. inputs() raised
+            reason = QString::fromUtf8(e.what());
+        } catch (const std::exception &e) {
+            reason = QString::fromUtf8(e.what());
         }
+
+        if (!reason.isEmpty()) {
+            qWarning().noquote() << "[PluginHost] Plugin" << label << "rejected:" << reason;
+            report.rejected << label + QStringLiteral(": ") + reason;
+            ++count.rejected;
+        }
+        ++index;
     }
-    return inputs;
+    return count;
 }
 
-// The "session" handed to one compute() call. The view is made inert when the
-// call ends, whether it returns or throws, so a plug-in that keeps the object
-// never holds a pointer to a dead evaluation context.
-struct ViewScope {
-    explicit ViewScope(const EvaluationContext* ctx)
-        : view(std::make_shared<PluginSessionView>(ctx)) {}
-    ~ViewScope() { view->invalidate(); }
-    ViewScope(const ViewScope&) = delete;
-    ViewScope& operator=(const ViewScope&) = delete;
-
-    std::shared_ptr<PluginSessionView> view;
-};
+} // namespace
 
 /* ────────────────────────────────────────────────────────────────────────────
  *  Singleton
@@ -298,109 +314,46 @@ void PluginHost::initialise(const QString& pluginDir)
         return;
     }
 
+    // The interpreter, the bridge and the SDK are up: plugin loading runs.
+    m_ready = true;
+
     /* ------------------------------------------------------------------ */
-    /* 3.  Import every .py file in the plug-in directory                 */
+    /* 3.  Import every .py file in the plug-in directory (name order)    */
     /* ------------------------------------------------------------------ */
     QDir dir(pluginDir);
-    for (const QFileInfo& fi : dir.entryInfoList({ "*.py" }, QDir::Files)) {
+    for (const QFileInfo& fi : dir.entryInfoList({ "*.py" }, QDir::Files, QDir::Name)) {
         try {
             py::module::import(fi.baseName().toStdString().c_str());
         } catch (const py::error_already_set& e) {
             qWarning().noquote() << "[PluginHost] Plug-in" << fi.fileName()
             << "failed to import:" << e.what();
+            m_report.failedImports << fi.fileName();
         }
     }
 
     /* ------------------------------------------------------------------ */
-    /* 4.  Register calculated attributes                                 */
+    /* 4.  Register plugin calculations                                   */
     /* ------------------------------------------------------------------ */
-    // Each plug-in becomes one single-output calculation in the process-wide
-    // registry. This runs before the built-ins are registered, so a plug-in
-    // that declares a built-in output is tried first.
-    CalculationRegistry &registry = CalculationRegistry::instance();
-
-    int attributeIndex = 0;
-    for (py::handle h : sdk.attr("_attributes")) {
-        py::object plugin = h.cast<py::object>();
-        const QString key =
-            QString::fromStdString(plugin.attr("name").cast<std::string>());
-
-        CalculationDescriptor d;
-        d.id = QStringLiteral("plugin.attr.%1.%2").arg(attributeIndex++).arg(key);
-        d.inputs = decodeInputs(plugin);
-        d.outputs = { DependencyKey::attribute(key) };
-        d.compute = [plugin, key](const EvaluationContext &ctx) -> CalculationResult {
-            py::gil_scoped_acquire gil;
-            ViewScope scope(&ctx);
-            py::object out = plugin.attr("compute")(py::cast(scope.view));
-            if (out.is_none()) return CalculationResult::unavailable();
-
-            if (py::isinstance<py::float_>(out) ||
-                py::isinstance<py::int_>(out))
-                return CalculationResult().setAttribute(
-                    key, QVariant::fromValue(out.cast<double>()));
-
-            if (py::isinstance<py::str>(out)) {
-                const QString txt =
-                    QString::fromStdString(out.cast<std::string>());
-                const QDateTime dt =
-                    QDateTime::fromString(txt, Qt::ISODateWithMs);
-                if (dt.isValid()) {
-                    // Store as UTC-seconds double so the value participates
-                    // in the interpolation system's canConvert<double>() check.
-                    return CalculationResult().setAttribute(
-                        key, QVariant::fromValue(dt.toMSecsSinceEpoch() / 1000.0));
-                }
-                return CalculationResult().setAttribute(key, QVariant::fromValue(txt));
-            }
-            return CalculationResult::unavailable();
-        };
-
-        if (!registry.registerCalculation(d)) {
-            qWarning().noquote() << "[PluginHost] Attribute plug-in" << key
-                                 << "could not be registered as" << d.id;
-        }
-    }
-
-    /* ------------------------------------------------------------------ */
-    /* 5.  Register calculated measurements                               */
-    /* ------------------------------------------------------------------ */
-    int measurementIndex = 0;
-    for (py::handle h : sdk.attr("_measurements")) {
-        py::object plugin = h.cast<py::object>();
-        const QString sensor =
-            QString::fromStdString(plugin.attr("sensor").cast<std::string>());
-        const QString name =
-            QString::fromStdString(plugin.attr("name").cast<std::string>());
-
-        CalculationDescriptor d;
-        d.id = QStringLiteral("plugin.meas.%1.%2/%3").arg(measurementIndex++).arg(sensor, name);
-        d.inputs = decodeInputs(plugin);
-        d.outputs = { DependencyKey::measurement(sensor, name) };
-        d.compute = [plugin, sensor, name](const EvaluationContext &ctx) -> CalculationResult {
-            py::gil_scoped_acquire gil;
-            ViewScope scope(&ctx);
-            py::object out = plugin.attr("compute")(py::cast(scope.view));
-            if (out.is_none()) return CalculationResult::unavailable();
-
-            auto buf = out.cast<
-                py::array_t<double,
-                            py::array::c_style | py::array::forcecast>>();
-            // The copy into the QVector detaches the result from the NumPy buffer.
-            return CalculationResult().setMeasurement(
-                sensor, name, QVector<double>(buf.data(), buf.data() + buf.shape(0)));
-        };
-
-        if (!registry.registerCalculation(d)) {
-            qWarning().noquote() << "[PluginHost] Measurement plug-in" << (sensor + "/" + name)
-                                 << "could not be registered as" << d.id;
-        }
+    // Fixed order: all attributes, then all measurements, then all multi-output
+    // calculations; inside a list, registration-call order. This runs before
+    // the built-ins are registered, so a plug-in that declares a built-in
+    // output is tried first (recorded data still beats both).
+    RegistrationCount attributes, measurements, calculations;
+    try {
+        attributes = registerEach(sdk.attr("_attributes"), m_report,
+                                  &PluginBridge::makeAttributeAdapter);
+        measurements = registerEach(sdk.attr("_measurements"), m_report,
+                                    &PluginBridge::makeMeasurementAdapter);
+        calculations = registerEach(sdk.attr("_calculations"), m_report,
+                                    &PluginBridge::makeCalculationAdapter);
+    } catch (const py::error_already_set& e) {
+        qCritical().noquote() << "[PluginHost] The SDK's plugin lists could not be read:" << e.what();
     }
 
     /* ------------------------------------------------------------------ */
     /* 6.  Register simple plot definitions                               */
     /* ------------------------------------------------------------------ */
-    for (py::handle h : sdk.attr("_simple_plots")) {
+    for (py::handle h : sdk.attr("_simple_plots")) try {
         py::object plt = h.cast<py::object>();
         PlotRegistry::instance().registerPlot({
             QString::fromStdString(plt.attr("category").cast<std::string>()),
@@ -417,12 +370,14 @@ void PluginHost::initialise(const QString& pluginDir)
                 ? QString::fromStdString(plt.attr("measurement_type").cast<std::string>())
                 : QString{}
         });
+    } catch (const std::exception& e) {     // a malformed definition skips that plot only
+        qWarning().noquote() << "[PluginHost] Plot definition skipped:" << e.what();
     }
 
     /* ------------------------------------------------------------------ */
     /* 6b. Register simple marker definitions                             */
     /* ------------------------------------------------------------------ */
-    for (py::handle h : sdk.attr("_markers")) {
+    for (py::handle h : sdk.attr("_markers")) try {
         py::object mk = h.cast<py::object>();
 
         MarkerDefinition def;
@@ -444,14 +399,19 @@ void PluginHost::initialise(const QString& pluginDir)
         }
 
         MarkerRegistry::instance()->registerMarker(def);
+    } catch (const std::exception& e) {     // a malformed definition skips that marker only
+        qWarning().noquote() << "[PluginHost] Marker definition skipped:" << e.what();
     }
 
     /* ------------------------------------------------------------------ */
     /* 7.  Summary                                                        */
     /* ------------------------------------------------------------------ */
-    qInfo() << "[PluginHost] Registered"
-            << py::len(sdk.attr("_attributes"))   << "attributes,"
-            << py::len(sdk.attr("_measurements")) << "measurements,"
-            << py::len(sdk.attr("_simple_plots")) << "plots and"
-            << py::len(sdk.attr("_markers"))      << "markers.";
+    qInfo().noquote() << QStringLiteral(
+        "[PluginHost] Registered %1 attributes (%2 rejected), %3 measurements (%4 rejected), "
+        "%5 calculations (%6 rejected), %7 plots and %8 markers.")
+        .arg(attributes.registered).arg(attributes.rejected)
+        .arg(measurements.registered).arg(measurements.rejected)
+        .arg(calculations.registered).arg(calculations.rejected)
+        .arg(py::len(sdk.attr("_simple_plots")))
+        .arg(py::len(sdk.attr("_markers")));
 }

@@ -340,6 +340,7 @@ set(PROJECT_SOURCES
   graphinfo.h
   plotutils.cpp              plotutils.h
   pluginhost.h               pluginhost.cpp
+  pluginadapters.h           pluginadapters.cpp
   profile.cpp                profile.h
   profilemanager.cpp         profilemanager.h
   profilestatebridge.cpp     profilestatebridge.h
@@ -445,7 +446,6 @@ flysight_msvc_fix_python_debug_autolink(FlySightViewer)
 # ─────────────────────────────── pybind11 bridge (.pyd)
 pybind11_add_module(flysight_cpp_bridge
   cpp_bridge.cpp
-  dependencykey_bindings.cpp
   sessiondata_bindings.cpp
   pluginsessionview.h
 )
@@ -531,7 +531,15 @@ else()
 endif()
 
 install(FILES "${CMAKE_CURRENT_LIST_DIR}/../python_plugins/flysight_plugin_sdk.py"
+              "${CMAKE_CURRENT_LIST_DIR}/../python_plugins/README.md"
   DESTINATION "${_plugins_dest}"
+)
+
+# The bundled example goes into a subdirectory on purpose: PluginHost imports
+# only the *.py files directly inside the plugin directory, so an installed
+# example is never auto-loaded. A user enables it by copying it one level up.
+install(FILES "${CMAKE_CURRENT_LIST_DIR}/../python_plugins/examples/imu_tilt.py"
+  DESTINATION "${_plugins_dest}/examples"
 )
 
 

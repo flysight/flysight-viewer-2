@@ -68,11 +68,16 @@ endif()
 #   - Forwarded to the application project (src/CMakeLists.txt), which owns the option
 #   - Run with: ctest --test-dir <build>/FlySightViewer-build -C Release --output-on-failure
 #
+# FLYSIGHT_BUILD_PYTHON_TESTS: With FLYSIGHT_BUILD_TESTS, also build tst_python_bridge (default ON)
+#   - Forwarded to the application project; tests/CMakeLists.txt owns the option
+#   - Needs NumPy in the build-time Python; without it the test is registered but disabled
+#
 
 option(FLYSIGHT_BUILD_THIRD_PARTY "Build third-party dependencies" ON)
 option(FLYSIGHT_BUILD_APP "Build the main FlySight Viewer application" ON)
 option(FLYSIGHT_THIRD_PARTY_ONLY "Build only third-party dependencies (skip application)" OFF)
 option(FLYSIGHT_BUILD_TESTS "Build the FlySight Viewer test suite" OFF)
+option(FLYSIGHT_BUILD_PYTHON_TESTS "With FLYSIGHT_BUILD_TESTS: also build the embedded-Python plugin bridge test" ON)
 
 # Handle option interaction: THIRD_PARTY_ONLY implies no app build
 if(FLYSIGHT_THIRD_PARTY_ONLY)
@@ -157,6 +162,7 @@ if(FLYSIGHT_BUILD_APP)
         # Forwarded unconditionally so that turning the option back OFF also
         # reaches the inner cache.
         -DFLYSIGHT_BUILD_TESTS=${FLYSIGHT_BUILD_TESTS}
+        -DFLYSIGHT_BUILD_PYTHON_TESTS=${FLYSIGHT_BUILD_PYTHON_TESTS}
     )
     if(CMAKE_PREFIX_PATH)
         list(APPEND _APP_CMAKE_ARGS "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}")
@@ -228,6 +234,7 @@ message(STATUS "  FLYSIGHT_BUILD_THIRD_PARTY: ${FLYSIGHT_BUILD_THIRD_PARTY}")
 message(STATUS "  FLYSIGHT_BUILD_APP:         ${FLYSIGHT_BUILD_APP}")
 message(STATUS "  FLYSIGHT_THIRD_PARTY_ONLY:  ${FLYSIGHT_THIRD_PARTY_ONLY}")
 message(STATUS "  FLYSIGHT_BUILD_TESTS:       ${FLYSIGHT_BUILD_TESTS}")
+message(STATUS "  FLYSIGHT_BUILD_PYTHON_TESTS: ${FLYSIGHT_BUILD_PYTHON_TESTS}")
 message(STATUS "")
 message(STATUS "Path Variables:")
 message(STATUS "  THIRD_PARTY_DIR:       ${THIRD_PARTY_DIR}")

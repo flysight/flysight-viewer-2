@@ -67,4 +67,9 @@ QString EvaluationContext::sourceUnit(const QString &sensor, const QString &name
     return v ? v->unit : QString();
 }
 
+bool EvaluationContext::isDeclared(const CalcInput &input) const
+{
+    return m_inputs.contains(input);
+}
+
 } // namespace FlySight

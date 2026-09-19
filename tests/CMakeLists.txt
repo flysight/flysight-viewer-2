@@ -131,3 +131,69 @@ flysight_add_test(tst_column_cache          SOURCES tst_column_cache.cpp)
 flysight_add_test(tst_session_merge SOURCES tst_session_merge.cpp)
 flysight_add_test(tst_import_merge  SOURCES tst_import_merge.cpp)
 flysight_add_test(tst_import_batch  SOURCES tst_import_batch.cpp)
+
+# ---- Phase 7: embedded-Python bridge test --------------------------------
+# tst_python_bridge boots the real embedded interpreter, imports the real
+# flysight_cpp_bridge module from the build tree, and loads the SDK, the test
+# plugins under tests/python_plugins/ and the bundled example. It is the only
+# target that links pybind11::embed / Python.
+#
+# Environment (all supplied by CTest, nothing is taken from the user's PATH or
+# profile; see tests/README.md for running the executable by hand):
+#   PYTHONHOME  = sys.base_prefix of the build-time interpreter (stdlib)
+#   PYTHONPATH  = <dir of the built flysight_cpp_bridge> ; <site dir holding NumPy>
+#   PATH (Win)  += the directory of pythonXY.dll (plus Qt / GeographicLib, as for every test)
+#   PYTHONDONTWRITEBYTECODE=1 so nothing is written outside the test's temp dir
+# A test executable has no python/ sibling, so PluginHost takes its "system
+# Python" branch, which honours these variables. No test seam exists in PluginHost.
+option(FLYSIGHT_BUILD_PYTHON_TESTS "Build and run the embedded-Python plugin bridge test" ON)
+if(FLYSIGHT_BUILD_PYTHON_TESTS)
+  # Build-time interpreter facts (Python_EXECUTABLE comes from src/CMakeLists.txt find_package(Python))
+  execute_process(COMMAND "${Python_EXECUTABLE}" -c "import sys; print(sys.base_prefix)"
+                  OUTPUT_VARIABLE _fs_py_home OUTPUT_STRIP_TRAILING_WHITESPACE)
+  execute_process(COMMAND "${Python_EXECUTABLE}" -c
+                  "import numpy, os; print(os.path.dirname(os.path.dirname(numpy.__file__)))"
+                  RESULT_VARIABLE _fs_numpy_rc OUTPUT_VARIABLE _fs_numpy_site
+                  OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  file(TO_CMAKE_PATH "${_fs_py_home}" _fs_py_home)
+  file(TO_CMAKE_PATH "${_fs_numpy_site}" _fs_numpy_site)
+
+  flysight_add_test(tst_python_bridge
+    SOURCES tst_python_bridge.cpp
+            "${FLYSIGHT_SRC_DIR}/pluginhost.cpp"
+            "${FLYSIGHT_SRC_DIR}/pluginadapters.cpp"
+    LIBS pybind11::embed
+    ENVIRONMENT "PYTHONHOME=${_fs_py_home}" "PYTHONDONTWRITEBYTECODE=1")
+  add_dependencies(tst_python_bridge flysight_cpp_bridge)
+  flysight_msvc_fix_python_debug_autolink(tst_python_bridge)
+  target_compile_definitions(tst_python_bridge PRIVATE
+    FLYSIGHT_PYTHON_PLUGINS_DIR="${CMAKE_CURRENT_LIST_DIR}/../python_plugins"
+    FLYSIGHT_TEST_PLUGINS_DIR="${CMAKE_CURRENT_LIST_DIR}/python_plugins"
+    FLYSIGHT_BRIDGE_DIR="$<TARGET_FILE_DIR:flysight_cpp_bridge>")
+  set_tests_properties(tst_python_bridge PROPERTIES LABELS "core;python" TIMEOUT 180)
+
+  if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
+    # ENVIRONMENT_MODIFICATION, not ENVIRONMENT: the Windows separator ';' is
+    # also CMake's list separator.
+    set_property(TEST tst_python_bridge APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PYTHONPATH=set:$<TARGET_FILE_DIR:flysight_cpp_bridge>"
+      "PYTHONPATH=path_list_append:${_fs_numpy_site}")
+    if(WIN32)
+      foreach(_d IN LISTS Python_RUNTIME_LIBRARY_DIRS)
+        set_property(TEST tst_python_bridge APPEND PROPERTY ENVIRONMENT_MODIFICATION
+          "PATH=path_list_prepend:${_d}")
+      endforeach()
+    endif()
+  endif()
+
+  if(APPLE)
+    # Unverified (needs a CI run): let the test executable find libpython.
+    set_target_properties(tst_python_bridge PROPERTIES BUILD_RPATH "${Python_LIBRARY_DIRS}")
+  endif()
+
+  if(NOT _fs_numpy_rc EQUAL 0 OR CMAKE_VERSION VERSION_LESS 3.22)
+    message(WARNING "tst_python_bridge is DISABLED: NumPy is not importable by ${Python_EXECUTABLE} "
+                    "(python -m pip install numpy) or CMake < 3.22.")
+    set_tests_properties(tst_python_bridge PROPERTIES DISABLED TRUE)
+  endif()
+endif()

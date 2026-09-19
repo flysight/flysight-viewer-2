@@ -54,7 +54,7 @@ bool CalculationRegistry::checkMutable(const char *what, const CalculationId &id
     return true;
 }
 
-bool CalculationRegistry::validate(const CalculationDescriptor &d, bool allowSourceInputs,
+bool CalculationRegistry::validate(const CalculationDescriptor &d, bool sourceInputsPermitted,
                                    const QString &label) const
 {
     if (d.outputs.isEmpty()) {
@@ -76,9 +76,10 @@ bool CalculationRegistry::validate(const CalculationDescriptor &d, bool allowSou
     }
     for (const CalcInput &in : d.inputs) {
         if (in.isSourceKind()) {
-            if (!allowSourceInputs) {
+            if (!sourceInputsPermitted) {
                 qWarning().noquote() << "CalculationRegistry:" << label << "declares" << describe(in)
-                                     << "- only source conversions may read the source layer";
+                                     << "- only source conversions (and plugin calculations that opt in)"
+                                     << "may read the source layer";
                 return false;
             }
             continue;
@@ -108,7 +109,9 @@ bool CalculationRegistry::registerCalculation(const CalculationDescriptor &d)
         qWarning().noquote() << "CalculationRegistry: id already registered:" << d.id;
         return false;
     }
-    if (!validate(d, /*allowSourceInputs=*/false, d.id))
+    // Source inputs: only through registerSourceConversion, or by the descriptor's
+    // explicit opt-in (set only by the Python plugin host).
+    if (!validate(d, d.allowSourceInputs, d.id))
         return false;
 
     Entry entry;

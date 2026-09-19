@@ -35,6 +35,7 @@ packages are the same whether or not the option is set.
 | `tst_session_merge` | `SessionMerge`, the pure plan-then-apply merge of spec 6.3 / 6.4 on programmatic sessions: absent attributes added, equal ones ignored, different header attributes conflict (all reported, sorted, with the delete-and-re-import hint), `_` attributes keep the session's value, the `n/a` device placeholder counts as absent, equality on the on-disk text form, columns replaced / added / kept with samples and unit together, bitwise column comparison (NaN, `-0`), the ragged rule, purity of `plan()`, the invalidation set of `apply()` |
 | `tst_import_merge` | The import path (`SessionImport::importFiles` -> `SessionModel::mergeSessions`) against a temporary logbook: acceptance 3 (a rejected file leaves the session untouched), 7 (TRACK/SENSOR order independence loaded, unloaded and in one batch; conflicts change nothing; edits and unmatched measurements survive), 8 (the `SCHEMA_VER` escape hatch), 10 and 18 (merge parts); defaults only at creation, failed loads are errors, failed-load placeholders are never saved, identity stubs are matched, identical re-imports are no-ops |
 | `tst_import_batch` | `SessionImport`: one result per file in input order with parse failures included, cancellation through the progress callback, and the text of the import-failure dialog with each file's error |
+| `tst_python_bridge` | The Python plugin bridge through the real embedded interpreter and the real `flysight_cpp_bridge` module (acceptance 17, plugin half): effective reads in single-output plugins, declared-read diagnostics (`UndeclaredInputError`), source access matching C++, the multi-output form running once, exceptions and malformed output giving a clean unavailable result with negative caching, returned arrays copied, explicit key decoding with per-plugin rejection, plugin-before-built-in precedence, the bundled `imu_tilt.py` example. See "The embedded-Python bridge test" below |
 
 The `tst_calc*` tests drive `src/engine/` with synthetic calculations against
 `FakeSessionState` / `FakePreferenceProvider` (`support/fakesessionstate.h`).
@@ -206,15 +207,73 @@ simulates an application restart on the same folder.
   matters. `index.json` gets fresh column ids on every flush, so "the index
   bytes are unchanged" also proves that nothing flushed it.
 
-## Adding tests that need Python (Phase 7)
+## The embedded-Python bridge test (`tst_python_bridge`)
 
-Not implemented yet. `pluginhost.cpp` has no UI dependencies but is not part of
-`flysight_core`, because that would force Python onto every test. A test of
-the embedded Python bridge compiles it directly and links the interpreter:
-`flysight_add_test(tst_<area> SOURCES tst_<area>.cpp ${FLYSIGHT_SRC_DIR}/pluginhost.cpp LIBS pybind11::embed ENVIRONMENT <VAR=value> ...)`,
-plus `add_dependencies(tst_<area> flysight_cpp_bridge)` so the bridge module
-is built first, with `ENVIRONMENT` entries telling the interpreter where to
-find the bridge module and the plugin directory. This works because `tests/` is
-added from inside the `src` project, where `pybind11::embed`,
-`Python::Python`, `flysight_cpp_bridge`, and
-`flysight_msvc_fix_python_debug_autolink()` are all in scope.
+`tst_python_bridge` is the one exception to "no Python": it boots the real
+embedded interpreter, imports the real `flysight_cpp_bridge` module from the
+build tree, and runs the SDK (`python_plugins/flysight_plugin_sdk.py`), the
+test plugins in `tests/python_plugins/*.py`, and the bundled example
+(`python_plugins/examples/imu_tilt.py`) against real `SessionData` objects. It
+covers the plugin half of acceptance 17: effective reads in existing
+single-output plugins, source access matching C++, the multi-output form
+running once, exceptions and malformed output giving a clean unavailable
+result, explicit key decoding, and registration-order precedence.
+`pluginhost.cpp` and `pluginadapters.cpp` are not part of `flysight_core`
+(that would force Python onto every test), so this target compiles them
+directly and links `pybind11::embed`. No other test links Python.
+
+**How it finds Python.** A test executable has no `python/` folder next to it,
+so `PluginHost` takes its "system Python" branch, which honours the standard
+environment variables. CTest sets all of them (see the block at the end of
+`tests/CMakeLists.txt`); nothing comes from your `PATH` or profile, and
+`PluginHost` has no test-only code path:
+
+| Variable | Value | Why |
+|---|---|---|
+| `PYTHONHOME` | `sys.base_prefix` of the interpreter CMake found (`Python_EXECUTABLE`) | the standard library |
+| `PYTHONPATH` | the directory of the built `flysight_cpp_bridge` (`build/FlySightViewer-build/Release`), then the site directory that holds NumPy | the bridge is imported before the plugin folder is on `sys.path`; NumPy may live in a venv or user site |
+| `PATH` (Windows) | `+=` the directory of `python3XX.dll`, plus Qt and GeographicLib as for every test | DLL lookup |
+| `PYTHONDONTWRITEBYTECODE` | `1` | nothing is written outside the test's temporary directory |
+
+The plugin files are copied into a temporary directory first, because
+`PluginHost` imports every `*.py` in the plugin folder.
+
+**NumPy is required** in the build-time interpreter (the SDK imports it). If
+`python -c "import numpy"` fails at configure time (or CMake is older than
+3.22), CMake prints a warning and the test is registered as **disabled**:
+`ctest` reports it as "Not Run (Disabled)" rather than omitting it, and the
+target is still built so `pluginhost.cpp` stays compile-checked. Fix with
+`python -m pip install numpy` and re-run CMake.
+`-DFLYSIGHT_BUILD_PYTHON_TESTS=OFF` (default `ON`; forwarded by the root
+`CMakeLists.txt`) removes the target entirely. Like every test on Windows it is
+Release only.
+
+**Running it outside CTest** means setting the three variables by hand (Git
+Bash; adjust the Python and Qt paths):
+
+```bash
+PY="$(python -c 'import sys; print(sys.base_prefix)')"
+NP="$(python -c 'import numpy, os; print(os.path.dirname(os.path.dirname(numpy.__file__)))')"
+PYTHONHOME="$PY" \
+PYTHONPATH="$(cygpath -w "$PWD/build/FlySightViewer-build/Release");$NP" \
+PATH="$(cygpath -u "$PY"):/c/Qt/6.9.3/msvc2022_64/bin:$PWD/third-party/GeographicLib-install/bin:$PATH" \
+PYTHONDONTWRITEBYTECODE=1 QT_FORCE_STDERR_LOGGING=1 \
+build/FlySightViewer-build/Release/tst_python_bridge.exe -v2
+```
+
+**Adding a case.** There is one interpreter per process and
+`PluginHost::initialise()` runs once, so every plugin file is loaded in
+`initTestCase()`: add a file under `tests/python_plugins/` and a test function
+in `tst_python_bridge.cpp`, never a second `initialise()`. Plugin calculations,
+plots and markers stay registered for the life of the process: use unique
+`_PY_*` / `py*` names and never assert that a registry is empty. Files are
+imported in name order and the calculation ids contain the registration index,
+so a new file that sorts before an existing one shifts the literal list in
+`registrationOrderIsDeterministic` (name it to sort last, like `t_zdocs.py`).
+Log assertions install their message handler inside the test function (after
+`initTestCase`) and `cleanup()` removes it.
+
+**Include order.** Include the pybind11 headers before any Qt header, wrapped
+in `#pragma push_macro("slots")` / `#undef slots` / `#pragma pop_macro("slots")`
+(Qt's `slots` macro breaks the Python headers), and mask `_DEBUG` around
+`<Python.h>` on MSVC; copy the top of `tst_python_bridge.cpp`.

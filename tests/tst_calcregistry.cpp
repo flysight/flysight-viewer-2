@@ -109,6 +109,9 @@ private slots:
     void staticDependenciesClosure();
     void declaredPreferenceKeys();
     void observersFire();
+
+    // Opt-in source inputs for the Python plugin host (Phase 7)
+    void sourceInputsOptIn();
 };
 
 void CalcRegistryTest::graphTypesAreHashKeys()
@@ -671,6 +674,35 @@ void CalcRegistryTest::observersFire()
 
     registry.removeObserver(otherToken);
     registry.removeObserver(12345);     // unknown tokens are ignored
+}
+
+// ---- Phase 7: CalculationDescriptor::allowSourceInputs --------------------
+
+void CalcRegistryTest::sourceInputsOptIn()
+{
+    CalculationRegistry registry;
+
+    CalculationDescriptor d = simple(QStringLiteral("reader"), QStringLiteral("out"));
+    d.inputs = {CalcInput::sourceMeasurement("S", "m"), CalcInput::sourceUnit("S", "m")};
+
+    // Default: a plain calculation may not read the source layer.
+    QVERIFY(!d.allowSourceInputs);
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("may read the source layer")));
+    QVERIFY(!registry.registerCalculation(d));
+    QVERIFY(!registry.contains(QStringLiteral("reader")));
+
+    // With the opt-in the same descriptor is accepted, as an ordinary candidate.
+    d.allowSourceInputs = true;
+    QVERIFY(registry.registerCalculation(d));
+    QVERIFY(registry.hasCandidateFor(attr("out")));
+    QVERIFY(registry.sourceConversionsFor(QStringLiteral("S"), QStringLiteral("m")).isEmpty());
+
+    // The flag opens nothing else: an own output as an input is still refused.
+    CalculationDescriptor own = simple(QStringLiteral("own"), QStringLiteral("own"));
+    own.allowSourceInputs = true;
+    own.inputs = {CalcInput::attribute("own")};
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("its own output")));
+    QVERIFY(!registry.registerCalculation(own));
 }
 
 FLYSIGHT_TEST_MAIN(CalcRegistryTest)
