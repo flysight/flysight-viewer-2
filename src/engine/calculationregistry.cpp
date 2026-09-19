@@ -9,18 +9,6 @@
 
 namespace FlySight {
 
-namespace {
-
-bool isEmptyName(const DependencyKey &name)
-{
-    // A "no name" key is built with DependencyKey::attribute(QString()); never
-    // look at `type` alone, which a default-constructed key leaves unset.
-    return name.attributeKey.isEmpty()
-        && name.measurementKey.first.isEmpty() && name.measurementKey.second.isEmpty();
-}
-
-} // namespace
-
 CalculationRegistry &CalculationRegistry::instance()
 {
     static CalculationRegistry registry;
@@ -115,7 +103,6 @@ bool CalculationRegistry::registerCalculation(const CalculationDescriptor &d)
         return false;
 
     Entry entry;
-    entry.sequence = m_nextSequence++;
     entry.kind = EntryKind::Calculation;
     entry.id = d.id;
     entry.descriptor = std::make_shared<const CalculationDescriptor>(d);
@@ -158,7 +145,6 @@ bool CalculationRegistry::addFamily(const CalculationFamily &f, EntryKind kind)
     }
 
     Entry entry;
-    entry.sequence = m_nextSequence++;
     entry.kind = kind;
     entry.id = f.id;
     entry.family = f;

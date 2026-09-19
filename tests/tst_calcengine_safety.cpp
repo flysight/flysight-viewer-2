@@ -1,5 +1,6 @@
 // CalculationEngine safety (acceptance 12): nested evaluation with per-scope
-// dependency recording, cycle detection with read-order-independent results,
+// dependency recording, cycle detection (read-order independent for a single
+// ring, including a ring closed through request()),
 // exception safety, and the re-entrancy guards. After every scenario the cached
 // answers are compared with a fresh evaluation.
 
@@ -80,6 +81,34 @@ CalculationDescriptor outer()
     return d;
 }
 
+// explicitE: Explicit policy; input EY; output EX = EY + 1.
+CalculationDescriptor explicitE()
+{
+    CalculationDescriptor d;
+    d.id = QStringLiteral("explicitE");
+    d.policy = EvaluationPolicy::Explicit;
+    d.inputs = {CalcInput::attribute("EY")};
+    d.outputs = {attr("EX")};
+    d.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute("EX", ctx.attribute("EY").toInt() + 1);
+    };
+    return d;
+}
+
+// feedsE: input EX; output EY = EX * 2. Together with explicitE it closes a
+// ring through the explicit calculation's own output.
+CalculationDescriptor feedsE()
+{
+    CalculationDescriptor d;
+    d.id = QStringLiteral("feedsE");
+    d.inputs = {CalcInput::attribute("EX")};
+    d.outputs = {attr("EY")};
+    d.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute("EY", ctx.attribute("EX").toInt() * 2);
+    };
+    return d;
+}
+
 // A state whose reads can be made to throw: an exception that does not come
 // from a compute function.
 class ThrowingState : public FakeSessionState {
@@ -103,6 +132,8 @@ private slots:
     void cycleFallsBackIndependentOfReadOrder_data();
     void cycleFallsBackIndependentOfReadOrder();
     void pureCycleTerminates();
+    void requestThroughOwnOutputIsCycle_data();
+    void requestThroughOwnOutputIsCycle();
     void exceptionLeavesNoPartialResult_data();
     void exceptionLeavesNoPartialResult();
     void innerExceptionKeepsUnrelatedResults();
@@ -217,6 +248,76 @@ void CalcEngineSafetyTest::pureCycleTerminates()
     QCOMPARE(w.engine.attribute("X2"), QVariant(6));
     QCOMPARE(w.engine.attribute("Y2"), QVariant(5));
     QVERIFY(w.engine.verifyAgainstFresh({attr("X2"), attr("Y2")}).isEmpty());
+    QCOMPARE(w.engine.scopeDepth(), 0);
+}
+
+void CalcEngineSafetyTest::requestThroughOwnOutputIsCycle_data()
+{
+    QTest::addColumn<bool>("readFirst");
+    QTest::newRow("nothing cached") << false;
+    QTest::newRow("not-requested answers cached") << true;
+}
+
+// Acceptance 12: an explicit calculation whose input is produced from its own
+// output is a cycle, and request() says so. The cached "not requested" answer
+// must not hide the ring: the nested lookup has to reach the stack check, and
+// no input may be served from an answer that was derived from "not requested".
+void CalcEngineSafetyTest::requestThroughOwnOutputIsCycle()
+{
+    QFETCH(bool, readFirst);
+    World w(false);
+    QVERIFY(w.registry.registerCalculation(explicitE()));
+    QVERIFY(w.registry.registerCalculation(feedsE()));
+    const QList<DependencyKey> names = {attr("EX"), attr("EY")};
+
+    if (readFirst) {
+        // Reads never start the explicit calculation, so there is no ring yet:
+        // EX is "not requested", and EY is missing that input.
+        QVERIFY(!w.engine.attribute("EX").isValid());
+        QVERIFY(!w.engine.attribute("EY").isValid());
+        QCOMPARE(w.engine.cycleCount(), 0);
+        QCOMPARE(w.engine.resultStatus("explicitE"), std::optional<ResultStatus>(ResultStatus::NotRequested));
+        QCOMPARE(w.engine.resultStatus("feedsE"), std::optional<ResultStatus>(ResultStatus::MissingInput));
+    }
+
+    const CalculationEngine::RequestOutcome outcome = w.engine.request("explicitE");
+    QVERIFY(outcome.found);
+    QCOMPARE(outcome.status, ResultStatus::Cycle);
+    QCOMPARE(outcome.invalidated, Names({attr("EX"), attr("EY")}));
+    QCOMPARE(w.engine.cycleCount(), 1);
+    QCOMPARE(w.engine.lastCyclePath(),
+             QList<GraphNode>({GraphNode::result("explicitE"), GraphNode::resolution(attr("EY")),
+                               GraphNode::result("feedsE"), GraphNode::resolution(attr("EX")),
+                               GraphNode::result("explicitE")}));
+    QCOMPARE(w.engine.scopeDepth(), 0);
+    QCOMPARE(w.engine.totalRunCount(), 0);          // neither compute function ran
+
+    // Nothing was published for either output, and the ring is cached as such.
+    QCOMPARE(w.engine.resultStatus("explicitE"), std::optional<ResultStatus>(ResultStatus::Cycle));
+    QVERIFY(!w.engine.attribute("EX").isValid());
+    QVERIFY(!w.engine.attribute("EY").isValid());
+    QCOMPARE(w.engine.cachedState(attr("EX")), CalculationEngine::CachedState::Unavailable);
+    QCOMPARE(w.engine.cachedState(attr("EY")), CalculationEngine::CachedState::Unavailable);
+    QCOMPARE(w.engine.totalRunCount(), 0);
+    QVERIFY(w.engine.verifyAgainstFresh(names).isEmpty());
+    QCOMPARE(w.engine.scopeDepth(), 0);
+
+    // Asking again does not re-evaluate: the cycle answer is a valid result.
+    const int cycles = w.engine.cycleCount();
+    QCOMPARE(w.engine.request("explicitE").status, ResultStatus::Cycle);
+    QCOMPARE(w.engine.cycleCount(), cycles);
+
+    // Storing EY breaks the ring. The explicit calculation reverts to "not
+    // requested" because its input changed; requested again, it runs once.
+    QVERIFY(w.state.setAttribute(w.engine, "EY", 5).contains(attr("EX")));
+    QVERIFY(!w.engine.attribute("EX").isValid());
+    QCOMPARE(w.engine.request("explicitE").status, ResultStatus::Ok);
+    QCOMPARE(w.engine.attribute("EX"), QVariant(6));
+    QCOMPARE(w.engine.attribute("EY"), QVariant(5));
+    QCOMPARE(w.engine.runCount("explicitE"), 1);
+    QCOMPARE(w.engine.runCount("feedsE"), 0);
+    QCOMPARE(w.engine.cycleCount(), cycles);
+    QVERIFY(w.engine.verifyAgainstFresh(names).isEmpty());
     QCOMPARE(w.engine.scopeDepth(), 0);
 }
 

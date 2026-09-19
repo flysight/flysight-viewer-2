@@ -105,15 +105,16 @@ private slots:
     void enrolment();
     void registrationDuringEvaluationRejected();
 
-    // Registration-derived queries for the logbook column cache (Phase 5)
+    // Registration-derived queries for the logbook column cache
     void staticDependenciesClosure();
     void declaredPreferenceKeys();
     void observersFire();
 
-    // Opt-in source inputs for the Python plugin host (Phase 7)
+    // Opt-in source inputs for the Python plugin host
     void sourceInputsOptIn();
 
-    // Phase 5's staticDependencies and Phase 7's opt-in compose (Phase 8, F1)
+    // staticDependencies() and the source-input opt-in compose: an opted-in
+    // source input is part of the static closure
     void staticDependenciesCoverOptInSourceInputs();
 };
 
@@ -578,7 +579,7 @@ void CalcRegistryTest::registrationDuringEvaluationRejected()
 #endif
 }
 
-// ─────────────────────────────── registration-derived queries (Phase 5)
+// ─────────────────────────────── registration-derived queries (logbook column cache)
 // Self-contained block: static closures, declared preferences, observers.
 
 void CalcRegistryTest::staticDependenciesClosure()
@@ -679,7 +680,7 @@ void CalcRegistryTest::observersFire()
     registry.removeObserver(12345);     // unknown tokens are ignored
 }
 
-// ---- Phase 7: CalculationDescriptor::allowSourceInputs --------------------
+// ---- CalculationDescriptor::allowSourceInputs (Python plugin host) ---------
 
 void CalcRegistryTest::sourceInputsOptIn()
 {
@@ -708,7 +709,7 @@ void CalcRegistryTest::sourceInputsOptIn()
     QVERIFY(!registry.registerCalculation(own));
 }
 
-// ---- Phase 8 (F1): the two engine additions compose -------------------------
+// ---- staticDependencies() and the source-input opt-in compose --------------
 
 // A logbook column fed by a source-reading plugin must refresh when its source
 // column is merged: staticDependencies has to see opt-in source inputs as the

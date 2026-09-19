@@ -146,7 +146,6 @@ private:
     enum class EntryKind { Calculation, Family, SourceConversion };
 
     struct Entry {
-        quint64 sequence = 0;
         EntryKind kind = EntryKind::Calculation;
         CalculationId id;
         std::shared_ptr<const CalculationDescriptor> descriptor;    // Calculation
@@ -166,8 +165,7 @@ private:
     std::optional<CalculationInstance> instantiate(const Entry &entry, const DependencyKey &name) const;
     void broadcast(const RegistryChange &change);
 
-    QList<Entry> m_entries;                 // in sequence order
-    quint64 m_nextSequence = 1;
+    QList<Entry> m_entries;                 // in registration order
     QList<CalculationEngine *> m_engines;
     const IPreferenceProvider *m_preferenceProvider = nullptr;
     int m_activeEvaluations = 0;

@@ -9,17 +9,6 @@
 
 namespace FlySight {
 
-namespace {
-
-bool isEmptyName(const DependencyKey &name)
-{
-    // See CalculationRegistry: a "no name" key has all strings empty.
-    return name.attributeKey.isEmpty()
-        && name.measurementKey.first.isEmpty() && name.measurementKey.second.isEmpty();
-}
-
-} // namespace
-
 // =============================================================================
 // Scope stack
 // =============================================================================
@@ -185,7 +174,11 @@ int CalculationEngine::stackIndexOf(const GraphNode &node) const
 void CalculationEngine::reportCycle(int stackIndex, const GraphNode &reentered)
 {
     // Every calculation on the ring is unavailable, whichever node the ring was
-    // entered through; that is what keeps the answer independent of read order.
+    // entered through; for a SINGLE ring that keeps the answer independent of
+    // read order. It does not for overlapping rings: a calculation that lies on
+    // two rings is marked only for the ring that happened to be closed while it
+    // was on the stack, so which calculations end up unavailable can depend on
+    // where evaluation started (a documented limitation; see docs/CALCULATIONS.md).
     // Resolution scopes are not marked: they carry on down their candidate list.
     QList<GraphNode> path;
     for (size_t i = size_t(stackIndex); i < m_scopes.size(); ++i) {
@@ -242,8 +235,9 @@ CalculationEngine::ResolutionEntry CalculationEngine::resolve(const DependencyKe
         note(GraphNode::sourceMeasurement(sensor, meas));
         if (m_state && m_state->hasSourceMeasurement(sensor, meas)) {
             if (m_registry && m_registry->hasSourceConversions()) {
-                // The effective value is the conversion layer's output. It never
-                // falls through to derived candidates (spec 7.3 rule 1).
+                // The effective value is the conversion layer's output. A name
+                // with recorded source data never falls through to derived
+                // candidates, even when its conversion is unavailable.
                 tryCandidates(m_registry->sourceConversionsFor(sensor, meas), name, entry);
             } else {
                 note(GraphNode::sourceUnit(sensor, meas));
@@ -703,14 +697,30 @@ CalculationEngine::RequestOutcome CalculationEngine::requestInstance(const Calcu
         return outcome;
     }
 
+    // Forget the cached "not requested" answer BEFORE evaluating. While it is
+    // in the cache a nested lookup of this calculation (an input that
+    // transitively reads one of its outputs) would be served from the cache
+    // ahead of the stack check in ensureResult(): no cycle would be reported,
+    // and the input would resolve as though the calculation were still not
+    // requested. Everything that cached an answer derived from "not requested"
+    // goes with it, so no input of this evaluation is served from that stale
+    // state either. A "not requested" entry looked at nothing, so it has no
+    // forward edges of its own; dropForwardEdges is for symmetry.
+    if (cached != m_results.constEnd()) {
+        m_results.remove(C);
+        dropForwardEdges(C);
+    }
+    outcome.invalidated = invalidate(m_dependents.value(C).values());
+
     QSet<GraphNode> looked;
     const ResultEntry entry = computeResult(instance, /*fromRequest=*/true, looked);
     if (evaluated)
         *evaluated = true;
 
-    // Names that were read while the calculation was "not requested" cached that
-    // answer; drop them (not the result node) so all outputs appear at once.
-    outcome.invalidated = invalidate(m_dependents.value(C).values());
+    // Whatever looked at this calculation DURING the evaluation saw it on the
+    // stack (a cycle) and cached that answer; drop those (not the result node)
+    // so that every output appears at once with the publication below.
+    outcome.invalidated.unite(invalidate(m_dependents.value(C).values()));
 
     m_results.insert(C, entry);
     setEdges(C, looked);

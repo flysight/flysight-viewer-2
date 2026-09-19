@@ -3,7 +3,7 @@
 // and the measurement layers - all with synthetic calculations against a fake
 // session state. Expected values are literals.
 //
-// Acceptance items (spec section 11) are named on the test functions that
+// Acceptance items (tests/README.md, appendix A) are named on the test functions that
 // demonstrate them at engine level.
 
 #include <optional>
@@ -90,7 +90,7 @@ private slots:
     void invalidOutputRejected();
     void clearDropsEverything();
     void rebindKeepsCaches();
-    // Phase 7: engine opt-ins needed by the Python plugin bridge
+    // Engine opt-ins needed by the Python plugin bridge
     void optInSourceRead();
     void isDeclaredIsSilent();
 };
@@ -608,7 +608,7 @@ void CalcEngineTest::missingPreferenceIsUnavailable()
     QCOMPARE(w.engine.resultStatus("triple"), std::optional<ResultStatus>(ResultStatus::MissingInput));
 }
 
-// Spec 7.6: one registration, one instance per parameter set, each with its own
+// One registration, one instance per parameter set, each with its own
 // result and dependencies.
 void CalcEngineTest::familyInstancesAreDistinct()
 {
@@ -664,7 +664,7 @@ void CalcEngineTest::unregisterFamilyInvalidatesInstances()
     QCOMPARE(w.engine.attribute("neg:A"), QVariant(-1));
 }
 
-// Spec 7.2: inspecting never triggers computation.
+// Inspecting never triggers computation.
 void CalcEngineTest::inspectDoesNotCompute()
 {
     World w;
@@ -698,7 +698,7 @@ void CalcEngineTest::inspectDoesNotCompute()
     QCOMPARE(w.engine.totalRunCount(), 1);
 }
 
-// Spec 7.2: invalidating never triggers computation.
+// Invalidating never triggers computation.
 void CalcEngineTest::invalidateDoesNotCompute()
 {
     World w;
@@ -843,7 +843,7 @@ void CalcEngineTest::derivedMeasurementAndUnit()
     QCOMPARE(w.engine.resultStatus("meas"), std::optional<ResultStatus>(ResultStatus::MissingInput));
 }
 
-// The hook Phase 4's conversion layer uses: for a measurement with source data
+// The hook the conversion layer uses: for a measurement with source data
 // the effective value is the conversion's output, and only a conversion may
 // depend on the source layer.
 void CalcEngineTest::sourceConversionHook()
@@ -919,7 +919,7 @@ void CalcEngineTest::sourceConversionHook()
     QVERIFY(w.engine.verifyAgainstFresh({measKey("S", "m"), measKey("S", "d"), measKey("T", "other")}).isEmpty());
 }
 
-// Spec 7.1: reading an undeclared input is an error that tests can detect.
+// Reading an undeclared input is an error that tests can detect.
 void CalcEngineTest::undeclaredReadDetected()
 {
     World w(false);
@@ -1026,7 +1026,7 @@ void CalcEngineTest::rebindKeepsCaches()
     w.engine.clear();
 }
 
-// ---- Phase 7: engine opt-ins needed by the Python plugin bridge ------------
+// ---- engine opt-ins needed by the Python plugin bridge ---------------------
 
 namespace {
 

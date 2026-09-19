@@ -1,11 +1,12 @@
-// Idempotency oracle (spec 7.4, acceptance 10): after any sequence of reads,
+// Idempotency oracle (acceptance 10): after any sequence of reads,
 // edits, preference changes, and registry changes, the value returned for every
 // name equals the value obtained from a fresh evaluation with empty caches.
 //
 // Randomized but reproducible: std::mt19937 with a literal seed, reduced with
 // `rng() % n` only (std::uniform_int_distribution differs between standard
 // libraries). This is the one place where a computed value is the expectation,
-// as the spec mandates; every sequence also starts with literal checkpoints.
+// because the rule under test IS "equal to a fresh evaluation"; every sequence
+// also starts with literal checkpoints.
 
 #include <cstdio>
 #include <limits>
@@ -145,7 +146,7 @@ void CalcEngineOracleTest::randomizedSequences_data()
         QTest::addRow("seed %d", seed) << seed;
 }
 
-// Acceptance 10 (and spec 7.4): read order and cache contents never change the
+// Acceptance 10 (idempotency): read order and cache contents never change the
 // answer, across edits, preference changes, and registry changes, in two
 // sessions sharing one registry.
 void CalcEngineOracleTest::randomizedSequences()

@@ -190,6 +190,16 @@ enum class ResultStatus {
     InvalidOutput   ///< compute set an output it had not declared (or of the wrong type)
 };
 
+/// True for the "no name" key that selects a plain calculation rather than a
+/// family instance. Such a key is built with DependencyKey::attribute(QString()),
+/// so all of its strings are empty; never look at `type` alone, which a
+/// default-constructed key leaves unset.
+inline bool isEmptyName(const DependencyKey &name)
+{
+    return name.attributeKey.isEmpty()
+        && name.measurementKey.first.isEmpty() && name.measurementKey.second.isEmpty();
+}
+
 // ---- text forms, for warnings only ----------------------------------------
 
 inline QString describe(const DependencyKey &name)

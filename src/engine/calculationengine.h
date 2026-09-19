@@ -34,7 +34,7 @@ namespace FlySight {
 /// winner - so any change that could alter the choice invalidates the cached
 /// answer. Unavailable answers are cached like any other.
 ///
-/// Invariant (spec 7.4): the value returned for a name is a pure function of
+/// Invariant (idempotency): the value returned for a name is a pure function of
 /// the session's persistent state, the declared preferences, and the registry.
 /// evaluateFresh() is the oracle for it.
 ///
@@ -77,7 +77,13 @@ public:
     struct RequestOutcome {
         bool found = false;
         ResultStatus status = ResultStatus::NotRequested;
-        QSet<DependencyKey> invalidated;    ///< names that had been read as "not requested"
+        /// Every cached name that was dropped by this request: the names that
+        /// had been read while the calculation was "not requested" (dropped
+        /// before the evaluation, so that no input is served from them), united
+        /// with the names that looked at the calculation during the evaluation
+        /// (dropped after it, so that all outputs appear at once). Empty when
+        /// a valid cached result was returned without evaluating.
+        QSet<DependencyKey> invalidated;
     };
     /// Synchronously evaluates one calculation by identity (any policy) and
     /// publishes one result for all of its outputs. A valid cached result is

@@ -132,9 +132,11 @@ invalidates every loaded session.
 state when an input changes. Nothing uses the policy yet; it exists for a
 future job queue. `request` returns the names whose cached "not requested"
 answer was dropped: a future model-level caller must publish that set through
-`SessionModel`, which is the single emitter of `dependencyChanged`. (Known
-limitation: an explicit calculation whose input transitively depends on its own
-output is a cycle that `request` does not diagnose up front; do not write one.)
+`SessionModel`, which is the single emitter of `dependencyChanged`. An explicit
+calculation whose input transitively depends on its own output is a cycle like
+any other: `request` drops the cached "not requested" answers before it
+evaluates, reports the cycle, returns `ResultStatus::Cycle`, and publishes
+nothing.
 
 ## 9. When to bump `CalculationCompatibilityVersion`
 
