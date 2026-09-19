@@ -10,7 +10,7 @@ namespace {
 // Legacy FlySight 2 firmware scaled the LSM6DSO gyroscope by the nominal
 // full-scale range (2000 deg/s / 32768 counts) instead of ST's sensitivity of
 // 0.070 deg/s per count, so schema 1 gyro rates are too small by this factor
-// (specification section 1). Written as the decimal literal on purpose: the
+// (see docs/DATA_SCHEMA.md). Written as the decimal literal on purpose: the
 // expression 0.070 / (2000.0 / 32768.0) evaluates to a different double.
 constexpr double kLegacyGyroScale = 1.14688;
 
