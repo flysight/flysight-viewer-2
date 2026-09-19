@@ -133,6 +133,15 @@ void LogbookView::onContextMenuRequested(const QPoint &pos)
     QAction *hideSelectedAction = menu.addAction(tr("Hide Selected Tracks"));
     QAction *hideOthersAction = menu.addAction(tr("Hide Others"));
 
+    // The menu and the input dialog below each run a nested event loop, during
+    // which rows can be reordered, added or removed and columns rebuilt. Row
+    // and column indices are therefore not kept across them: the selection is
+    // captured as session ids and the column as its attribute key, and both are
+    // resolved to indices again once the dialogs have closed.
+    QStringList selectedSessionIds;
+    for (const QModelIndex &idx : treeView->selectionModel()->selectedRows())
+        selectedSessionIds.append(model->rowAt(idx.row()).sessionId);
+
     // --- Editable column actions ---
     QList<QAction*> editActions;
     const auto &reg = AttributeRegistry::instance();
@@ -146,7 +155,8 @@ void LogbookView::onContextMenuRequested(const QPoint &pos)
         if (editActions.isEmpty())
             menu.addSeparator();
         QAction *action = menu.addAction(tr("Set %1...").arg(logbookColumnLabel(col)));
-        action->setData(i);
+        action->setData(col.attributeKey);
+        action->setProperty("columnLabel", logbookColumnLabel(col));
         editActions.append(action);
     }
 
@@ -165,17 +175,16 @@ void LogbookView::onContextMenuRequested(const QPoint &pos)
     } else if (chosenAction == deleteAction) {
         emit deleteRequested();
     } else if (editActions.contains(chosenAction)) {
-        const int colIndex = chosenAction->data().toInt();
-        const LogbookColumn &col = model->column(colIndex);
-        const QList<QModelIndex> rows = treeView->selectionModel()->selectedRows();
-        if (rows.isEmpty())
+        const QString attributeKey = chosenAction->data().toString();
+        const QString columnLabel = chosenAction->property("columnLabel").toString();
+        if (selectedSessionIds.isEmpty())
             return;
 
         bool ok = false;
         const QString value = QInputDialog::getText(
             this,
-            tr("Set %1").arg(logbookColumnLabel(col)),
-            tr("New value for %n session(s):", "", rows.size()),
+            tr("Set %1").arg(columnLabel),
+            tr("New value for %n session(s):", "", selectedSessionIds.size()),
             QLineEdit::Normal,
             QString(),
             &ok);
@@ -183,10 +192,27 @@ void LogbookView::onContextMenuRequested(const QPoint &pos)
         if (!ok)
             return;
 
+        // Resolve the column and the sessions as they are now. A session that
+        // is gone, or a column that was removed, is skipped rather than
+        // letting the value land somewhere else.
+        int colIndex = -1;
+        for (int i = 0; i < model->columnCount(); ++i) {
+            const LogbookColumn &col = model->column(i);
+            if (col.type == ColumnType::SessionAttribute && col.attributeKey == attributeKey) {
+                colIndex = i;
+                break;
+            }
+        }
+        if (colIndex < 0)
+            return;
+
         QList<int> rowIndices;
-        rowIndices.reserve(rows.size());
-        for (const QModelIndex &idx : rows)
-            rowIndices.append(idx.row());
+        rowIndices.reserve(selectedSessionIds.size());
+        for (const QString &sessionId : selectedSessionIds) {
+            const int row = model->getSessionRow(sessionId);
+            if (row >= 0)
+                rowIndices.append(row);
+        }
         model->startBulkEdit(rowIndices, colIndex, value);
     }
 }
