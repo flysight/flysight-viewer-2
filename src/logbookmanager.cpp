@@ -507,10 +507,15 @@ void LogbookManager::setLastAccessed(const QString &sessionId, double timestamp)
 // loadSession
 // ============================================================================
 
-std::optional<SessionData> LogbookManager::loadSession(const QString &sessionId)
+std::optional<SessionData> LogbookManager::loadSessionRaw(const QString &sessionId, QString *error)
 {
+    if (error)
+        error->clear();
+
     if (!m_sessionIdToUuid.contains(sessionId)) {
         qWarning("LogbookManager::loadSession: unknown SESSION_ID '%s'", qPrintable(sessionId));
+        if (error)
+            *error = QStringLiteral("not in the logbook index");
         return std::nullopt;
     }
 
@@ -523,28 +528,62 @@ std::optional<SessionData> LogbookManager::loadSession(const QString &sessionId)
     if (!importer.readFile(filePath, sessionData)) {
         qWarning("LogbookManager::loadSession: failed to read '%s': %s",
                  qPrintable(filePath), qPrintable(importer.getLastError()));
+        if (error)
+            *error = importer.getLastError();
         return std::nullopt;
     }
 
+    return sessionData;
+}
+
+void LogbookManager::applyLegacyBackfill(SessionData &session)
+{
     // Backfill mass/area for sessions saved before per-session attributes existed
-    if (!sessionData.hasAttribute(SessionKeys::JumperMass)) {
-        sessionData.setAttribute(SessionKeys::JumperMass,
+    if (!session.hasAttribute(SessionKeys::JumperMass)) {
+        session.setAttribute(SessionKeys::JumperMass,
             PreferencesManager::instance().getValue(PreferenceKeys::AeroMass));
     }
-    if (!sessionData.hasAttribute(SessionKeys::PlanformArea)) {
-        sessionData.setAttribute(SessionKeys::PlanformArea,
+    if (!session.hasAttribute(SessionKeys::PlanformArea)) {
+        session.setAttribute(SessionKeys::PlanformArea,
             PreferencesManager::instance().getValue(PreferenceKeys::AeroArea));
     }
 
     // Backfill wind defaults for sessions saved before wind attributes existed
-    if (!sessionData.hasAttribute(SessionKeys::WindN)) {
-        sessionData.setAttribute(SessionKeys::WindN, 0.0);
+    if (!session.hasAttribute(SessionKeys::WindN)) {
+        session.setAttribute(SessionKeys::WindN, 0.0);
     }
-    if (!sessionData.hasAttribute(SessionKeys::WindE)) {
-        sessionData.setAttribute(SessionKeys::WindE, 0.0);
+    if (!session.hasAttribute(SessionKeys::WindE)) {
+        session.setAttribute(SessionKeys::WindE, 0.0);
     }
+}
 
-    return sessionData;
+std::optional<SessionData> LogbookManager::loadSession(const QString &sessionId)
+{
+    std::optional<SessionData> session = loadSessionRaw(sessionId);
+    if (session.has_value())
+        applyLegacyBackfill(*session);
+    return session;
+}
+
+// ============================================================================
+// Identity entries
+// ============================================================================
+
+bool LogbookManager::isIdentityEntry(const QString &sessionId) const
+{
+    auto it = m_sessionIdToUuid.constFind(sessionId);
+    return it != m_sessionIdToUuid.constEnd() && it.value() == sessionId;
+}
+
+std::optional<QString> LogbookManager::peekSessionId(const QString &sessionId) const
+{
+    auto it = m_sessionIdToUuid.constFind(sessionId);
+    if (it == m_sessionIdToUuid.constEnd())
+        return std::nullopt;
+
+    const QString filePath = sessionsDirectory()
+        + QStringLiteral("/") + it.value() + QStringLiteral(".csv");
+    return DataImporter::peekHeaderAttribute(filePath, QLatin1String(SessionKeys::SessionId));
 }
 
 // ============================================================================
@@ -619,47 +658,6 @@ bool LogbookManager::saveSession(const SessionData& session)
     }
 
     return true;
-}
-
-// ============================================================================
-// Load All Sessions
-// ============================================================================
-
-QList<SessionData> LogbookManager::loadAllSessions()
-{
-    return scanSessionFiles();
-}
-
-// ============================================================================
-// Scan Session Files
-// ============================================================================
-
-QList<SessionData> LogbookManager::scanSessionFiles()
-{
-    QList<SessionData> result;
-    const QString dir = sessionsDirectory();
-    const QDir sessDir(dir);
-    const QStringList csvFiles = sessDir.entryList(
-        QStringList() << QStringLiteral("*.csv"),
-        QDir::Files, QDir::Name);
-
-    for (const QString& filename : csvFiles) {
-        const QString filePath = sessDir.absoluteFilePath(filename);
-        DataImporter importer;
-        SessionData sessionData;
-        if (importer.readFile(filePath, sessionData)) {
-            // Stored attribute: hundreds of temporary sessions must not each
-            // create a calculation engine.
-            const QString sessionId = sessionData.storedAttribute(SessionKeys::SessionId).toString();
-            const QString uuid = QFileInfo(filename).completeBaseName();
-            if (!sessionId.isEmpty()) {
-                m_sessionIdToUuid[sessionId] = uuid;
-            }
-            result.append(sessionData);
-        }
-    }
-
-    return result;
 }
 
 // ============================================================================

@@ -18,6 +18,10 @@ class CalculationEngine;
 
 namespace SessionKeys {
     constexpr char DeviceId[] = "DEVICE_ID";
+    /// Placeholder Viewer stores as DEVICE_ID when a new session's file records
+    /// none and no FLYSIGHT.TXT is found. Not a recorded fact: a merge treats
+    /// it as absent on either side.
+    constexpr char DeviceIdUnknown[] = "n/a";
     constexpr char SessionId[] = "SESSION_ID";
     constexpr char Description[] = "_DESCRIPTION";
     constexpr char ImportTime[] = "_IMPORT_TIME";

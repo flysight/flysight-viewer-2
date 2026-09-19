@@ -262,6 +262,11 @@ target_link_libraries(flysight_model PUBLIC Qt${QT_VERSION_MAJOR}::Core)
 # not acquire these dependencies.
 add_library(flysight_core STATIC
   dataimporter.cpp           dataimporter.h
+  parsedfile.h
+  # Import and merge rules: pure plan-then-apply merge, and the widget-free
+  # import driver the main window calls
+  sessionmerge.cpp           sessionmerge.h
+  sessionimport.cpp          sessionimport.h
   dataexporter.cpp           dataexporter.h
   csvformat.cpp              csvformat.h
   logbookmanager.cpp        logbookmanager.h

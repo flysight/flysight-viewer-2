@@ -20,7 +20,7 @@
 #include <kddockwidgets/LayoutSaver.h>
 
 #include "version.h"
-#include "dataimporter.h"
+#include "sessionimport.h"
 #include "dependencykey.h"
 #include "pluginhost.h"
 #include "ui/docks/DockRegistry.h"
@@ -173,26 +173,21 @@ MainWindow::MainWindow(QWidget *parent)
     m_altitudeMarkerManager = new AltitudeMarkerManager(model, this);
     m_altitudeMarkerManager->registerAll();
 
-    // Load saved sessions from the logbook directory
+    // Bring up the logbook. Every session starts as a stub - also those of a
+    // legacy flat index, which knows real SESSION_IDs but caches no column
+    // values: the idle column worker fills them in and its completion flush
+    // writes the extended index. No session file is parsed here and none is
+    // ever rewritten by starting the application.
     LogbookManager &logbook = LogbookManager::instance();
-    QList<SessionData> savedSessions = logbook.initialize();
+    logbook.initialize();
 
-    if (logbook.hasIndexData()) {
-        QVector<LogbookColumn> liveColumns = LogbookColumnStore::instance().enabledColumns();
-        QMap<QString, QMap<int, QVariant>> cached = logbook.cachedColumnValues(liveColumns);
-        model->populateFromIndex(cached, logbook.lastAccessedMap());
-        model->startColumnWorker();
-    } else if (logbook.hasDeferredScan()) {
+    if (logbook.hasDeferredScan()) {
         model->populateFromUuids(logbook.scannedUuids());
-        model->startColumnWorker();
     } else {
-        if (savedSessions.isEmpty()) {
-            savedSessions = logbook.loadAllSessions();
-        }
-        if (!savedSessions.isEmpty()) {
-            model->mergeSessions(savedSessions);
-        }
+        QVector<LogbookColumn> liveColumns = LogbookColumnStore::instance().enabledColumns();
+        model->populateFromIndex(logbook.cachedColumnValues(liveColumns), logbook.lastAccessedMap());
     }
+    model->startColumnWorker();
 
     // Create range model for synchronizing plot x-axis range with other docks
     m_rangeModel = new PlotRangeModel(this);
@@ -579,65 +574,28 @@ void MainWindow::importFiles(
         return;
     }
 
-    // Initialize a map to collect failed imports with error messages
-    QMap<QString, QString> failedImports;
-
-    // Collect successfully imported sessions for batch merge
-    QList<SessionData> importedSessions;
-
-    auto importOne = [&](const QString &filePath) {
-        DataImporter importer;
-        SessionData tempSessionData;
-
-        if (importer.importFile(filePath, tempSessionData)) {
-            importedSessions.append(tempSessionData);
-        } else {
-            QString errorMessage = importer.getLastError();
-            qWarning() << "Failed to import file:" << filePath << "Error:" << errorMessage;
-
-            QString displayPath;
-            if (!baseDir.isEmpty()) {
-                QDir dir(baseDir);
-                displayPath = dir.relativeFilePath(filePath);
-                if (displayPath == filePath) {
-                    displayPath = QFileInfo(filePath).fileName();
-                }
-            } else {
-                displayPath = filePath;
-            }
-            failedImports.insert(displayPath, errorMessage);
-        }
-    };
-
+    // Parse every file and hand the batch to the model, which decides per file
+    // between creating a session and merging into an existing one.
+    SessionImport::BatchResult result;
     if (showProgress) {
         QProgressDialog progressDialog(tr("Importing files..."), tr("Cancel"), 0, fileNames.size(), this);
         progressDialog.setWindowModality(Qt::WindowModal);
         progressDialog.setMinimumDuration(0);
 
-        int current = 0;
-        for (const QString &filePath : fileNames) {
+        result = SessionImport::importFiles(*model, fileNames, [&progressDialog](int current, int /*total*/) {
             progressDialog.setValue(current);
-            if (progressDialog.wasCanceled())
-                break;
-            importOne(filePath);
-            ++current;
-        }
+            return !progressDialog.wasCanceled();
+        });
         progressDialog.setValue(fileNames.size());
     } else {
-        for (const QString &filePath : fileNames) {
-            importOne(filePath);
-        }
+        result = SessionImport::importFiles(*model, fileNames);
     }
 
-    // Batch merge all imported sessions
-    model->mergeSessions(importedSessions);
-
-    // Make imported sessions visible; optionally hide all others
-    if (!importedSessions.isEmpty()) {
-        QSet<QString> importedIds;
-        for (const SessionData &s : importedSessions) {
-            importedIds.insert(s.getAttribute(SessionKeys::SessionId).toString());
-        }
+    // Make imported sessions visible; optionally hide all others. A session
+    // the file changed nothing in is shown too: the user asked for it.
+    const QStringList importedIdList = result.importedSessionIds();
+    if (!importedIdList.isEmpty()) {
+        const QSet<QString> importedIds(importedIdList.begin(), importedIdList.end());
 
         bool hideOthers = PreferencesManager::instance()
                               .getValue(PreferenceKeys::ImportHideOthersOnImport).toBool();
@@ -652,36 +610,25 @@ void MainWindow::importFiles(
             }
         }
         model->setRowsVisibility(visibilityMap);
-    }
 
-    // Zoom to extent of newly imported sessions
-    if (!importedSessions.isEmpty()) {
+        // Zoom to the extent of the imported sessions: the merged session, not
+        // the single file, is what should be framed.
         auto* pf = findFeature<PlotDockFeature>();
         if (pf && pf->plotWidget()) {
-            QVector<SessionData> imported(importedSessions.begin(), importedSessions.end());
-            pf->plotWidget()->zoomToExtent(imported);
+            QVector<SessionData> imported;
+            for (const QString &sessionId : importedIdList) {
+                const int row = model->getSessionRow(sessionId);
+                if (row >= 0 && model->rowAt(row).isLoaded())
+                    imported.append(model->sessionRef(row));
+            }
+            if (!imported.isEmpty())
+                pf->plotWidget()->zoomToExtent(imported);
         }
     }
 
-    // Display completion message
-    if (failedImports.size() > 5) {
-        QString message = tr("Import has been completed.");
-        message += tr("\nHowever, %1 files failed to import.").arg(failedImports.size());
-        // Optionally, list the first few failed files
-        QStringList failedList = failedImports.keys();
-        int displayCount = qMin(failedList.size(), 10); // Limit to first 10 for brevity
-        QString displayedFailedList = failedList.mid(0, displayCount).join("\n");
-        if (failedList.size() > displayCount) {
-            displayedFailedList += tr("\n...and %1 more.").arg(failedList.size() - displayCount);
-        }
-        message += tr("\nFailed Files:\n") + displayedFailedList;
-        QMessageBox::warning(this, tr("Import Completed with Some Failures"), message);
-    } else if (!failedImports.isEmpty()) {
-        // List all failed imports
-        QStringList failedList = failedImports.keys();
-        QString message = tr("Import has been completed.");
-        message += tr("\nHowever, some files failed to import:");
-        message += "\n" + failedList.join("\n");
+    // Report failures, each with its reason
+    const QString message = SessionImport::failureMessage(result.failures(), baseDir);
+    if (!message.isEmpty()) {
         QMessageBox::warning(this, tr("Import Completed with Some Failures"), message);
     }
 }

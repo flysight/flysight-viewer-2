@@ -507,14 +507,19 @@ void ColumnCacheTest::mergeRefreshesWrittenNamesOnly()
     startWithLoadedSessions({gyroSession(QStringLiteral("g1")), gyroSession(QStringLiteral("g2"))});
     m_model->resetColumnWorkStats();
 
+    // Phase 6 merge rules: a Viewer attribute the session already has is kept
+    // (_DESCRIPTION stays "first"), an absent one is added. _EXIT_TIME feeds
+    // column E and nothing else.
     SessionData incoming;
     incoming.setAttribute("SESSION_ID", QStringLiteral("g1"));
     incoming.setAttribute("_DESCRIPTION", QStringLiteral("merged"));
+    incoming.setAttribute("_EXIT_TIME", T0 + 12.0);
     m_model->mergeSessions({incoming});
 
     const int row = m_model->getSessionRow("g1");
     const int other = m_model->getSessionRow("g2");
-    QVERIFY(!m_model->rowAt(row).cachedValues.contains(kD));
+    QVERIFY(!m_model->rowAt(row).cachedValues.contains(kE));
+    QVERIFY(m_model->rowAt(row).cachedValues.contains(kD));
     QVERIFY(m_model->rowAt(row).cachedValues.contains(kG));
     QCOMPARE(m_model->rowAt(other).cachedValues.size(), 3);
     QVERIFY(LogbookManager::instance().hasUnsavedColumns("g1"));
@@ -522,7 +527,8 @@ void ColumnCacheTest::mergeRefreshesWrittenNamesOnly()
 
     QVERIFY(waitForIdle(*m_model));
     QCOMPARE(m_model->columnWorkStats().valuesComputed, 1);
-    QCOMPARE(indexValue(readIndex(), "g1", m_d).toString(), QStringLiteral("merged"));
+    QCOMPARE(indexValue(readIndex(), "g1", m_e).toDouble(), 1704110412.0);
+    QCOMPARE(indexValue(readIndex(), "g1", m_d).toString(), QStringLiteral("first"));
     QCOMPARE(indexValue(readIndex(), "g2", m_d).toString(), QStringLiteral("first"));
 
     // Source data: IMU/wx feeds G and nothing else

@@ -125,3 +125,9 @@ flysight_add_test(tst_csvformat             SOURCES tst_csvformat.cpp)
 flysight_add_test(tst_persistence_roundtrip SOURCES tst_persistence_roundtrip.cpp)
 flysight_add_test(tst_logbook_index         SOURCES tst_logbook_index.cpp)
 flysight_add_test(tst_column_cache          SOURCES tst_column_cache.cpp)
+
+# Import and merge rules: the pure merge plan, the model's import path against
+# a temporary logbook, and the widget-free import driver / failure text
+flysight_add_test(tst_session_merge SOURCES tst_session_merge.cpp)
+flysight_add_test(tst_import_merge  SOURCES tst_import_merge.cpp)
+flysight_add_test(tst_import_batch  SOURCES tst_import_batch.cpp)

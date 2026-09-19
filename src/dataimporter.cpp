@@ -49,14 +49,53 @@ QVector<QString> splitFields(QStringView text)
 
 } // namespace
 
-bool DataImporter::importFile(const QString& fileName, SessionData& sessionData) {
-    m_lastError.clear();
+bool DataImporter::parseFile(const QString& fileName, ParsedFile& out) {
+    out = ParsedFile();
 
     QByteArray fileData;
-    if (!readFile(fileName, sessionData, &fileData)) {
+    SessionData parsed;
+    if (!readFile(fileName, parsed, &fileData)) {
         return false;
     }
-    initializeFromDevice(fileName, fileData, sessionData);
+
+    out.data = std::move(parsed);
+    out.filePath = fileName;
+
+    // The match id. A synthesized id is NOT written into out.data: the parse
+    // result carries nothing the file did not say.
+    const QString recordedId = out.data.storedAttribute(SessionKeys::SessionId).toString();
+    if (out.data.hasStoredAttribute(SessionKeys::SessionId) && !recordedId.isEmpty()) {
+        out.sessionId = recordedId;
+        out.sessionIdRecorded = true;
+    } else {
+        out.sessionId = QString::fromLatin1(
+            QCryptographicHash::hash(fileData, QCryptographicHash::Md5).toHex());
+        out.sessionIdRecorded = false;
+    }
+    return true;
+}
+
+bool DataImporter::importFile(const QString& fileName, SessionData& sessionData) {
+    ParsedFile file;
+    if (!parseFile(fileName, file)) {
+        return false;
+    }
+
+    // Publish exactly as readFile would have: an empty target becomes the
+    // parsed session; a pre-populated one receives the attributes and columns.
+    if (sessionData.attributeKeys().isEmpty() && sessionData.sensorKeys().isEmpty()) {
+        const bool visible = sessionData.isVisible();
+        sessionData = file.data;
+        sessionData.setVisible(visible);
+    } else {
+        const QStringList keys = file.data.attributeKeys();
+        for (const QString &key : keys) {
+            sessionData.setAttribute(key, file.data.storedAttribute(key));
+        }
+        sessionData.mergeSourceData(file.data.sourceData());
+    }
+
+    applyCreationDefaults(file, sessionData);
     return true;
 }
 
@@ -158,58 +197,90 @@ bool DataImporter::structuralError(int lineNumber, const QString& reason) {
     return false;
 }
 
-void DataImporter::initializeFromDevice(const QString& fileName, const QByteArray& fileData, SessionData& sessionData) {
-    // Set default description
-    sessionData.setAttribute(SessionKeys::Description, getDescription(fileName));
+void DataImporter::applyCreationDefaults(const ParsedFile& file, SessionData& session) {
+    // Every default is written only when the key is not already stored: a
+    // Viewer-saved file imported as a new session keeps its own values.
 
-    // Determine file type from the first line for device ID extraction
-    int firstNewline = fileData.indexOf('\n');
-    QString firstLine = (firstNewline != -1)
-        ? QString::fromUtf8(fileData.left(firstNewline)).trimmed()
-        : QString::fromUtf8(fileData).trimmed();
-    bool isFS2 = firstLine.startsWith("$FLYS");
+    // 1. SESSION_ID synthesized from the file bytes, when none was recorded
+    if (!file.sessionIdRecorded && !file.sessionId.isEmpty()
+        && !session.hasStoredAttribute(SessionKeys::SessionId)) {
+        session.setAttribute(SessionKeys::SessionId, file.sessionId);
+    }
 
-    // Attempt to extract DEVICE_ID based on file type
-    if (!sessionData.hasAttribute(SessionKeys::DeviceId)) {
-        if (isFS2) {
-            extractDeviceId(fileName, sessionData, "Device_ID");
-        } else {
-            extractDeviceId(fileName, sessionData, "Processor serial number");
+    // 2. DEVICE_ID from the device's FLYSIGHT.TXT, else the placeholder. A
+    //    session built in memory has no path: no lookup and no placeholder.
+    if (!session.hasStoredAttribute(SessionKeys::DeviceId) && !file.filePath.isEmpty()) {
+        const QString deviceId = extractDeviceId(file.filePath);
+        session.setAttribute(SessionKeys::DeviceId,
+                             deviceId.isEmpty() ? QString::fromLatin1(SessionKeys::DeviceIdUnknown) : deviceId);
+    }
+
+    // 3. Description from the file's place in the device folder layout
+    if (!session.hasStoredAttribute(SessionKeys::Description)) {
+        session.setAttribute(SessionKeys::Description,
+                             CsvFormat::singleLine(getDescription(file.filePath)));
+    }
+
+    // 4. Import time
+    if (!session.hasStoredAttribute(SessionKeys::ImportTime)) {
+        const double now = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch() / 1000.0;
+        session.setAttribute(SessionKeys::ImportTime, now);
+    }
+
+    // 5. Wind defaults (placeholder; will be calculated per-track in future)
+    if (!session.hasStoredAttribute(SessionKeys::WindN))
+        session.setAttribute(SessionKeys::WindN, 0.0);
+    if (!session.hasStoredAttribute(SessionKeys::WindE))
+        session.setAttribute(SessionKeys::WindE, 0.0);
+
+    // 6. Aerodynamic defaults from preferences
+    PreferencesManager &prefs = PreferencesManager::instance();
+    if (!session.hasStoredAttribute(SessionKeys::JumperMass))
+        session.setAttribute(SessionKeys::JumperMass, prefs.getValue(PreferenceKeys::AeroMass));
+    if (!session.hasStoredAttribute(SessionKeys::PlanformArea))
+        session.setAttribute(SessionKeys::PlanformArea, prefs.getValue(PreferenceKeys::AeroArea));
+
+    // 7. For fixed ground elevation mode, bake the value at creation time
+    if (!session.hasStoredAttribute(SessionKeys::GroundElev)) {
+        const QString groundMode = prefs.getValue(PreferenceKeys::ImportGroundReferenceMode).toString();
+        if (groundMode == "Fixed") {
+            const double fixedElev = prefs.getValue(PreferenceKeys::ImportFixedElevation).toDouble();
+            session.setAttribute(SessionKeys::GroundElev, fixedElev);
         }
     }
+}
 
-    // If DEVICE_ID still isn't set, set it
-    if (!sessionData.hasAttribute(SessionKeys::DeviceId)) {
-        sessionData.setAttribute(SessionKeys::DeviceId, "n/a");
+std::optional<QString> DataImporter::peekHeaderAttribute(const QString& fileName, const QString& key) {
+    QFile file(fileName);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return std::nullopt;
     }
 
-    // After importing, check if SESSION_ID is set
-    if (!sessionData.hasAttribute(SessionKeys::SessionId)) {
-        // Compute MD5 hash of fileData
-        QByteArray md5Hash = QCryptographicHash::hash(fileData, QCryptographicHash::Md5);
-        QString md5HashString = md5Hash.toHex();
-        sessionData.setAttribute(SessionKeys::SessionId, md5HashString);
+    const QString prefix = QStringLiteral("$VAR,") + key;
+
+    // Line by line up to $DATA: the data section is never read.
+    while (!file.atEnd()) {
+        QByteArray raw = file.readLine();
+        while (raw.endsWith('\n') || raw.endsWith('\r'))
+            raw.chop(1);
+        const QString line = QString::fromUtf8(raw);
+
+        if (line.trimmed() == QLatin1String("$DATA")) {
+            break;
+        }
+        if (!line.startsWith(prefix)) {
+            continue;
+        }
+        // "$VAR,<key>" alone is the value "", "$VAR,<key>,<value>" the verbatim
+        // remainder; "$VAR,<key>X..." is a different key.
+        if (line.size() == prefix.size()) {
+            return QString();
+        }
+        if (line.at(prefix.size()) == QLatin1Char(',')) {
+            return line.mid(prefix.size() + 1);
+        }
     }
-
-    // Record the import time
-    double now = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch() / 1000.0;
-    sessionData.setAttribute(SessionKeys::ImportTime, now);
-
-    // Set wind defaults (placeholder; will be calculated per-track in future)
-    sessionData.setAttribute(SessionKeys::WindN, 0.0);
-    sessionData.setAttribute(SessionKeys::WindE, 0.0);
-
-    // Set aerodynamic defaults from preferences
-    PreferencesManager &prefs = PreferencesManager::instance();
-    sessionData.setAttribute(SessionKeys::JumperMass, prefs.getValue(PreferenceKeys::AeroMass));
-    sessionData.setAttribute(SessionKeys::PlanformArea, prefs.getValue(PreferenceKeys::AeroArea));
-
-    // For fixed ground elevation mode, bake the value at import time
-    QString groundMode = prefs.getValue(PreferenceKeys::ImportGroundReferenceMode).toString();
-    if (groundMode == "Fixed") {
-        double fixedElev = prefs.getValue(PreferenceKeys::ImportFixedElevation).toDouble();
-        sessionData.setAttribute(SessionKeys::GroundElev, fixedElev);
-    }
+    return std::nullopt;
 }
 
 bool DataImporter::importSimple(QTextStream& in, StagedFile& staged, const QString &sensorName) {
@@ -456,25 +527,29 @@ void DataImporter::importDataRow(const QString& line, StagedFile& staged, const 
     }
 }
 
-void DataImporter::extractDeviceId(const QString& fileName, SessionData& sessionData, const QString& expectedKey) {
+QString DataImporter::extractDeviceId(const QString& fileName) {
     // Find the root directory of the FlySight device
-    QString flySightRoot = findFlySightRoot(fileName);
+    const QString flySightRoot = findFlySightRoot(fileName);
 
     if (flySightRoot.isEmpty()) {
-        // FLYSIGHT.TXT not found
-        qWarning() << "FLYSIGHT.TXT not found in any parent directories of:" << fileName;
-        return;
+        // The normal case for a file copied off the device: not worth a warning
+        qDebug() << "FLYSIGHT.TXT not found in any parent directories of:" << fileName;
+        return QString();
     }
 
-    QString flysightTxtPath = QDir(flySightRoot).absoluteFilePath("FLYSIGHT.TXT");
+    const QString flysightTxtPath = QDir(flySightRoot).absoluteFilePath("FLYSIGHT.TXT");
 
-    // Open FLYSIGHT.TXT and search for the expected key
     QFile flysightFile(flysightTxtPath);
     if (!flysightFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        // Fail silently if the file cannot be opened
         qWarning() << "Failed to open FLYSIGHT.TXT at:" << flysightTxtPath;
-        return;
+        return QString();
     }
+
+    // FlySight 2 writes "Device_ID", FlySight 1 "Processor serial number". The
+    // two never coexist in one FLYSIGHT.TXT; the FlySight 2 key is looked for
+    // first.
+    QString deviceId;
+    QString serialNumber;
 
     QTextStream in(&flysightFile);
     while (!in.atEnd()) {
@@ -502,14 +577,21 @@ void DataImporter::extractDeviceId(const QString& fileName, SessionData& session
         QString key = line.left(colonIndex).trimmed();
         QString value = line.mid(colonIndex + 1).trimmed();
 
-        if (key == expectedKey) {
-            sessionData.setAttribute(SessionKeys::DeviceId, value);
-            return;
+        if (key == QLatin1String("Device_ID") && deviceId.isEmpty()) {
+            deviceId = value;
+        } else if (key == QLatin1String("Processor serial number") && serialNumber.isEmpty()) {
+            serialNumber = value;
         }
     }
 
-    // Optionally, log that the expected key was not found
-    qWarning() << expectedKey << "not found in FLYSIGHT.TXT";
+    if (!deviceId.isEmpty())
+        return deviceId;
+    if (!serialNumber.isEmpty())
+        return serialNumber;
+
+    // No device ID in this FLYSIGHT.TXT: the caller stores the placeholder
+    qDebug() << "No device ID found in" << flysightTxtPath;
+    return QString();
 }
 
 QString DataImporter::findFlySightRoot(const QString& filePath) {

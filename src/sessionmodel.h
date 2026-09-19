@@ -11,6 +11,7 @@
 #include "engine/calculationregistry.h"
 #include "idlescheduler.h"
 #include "logbookcolumn.h"
+#include "parsedfile.h"
 #include "sessiondata.h"
 
 namespace FlySight {
@@ -21,8 +22,28 @@ struct SessionRow {
     std::optional<SessionData> session; // std::nullopt = stub, has_value = loaded
     bool visible = false;  // all sessions default to not visible
     bool dirty = false;    // true when in-memory data has not been persisted
+    // The session file could not be loaded and `session` is an empty
+    // placeholder (sessionRef() must return a reference). A placeholder is
+    // never attached, never saved, and never merged into; eviction resets the
+    // row to a stub so that a later access retries the load.
+    bool loadFailed = false;
 
     bool isLoaded() const { return session.has_value(); }
+};
+
+/// What SessionModel::mergeSessions did with one input file.
+struct MergeResult {
+    enum class Outcome {
+        Created,    ///< no session had the file's SESSION_ID: a new session exists
+        Merged,     ///< the existing session changed
+        Unchanged,  ///< the file holds nothing the session lacks: nothing happened at all
+        Failed      ///< see error; the existing session (if any) is exactly as it was
+    };
+    QString filePath;      ///< ParsedFile::filePath
+    QString sessionId;     ///< match id ("" when the input had none)
+    Outcome outcome = Outcome::Failed;
+    QString error;         ///< non-empty iff Failed
+    bool ok() const { return outcome != Outcome::Failed; }
 };
 
 /// The logbook table: one row per session, loaded or stub.
@@ -51,6 +72,10 @@ struct SessionRow {
 /// temporarily for the mutation (bulk edit on a stub). Which columns a key can
 /// affect comes from CalculationRegistry::staticDependencies(), so it is
 /// correct for cold engines and unloaded rows alike.
+///
+/// `mergeSessions` is the only import path. It never assigns an incoming file
+/// to an existing row; an existing row's session changes only through
+/// `SessionMerge::apply`.
 ///
 /// Changes of the calculation ENVIRONMENT (a calculation registered or
 /// unregistered, a declared preference changed) are not persistent changes:
@@ -99,7 +124,27 @@ public:
 
     Qt::ItemFlags flags(const QModelIndex &index) const override;
 
-    void mergeSessions(const QList<SessionData>& sessions);
+    /// The import path (spec 6.2-6.5). One result per input, in input order.
+    /// A file whose match id has no row CREATES a session (import-time defaults
+    /// are applied here and only here); any other file MERGES into the existing
+    /// session, loaded or not, as a validated all-or-nothing operation on
+    /// source data and stored attributes (SessionMerge). An unloaded session is
+    /// loaded for the merge; a failed load fails the file. A merge that changes
+    /// something goes through the normal invalidation / column / dirty / save
+    /// path and leaves the session loaded; a file that changes nothing
+    /// (Unchanged) or fails mutates nothing, emits nothing, and saves nothing.
+    /// A later file of the batch sees the effects of the earlier ones.
+    QList<MergeResult> mergeSessions(const QList<ParsedFile> &files);
+    /// For tests and tools: each session is adopted as is
+    /// (ParsedFile::fromSession - no import-time defaults).
+    QList<MergeResult> mergeSessions(const QList<SessionData> &sessions);
+
+    /// Gives rows that are still known by their file stem (deferred filename
+    /// scan, orphan adoption) their real SESSION_ID through a header-only
+    /// read, so that an import can match them. Unreadable files and refused
+    /// remaps leave the row as it is. Emits nothing.
+    void resolveIdentityStubs();
+
     bool removeSessions(const QList<QString> &sessionIds);
 
     void setRowsVisibility(const QMap<int, bool>& rowVisibility);

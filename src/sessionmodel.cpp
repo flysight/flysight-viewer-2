@@ -8,11 +8,13 @@
 #include "attributeregistry.h"
 #include "calculations/builtincalculations.h"
 #include "csvformat.h"
+#include "dataimporter.h"
 #include "engine/calculationengine.h"
 #include "logbookcolumn.h"
 #include "logbookmanager.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
+#include "sessionmerge.h"
 #include "units/unitconverter.h"
 
 namespace FlySight {
@@ -532,114 +534,219 @@ bool SessionModel::setData(const QModelIndex &index, const QVariant &value, int 
     return false;
 }
 
-void SessionModel::mergeSessions(const QList<SessionData>& sessions)
+QList<MergeResult> SessionModel::mergeSessions(const QList<SessionData> &sessions)
 {
-    if (sessions.isEmpty())
-        return;
+    QList<ParsedFile> files;
+    files.reserve(sessions.size());
+    for (const SessionData &session : sessions)
+        files.append(ParsedFile::fromSession(session));
+    return mergeSessions(files);
+}
 
-    // Names invalidated in sessions that were already loaded, by session id
-    QHash<QString, QSet<DependencyKey>> mergeInvalidations;
+QList<MergeResult> SessionModel::mergeSessions(const QList<ParsedFile> &files)
+{
+    QList<MergeResult> results;
+    if (files.isEmpty())
+        return results;
+    results.reserve(files.size());
 
-    beginResetModel();
-    for (const SessionData& newSession : sessions) {
-        if (!newSession.hasAttribute(SessionKeys::SessionId)) {
-            qWarning() << "Skipping session with no SESSION_ID";
-            continue;
+    LogbookManager &logbook = LogbookManager::instance();
+
+    // Rows still known by their file stem must be matchable by SESSION_ID
+    resolveIdentityStubs();
+
+    // Rows move when m_rows grows: effects are recorded by session id and the
+    // rows are looked up again after the loop.
+    QStringList createdIds;
+    QStringList mergedIds;                                  // first-seen order
+    QHash<QString, QSet<DependencyKey>> mergedKeys;
+    QStringList newlyLoadedIds;
+
+    // The model is reset only when something changes: a batch of no-ops and
+    // failures emits nothing (a reset costs views their selection and scroll
+    // position).
+    bool resetBegun = false;
+    auto beginMutation = [this, &resetBegun]() {
+        if (!resetBegun) {
+            beginResetModel();
+            resetBegun = true;
         }
+    };
+    auto recordMerge = [&mergedIds, &mergedKeys](const QString &sessionId, const QSet<DependencyKey> &keys) {
+        if (!mergedKeys.contains(sessionId))
+            mergedIds.append(sessionId);
+        mergedKeys[sessionId].unite(keys);
+    };
 
-        QString newSessionID = newSession.getAttribute(SessionKeys::SessionId).toString();
+    // In list order: a later file sees the effects of the earlier ones, which
+    // is what makes TRACK + SENSOR of one new session work in one batch.
+    for (const ParsedFile &file : files) {
+        MergeResult result;
+        result.filePath = file.filePath;
+        result.sessionId = file.sessionId;
 
-        auto rowIt = std::find_if(
-            m_rows.begin(), m_rows.end(),
-            [&newSessionID](const SessionRow &row) {
-                return row.sessionId == newSessionID;
-            });
+        auto fail = [&result](const QString &error) {
+            result.outcome = MergeResult::Outcome::Failed;
+            result.error = error;
+        };
 
-        if (rowIt != m_rows.end()) {
-            // Found existing row
-            if (rowIt->isLoaded()) {
-                // Merge into existing loaded session
-                SessionData &existingSession = rowIt->session.value();
+        const int rowIndex = file.sessionId.isEmpty() ? -1 : getSessionRow(file.sessionId);
 
-                // Everything the merge invalidates is published once the
-                // model reset is complete.
-                QSet<DependencyKey> &invalidated = mergeInvalidations[newSessionID];
+        if (file.sessionId.isEmpty()) {
+            fail(QStringLiteral("File has no SESSION_ID"));
+        } else if (rowIndex < 0) {
+            // ---- no such session: create one. The only place import-time
+            // defaults are applied.
+            SessionData created = file.data;
+            if (file.applyCreationDefaults)
+                DataImporter::applyCreationDefaults(file, created);
 
-                // The stored names this merge writes: what the cached logbook
-                // columns of the row may depend on.
-                QSet<DependencyKey> writtenKeys;
-
-                // Stored values only: a merge never consults the engine.
-                for (const QString &attributeKey : newSession.attributeKeys()) {
-                    invalidated.unite(
-                        existingSession.setAttribute(attributeKey, newSession.storedAttribute(attributeKey)));
-                    writtenKeys.insert(DependencyKey::attribute(attributeKey));
-                }
-
-                // Source data only, samples and unit text together. Copying
-                // effective values here would store already-converted numbers
-                // as if they had been recorded, and convert them again on read.
-                const SourceData incoming = newSession.sourceData();
-                invalidated.unite(existingSession.mergeSourceData(incoming));
-                for (auto sensorIt = incoming.cbegin(); sensorIt != incoming.cend(); ++sensorIt) {
-                    for (auto colIt = sensorIt->cbegin(); colIt != sensorIt->cend(); ++colIt)
-                        writtenKeys.insert(DependencyKey::measurement(sensorIt.key(), colIt.key()));
-                }
-
-                invalidateColumns(int(rowIt - m_rows.begin()), writtenKeys);
-
-                if (!rowIt->dirty) {
-                    rowIt->dirty = true;
-                    m_saveHighWater++;
-                    m_saveRemaining++;
-                }
-                qDebug() << "Merged SessionData into loaded row with SESSION_ID:" << newSessionID;
-            } else {
-                // Replace stub with loaded data
-                rowIt->session = newSession;
-                rowIt->visible = newSession.isVisible();
-                rowIt->session->setVisible(rowIt->visible);
-                attachSession(*rowIt);
-                invalidateAllColumns(int(rowIt - m_rows.begin()));
-
-                rowIt->dirty = true;
-                m_saveHighWater++;
-                m_saveRemaining++;
-                qDebug() << "Replaced stub with loaded SessionData for SESSION_ID:" << newSessionID;
-            }
-        } else {
-            // Add as new loaded row
+            beginMutation();
             SessionRow newRow;
-            newRow.sessionId = newSessionID;
-            newRow.session = newSession;
-            newRow.visible = newSession.isVisible();
+            newRow.sessionId = file.sessionId;
+            newRow.visible = created.isVisible();
+            newRow.session = std::move(created);
             newRow.session->setVisible(newRow.visible);
-            newRow.dirty = true;
-            m_saveHighWater++;
-            m_saveRemaining++;
             m_rows.append(std::move(newRow));
             attachSession(m_rows.last());   // the element in m_rows, not the local
-            invalidateAllColumns(int(m_rows.size()) - 1);
-            qDebug() << "Added new SessionData with SESSION_ID:" << newSessionID;
+
+            createdIds.append(file.sessionId);
+            result.outcome = MergeResult::Outcome::Created;
+        } else if (m_rows[rowIndex].isLoaded() && !m_rows[rowIndex].loadFailed) {
+            // ---- loaded session: plan, then apply in place ----
+            const MergePlan plan = SessionMerge::plan(*m_rows[rowIndex].session, file.data);
+            if (!plan.ok()) {
+                fail(plan.error);
+            } else if (plan.isEmpty()) {
+                result.outcome = MergeResult::Outcome::Unchanged;
+            } else {
+                beginMutation();
+                QSet<DependencyKey> keys = SessionMerge::apply(*m_rows[rowIndex].session, plan);
+                keys.unite(plan.changedKeys());
+                recordMerge(file.sessionId, keys);
+                result.outcome = MergeResult::Outcome::Merged;
+            }
+        } else {
+            // ---- unloaded session (or a failed-load placeholder): load what is
+            // on disk, merge into that copy, install it only on success. Not
+            // through sessionRef(): that would install the session, emit, touch
+            // the LRU, and apply the backfill before the merge was decided.
+            QString reason;
+            std::optional<SessionData> loaded = logbook.loadSessionRaw(file.sessionId, &reason);
+            if (loaded.has_value()) {
+                const QString loadedId = loaded->storedAttribute(SessionKeys::SessionId).toString();
+                if (loadedId != file.sessionId) {
+                    reason = QStringLiteral("the logbook file belongs to session '%1'").arg(loadedId);
+                    loaded.reset();
+                }
+            }
+
+            if (!loaded.has_value()) {
+                // Never a reason to replace the session with the incoming file
+                fail(QStringLiteral("Existing session '%1' could not be loaded (%2); the file was not imported.")
+                         .arg(file.sessionId, reason));
+            } else {
+                const MergePlan plan = SessionMerge::plan(*loaded, file.data);
+                if (!plan.ok()) {
+                    fail(plan.error);                                   // the copy is discarded
+                } else if (plan.isEmpty()) {
+                    result.outcome = MergeResult::Outcome::Unchanged;   // the row stays a stub
+                } else {
+                    QSet<DependencyKey> keys = SessionMerge::apply(*loaded, plan);
+                    keys.unite(plan.changedKeys());
+
+                    // After the merge decision, never before it
+                    LogbookManager::applyLegacyBackfill(*loaded);
+
+                    beginMutation();
+                    SessionRow &row = m_rows[rowIndex];
+                    row.session = std::move(*loaded);
+                    row.loadFailed = false;
+                    row.session->setVisible(row.visible);
+                    attachSession(row);
+
+                    // The session stays loaded: it is dirty and is saved from
+                    // memory. Normal LRU accounting; one eviction pass per batch.
+                    if (!row.visible && row.sessionId != m_focusedSessionId)
+                        lruTouch(row.sessionId);
+
+                    if (!newlyLoadedIds.contains(file.sessionId))
+                        newlyLoadedIds.append(file.sessionId);
+                    recordMerge(file.sessionId, keys);
+                    result.outcome = MergeResult::Outcome::Merged;
+                }
+            }
         }
+
+        switch (result.outcome) {
+        case MergeResult::Outcome::Created:
+            qDebug().noquote() << "Import:" << file.filePath << "created session" << file.sessionId;
+            break;
+        case MergeResult::Outcome::Merged:
+            qDebug().noquote() << "Import:" << file.filePath << "merged into session" << file.sessionId;
+            break;
+        case MergeResult::Outcome::Unchanged:
+            qDebug().noquote() << "Import:" << file.filePath << "changes nothing in session" << file.sessionId;
+            break;
+        case MergeResult::Outcome::Failed:
+            qDebug().noquote() << "Import:" << file.filePath << "failed:" << result.error;
+            break;
+        }
+        results.append(result);
     }
+
+    if (!resetBegun)
+        return results;     // nothing changed: nothing is emitted, marked, or scheduled
+
     endResetModel();
 
-    // Tell subscribers what the merge invalidated in already-loaded sessions
-    for (auto it = mergeInvalidations.cbegin(); it != mergeInvalidations.cend(); ++it) {
-        for (const DependencyKey &key : it.value())
-            emit dependencyChanged(it.key(), key);
+    // ---- effects (spec 6.5), through the model's normal paths. Column
+    // invalidation comes before scheduleSave: the unsaved marks must exist
+    // before the save runs.
+    for (const QString &sessionId : std::as_const(createdIds)) {
+        const int row = getSessionRow(sessionId);
+        if (row < 0)
+            continue;
+        invalidateAllColumns(row);
+        scheduleSave(sessionId);
     }
 
-    // The rows touched above now have missing column values. The saver fills
-    // them right after it has written the session; rows untouched by this
-    // merge keep their values and are not recomputed.
+    for (const QString &sessionId : std::as_const(mergedIds)) {
+        const int row = getSessionRow(sessionId);
+        if (row < 0)
+            continue;
+        const QSet<DependencyKey> keys = mergedKeys.value(sessionId);
+        invalidateColumns(row, keys);
+        publishInvalidation(row, keys);
+        scheduleSave(sessionId);
+    }
+
+    for (const QString &sessionId : std::as_const(newlyLoadedIds))
+        emit sessionLoaded(sessionId);
+
+    evictIfNeeded();
     startColumnWorker();
 
-    // Wake the scheduler so the saver picks up newly dirty rows
-    m_scheduler.wake();
-
     emit modelChanged();
+    return results;
+}
+
+void SessionModel::resolveIdentityStubs()
+{
+    LogbookManager &logbook = LogbookManager::instance();
+
+    for (SessionRow &row : m_rows) {
+        if (row.isLoaded() || !logbook.isIdentityEntry(row.sessionId))
+            continue;
+
+        // Header-only read; the cached values move with the remap. The id is
+        // not displayed, so there is nothing to signal.
+        const std::optional<QString> realId = logbook.peekSessionId(row.sessionId);
+        if (!realId.has_value() || realId->isEmpty() || *realId == row.sessionId)
+            continue;
+        if (logbook.remapSessionId(row.sessionId, *realId))
+            row.sessionId = *realId;
+    }
 }
 
 void SessionModel::populateFromIndex(const QMap<QString, QMap<int, QVariant>> &cachedValues,
@@ -888,14 +995,18 @@ SessionData &SessionModel::sessionRef(int row)
         } else {
             qWarning() << "SessionModel::sessionRef: failed to load session"
                         << sr.sessionId << "- creating empty SessionData";
+            // A placeholder, only because this function returns a reference.
+            // It is never attached, saved, or merged into (SessionRow::loadFailed).
             sr.session = SessionData();
+            sr.loadFailed = true;
         }
         // Sync visibility from SessionRow to the newly loaded SessionData
         sr.session->setVisible(sr.visible);
 
         // Listen for broadcast invalidations (after the id remap above, so the
         // listener captures the final session id)
-        attachSession(sr);
+        if (!sr.loadFailed)
+            attachSession(sr);
 
         // Emit sessionLoaded for consistency
         emit sessionLoaded(sr.sessionId);
@@ -1287,6 +1398,12 @@ void SessionModel::scheduleSave(const QString &sessionId)
     if (row < 0) return;
 
     SessionRow &sr = m_rows[row];
+
+    // A failed-load placeholder is never saved: it must not reach the file of
+    // the session it stands in for.
+    if (sr.loadFailed)
+        return;
+
     if (!sr.dirty) {
         sr.dirty = true;
         m_saveHighWater++;
@@ -1318,6 +1435,10 @@ void SessionModel::flushDirtySessions()
         if (!sr.dirty)
             continue;
         const SessionData &session = sessionRef(i);
+        if (sr.loadFailed) {
+            sr.dirty = false;       // a placeholder is never saved
+            continue;
+        }
         if (!logbook.saveSession(session)) {
             qWarning("SessionModel: session %s was not saved: %s",
                      qPrintable(sr.sessionId), qPrintable(logbook.lastSaveError()));
@@ -1358,6 +1479,12 @@ void SessionModel::saveNextSession()
     // scheduler); the unsaved marks keep index.json consistent with the file
     // that is still on disk.
     const SessionData &session = sessionRef(dirtyIdx);
+    if (sr.loadFailed) {
+        // A placeholder is never saved
+        sr.dirty = false;
+        m_saveRemaining--;
+        return;
+    }
     if (!logbook.saveSession(session)) {
         qWarning("SessionModel: session %s was not saved: %s",
                  qPrintable(sr.sessionId), qPrintable(logbook.lastSaveError()));
@@ -1446,6 +1573,20 @@ void SessionModel::evictSession(const QString &sessionId)
         return;
 
     LogbookManager &logbook = LogbookManager::instance();
+
+    // A failed-load placeholder holds nothing worth keeping: it is never saved
+    // and caches no column values. Back to a stub, so that a later access
+    // retries the load.
+    if (sr.loadFailed) {
+        if (sr.dirty) {
+            sr.dirty = false;
+            if (m_saveRemaining > 0)
+                m_saveRemaining--;
+        }
+        sr.session = std::nullopt;
+        sr.loadFailed = false;
+        return;
+    }
 
     // Save if dirty
     if (sr.dirty) {
@@ -1638,7 +1779,10 @@ void SessionModel::processNextBulkEdit()
         return;
     }
 
-    if (sr.isLoaded()) {
+    if (sr.loadFailed) {
+        // A failed-load placeholder is never edited or saved: skipped, like a
+        // stub whose load fails below
+    } else if (sr.isLoaded()) {
         // --- LOADED PATH ---
         SessionData &session = sr.session.value();
         session.setAttribute(col.attributeKey, newVal);

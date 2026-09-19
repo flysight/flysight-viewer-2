@@ -48,9 +48,9 @@ class LogbookManager : public QObject {
 public:
     static LogbookManager& instance();
 
-    // Creates sessions directory if missing, loads index.json or scans *.csv files.
-    // Returns parsed sessions if fallback CSV scan was used, empty list otherwise.
-    QList<SessionData> initialize();
+    // Creates sessions directory if missing, loads index.json or scans *.csv
+    // file names. No session file is parsed: every session comes up as a stub.
+    QList<SessionData> initialize();    // always empty; kept for source compatibility
 
     // Drops all in-memory index state so the next initialize() re-reads the current
     // logbook folder. Used by tests to simulate an application restart.
@@ -65,9 +65,6 @@ public:
 
     // Reason of the last failed saveSession(); empty after a successful one.
     QString lastSaveError() const;
-
-    // Reads all *.csv files from the sessions directory, returns parsed sessions
-    QList<SessionData> loadAllSessions();
 
     // Deletes the .csv file for the given SESSION_ID; returns true on success
     bool removeSession(const QString& sessionId);
@@ -120,8 +117,34 @@ public:
     // and must not come back stale when such a column is enabled again.
     void dropCachedValuesExcept(const QString &sessionId, const QVector<LogbookColumn> &columns);
 
-    // Loads and parses the CSV for a single session. Returns std::nullopt on failure.
+    // Loads and parses the CSV for a single session: the file's contents and
+    // nothing else (no backfill, no Viewer-generated value). Returns
+    // std::nullopt on failure, with the reason in *error: "not in the logbook
+    // index" for an unknown id, otherwise the importer's error text ("Couldn't
+    // read file", "Unknown file format", "Missing $DATA section", ...).
+    // This is the load a merge uses: merge decisions are made on what is on disk.
+    std::optional<SessionData> loadSessionRaw(const QString &sessionId, QString *error = nullptr);
+
+    // Compatibility shim for session files written by Viewer versions that
+    // predate `_JUMPER_MASS` / `_PLANFORM_AREA` / `_WIND_N` / `_WIND_E`. It is
+    // not an import default: it never runs on an incoming file, never runs
+    // before a merge has been decided, only fills keys that are absent, and
+    // does not mark the session dirty (pinned by
+    // `tst_persistence_roundtrip::releasedLogbookBackfillIsAdditive`).
+    static void applyLegacyBackfill(SessionData &session);
+
+    // loadSessionRaw() + applyLegacyBackfill(): the ordinary load.
+    // Returns std::nullopt on failure.
     std::optional<SessionData> loadSession(const QString &sessionId);
+
+    // True when the entry maps a file stem to itself: a session known only by
+    // its file name (deferred filename scan, orphan adoption), whose real
+    // SESSION_ID has not been read yet.
+    bool isIdentityEntry(const QString &sessionId) const;
+
+    // Header-only read of the SESSION_ID recorded in the entry's CSV. nullopt
+    // when the id is unknown, the file is unreadable, or it records none.
+    std::optional<QString> peekSessionId(const QString &sessionId) const;
 
     // Updates the lastAccessed timestamp for a session (persisted on next flushIndex())
     void setLastAccessed(const QString &sessionId, double timestamp);
@@ -168,9 +191,6 @@ private:
 
     // Returns the full path to the sessions directory
     QString sessionsDirectory() const;
-
-    // Scans *.csv files in the sessions directory, parses each, and populates m_sessionIdToUuid
-    QList<SessionData> scanSessionFiles();
 
     // Scans *.csv filenames only (no parsing); populates m_sessionIdToUuid with identity mappings
     QStringList scanSessionFilenames();

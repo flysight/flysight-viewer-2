@@ -5,9 +5,6 @@
 // purpose were rewritten with that phase. Every expectation is a literal.
 // Corrected gyro values (recorded x 1.14688) are compared with an absolute
 // tolerance of 1e-9: 62.5 * 1.14688 is not the double nearest 71.68.
-// A test whose expectation a later phase is known to change carries a
-//     // BASELINE: <what> - changes in Phase <n>
-// comment, so the later implementer finds it with `git grep -n "BASELINE:" tests/`.
 
 #include <cstring>
 
@@ -417,13 +414,18 @@ void SmokeTest::modelMergesTrackAndSensor()
     QVERIFY(importSensor(sensor));
 
     SessionModel model;
-    model.mergeSessions({track});
-    model.mergeSessions({sensor});
+    const QList<MergeResult> first = model.mergeSessions({track});
+    const QList<MergeResult> second = model.mergeSessions({sensor});
 
-    // BASELINE: TRACK and SENSOR files with one SESSION_ID end up as one
-    // session holding both files' sensors - the merge rules (attribute
-    // conflicts, creation-only defaults, units, unloaded sessions) change in
-    // Phase 6, so nothing is asserted about attribute overwrite behavior.
+    // TRACK and SENSOR files with one SESSION_ID end up as one session holding
+    // both files' sensors: the first creates it, the second merges into it.
+    // (The merge rules themselves are covered by tst_session_merge and
+    // tst_import_merge.)
+    QCOMPARE(first.size(), 1);
+    QVERIFY(first.first().outcome == MergeResult::Outcome::Created);
+    QCOMPARE(second.size(), 1);
+    QVERIFY(second.first().outcome == MergeResult::Outcome::Merged);
+    QVERIFY(second.first().error.isEmpty());
     QCOMPARE(model.rowCount(), 1);
     QCOMPARE(model.sessionRef(0).sensorKeys(), QStringList({"GNSS", "IMU", "MAG"}));
 

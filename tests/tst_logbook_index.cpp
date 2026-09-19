@@ -6,7 +6,10 @@
 //  - unsaved-column tracking and the save ordering make it impossible for
 //    index.json on disk to hold a column value that disagrees with the session
 //    file on disk after an interrupted save;
-//  - a session file the index does not know is adopted as an identity stub.
+//  - a session file the index does not know is adopted as an identity stub;
+//  - the raw load (file contents only, with the failure reason) that merges
+//    use, the legacy backfill as a separate step, identity-entry queries, and
+//    a legacy flat index coming up as stubs without rewriting a session file.
 //
 // index.json is inspected with QJsonDocument; QJsonObject orders keys
 // alphabetically, so nothing here depends on field order.
@@ -23,6 +26,7 @@
 #include "logbookcolumn.h"
 #include "logbookmanager.h"
 #include "sessiondata.h"
+#include "sessionmodel.h"
 #include "testenvironment.h"
 #include "testmain.h"
 
@@ -144,6 +148,11 @@ private slots:
 
     void orphanSessionFileIsAdopted();
     void remapAndRemoveCarryMarks();
+
+    void rawLoadSkipsBackfill();
+    void rawLoadReportsReason();
+    void identityEntries();
+    void legacyFlatIndexStartsAsStubs();
 
 private:
     // One saved session "s1" with D = "x" and G = 1.5 cached and flushed,
@@ -585,6 +594,154 @@ void LogbookIndexTest::remapAndRemoveCarryMarks()
     QVERIFY(!logbook.cachedValuesDiscardedOnLoad());
     QVERIFY(logbook.cacheEnvironment().isEmpty());
     QVERIFY(logbook.lastSaveError().isEmpty());
+}
+
+// A session file written before the mass / area / wind attributes existed.
+void LogbookIndexTest::rawLoadSkipsBackfill()
+{
+    LogbookManager &logbook = LogbookManager::instance();
+
+    SessionData old;
+    old.setAttribute("SESSION_ID", QStringLiteral("old"));
+    old.setAttribute("DEVICE_ID", QStringLiteral("test-device"));
+    old.setAttribute("_DESCRIPTION", QStringLiteral("released"));
+    old.setSourceMeasurement("IMU", "time", {10.0}, "s");
+    QVERIFY(logbook.saveSession(old));
+
+    QString error = QStringLiteral("stale");
+    const std::optional<SessionData> raw = logbook.loadSessionRaw(QStringLiteral("old"), &error);
+    QVERIFY(raw.has_value());
+    QVERIFY(error.isEmpty());
+    QCOMPARE(raw->attributeKeys(), QStringList({"DEVICE_ID", "SESSION_ID", "_DESCRIPTION"}));
+
+    const std::optional<SessionData> ordinary = logbook.loadSession(QStringLiteral("old"));
+    QVERIFY(ordinary.has_value());
+    QCOMPARE(ordinary->attributeKeys(),
+             QStringList({"DEVICE_ID", "SESSION_ID", "_DESCRIPTION",
+                          "_JUMPER_MASS", "_PLANFORM_AREA", "_WIND_E", "_WIND_N"}));
+    QCOMPARE(ordinary->storedAttribute("_JUMPER_MASS").toDouble(), 1.0);
+    QCOMPARE(ordinary->storedAttribute("_WIND_N").toDouble(), 0.0);
+
+    // The shim only fills what is absent
+    SessionData partial;
+    partial.setAttribute("_JUMPER_MASS", QStringLiteral("80"));
+    LogbookManager::applyLegacyBackfill(partial);
+    QCOMPARE(partial.storedAttribute("_JUMPER_MASS").toString(), QStringLiteral("80"));
+    QCOMPARE(partial.attributeKeys(),
+             QStringList({"_JUMPER_MASS", "_PLANFORM_AREA", "_WIND_E", "_WIND_N"}));
+}
+
+void LogbookIndexTest::rawLoadReportsReason()
+{
+    LogbookManager &logbook = LogbookManager::instance();
+    prepareCachedSession();
+
+    QString error;
+    QVERIFY(!logbook.loadSessionRaw(QStringLiteral("nobody"), &error).has_value());
+    QCOMPARE(error, QStringLiteral("not in the logbook index"));
+
+    QVERIFY(writeFile(sessionFilePath(QStringLiteral("s1")), "garbage"));
+    QVERIFY(!logbook.loadSessionRaw(QStringLiteral("s1"), &error).has_value());
+    QCOMPARE(error, QStringLiteral("Unknown file format"));
+
+    QVERIFY(QFile::remove(sessionFilePath(QStringLiteral("s1"))));
+    QVERIFY(!logbook.loadSessionRaw(QStringLiteral("s1"), &error).has_value());
+    QCOMPARE(error, QStringLiteral("Couldn't read file"));
+
+    // The error pointer is optional
+    QVERIFY(!logbook.loadSessionRaw(QStringLiteral("s1")).has_value());
+    QVERIFY(!logbook.loadSession(QStringLiteral("s1")).has_value());
+}
+
+void LogbookIndexTest::identityEntries()
+{
+    TestEnvironment &env = TestEnvironment::instance();
+    LogbookManager &logbook = LogbookManager::instance();
+
+    // The setup of orphanSessionFileIsAdopted: "a" is indexed, "c" is not
+    QVERIFY(logbook.saveSession(makeSession(QStringLiteral("a"))));
+    QVERIFY(logbook.flushIndex());
+    const QStringList indexedFiles = sessionCsvFiles();
+    QVERIFY(logbook.saveSession(makeSession(QStringLiteral("c"))));
+    QStringList orphanFiles = sessionCsvFiles();
+    for (const QString &file : indexedFiles)
+        orphanFiles.removeOne(file);
+    QCOMPARE(orphanFiles.size(), 1);
+    const QString stem = QFileInfo(orphanFiles.first()).completeBaseName();
+
+    env.reopenLogbook();
+    logbook.initialize();
+
+    QVERIFY(logbook.isIdentityEntry(stem));
+    QVERIFY(!logbook.isIdentityEntry(QStringLiteral("a")));
+    QVERIFY(!logbook.isIdentityEntry(QStringLiteral("nobody")));
+
+    QCOMPARE(logbook.peekSessionId(stem).value_or(QStringLiteral("<none>")), QStringLiteral("c"));
+    QCOMPARE(logbook.peekSessionId(QStringLiteral("a")).value_or(QStringLiteral("<none>")), QStringLiteral("a"));
+    QVERIFY(!logbook.peekSessionId(QStringLiteral("nobody")).has_value());
+
+    // The model resolves the stub without loading the file
+    SessionModel model;
+    model.populateFromIndex(logbook.cachedColumnValues({m_d, m_g}), logbook.lastAccessedMap());
+    QCOMPARE(model.rowCount(), 2);
+    QVERIFY(model.getSessionRow(stem) >= 0);
+    model.resolveIdentityStubs();
+    QCOMPARE(model.getSessionRow(stem), -1);
+    const int row = model.getSessionRow(QStringLiteral("c"));
+    QVERIFY(row >= 0);
+    QVERIFY(!model.rowAt(row).isLoaded());
+    QVERIFY(!logbook.isIdentityEntry(stem));
+    QVERIFY(logbook.loadSession(QStringLiteral("c")).has_value());
+}
+
+// A logbook written by a release that kept a flat index ({"<id>": {"uuid": ...}}):
+// it comes up as stubs like any other; no session file is rewritten.
+void LogbookIndexTest::legacyFlatIndexStartsAsStubs()
+{
+    TestEnvironment &env = TestEnvironment::instance();
+    LogbookManager &logbook = LogbookManager::instance();
+
+    QVERIFY(logbook.saveSession(makeSession(QStringLiteral("s1"))));
+    QVERIFY(logbook.flushIndex());
+    const QString csvPath = sessionFilePath(QStringLiteral("s1"));
+    const QString uuid = QFileInfo(csvPath).completeBaseName();
+    const QByteArray csvBefore = readFileBytes(csvPath);
+    QVERIFY(!csvBefore.isEmpty());
+
+    QJsonObject entry;
+    entry[QStringLiteral("uuid")] = uuid;
+    QJsonObject flat;
+    flat[QStringLiteral("s1")] = entry;
+    QVERIFY(writeIndex(flat));
+
+    env.reopenLogbook();
+    QVERIFY(logbook.initialize().isEmpty());
+    QVERIFY(!logbook.hasIndexData());
+    QVERIFY(!logbook.hasDeferredScan());
+
+    // What MainWindow does at startup
+    SessionModel model;
+    model.populateFromIndex(logbook.cachedColumnValues({m_d, m_g}), logbook.lastAccessedMap());
+    model.startColumnWorker();
+    QCOMPARE(model.rowCount(), 1);
+    QVERIFY(!model.rowAt(0).isLoaded());
+    QVERIFY(model.rowAt(0).cachedValues.isEmpty());
+
+    QVERIFY(waitForIdle(model));
+
+    QCOMPARE(model.rowCount(), 1);
+    QCOMPARE(model.rowAt(0).sessionId, QStringLiteral("s1"));
+    QVERIFY(!model.rowAt(0).dirty);
+    QVERIFY(!model.rowAt(0).isLoaded());
+    QCOMPARE(model.rowAt(0).cachedValues.value(0).toString(), QStringLiteral("first"));
+    QCOMPARE(readFileBytes(csvPath), csvBefore);
+    QCOMPARE(sessionCsvFiles().size(), 1);
+
+    // The index was rewritten in the extended format
+    const QJsonObject root = readIndex();
+    QVERIFY(root.contains(QStringLiteral("columns")));
+    QCOMPARE(root[QStringLiteral("calculationCompatibility")].toInt(), CalculationCompatibilityVersion);
+    QCOMPARE(indexValue(root, QStringLiteral("s1"), m_d).toString(), QStringLiteral("first"));
 }
 
 FLYSIGHT_TEST_MAIN(LogbookIndexTest)

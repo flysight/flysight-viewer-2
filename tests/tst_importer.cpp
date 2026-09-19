@@ -5,15 +5,25 @@
 //
 // Acceptance 3 (a file declaring SCHEMA_VER 3 / abc is rejected and the target
 // session is unmodified) is demonstrated here at the importer level.
+//
+// Parsing versus creation (spec 6.2): parseFile() carries nothing the file did
+// not say; applyCreationDefaults() is the one writer of import-time defaults
+// and only fills keys that are absent.
 
 #include <QtTest>
 
 #include <cmath>
 #include <limits>
 
+#include <QDir>
+
+#include "csvformat.h"
 #include "dataimporter.h"
 #include "engine/calculationengine.h"
 #include "fixturebuilder.h"
+#include "parsedfile.h"
+#include "preferences/preferencekeys.h"
+#include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
 #include "testenvironment.h"
 #include "testmain.h"
@@ -105,6 +115,15 @@ private slots:
     void customColumnsAndSensors();
     void crlfLineEndings();
     void existingErrorsUnchanged();
+
+    // parse result versus session creation
+    void parseFileCarriesNoDefaults();
+    void parseFileSynthesizesMatchId();
+    void parseFailureLeavesResultEmpty();
+    void creationDefaultsOnlyFillAbsent();
+    void creationDefaultsDeviceId();
+    void fixedGroundElevationOnlyInFixedMode();
+    void peekHeaderAttributeReadsNoData();
 };
 
 void ImporterTest::init()
@@ -178,7 +197,7 @@ void ImporterTest::failedImportLeavesTargetUntouched()
     QCOMPARE(target.sourceMeasurement("IMU", "wx"), QVector<double>({1.0, 2.0}));
     QCOMPARE(target.sourceUnit("IMU", "wx"), QStringLiteral("deg/s"));
 
-    // initializeFromDevice did not run
+    // applyCreationDefaults did not run
     QVERIFY(!target.hasAttribute("_IMPORT_TIME"));
     QVERIFY(!target.hasAttribute("SCHEMA_VER"));
 
@@ -665,6 +684,241 @@ void ImporterTest::existingErrorsUnchanged()
     QCOMPARE(importer.getLastError(), QStringLiteral("Unknown file format"));
 
     QVERIFY(nothingPublished(session));
+}
+
+// ─────────────────────────────── parse result versus session creation
+
+void ImporterTest::parseFileCarriesNoDefaults()
+{
+    const QString path = writeTemp(Fixtures::sensorFile().toBytes());
+
+    DataImporter importer;
+    ParsedFile file;
+    QVERIFY2(importer.parseFile(path, file), qPrintable(importer.getLastError()));
+
+    // Exactly what the file declares: no _DESCRIPTION, no _IMPORT_TIME, ...
+    QCOMPARE(file.data.attributeKeys(), QStringList({"DEVICE_ID", "FIRMWARE_VER", "SESSION_ID"}));
+    QCOMPARE(file.data.sensorKeys(), QStringList({"IMU", "MAG"}));
+    QCOMPARE(file.filePath, path);
+    QCOMPARE(file.sessionId, QStringLiteral("test-session"));
+    QVERIFY(file.sessionIdRecorded);
+    QVERIFY(file.applyCreationDefaults);
+}
+
+void ImporterTest::parseFileSynthesizesMatchId()
+{
+    // MD5 sums computed once with md5sum on these exact bytes.
+    const QByteArray fs1 =
+        "time,lat,lon,hMSL,velN,velE,velD,hAcc,vAcc,sAcc,heading,cAcc,gpsFix,numSV\n"
+        ",(deg),(deg),(m),(m/s),(m/s),(m/s),(m),(m),(m/s),(deg),(deg),,\n"
+        "2024-01-01T12:00:00.00Z,45.5,-73.25,4000.5,10,-20,5,1.5,2.5,0.25,296.5,1.25,3,12\n";
+    const QByteArray fs2 =
+        "$FLYS,1\n"
+        "$VAR,FIRMWARE_VER,v2023.09.22\n"
+        "$COL,GNSS,time,lat,lon,hMSL\n"
+        "$UNIT,GNSS,,deg,deg,m\n"
+        "$DATA\n"
+        "$GNSS,2024-01-01T12:00:00.000Z,45.5,-73.25,4000\n";
+
+    {
+        DataImporter importer;
+        ParsedFile file;
+        QVERIFY2(importer.parseFile(writeTemp(fs1, QStringLiteral("a.csv")), file), qPrintable(importer.getLastError()));
+        QVERIFY(!file.sessionIdRecorded);
+        QCOMPARE(file.sessionId, QStringLiteral("277eace764c3329f1f7fab1dc85c64c6"));
+        QVERIFY(file.data.attributeKeys().isEmpty());
+        QVERIFY(!file.data.hasAttribute("SESSION_ID"));
+        QVERIFY(!file.data.hasAttribute("DEVICE_ID"));
+
+        // The id follows the bytes, not the path
+        ParsedFile again;
+        QVERIFY(importer.parseFile(writeTemp(fs1, QStringLiteral("elsewhere.csv")), again));
+        QCOMPARE(again.sessionId, QStringLiteral("277eace764c3329f1f7fab1dc85c64c6"));
+    }
+    {
+        DataImporter importer;
+        ParsedFile file;
+        QVERIFY2(importer.parseFile(writeTemp(fs2), file), qPrintable(importer.getLastError()));
+        QVERIFY(!file.sessionIdRecorded);
+        QCOMPARE(file.sessionId, QStringLiteral("689427db5cd64fdd5bc096ed70e8a07a"));
+        QCOMPARE(file.data.attributeKeys(), QStringList({"FIRMWARE_VER"}));
+        QVERIFY(!file.data.hasAttribute("SESSION_ID"));
+        QVERIFY(!file.data.hasAttribute("DEVICE_ID"));
+
+        // Creation is what stores the synthesized id
+        SessionData created = file.data;
+        DataImporter::applyCreationDefaults(file, created);
+        QCOMPARE(created.storedAttribute("SESSION_ID").toString(),
+                 QStringLiteral("689427db5cd64fdd5bc096ed70e8a07a"));
+    }
+}
+
+void ImporterTest::parseFailureLeavesResultEmpty()
+{
+    DataImporter importer;
+    ParsedFile file;
+    QVERIFY(importer.parseFile(writeTemp(Fixtures::sensorFile().toBytes()), file));
+
+    // The same object, reused for a file that is rejected
+    QVERIFY(!importer.parseFile(writeTemp(Fixtures::sensorFile().var("SCHEMA_VER", "3").toBytes()), file));
+    QCOMPARE(importer.getLastError(), QStringLiteral("Unsupported SCHEMA_VER '3' (supported: 1, 2)"));
+    QVERIFY(nothingPublished(file.data));
+    QVERIFY(file.filePath.isEmpty());
+    QVERIFY(file.sessionId.isEmpty());
+    QVERIFY(!file.sessionIdRecorded);
+}
+
+void ImporterTest::creationDefaultsOnlyFillAbsent()
+{
+    // A Viewer-saved file imported as a new session keeps its own values.
+    const QString path = writeTemp(Fixtures::sensorFile()
+                                       .var("_DESCRIPTION", "kept")
+                                       .var("_JUMPER_MASS", "80")
+                                       .toBytes());
+    DataImporter importer;
+    ParsedFile file;
+    QVERIFY2(importer.parseFile(path, file), qPrintable(importer.getLastError()));
+
+    SessionData session = file.data;
+    DataImporter::applyCreationDefaults(file, session);
+
+    QCOMPARE(session.storedAttribute("_DESCRIPTION").toString(), QStringLiteral("kept"));
+    QCOMPARE(session.storedAttribute("_JUMPER_MASS").toString(), QStringLiteral("80"));
+    QCOMPARE(session.storedAttribute("_PLANFORM_AREA").toDouble(), 1.0);
+    QVERIFY(session.hasStoredAttribute("_WIND_N"));
+    QCOMPARE(session.storedAttribute("_WIND_N").toDouble(), 0.0);
+    QCOMPARE(session.storedAttribute("_WIND_E").toDouble(), 0.0);
+    QVERIFY(session.storedAttribute("_IMPORT_TIME").toDouble() > 0.0);
+    QCOMPARE(session.storedAttribute("DEVICE_ID").toString(), QStringLiteral("test-device"));
+    QCOMPARE(session.storedAttribute("SESSION_ID").toString(), QStringLiteral("test-session"));
+    QVERIFY(!session.hasStoredAttribute("_GROUND_ELEV"));
+    QVERIFY(!session.hasStoredAttribute("SCHEMA_VER"));
+
+    // The parse result itself was not touched
+    QCOMPARE(file.data.attributeKeys(),
+             QStringList({"DEVICE_ID", "FIRMWARE_VER", "SESSION_ID", "_DESCRIPTION", "_JUMPER_MASS"}));
+}
+
+void ImporterTest::creationDefaultsDeviceId()
+{
+    Fs2FileBuilder noDevice;
+    noDevice.var("SESSION_ID", "no-device")
+            .sensor("GNSS", {"time", "lat", "lon", "hMSL"}, {"", "deg", "deg", "m"})
+            .row("GNSS", "2024-01-01T12:00:00.000Z,45.5,-73.25,4000");
+
+    // A device tree: FLYSIGHT.TXT at the root, the file in YY-MM-DD/HH-MM-SS
+    {
+        const QString root = TestEnvironment::instance().newTempDir(QStringLiteral("device"));
+        QVERIFY(QDir(root).mkpath(QStringLiteral("24-01-01/12-00-00")));
+        QVERIFY(writeFile(root + QStringLiteral("/FLYSIGHT.TXT"),
+                          "; FlySight 2\nFirmware_Ver: v2023.09.22\nDevice_ID: abc123 ; comment\n"));
+        const QString path = root + QStringLiteral("/24-01-01/12-00-00/TRACK.CSV");
+        QVERIFY(noDevice.write(path));
+
+        DataImporter importer;
+        ParsedFile file;
+        QVERIFY2(importer.parseFile(path, file), qPrintable(importer.getLastError()));
+        QVERIFY(!file.data.hasAttribute("DEVICE_ID"));
+
+        SessionData session = file.data;
+        DataImporter::applyCreationDefaults(file, session);
+        QCOMPARE(session.storedAttribute("DEVICE_ID").toString(), QStringLiteral("abc123"));
+        QCOMPARE(session.storedAttribute("_DESCRIPTION").toString(), QStringLiteral("24-01-01/12-00-00"));
+    }
+
+    // A FlySight 1 card names the device differently
+    {
+        const QString root = TestEnvironment::instance().newTempDir(QStringLiteral("device-fs1"));
+        QVERIFY(writeFile(root + QStringLiteral("/FLYSIGHT.TXT"), "Processor serial number: 0042\n"));
+        const QString path = root + QStringLiteral("/track.csv");
+        QVERIFY(noDevice.write(path));
+
+        DataImporter importer;
+        ParsedFile file;
+        QVERIFY(importer.parseFile(path, file));
+        SessionData session = file.data;
+        DataImporter::applyCreationDefaults(file, session);
+        QCOMPARE(session.storedAttribute("DEVICE_ID").toString(), QStringLiteral("0042"));
+        QCOMPARE(session.storedAttribute("_DESCRIPTION").toString(), QStringLiteral("track.csv"));
+    }
+
+    // No FLYSIGHT.TXT above the file: the placeholder, silently
+    {
+        const QString path = writeTemp(noDevice.toBytes());
+        DataImporter importer;
+        ParsedFile file;
+        QVERIFY(importer.parseFile(path, file));
+
+        WarningCounter warnings;
+        SessionData session = file.data;
+        DataImporter::applyCreationDefaults(file, session);
+        QCOMPARE(session.storedAttribute("DEVICE_ID").toString(), QStringLiteral("n/a"));
+        QCOMPARE(warnings.count(), 0);
+    }
+
+    // A session built in memory has no path: no lookup and no placeholder
+    {
+        SessionData built;
+        built.setAttribute("SESSION_ID", QStringLiteral("built"));
+        ParsedFile file = ParsedFile::fromSession(built);
+        QVERIFY(file.filePath.isEmpty());
+        QVERIFY(!file.applyCreationDefaults);
+        QCOMPARE(file.sessionId, QStringLiteral("built"));
+        QVERIFY(file.sessionIdRecorded);
+
+        SessionData session = file.data;
+        DataImporter::applyCreationDefaults(file, session);
+        QVERIFY(!session.hasStoredAttribute("DEVICE_ID"));
+    }
+}
+
+void ImporterTest::fixedGroundElevationOnlyInFixedMode()
+{
+    PreferencesManager &prefs = PreferencesManager::instance();
+    const QString path = writeTemp(Fixtures::trackFile().toBytes());
+
+    prefs.setValue(PreferenceKeys::ImportGroundReferenceMode, QStringLiteral("Fixed"));
+    prefs.setValue(PreferenceKeys::ImportFixedElevation, 123.5);
+    {
+        DataImporter importer;
+        SessionData session;
+        QVERIFY(importer.importFile(path, session));
+        QVERIFY(session.hasStoredAttribute("_GROUND_ELEV"));
+        QCOMPARE(session.storedAttribute("_GROUND_ELEV").toDouble(), 123.5);
+    }
+
+    prefs.setValue(PreferenceKeys::ImportGroundReferenceMode, QStringLiteral("Automatic"));
+    {
+        DataImporter importer;
+        SessionData session;
+        QVERIFY(importer.importFile(path, session));
+        QVERIFY(!session.hasStoredAttribute("_GROUND_ELEV"));
+    }
+}
+
+void ImporterTest::peekHeaderAttributeReadsNoData()
+{
+    // The data section is binary junk no parser would accept: the peek never
+    // gets there.
+    QByteArray bytes =
+        "$FLYS,1\r\n"
+        "$VAR,SESSION_ID_X,decoy\r\n"
+        "$VAR,SESSION_ID,abc,def\r\n"
+        "$VAR,EMPTY\r\n"
+        "$COL,GNSS,time,lat\r\n"
+        "$DATA\r\n";
+    bytes += QByteArray::fromHex("00fffe");
+    bytes += "$VAR,AFTER_DATA,no\n";
+    bytes += QByteArray(4096, '\xff');
+    const QString path = writeTemp(bytes);
+
+    QCOMPARE(DataImporter::peekHeaderAttribute(path, QStringLiteral("SESSION_ID")).value_or(QStringLiteral("<none>")),
+             QStringLiteral("abc,def"));
+    QCOMPARE(DataImporter::peekHeaderAttribute(path, QStringLiteral("EMPTY")).value_or(QStringLiteral("<none>")),
+             QString());
+    QVERIFY(!DataImporter::peekHeaderAttribute(path, QStringLiteral("AFTER_DATA")).has_value());
+    QVERIFY(!DataImporter::peekHeaderAttribute(path, QStringLiteral("MISSING")).has_value());
+    QVERIFY(!DataImporter::peekHeaderAttribute(path + QStringLiteral(".nope"), QStringLiteral("SESSION_ID")).has_value());
 }
 
 FLYSIGHT_TEST_MAIN(ImporterTest)
