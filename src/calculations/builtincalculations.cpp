@@ -49,7 +49,7 @@ QString calculationEnvironmentFingerprint(const CalculationRegistry &registry)
     const QStringList keys = registry.declaredPreferenceKeys();
     for (const QString &key : keys) {
         // The same text form a session file would carry: exact for doubles,
-        // and the same whether QSettings handed back a number or a string.
+        // and the same whether the settings store handed back a number or a string.
         const QVariant value = provider ? provider->preferenceValue(key) : QVariant();
         const QString text = CsvFormat::formatAttributeValue(value).value_or(QString());
         hash.addData((QStringLiteral("pref:") + key + QLatin1Char('=') + text + QLatin1Char('\n')).toUtf8());
