@@ -305,6 +305,12 @@ jobs:
           # cmake/BundlePythonMacOS.cmake and cmake/BundlePythonLinux.cmake
           python-version: '3.13.14'
 
+      # tst_python_bridge runs the SDK in this (build-time) interpreter, and the
+      # SDK imports NumPy. Without it the test is registered but disabled.
+      - name: Install NumPy for the embedded-Python bridge test
+        shell: bash
+        run: python -m pip install numpy
+
       - name: Verify Python configuration
         shell: bash
         run: |
