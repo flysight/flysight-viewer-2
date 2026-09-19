@@ -116,6 +116,7 @@ private slots:
     // staticDependencies() and the source-input opt-in compose: an opted-in
     // source input is part of the static closure
     void staticDependenciesCoverOptInSourceInputs();
+    void candidateOrderIgnoresUnrelatedOrder();
 };
 
 void CalcRegistryTest::graphTypesAreHashKeys()
@@ -727,6 +728,69 @@ void CalcRegistryTest::staticDependenciesCoverOptInSourceInputs()
     const StaticDependencies deps = registry.staticDependencies(attr("SRC0"));
     QCOMPARE(deps.names, QSet<DependencyKey>({attr("SRC0"), measKey("S", "m"), attr("A")}));
     QVERIFY(deps.preferences.isEmpty());
+}
+
+// candidateOrder() is the registration order as far as resolution can see it:
+// per output the list candidatesFor() walks, the families, the conversions.
+void CalcRegistryTest::candidateOrderIgnoresUnrelatedOrder()
+{
+    CalculationFamily conv;
+    conv.id = QStringLiteral("conv");
+    conv.instantiate = [](const DependencyKey &) -> std::optional<CalculationDescriptor> { return std::nullopt; };
+
+    CalculationDescriptor two = simple("two", "b");
+    two.outputs.append(measKey("S", "m"));
+
+    const auto outputs = [](const CandidateOrder &order) {
+        QStringList lines;
+        for (const auto &entry : order.byOutput)
+            lines.append(describe(entry.first) + QLatin1Char('=') + entry.second.join(QLatin1Char(',')));
+        return lines;
+    };
+    const auto same = [](const CandidateOrder &l, const CandidateOrder &r) {
+        return l.byOutput == r.byOutput && l.families == r.families && l.sourceConversions == r.sourceConversions;
+    };
+
+    CalculationRegistry a;
+    QVERIFY(a.candidateOrder().byOutput.isEmpty());
+    QVERIFY(a.registerCalculation(simple("a1", "a")));
+    QVERIFY(a.registerSourceConversion(conv));
+    QVERIFY(a.registerFamily(prefixFamily("fam", "k:")));
+    QVERIFY(a.registerCalculation(two));
+    QVERIFY(a.registerCalculation(simple("a2", "a")));
+    QVERIFY(a.registerCalculation(simple("c1", "c")));
+
+    // Sorted by name (attributes before measurements); the family takes its
+    // place in every list because it may accept any name.
+    const CandidateOrder orderA = a.candidateOrder();
+    QCOMPARE(outputs(orderA), QStringList({"a=a1,fam,a2", "b=fam,two", "c=fam,c1", "S/m=fam,two"}));
+    QCOMPARE(orderA.families, QStringList({"fam"}));
+    QCOMPARE(orderA.sourceConversions, QStringList({"conv"}));
+    for (const auto &entry : orderA.byOutput) {
+        QStringList tried;
+        for (const CalculationId &id : entry.second) {
+            if (!a.isFamily(id))
+                tried.append(id);
+        }
+        QCOMPARE(ids(a.candidatesFor(entry.first)), tried);     // "fam" accepts none of these names
+    }
+
+    // The same registrations in another order that keeps every candidate list
+    CalculationRegistry b;
+    QVERIFY(b.registerCalculation(simple("a1", "a")));
+    QVERIFY(b.registerFamily(prefixFamily("fam", "k:")));
+    QVERIFY(b.registerCalculation(simple("c1", "c")));
+    QVERIFY(b.registerCalculation(simple("a2", "a")));
+    QVERIFY(b.registerCalculation(two));
+    QVERIFY(b.registerSourceConversion(conv));
+    QVERIFY(a.registeredIds() != b.registeredIds());
+    QVERIFY(same(a.candidateOrder(), b.candidateOrder()));
+
+    // Two candidates of one output swapped
+    QVERIFY(b.unregister("a1"));
+    QVERIFY(b.registerCalculation(simple("a1", "a")));
+    QCOMPARE(outputs(b.candidateOrder()).first(), QStringLiteral("a=fam,a2,a1"));
+    QVERIFY(!same(a.candidateOrder(), b.candidateOrder()));
 }
 
 FLYSIGHT_TEST_MAIN(CalcRegistryTest)

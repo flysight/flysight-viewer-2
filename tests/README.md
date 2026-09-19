@@ -103,7 +103,9 @@ The built-in calculations are pinned by one golden table
 (`support/builtinfixture.*`: `DescentFixture` generates a 296-row jump plus a
 three-row sensor file; `goldenValues()` holds literals only). Rows marked
 "captured" were recorded from the v2026.04.1 engine before the migration; all
-others were derived by hand. `tst_builtins_engine` uses private registries;
+others were derived by hand. `tst_builtins_engine` uses private registries
+(except `fingerprintSurvivesRuntimeAltitudeMarker`, which drives the real
+`AltitudeMarkerManager` on the process-wide one and removes what it added);
 `tst_builtins_golden`, `tst_session_engine` and `tst_session_model_engine` use
 the process-wide registry through `TestEnvironment::registerBuiltIns()`, and
 must leave it as they found it (altitude-marker registrations are removed in

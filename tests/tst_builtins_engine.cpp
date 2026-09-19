@@ -12,7 +12,10 @@
 #include "calculations/builtincalculations.h"
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
+#include "calculations/interpolationcalculations.h"
 #include "fakesessionstate.h"
+#include "logbookprobe.h"
+#include "preferences/preferencesmanager.h"
 #include "preferences/preferencekeys.h"
 #include "sessiondata.h"
 #include "testenvironment.h"
@@ -91,6 +94,7 @@ private slots:
     // Logbook column cache: static closures and the environment fingerprint
     void gyroColumnClosure();
     void fingerprintChanges();
+    void fingerprintSurvivesRuntimeAltitudeMarker();
 
 private:
     SessionData m_fixture;              // imported once; copied into each fake
@@ -544,7 +548,8 @@ void BuiltinsEngineTest::fingerprintChanges()
     QVERIFY(b.registry.unregister(extra.id));
     QCOMPARE(calculationEnvironmentFingerprint(b.registry), base);
 
-    // Two registrations swapped: the same ids in a different order
+    // Two registrations with different outputs, swapped: they are never
+    // candidates for the same name, so nothing can tell the orders apart
     CalculationDescriptor second = extra;
     second.id = QStringLiteral("test.second");
     second.outputs = {attr("_TEST_SECOND")};
@@ -553,8 +558,36 @@ void BuiltinsEngineTest::fingerprintChanges()
     QVERIFY(a.registry.registerCalculation(second));
     QVERIFY(b.registry.registerCalculation(second));
     QVERIFY(b.registry.registerCalculation(extra));
+    QVERIFY(a.registry.registeredIds() != b.registry.registeredIds());
+    const QString withBoth = calculationEnvironmentFingerprint(a.registry);
+    QCOMPARE(calculationEnvironmentFingerprint(b.registry), withBoth);
+    QVERIFY(withBoth != withExtra);
+    QVERIFY(withBoth != base);
+
+    // Two candidates for ONE output, swapped: the first one wins, so the
+    // order is part of the environment
+    CalculationDescriptor rival = extra;
+    rival.id = QStringLiteral("test.rival");
+    CalculationDescriptor rival2 = extra;
+    rival2.id = QStringLiteral("test.rival2");
+    QVERIFY(a.registry.registerCalculation(rival));
+    QVERIFY(a.registry.registerCalculation(rival2));
+    QVERIFY(b.registry.registerCalculation(rival2));
+    QVERIFY(b.registry.registerCalculation(rival));
     QVERIFY(calculationEnvironmentFingerprint(a.registry) != calculationEnvironmentFingerprint(b.registry));
-    QVERIFY(calculationEnvironmentFingerprint(a.registry) != withExtra);
+    QVERIFY(calculationEnvironmentFingerprint(a.registry) != withBoth);
+    QVERIFY(b.registry.unregister(rival.id));
+    QVERIFY(b.registry.unregister(rival2.id));
+    QCOMPARE(calculationEnvironmentFingerprint(b.registry), withBoth);
+
+    // Before or after a family is a difference too: a family may accept any name
+    World early;
+    QVERIFY(early.registry.unregister(QStringLiteral("builtin.interpolation")));
+    QVERIFY(early.registry.registerCalculation(extra));
+    QVERIFY(early.registry.registerCalculation(second));
+    Calculations::registerInterpolationFamily(early.registry);
+    QCOMPARE(early.registry.registeredIds().size(), a.registry.registeredIds().size() - 2);
+    QVERIFY(calculationEnvironmentFingerprint(early.registry) != withBoth);
 
     // The declared preference
     World c;
@@ -572,6 +605,48 @@ void BuiltinsEngineTest::fingerprintChanges()
     // No engine ran anything for any of this
     QCOMPARE(a.engine->totalRunCount(), 0);
     QCOMPARE(c.engine->totalRunCount(), 0);
+}
+
+// An altitude marker added while the application runs is registered after the
+// existing ones; the next start registers all of them in ascending order. Both
+// are the same environment: the index written in between stays valid.
+void BuiltinsEngineTest::fingerprintSurvivesRuntimeAltitudeMarker()
+{
+    TestEnvironment::instance().registerBuiltIns();     // the application registry, as at startup
+    CalculationRegistry &registry = CalculationRegistry::instance();
+    const QStringList idsBefore = registry.registeredIds();
+    const QString fingerprintBefore = calculationEnvironmentFingerprint();
+
+    const auto altitudeIds = [&]() { return registry.registeredIds().mid(idsBefore.size()); };
+
+    writeAltitudes({1000, 3000});
+    auto manager = std::make_unique<AltitudeMarkerManager>();
+    PreferencesManager::instance().setValue(PreferenceKeys::AltitudeMarkersUnits, QStringLiteral("Metric"));
+    manager->refresh();
+    QCOMPARE(altitudeIds(), QStringList({"builtin.altitude._ALTITUDE_1000_M", "builtin.altitude._ALTITUDE_3000_M"}));
+    const QString withTwo = calculationEnvironmentFingerprint();
+    QVERIFY(withTwo != fingerprintBefore);
+
+    // Added at run time (the preference change refreshes the manager): appended
+    writeAltitudes({1000, 3000, 2000});
+    QCOMPARE(altitudeIds(), QStringList({"builtin.altitude._ALTITUDE_1000_M", "builtin.altitude._ALTITUDE_3000_M",
+                                         "builtin.altitude._ALTITUDE_2000_M"}));
+    const QString atRuntime = calculationEnvironmentFingerprint();
+    QVERIFY(atRuntime != withTwo);
+
+    // The next start: a new manager registers them in ascending order
+    manager.reset();
+    QCOMPARE(registry.registeredIds(), idsBefore);
+    manager = std::make_unique<AltitudeMarkerManager>();
+    manager->refresh();
+    QCOMPARE(altitudeIds(), QStringList({"builtin.altitude._ALTITUDE_1000_M", "builtin.altitude._ALTITUDE_2000_M",
+                                         "builtin.altitude._ALTITUDE_3000_M"}));
+    QCOMPARE(calculationEnvironmentFingerprint(), atRuntime);
+
+    manager.reset();
+    writeAltitudes({});
+    QCOMPARE(registry.registeredIds(), idsBefore);
+    QCOMPARE(calculationEnvironmentFingerprint(), fingerprintBefore);
 }
 
 FLYSIGHT_TEST_MAIN(BuiltinsEngineTest)

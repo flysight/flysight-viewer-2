@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <QDebug>
+#include <QMap>
 #include <QSet>
 
 #include "calculationengine.h"
@@ -458,6 +459,43 @@ QStringList CalculationRegistry::declaredPreferenceKeys() const
     QStringList sorted(keys.cbegin(), keys.cend());
     sorted.sort();
     return sorted;
+}
+
+CandidateOrder CalculationRegistry::candidateOrder() const
+{
+    CandidateOrder order;
+
+    // Same walk as candidatesFor(): m_entries is in sequence order, and a
+    // family takes its place among the plain candidates of every name.
+    QMap<DependencyKey, QList<CalculationId>> byOutput;
+    for (const Entry &entry : m_entries) {
+        if (entry.kind != EntryKind::Calculation)
+            continue;
+        for (const DependencyKey &out : entry.descriptor->outputs)
+            byOutput.insert(out, {});
+    }
+
+    for (const Entry &entry : m_entries) {
+        switch (entry.kind) {
+        case EntryKind::SourceConversion:
+            order.sourceConversions.append(entry.id);
+            break;
+        case EntryKind::Family:
+            order.families.append(entry.id);
+            for (auto it = byOutput.begin(); it != byOutput.end(); ++it)
+                it->append(entry.id);
+            break;
+        case EntryKind::Calculation:
+            for (const DependencyKey &out : entry.descriptor->outputs)
+                byOutput[out].append(entry.id);
+            break;
+        }
+    }
+
+    order.byOutput.reserve(byOutput.size());
+    for (auto it = byOutput.cbegin(); it != byOutput.cend(); ++it)
+        order.byOutput.append({it.key(), it.value()});
+    return order;
 }
 
 int CalculationRegistry::addObserver(std::function<void()> observer)

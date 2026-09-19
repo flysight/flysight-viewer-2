@@ -36,13 +36,23 @@ void registerBuiltInCalculations(CalculationRegistry &registry = CalculationRegi
 constexpr int CalculationCompatibilityVersion = 1;
 
 /// The second half of cache validity (index.json field
-/// "calculationEnvironment"): which calculations are registered, in which
-/// order, and the values of the preferences they declare as inputs.
+/// "calculationEnvironment"): which calculations are registered, the order in
+/// which candidates for one name are tried, and the values of the preferences
+/// the calculations declare as inputs.
 ///
-/// SHA-1 (lower-case hex, 40 characters) over, in this order:
-///   "id:<id>\n"            for every id in registry.registeredIds()            (registration order)
+/// SHA-1 (lower-case hex, 40 characters) over registry.candidateOrder() and
+/// the preferences, in this order (each list is a label line followed by one
+/// "#<id>\n" line per id):
+///   "attribute:<key>\n" / "measurement:<sensor>/<name>\n" + candidate ids,
+///        for every output name a plain calculation declares          (sorted by name)
+///   "families\n" + family ids                                         (registration order)
+///   "conversions\n" + source-conversion family ids                    (registration order)
 ///   "pref:<key>=<text>\n"  for every key in registry.declaredPreferenceKeys()  (sorted),
 ///        text = CsvFormat::formatAttributeValue(provider value).value_or(QString())
+/// The relative order of registrations that can never be candidates for the
+/// same name does not enter: registering the same calculations in another
+/// order gives the same fingerprint unless that changes which one is tried
+/// first for some name.
 /// A registry without a preference provider contributes empty texts.
 ///
 /// Not covered: a registration whose id is unchanged but whose code changed

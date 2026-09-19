@@ -47,6 +47,18 @@ struct StaticDependencies {
     QSet<QString> preferences;      ///< every declared preference key reachable
 };
 
+/// The part of the registration order that resolution can observe (see
+/// CalculationRegistry::candidateOrder).
+struct CandidateOrder {
+    /// Per output name declared by a plain calculation, sorted by name: what is
+    /// tried for it, in the order it is tried - the plain calculations
+    /// declaring the name interleaved with EVERY family (which names a family
+    /// accepts is not enumerable, so each one may be a candidate).
+    QList<std::pair<DependencyKey, QList<CalculationId>>> byOutput;
+    QList<CalculationId> families;              ///< what is tried for any other name
+    QList<CalculationId> sourceConversions;     ///< what is tried for a measurement with source data
+};
+
 /// Global, session-free registrations in deterministic order.
 ///
 /// The registry holds no per-session data and never runs a calculation. It
@@ -132,6 +144,13 @@ public:
     /// explicitly, or changes of that preference will not reach the cached
     /// logbook columns of unloaded sessions.
     QStringList declaredPreferenceKeys() const;
+
+    /// Registration order as far as it can decide which candidate wins, and
+    /// nothing more: two plain calculations that share no output are never
+    /// candidates for the same name, so their relative order is not part of
+    /// the result. Registries with equal results try the same candidates in
+    /// the same order for every name.
+    CandidateOrder candidateOrder() const;
 
     /// `observer` is called after every successful register* / unregister,
     /// after the enrolled engines were notified. Plain callbacks (this library

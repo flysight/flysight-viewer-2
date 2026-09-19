@@ -41,9 +41,28 @@ QString calculationEnvironmentFingerprint(const CalculationRegistry &registry)
 {
     QCryptographicHash hash(QCryptographicHash::Sha1);
 
-    const QList<CalculationId> ids = registry.registeredIds();
-    for (const CalculationId &id : ids)
-        hash.addData((QStringLiteral("id:") + id + QLatin1Char('\n')).toUtf8());
+    // Registrations, as far as their order can affect a result: for every
+    // output name (sorted) the candidates in the order they are tried. The
+    // relative order of calculations that share no output is left out, so
+    // that a calculation registered at run time (appended) hashes the same as
+    // after the next start, where it may be registered between others. An id
+    // cannot contain '#'.
+    const auto addList = [&hash](const QString &label, const QList<CalculationId> &ids) {
+        hash.addData((label + QLatin1Char('\n')).toUtf8());
+        for (const CalculationId &id : ids)
+            hash.addData((QLatin1Char('#') + id + QLatin1Char('\n')).toUtf8());
+    };
+    const CandidateOrder order = registry.candidateOrder();
+    for (const auto &output : order.byOutput) {
+        const DependencyKey &name = output.first;
+        addList(name.type == DependencyKey::Type::Measurement
+                    ? QStringLiteral("measurement:") + name.measurementKey.first
+                          + QLatin1Char('/') + name.measurementKey.second
+                    : QStringLiteral("attribute:") + name.attributeKey,
+                output.second);
+    }
+    addList(QStringLiteral("families"), order.families);
+    addList(QStringLiteral("conversions"), order.sourceConversions);
 
     const IPreferenceProvider *provider = registry.preferenceProvider();
     const QStringList keys = registry.declaredPreferenceKeys();
