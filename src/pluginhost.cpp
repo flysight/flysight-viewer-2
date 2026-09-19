@@ -351,7 +351,7 @@ void PluginHost::initialise(const QString& pluginDir)
     }
 
     /* ------------------------------------------------------------------ */
-    /* 6.  Register simple plot definitions                               */
+    /* 5.  Register simple plot definitions                               */
     /* ------------------------------------------------------------------ */
     for (py::handle h : sdk.attr("_simple_plots")) try {
         py::object plt = h.cast<py::object>();
@@ -375,7 +375,7 @@ void PluginHost::initialise(const QString& pluginDir)
     }
 
     /* ------------------------------------------------------------------ */
-    /* 6b. Register simple marker definitions                             */
+    /* 5b. Register simple marker definitions                             */
     /* ------------------------------------------------------------------ */
     for (py::handle h : sdk.attr("_markers")) try {
         py::object mk = h.cast<py::object>();
@@ -404,7 +404,7 @@ void PluginHost::initialise(const QString& pluginDir)
     }
 
     /* ------------------------------------------------------------------ */
-    /* 7.  Summary                                                        */
+    /* 6.  Summary                                                        */
     /* ------------------------------------------------------------------ */
     qInfo().noquote() << QStringLiteral(
         "[PluginHost] Registered %1 attributes (%2 rejected), %3 measurements (%4 rejected), "

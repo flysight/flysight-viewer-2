@@ -130,25 +130,25 @@ private slots:
     void initTestCase();
     void cleanup();
 
-    // Task 7.2
+    // boot, single-output plugins, registries
     void bootsRealBridge();
     void singleOutputPluginsReadEffectiveValues();
     void pluginOutputsAreNotEnumerated();
     void plotAndMarkerRegistrationUnaffected();
     void secondInitialiseIsNoOp();
 
-    // Task 7.3
+    // plugin registration: rejection and order
     void unknownKindRejectsPluginOnly();
     void registrationOrderIsDeterministic();
 
-    // Task 7.4
+    // undeclared reads, source access, stale views
     void undeclaredReadDiagnostic();
     void swallowedUndeclaredReadStillFails();
     void undeclaredSourceRead();
     void sourceOfDerivedNameIsAbsent();
     void staleViewRaises();
 
-    // Task 7.5
+    // failures, return types, precedence
     void exceptionYieldsCleanUnavailable();
     void malformedOutputsAreUnavailable_data();
     void malformedOutputsAreUnavailable();
@@ -157,7 +157,7 @@ private slots:
     void pluginBeatsBuiltinStoredBeatsBoth();
     void measurementPluginUnit();
 
-    // Task 7.6
+    // multi-output (bundle) plugins
     void multiOutputRunsOnce();
     void partialBundle();
     void sourceAccessMatchesCpp();
@@ -166,10 +166,10 @@ private slots:
     void malformedBundles();
     void badOutputDeclarationsRejected();
 
-    // Task 7.7
+    // the bundled example plugin
     void bundledExampleRuns();
 
-    // Phase 8, Task 8.4
+    // a plugin through the application model: import, column cache, save
     void pluginWorkflowThroughModel();
 
 private:
@@ -272,7 +272,7 @@ int PythonBridgeTest::rejectionsFor(const QString &label, const QString &reasonP
     return count;
 }
 
-// ------------------------------------------------------------------ Task 7.2
+// ------------------------------ boot, single-output plugins, registries
 
 void PythonBridgeTest::bootsRealBridge()
 {
@@ -376,7 +376,7 @@ void PythonBridgeTest::secondInitialiseIsNoOp()
     QCOMPARE(PlotRegistry::instance().allPlots().size(), plotsBefore);
 }
 
-// ------------------------------------------------------------------ Task 7.3
+// ------------------------------ plugin registration: rejection and order
 
 void PythonBridgeTest::unknownKindRejectsPluginOnly()
 {
@@ -467,7 +467,7 @@ void PythonBridgeTest::registrationOrderIsDeterministic()
     QCOMPARE(QStringList(all.mid(0, expected.size())), expected);
 }
 
-// ------------------------------------------------------------------ Task 7.4
+// ------------------------------ undeclared reads, source access, stale views
 
 void PythonBridgeTest::undeclaredReadDiagnostic()
 {
@@ -558,7 +558,7 @@ void PythonBridgeTest::staleViewRaises()
     QVERIFY(py::module_::import("t_view").attr("poke_stale")().cast<bool>());
 }
 
-// ------------------------------------------------------------------ Task 7.5
+// ------------------------------ failures, return types, precedence
 
 void PythonBridgeTest::exceptionYieldsCleanUnavailable()
 {
@@ -719,7 +719,7 @@ void PythonBridgeTest::measurementPluginUnit()
     QCOMPARE(session.effectiveUnit(QStringLiteral("IMU"), QStringLiteral("pyWx2")), QStringLiteral("deg/s"));
 }
 
-// ------------------------------------------------------------------ Task 7.6
+// ------------------------------ multi-output (bundle) plugins
 
 void PythonBridgeTest::multiOutputRunsOnce()
 {
@@ -868,7 +868,7 @@ void PythonBridgeTest::badOutputDeclarationsRejected()
     QVERIFY(idEndingWith(QStringLiteral(".PyNoOutputs")).isEmpty());
 }
 
-// ------------------------------------------------------------------ Task 7.7
+// ------------------------------ the bundled example plugin
 
 void PythonBridgeTest::bundledExampleRuns()
 {
@@ -896,7 +896,7 @@ void PythonBridgeTest::bundledExampleRuns()
     QCOMPARE(plots, QSet<QString>({QStringLiteral("Tilt pitch"), QStringLiteral("Tilt roll")}));
 }
 
-// ------------------------------------------------------------------ Task 8.4
+// ------------------------------ a plugin through the application model
 
 // Acceptance 17 / 19: the plugin workflow end to end - a file imported through
 // the application's import path, a logbook column fed by a multi-output Python
