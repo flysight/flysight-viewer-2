@@ -9,6 +9,7 @@ namespace FlySight {
 
 class MeasureModel;
 class PlotModel;
+struct PlotValue;
 
 class MeasureTool : public PlotTool
 {
@@ -26,6 +27,15 @@ public:
 
 private:
     void updateMeasurement(const QPoint &currentPixel);
+
+    struct Measurement;
+    /// Computes the measurement from the model's live sessions. The caller
+    /// holds a SessionModel::RowStabilityGuard for the whole call.
+    Measurement measure(double currentX,
+                        const QString &xVariable,
+                        const QString &referenceMarkerKey,
+                        const QVector<PlotValue> &enabledPlots) const;
+
     void applyLinePenFromPreferences();
 
     PlotWidget   *m_widget;

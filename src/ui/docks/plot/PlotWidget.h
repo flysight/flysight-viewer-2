@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QSet>
 #include <QTimer>
+#include <functional>
 #include <memory>
 #include <optional>
 #include "QCustomPlot/qcustomplot.h"
@@ -162,7 +163,11 @@ private:
     void writeMouseMoment(const QPoint &pixelPos, const QSet<QString> &tracedSessions);
 
     // View management
-    const SessionData* referenceSession() const;
+    /// Calls `fn` with the reference session (the hovered session, else the
+    /// first visible one) under a SessionModel::RowStabilityGuard; false when
+    /// there is none. `fn` must only read, and the reference is not valid
+    /// after it returns.
+    bool withReferenceSession(const std::function<void(const SessionData &)> &fn) const;
     std::optional<double> referenceOffsetForSession(const SessionData &session) const;
     QCPRange keyRangeOf(const SessionData& s,
                         const QString& sensor,

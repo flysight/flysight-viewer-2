@@ -1011,6 +1011,18 @@ void SessionModel::forEachLoadedSession(const QStringList &sessionIds,
     }
 }
 
+const SessionData *SessionModel::loadedSession(const QString &sessionId) const
+{
+    Q_ASSERT_X(m_rowStabilityDepth > 0, "SessionModel::loadedSession",
+               "the returned pointer is only valid under a RowStabilityGuard");
+    if (sessionId.isEmpty())
+        return nullptr;
+    const int row = getSessionRow(sessionId);
+    if (row < 0 || !m_rows.at(row).isLoaded())
+        return nullptr;
+    return &m_rows.at(row).session.value();
+}
+
 SessionData &SessionModel::sessionRef(int row)
 {
     Q_ASSERT(row >= 0 && row < m_rows.size());

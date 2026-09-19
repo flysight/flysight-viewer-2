@@ -98,7 +98,8 @@ struct MergeResult {
 /// debug builds (in release builds the guard only counts). Release the guard
 /// before anything that can emit or mutate; do not hold one across a return to
 /// the event loop. forEachLoadedSession() is the guarded way to read several
-/// sessions by id.
+/// sessions by id; loadedSession() looks one up for a reader that already
+/// holds a guard.
 class SessionModel : public QAbstractTableModel
 {
     Q_OBJECT
@@ -141,6 +142,13 @@ public:
     /// reference it receives is not valid after it returns.
     void forEachLoadedSession(const QStringList &sessionIds,
                               const std::function<void(const SessionData &)> &fn) const;
+
+    /// The live session of the loaded row with this id, or nullptr when the id
+    /// is empty, has no row, or its row is not loaded. A plain read like
+    /// forEachLoadedSession(): nothing is loaded, evicted or touched in the
+    /// LRU. The pointer is a session reference in the sense of ROW STABILITY:
+    /// call this, and use the result, only while holding a RowStabilityGuard.
+    const SessionData *loadedSession(const QString &sessionId) const;
 
     /// Work done maintaining cached column values. A test seam: the temporary
     /// sessions (and engines) behind stub rows are gone by the time a test

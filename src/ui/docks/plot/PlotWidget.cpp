@@ -228,11 +228,10 @@ PlotWidget::PlotWidget(SessionModel *model,
     updateXAxisTicker();
 
     // Initialize viewport shift tracking from the reference session
-    const SessionData* ref = referenceSession();
-    if (ref) {
-        m_lastRefSessionId = ref->getAttribute(SessionKeys::SessionId).toString();
-        m_lastRefOffset = referenceOffsetForSession(*ref).value_or(0.0);
-    }
+    withReferenceSession([this](const SessionData &ref) {
+        m_lastRefSessionId = ref.getAttribute(SessionKeys::SessionId).toString();
+        m_lastRefOffset = referenceOffsetForSession(ref).value_or(0.0);
+    });
 }
 
 PlotWidget::~PlotWidget() = default;
@@ -513,35 +512,48 @@ void PlotWidget::updatePlot()
 
         // Add graphs for each visible session
         for (int si = 0; si < model->rowCount(); ++si) {
-            const SessionRow &sr = model->rowAt(si);
-            if (!sr.isLoaded() || !sr.visible)
-                continue;
+            QVector<double> xData;
+            QVector<double> yData;
+            QString graphSessionId;
+            {
+                // The session is read, into plain values, under a row
+                // stability guard that ends before the graph is created. Only
+                // loaded rows are plotted, so the row is read in place:
+                // nothing is loaded here.
+                const SessionModel::RowStabilityGuard guard(*model);
 
-            SessionData &session = model->sessionRef(si);
+                const SessionRow &sr = model->rowAt(si);
+                if (!sr.isLoaded() || !sr.visible)
+                    continue;
 
-            QVector<double> yData = session.getMeasurement(sensorID, measurementID);
-            if (yData.isEmpty()) {
-                qWarning() << "No data available for plot:" << plotName << "in session:" << session.getAttribute(SessionKeys::SessionId);
-                continue;
-            }
+                const SessionData &session = sr.session.value();
 
-            auto offset = referenceOffsetForSession(session);
-            if (!offset.has_value())
-                continue;  // session lacks reference marker value; skip it
+                yData = session.getMeasurement(sensorID, measurementID);
+                if (yData.isEmpty()) {
+                    qWarning() << "No data available for plot:" << plotName << "in session:" << session.getAttribute(SessionKeys::SessionId);
+                    continue;
+                }
 
-            QVector<double> xData = session.getMeasurement(sensorID, m_xVariable);
-            if (xData.isEmpty() || xData.size() != yData.size()) {
-                qWarning() << "Time and measurement data size mismatch for session:" << session.getAttribute(SessionKeys::SessionId);
-                continue;
-            }
+                auto offset = referenceOffsetForSession(session);
+                if (!offset.has_value())
+                    continue;  // session lacks reference marker value; skip it
 
-            if (offset.value() != 0.0) {
-                for (double &x : xData)
-                    x -= offset.value();
+                xData = session.getMeasurement(sensorID, m_xVariable);
+                if (xData.isEmpty() || xData.size() != yData.size()) {
+                    qWarning() << "Time and measurement data size mismatch for session:" << session.getAttribute(SessionKeys::SessionId);
+                    continue;
+                }
+
+                if (offset.value() != 0.0) {
+                    for (double &x : xData)
+                        x -= offset.value();
+                }
+
+                graphSessionId = session.getAttribute(SessionKeys::SessionId).toString();
             }
 
             GraphInfo info;
-            info.sessionId = session.getAttribute(SessionKeys::SessionId).toString();
+            info.sessionId = graphSessionId;
             info.sensorId = sensorID;
             info.measurementId = measurementID;
 
@@ -579,11 +591,10 @@ void PlotWidget::updatePlot()
     onXAxisRangeChanged(customPlot->xAxis->range());
 
     // Update viewport shift tracking for the reference session
-    const SessionData* ref = referenceSession();
-    if (ref) {
-        m_lastRefSessionId = ref->getAttribute(SessionKeys::SessionId).toString();
-        m_lastRefOffset = referenceOffsetForSession(*ref).value_or(0.0);
-    }
+    withReferenceSession([this](const SessionData &ref) {
+        m_lastRefSessionId = ref.getAttribute(SessionKeys::SessionId).toString();
+        m_lastRefOffset = referenceOffsetForSession(ref).value_or(0.0);
+    });
 }
 
 void PlotWidget::updateMarkersOnly()
@@ -1093,25 +1104,33 @@ QString PlotWidget::determineGraphLayer(const GraphInfo &info, const QString &ho
 }
 
 // View management
-const SessionData* PlotWidget::referenceSession() const
+bool PlotWidget::withReferenceSession(const std::function<void(const SessionData &)> &fn) const
 {
+    // The session is handed to fn under a row stability guard and is never
+    // returned, so it cannot be held past the read.
+    const SessionModel::RowStabilityGuard guard(*model);
+
     // 1. hovered?
     QString hovered = model->hoveredSessionId();
     if (!hovered.isEmpty()) {
         for (int i = 0; i < model->rowCount(); ++i) {
             const SessionRow &row = model->rowAt(i);
-            if (row.isLoaded() && row.sessionId == hovered)
-                return &row.session.value();
+            if (row.isLoaded() && row.sessionId == hovered) {
+                fn(row.session.value());
+                return true;
+            }
         }
     }
     // 2. first visible
     for (int i = 0; i < model->rowCount(); ++i) {
         const SessionRow &row = model->rowAt(i);
-        if (row.isLoaded() && row.visible)
-            return &row.session.value();
+        if (row.isLoaded() && row.visible) {
+            fn(row.session.value());
+            return true;
+        }
     }
 
-    return nullptr;           // should not happen
+    return false;             // should not happen
 }
 
 std::optional<double> PlotWidget::referenceOffsetForSession(const SessionData &session) const
@@ -1716,16 +1735,6 @@ void PlotWidget::updateCrosshairFromMoments()
         return;
     }
 
-    // Build a fast id -> session lookup.
-    QHash<QString, const SessionData *> sessionById;
-    sessionById.reserve(model->rowCount());
-    for (int si = 0; si < model->rowCount(); ++si) {
-        const SessionRow &sr = model->rowAt(si);
-        if (!sr.isLoaded()) continue;
-        if (!sr.sessionId.isEmpty())
-            sessionById.insert(sr.sessionId, &sr.session.value());
-    }
-
     // Convert moment UTC position to plot-axis coordinate for a given session.
     auto xPlotForMoment = [&](const MomentModel::Moment &moment,
                               const SessionData &s,
@@ -1761,6 +1770,10 @@ void PlotWidget::updateCrosshairFromMoments()
         return true;
     };
 
+    // Sessions are looked up by id and read, into plain plot coordinates, under
+    // a row stability guard; each guarded block ends before the crosshair
+    // manager is called.
+
     // Case 1: Mouse moment with exactly one explicit target session.
     if (effective->id == QStringLiteral("mouse")) {
         if (effective->targetSessions.size() != 1) {
@@ -1769,14 +1782,14 @@ void PlotWidget::updateCrosshairFromMoments()
         }
 
         const QString sessionId = *effective->targetSessions.constBegin();
-        const SessionData *sessionPtr = sessionById.value(sessionId, nullptr);
-        if (!sessionPtr) {
-            m_crosshairManager->clearExternalCursor();
-            return;
-        }
-
         double xPlot = 0.0;
-        if (!xPlotForMoment(*effective, *sessionPtr, &xPlot)) {
+        bool haveX = false;
+        {
+            const SessionModel::RowStabilityGuard guard(*model);
+            const SessionData *sessionPtr = model->loadedSession(sessionId);
+            haveX = sessionPtr && xPlotForMoment(*effective, *sessionPtr, &xPlot);
+        }
+        if (!haveX) {
             m_crosshairManager->clearExternalCursor();
             return;
         }
@@ -1788,71 +1801,75 @@ void PlotWidget::updateCrosshairFromMoments()
     // Case 2: Non-mouse moment: multi-session external cursor.
     QHash<QString, double> xBySession;
 
-    if (!effective->targetSessions.isEmpty()) {
-        // Explicit targets
-        for (const QString &sid : effective->targetSessions) {
-            const SessionData *s = sessionById.value(sid, nullptr);
-            if (!s || !s->isVisible())
-                continue;
+    {
+        const SessionModel::RowStabilityGuard guard(*model);
 
-            double xPlot = 0.0;
-            if (!xPlotForMoment(*effective, *s, &xPlot))
-                continue;
-
-            xBySession.insert(sid, xPlot);
-        }
-    } else if (effective->traits.positionSource == PositionSource::Attribute) {
-        // Attribute-sourced without explicit targets: all visible sessions
-        for (int si = 0; si < model->rowCount(); ++si) {
-            const SessionRow &sr = model->rowAt(si);
-            if (!sr.isLoaded() || !sr.visible)
-                continue;
-
-            const QString &sid = sr.sessionId;
-            if (sid.isEmpty())
-                continue;
-
-            const SessionData &s = sr.session.value();
-            double xPlot = 0.0;
-            if (!xPlotForMoment(*effective, s, &xPlot))
-                continue;
-
-            xBySession.insert(sid, xPlot);
-        }
-    } else {
-        // Non-attribute without explicit targets: all visible sessions that overlap
-        for (int si = 0; si < model->rowCount(); ++si) {
-            const SessionRow &sr = model->rowAt(si);
-            if (!sr.isLoaded() || !sr.visible)
-                continue;
-
-            const QString &sid = sr.sessionId;
-            if (sid.isEmpty())
-                continue;
-
-            const SessionData &s = sr.session.value();
-            double xPlot = 0.0;
-            if (!xPlotForMoment(*effective, s, &xPlot))
-                continue;
-
-            // Check if any graph for this session has data at this x position
-            bool overlaps = false;
-            for (auto it = m_graphInfoMap.cbegin(); it != m_graphInfoMap.cend(); ++it) {
-                if (it.value().sessionId != sid)
+        if (!effective->targetSessions.isEmpty()) {
+            // Explicit targets
+            for (const QString &sid : effective->targetSessions) {
+                const SessionData *s = model->loadedSession(sid);
+                if (!s || !s->isVisible())
                     continue;
-                QCPGraph *g = it.key();
-                if (!g || !g->visible())
+
+                double xPlot = 0.0;
+                if (!xPlotForMoment(*effective, *s, &xPlot))
                     continue;
-                const double yPlot = PlotWidget::interpolateY(g, xPlot);
-                if (!std::isnan(yPlot)) {
-                    overlaps = true;
-                    break;
-                }
+
+                xBySession.insert(sid, xPlot);
             }
-            if (!overlaps)
-                continue;
+        } else if (effective->traits.positionSource == PositionSource::Attribute) {
+            // Attribute-sourced without explicit targets: all visible sessions
+            for (int si = 0; si < model->rowCount(); ++si) {
+                const SessionRow &sr = model->rowAt(si);
+                if (!sr.isLoaded() || !sr.visible)
+                    continue;
 
-            xBySession.insert(sid, xPlot);
+                const QString &sid = sr.sessionId;
+                if (sid.isEmpty())
+                    continue;
+
+                const SessionData &s = sr.session.value();
+                double xPlot = 0.0;
+                if (!xPlotForMoment(*effective, s, &xPlot))
+                    continue;
+
+                xBySession.insert(sid, xPlot);
+            }
+        } else {
+            // Non-attribute without explicit targets: all visible sessions that overlap
+            for (int si = 0; si < model->rowCount(); ++si) {
+                const SessionRow &sr = model->rowAt(si);
+                if (!sr.isLoaded() || !sr.visible)
+                    continue;
+
+                const QString &sid = sr.sessionId;
+                if (sid.isEmpty())
+                    continue;
+
+                const SessionData &s = sr.session.value();
+                double xPlot = 0.0;
+                if (!xPlotForMoment(*effective, s, &xPlot))
+                    continue;
+
+                // Check if any graph for this session has data at this x position
+                bool overlaps = false;
+                for (auto it = m_graphInfoMap.cbegin(); it != m_graphInfoMap.cend(); ++it) {
+                    if (it.value().sessionId != sid)
+                        continue;
+                    QCPGraph *g = it.key();
+                    if (!g || !g->visible())
+                        continue;
+                    const double yPlot = PlotWidget::interpolateY(g, xPlot);
+                    if (!std::isnan(yPlot)) {
+                        overlaps = true;
+                        break;
+                    }
+                }
+                if (!overlaps)
+                    continue;
+
+                xBySession.insert(sid, xPlot);
+            }
         }
     }
 
@@ -1881,31 +1898,40 @@ void PlotWidget::writeMouseMoment(const QPoint &pixelPos, const QSet<QString> &t
         bool anyConverted = false;
         QHash<QString, double> sessionUtcMap;
 
-        for (const QString &sid : tracedSessions) {
-            const int r = model->getSessionRow(sid);
-            if (r < 0)
-                continue;
-            SessionData &sess = model->sessionRef(r);
-            const auto offset = referenceOffsetForSession(sess);
-            if (!offset.has_value())
-                continue;
+        {
+            // Traced sessions have graphs, so they are normally loaded. One that
+            // is not (hidden and evicted before the plot was rebuilt) is
+            // skipped rather than loaded from disk inside a mouse move. They
+            // are read in place under a row stability guard (no load, no LRU
+            // use), which ends before the moment model is updated and emits.
+            const SessionModel::RowStabilityGuard guard(*model);
 
-            const double rawX = xCoord + offset.value();
+            for (const QString &sid : tracedSessions) {
+                const SessionData *sessPtr = model->loadedSession(sid);
+                if (!sessPtr)
+                    continue;
+                const SessionData &sess = *sessPtr;
+                const auto offset = referenceOffsetForSession(sess);
+                if (!offset.has_value())
+                    continue;
 
-            if (m_xVariable == QLatin1String(SessionKeys::SystemTime)) {
-                auto utcOpt = Calculations::systemTimeToUtc(sess, rawX);
-                if (utcOpt.has_value()) {
-                    sessionUtcMap.insert(sid, *utcOpt);
+                const double rawX = xCoord + offset.value();
+
+                if (m_xVariable == QLatin1String(SessionKeys::SystemTime)) {
+                    auto utcOpt = Calculations::systemTimeToUtc(sess, rawX);
+                    if (utcOpt.has_value()) {
+                        sessionUtcMap.insert(sid, *utcOpt);
+                        if (!anyConverted) {
+                            fallbackUtc = *utcOpt;
+                            anyConverted = true;
+                        }
+                    }
+                } else {
+                    sessionUtcMap.insert(sid, rawX);
                     if (!anyConverted) {
-                        fallbackUtc = *utcOpt;
+                        fallbackUtc = rawX;
                         anyConverted = true;
                     }
-                }
-            } else {
-                sessionUtcMap.insert(sid, rawX);
-                if (!anyConverted) {
-                    fallbackUtc = rawX;
-                    anyConverted = true;
                 }
             }
         }
@@ -1984,15 +2010,14 @@ void PlotWidget::updateMomentVLines()
             }
         } else {
             // External source
-            const SessionData *refSession = referenceSession();
-            if (refSession) {
+            withReferenceSession([&](const SessionData &refSession) {
                 auto opt = plotAxisXFromUtc(moment.positionUtc, m_xVariable,
-                                            m_referenceMarkerKey, *refSession);
+                                            m_referenceMarkerKey, refSession);
                 if (opt.has_value()) {
                     xPlot = *opt;
                     havePosition = true;
                 }
-            }
+            });
         }
 
         if (!havePosition)
@@ -2052,28 +2077,32 @@ void PlotWidget::onDependencyChanged(const QString &sessionId, const DependencyK
             // Viewport shift for the reference session.
             // Only apply the delta when the changed session is the same one
             // whose offset we cached, to avoid stale/mismatched deltas.
-            const SessionData* ref = referenceSession();
-            if (ref) {
-                QString refId = ref->getAttribute(SessionKeys::SessionId).toString();
-                if (refId == sessionId && sessionId == m_lastRefSessionId) {
-                    double newOffset = referenceOffsetForSession(*ref).value_or(0.0);
-                    double delta = newOffset - m_lastRefOffset;
+            // The new offset is read as a plain value; the range model is
+            // updated (and emits) only after the session read has ended.
+            std::optional<double> newRefOffset;
+            withReferenceSession([&](const SessionData &ref) {
+                QString refId = ref.getAttribute(SessionKeys::SessionId).toString();
+                if (refId == sessionId && sessionId == m_lastRefSessionId)
+                    newRefOffset = referenceOffsetForSession(ref).value_or(0.0);
+            });
+            if (newRefOffset.has_value()) {
+                double newOffset = newRefOffset.value();
+                double delta = newOffset - m_lastRefOffset;
 
-                    if (delta != 0.0) {
-                        QCPRange oldRange = customPlot->xAxis->range();
-                        QCPRange newRange(oldRange.lower - delta, oldRange.upper - delta);
+                if (delta != 0.0) {
+                    QCPRange oldRange = customPlot->xAxis->range();
+                    QCPRange newRange(oldRange.lower - delta, oldRange.upper - delta);
 
-                        {
-                            QSignalBlocker blocker(customPlot->xAxis);
-                            customPlot->xAxis->setRange(newRange);
-                        }
-
-                        if (m_rangeModel) {
-                            m_rangeModel->setRange(m_xVariable, m_referenceMarkerKey, newRange.lower, newRange.upper);
-                        }
-
-                        m_lastRefOffset = newOffset;
+                    {
+                        QSignalBlocker blocker(customPlot->xAxis);
+                        customPlot->xAxis->setRange(newRange);
                     }
+
+                    if (m_rangeModel) {
+                        m_rangeModel->setRange(m_xVariable, m_referenceMarkerKey, newRange.lower, newRange.upper);
+                    }
+
+                    m_lastRefOffset = newOffset;
                 }
             }
             // Reference marker change always requires a full rebuild

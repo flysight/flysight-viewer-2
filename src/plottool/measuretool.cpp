@@ -40,6 +40,17 @@ double plotAxisXToUtcSeconds(double plotAxisX,
 
 } // anonymous namespace
 
+// What the measure model is given, as plain values.
+struct MeasureTool::Measurement
+{
+    bool valid = false;         // false: the measure model is cleared
+    bool multiTrack = false;
+    QString sessionDesc;
+    QString utcText;
+    QString coordsText;
+    QVector<MeasureModel::Row> rows;
+};
+
 // -----------------------------------------------------------------------
 
 MeasureTool::MeasureTool(const PlotWidget::PlotContext &ctx)
@@ -201,6 +212,30 @@ void MeasureTool::updateMeasurement(const QPoint &currentPixel)
         return;
     }
 
+    // The sessions are read, into plain values, while a row stability guard is
+    // held; the guard ends before the measure model is updated and emits.
+    Measurement result;
+    {
+        const SessionModel::RowStabilityGuard guard(*m_model);
+        result = measure(currentX, xVariable, referenceMarkerKey, enabledPlots);
+    }
+
+    if (!result.valid) {
+        m_measureModel->clear();
+        return;
+    }
+
+    m_measureModel->setData(result.sessionDesc, result.utcText, result.coordsText,
+                            result.rows, result.multiTrack);
+}
+
+// Reads sessions through pointers into the model: the caller holds a
+// SessionModel::RowStabilityGuard for the whole call.
+MeasureTool::Measurement MeasureTool::measure(double currentX,
+                                              const QString &xVariable,
+                                              const QString &referenceMarkerKey,
+                                              const QVector<PlotValue> &enabledPlots) const
+{
     const double xLo = qMin(m_startX, currentX);
     const double xHi = qMax(m_startX, currentX);
 
@@ -230,8 +265,7 @@ void MeasureTool::updateMeasurement(const QPoint &currentPixel)
         }
 
         if (sessionById.isEmpty()) {
-            m_measureModel->clear();
-            return;
+            return Measurement();
         }
 
         QVector<MeasureModel::Row> rows;
@@ -304,12 +338,14 @@ void MeasureTool::updateMeasurement(const QPoint &currentPixel)
         }
 
         if (!hasData) {
-            m_measureModel->clear();
-            return;
+            return Measurement();
         }
 
-        m_measureModel->setData(QString(), QString(), QString(), rows, /*multiTrack=*/true);
-        return;
+        Measurement result;
+        result.valid = true;
+        result.multiTrack = true;
+        result.rows = rows;
+        return result;
     }
 
     // ---- Single-track: locked session ----
@@ -323,8 +359,7 @@ void MeasureTool::updateMeasurement(const QPoint &currentPixel)
             session = &sr.session.value();
     }
     if (!session) {
-        m_measureModel->clear();
-        return;
+        return Measurement();
     }
 
     // Compute offset for raw data space conversion
@@ -422,8 +457,7 @@ void MeasureTool::updateMeasurement(const QPoint &currentPixel)
     }
 
     if (!hasData) {
-        m_measureModel->clear();
-        return;
+        return Measurement();
     }
 
     // Header: session description + UTC + coordinates at the *current* cursor position.
@@ -462,7 +496,13 @@ void MeasureTool::updateMeasurement(const QPoint &currentPixel)
         }
     }
 
-    m_measureModel->setData(sessionDesc, utcText, coordsText, rows);
+    Measurement result;
+    result.valid = true;
+    result.sessionDesc = sessionDesc;
+    result.utcText = utcText;
+    result.coordsText = coordsText;
+    result.rows = rows;
+    return result;
 }
 
 void MeasureTool::applyLinePenFromPreferences()

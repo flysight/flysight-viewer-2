@@ -84,6 +84,7 @@ private slots:
     void rowStabilityGuardNests();
     void forEachLoadedSessionVisitsInIdOrder();
     void forEachLoadedSessionIsAPlainRead();
+    void loadedSessionIsAGuardedPlainLookup();
 
 private:
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
@@ -581,6 +582,53 @@ void SessionModelEngineTest::forEachLoadedSessionIsAPlainRead()
     QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
     QCOMPARE(m_model->columnWorkStats().valuesComputed, 0);
     QCOMPARE(m_model->columnWorkStats().calculationRuns, 0);
+}
+
+// The model's own session for a loaded row, nullptr otherwise; no load, no LRU use.
+void SessionModelEngineTest::loadedSessionIsAGuardedPlainLookup()
+{
+    QVERIFY(waitForIdle(*m_model));
+    session("s1");
+    session("s2");                  // s1 is now the least recently used
+
+    {
+        const auto guard = m_model->stableRows();
+        QCOMPARE(m_model->loadedSession("s1"),
+                 &m_model->rowAt(m_model->getSessionRow("s1")).session.value());
+        QCOMPARE(m_model->loadedSession("s2"),
+                 &m_model->rowAt(m_model->getSessionRow("s2")).session.value());
+        QVERIFY(m_model->loadedSession("no-such-session") == nullptr);
+        QVERIFY(m_model->loadedSession(QString()) == nullptr);
+
+        // Reads through the pointer, calculated values included, are allowed
+        // under the guard.
+        QCOMPARE(m_model->loadedSession("s1")->getAttribute("_EXIT_TIME").toDouble(), T0 + 9.0);
+    }
+    QCOMPARE(m_model->rowStabilityDepth(), 0);
+
+    // Room for one session: had the lookups of s1 touched the LRU, s2 would go.
+    const auto restoreCapacity = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    });
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 1);
+    const int row1 = m_model->getSessionRow("s1");
+    const int row2 = m_model->getSessionRow("s2");
+    QVERIFY(!m_model->rowAt(row1).isLoaded());
+    QVERIFY(m_model->rowAt(row2).isLoaded());
+    QVERIFY(waitForIdle(*m_model));
+
+    // s1 is a stub now: nullptr, and still a stub afterwards.
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+    m_model->resetColumnWorkStats();
+    {
+        const auto guard = m_model->stableRows();
+        QVERIFY(m_model->loadedSession("s1") == nullptr);
+        QCOMPARE(m_model->loadedSession("s2"), &m_model->rowAt(row2).session.value());
+    }
+    QVERIFY(!m_model->rowAt(row1).isLoaded());
+    QVERIFY(m_model->rowAt(row2).isLoaded());
+    QCOMPARE(loadedSpy.count(), 0);
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
 }
 
 FLYSIGHT_TEST_MAIN(SessionModelEngineTest)
