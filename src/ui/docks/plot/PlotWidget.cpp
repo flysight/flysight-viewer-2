@@ -1614,16 +1614,21 @@ void PlotWidget::showBubbleContextMenu(QCPItemText *bubble, const QPoint &global
     int row = model->getSessionRow(meta.sessionId);
     if (row < 0)
         return;
-    const SessionData &session = model->sessionRef(row);
-    if (!session.hasAttribute(meta.attributeKey))
+    if (!model->sessionRef(row).hasAttribute(meta.attributeKey))
         return;
+
+    // menu.exec() runs a nested event loop, during which the marker bubbles can
+    // be rebuilt (clearing m_markerBubbleMeta) and sessions loaded or evicted.
+    // Keep copies of what is needed afterwards; hold no reference across it.
+    const QString sessionId = meta.sessionId;
+    const QString attributeKey = meta.attributeKey;
 
     // Show menu
     QMenu menu(this);
     QAction *resetAction = menu.addAction(tr("Reset to default"));
     QAction *chosenAction = menu.exec(globalPos);
     if (chosenAction == resetAction) {
-        model->removeAttribute(meta.sessionId, meta.attributeKey);
+        model->removeAttribute(sessionId, attributeKey);
     }
 }
 
