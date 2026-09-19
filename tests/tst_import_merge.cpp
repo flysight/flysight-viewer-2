@@ -492,13 +492,11 @@ void ImportMergeTest::conflictRows()
     QTest::newRow("FIRMWARE_VER")
         << QByteArray("v2024.01.01") << QByteArray("test-device")
         << "Attribute 'FIRMWARE_VER' conflicts with the existing session "
-           "(session: 'v2023.09.22', file: 'v2024.01.01'). "
-           "To replace the session, delete it and re-import its files.";
+           "(session: 'v2023.09.22', file: 'v2024.01.01').";
     QTest::newRow("DEVICE_ID")
         << QByteArray("v2023.09.22") << QByteArray("other-device")
         << "Attribute 'DEVICE_ID' conflicts with the existing session "
-           "(session: 'test-device', file: 'other-device'). "
-           "To replace the session, delete it and re-import its files.";
+           "(session: 'test-device', file: 'other-device').";
 }
 
 void ImportMergeTest::runConflict(bool unloaded)
@@ -533,6 +531,7 @@ void ImportMergeTest::runConflict(bool unloaded)
     QCOMPARE(result.outcome, Outcome::Failed);
     QVERIFY(!result.ok());
     QCOMPARE(result.error, error);
+    QCOMPARE(result.hint, QStringLiteral("To replace the session, delete it and re-import its files."));
     QCOMPARE(result.sessionId, QStringLiteral("test-session"));
 
     // Nothing happened, now or later
@@ -923,9 +922,8 @@ void ImportMergeTest::explicitSchemaMismatch()
     const MergeResult result = importOne(writeTo(folder, QStringLiteral("SENSOR-1.CSV"), sensorVariant(one)));
     QCOMPARE(result.outcome, Outcome::Failed);
     QCOMPARE(result.error,
-             QStringLiteral("Attribute 'SCHEMA_VER' conflicts with the existing session (session: '2', file: '1'). "
-                            "To change a session's schema version, delete the session and re-import its files."));
-    QVERIFY(result.error.contains(QStringLiteral("delete the session and re-import")));
+             QStringLiteral("Attribute 'SCHEMA_VER' conflicts with the existing session (session: '2', file: '1')."));
+    QCOMPARE(result.hint, QStringLiteral("To change a session's schema version, delete the session and re-import its files."));
 
     QCOMPARE(session().storedAttribute("SCHEMA_VER").toString(), QStringLiteral("2"));
     QCOMPARE(session().getMeasurement("IMU", "wx"), QVector<double>({62.5}));
@@ -977,6 +975,7 @@ void ImportMergeTest::failedLoadIsAnError()
                             "the file was not imported."));
 
     // Never a reason to replace the session with the incoming file alone
+    QVERIFY(result.hint.isEmpty());
     QVERIFY(waitForIdle(*m_model));
     QCOMPARE(readFileBytes(csvPath), QByteArray("corrupt"));
     QCOMPARE(m_model->rowCount(), 1);
@@ -1254,8 +1253,8 @@ void ImportMergeTest::raggedMergeRejected()
     const MergeResult result = importOne(writeTo(deviceFolder(), QStringLiteral("X.CSV"), file));
     QCOMPARE(result.outcome, Outcome::Failed);
     QCOMPARE(result.error,
-             QStringLiteral("Sensor 'X': the file has 2 rows but the session's column 'keep' has 3. "
-                            "Delete the session and re-import its files."));
+             QStringLiteral("Sensor 'X': the file has 2 rows but the session's column 'keep' has 3."));
+    QCOMPARE(result.hint, QStringLiteral("To replace the session, delete it and re-import its files."));
 
     QVERIFY(waitForIdle(*m_model));
     QVERIFY(snapshot(QStringLiteral("ragged")) == before);

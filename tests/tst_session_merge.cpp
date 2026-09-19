@@ -122,8 +122,10 @@ void SessionMergeTest::differentAttributeConflicts()
     QVERIFY(!plan.ok());
     QCOMPARE(plan.error,
              QStringLiteral("Attribute 'FIRMWARE_VER' conflicts with the existing session "
-                            "(session: 'v2023.09.22', file: 'v2024.01.01'). "
-                            "To replace the session, delete it and re-import its files."));
+                            "(session: 'v2023.09.22', file: 'v2024.01.01')."));
+    // The advice is carried separately, so that a report on many files gives it once
+    QCOMPARE(plan.hint, QStringLiteral("To replace the session, delete it and re-import its files."));
+    QCOMPARE(plan.errorWithHint(), plan.error + QLatin1Char(' ') + plan.hint);
 
     // A rejected plan holds nothing to apply
     QVERIFY(plan.attributesToSet.isEmpty());
@@ -165,9 +167,8 @@ void SessionMergeTest::explicitSchemaMismatch()
     const MergePlan plan = SessionMerge::plan(existing, incoming);
     QVERIFY(!plan.ok());
     QCOMPARE(plan.error,
-             QStringLiteral("Attribute 'SCHEMA_VER' conflicts with the existing session (session: '2', file: '1'). "
-                            "To change a session's schema version, delete the session and re-import its files."));
-    QVERIFY(plan.error.contains(QStringLiteral("delete the session and re-import")));
+             QStringLiteral("Attribute 'SCHEMA_VER' conflicts with the existing session (session: '2', file: '1')."));
+    QCOMPARE(plan.hint, QStringLiteral("To change a session's schema version, delete the session and re-import its files."));
 }
 
 void SessionMergeTest::multipleConflictsSorted()
@@ -181,8 +182,8 @@ void SessionMergeTest::multipleConflictsSorted()
     QCOMPARE(plan.error,
              QStringLiteral("Attribute 'DEVICE_ID' conflicts with the existing session (session: 'abc', file: 'def'). "
                             "Attribute 'FIRMWARE_VER' conflicts with the existing session "
-                            "(session: 'v2023.09.22', file: 'v2024.01.01'). "
-                            "To replace the session, delete it and re-import its files."));
+                            "(session: 'v2023.09.22', file: 'v2024.01.01')."));
+    QCOMPARE(plan.hint, QStringLiteral("To replace the session, delete it and re-import its files."));
 }
 
 void SessionMergeTest::typedVersusTextEquality()
@@ -357,8 +358,8 @@ void SessionMergeTest::raggedIsRejected()
     const MergePlan rejected = SessionMerge::plan(existing, shorter);
     QVERIFY(!rejected.ok());
     QCOMPARE(rejected.error,
-             QStringLiteral("Sensor 'X': the file has 2 rows but the session's column 'keep' has 3. "
-                            "Delete the session and re-import its files."));
+             QStringLiteral("Sensor 'X': the file has 2 rows but the session's column 'keep' has 3."));
+    QCOMPARE(rejected.hint, QStringLiteral("To replace the session, delete it and re-import its files."));
     QVERIFY(rejected.columnsToSet.isEmpty());
 
     // Replacing every column of the sensor together is fine

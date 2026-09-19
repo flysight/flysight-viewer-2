@@ -41,29 +41,40 @@ bool isDeviceIdPlaceholder(const QString &key, const QVariant &value)
         && value.toString() == QLatin1String(SessionKeys::DeviceIdUnknown);
 }
 
-QString conflictMessage(QVector<Conflict> conflicts)
+QString replaceSessionHint()
+{
+    return QStringLiteral("To replace the session, delete it and re-import its files.");
+}
+
+// Fills result.error (one sentence per conflict, sorted by key) and result.hint.
+void setConflictError(MergePlan &result, QVector<Conflict> conflicts)
 {
     std::sort(conflicts.begin(), conflicts.end(),
               [](const Conflict &a, const Conflict &b) { return a.key < b.key; });
 
-    QString message;
+    QStringList sentences;
     bool schemaInvolved = false;
     for (const Conflict &conflict : std::as_const(conflicts)) {
-        message += QStringLiteral("Attribute '%1' conflicts with the existing session (session: '%2', file: '%3'). ")
-                       .arg(conflict.key, conflict.sessionText, conflict.fileText);
+        sentences.append(QStringLiteral("Attribute '%1' conflicts with the existing session (session: '%2', file: '%3').")
+                             .arg(conflict.key, conflict.sessionText, conflict.fileText));
         if (conflict.key == QLatin1String(Schema::AttributeKey))
             schemaInvolved = true;
     }
 
-    message += schemaInvolved
+    result.error = sentences.join(QLatin1Char(' '));
+    result.hint = schemaInvolved
         ? QStringLiteral("To change a session's schema version, delete the session and re-import its files.")
-        : QStringLiteral("To replace the session, delete it and re-import its files.");
-    return message;
+        : replaceSessionHint();
 }
 
 // The ragged rule for one sensor the plan touches. Returns the error, or "".
-QString raggedError(const QString &sensorName, const SourceSensor &planned, const SourceSensor &existing)
+// Only the second kind of error can be helped by replacing the session
+// (*sessionInvolved).
+QString raggedError(const QString &sensorName, const SourceSensor &planned, const SourceSensor &existing,
+                    bool *sessionInvolved)
 {
+    *sessionInvolved = false;
+
     // What the file brings for this sensor. A parsed file has columns of one
     // length; a session built in memory might not.
     const qsizetype fileRows = planned.constBegin().value().samples.size();
@@ -81,8 +92,8 @@ QString raggedError(const QString &sensorName, const SourceSensor &planned, cons
         if (planned.contains(it.key()))
             continue;
         if (it.value().samples.size() != fileRows) {
-            return QStringLiteral("Sensor '%1': the file has %2 rows but the session's column '%3' has %4. "
-                                  "Delete the session and re-import its files.")
+            *sessionInvolved = true;
+            return QStringLiteral("Sensor '%1': the file has %2 rows but the session's column '%3' has %4.")
                 .arg(sensorName).arg(fileRows).arg(it.key()).arg(it.value().samples.size());
         }
     }
@@ -146,7 +157,7 @@ MergePlan plan(const SessionData &existing, const SessionData &incoming)
 
     if (!conflicts.isEmpty()) {
         result.attributesToSet.clear();
-        result.error = conflictMessage(conflicts);
+        setConflictError(result, conflicts);
         return result;
     }
 
@@ -165,11 +176,15 @@ MergePlan plan(const SessionData &existing, const SessionData &incoming)
 
     // ---- ragged rule: only sensors the plan touches ----
     for (auto sensorIt = result.columnsToSet.constBegin(); sensorIt != result.columnsToSet.constEnd(); ++sensorIt) {
-        const QString error = raggedError(sensorIt.key(), sensorIt.value(), existingSource.value(sensorIt.key()));
+        bool sessionInvolved = false;
+        const QString error = raggedError(sensorIt.key(), sensorIt.value(), existingSource.value(sensorIt.key()),
+                                          &sessionInvolved);
         if (!error.isEmpty()) {
             result.attributesToSet.clear();
             result.columnsToSet.clear();
             result.error = error;
+            if (sessionInvolved)
+                result.hint = replaceSessionHint();
             return result;
         }
     }

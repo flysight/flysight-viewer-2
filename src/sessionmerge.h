@@ -19,9 +19,12 @@ namespace FlySight {
 struct MergePlan {
     QVector<QPair<QString, QVariant>> attributesToSet;   ///< key order; values exactly as the incoming file holds them
     SourceData                        columnsToSet;      ///< only columns that differ from the session's
-    QString                           error;             ///< non-empty = the merge must not happen
+    QString                           error;             ///< non-empty = the merge must not happen; complete without the hint
+    QString                           hint;              ///< what the user can do about the error; may be empty
 
     bool ok() const      { return error.isEmpty(); }
+    /// The error followed by its hint: what to show for one failure on its own.
+    QString errorWithHint() const { return hint.isEmpty() ? error : error + QLatin1Char(' ') + hint; }
     bool isEmpty() const { return attributesToSet.isEmpty() && columnsToSet.isEmpty(); }
 
     /// The stored names the plan writes: attribute(k) and measurement(sensor, name).
@@ -56,7 +59,9 @@ namespace SessionMerge {
 
 /// Never mutates either argument, never reads effective values, never touches
 /// an engine. All attribute conflicts are reported in one error, sorted by
-/// key; the ragged check runs only when there is no conflict.
+/// key; the ragged check runs only when there is no conflict. The advice that
+/// goes with an error is MergePlan::hint, not part of the error text, so that
+/// a report on many files can give it once.
 MergePlan plan(const SessionData &existing, const SessionData &incoming);
 
 /// Applies an ok() plan. Cannot fail. Returns the union of the invalidation sets.

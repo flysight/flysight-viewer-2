@@ -35,13 +35,26 @@ QString writeBytes(const QString &folder, const QString &fileName, const QByteAr
     return path;
 }
 
-MergeResult failure(const QString &path, const QString &error)
+MergeResult failure(const QString &path, const QString &error, const QString &hint = QString())
 {
     MergeResult result;
     result.filePath = path;
     result.outcome = Outcome::Failed;
     result.error = error;
+    result.hint = hint;
     return result;
+}
+
+const QString kReplaceHint = QStringLiteral("To replace the session, delete it and re-import its files.");
+const QString kSchemaHint =
+    QStringLiteral("To change a session's schema version, delete the session and re-import its files.");
+
+MergeResult firmwareConflict(const QString &path, const QString &fileVersion)
+{
+    return failure(path,
+                   QStringLiteral("Attribute 'FIRMWARE_VER' conflicts with the existing session "
+                                  "(session: 'v2023.09.22', file: '%1').").arg(fileVersion),
+                   kReplaceHint);
 }
 
 } // namespace
@@ -58,6 +71,8 @@ private slots:
     void progressCancels();
     void failureMessageFew();
     void failureMessageMany();
+    void failureMessageGroupsSharedReasons();
+    void failureMessageHintsOnce();
     void failureMessageEmpty();
     void failureMessageWithoutBaseDir();
     void mergeFailureReachesMessage();
@@ -158,31 +173,43 @@ void ImportBatchTest::progressCancels()
 void ImportBatchTest::failureMessageFew()
 {
     const QString base = QStringLiteral("C:/cards/flysight");
-    const QList<MergeResult> failures = {
-        failure(base + QStringLiteral("/sub/SENSOR.CSV"),
-                QStringLiteral("Attribute 'FIRMWARE_VER' conflicts with the existing session "
-                               "(session: 'v2023.09.22', file: 'v2024.01.01'). "
-                               "To replace the session, delete it and re-import its files.")),
-        failure(base + QStringLiteral("/bad.csv"), QStringLiteral("Unknown file format")),
-    };
 
+    // One file: its reason on its line, the hint below the list
+    QCOMPARE(SessionImport::failureMessage({firmwareConflict(base + QStringLiteral("/sub/SENSOR.CSV"), "v2024.01.01")},
+                                           base),
+             QStringLiteral("Import has been completed.\n"
+                            "However, some files failed to import:\n"
+                            "sub/SENSOR.CSV: Attribute 'FIRMWARE_VER' conflicts with the existing session "
+                            "(session: 'v2023.09.22', file: 'v2024.01.01').\n"
+                            "\n"
+                            "To replace the session, delete it and re-import its files."));
+
+    // Three files, three reasons: one line each, in input order. The hint
+    // follows the list although the file it belongs to comes first.
+    const QList<MergeResult> failures = {
+        firmwareConflict(base + QStringLiteral("/sub/SENSOR.CSV"), "v2024.01.01"),
+        failure(base + QStringLiteral("/bad.csv"), QStringLiteral("Unknown file format")),
+        failure(base + QStringLiteral("/empty.csv"), QStringLiteral("Empty file")),
+    };
     QCOMPARE(SessionImport::failureMessage(failures, base),
              QStringLiteral("Import has been completed.\n"
                             "However, some files failed to import:\n"
                             "sub/SENSOR.CSV: Attribute 'FIRMWARE_VER' conflicts with the existing session "
-                            "(session: 'v2023.09.22', file: 'v2024.01.01'). "
-                            "To replace the session, delete it and re-import its files.\n"
-                            "bad.csv: Unknown file format"));
+                            "(session: 'v2023.09.22', file: 'v2024.01.01').\n"
+                            "bad.csv: Unknown file format\n"
+                            "empty.csv: Empty file\n"
+                            "\n"
+                            "To replace the session, delete it and re-import its files."));
 
-    // Five failures still use the full listing
+    // Five failures still use the full listing; one shared reason is given once
     QList<MergeResult> five;
     for (int i = 1; i <= 5; ++i)
         five.append(failure(base + QStringLiteral("/f%1.csv").arg(i), QStringLiteral("Empty file")));
     QCOMPARE(SessionImport::failureMessage(five, base),
              QStringLiteral("Import has been completed.\n"
                             "However, some files failed to import:\n"
-                            "f1.csv: Empty file\nf2.csv: Empty file\nf3.csv: Empty file\n"
-                            "f4.csv: Empty file\nf5.csv: Empty file"));
+                            "Empty file\n"
+                            "    f1.csv\n    f2.csv\n    f3.csv\n    f4.csv\n    f5.csv"));
 }
 
 void ImportBatchTest::failureMessageMany()
@@ -198,23 +225,127 @@ void ImportBatchTest::failureMessageMany()
              QStringLiteral("Import has been completed.\n"
                             "However, 12 files failed to import.\n"
                             "Failed Files:\n"
-                            "f12.csv: Couldn't read file\nf11.csv: Couldn't read file\n"
-                            "f10.csv: Couldn't read file\nf9.csv: Couldn't read file\n"
-                            "f8.csv: Couldn't read file\nf7.csv: Couldn't read file\n"
-                            "f6.csv: Couldn't read file\nf5.csv: Couldn't read file\n"
-                            "f4.csv: Couldn't read file\nf3.csv: Couldn't read file\n"
+                            "Couldn't read file\n"
+                            "    f12.csv\n    f11.csv\n    f10.csv\n    f9.csv\n    f8.csv\n"
+                            "    f7.csv\n    f6.csv\n    f5.csv\n    f4.csv\n    f3.csv\n"
                             "...and 2 more."));
 
-    // Six to ten failures: the count line, every file, no "more" line
+    // Six to ten failures: the count line, every file, no "more" line. Six
+    // conflicts that differ in the file's value are six reasons and ONE hint.
     QList<MergeResult> six;
     for (int i = 1; i <= 6; ++i)
-        six.append(failure(base + QStringLiteral("/f%1.csv").arg(i), QStringLiteral("Empty file")));
-    QCOMPARE(SessionImport::failureMessage(six, base),
+        six.append(firmwareConflict(base + QStringLiteral("/f%1.csv").arg(i), QStringLiteral("v2024.01.0%1").arg(i)));
+    const QString sixMessage = SessionImport::failureMessage(six, base);
+    QCOMPARE(sixMessage,
+             QStringLiteral(
+                 "Import has been completed.\n"
+                 "However, 6 files failed to import.\n"
+                 "Failed Files:\n"
+                 "f1.csv: Attribute 'FIRMWARE_VER' conflicts with the existing session (session: 'v2023.09.22', file: 'v2024.01.01').\n"
+                 "f2.csv: Attribute 'FIRMWARE_VER' conflicts with the existing session (session: 'v2023.09.22', file: 'v2024.01.02').\n"
+                 "f3.csv: Attribute 'FIRMWARE_VER' conflicts with the existing session (session: 'v2023.09.22', file: 'v2024.01.03').\n"
+                 "f4.csv: Attribute 'FIRMWARE_VER' conflicts with the existing session (session: 'v2023.09.22', file: 'v2024.01.04').\n"
+                 "f5.csv: Attribute 'FIRMWARE_VER' conflicts with the existing session (session: 'v2023.09.22', file: 'v2024.01.05').\n"
+                 "f6.csv: Attribute 'FIRMWARE_VER' conflicts with the existing session (session: 'v2023.09.22', file: 'v2024.01.06').\n"
+                 "\n"
+                 "To replace the session, delete it and re-import its files."));
+    QCOMPARE(sixMessage.count(kReplaceHint), 1);
+}
+
+// Files with the identical reason are listed under it, where the reason first
+// occurred; the cap of ten counts files, not lines.
+void ImportBatchTest::failureMessageGroupsSharedReasons()
+{
+    const QString base = QStringLiteral("C:/cards/flysight");
+
+    // 12 files: a1 (its own reason), then s1..s8 sharing one conflict with
+    // b1, b2 in between, then c1
+    QList<MergeResult> twelve;
+    twelve.append(failure(base + QStringLiteral("/a1.csv"), QStringLiteral("Unknown file format")));
+    for (int i = 1; i <= 8; ++i) {
+        twelve.append(firmwareConflict(base + QStringLiteral("/s%1.csv").arg(i), "v2024.01.01"));
+        if (i == 2)
+            twelve.append(failure(base + QStringLiteral("/b1.csv"), QStringLiteral("Empty file")));
+        if (i == 5)
+            twelve.append(failure(base + QStringLiteral("/b2.csv"), QStringLiteral("Couldn't read file")));
+    }
+    twelve.append(failure(base + QStringLiteral("/c1.csv"), QStringLiteral("File has no SESSION_ID")));
+    QCOMPARE(twelve.size(), 12);
+
+    const QString message = SessionImport::failureMessage(twelve, base);
+    QCOMPARE(message,
              QStringLiteral("Import has been completed.\n"
-                            "However, 6 files failed to import.\n"
+                            "However, 12 files failed to import.\n"
                             "Failed Files:\n"
-                            "f1.csv: Empty file\nf2.csv: Empty file\nf3.csv: Empty file\n"
-                            "f4.csv: Empty file\nf5.csv: Empty file\nf6.csv: Empty file"));
+                            "a1.csv: Unknown file format\n"
+                            "Attribute 'FIRMWARE_VER' conflicts with the existing session "
+                            "(session: 'v2023.09.22', file: 'v2024.01.01').\n"
+                            "    s1.csv\n    s2.csv\n    s3.csv\n    s4.csv\n"
+                            "    s5.csv\n    s6.csv\n    s7.csv\n    s8.csv\n"
+                            "b1.csv: Empty file\n"
+                            "...and 2 more.\n"
+                            "\n"
+                            "To replace the session, delete it and re-import its files."));
+    QCOMPARE(message.count(QStringLiteral("conflicts with")), 1);
+
+    // The cap can fall inside a group
+    QList<MergeResult> eleven;
+    for (int i = 1; i <= 11; ++i)
+        eleven.append(failure(base + QStringLiteral("/f%1.csv").arg(i),
+                              i <= 2 ? QStringLiteral("Empty file %1").arg(i) : QStringLiteral("Couldn't read file")));
+    QCOMPARE(SessionImport::failureMessage(eleven, base),
+             QStringLiteral("Import has been completed.\n"
+                            "However, 11 files failed to import.\n"
+                            "Failed Files:\n"
+                            "f1.csv: Empty file 1\n"
+                            "f2.csv: Empty file 2\n"
+                            "Couldn't read file\n"
+                            "    f3.csv\n    f4.csv\n    f5.csv\n    f6.csv\n"
+                            "    f7.csv\n    f8.csv\n    f9.csv\n    f10.csv\n"
+                            "...and 1 more."));
+}
+
+// Each distinct hint once, in the order first seen, also for files beyond the
+// ten that are listed.
+void ImportBatchTest::failureMessageHintsOnce()
+{
+    const QString base = QStringLiteral("C:/cards/flysight");
+    const QString schemaConflict =
+        QStringLiteral("Attribute 'SCHEMA_VER' conflicts with the existing session (session: '2', file: '1').");
+
+    const QList<MergeResult> mixed = {
+        failure(base + QStringLiteral("/s1.csv"), schemaConflict, kSchemaHint),
+        firmwareConflict(base + QStringLiteral("/f1.csv"), "v2024.01.01"),
+        failure(base + QStringLiteral("/bad.csv"), QStringLiteral("Unknown file format")),
+        failure(base + QStringLiteral("/s2.csv"), schemaConflict, kSchemaHint),
+        firmwareConflict(base + QStringLiteral("/f2.csv"), "v2024.01.02"),
+    };
+    const QString message = SessionImport::failureMessage(mixed, base);
+    QCOMPARE(message,
+             QStringLiteral("Import has been completed.\n"
+                            "However, some files failed to import:\n"
+                            "Attribute 'SCHEMA_VER' conflicts with the existing session (session: '2', file: '1').\n"
+                            "    s1.csv\n"
+                            "    s2.csv\n"
+                            "f1.csv: Attribute 'FIRMWARE_VER' conflicts with the existing session "
+                            "(session: 'v2023.09.22', file: 'v2024.01.01').\n"
+                            "bad.csv: Unknown file format\n"
+                            "f2.csv: Attribute 'FIRMWARE_VER' conflicts with the existing session "
+                            "(session: 'v2023.09.22', file: 'v2024.01.02').\n"
+                            "\n"
+                            "To change a session's schema version, delete the session and re-import its files.\n"
+                            "To replace the session, delete it and re-import its files."));
+    QCOMPARE(message.count(kSchemaHint), 1);
+    QCOMPARE(message.count(kReplaceHint), 1);
+
+    // The only file with a hint is the twelfth: not listed, its hint is
+    QList<MergeResult> twelve;
+    for (int i = 1; i <= 11; ++i)
+        twelve.append(failure(base + QStringLiteral("/f%1.csv").arg(i), QStringLiteral("Empty file")));
+    twelve.append(firmwareConflict(base + QStringLiteral("/f12.csv"), "v2024.01.01"));
+    const QString capped = SessionImport::failureMessage(twelve, base);
+    QVERIFY(!capped.contains(QStringLiteral("f12.csv")));
+    QVERIFY(capped.endsWith(QStringLiteral("    f10.csv\n...and 2 more.\n\n") + kReplaceHint));
 }
 
 void ImportBatchTest::failureMessageEmpty()
@@ -262,8 +393,11 @@ void ImportBatchTest::mergeFailureReachesMessage()
              QStringLiteral("Import has been completed.\n"
                             "However, some files failed to import:\n"
                             "24-01-01/12-00-00/SENSOR.CSV: Attribute 'FIRMWARE_VER' conflicts with the existing "
-                            "session (session: 'v2023.09.22', file: 'v2024.01.01'). "
+                            "session (session: 'v2023.09.22', file: 'v2024.01.01').\n"
+                            "\n"
                             "To replace the session, delete it and re-import its files."));
+    QCOMPARE(second.files.first().hint, kReplaceHint);
+    QCOMPARE(second.files.first().errorWithHint(), second.files.first().error + QLatin1Char(' ') + kReplaceHint);
     QVERIFY(waitForIdle(*m_model));
 }
 

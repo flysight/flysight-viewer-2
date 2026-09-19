@@ -31,9 +31,13 @@ BatchResult importFiles(SessionModel &model, const QStringList &filePaths,
                         const std::function<bool(int, int)> &progress = {});
 
 /// Text for the existing import-failure warning box; empty when there are no
-/// failures. One line per failure, "<displayPath>: <error>", where displayPath
+/// failures. A reason (MergeResult::error) only one file has is one line,
+/// "<displayPath>: <error>"; a reason several files share is given once, where
+/// it first occurs, followed by its files, one indented line each. displayPath
 /// is relative to baseDir when one is given (else the path as passed). Up to
-/// five failures are listed in full; beyond that the count and the first ten.
+/// five failures are listed in full; beyond that the count and the first ten
+/// files. Each distinct MergeResult::hint follows the list once, in the order
+/// first seen.
 QString failureMessage(const QList<MergeResult> &failures, const QString &baseDir);
 
 } // namespace SessionImport

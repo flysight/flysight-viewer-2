@@ -49,8 +49,11 @@ struct MergeResult {
     QString filePath;      ///< ParsedFile::filePath
     QString sessionId;     ///< match id ("" when the input had none)
     Outcome outcome = Outcome::Failed;
-    QString error;         ///< non-empty iff Failed
+    QString error;         ///< non-empty iff Failed; the complete reason, without the hint
+    QString hint;          ///< what the user can do about it (MergePlan::hint); empty for most failures
     bool ok() const { return outcome != Outcome::Failed; }
+    /// The error followed by its hint: what to show for one failure on its own.
+    QString errorWithHint() const { return hint.isEmpty() ? error : error + QLatin1Char(' ') + hint; }
 };
 
 /// The logbook table: one row per session, loaded or stub.

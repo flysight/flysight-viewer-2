@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
 
 #include "dataimporter.h"
 
@@ -83,7 +84,15 @@ QString failureMessage(const QList<MergeResult> &failures, const QString &baseDi
     // existing translations still apply.
     auto tr = [](const char *text) { return QCoreApplication::translate("MainWindow", text); };
 
-    QStringList lines;
+    // Files that failed for the identical reason form one group, in the order
+    // in which each reason first occurs; hints are collected once each.
+    struct Group {
+        QString reason;
+        QStringList paths;
+    };
+    QList<Group> groups;
+    QHash<QString, int> groupOfReason;
+    QStringList hints;
     for (const MergeResult &failure : failures) {
         QString displayPath;
         if (!baseDir.isEmpty()) {
@@ -93,21 +102,58 @@ QString failureMessage(const QList<MergeResult> &failures, const QString &baseDi
         } else {
             displayPath = failure.filePath;
         }
-        lines.append(displayPath + QStringLiteral(": ") + failure.error);
+
+        auto it = groupOfReason.constFind(failure.error);
+        if (it == groupOfReason.constEnd()) {
+            it = groupOfReason.insert(failure.error, int(groups.size()));
+            groups.append({failure.error, {}});
+        }
+        groups[it.value()].paths.append(displayPath);
+
+        if (!failure.hint.isEmpty() && !hints.contains(failure.hint))
+            hints.append(failure.hint);
     }
 
+    // "<file>: <reason>" for a reason only one file has; a shared reason once,
+    // followed by its files. At most `fileLimit` files are listed.
+    const auto listing = [&groups](int fileLimit) {
+        QStringList lines;
+        int shown = 0;
+        for (const Group &group : groups) {
+            if (shown >= fileLimit)
+                break;
+            if (group.paths.size() == 1) {
+                lines.append(group.paths.first() + QStringLiteral(": ") + group.reason);
+                ++shown;
+                continue;
+            }
+            lines.append(group.reason);
+            for (const QString &path : group.paths) {
+                if (shown >= fileLimit)
+                    break;
+                lines.append(QStringLiteral("    ") + path);
+                ++shown;
+            }
+        }
+        return lines.join(QLatin1Char('\n'));
+    };
+
+    const int failureCount = int(failures.size());
     QString message = tr("Import has been completed.");
-    if (lines.size() > 5) {
-        message += tr("\nHowever, %1 files failed to import.").arg(lines.size());
-        const int displayCount = int(qMin(lines.size(), qsizetype(10)));   // the first 10 for brevity
-        QString displayed = lines.mid(0, displayCount).join(QLatin1Char('\n'));
-        if (lines.size() > displayCount)
-            displayed += tr("\n...and %1 more.").arg(lines.size() - displayCount);
+    if (failureCount > 5) {
+        message += tr("\nHowever, %1 files failed to import.").arg(failureCount);
+        const int displayCount = qMin(failureCount, 10);    // the first 10 files for brevity
+        QString displayed = listing(displayCount);
+        if (failureCount > displayCount)
+            displayed += tr("\n...and %1 more.").arg(failureCount - displayCount);
         message += tr("\nFailed Files:\n") + displayed;
     } else {
         message += tr("\nHowever, some files failed to import:");
-        message += QLatin1Char('\n') + lines.join(QLatin1Char('\n'));
+        message += QLatin1Char('\n') + listing(failureCount);
     }
+
+    if (!hints.isEmpty())
+        message += QStringLiteral("\n\n") + hints.join(QLatin1Char('\n'));
     return message;
 }
 

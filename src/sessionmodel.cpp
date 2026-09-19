@@ -586,9 +586,10 @@ QList<MergeResult> SessionModel::mergeSessions(const QList<ParsedFile> &files)
         result.filePath = file.filePath;
         result.sessionId = file.sessionId;
 
-        auto fail = [&result](const QString &error) {
+        auto fail = [&result](const QString &error, const QString &hint = QString()) {
             result.outcome = MergeResult::Outcome::Failed;
             result.error = error;
+            result.hint = hint;
         };
 
         const int rowIndex = file.sessionId.isEmpty() ? -1 : getSessionRow(file.sessionId);
@@ -617,7 +618,7 @@ QList<MergeResult> SessionModel::mergeSessions(const QList<ParsedFile> &files)
             // ---- loaded session: plan, then apply in place ----
             const MergePlan plan = SessionMerge::plan(*m_rows[rowIndex].session, file.data);
             if (!plan.ok()) {
-                fail(plan.error);
+                fail(plan.error, plan.hint);
             } else if (plan.isEmpty()) {
                 result.outcome = MergeResult::Outcome::Unchanged;
             } else {
@@ -649,7 +650,7 @@ QList<MergeResult> SessionModel::mergeSessions(const QList<ParsedFile> &files)
             } else {
                 const MergePlan plan = SessionMerge::plan(*loaded, file.data);
                 if (!plan.ok()) {
-                    fail(plan.error);                                   // the copy is discarded
+                    fail(plan.error, plan.hint);                        // the copy is discarded
                 } else if (plan.isEmpty()) {
                     result.outcome = MergeResult::Outcome::Unchanged;   // the row stays a stub
                 } else {
@@ -690,7 +691,7 @@ QList<MergeResult> SessionModel::mergeSessions(const QList<ParsedFile> &files)
             qDebug().noquote() << "Import:" << file.filePath << "changes nothing in session" << file.sessionId;
             break;
         case MergeResult::Outcome::Failed:
-            qDebug().noquote() << "Import:" << file.filePath << "failed:" << result.error;
+            qDebug().noquote() << "Import:" << file.filePath << "failed:" << result.errorWithHint();
             break;
         }
         results.append(result);
