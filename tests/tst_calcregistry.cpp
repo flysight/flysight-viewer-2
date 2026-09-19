@@ -112,6 +112,9 @@ private slots:
 
     // Opt-in source inputs for the Python plugin host (Phase 7)
     void sourceInputsOptIn();
+
+    // Phase 5's staticDependencies and Phase 7's opt-in compose (Phase 8, F1)
+    void staticDependenciesCoverOptInSourceInputs();
 };
 
 void CalcRegistryTest::graphTypesAreHashKeys()
@@ -703,6 +706,26 @@ void CalcRegistryTest::sourceInputsOptIn()
     own.inputs = {CalcInput::attribute("own")};
     QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("its own output")));
     QVERIFY(!registry.registerCalculation(own));
+}
+
+// ---- Phase 8 (F1): the two engine additions compose -------------------------
+
+// A logbook column fed by a source-reading plugin must refresh when its source
+// column is merged: staticDependencies has to see opt-in source inputs as the
+// public measurement name whose source layer they read.
+void CalcRegistryTest::staticDependenciesCoverOptInSourceInputs()
+{
+    CalculationRegistry registry;
+
+    CalculationDescriptor d = simple(QStringLiteral("srcProbe"), QStringLiteral("SRC0"));
+    d.allowSourceInputs = true;
+    d.inputs = {CalcInput::sourceMeasurement("S", "m"), CalcInput::sourceUnit("S", "m"),
+                CalcInput::attribute("A")};
+    QVERIFY(registry.registerCalculation(d));
+
+    const StaticDependencies deps = registry.staticDependencies(attr("SRC0"));
+    QCOMPARE(deps.names, QSet<DependencyKey>({attr("SRC0"), measKey("S", "m"), attr("A")}));
+    QVERIFY(deps.preferences.isEmpty());
 }
 
 FLYSIGHT_TEST_MAIN(CalcRegistryTest)

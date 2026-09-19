@@ -7,6 +7,7 @@
 #include <QDebug>
 #include <QSaveFile>
 
+#include "conversion/schematable.h"
 #include "csvformat.h"
 
 namespace FlySight {
@@ -129,6 +130,22 @@ bool planSensors(const SourceData &source, QList<SensorPlan> &plans, QString *er
     return true;
 }
 
+// A stored SCHEMA_VER the importer would reject must never reach a file: the
+// session could not be loaded again. No UI path stores one, but setAttribute
+// is public. Absence is fine (and is never filled in).
+bool validateSchema(const SessionData &sessionData, QString *error)
+{
+    const QString key = QString::fromLatin1(Schema::AttributeKey);
+    if (!sessionData.hasStoredAttribute(key))
+        return true;
+    const QVariant recorded = sessionData.storedAttribute(key);
+    if (Schema::parseVersion(recorded))
+        return true;
+    if (error)
+        *error = Schema::unsupportedMessage(recorded);
+    return false;
+}
+
 // "$FLYS" line through "$DATA" line. Only stored attributes are read.
 QByteArray headerBytes(const SessionData &sessionData, const QList<SensorPlan> &plans)
 {
@@ -225,7 +242,7 @@ std::optional<QByteArray> DataExporter::toBytes(const SessionData &sessionData, 
     const SourceData source = sessionData.sourceData();
 
     QList<SensorPlan> plans;
-    if (!planSensors(source, plans, error))
+    if (!validateSchema(sessionData, error) || !planSensors(source, plans, error))
         return std::nullopt;
 
     QByteArray bytes = headerBytes(sessionData, plans);
@@ -244,7 +261,7 @@ bool DataExporter::exportSession(const QString &filePath, const SessionData &ses
     // Validate before the file is opened: on failure nothing is written and
     // whatever is at filePath stays as it is.
     QList<SensorPlan> plans;
-    if (!planSensors(source, plans, error))
+    if (!validateSchema(sessionData, error) || !planSensors(source, plans, error))
         return false;
 
     // Atomic write via QSaveFile

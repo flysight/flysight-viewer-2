@@ -277,6 +277,7 @@ void SessionModelEngineTest::preferenceBroadcastReachesModel()
     QCOMPARE(publicationCount(dataSpy, row1), 1);
     QCOMPARE(publicationCount(dataSpy, m_model->getSessionRow("s2")), 1);
 
+    // Cleared by SessionModel::checkCalculationEnvironment (Phase 5), not by flushPendingInvalidations.
     QVERIFY(m_model->rowAt(row1).cachedValues.isEmpty());
     QVERIFY(!m_model->rowAt(row1).dirty);
     QVERIFY(!m_model->rowAt(m_model->getSessionRow("s2")).dirty);

@@ -3,6 +3,7 @@
 // preference input. Every expectation is a literal; the only computed
 // comparison is the engine's fresh-evaluation oracle.
 
+#include <stdexcept>
 #include <utility>
 
 #include <QtTest>
@@ -79,6 +80,7 @@ class SessionEngineTest : public QObject {
 private slots:
     void initTestCase();
     void init();
+    void cleanup();
 
     void multiOutputRunsOnce();
     void declaredInputChangeRunsOnceMore();
@@ -94,7 +96,16 @@ private slots:
     void oracleOnFixture();
     void copyAndMoveSemantics();
 
+    // Phase 8: acceptance clauses on a real session with temporary global registrations
+    void explicitPolicyOnSession();
+    void safetyOnRealSession();
+
 private:
+    // Registers on the global registry; cleanup() removes it again.
+    bool registerTemporary(const CalculationDescriptor &d);
+    QStringList m_registryBefore;
+    QStringList m_temporaryIds;
+
     // Reads every multi-output group of multiOutputRunsOnce.
     void readMultiOutputGroups(const SessionData &session);
 };
@@ -107,6 +118,25 @@ void SessionEngineTest::initTestCase()
 void SessionEngineTest::init()
 {
     TestEnvironment::instance().resetPreferencesToDefaults();
+    m_registryBefore = CalculationRegistry::instance().registeredIds();
+    m_temporaryIds.clear();
+}
+
+// The global registry is left as it was found.
+void SessionEngineTest::cleanup()
+{
+    for (const QString &id : std::as_const(m_temporaryIds))
+        CalculationRegistry::instance().unregister(id);
+    m_temporaryIds.clear();
+    QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
+}
+
+bool SessionEngineTest::registerTemporary(const CalculationDescriptor &d)
+{
+    if (!CalculationRegistry::instance().registerCalculation(d))
+        return false;
+    m_temporaryIds.append(d.id);
+    return true;
 }
 
 void SessionEngineTest::readMultiOutputGroups(const SessionData &session)
@@ -503,6 +533,143 @@ void SessionEngineTest::copyAndMoveSemantics()
 
     // A moved-from session is empty but usable.
     QVERIFY(!a.getAttribute("_EXIT_TIME").isValid());
+}
+
+// Acceptance 14, on a real SessionData and the global registry: an
+// explicit-policy calculation reports unavailable until requested, and
+// requesting it publishes all of its outputs at once.
+void SessionEngineTest::explicitPolicyOnSession()
+{
+    const QString id = QStringLiteral("test.explicit.pair");
+    CalculationDescriptor d;
+    d.id = id;
+    d.policy = EvaluationPolicy::Explicit;
+    d.inputs = {CalcInput::attribute("_EXIT_TIME")};
+    d.outputs = {attr("_T_EXPL_A"), attr("_T_EXPL_B")};
+    d.compute = [](const EvaluationContext &ctx) {
+        const double exit = ctx.attribute("_EXIT_TIME").toDouble();
+        CalculationResult r;
+        r.setAttribute("_T_EXPL_A", exit + 1.0);
+        r.setAttribute("_T_EXPL_B", exit + 2.0);
+        return r;
+    };
+    QVERIFY(registerTemporary(d));
+
+    SessionData session = DescentFixture::load();
+    CalculationEngine &engine = session.calculationEngine();
+    const QList<DependencyKey> both = {attr("_T_EXPL_A"), attr("_T_EXPL_B")};
+
+    // Before the request: unavailable, and reading starts no work
+    QVERIFY(!session.getAttribute("_T_EXPL_A").isValid());
+    QVERIFY(!session.getAttribute("_T_EXPL_B").isValid());
+    QCOMPARE(engine.runCount(id), 0);
+    QVERIFY(engine.resultStatus(id).has_value());
+    QVERIFY(*engine.resultStatus(id) == ResultStatus::NotRequested);
+    QVERIFY(engine.verifyAgainstFresh(both).isEmpty());
+
+    // The request publishes one result for both outputs
+    const CalculationEngine::RequestOutcome first = engine.request(id);
+    QVERIFY(first.found);
+    QVERIFY(first.status == ResultStatus::Ok);
+    QVERIFY(first.invalidated.contains(attr("_T_EXPL_A")));
+    QVERIFY(first.invalidated.contains(attr("_T_EXPL_B")));
+    QCOMPARE(session.getAttribute("_T_EXPL_A").toDouble(), 1704110410.0);
+    QCOMPARE(session.getAttribute("_T_EXPL_B").toDouble(), 1704110411.0);
+    QCOMPARE(engine.runCount(id), 1);
+    QVERIFY(engine.verifyAgainstFresh(both).isEmpty());
+
+    // A valid result is not recomputed
+    const CalculationEngine::RequestOutcome second = engine.request(id);
+    QVERIFY(second.found);
+    QVERIFY(second.status == ResultStatus::Ok);
+    QCOMPARE(engine.runCount(id), 1);
+
+    // An input change reverts the result to "not requested"; nothing runs
+    session.setAttribute("_EXIT_TIME", T0 + 20.0);
+    QVERIFY(!session.getAttribute("_T_EXPL_A").isValid());
+    QVERIFY(!session.getAttribute("_T_EXPL_B").isValid());
+    QCOMPARE(engine.runCount(id), 1);
+    QVERIFY(engine.verifyAgainstFresh(both).isEmpty());
+
+    QVERIFY(engine.request(id).found);
+    QCOMPARE(session.getAttribute("_T_EXPL_A").toDouble(), 1704110421.0);
+    QCOMPARE(session.getAttribute("_T_EXPL_B").toDouble(), 1704110422.0);
+    QCOMPARE(engine.runCount(id), 2);
+    QVERIFY(engine.verifyAgainstFresh(both).isEmpty());
+}
+
+// Acceptance 12, on a real session next to the real built-ins: a thrown
+// exception, a calculation nested on the failed one, and a two-calculation
+// cycle leave no partial result and no corrupted evaluation state.
+void SessionEngineTest::safetyOnRealSession()
+{
+    CalculationDescriptor thrower;
+    thrower.id = QStringLiteral("test.throw");
+    thrower.inputs = {CalcInput::attribute("_EXIT_TIME")};
+    thrower.outputs = {attr("_T_THROW_A"), attr("_T_THROW_B")};
+    thrower.compute = [](const EvaluationContext &ctx) -> CalculationResult {
+        CalculationResult r;
+        r.setAttribute("_T_THROW_A", ctx.attribute("_EXIT_TIME").toDouble());   // must never be published
+        if (r.contains(DependencyKey::attribute(QStringLiteral("_T_THROW_A"))))
+            throw std::runtime_error("x");
+        return r;
+    };
+    QVERIFY(registerTemporary(thrower));
+
+    CalculationDescriptor nested;
+    nested.id = QStringLiteral("test.nested");
+    nested.inputs = {CalcInput::attribute("_T_THROW_A")};
+    nested.outputs = {attr("_T_NESTED")};
+    nested.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute("_T_NESTED", ctx.attribute("_T_THROW_A").toDouble() + 1.0);
+    };
+    QVERIFY(registerTemporary(nested));
+
+    CalculationDescriptor cycX;
+    cycX.id = QStringLiteral("test.cycX");
+    cycX.inputs = {CalcInput::attribute("_T_CYC_Y")};
+    cycX.outputs = {attr("_T_CYC_X")};
+    cycX.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute("_T_CYC_X", ctx.attribute("_T_CYC_Y").toDouble() + 1.0);
+    };
+    QVERIFY(registerTemporary(cycX));
+
+    CalculationDescriptor cycY;
+    cycY.id = QStringLiteral("test.cycY");
+    cycY.inputs = {CalcInput::attribute("_T_CYC_X")};
+    cycY.outputs = {attr("_T_CYC_Y")};
+    cycY.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute("_T_CYC_Y", ctx.attribute("_T_CYC_X").toDouble() + 1.0);
+    };
+    QVERIFY(registerTemporary(cycY));
+
+    const SessionData session = DescentFixture::load();
+    CalculationEngine &engine = session.calculationEngine();
+
+    const QStringList testNames = {"_T_NESTED", "_T_THROW_A", "_T_THROW_B", "_T_CYC_X", "_T_CYC_Y"};
+    for (int pass = 0; pass < 3; ++pass) {
+        for (const QString &name : testNames)
+            QVERIFY2(!session.getAttribute(name).isValid(), qPrintable(name));
+        QCOMPARE(engine.scopeDepth(), 0);
+    }
+
+    QVERIFY(engine.resultStatus(QStringLiteral("test.throw")).has_value());
+    QVERIFY(*engine.resultStatus(QStringLiteral("test.throw")) == ResultStatus::Failed);
+    QVERIFY(engine.resultStatus(QStringLiteral("test.nested")).has_value());
+    QVERIFY(*engine.resultStatus(QStringLiteral("test.nested")) == ResultStatus::MissingInput);
+    QVERIFY(engine.cycleCount() >= 1);
+    QCOMPARE(engine.runCount(QStringLiteral("test.throw")), 1);     // the failure is cached
+    QCOMPARE(engine.runCount(QStringLiteral("test.nested")), 0);
+
+    // The real values around them are intact
+    QCOMPARE(session.getAttribute("_EXIT_TIME").toDouble(), T0 + 9.0);
+    QVERIFY(qAbs(session.getMeasurement("IMU", "wTotal").value(0) - 5.7344) <= 1e-9);
+    QCOMPARE(engine.scopeDepth(), 0);
+
+    QList<DependencyKey> names = goldenNames();
+    for (const QString &name : testNames)
+        names.append(DependencyKey::attribute(name));
+    QVERIFY(engine.verifyAgainstFresh(names).isEmpty());
 }
 
 FLYSIGHT_TEST_MAIN(SessionEngineTest)

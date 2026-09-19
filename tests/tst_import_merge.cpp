@@ -328,8 +328,10 @@ private slots:
 
     void editsSurviveMerge_data();
     void editsSurviveMerge();
+    void unmatchedMeasurementsSurvive_data();
     void unmatchedMeasurementsSurvive();
     void defaultsNotReappliedOnMerge();
+    void viewerSavedFileKeepsExistingEdits();
 
     void rejectedSchemaLeavesSession_loaded_data();
     void rejectedSchemaLeavesSession_loaded();
@@ -723,15 +725,27 @@ void ImportMergeTest::editsSurviveMerge()
     QVERIFY(csv.contains("$COL,IMU,"));
 }
 
+void ImportMergeTest::unmatchedMeasurementsSurvive_data()
+{
+    QTest::addColumn<bool>("unloaded");
+    QTest::newRow("loaded") << false;
+    QTest::newRow("stub") << true;      // Phase 8: the session is an unloaded stub when the file arrives
+}
+
 // Acceptance 7
 void ImportMergeTest::unmatchedMeasurementsSurvive()
 {
+    QFETCH(bool, unloaded);
+
     const QString folder = deviceFolder();
     SensorOptions withFoo;
     withFoo.fooSensor = true;
     QCOMPARE(importOne(writeTo(folder, QStringLiteral("SENSOR.CSV"), sensorVariant(withFoo))).outcome, Outcome::Created);
     QCOMPARE(session().sensorKeys(), QStringList({"FOO", "IMU", "MAG"}));
     QVERIFY(waitForIdle(*m_model));
+
+    if (unloaded)
+        QVERIFY(makeStub());
 
     QSignalSpy spy(m_model.get(), &SessionModel::dependencyChanged);
 
@@ -760,6 +774,53 @@ void ImportMergeTest::unmatchedMeasurementsSurvive()
     QVERIFY(csv.contains("$COL,FOO,bar,time\n"));       // unknown sensor: columns by name
     QVERIFY(csv.contains("$UNIT,FOO,furlongs,s\n"));
     QVERIFY(csv.contains("$FOO,7,3\n"));
+}
+
+// Spec 6.3 as decided for Viewer's own attributes (Q2), through the model: a
+// file Viewer itself saved carries `_` attributes. Re-importing it never
+// overwrites what the session holds now (existing wins); a `_` attribute the
+// session lacks is added; none of it is ever a conflict.
+void ImportMergeTest::viewerSavedFileKeepsExistingEdits()
+{
+    QCOMPARE(importOne(writeTo(deviceFolder(), QStringLiteral("TRACK.CSV"), Fixtures::trackFile())).outcome,
+             Outcome::Created);
+    QVERIFY(m_model->updateAttribute(kId, "_DESCRIPTION", QStringLiteral("mine")));
+    QVERIFY(m_model->updateAttribute(kId, "_GROUND_ELEV", 12.5));
+    QVERIFY(waitForIdle(*m_model));
+
+    // The Viewer-exported file, kept aside as a user would keep a backup
+    const QByteArray exported = readFileBytes(sessionFilePath(kId));
+    QVERIFY(exported.contains("$VAR,_DESCRIPTION,mine\n"));
+    QVERIFY(exported.contains("$VAR,_GROUND_ELEV,12.5\n"));
+    const QString backup = TestEnvironment::instance().newTempDir(QStringLiteral("backup")) + QStringLiteral("/backup.csv");
+    QVERIFY(writeFile(backup, exported));
+
+    // The session moves on
+    QVERIFY(m_model->updateAttribute(kId, "_DESCRIPTION", QStringLiteral("newer")));
+    QVERIFY(waitForIdle(*m_model));
+    const QByteArray savedNewer = readFileBytes(sessionFilePath(kId));
+
+    // Every `_` key of the backup exists in the session: nothing to do, nothing saved
+    MergeResult result = importOne(backup);
+    QCOMPARE(result.outcome, Outcome::Unchanged);
+    QVERIFY(result.error.isEmpty());
+    QCOMPARE(m_model->rowCount(), 1);
+    QCOMPARE(attributeText(session(), "_DESCRIPTION"), QStringLiteral("newer"));
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(readFileBytes(sessionFilePath(kId)), savedNewer);
+
+    // A `_` key the session lacks is added; the one it has still wins
+    QVERIFY(m_model->removeAttribute(kId, "_GROUND_ELEV"));
+    QVERIFY(!session().hasAttribute("_GROUND_ELEV"));
+    result = importOne(backup);
+    QCOMPARE(result.outcome, Outcome::Merged);
+    QCOMPARE(attributeText(session(), "_GROUND_ELEV"), QStringLiteral("12.5"));
+    QCOMPARE(attributeText(session(), "_DESCRIPTION"), QStringLiteral("newer"));
+
+    QVERIFY(waitForIdle(*m_model));
+    const QByteArray csv = readFileBytes(sessionFilePath(kId));
+    QVERIFY(csv.contains("$VAR,_DESCRIPTION,newer\n"));
+    QVERIFY(csv.contains("$VAR,_GROUND_ELEV,12.5\n"));
 }
 
 void ImportMergeTest::defaultsNotReappliedOnMerge()

@@ -33,6 +33,7 @@ add_library(flysight_test_support STATIC
   support/fixturebuilder.cpp   support/fixturebuilder.h
   support/fakesessionstate.cpp support/fakesessionstate.h
   support/builtinfixture.cpp   support/builtinfixture.h
+  support/oraclecatalogue.cpp  support/oraclecatalogue.h
   support/testmain.h
 )
 target_include_directories(flysight_test_support PUBLIC "${CMAKE_CURRENT_LIST_DIR}/support")
@@ -132,6 +133,16 @@ flysight_add_test(tst_session_merge SOURCES tst_session_merge.cpp)
 flysight_add_test(tst_import_merge  SOURCES tst_import_merge.cpp)
 flysight_add_test(tst_import_batch  SOURCES tst_import_batch.cpp)
 
+# Session-level idempotency oracle: randomized reads, edits, merges, preference
+# and registry changes on real sessions against a fresh evaluation.
+# QT_HASH_SEED=0 makes QSet / QHash iteration order reproducible, so a failure
+# that depends on invalidation order reproduces from its seed.
+flysight_add_test(tst_session_oracle SOURCES tst_session_oracle.cpp ENVIRONMENT "QT_HASH_SEED=0")
+set_tests_properties(tst_session_oracle PROPERTIES TIMEOUT 300 LABELS "core;oracle")
+
+# End-to-end workflows on the application's import path (acceptance 19)
+flysight_add_test(tst_workflow SOURCES tst_workflow.cpp)
+
 # ---- Phase 7: embedded-Python bridge test --------------------------------
 # tst_python_bridge boots the real embedded interpreter, imports the real
 # flysight_cpp_bridge module from the build tree, and loads the SDK, the test
@@ -196,4 +207,16 @@ if(FLYSIGHT_BUILD_PYTHON_TESTS)
                     "(python -m pip install numpy) or CMake < 3.22.")
     set_tests_properties(tst_python_bridge PROPERTIES DISABLED TRUE)
   endif()
+endif()
+
+# ---- Phase 8: cleanup audit ------------------------------------------------
+# "No old mechanism remains", "no new UI", and the acceptance traceability map
+# (tests/acceptance_map.txt) as one repeatable command. A CMake script over
+# `git grep` / `git diff`; registered only when this is a git checkout.
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_LIST_DIR}/../.git")
+  add_test(NAME audit_cleanup COMMAND "${CMAKE_COMMAND}"
+           "-DREPO=${CMAKE_CURRENT_LIST_DIR}/.." "-DGIT=${GIT_EXECUTABLE}"
+           -P "${CMAKE_CURRENT_LIST_DIR}/audit/cleanup_audit.cmake")
+  set_tests_properties(audit_cleanup PROPERTIES LABELS "audit" TIMEOUT 120)
 endif()

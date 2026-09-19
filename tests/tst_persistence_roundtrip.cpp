@@ -260,6 +260,8 @@ private slots:
     void raggedSensorIsRejected();
     void headerOnlySensor();
     void unrepresentableText();
+    void unsupportedSchemaIsNotSaved();
+    void fileAndMemoryWritersAgree();
 
     // acceptance 6
     void releasedLogbookSaveKeepsBytes();
@@ -735,6 +737,95 @@ void PersistenceRoundTripTest::unrepresentableText()
     QVERIFY(!DataExporter::exportSession(path, badSensor, &error));
     QCOMPARE(error, QStringLiteral("Sensor 'Y,Z': name/column/unit text cannot be written ('Y,Z')"));
     QCOMPARE(readFileBytes(path), QByteArray("keep"));
+}
+
+// Phase 8 (F9): the exporter never writes a file that DataImporter would
+// reject. An unsupported SCHEMA_VER can only be stored programmatically.
+void PersistenceRoundTripTest::unsupportedSchemaIsNotSaved()
+{
+    SessionData session;
+    QVERIFY(readBuilder(awkwardFile(), session));
+    session.setAttribute("SCHEMA_VER", QStringLiteral("3"));
+
+    const QString path = tempFile(QStringLiteral("schema3"));
+    QVERIFY(writeFile(path, "keep"));
+
+    QString error;
+    QVERIFY(!DataExporter::exportSession(path, session, &error));
+    QCOMPARE(error, QStringLiteral("Unsupported SCHEMA_VER '3' (supported: 1, 2)"));
+    QCOMPARE(readFileBytes(path), QByteArray("keep"));
+
+    QString bytesError;
+    QVERIFY(!DataExporter::toBytes(session, &bytesError).has_value());
+    QCOMPARE(bytesError, error);
+
+    // A supported value is written, once, exactly as stored.
+    session.setAttribute("SCHEMA_VER", QStringLiteral("2"));
+    QVERIFY(DataExporter::exportSession(path, session, &error));
+    QVERIFY(error.isEmpty());
+    const QByteArray bytes = readFileBytes(path);
+    QCOMPARE(bytes.count("SCHEMA_VER"), 1);
+    QVERIFY(lines(bytes).contains(QByteArray("$VAR,SCHEMA_VER,2")));
+}
+
+// Acceptance 5: the streaming file writer and the in-memory writer are two
+// code paths and must produce the same bytes - also for a session large enough
+// to cross the file writer's periodic 4 MB flush.
+void PersistenceRoundTripTest::fileAndMemoryWritersAgree()
+{
+    // (i) the awkward fixture
+    {
+        SessionData session;
+        QVERIFY(readBuilder(awkwardFile(), session));
+        const QString path = tempFile(QStringLiteral("agree-awkward"));
+        QString error;
+        QVERIFY2(DataExporter::exportSession(path, session, &error), qPrintable(error));
+        const std::optional<QByteArray> memory = DataExporter::toBytes(session);
+        QVERIFY(memory.has_value());
+        QVERIFY(readFileBytes(path) == *memory);
+    }
+
+    // (ii) a large programmatic sensor
+    {
+        const int rows = 80000;
+        QVector<double> time(rows), a(rows), b(rows), c(rows), d(rows), e(rows), f(rows), g(rows);
+        for (int i = 0; i < rows; ++i) {
+            time[i] = i * 0.001;
+            a[i] = i + 0.25;
+            b[i] = -i - 0.5;
+            c[i] = i * 3.0;
+            d[i] = 1e-3 * i;
+            e[i] = i % 7;
+            f[i] = 0.1;
+            g[i] = -0.0;
+        }
+        SessionData session;
+        session.setAttribute("SESSION_ID", QStringLiteral("big"));
+        session.setSourceMeasurement("BIG", "time", time, "s");
+        session.setSourceMeasurement("BIG", "a", a, "u");
+        session.setSourceMeasurement("BIG", "b", b, "u");
+        session.setSourceMeasurement("BIG", "c", c, "u");
+        session.setSourceMeasurement("BIG", "d", d, "u");
+        session.setSourceMeasurement("BIG", "e", e, "u");
+        session.setSourceMeasurement("BIG", "f", f, "u");
+        session.setSourceMeasurement("BIG", "g", g, "u");
+
+        const QString path = tempFile(QStringLiteral("agree-big"));
+        QString error;
+        QVERIFY2(DataExporter::exportSession(path, session, &error), qPrintable(error));
+        const QByteArray bytes = readFileBytes(path);
+        const std::optional<QByteArray> memory = DataExporter::toBytes(session);
+        QVERIFY(memory.has_value());
+        QVERIFY(bytes == *memory);
+        QVERIFY(bytes.size() > 4 * 1024 * 1024);
+        QVERIFY(bytes.endsWith('\n'));
+
+        SessionData reloaded;
+        QVERIFY(reload(bytes, reloaded));
+        QVERIFY(reloaded.sourceData() == session.sourceData());
+        // operator== on doubles cannot see the sign of zero: check it by bits
+        QVERIFY(bitsEqual(reloaded.sourceMeasurement("BIG", "g"), g));
+    }
 }
 
 // Acceptance 6: a logbook file written by a released version - physical

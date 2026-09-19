@@ -124,6 +124,8 @@ private slots:
     void exporterWritesSource();
     void mergeCopiesSource();
     void registryStartsWithConversionLayer();
+
+    void onlySchemaVerDecides();
 };
 
 void SourceLayerTest::initTestCase()
@@ -700,6 +702,59 @@ void SourceLayerTest::registryStartsWithConversionLayer()
     QCOMPARE(ids.at(0), QStringLiteral("builtin.conversion.schema"));
     QCOMPARE(ids.at(1), QStringLiteral("builtin.conversion.default"));
     QVERIFY(CalculationRegistry::instance().hasSourceConversions());
+}
+
+// Spec 12: nothing infers the schema from the firmware version, the file name,
+// a date, or the data. Only SCHEMA_VER decides.
+void SourceLayerTest::onlySchemaVerDecides()
+{
+    // The sensor fixture's IMU (gyro 62.5 / -125 / 0) under a chosen firmware version
+    const auto sensorWithFirmware = [](const QByteArray &firmware) {
+        Fs2FileBuilder b;
+        b.var("FIRMWARE_VER", firmware)
+         .var("SESSION_ID", "only-schema")
+         .var("DEVICE_ID", "test-device")
+         .sensor("IMU",
+                 {"time", "wy", "ax", "wz", "wx", "temperature"},
+                 {"s", "deg/s", "g", "deg/s", "deg/s", "deg C"})
+         .row("IMU", "3,-125,1,0,62.5,40");
+        return b;
+    };
+    const auto importNamed = [](SessionData &session, const Fs2FileBuilder &file, const QString &fileName) {
+        const QString path = TestEnvironment::instance().newTempDir(QStringLiteral("only-schema"))
+                             + QLatin1Char('/') + fileName;
+        if (!file.write(path))
+            return false;
+        DataImporter importer;
+        return importer.importFile(path, session);
+    };
+
+    // (i) a firmware version from the far future and a file name that shouts
+    // "schema 2", but no SCHEMA_VER: legacy, corrected.
+    SessionData futureFirmware;
+    QVERIFY(importNamed(futureFirmware, sensorWithFirmware("v2099.12.31"), QStringLiteral("SCHEMA_VER_2.CSV")));
+    QVERIFY(!futureFirmware.hasAttribute("SCHEMA_VER"));
+    QVERIFY(isNear(first(futureFirmware, "IMU", "wx"), 71.68));
+    QVERIFY(isNear(first(futureFirmware, "IMU", "wy"), -143.36));
+
+    // (ii) an ancient firmware version and a "legacy" file name, with
+    // SCHEMA_VER 2: read literally.
+    SessionData oldFirmware;
+    QVERIFY(importNamed(oldFirmware, sensorWithFirmware("v2020.01.01").var("SCHEMA_VER", "2"),
+                        QStringLiteral("LEGACY.CSV")));
+    QVERIFY(first(oldFirmware, "IMU", "wx") == 62.5);
+    QVERIFY(first(oldFirmware, "IMU", "wy") == -125.0);
+
+    // (iii) recorded long after the firmware fix, according to its own GNSS
+    // timestamps, but unmarked: legacy, corrected.
+    SessionData lateRecording;
+    Fs2FileBuilder late = Fixtures::sensorFile("only-schema-late");
+    late.sensor("GNSS", {"time", "lat", "lon", "hMSL"}, {"", "deg", "deg", "m"})
+        .row("GNSS", "2031-01-01T00:00:00.000Z,45.5,-73.25,4000");
+    QVERIFY(importNamed(lateRecording, late, QStringLiteral("SENSOR.CSV")));
+    QCOMPARE(lateRecording.sourceMeasurement("GNSS", "time"), QVector<double>({1924992000.0}));
+    QVERIFY(!lateRecording.hasAttribute("SCHEMA_VER"));
+    QVERIFY(isNear(first(lateRecording, "IMU", "wx"), 71.68));
 }
 
 FLYSIGHT_TEST_MAIN(SourceLayerTest)

@@ -37,6 +37,10 @@ schema and normalized to SI units, under the recorded names. Declaring
 Every key read inside `compute()` must be returned by `inputs()`; any other
 read raises `UndeclaredInputError` and makes the result unavailable.
 
+Header attributes (`FIRMWARE_VER`, `SCHEMA_VER`, ...) are single-valued per
+session: a merged file with a different value is rejected (see README, 'Header
+attributes and the conflict rule').
+
 Unit Conversion
 ---------------
 Plots can participate in the automatic unit conversion system by specifying

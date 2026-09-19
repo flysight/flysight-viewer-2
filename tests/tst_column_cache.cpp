@@ -259,6 +259,7 @@ private slots:
     void preferenceChangeDiscardsUnloadedRows();
     void snapshotPreferenceDoesNotDiscard();
     void altitudeMarkerChangeDiscards();
+    void altitudeMarkerRemovalDiscardsStubValues();
 
     void saveFailureIsReported();
     void lineBreaksAreFlattenedAtEdit();
@@ -302,6 +303,7 @@ void ColumnCacheTest::cleanup()
     m_altitudes.reset();
     writeAltitudes({});
     m_model.reset();
+    LogbookColumnStore::instance().setColumns({m_d, m_g, m_e});     // altitudeMarkerRemovalDiscardsStubValues adds one
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
     QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
 }
@@ -751,6 +753,71 @@ void ColumnCacheTest::altitudeMarkerChangeDiscards()
     QVERIFY(isNear(cached(0, kG).toDouble(), 1.72032));
     QVERIFY(isNear(cached(1, kG).toDouble(), 1.72032));
     QCOMPARE(readIndex()[QStringLiteral("calculationEnvironment")].toString(), logbook.cacheEnvironment());
+}
+
+// Acceptance 13, for rows that are not loaded: when a registration is REMOVED,
+// the cached column values it produced are discarded in every row - a loaded
+// one and a stub alike - without touching a session file.
+void ColumnCacheTest::altitudeMarkerRemovalDiscardsStubValues()
+{
+    constexpr int kA = 3;
+    LogbookColumn altitudeColumn;
+    altitudeColumn.type = ColumnType::SessionAttribute;
+    altitudeColumn.attributeKey = QStringLiteral("_ALTITUDE_1000_M");
+    LogbookColumnStore::instance().setColumns({m_d, m_g, m_e, altitudeColumn});     // restored in cleanup()
+
+    LogbookManager &logbook = LogbookManager::instance();
+    startWithLoadedSessions({DescentFixture::load("s1"), DescentFixture::load("s2")});
+    restartAsStubs();
+    const int row1 = m_model->getSessionRow("s1");
+    const int row2 = m_model->getSessionRow("s2");
+    m_model->sessionRef(row1);      // s1 loaded, s2 stays a stub
+    QVERIFY(m_model->rowAt(row1).isLoaded());
+    QVERIFY(!m_model->rowAt(row2).isLoaded());
+
+    m_altitudes = std::make_unique<AltitudeMarkerManager>(m_model.get());
+    writeAltitudes({1000});
+    PreferencesManager::instance().setValue(PreferenceKeys::AltitudeMarkersUnits, QStringLiteral("Metric"));
+    m_altitudes->registerAll();
+    m_model->flushPendingInvalidations();
+    QVERIFY(waitForIdle(*m_model));
+
+    const DependencyKey altitudeName = DependencyKey::attribute(QStringLiteral("_ALTITUDE_1000_M"));
+    QVERIFY(CalculationRegistry::instance().hasCandidateFor(altitudeName));
+    QVERIFY(isNear(cached(row1, kA).toDouble(), T0 + 71.5));
+    QVERIFY(isNear(cached(row2, kA).toDouble(), T0 + 71.5));
+    QVERIFY(!m_model->rowAt(row2).isLoaded());
+    logbook.flushIndex();
+    QVERIFY(indexValue(readIndex(), "s1", altitudeColumn).isDouble());
+    QVERIFY(indexValue(readIndex(), "s2", altitudeColumn).isDouble());
+
+    const QByteArray csv1 = readFileBytes(sessionFilePath("s1"));
+    const QByteArray csv2 = readFileBytes(sessionFilePath("s2"));
+    const QString withAltitude = logbook.cacheEnvironment();
+    QCOMPARE(withAltitude, calculationEnvironmentFingerprint());
+
+    writeAltitudes({});             // the manager refreshes and unregisters
+    m_model->flushPendingInvalidations();
+    QVERIFY(waitForIdle(*m_model));
+
+    QVERIFY(!CalculationRegistry::instance().hasCandidateFor(altitudeName));
+    QVERIFY(!cached(row1, kA).isValid());
+    QVERIFY(!cached(row2, kA).isValid());
+
+    logbook.flushIndex();
+    QVERIFY(!indexValue(readIndex(), "s1", altitudeColumn).isDouble());
+    QVERIFY(!indexValue(readIndex(), "s2", altitudeColumn).isDouble());
+
+    QVERIFY(!m_model->rowAt(row1).dirty);
+    QVERIFY(!m_model->rowAt(row2).dirty);
+    QCOMPARE(readFileBytes(sessionFilePath("s1")), csv1);
+    QCOMPARE(readFileBytes(sessionFilePath("s2")), csv2);
+
+    QVERIFY(logbook.cacheEnvironment() != withAltitude);
+    QCOMPARE(logbook.cacheEnvironment(), calculationEnvironmentFingerprint());
+
+    // The other columns came back
+    QCOMPARE(cached(row2, kE).toDouble(), T0 + 9.0);
 }
 
 // A failed save is reported once with the exporter's reason, is not retried,

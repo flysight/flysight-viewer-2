@@ -76,6 +76,10 @@ plugin did not declare); a plot whose x and y lengths differ is simply skipped.
 * The `session` object is valid only during `compute()`. Using it afterwards
   raises `RuntimeError`.
 
+The same rules bind the built-in C++ calculations; they are described for
+contributors in [the calculations note](https://github.com/flysight/flysight-viewer-2/blob/master/docs/CALCULATIONS.md)
+(in the repository: `docs/CALCULATIONS.md`).
+
 ## 4. Effective versus source values
 
 `session.getMeasurement(sensor, name)` returns the **effective** values - what
@@ -115,7 +119,8 @@ register_calculation(PySourceProbe())
 <!-- exercised by tests/python_plugins/t_multi.py (PySourceProbe) -->
 
 The schemas, the unit table, and the conversion rules are described in
-[`docs/DATA_SCHEMA.md`](../docs/DATA_SCHEMA.md).
+[the data schema document](https://github.com/flysight/flysight-viewer-2/blob/master/docs/DATA_SCHEMA.md#6-the-conversion-layer)
+(in the repository: `docs/DATA_SCHEMA.md`).
 
 ## 5. Multi-output calculations
 
@@ -196,6 +201,15 @@ Registration problems - an unknown key kind, a bad `outputs()` list, a missing
 `name`, a duplicate id - reject that one plugin at startup with a log line
 (`[PluginHost] Plugin ... rejected:`); the others still load.
 
+### Cached logbook columns
+
+FlySight Viewer caches the logbook column values of sessions that are not
+loaded. That cache is discarded when the *set of registered calculation ids*
+changes - a plugin added, removed, or renamed - not when a plugin's code
+changes. After changing what `compute()` returns, either rename the plugin (its
+id changes with its name) or remove the logbook column and add it again;
+otherwise unloaded sessions keep showing the old values.
+
 ## 8. Precedence
 
 A name is resolved in this order: recorded data or a stored attribute first,
@@ -225,8 +239,14 @@ value": a plugin that declares it simply does not run. Never assume a default,
 in particular for `SCHEMA_VER`, whose interpretation belongs to the conversion
 layer. When a second file is merged into a session, a header attribute with a
 *different* value makes that import fail rather than overwrite, so a plugin can
-rely on header attributes being single-valued per session. Details:
-[`docs/DATA_SCHEMA.md`](../docs/DATA_SCHEMA.md).
+rely on header attributes being single-valued per session.
+
+Two refinements: FlySight Viewer's own attributes (keys starting with `_`) in
+an incoming file never overwrite existing values - the existing value wins and
+absent ones are added, which is never a conflict; and the `DEVICE_ID`
+placeholder `n/a` (stored when no device id is known) counts as absent.
+Details: [the data schema document](https://github.com/flysight/flysight-viewer-2/blob/master/docs/DATA_SCHEMA.md#8-importing-and-merging)
+(in the repository: `docs/DATA_SCHEMA.md`).
 
 ## 11. Plots and markers
 

@@ -27,6 +27,7 @@
 #include <pybind11/numpy.h>
 #pragma pop_macro("slots")
 
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -36,15 +37,22 @@
 #include <QSet>
 #include <QtTest>
 
+#include "calculations/builtincalculations.h"
 #include "dataimporter.h"
 #include "dependencykey.h"
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
 #include "fixturebuilder.h"
+#include "logbookcolumn.h"
+#include "logbookmanager.h"
 #include "markerregistry.h"
 #include "plotregistry.h"
 #include "pluginhost.h"
+#include "preferences/preferencekeys.h"
+#include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
+#include "sessionimport.h"
+#include "sessionmodel.h"
 #include "testenvironment.h"
 #include "testmain.h"
 
@@ -160,6 +168,9 @@ private slots:
 
     // Task 7.7
     void bundledExampleRuns();
+
+    // Phase 8, Task 8.4
+    void pluginWorkflowThroughModel();
 
 private:
     // Fresh file, fresh importer, fresh session (fresh engine => per-test run counts).
@@ -883,6 +894,72 @@ void PythonBridgeTest::bundledExampleRuns()
             plots.insert(plot.plotName);
     }
     QCOMPARE(plots, QSet<QString>({QStringLiteral("Tilt pitch"), QStringLiteral("Tilt roll")}));
+}
+
+// ------------------------------------------------------------------ Task 8.4
+
+// Acceptance 17 / 19: the plugin workflow end to end - a file imported through
+// the application's import path, a logbook column fed by a multi-output Python
+// plugin, a save, and a restart. Plugin outputs are cached for the logbook but
+// never persisted in the session file.
+void PythonBridgeTest::pluginWorkflowThroughModel()
+{
+    PreferencesManager::instance().registerPreference(PreferenceKeys::LogbookColumnsVersion, 0);
+    LogbookColumn pluginColumn;
+    pluginColumn.type = ColumnType::SessionAttribute;
+    pluginColumn.attributeKey = QStringLiteral("_PY_W_MAX");    // t_multi.py, PyGyroStats
+    LogbookColumnStore::instance().setColumns({pluginColumn});
+
+    TestEnvironment &env = TestEnvironment::instance();
+    LogbookManager &logbook = LogbookManager::instance();
+    env.useFreshLogbook();
+    env.resetPreferencesToDefaults();
+    logbook.initialize();       // plugins and built-ins are registered already
+
+    const QString folder = env.newTempDir(QStringLiteral("card")) + QStringLiteral("/24-01-01/12-00-00");
+    QVERIFY(QDir().mkpath(folder));
+    const QString path = QDir(folder).filePath(QStringLiteral("SENSOR.CSV"));
+    QVERIFY(bridgeSensorFile("bridge-workflow").write(path));
+
+    auto model = std::make_unique<SessionModel>();
+    const SessionImport::BatchResult batch = SessionImport::importFiles(*model, {path});
+    QCOMPARE(batch.files.size(), 1);
+    QVERIFY(batch.files.first().outcome == MergeResult::Outcome::Created);
+    QVERIFY(waitForIdle(*model));
+
+    // Live, and cached for the logbook
+    QCOMPARE(model->rowCount(), 1);
+    QVERIFY(near(model->sessionRef(0).getAttribute(QStringLiteral("_PY_W_MAX")).toDouble(), 71.68));
+    QVERIFY(near(model->rowAt(0).cachedValues.value(0).toDouble(), 71.68));
+    const QString fingerprint = calculationEnvironmentFingerprint();
+
+    // Plugin outputs are never persisted
+    const QStringList csvFiles = QDir(env.sessionsDir()).entryList({QStringLiteral("*.csv")}, QDir::Files);
+    QCOMPARE(csvFiles.size(), 1);
+    const QByteArray csv = readFileBytes(QDir(env.sessionsDir()).filePath(csvFiles.first()));
+    QVERIFY(csv.contains("$IMU,3,62.5,-125,0,1,0,1,40\n"));
+    QVERIFY(!csv.contains("_PY_"));
+    QVERIFY(!csv.contains("pyWNorm"));
+
+    // Restart: the same plugin set, so the cached value is served from index.json
+    model.reset();
+    env.reopenLogbook();
+    logbook.initialize();
+    QVERIFY(!logbook.cachedValuesDiscardedOnLoad());
+    QCOMPARE(calculationEnvironmentFingerprint(), fingerprint);
+
+    model = std::make_unique<SessionModel>();
+    model->populateFromIndex(logbook.cachedColumnValues(LogbookColumnStore::instance().enabledColumns()),
+                             logbook.lastAccessedMap());
+    model->startColumnWorker();
+    QVERIFY(waitForIdle(*model));
+    QCOMPARE(model->rowCount(), 1);
+    QVERIFY(!model->rowAt(0).isLoaded());
+    QVERIFY(near(model->rowAt(0).cachedValues.value(0).toDouble(), 71.68));
+    QCOMPARE(model->columnWorkStats().sessionsLoaded, 0);
+
+    model.reset();
+    QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
 }
 
 FLYSIGHT_TEST_MAIN(PythonBridgeTest)
