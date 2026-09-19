@@ -746,9 +746,23 @@ void SessionModel::resolveIdentityStubs()
         const std::optional<QString> realId = logbook.peekSessionId(row.sessionId);
         if (!realId.has_value() || realId->isEmpty() || *realId == row.sessionId)
             continue;
-        if (logbook.remapSessionId(row.sessionId, *realId))
-            row.sessionId = *realId;
+        setRowSessionId(row, *realId);
     }
+}
+
+bool SessionModel::setRowSessionId(SessionRow &sr, const QString &realId)
+{
+    const QString oldId = sr.sessionId;
+    if (!LogbookManager::instance().remapSessionId(oldId, realId))
+        return false;
+    sr.sessionId = realId;
+
+    // Queued bulk edits find their row by id
+    for (BulkEditItem &item : m_bulkEditQueue) {
+        if (item.sessionId == oldId)
+            item.sessionId = realId;
+    }
+    return true;
 }
 
 void SessionModel::populateFromIndex(const QMap<QString, QMap<int, QVariant>> &cachedValues,
@@ -1007,11 +1021,8 @@ SessionData &SessionModel::sessionRef(int row)
         if (loaded.has_value()) {
             // Remap UUID-based session ID to real SESSION_ID if needed
             const QString realId = loaded->getAttribute(SessionKeys::SessionId).toString();
-            if (!realId.isEmpty() && realId != sr.sessionId) {
-                LogbookManager &logbook = LogbookManager::instance();
-                if (logbook.remapSessionId(sr.sessionId, realId))
-                    sr.sessionId = realId;
-            }
+            if (!realId.isEmpty() && realId != sr.sessionId)
+                setRowSessionId(sr, realId);
             sr.session = std::move(loaded.value());
         } else {
             qWarning() << "SessionModel::sessionRef: failed to load session"
@@ -1474,6 +1485,7 @@ void SessionModel::flushDirtySessions()
     m_bulkEditQueue.clear();
     m_bulkEditHighWater = 0;
     m_bulkEditRemaining = 0;
+    m_bulkEditSkipped = 0;
 
     LogbookManager &logbook = LogbookManager::instance();
     bool anySaved = false;
@@ -1716,10 +1728,8 @@ void SessionModel::processNextDirtyColumn()
         if (loaded.has_value()) {
             // Remap UUID-based session ID to real SESSION_ID if needed
             const QString realId = loaded->getAttribute(SessionKeys::SessionId).toString();
-            if (!realId.isEmpty() && realId != row.sessionId) {
-                if (logbook.remapSessionId(row.sessionId, realId))
-                    row.sessionId = realId;
-            }
+            if (!realId.isEmpty() && realId != row.sessionId)
+                setRowSessionId(row, realId);
             m_columnWorkStats.sessionsLoaded++;
             fillMissingColumns(dirtyIdx, loaded.value());
         } else {
@@ -1750,12 +1760,18 @@ void SessionModel::startBulkEdit(const QList<int> &rows, int columnIndex, const 
     if (!def || !def->editable)
         return;
 
-    if (rows.isEmpty())
+    // The indices are current here and only here: the queue keeps the session
+    // id and the attribute key (see BulkEditItem). Appending supports multiple
+    // successive edits.
+    int queued = 0;
+    for (int row : rows) {
+        if (row < 0 || row >= m_rows.size())
+            continue;
+        m_bulkEditQueue.append({m_rows[row].sessionId, col.attributeKey, value});
+        ++queued;
+    }
+    if (queued == 0)
         return;
-
-    // Append work items to the queue (supports multiple successive edits)
-    for (int row : rows)
-        m_bulkEditQueue.append({row, columnIndex, value});
 
     // Mark the column unsaved for the whole batch up front, so that the first
     // save performs one pre-save index flush instead of one per row.
@@ -1764,8 +1780,8 @@ void SessionModel::startBulkEdit(const QList<int> &rows, int columnIndex, const 
             invalidateColumns(row, {DependencyKey::attribute(col.attributeKey)});
     }
 
-    m_bulkEditHighWater += rows.size();
-    m_bulkEditRemaining += rows.size();
+    m_bulkEditHighWater += queued;
+    m_bulkEditRemaining += queued;
 
     // Wake the scheduler so the bulk edit worker picks up new work
     m_scheduler.wake();
@@ -1778,40 +1794,38 @@ void SessionModel::cancelBulkEdit()
 
 void SessionModel::processNextBulkEdit()
 {
-    // Skip invalid entries
+    // Skip entries that cannot be applied; each one counts as done
+    int row = -1;
+    const AttributeDefinition *def = nullptr;
     while (!m_bulkEditQueue.isEmpty()) {
         const BulkEditItem &front = m_bulkEditQueue.first();
-        if (front.row < 0 || front.row >= m_rows.size() ||
-            front.columnIndex < 0 || front.columnIndex >= m_columns.size()) {
-            m_bulkEditQueue.removeFirst();
-            m_bulkEditRemaining--;
-            continue;
-        }
-        const LogbookColumn &col = m_columns[front.columnIndex];
-        const auto *def = AttributeRegistry::instance().findByKey(col.attributeKey);
-        if (!def) {
-            m_bulkEditQueue.removeFirst();
-            m_bulkEditRemaining--;
-            continue;
-        }
-        // Check non-editable format types
-        if (def->formatType != AttributeFormatType::Text &&
-            def->formatType != AttributeFormatType::Double) {
-            m_bulkEditQueue.removeFirst();
-            m_bulkEditRemaining--;
-            continue;
-        }
-        break;
+        def = AttributeRegistry::instance().findByKey(front.attributeKey);
+        // Unknown attribute, or a format type that is not edited in bulk
+        const bool editableType = def &&
+            (def->formatType == AttributeFormatType::Text ||
+             def->formatType == AttributeFormatType::Double);
+        // The row is wherever the session is now. A session that was removed
+        // since the item was queued has none.
+        row = editableType ? getSessionRow(front.sessionId) : -1;
+        if (row >= 0)
+            break;
+        if (editableType)
+            m_bulkEditSkipped++;
+        m_bulkEditQueue.removeFirst();
+        m_bulkEditRemaining--;
     }
 
     if (m_bulkEditQueue.isEmpty())
         return;
 
-    BulkEditItem item = m_bulkEditQueue.takeFirst();
+    const BulkEditItem item = m_bulkEditQueue.takeFirst();
 
-    SessionRow &sr = m_rows[item.row];
-    const LogbookColumn &col = m_columns[item.columnIndex];
-    const auto *def = AttributeRegistry::instance().findByKey(col.attributeKey);
+    // The edit is made by attribute key. invalidateColumns() finds the columns
+    // the key affects among the columns enabled now, so an edit whose column
+    // was disabled since it was queued still reaches the session; there is
+    // just no cached column value to refresh.
+    SessionRow &sr = m_rows[row];
+    const QString &attributeKey = item.attributeKey;
     LogbookManager &logbook = LogbookManager::instance();
 
     // Compute the final value (with unit reverse-conversion for Double)
@@ -1839,15 +1853,15 @@ void SessionModel::processNextBulkEdit()
     } else if (sr.isLoaded()) {
         // --- LOADED PATH ---
         SessionData &session = sr.session.value();
-        session.setAttribute(col.attributeKey, newVal);
-        invalidateColumns(item.row, {DependencyKey::attribute(col.attributeKey)});
+        session.setAttribute(attributeKey, newVal);
+        invalidateColumns(row, {DependencyKey::attribute(attributeKey)});
 
         // Save inline. A row that was already queued for the idle saver
         // (dirty, not failed) leaves that queue either way: saved, or failed.
         const bool wasQueued = sr.dirty && !sr.saveFailed;
         if (saveLoadedRow(sr)) {
             // Recompute only what the edit removed
-            fillMissingColumns(item.row, session);
+            fillMissingColumns(row, session);
         }
         if (wasQueued)
             m_saveRemaining--;
@@ -1857,21 +1871,19 @@ void SessionModel::processNextBulkEdit()
         if (loaded.has_value()) {
             // UUID remap (same pattern as column worker)
             const QString realId = loaded->getAttribute(SessionKeys::SessionId).toString();
-            if (!realId.isEmpty() && realId != sr.sessionId) {
-                if (logbook.remapSessionId(sr.sessionId, realId))
-                    sr.sessionId = realId;
-            }
+            if (!realId.isEmpty() && realId != sr.sessionId)
+                setRowSessionId(sr, realId);   // later items queued for this session follow
 
             m_columnWorkStats.sessionsLoaded++;
 
             // Apply the edit
-            loaded->setAttribute(col.attributeKey, newVal);
-            invalidateColumns(item.row, {DependencyKey::attribute(col.attributeKey)});
+            loaded->setAttribute(attributeKey, newVal);
+            invalidateColumns(row, {DependencyKey::attribute(attributeKey)});
 
             // Save
             if (logbook.saveSession(loaded.value())) {
                 // Recompute only what the edit removed
-                fillMissingColumns(item.row, loaded.value());
+                fillMissingColumns(row, loaded.value());
                 // loaded goes out of scope: the session stays a stub
             } else {
                 qWarning("SessionModel: session %s was not saved: %s",
@@ -1897,7 +1909,8 @@ void SessionModel::processNextBulkEdit()
     }
 
     // Notify the view that this row has been updated
-    emit dataChanged(index(item.row, 0), index(item.row, columnCount() - 1), {Qt::DisplayRole});
+    if (columnCount() > 0)
+        emit dataChanged(index(row, 0), index(row, columnCount() - 1), {Qt::DisplayRole});
 
     // Update progress
     m_bulkEditRemaining--;
@@ -1907,9 +1920,13 @@ void SessionModel::finishBulkEdit()
 {
     LogbookManager::instance().flushIndex();
 
+    if (m_bulkEditSkipped > 0)
+        qDebug("SessionModel: bulk edit skipped %d session(s) that no longer exist", m_bulkEditSkipped);
+
     // Reset state
     m_bulkEditHighWater = 0;
     m_bulkEditRemaining = 0;
+    m_bulkEditSkipped = 0;
     m_bulkEditQueue.clear();
 
     emit modelChanged();

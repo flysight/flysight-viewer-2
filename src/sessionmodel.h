@@ -323,15 +323,26 @@ private:
     int m_columnWorkerRemaining = 0;
     void processNextDirtyColumn();
 
-    // Bulk edit worker (edits + saves one session per tick)
+    // Bulk edit worker (edits + saves one session per tick). Items wait across
+    // returns to the event loop, during which rows can be sorted, added,
+    // removed or reset and the columns rebuilt, so an item names its target by
+    // session id and attribute key, never by row or column index; the row is
+    // looked up when the item is processed. setRowSessionId() keeps the queued
+    // ids current when a row's id changes.
     struct BulkEditItem {
-        int row;
-        int columnIndex;
+        QString sessionId;
+        QString attributeKey;
         QVariant value;
     };
     int m_bulkEditHighWater = 0;
     int m_bulkEditRemaining = 0;
+    int m_bulkEditSkipped = 0;   // items of the current batch whose session was gone
     QList<BulkEditItem> m_bulkEditQueue;
+    /// The one place a row's id changes after the row was created (a row known
+    /// by its file stem learns its real SESSION_ID): remaps the logbook entry
+    /// and, if that succeeds, the row and every queued bulk edit item that
+    /// names it. False (nothing changed) when the logbook refuses the remap.
+    bool setRowSessionId(SessionRow &sr, const QString &realId);
     void finishBulkEdit();
     void processNextBulkEdit();
 

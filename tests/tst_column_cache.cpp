@@ -123,6 +123,11 @@ private slots:
     void removeAttributeRefreshesDependents();
     void mergeRefreshesWrittenNamesOnly();
     void bulkEditOnStubComputesOneColumn();
+    void bulkEditFollowsSessionsAcrossSort();
+    void bulkEditSkipsRemovedSession();
+    void bulkEditFollowsSessionsAcrossMerge();
+    void bulkEditFollowsIdentityStubRemap();
+    void bulkEditSurvivesDisabledColumn();
 
     void interruptedSaveViaModel();
     void indexFlushWhileDirtyOmitsUnsaved();
@@ -145,6 +150,11 @@ private:
     // its column values cached.
     void restartAsStubs();
     QVariant cached(int row, int column) const { return m_model->rowAt(row).cachedValues.value(column); }
+    // Rows [sA, sB, sC] with descriptions "m", "a", "z", so that a sort by
+    // description reorders them; sA and sB are stubs, sC is loaded.
+    void startWithMixedRows();
+    QString descriptionOf(const QString &sessionId) const;     // in memory
+    bool fileHasDescription(const QString &sessionId, const char *text) const;
 
     std::unique_ptr<SessionModel> m_model;
     std::unique_ptr<AltitudeMarkerManager> m_altitudes;
@@ -441,6 +451,236 @@ void ColumnCacheTest::bulkEditOnStubComputesOneColumn()
     QCOMPARE(indexValue(root, "g1", m_d).toString(), QStringLiteral("bulk"));
     QVERIFY(isNear(indexValue(root, "g1", m_g).toDouble(), 1.72032));
     QVERIFY(!LogbookManager::instance().hasUnsavedColumns("g1"));
+}
+
+// ---- a queued bulk edit names sessions and the attribute, not indices ----
+//
+// The edit is queued, and the rows (or columns) change before the idle
+// scheduler processes it.
+
+namespace {
+
+SessionData describedSession(const QString &id, const QString &description)
+{
+    SessionData s = gyroSession(id);
+    s.setAttribute("_DESCRIPTION", description);
+    return s;
+}
+
+// The bulk edit task's share of the scheduler's signals
+struct BulkEditSignals {
+    explicit BulkEditSignals(SessionModel &model)
+        : active(&model.scheduler(), &IdleScheduler::activeTaskChanged)
+        , progress(&model.scheduler(), &IdleScheduler::progressChanged)
+    {}
+    int activations() const
+    {
+        int count = 0;
+        for (const QList<QVariant> &args : active)
+            count += args.at(0).toInt() == SessionModel::BulkEditTask ? 1 : 0;
+        return count;
+    }
+    // {remaining, total} of the last report, {-1, -1} if there was none
+    QPair<int, int> lastProgress() const
+    {
+        QPair<int, int> last(-1, -1);
+        for (const QList<QVariant> &args : progress) {
+            if (args.at(0).toInt() == SessionModel::BulkEditTask)
+                last = {args.at(1).toInt(), args.at(2).toInt()};
+        }
+        return last;
+    }
+    QSignalSpy active;
+    QSignalSpy progress;
+};
+
+} // namespace
+
+void ColumnCacheTest::startWithMixedRows()
+{
+    startWithLoadedSessions({describedSession("sA", "m"), describedSession("sB", "a"), describedSession("sC", "z")});
+    restartAsStubs();
+    QCOMPARE(m_model->rowCount(), 3);
+    QCOMPARE(m_model->rowAt(0).sessionId, QStringLiteral("sA"));
+    QCOMPARE(m_model->rowAt(1).sessionId, QStringLiteral("sB"));
+    QCOMPARE(m_model->rowAt(2).sessionId, QStringLiteral("sC"));
+    m_model->sessionRef(2);
+    QVERIFY(!m_model->rowAt(0).isLoaded());
+    QVERIFY(!m_model->rowAt(1).isLoaded());
+    QVERIFY(m_model->rowAt(2).isLoaded());
+}
+
+QString ColumnCacheTest::descriptionOf(const QString &sessionId) const
+{
+    const int row = m_model->getSessionRow(sessionId);
+    if (row < 0)
+        return QStringLiteral("<no row>");
+    const SessionRow &sr = std::as_const(*m_model).rowAt(row);
+    return sr.isLoaded() ? sr.session->getAttribute("_DESCRIPTION").toString()
+                         : sr.cachedValues.value(kD).toString();
+}
+
+bool ColumnCacheTest::fileHasDescription(const QString &sessionId, const char *text) const
+{
+    return readFileBytes(sessionFilePath(sessionId))
+        .contains(QByteArray("$VAR,_DESCRIPTION,") + text + QByteArray("\n"));
+}
+
+void ColumnCacheTest::bulkEditFollowsSessionsAcrossSort()
+{
+    startWithMixedRows();
+    if (QTest::currentTestFailed())
+        return;
+
+    m_model->startBulkEdit({0, 2}, kD, QStringLiteral("bulk"));
+    // Queuing the edit removed the cached description of the stub sA, and a
+    // row without a value sorts last
+    m_model->sort(kD, Qt::AscendingOrder);
+    QCOMPARE(m_model->rowAt(0).sessionId, QStringLiteral("sB"));
+    QCOMPARE(m_model->rowAt(1).sessionId, QStringLiteral("sC"));
+    QCOMPARE(m_model->rowAt(2).sessionId, QStringLiteral("sA"));
+
+    QVERIFY(waitForIdle(*m_model));
+
+    QCOMPARE(descriptionOf("sA"), QStringLiteral("bulk"));
+    QCOMPARE(descriptionOf("sB"), QStringLiteral("a"));
+    QCOMPARE(descriptionOf("sC"), QStringLiteral("bulk"));
+    QVERIFY(fileHasDescription("sA", "bulk"));
+    QVERIFY(fileHasDescription("sB", "a"));
+    QVERIFY(fileHasDescription("sC", "bulk"));
+    QVERIFY(!m_model->rowAt(m_model->getSessionRow("sA")).isLoaded());
+    QVERIFY(!m_model->rowAt(m_model->getSessionRow("sC")).dirty);
+}
+
+void ColumnCacheTest::bulkEditSkipsRemovedSession()
+{
+    startWithMixedRows();
+    if (QTest::currentTestFailed())
+        return;
+
+    m_model->startBulkEdit({0, 2}, kD, QStringLiteral("bulk"));
+    QVERIFY(m_model->removeSessions({QStringLiteral("sA")}));
+    QCOMPARE(m_model->rowCount(), 2);
+
+    BulkEditSignals bulk(*m_model);
+    QSignalSpy modelChangedSpy(m_model.get(), &SessionModel::modelChanged);
+    {
+        WarningCapture warnings;
+        QVERIFY(waitForIdle(*m_model));
+        QCOMPARE(warnings.count(), 0);
+    }
+
+    QCOMPARE(descriptionOf("sB"), QStringLiteral("a"));
+    QCOMPARE(descriptionOf("sC"), QStringLiteral("bulk"));
+    QVERIFY(fileHasDescription("sB", "a"));
+    QVERIFY(fileHasDescription("sC", "bulk"));
+
+    // The skipped item counts as done; the batch finishes once
+    QCOMPARE(bulk.activations(), 1);
+    QCOMPARE(bulk.lastProgress(), qMakePair(0, 2));
+    QCOMPARE(modelChangedSpy.count(), 1);      // finishBulkEdit
+
+    // Nothing is left over for a later batch
+    BulkEditSignals second(*m_model);
+    m_model->startBulkEdit({0}, kD, QStringLiteral("again"));
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(second.lastProgress(), qMakePair(0, 1));
+    QCOMPARE(descriptionOf("sB"), QStringLiteral("again"));
+    QCOMPARE(descriptionOf("sC"), QStringLiteral("bulk"));
+}
+
+// A merge appends the session it creates, so the rows are sorted as well: the
+// new session takes row 0, which the batch's index for sA named.
+void ColumnCacheTest::bulkEditFollowsSessionsAcrossMerge()
+{
+    startWithMixedRows();
+    if (QTest::currentTestFailed())
+        return;
+
+    m_model->startBulkEdit({0, 2}, kD, QStringLiteral("bulk"));
+    const QList<MergeResult> results = m_model->mergeSessions({describedSession("sN", "0")});
+    QCOMPARE(results.size(), 1);
+    QCOMPARE(results.first().outcome, MergeResult::Outcome::Created);
+    m_model->sort(kD, Qt::AscendingOrder);
+    QCOMPARE(m_model->rowCount(), 4);
+    QCOMPARE(m_model->rowAt(0).sessionId, QStringLiteral("sN"));
+    QCOMPARE(m_model->rowAt(1).sessionId, QStringLiteral("sB"));
+    QCOMPARE(m_model->rowAt(2).sessionId, QStringLiteral("sC"));
+    QCOMPARE(m_model->rowAt(3).sessionId, QStringLiteral("sA"));    // no cached description: last
+
+    QVERIFY(waitForIdle(*m_model));
+
+    QCOMPARE(descriptionOf("sN"), QStringLiteral("0"));
+    QCOMPARE(descriptionOf("sA"), QStringLiteral("bulk"));
+    QCOMPARE(descriptionOf("sB"), QStringLiteral("a"));
+    QCOMPARE(descriptionOf("sC"), QStringLiteral("bulk"));
+    QVERIFY(fileHasDescription("sN", "0"));
+    QVERIFY(fileHasDescription("sA", "bulk"));
+    QVERIFY(fileHasDescription("sB", "a"));
+    QVERIFY(fileHasDescription("sC", "bulk"));
+}
+
+// A row known by its file stem gets its real SESSION_ID while the edit is
+// queued; the queued item follows the row.
+void ColumnCacheTest::bulkEditFollowsIdentityStubRemap()
+{
+    TestEnvironment &env = TestEnvironment::instance();
+    LogbookManager &logbook = LogbookManager::instance();
+
+    startWithLoadedSessions({gyroSession()});
+    QCOMPARE(sessionCsvFiles().size(), 1);
+    const QString stem = QFileInfo(sessionCsvFiles().first()).completeBaseName();
+    const QString csvPath = env.sessionsDir() + QLatin1Char('/') + stem + QStringLiteral(".csv");
+    QVERIFY(stem != QStringLiteral("g1"));
+    m_model.reset();
+
+    QVERIFY(QFile::remove(env.indexPath()));
+    env.reopenLogbook();
+    logbook.initialize();
+    QVERIFY(logbook.hasDeferredScan());
+
+    m_model = std::make_unique<SessionModel>();
+    m_model->populateFromUuids(logbook.scannedUuids());
+    QCOMPARE(m_model->rowCount(), 1);
+    QCOMPARE(m_model->rowAt(0).sessionId, stem);
+
+    BulkEditSignals bulk(*m_model);
+    m_model->startBulkEdit({0}, kD, QStringLiteral("bulk"));
+    m_model->resolveIdentityStubs();
+    QCOMPARE(m_model->rowAt(0).sessionId, QStringLiteral("g1"));
+
+    QVERIFY(waitForIdle(*m_model));
+
+    QCOMPARE(bulk.lastProgress(), qMakePair(0, 1));
+    QCOMPARE(m_model->rowAt(0).sessionId, QStringLiteral("g1"));
+    QCOMPARE(descriptionOf("g1"), QStringLiteral("bulk"));
+    QVERIFY(readFileBytes(csvPath).contains("$VAR,_DESCRIPTION,bulk\n"));
+    QCOMPARE(sessionCsvFiles(), QStringList({stem + QStringLiteral(".csv")}));
+}
+
+// The edited column is disabled while the edit is queued: the attribute is
+// the truth and is edited all the same; there is no column left to refresh.
+void ColumnCacheTest::bulkEditSurvivesDisabledColumn()
+{
+    startWithMixedRows();
+    if (QTest::currentTestFailed())
+        return;
+
+    m_model->startBulkEdit({0, 2}, kD, QStringLiteral("bulk"));
+    LogbookColumnStore::instance().setColumns({m_g, m_e});      // restored in cleanup()
+    QCOMPARE(m_model->columnCount(), 2);
+
+    QVERIFY(waitForIdle(*m_model));
+
+    QVERIFY(fileHasDescription("sA", "bulk"));
+    QVERIFY(fileHasDescription("sB", "a"));
+    QVERIFY(fileHasDescription("sC", "bulk"));
+    QCOMPARE(m_model->sessionRef(m_model->getSessionRow("sA")).getAttribute("_DESCRIPTION").toString(),
+             QStringLiteral("bulk"));
+    QCOMPARE(m_model->sessionRef(m_model->getSessionRow("sB")).getAttribute("_DESCRIPTION").toString(),
+             QStringLiteral("a"));
+    QCOMPARE(m_model->sessionRef(m_model->getSessionRow("sC")).getAttribute("_DESCRIPTION").toString(),
+             QStringLiteral("bulk"));
 }
 
 // An interrupted save cannot leave cached columns that disagree
