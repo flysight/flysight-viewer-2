@@ -307,7 +307,9 @@ jobs:
 
       # tst_python_bridge runs the SDK in this (build-time) interpreter, and the
       # SDK imports NumPy. Without it the test is registered but disabled.
-      - name: Install NumPy for the embedded-Python bridge test
+      # Tests are not configured, built, or run on release tags (see "Run tests").
+      - name: Install NumPy for bridge tests
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         shell: bash
         run: python -m pip install numpy
 
@@ -483,6 +485,12 @@ jobs:
           if [ "${{ runner.os }}" == "macOS" ]; then
             CMAKE_EXTRA_ARGS="-DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOS_DEPLOYMENT_TARGET }}"
           fi
+          # The test suite is built on branch, pull-request and manual runs
+          # only: a release-tag build is the plain application pipeline.
+          TEST_ARGS=""
+          if [[ "${{ github.ref }}" != refs/tags/v* ]]; then
+            TEST_ARGS="-DFLYSIGHT_BUILD_TESTS=ON"
+          fi
           cmake -G Ninja -B build -S src \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=build/install \
@@ -497,7 +505,7 @@ jobs:
             ${FLYSIGHT_VERSION:+-DFLYSIGHT_VERSION_OVERRIDE="$FLYSIGHT_VERSION"} \
             -DFLYSIGHT_CODESIGN_IDENTITY="${FLYSIGHT_CODESIGN_IDENTITY:--}" \
             -DFLYSIGHT_CODESIGN_ENTITLEMENTS="${GITHUB_WORKSPACE}/src/FlySightViewer.entitlements" \
-            -DFLYSIGHT_BUILD_TESTS=ON \
+            $TEST_ARGS \
             $CMAKE_EXTRA_ARGS
 
       # =========================================================================
@@ -540,6 +548,7 @@ jobs:
           cmake --build build --parallel --config Release
 
       - name: Run tests
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         shell: bash
         run: ctest --test-dir build --output-on-failure -C Release
 
