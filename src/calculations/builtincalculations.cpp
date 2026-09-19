@@ -9,6 +9,9 @@
 #include "spcalculations.h"
 #include "interpolationcalculations.h"
 #include "../conversion/sourceconversion.h"
+#include "../csvformat.h"
+
+#include <QCryptographicHash>
 
 namespace FlySight {
 
@@ -32,6 +35,27 @@ void registerBuiltInCalculations(CalculationRegistry &registry)
     Calculations::registerWspCalculations(registry);
     Calculations::registerSpCalculations(registry);
     Calculations::registerInterpolationFamily(registry);
+}
+
+QString calculationEnvironmentFingerprint(const CalculationRegistry &registry)
+{
+    QCryptographicHash hash(QCryptographicHash::Sha1);
+
+    const QList<CalculationId> ids = registry.registeredIds();
+    for (const CalculationId &id : ids)
+        hash.addData((QStringLiteral("id:") + id + QLatin1Char('\n')).toUtf8());
+
+    const IPreferenceProvider *provider = registry.preferenceProvider();
+    const QStringList keys = registry.declaredPreferenceKeys();
+    for (const QString &key : keys) {
+        // The same text form a session file would carry: exact for doubles,
+        // and the same whether QSettings handed back a number or a string.
+        const QVariant value = provider ? provider->preferenceValue(key) : QVariant();
+        const QString text = CsvFormat::formatAttributeValue(value).value_or(QString());
+        hash.addData((QStringLiteral("pref:") + key + QLatin1Char('=') + text + QLatin1Char('\n')).toUtf8());
+    }
+
+    return QString::fromLatin1(hash.result().toHex());
 }
 
 void registerBuiltInCalculationMetadata()

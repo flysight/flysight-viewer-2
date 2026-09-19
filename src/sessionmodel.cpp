@@ -6,6 +6,8 @@
 #include <QTimeZone>
 
 #include "attributeregistry.h"
+#include "calculations/builtincalculations.h"
+#include "csvformat.h"
 #include "engine/calculationengine.h"
 #include "logbookcolumn.h"
 #include "logbookmanager.h"
@@ -124,10 +126,24 @@ SessionModel::SessionModel(QObject *parent)
         if (key == PreferenceKeys::LogbookCacheSize) {
             m_cacheCapacity = value.toInt();
             evictIfNeeded();
+        } else if (CalculationRegistry::instance().declaredPreferenceKeys().contains(key)) {
+            // A declared preference is part of the calculation environment
+            queueEnvironmentCheck();
         }
     });
 
+    // Registrations are part of the calculation environment too. One user
+    // action can cause many registry changes; the check is coalesced.
+    m_registryObserver = CalculationRegistry::instance().addObserver([this]() {
+        queueEnvironmentCheck();
+    });
+
     rebuildColumns();
+}
+
+SessionModel::~SessionModel()
+{
+    CalculationRegistry::instance().removeObserver(m_registryObserver);
 }
 
 void SessionModel::rebuildColumns()
@@ -135,12 +151,25 @@ void SessionModel::rebuildColumns()
     beginResetModel();
     m_columns = LogbookColumnStore::instance().enabledColumns();
 
+    QVector<int> allIndices;
+    allIndices.reserve(m_columns.size());
+    for (int i = 0; i < m_columns.size(); ++i)
+        allIndices.append(i);
+
     // Rebuild cached values for all sessions to reflect new column set
     LogbookManager &logbook = LogbookManager::instance();
     for (SessionRow &row : m_rows) {
         if (row.isLoaded()) {
+            // A row with unsaved changes: the marks name the columns that were
+            // enabled when the change was made, and a column enabled since may
+            // depend on it just the same. Keep everything out of the index
+            // until the session has been saved.
+            if (row.dirty || logbook.hasUnsavedColumns(row.sessionId))
+                logbook.markSessionUnsaved(row.sessionId);
+
             // Loaded session: recompute all column values from in-memory data
-            QMap<LogbookColumn, QVariant> colValues = computeColumnValues(row.session.value());
+            // (the one place that computes a whole row)
+            QMap<LogbookColumn, QVariant> colValues = computeColumnValues(row.session.value(), allIndices);
             logbook.setCachedValues(row.sessionId, colValues);
             QMap<int, QVariant> indexed;
             for (int i = 0; i < m_columns.size(); ++i)
@@ -163,6 +192,8 @@ void SessionModel::rebuildColumns()
     }
 
     endResetModel();
+
+    rebuildColumnDependencies();
 
     // Flush the index so it reflects the current column set
     if (!m_rows.isEmpty())
@@ -445,10 +476,13 @@ bool SessionModel::setData(const QModelIndex &index, const QVariant &value, int 
 
         switch (def->formatType) {
         case AttributeFormatType::Text: {
-            QString newVal = value.toString();
+            // A session file is a line format: line breaks become spaces here,
+            // so that memory and disk agree (the exporter would do it anyway).
+            QString newVal = CsvFormat::singleLine(value.toString());
             QString oldVal = item.getAttribute(col.attributeKey).toString();
             if (oldVal != newVal) {
                 visitedKeys = item.setAttribute(col.attributeKey, newVal);
+                invalidateColumns(index.row(), {DependencyKey::attribute(col.attributeKey)});
                 somethingChanged = true;
                 attributeChanged = true;
             }
@@ -462,6 +496,7 @@ bool SessionModel::setData(const QModelIndex &index, const QVariant &value, int 
             double oldVal = item.getAttribute(col.attributeKey).toDouble();
             if (oldVal != newVal) {
                 visitedKeys = item.setAttribute(col.attributeKey, newVal);
+                invalidateColumns(index.row(), {DependencyKey::attribute(col.attributeKey)});
                 somethingChanged = true;
                 attributeChanged = true;
             }
@@ -530,16 +565,28 @@ void SessionModel::mergeSessions(const QList<SessionData>& sessions)
                 // model reset is complete.
                 QSet<DependencyKey> &invalidated = mergeInvalidations[newSessionID];
 
+                // The stored names this merge writes: what the cached logbook
+                // columns of the row may depend on.
+                QSet<DependencyKey> writtenKeys;
+
                 // Stored values only: a merge never consults the engine.
                 for (const QString &attributeKey : newSession.attributeKeys()) {
                     invalidated.unite(
                         existingSession.setAttribute(attributeKey, newSession.storedAttribute(attributeKey)));
+                    writtenKeys.insert(DependencyKey::attribute(attributeKey));
                 }
 
                 // Source data only, samples and unit text together. Copying
                 // effective values here would store already-converted numbers
                 // as if they had been recorded, and convert them again on read.
-                invalidated.unite(existingSession.mergeSourceData(newSession.sourceData()));
+                const SourceData incoming = newSession.sourceData();
+                invalidated.unite(existingSession.mergeSourceData(incoming));
+                for (auto sensorIt = incoming.cbegin(); sensorIt != incoming.cend(); ++sensorIt) {
+                    for (auto colIt = sensorIt->cbegin(); colIt != sensorIt->cend(); ++colIt)
+                        writtenKeys.insert(DependencyKey::measurement(sensorIt.key(), colIt.key()));
+                }
+
+                invalidateColumns(int(rowIt - m_rows.begin()), writtenKeys);
 
                 if (!rowIt->dirty) {
                     rowIt->dirty = true;
@@ -553,6 +600,7 @@ void SessionModel::mergeSessions(const QList<SessionData>& sessions)
                 rowIt->visible = newSession.isVisible();
                 rowIt->session->setVisible(rowIt->visible);
                 attachSession(*rowIt);
+                invalidateAllColumns(int(rowIt - m_rows.begin()));
 
                 rowIt->dirty = true;
                 m_saveHighWater++;
@@ -571,6 +619,7 @@ void SessionModel::mergeSessions(const QList<SessionData>& sessions)
             m_saveRemaining++;
             m_rows.append(std::move(newRow));
             attachSession(m_rows.last());   // the element in m_rows, not the local
+            invalidateAllColumns(int(m_rows.size()) - 1);
             qDebug() << "Added new SessionData with SESSION_ID:" << newSessionID;
         }
     }
@@ -582,13 +631,10 @@ void SessionModel::mergeSessions(const QList<SessionData>& sessions)
             emit dependencyChanged(it.key(), key);
     }
 
-    // Cache column values for all loaded sessions so the index is populated
-    LogbookManager &logbook = LogbookManager::instance();
-    for (const SessionRow &row : std::as_const(m_rows)) {
-        if (row.isLoaded()) {
-            logbook.setCachedValues(row.sessionId, computeColumnValues(row.session.value()));
-        }
-    }
+    // The rows touched above now have missing column values. The saver fills
+    // them right after it has written the session; rows untouched by this
+    // merge keep their values and are not recomputed.
+    startColumnWorker();
 
     // Wake the scheduler so the saver picks up newly dirty rows
     m_scheduler.wake();
@@ -969,16 +1015,23 @@ bool SessionModel::updateAttribute(const QString &sessionId,
     // 2. Force-load before mutating
     SessionData &session = sessionRef(row);
 
+    // Text is kept on one line: a session file is a line format, and memory
+    // should equal what a reload would give.
+    QVariant value = newValue;
+    if (value.typeId() == QMetaType::QString)
+        value = CsvFormat::singleLine(value.toString());
+
     // 3. Retrieve the existing value
     QVariant oldValue = session.getAttribute(attributeKey);
 
     // 4. Check if there's actually a change
-    if (oldValue == newValue) {
+    if (oldValue == value) {
         return false;  // Nothing to update
     }
 
     // 5. Update the attribute in SessionData (captures all BFS-visited keys)
-    QSet<DependencyKey> visitedKeys = session.setAttribute(attributeKey, newValue);
+    QSet<DependencyKey> visitedKeys = session.setAttribute(attributeKey, value);
+    invalidateColumns(row, {DependencyKey::attribute(attributeKey)});
 
     // 6. Notify views that data has changed, and emit fine-grained
     //    dependencyChanged for each invalidated name
@@ -1010,6 +1063,7 @@ bool SessionModel::removeAttribute(const QString &sessionId,
 
     // 4. Remove the attribute and capture all BFS-visited keys
     QSet<DependencyKey> visitedKeys = session.removeAttribute(attributeKey);
+    invalidateColumns(row, {DependencyKey::attribute(attributeKey)});
 
     // 5. Notify views that data has changed, and emit fine-grained
     //    dependencyChanged for each invalidated name
@@ -1065,18 +1119,152 @@ void SessionModel::flushPendingInvalidations()
             continue;   // removed or evicted in the meantime
 
         publishInvalidation(row, it.value());
-
-        // The cached logbook columns may be stale; the idle column worker
-        // recomputes them from the in-memory session and updates the index.
-        // Persistent state did not change, so the session is not marked dirty.
-        m_rows[row].cachedValues.clear();
         published = true;
     }
 
-    if (published) {
-        startColumnWorker();
+    if (published)
         emit modelChanged();
+
+    // Every broadcast invalidation (declared preference, registration change)
+    // is by construction an environment change. The environment handler deals
+    // with the cached logbook columns of loaded AND unloaded rows in one place.
+    if (m_environmentCheckPending)
+        checkCalculationEnvironment();
+}
+
+void SessionModel::queueEnvironmentCheck()
+{
+    m_environmentCheckPending = true;
+
+    if (!m_invalidationFlushQueued) {
+        m_invalidationFlushQueued = true;
+        QMetaObject::invokeMethod(this, &SessionModel::flushPendingInvalidations, Qt::QueuedConnection);
     }
+}
+
+void SessionModel::checkCalculationEnvironment()
+{
+    m_environmentCheckPending = false;
+
+    // Which columns a name can affect follows the registrations.
+    rebuildColumnDependencies();
+
+    // Unchanged covers A -> B -> A within one event-loop pass, and the startup
+    // registrations, which are complete before LogbookManager::initialize().
+    LogbookManager &logbook = LogbookManager::instance();
+    if (calculationEnvironmentFingerprint() == logbook.cacheEnvironment())
+        return;
+
+    // Coarse on purpose: every cached value of every row, loaded or not. Rows
+    // are not marked dirty or unsaved - persistent state did not change, so
+    // the values the worker recomputes are valid for the files on disk.
+    logbook.discardCachedValues();
+    for (SessionRow &row : m_rows)
+        row.cachedValues.clear();
+
+    if (!m_rows.isEmpty() && !m_columns.isEmpty())
+        emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::DisplayRole});
+
+    startColumnWorker();
+}
+
+// ---- Cached column values: per-column refresh ---------------------------
+
+QList<DependencyKey> SessionModel::columnNames(const LogbookColumn &col)
+{
+    // The same keys computeColumnValues reads
+    switch (col.type) {
+    case ColumnType::SessionAttribute:
+        return {DependencyKey::attribute(col.attributeKey)};
+    case ColumnType::MeasurementAtMarker:
+        return {DependencyKey::attribute(SessionData::interpolationKey(
+            col.markerAttributeKey, col.sensorID, SessionKeys::Time, col.measurementID))};
+    case ColumnType::Delta:
+        return {DependencyKey::attribute(SessionData::interpolationKey(
+                    col.markerAttributeKey, col.sensorID, SessionKeys::Time, col.measurementID)),
+                DependencyKey::attribute(SessionData::interpolationKey(
+                    col.marker2AttributeKey, col.sensorID, SessionKeys::Time, col.measurementID))};
+    }
+    return {};
+}
+
+void SessionModel::rebuildColumnDependencies()
+{
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+
+    m_columnDependencies.clear();
+    m_columnDependencies.reserve(m_columns.size());
+    for (const LogbookColumn &col : std::as_const(m_columns)) {
+        StaticDependencies deps;
+        const QList<DependencyKey> names = columnNames(col);
+        for (const DependencyKey &name : names) {
+            const StaticDependencies closure = registry.staticDependencies(name);
+            deps.names.unite(closure.names);
+            deps.preferences.unite(closure.preferences);
+        }
+        m_columnDependencies.append(deps);
+    }
+}
+
+void SessionModel::invalidateColumns(int row, const QSet<DependencyKey> &changedKeys)
+{
+    Q_ASSERT(row >= 0 && row < m_rows.size());
+    SessionRow &sr = m_rows[row];
+    LogbookManager &logbook = LogbookManager::instance();
+
+    // Values cached for columns that are not enabled right now cannot be
+    // checked against the change; they go, and are recomputed if the column
+    // comes back.
+    logbook.dropCachedValuesExcept(sr.sessionId, m_columns);
+
+    QVector<LogbookColumn> affected;
+    for (int i = 0; i < m_columns.size() && i < m_columnDependencies.size(); ++i) {
+        if (!m_columnDependencies[i].names.intersects(changedKeys))
+            continue;
+        sr.cachedValues.remove(i);
+        affected.append(m_columns[i]);
+    }
+
+    if (affected.isEmpty())
+        return;
+
+    logbook.markColumnsUnsaved(sr.sessionId, affected);
+    startColumnWorker();
+}
+
+void SessionModel::invalidateAllColumns(int row)
+{
+    Q_ASSERT(row >= 0 && row < m_rows.size());
+    SessionRow &sr = m_rows[row];
+
+    sr.cachedValues.clear();
+    LogbookManager::instance().markSessionUnsaved(sr.sessionId);
+    startColumnWorker();
+}
+
+void SessionModel::fillMissingColumns(int row, const SessionData &session)
+{
+    Q_ASSERT(row >= 0 && row < m_rows.size());
+    SessionRow &sr = m_rows[row];
+
+    QVector<int> missing;
+    for (int i = 0; i < m_columns.size(); ++i) {
+        if (!sr.cachedValues.contains(i))
+            missing.append(i);
+    }
+
+    // Nothing to do: do not even ask for the engine, which would create it.
+    if (missing.isEmpty())
+        return;
+
+    const int runsBefore = session.calculationEngine().totalRunCount();
+    const QMap<LogbookColumn, QVariant> values = computeColumnValues(session, missing);
+    m_columnWorkStats.calculationRuns += session.calculationEngine().totalRunCount() - runsBefore;
+    m_columnWorkStats.valuesComputed += int(missing.size());
+
+    LogbookManager::instance().updateCachedValues(sr.sessionId, values);
+    for (int i : std::as_const(missing))
+        sr.cachedValues[i] = values.value(m_columns[i]);
 }
 
 void SessionModel::publishInvalidation(int row, const QSet<DependencyKey> &keys)
@@ -1129,14 +1317,18 @@ void SessionModel::flushDirtySessions()
         SessionRow &sr = m_rows[i];
         if (!sr.dirty)
             continue;
-        logbook.saveSession(sessionRef(i));
-        if (sr.isLoaded()) {
-            logbook.setCachedValues(sr.sessionId, computeColumnValues(sr.session.value()));
+        const SessionData &session = sessionRef(i);
+        if (!logbook.saveSession(session)) {
+            qWarning("SessionModel: session %s was not saved: %s",
+                     qPrintable(sr.sessionId), qPrintable(logbook.lastSaveError()));
         }
+        fillMissingColumns(i, session);
         sr.dirty = false;
         anySaved = true;
     }
-    if (anySaved) {
+    // Also when nothing was dirty: a cache discarded at startup is rewritten
+    // with the current marker.
+    if (anySaved || logbook.indexNeedsFlush()) {
         logbook.flushIndex();
     }
 
@@ -1162,10 +1354,15 @@ void SessionModel::saveNextSession()
     SessionRow &sr = m_rows[dirtyIdx];
     LogbookManager &logbook = LogbookManager::instance();
 
-    logbook.saveSession(sessionRef(dirtyIdx));
-    if (sr.isLoaded()) {
-        logbook.setCachedValues(sr.sessionId, computeColumnValues(sr.session.value()));
+    // Not retried on failure (a full disk would otherwise spin the idle
+    // scheduler); the unsaved marks keep index.json consistent with the file
+    // that is still on disk.
+    const SessionData &session = sessionRef(dirtyIdx);
+    if (!logbook.saveSession(session)) {
+        qWarning("SessionModel: session %s was not saved: %s",
+                 qPrintable(sr.sessionId), qPrintable(logbook.lastSaveError()));
     }
+    fillMissingColumns(dirtyIdx, session);
     sr.dirty = false;
 
     m_saveRemaining--;
@@ -1252,7 +1449,10 @@ void SessionModel::evictSession(const QString &sessionId)
 
     // Save if dirty
     if (sr.dirty) {
-        logbook.saveSession(sr.session.value());
+        if (!logbook.saveSession(sr.session.value())) {
+            qWarning("SessionModel: session %s was not saved: %s",
+                     qPrintable(sr.sessionId), qPrintable(logbook.lastSaveError()));
+        }
         sr.dirty = false;
 
         // Update saver progress if saves are in flight
@@ -1261,14 +1461,8 @@ void SessionModel::evictSession(const QString &sessionId)
         }
     }
 
-    // Compute and cache column values before eviction
-    QMap<LogbookColumn, QVariant> colValues = computeColumnValues(sr.session.value());
-    logbook.setCachedValues(sr.sessionId, colValues);
-
-    QMap<int, QVariant> indexed;
-    for (int i = 0; i < m_columns.size(); ++i)
-        indexed[i] = colValues.value(m_columns[i]);
-    sr.cachedValues = indexed;
+    // Complete the cached column values before eviction: the stub displays them
+    fillMissingColumns(row, sr.session.value());
 
     // Reset to stub
     sr.session = std::nullopt;
@@ -1318,11 +1512,9 @@ void SessionModel::processNextDirtyColumn()
     SessionRow &row = m_rows[dirtyIdx];
     LogbookManager &logbook = LogbookManager::instance();
 
-    QMap<LogbookColumn, QVariant> colValues;
-
     if (row.isLoaded()) {
         // Session is already loaded; compute from in-memory data
-        colValues = computeColumnValues(row.session.value());
+        fillMissingColumns(dirtyIdx, row.session.value());
     } else {
         // Stub session: load temporarily via LogbookManager::loadSession()
         auto loaded = logbook.loadSession(row.sessionId);
@@ -1333,7 +1525,8 @@ void SessionModel::processNextDirtyColumn()
                 if (logbook.remapSessionId(row.sessionId, realId))
                     row.sessionId = realId;
             }
-            colValues = computeColumnValues(loaded.value());
+            m_columnWorkStats.sessionsLoaded++;
+            fillMissingColumns(dirtyIdx, loaded.value());
         } else {
             // Load failed; skip this session
             m_columnWorkerRemaining--;
@@ -1341,15 +1534,6 @@ void SessionModel::processNextDirtyColumn()
         }
         // Temporarily loaded session is discarded here
     }
-
-    // Persist computed values
-    logbook.setCachedValues(row.sessionId, colValues);
-
-    // Rebuild index-based cached values map
-    QMap<int, QVariant> indexed;
-    for (int i = 0; i < m_columns.size(); ++i)
-        indexed[i] = colValues.value(m_columns[i]);
-    row.cachedValues = indexed;
 
     m_columnWorkerRemaining--;
 
@@ -1377,6 +1561,13 @@ void SessionModel::startBulkEdit(const QList<int> &rows, int columnIndex, const 
     // Append work items to the queue (supports multiple successive edits)
     for (int row : rows)
         m_bulkEditQueue.append({row, columnIndex, value});
+
+    // Mark the column unsaved for the whole batch up front, so that the first
+    // save performs one pre-save index flush instead of one per row.
+    for (int row : rows) {
+        if (row >= 0 && row < m_rows.size())
+            invalidateColumns(row, {DependencyKey::attribute(col.attributeKey)});
+    }
 
     m_bulkEditHighWater += rows.size();
     m_bulkEditRemaining += rows.size();
@@ -1432,7 +1623,7 @@ void SessionModel::processNextBulkEdit()
     QVariant newVal;
     switch (def->formatType) {
     case AttributeFormatType::Text:
-        newVal = item.value.toString();
+        newVal = CsvFormat::singleLine(item.value.toString());
         break;
     case AttributeFormatType::Double: {
         double displayVal = item.value.toDouble();
@@ -1451,17 +1642,16 @@ void SessionModel::processNextBulkEdit()
         // --- LOADED PATH ---
         SessionData &session = sr.session.value();
         session.setAttribute(col.attributeKey, newVal);
+        invalidateColumns(item.row, {DependencyKey::attribute(col.attributeKey)});
 
         // Save inline
-        logbook.saveSession(session);
+        if (!logbook.saveSession(session)) {
+            qWarning("SessionModel: session %s was not saved: %s",
+                     qPrintable(sr.sessionId), qPrintable(logbook.lastSaveError()));
+        }
 
-        // Update cached column values
-        QMap<LogbookColumn, QVariant> colValues = computeColumnValues(session);
-        logbook.setCachedValues(sr.sessionId, colValues);
-        QMap<int, QVariant> indexed;
-        for (int i = 0; i < m_columns.size(); ++i)
-            indexed[i] = colValues.value(m_columns[i]);
-        sr.cachedValues = indexed;
+        // Recompute only what the edit removed
+        fillMissingColumns(item.row, session);
 
         // Clear dirty flag if set — we just saved
         if (sr.dirty) {
@@ -1479,19 +1669,20 @@ void SessionModel::processNextBulkEdit()
                     sr.sessionId = realId;
             }
 
+            m_columnWorkStats.sessionsLoaded++;
+
             // Apply the edit
             loaded->setAttribute(col.attributeKey, newVal);
+            invalidateColumns(item.row, {DependencyKey::attribute(col.attributeKey)});
 
             // Save
-            logbook.saveSession(loaded.value());
+            if (!logbook.saveSession(loaded.value())) {
+                qWarning("SessionModel: session %s was not saved: %s",
+                         qPrintable(sr.sessionId), qPrintable(logbook.lastSaveError()));
+            }
 
-            // Compute and cache column values
-            QMap<LogbookColumn, QVariant> colValues = computeColumnValues(loaded.value());
-            logbook.setCachedValues(sr.sessionId, colValues);
-            QMap<int, QVariant> indexed;
-            for (int i = 0; i < m_columns.size(); ++i)
-                indexed[i] = colValues.value(m_columns[i]);
-            sr.cachedValues = indexed;
+            // Recompute only what the edit removed
+            fillMissingColumns(item.row, loaded.value());
 
             // loaded goes out of scope — session stays a stub
         }
@@ -1519,10 +1710,14 @@ void SessionModel::finishBulkEdit()
 
 // ---- Column value extraction ------------------------------------------
 
-QMap<LogbookColumn, QVariant> SessionModel::computeColumnValues(const SessionData &session) const
+QMap<LogbookColumn, QVariant> SessionModel::computeColumnValues(const SessionData &session,
+                                                                const QVector<int> &columnIndices) const
 {
     QMap<LogbookColumn, QVariant> result;
-    for (const LogbookColumn &col : std::as_const(m_columns)) {
+    for (int columnIndex : columnIndices) {
+        if (columnIndex < 0 || columnIndex >= m_columns.size())
+            continue;
+        const LogbookColumn &col = m_columns[columnIndex];
         QVariant value;
         switch (col.type) {
         case ColumnType::SessionAttribute:

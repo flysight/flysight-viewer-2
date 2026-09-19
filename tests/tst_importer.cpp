@@ -8,6 +8,9 @@
 
 #include <QtTest>
 
+#include <cmath>
+#include <limits>
+
 #include "dataimporter.h"
 #include "engine/calculationengine.h"
 #include "fixturebuilder.h"
@@ -94,6 +97,7 @@ private slots:
     void cleanFileIsSilent();
     void isoTimestamps();
     void storesAsRecorded();
+    void nonFiniteTokens();
 
     // formats
     void fs1StillImports();
@@ -521,6 +525,35 @@ void ImporterTest::storesAsRecorded()
 
     // Importing computes nothing.
     QCOMPARE(session.calculationEngine().totalRunCount(), 0);
+}
+
+// Spec 9.2: the exporter writes non-finite source samples as "nan", "inf",
+// "-inf"; the importer reads them back in place instead of skipping the row.
+void ImporterTest::nonFiniteTokens()
+{
+    // Columns: time, wy, ax, wz, wx, temperature
+    const QByteArray bytes = Fixtures::sensorFile()
+        .row("IMU", "4,nan,1,0,62.5,40")
+        .row("IMU", "5,-125,inf,0,62.5,40")
+        .row("IMU", "6,-125,1,-inf,62.5,40")
+        .toBytes();
+    const QString path = writeTemp(bytes);
+
+    WarningCounter warnings;
+    DataImporter importer;
+    SessionData session;
+    QVERIFY2(importer.importFile(path, session), qPrintable(importer.getLastError()));
+
+    for (const QString &column : session.measurementKeys("IMU"))
+        QCOMPARE(session.sourceMeasurement("IMU", column).size(), 4);
+
+    QVERIFY(std::isnan(session.sourceMeasurement("IMU", "wy")[1]));
+    QVERIFY(session.sourceMeasurement("IMU", "ax")[2] == std::numeric_limits<double>::infinity());
+    QVERIFY(session.sourceMeasurement("IMU", "wz")[3] == -std::numeric_limits<double>::infinity());
+    QCOMPARE(session.sourceMeasurement("IMU", "time"), QVector<double>({3.0, 4.0, 5.0, 6.0}));
+
+    for (const QString &message : warnings.messages())
+        QVERIFY2(!message.contains(QStringLiteral("skipped")), qPrintable(message));
 }
 
 // ─────────────────────────────── formats

@@ -7,6 +7,7 @@
 #include <QList>
 #include <QMap>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QVector>
 
@@ -15,6 +16,32 @@
 
 namespace FlySight {
 
+/// The logbook on disk: one CSV per session under sessions/, and index.json,
+/// which maps SESSION_IDs to file names and caches the logbook column values
+/// of every session so that the logbook can be shown without parsing a CSV.
+///
+/// index.json root: "calculationCompatibility" (integer marker,
+/// FlySight::CalculationCompatibilityVersion), "calculationEnvironment"
+/// (calculationEnvironmentFingerprint() the cached values were computed under),
+/// "columns", "sessions" (per id: "uuid", "lastAccessed", "values").
+///
+/// CACHE VALIDITY is decided here and nowhere else. initialize() keeps the
+/// cached "values" only when both the marker and the environment recorded in
+/// the index equal the current ones; otherwise every cached value is dropped
+/// (uuid and lastAccessed are kept, session files are never touched or even
+/// opened) and the model's idle column worker recomputes them lazily.
+///
+/// SAVE ORDERING. index.json and a session file are separate atomic writes.
+/// The invariant kept by construction is: index.json on disk never holds a
+/// column value that disagrees with the session file on disk. A persistent
+/// change marks the columns it can affect UNSAVED (markColumnsUnsaved /
+/// markSessionUnsaved): "the value of this column for the in-memory session
+/// may differ from its value for the session file on disk". flushIndex()
+/// omits unsaved columns even when a new value is already cached in memory;
+/// saveSession() first flushes the index if the on-disk index may still hold
+/// a value for a marked column, then writes the CSV, then clears the marks, so
+/// that the next flush publishes the new values. See saveSession() in the
+/// .cpp for the crash analysis.
 class LogbookManager : public QObject {
     Q_OBJECT
 
@@ -29,8 +56,15 @@ public:
     // logbook folder. Used by tests to simulate an application restart.
     void reset();
 
-    // Writes a session to disk as a UUID-based .csv file; returns true on success
+    // Writes a session to disk as a UUID-based .csv file; returns true on success.
+    // The only caller of DataExporter::exportSession in the application, so no
+    // session file is written without the pre-save index flush described above.
+    // On failure (see lastSaveError()) the previous file is intact and the
+    // session's unsaved marks stay in place.
     bool saveSession(const SessionData& session);
+
+    // Reason of the last failed saveSession(); empty after a successful one.
+    QString lastSaveError() const;
 
     // Reads all *.csv files from the sessions directory, returns parsed sessions
     QList<SessionData> loadAllSessions();
@@ -38,13 +72,53 @@ public:
     // Deletes the .csv file for the given SESSION_ID; returns true on success
     bool removeSession(const QString& sessionId);
 
-    // Writes index.json mapping SESSION_IDs to UUIDs
-    void flushIndex();
+    // Writes index.json (atomically): the marker, cacheEnvironment(), the column
+    // definitions, and per session uuid / lastAccessed / cached values except
+    // those of unsaved columns. Returns true when the file was committed.
+    bool flushIndex();
+
+    // True when the in-memory index differs from what flushIndex() last wrote
+    // (or from what initialize() read).
+    bool indexNeedsFlush() const;
 
     // Stores cached column values for a session, to be written on next flushIndex().
     // columnValues maps a LogbookColumn (matched by definition) to its QVariant value.
+    // REPLACES everything cached for the session; updateCachedValues() MERGES.
     void setCachedValues(const QString &sessionId,
                          const QMap<LogbookColumn, QVariant> &columnValues);
+    void updateCachedValues(const QString &sessionId,
+                            const QMap<LogbookColumn, QVariant> &columnValues);
+
+    // --- Cache validity (calculation-compatibility marker + environment) ---
+
+    // The environment fingerprint the in-memory cached values are valid for.
+    // flushIndex() writes THIS, never a freshly computed fingerprint: if nobody
+    // told the manager about an environment change (discardCachedValues()), the
+    // next start sees the mismatch and discards.
+    QString cacheEnvironment() const;
+
+    // True when initialize() found a missing / different marker or environment
+    // and therefore dropped every cached value.
+    bool cachedValuesDiscardedOnLoad() const;
+
+    // Drops the cached values of every session and adopts the current
+    // environment fingerprint. Unsaved marks are unaffected: they concern
+    // persistence, not calculation semantics.
+    void discardCachedValues();
+
+    // --- Unsaved-column tracking (see SAVE ORDERING above) ---
+
+    // Removes the cached values of these columns and keeps them out of
+    // index.json until the session has been saved.
+    void markColumnsUnsaved(const QString &sessionId, const QVector<LogbookColumn> &columns);
+    // The same for all columns, present and future (new or replaced session).
+    void markSessionUnsaved(const QString &sessionId);
+    bool hasUnsavedColumns(const QString &sessionId) const;
+    // Forgets the values cached for this session under any column that is not
+    // in `columns`. Called with the enabled columns when the session changes:
+    // values kept for disabled columns cannot be checked against the change
+    // and must not come back stale when such a column is enabled again.
+    void dropCachedValuesExcept(const QString &sessionId, const QVector<LogbookColumn> &columns);
 
     // Loads and parses the CSV for a single session. Returns std::nullopt on failure.
     std::optional<SessionData> loadSession(const QString &sessionId);
@@ -64,7 +138,7 @@ public:
     const QStringList &scannedUuids() const;
 
     // Atomically replaces a temporary UUID-based session ID with the real SESSION_ID.
-    // Updates m_sessionIdToUuid, m_lastAccessed, and m_cachedValues.
+    // Updates m_sessionIdToUuid, m_lastAccessed, m_cachedValues, and the unsaved marks.
     // Returns false if oldId not found or newId already exists.
     bool remapSessionId(const QString &oldId, const QString &newId);
 
@@ -101,6 +175,9 @@ private:
     // Scans *.csv filenames only (no parsing); populates m_sessionIdToUuid with identity mappings
     QStringList scanSessionFilenames();
 
+    // File stems of sessions/*.csv, sorted by name. Touches no state.
+    QStringList sessionFileStems() const;
+
     // Maps SESSION_ID strings to UUID filename stems (without extension)
     QMap<QString, QString> m_sessionIdToUuid;
 
@@ -114,6 +191,18 @@ private:
     bool m_hasIndexData = false;
     bool m_deferredScan = false;
     QStringList m_scannedUuids;
+
+    // Cache validity
+    QString m_cacheEnvironment;         // fingerprint m_cachedValues is valid for
+    bool m_discardedOnLoad = false;
+    bool m_indexNeedsFlush = false;
+
+    // Unsaved-column tracking
+    QMap<QString, QSet<QString>> m_unsavedColumns;  // SESSION_ID -> column definition keys
+    QSet<QString> m_unsavedAll;                     // SESSION_IDs with every column unsaved
+    QSet<QString> m_needsFlushBeforeSave;           // the on-disk index may hold a marked value
+
+    QString m_lastSaveError;
 };
 
 } // namespace FlySight

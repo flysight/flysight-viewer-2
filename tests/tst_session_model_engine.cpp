@@ -237,7 +237,9 @@ void SessionModelEngineTest::reRegisterRestores()
 }
 
 // Acceptance 15: a declared preference change reaches the model's subscribers
-// and refreshes cached columns, without marking anything dirty.
+// and refreshes cached columns, without marking anything dirty. (The cached
+// columns are cleared by the model's calculation-environment handler, which
+// the same flush runs; it covers unloaded rows as well - see tst_column_cache.)
 void SessionModelEngineTest::preferenceBroadcastReachesModel()
 {
     QVERIFY(waitForIdle(*m_model));     // let the merge's saves finish

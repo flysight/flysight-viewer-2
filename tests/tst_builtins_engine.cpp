@@ -88,6 +88,10 @@ private slots:
     void interpolationUnavailableIsCached();
     void altitudeDescriptor();
 
+    // Logbook column cache: static closures and the environment fingerprint
+    void gyroColumnClosure();
+    void fingerprintChanges();
+
 private:
     SessionData m_fixture;              // imported once; copied into each fake
     std::unique_ptr<World> m_world;     // descent fixture, fresh per test function
@@ -475,6 +479,99 @@ void BuiltinsEngineTest::altitudeDescriptor()
     QCOMPARE(engine.attribute("_ALTITUDE_1000_M").toDouble(), T0 + 78.0);
     QCOMPARE(engine.runCount("builtin.altitude._ALTITUDE_1000_M"), 2);
     QCOMPARE(engine.undeclaredReadCount(), 0);
+}
+
+// ─────────────────────────────── column cache: closures and fingerprint
+
+// What a logbook column "IMU/wx at marker _M" can depend on, from the
+// registrations alone. An edit of any of these names (and of nothing else)
+// makes the model recompute that column.
+void BuiltinsEngineTest::gyroColumnClosure()
+{
+    World world;
+    const char column[] = "_M:IMU/_time/wx";
+
+    const StaticDependencies deps = world.registry.staticDependencies(attr(column));
+    QCOMPARE(deps.names, QSet<DependencyKey>({
+        attr(column),
+        attr("_M"),
+        measKey("IMU", "_time"), measKey("IMU", "time"),
+        attr("_TIME_FIT_A"), attr("_TIME_FIT_B"),
+        measKey("TIME", "time"), measKey("TIME", "tow"), measKey("TIME", "week"),
+        measKey("IMU", "wx"),
+        attr("SCHEMA_VER"),
+    }));
+    QVERIFY(deps.preferences.isEmpty());
+    QVERIFY(!deps.names.contains(attr("_DESCRIPTION")));
+
+    // Nothing calculates the description: it depends on itself only.
+    QCOMPARE(world.registry.staticDependencies(attr("_DESCRIPTION")).names,
+             QSet<DependencyKey>({attr("_DESCRIPTION")}));
+
+    // The exit time reaches the declared preference through the analysis range.
+    QVERIFY(world.registry.staticDependencies(attr("_EXIT_TIME")).preferences
+                .contains(QString(PreferenceKeys::ImportDescentPauseSeconds)));
+
+    // Pure functions of the registrations
+    QCOMPARE(world.engine->totalRunCount(), 0);
+    QCOMPARE(world.state.readCount(), 0);
+    QCOMPARE(world.prefs.readCount(), 0);
+
+    QCOMPARE(world.registry.declaredPreferenceKeys(),
+             QStringList({QString(PreferenceKeys::ImportDescentPauseSeconds)}));
+}
+
+void BuiltinsEngineTest::fingerprintChanges()
+{
+    World a;
+    World b;
+
+    const QString base = calculationEnvironmentFingerprint(a.registry);
+    QCOMPARE(base.size(), 40);
+    QVERIFY(QRegularExpression(QStringLiteral("^[0-9a-f]{40}$")).match(base).hasMatch());
+
+    // Two registries built the same way
+    QCOMPARE(calculationEnvironmentFingerprint(b.registry), base);
+
+    // One extra calculation (what a plugin would be)
+    CalculationDescriptor extra;
+    extra.id = QStringLiteral("test.extra");
+    extra.outputs = {attr("_TEST_EXTRA")};
+    extra.compute = [](const EvaluationContext &) { return CalculationResult().setAttribute("_TEST_EXTRA", 1); };
+    QVERIFY(b.registry.registerCalculation(extra));
+    const QString withExtra = calculationEnvironmentFingerprint(b.registry);
+    QVERIFY(withExtra != base);
+    QVERIFY(b.registry.unregister(extra.id));
+    QCOMPARE(calculationEnvironmentFingerprint(b.registry), base);
+
+    // Two registrations swapped: the same ids in a different order
+    CalculationDescriptor second = extra;
+    second.id = QStringLiteral("test.second");
+    second.outputs = {attr("_TEST_SECOND")};
+    second.compute = [](const EvaluationContext &) { return CalculationResult().setAttribute("_TEST_SECOND", 1); };
+    QVERIFY(a.registry.registerCalculation(extra));
+    QVERIFY(a.registry.registerCalculation(second));
+    QVERIFY(b.registry.registerCalculation(second));
+    QVERIFY(b.registry.registerCalculation(extra));
+    QVERIFY(calculationEnvironmentFingerprint(a.registry) != calculationEnvironmentFingerprint(b.registry));
+    QVERIFY(calculationEnvironmentFingerprint(a.registry) != withExtra);
+
+    // The declared preference
+    World c;
+    QCOMPARE(calculationEnvironmentFingerprint(c.registry), base);
+    c.prefs.set(PreferenceKeys::ImportDescentPauseSeconds, 5.0);
+    QVERIFY(calculationEnvironmentFingerprint(c.registry) != base);
+    c.prefs.set(PreferenceKeys::ImportDescentPauseSeconds, 30.0);
+    QCOMPARE(calculationEnvironmentFingerprint(c.registry), base);
+
+    // The same value read back as text (QSettings from an INI file) is the
+    // same environment.
+    c.prefs.set(PreferenceKeys::ImportDescentPauseSeconds, QStringLiteral("30"));
+    QCOMPARE(calculationEnvironmentFingerprint(c.registry), base);
+
+    // No engine ran anything for any of this
+    QCOMPARE(a.engine->totalRunCount(), 0);
+    QCOMPARE(c.engine->totalRunCount(), 0);
 }
 
 FLYSIGHT_TEST_MAIN(BuiltinsEngineTest)

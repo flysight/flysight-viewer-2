@@ -263,7 +263,8 @@ target_link_libraries(flysight_model PUBLIC Qt${QT_VERSION_MAJOR}::Core)
 add_library(flysight_core STATIC
   dataimporter.cpp           dataimporter.h
   dataexporter.cpp           dataexporter.h
-  logbookmanager.cpp         logbookmanager.h
+  csvformat.cpp              csvformat.h
+  logbookmanager.cpp        logbookmanager.h
   logbookcolumn.cpp          logbookcolumn.h
   sessionmodel.cpp           sessionmodel.h
   idlescheduler.cpp          idlescheduler.h

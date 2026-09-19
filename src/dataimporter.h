@@ -17,6 +17,14 @@ namespace FlySight {
 /// never inserted or rewritten. Schema correction and unit normalization happen
 /// at read time, in the conversion layer.
 ///
+/// Numeric fields: `nan`, `inf`, `-inf` are non-finite samples (written by
+/// DataExporter for non-finite source values); every other field is parsed
+/// with QStringView::toDouble (correctly rounded). Timestamps ending in `Z`
+/// become seconds since the epoch with millisecond precision. Numeric fields
+/// go through CsvFormat::parseDouble, the inverse of the exporter's
+/// CsvFormat::formatDouble, so a saved sample reloads with identical bits.
+/// $VAR values are not parsed at all: they stay QString, verbatim.
+///
 /// Error policy:
 ///  - header problems are structural errors and reject the file (see readFile);
 ///  - an unsupported or malformed SCHEMA_VER rejects the file;

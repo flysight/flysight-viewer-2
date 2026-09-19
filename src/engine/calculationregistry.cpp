@@ -383,6 +383,9 @@ void CalculationRegistry::broadcast(const RegistryChange &change)
         if (m_engines.contains(e))
             e->onRegistryChanged(change);
     }
+
+    // Every successful register* / unregister ends here.
+    registrationsChanged();
 }
 
 void CalculationRegistry::enrol(CalculationEngine *e)
@@ -394,6 +397,104 @@ void CalculationRegistry::enrol(CalculationEngine *e)
 void CalculationRegistry::withdraw(CalculationEngine *e)
 {
     m_engines.removeAll(e);
+}
+
+// ------------------------------------------ registration-derived queries
+// (logbook column cache: which columns can an edit affect, and when did the
+// calculation environment change). Nothing below touches an engine or a
+// session, or runs a calculation.
+
+StaticDependencies CalculationRegistry::staticDependencies(const DependencyKey &name) const
+{
+    const auto memoized = m_staticDependencyMemo.constFind(name);
+    if (memoized != m_staticDependencyMemo.constEnd())
+        return *memoized;
+
+    StaticDependencies result;
+    QSet<DependencyKey> visited;    // expanded names; result.names also holds source-layer leaves
+    QList<DependencyKey> worklist{name};
+
+    while (!worklist.isEmpty()) {
+        const DependencyKey current = worklist.takeLast();
+        if (visited.contains(current))
+            continue;       // the visited set also ends cycles
+        visited.insert(current);
+        result.names.insert(current);
+
+        // Every candidate, not only the one that would win
+        QList<CalculationInstance> candidates = candidatesFor(current);
+        if (current.type == DependencyKey::Type::Measurement) {
+            candidates += sourceConversionsFor(current.measurementKey.first,
+                                               current.measurementKey.second);
+        }
+
+        for (const CalculationInstance &candidate : std::as_const(candidates)) {
+            for (const CalcInput &in : candidate.descriptor->inputs) {
+                switch (in.kind) {
+                case CalcInput::Kind::Attribute:
+                    worklist.append(DependencyKey::attribute(in.key));
+                    break;
+                case CalcInput::Kind::Measurement:
+                    worklist.append(DependencyKey::measurement(in.sensor, in.name));
+                    break;
+                case CalcInput::Kind::Preference:
+                    result.preferences.insert(in.key);
+                    break;
+                case CalcInput::Kind::SourceMeasurement:
+                case CalcInput::Kind::SourceUnit:
+                    // A leaf: the source layer behind a public measurement name
+                    result.names.insert(DependencyKey::measurement(in.sensor, in.name));
+                    break;
+                }
+            }
+        }
+    }
+
+    m_staticDependencyMemo.insert(name, result);
+    return result;
+}
+
+QStringList CalculationRegistry::declaredPreferenceKeys() const
+{
+    QSet<QString> keys;
+    for (const Entry &entry : m_entries) {
+        if (entry.kind != EntryKind::Calculation)
+            continue;       // family instances are not enumerable (see the header)
+        for (const CalcInput &in : entry.descriptor->inputs) {
+            if (in.kind == CalcInput::Kind::Preference)
+                keys.insert(in.key);
+        }
+    }
+
+    QStringList sorted(keys.cbegin(), keys.cend());
+    sorted.sort();
+    return sorted;
+}
+
+int CalculationRegistry::addObserver(std::function<void()> observer)
+{
+    const int token = m_nextObserverToken++;
+    m_observers.append({token, std::move(observer)});
+    return token;
+}
+
+void CalculationRegistry::removeObserver(int token)
+{
+    m_observers.removeIf([token](const std::pair<int, std::function<void()>> &o) {
+        return o.first == token;
+    });
+}
+
+void CalculationRegistry::registrationsChanged()
+{
+    m_staticDependencyMemo.clear();
+
+    // A copy: an observer may remove itself (or another observer).
+    const auto observers = m_observers;
+    for (const auto &observer : observers) {
+        if (observer.second)
+            observer.second();
+    }
 }
 
 } // namespace FlySight

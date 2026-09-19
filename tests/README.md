@@ -28,6 +28,10 @@ packages are the same whether or not the option is set.
 | `tst_conversion_engine` | The conversion families on a private registry and `FakeSessionState`: legacy gyro correction, `SCHEMA_VER` 1 / 2 / absent / unsupported, unit normalization, schema-then-unit order, buffer sharing for identity conversions, the dependencies that make the choice follow the attribute |
 | `tst_importer` | `DataImporter`: data stored exactly as recorded, nothing stamped, `SCHEMA_VER` and structural errors rejected without touching the target session, `$VAR` values kept verbatim, malformed rows skipped with one summary warning, FS1, custom columns, CRLF |
 | `tst_source_layer` | Session-level acceptance for the source / effective split on real `SessionData`, importer, exporter, logbook and model: acceptance 1, 2, 4, 6 (load), 16; enumeration and source access never compute; lazy conversion; buffer sharing; exporter and merge use the source layer |
+| `tst_csvformat` | `CsvFormat`, the one definition of the on-disk text forms: shortest round-trip doubles (a 200 000-value bit-pattern sweep), `-0`, `nan` / `inf` / `-inf`, attribute values by `QVariant` type, line-break flattening, valid names and units |
+| `tst_persistence_roundtrip` | Save / reload on the real importer, exporter and logbook: acceptance 5 (bit-identical samples, units and header attributes preserved, `SCHEMA_VER` only if recorded, effective values unchanged, second cycle byte-identical, independent of any cache) and acceptance 6 (a released logbook file is not rescaled, relabelled or stamped by a save; the `loadSession` backfill is additive and idempotent); non-finite samples, ragged sensors, unrepresentable text |
+| `tst_logbook_index` | `LogbookManager`'s `index.json` column cache: the calculation-compatibility marker and environment fingerprint gate the cached values (acceptance 18 at the storage level), unsaved-column tracking and save ordering (an interrupted save never leaves a cached column that disagrees with the session file), orphan session files adopted, marks follow remap / remove / reset |
+| `tst_column_cache` | The same through `SessionModel`: upgrade discards and lazily recomputes (acceptance 18), an edit refreshes only the affected columns with a warm and a cold engine, merges and bulk edits, interrupted saves, environment changes (declared preference, altitude-marker registrations) discarding loaded and unloaded rows without saving, save failures, line breaks flattened at edit |
 
 The `tst_calc*` tests drive `src/engine/` with synthetic calculations against
 `FakeSessionState` / `FakePreferenceProvider` (`support/fakesessionstate.h`).
@@ -55,6 +59,15 @@ compared with `==`. Test helpers that move data between sessions
 (`DescentFixture::load`, `copyStoredState`) use the source accessors, so the
 copies carry the data as recorded. Tests that count warnings install their
 message handler after `registerBuiltIns()`.
+
+Tests that use `LogbookManager::initialize()` together with cached column
+values must call `TestEnvironment::registerBuiltIns()` first, as the
+application does: the calculation-environment fingerprint captured at
+`initialize()` is compared with the one of the next start, and registering in
+between would make every reopen discard the cache. For the same reason set the
+logbook columns (`LogbookColumnStore::setColumns`, which flushes the index)
+before planting a hand-edited `index.json`. `tst_logbook_index` and
+`tst_column_cache` remove whatever they register globally in `cleanup()`.
 
 ## Configure / build / run
 

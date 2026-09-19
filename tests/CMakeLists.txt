@@ -118,3 +118,10 @@ flysight_add_test(tst_schema_units      SOURCES tst_schema_units.cpp)
 flysight_add_test(tst_conversion_engine SOURCES tst_conversion_engine.cpp)
 flysight_add_test(tst_importer          SOURCES tst_importer.cpp)
 flysight_add_test(tst_source_layer      SOURCES tst_source_layer.cpp)
+
+# Persistence: the on-disk text forms, the exact save / reload round trip, the
+# marker-gated index.json column cache, and the model's per-column refresh
+flysight_add_test(tst_csvformat             SOURCES tst_csvformat.cpp)
+flysight_add_test(tst_persistence_roundtrip SOURCES tst_persistence_roundtrip.cpp)
+flysight_add_test(tst_logbook_index         SOURCES tst_logbook_index.cpp)
+flysight_add_test(tst_column_cache          SOURCES tst_column_cache.cpp)

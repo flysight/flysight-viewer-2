@@ -104,6 +104,11 @@ private slots:
     void localRegistryIsIsolated();
     void enrolment();
     void registrationDuringEvaluationRejected();
+
+    // Registration-derived queries for the logbook column cache (Phase 5)
+    void staticDependenciesClosure();
+    void declaredPreferenceKeys();
+    void observersFire();
 };
 
 void CalcRegistryTest::graphTypesAreHashKeys()
@@ -565,6 +570,107 @@ void CalcRegistryTest::registrationDuringEvaluationRejected()
     // Outside the evaluation the same calls succeed.
     QVERIFY(registry.registerCalculation(simple("late", "y")));
 #endif
+}
+
+// ─────────────────────────────── registration-derived queries (Phase 5)
+// Self-contained block: static closures, declared preferences, observers.
+
+void CalcRegistryTest::staticDependenciesClosure()
+{
+    CalculationRegistry registry;
+    Synthetic::registerSharedWorld(registry);
+
+    // Pure functions of the registrations: no engine, no session, no compute.
+    FakeSessionState state;
+    CalculationEngine engine(&state, &registry);
+
+    // Z comes from the losing candidate wAlt, C from the losing candidate
+    // fallbackX: every candidate is followed, not only the one that would win.
+    const StaticDependencies w = registry.staticDependencies(attr("W"));
+    QCOMPARE(w.names, QSet<DependencyKey>({attr("W"), attr("X"), attr("Z"), attr("A"), attr("B"), attr("C")}));
+    QCOMPARE(w.preferences, QSet<QString>({QStringLiteral("p")}));
+
+    // Memoized: the same answer again
+    QCOMPARE(registry.staticDependencies(attr("W")).names, w.names);
+
+    // A registry change drops the memo
+    QVERIFY(registry.unregister(QStringLiteral("wAlt")));
+    QCOMPARE(registry.staticDependencies(attr("W")).names,
+             QSet<DependencyKey>({attr("W"), attr("X"), attr("A"), attr("B"), attr("C")}));
+
+    // Terminates on the P / Q / R / S ring
+    const StaticDependencies x2 = registry.staticDependencies(attr("X2"));
+    QCOMPARE(x2.names, QSet<DependencyKey>({attr("X2"), attr("Y2")}));
+    QVERIFY(x2.preferences.isEmpty());
+
+    // A measurement, and through it an attribute chain
+    QCOMPARE(registry.staticDependencies(measKey("S", "d")).names,
+             QSet<DependencyKey>({measKey("S", "d"), measKey("S", "m"), attr("Y"),
+                                  attr("X"), attr("A"), attr("B"), attr("C")}));
+
+    // A family instance is instantiated from the name alone
+    QCOMPARE(registry.staticDependencies(attr("neg:A")).names,
+             QSet<DependencyKey>({attr("neg:A"), attr("A")}));
+
+    // A name nothing produces: only itself
+    QCOMPARE(registry.staticDependencies(attr("A")).names, QSet<DependencyKey>({attr("A")}));
+
+    QCOMPARE(engine.totalRunCount(), 0);
+    QCOMPARE(state.readCount(), 0);
+}
+
+void CalcRegistryTest::declaredPreferenceKeys()
+{
+    CalculationRegistry registry;
+    QVERIFY(registry.declaredPreferenceKeys().isEmpty());
+
+    Synthetic::registerSharedWorld(registry);
+    QCOMPARE(registry.declaredPreferenceKeys(), QStringList({QStringLiteral("p")}));
+
+    // Sorted and unique
+    CalculationDescriptor extra = simple(QStringLiteral("extra"), QStringLiteral("E"));
+    extra.inputs = {CalcInput::preference(QStringLiteral("p")), CalcInput::preference(QStringLiteral("a/first"))};
+    QVERIFY(registry.registerCalculation(extra));
+    QCOMPARE(registry.declaredPreferenceKeys(), QStringList({QStringLiteral("a/first"), QStringLiteral("p")}));
+
+    QVERIFY(registry.unregister(QStringLiteral("triple")));
+    QVERIFY(registry.unregister(QStringLiteral("extra")));
+    QVERIFY(registry.declaredPreferenceKeys().isEmpty());
+}
+
+void CalcRegistryTest::observersFire()
+{
+    CalculationRegistry registry;
+    int calls = 0;
+    int otherCalls = 0;
+    const int token = registry.addObserver([&calls]() { ++calls; });
+    const int otherToken = registry.addObserver([&otherCalls]() { ++otherCalls; });
+    QVERIFY(token != otherToken);
+
+    // One call per successful register / unregister, of every kind
+    QVERIFY(registry.registerCalculation(simple(QStringLiteral("a"), QStringLiteral("A"))));
+    QCOMPARE(calls, 1);
+    QVERIFY(registry.registerFamily(prefixFamily(QStringLiteral("fam"), QStringLiteral("f:"))));
+    QCOMPARE(calls, 2);
+    QVERIFY(registry.registerSourceConversion(prefixFamily(QStringLiteral("conv"), QStringLiteral("c:"))));
+    QCOMPARE(calls, 3);
+    QVERIFY(registry.unregister(QStringLiteral("fam")));
+    QCOMPARE(calls, 4);
+
+    // None for a rejected registration or a failed unregister
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("already registered")));
+    QVERIFY(!registry.registerCalculation(simple(QStringLiteral("a"), QStringLiteral("B"))));
+    QVERIFY(!registry.unregister(QStringLiteral("no-such-id")));
+    QCOMPARE(calls, 4);
+
+    // None after removeObserver; the other observer keeps firing
+    registry.removeObserver(token);
+    QVERIFY(registry.unregister(QStringLiteral("a")));
+    QCOMPARE(calls, 4);
+    QCOMPARE(otherCalls, 5);
+
+    registry.removeObserver(otherToken);
+    registry.removeObserver(12345);     // unknown tokens are ignored
 }
 
 FLYSIGHT_TEST_MAIN(CalcRegistryTest)

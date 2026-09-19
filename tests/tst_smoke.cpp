@@ -9,6 +9,8 @@
 //     // BASELINE: <what> - changes in Phase <n>
 // comment, so the later implementer finds it with `git grep -n "BASELINE:" tests/`.
 
+#include <cstring>
+
 #include <QDir>
 #include <QRegularExpression>
 #include <QSet>
@@ -315,7 +317,9 @@ void SmokeTest::exportReloadRoundTrip()
     for (const Expected &e : expected) {
         const QVector<double> source = reloaded.sourceMeasurement(e.sensor, e.name);
         QVERIFY2(source.size() == 1, e.name);
-        QVERIFY2(qAbs(source.at(0) - e.source) < 1e-12, e.name);
+        // Bit equality: a saved sample reloads exactly (spec 9.2).
+        const double reloadedSource = source.at(0);
+        QVERIFY2(std::memcmp(&reloadedSource, &e.source, sizeof(double)) == 0, e.name);
         QCOMPARE(reloaded.sourceUnit(e.sensor, e.name), QString::fromLatin1(e.sourceUnit));
 
         const QVector<double> effective = reloaded.getMeasurement(e.sensor, e.name);

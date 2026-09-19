@@ -8,6 +8,7 @@
 #include <QMap>
 #include <QSet>
 #include <QVector>
+#include "engine/calculationregistry.h"
 #include "idlescheduler.h"
 #include "logbookcolumn.h"
 #include "sessiondata.h"
@@ -24,6 +25,38 @@ struct SessionRow {
     bool isLoaded() const { return session.has_value(); }
 };
 
+/// The logbook table: one row per session, loaded or stub.
+///
+/// CACHED COLUMN VALUES (SessionRow::cachedValues, mirrored in LogbookManager
+/// for index.json). Loaded rows are displayed live from the session; the cache
+/// exists to feed index.json and the stub the row becomes when it is evicted.
+/// Invariant: a value that is present is the column's value for the row's
+/// current in-memory (for a stub: on-disk) state; a value that may no longer
+/// hold is REMOVED, never left stale. "Missing" is what the idle column worker
+/// looks for, and every maintenance site computes only missing columns
+/// (fillMissingColumns) - an edit of _DESCRIPTION does not re-run the time
+/// fit for the other columns.
+///
+/// RULE for every code path that mutates a row's PERSISTENT state
+/// (SessionData::setAttribute / removeAttribute / mergeSourceData /
+/// setSourceMeasurement, or replacing the row's session): before the next
+/// return to the event loop it must call
+///   invalidateColumns(row, changedKeys)   - changedKeys = the stored names it
+///                                           wrote (attribute(k), measurement(s, n)), or
+///   invalidateAllColumns(row)             - new or replaced session,
+/// and schedule a save. These remove the affected cached values and mark them
+/// unsaved in LogbookManager, which is what keeps index.json from ever holding
+/// a column value that disagrees with the session file on disk (see
+/// LogbookManager, SAVE ORDERING). This includes sessions that are loaded only
+/// temporarily for the mutation (bulk edit on a stub). Which columns a key can
+/// affect comes from CalculationRegistry::staticDependencies(), so it is
+/// correct for cold engines and unloaded rows alike.
+///
+/// Changes of the calculation ENVIRONMENT (a calculation registered or
+/// unregistered, a declared preference changed) are not persistent changes:
+/// they discard the cached values of ALL rows, loaded or not, and the column
+/// worker recomputes them; nothing is marked dirty or unsaved and no session
+/// file is rewritten.
 class SessionModel : public QAbstractTableModel
 {
     Q_OBJECT
@@ -40,8 +73,20 @@ public:
     };
 
     SessionModel(QObject *parent = nullptr);
+    ~SessionModel() override;       ///< removes the registry observer
 
     IdleScheduler& scheduler() { return m_scheduler; }
+
+    /// Work done maintaining cached column values. A test seam: the temporary
+    /// sessions (and engines) behind stub rows are gone by the time a test
+    /// could inspect their run counters.
+    struct ColumnWorkStats {
+        int valuesComputed = 0;     ///< column values computed by fillMissingColumns
+        int sessionsLoaded = 0;     ///< stub rows loaded temporarily (column worker, bulk edit)
+        int calculationRuns = 0;    ///< calculation runs those computations caused
+    };
+    const ColumnWorkStats &columnWorkStats() const { return m_columnWorkStats; }
+    void resetColumnWorkStats() { m_columnWorkStats = ColumnWorkStats(); }
 
     // Data management
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
@@ -95,10 +140,11 @@ public:
     void flushDirtySessions();
 
     /// Delivers, now, the invalidations that registry and preference changes
-    /// caused in loaded sessions: dataChanged + dependencyChanged per session,
-    /// and a refresh of its cached logbook columns. Normally this runs by
-    /// itself on the next event-loop pass; tests (and shutdown) call it
-    /// directly.
+    /// caused in loaded sessions (dataChanged + dependencyChanged per session)
+    /// and, when such a change is pending, the calculation-environment check
+    /// that discards the cached logbook columns of every row. Normally this
+    /// runs by itself on the next event-loop pass; tests (and shutdown) call
+    /// it directly.
     void flushPendingInvalidations();
 
 signals:
@@ -143,6 +189,21 @@ private:
     QHash<QString, QSet<DependencyKey>> m_pendingInvalidations;
     bool m_invalidationFlushQueued = false;
 
+    // Cached column values: per-column refresh (see the class comment).
+    QVector<StaticDependencies> m_columnDependencies;       // parallel to m_columns
+    void rebuildColumnDependencies();                       // union of staticDependencies() over columnNames(col)
+    static QList<DependencyKey> columnNames(const LogbookColumn &col);  // the names computeColumnValues reads
+    void invalidateColumns(int row, const QSet<DependencyKey> &changedKeys);   // persistent change
+    void invalidateAllColumns(int row);                                         // new / replaced session
+    void fillMissingColumns(int row, const SessionData &session);               // computes ONLY missing indices
+    ColumnWorkStats m_columnWorkStats;
+
+    // Calculation-environment changes: coalesced with the invalidation flush.
+    void queueEnvironmentCheck();
+    void checkCalculationEnvironment();
+    bool m_environmentCheckPending = false;
+    int m_registryObserver = -1;
+
     // Idle scheduler (replaces per-worker QTimers)
     IdleScheduler m_scheduler;
 
@@ -184,8 +245,11 @@ private:
     QVariant formatRawValue(const QVariant &rawValue, const LogbookColumn &col) const;
     QString columnUnitLabel(const LogbookColumn &col) const;
 
-    // Extract raw column values from a loaded session (used by index maintenance)
-    QMap<LogbookColumn, QVariant> computeColumnValues(const SessionData &session) const;
+    // Extract the raw values of the given columns (indices into m_columns) from
+    // a loaded session. What a column stores is part of cache validity: see
+    // CalculationCompatibilityVersion before changing it.
+    QMap<LogbookColumn, QVariant> computeColumnValues(const SessionData &session,
+                                                      const QVector<int> &columnIndices) const;
 
 private slots:
     void rebuildColumns();

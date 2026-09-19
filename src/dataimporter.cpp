@@ -2,6 +2,7 @@
 
 #include "dataimporter.h"
 #include "conversion/schematable.h"
+#include "csvformat.h"
 #include "preferences/preferencesmanager.h"
 #include "preferences/preferencekeys.h"
 #include <QCryptographicHash>
@@ -433,10 +434,10 @@ void DataImporter::importDataRow(const QString& line, StagedFile& staged, const 
             }
             values.append(dt.toMSecsSinceEpoch() / 1000.0);
         } else {
-            // Correctly rounded double; no further processing
-            bool ok = false;
-            const double value = field.toDouble(&ok);
-            if (!ok) {
+            // "nan" / "inf" / "-inf", or a correctly rounded double; no
+            // further processing
+            double value = 0.0;
+            if (!CsvFormat::parseDouble(field, &value)) {
                 ++staged.skippedRows;
                 return;
             }

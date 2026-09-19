@@ -7,7 +7,9 @@
 
 #include <QHash>
 #include <QList>
+#include <QSet>
 #include <QString>
+#include <QStringList>
 
 #include "calctypes.h"
 #include "calculationdescriptor.h"
@@ -36,6 +38,13 @@ struct RegistryChange {
     QList<DependencyKey> outputs;   ///< Calculation: its explicit output names
     /// Family / SourceConversion: the family's instantiate function
     std::function<std::optional<CalculationDescriptor>(const DependencyKey &name)> instantiate;
+};
+
+/// Everything a public name can depend on according to the registrations
+/// alone (see CalculationRegistry::staticDependencies).
+struct StaticDependencies {
+    QSet<DependencyKey> names;      ///< every public name reachable through declared inputs, INCLUDING the queried name
+    QSet<QString> preferences;      ///< every declared preference key reachable
 };
 
 /// Global, session-free registrations in deterministic order.
@@ -97,6 +106,39 @@ public:
     int enrolledEngineCount() const { return int(m_engines.size()); }
     int memoizedInstanceCount(const CalculationId &familyId) const;
 
+    // ---- Registration-derived queries for the logbook column cache ---------
+    // Pure functions of the registrations: none of them touches an engine, a
+    // session, or runs a calculation.
+
+    /// The closure of `name` over declared inputs, following EVERY candidate
+    /// for every name (not only the one that would win - which one wins
+    /// depends on session state) and, for measurements, every source
+    /// conversion. Attribute / Measurement inputs are followed; a Preference
+    /// input contributes its key; a SourceMeasurement / SourceUnit input
+    /// contributes DependencyKey::measurement(sensor, name), the public name
+    /// whose source layer it reads.
+    ///
+    /// The result is a superset of any dynamic dependency set an engine can
+    /// record for `name`, independent of session state and of what is cached.
+    /// That makes it safe for deciding which logbook columns an edit can affect
+    /// in rows whose engine is cold or which are not loaded at all. Memoized
+    /// per name; the memo is dropped by every successful register* / unregister.
+    StaticDependencies staticDependencies(const DependencyKey &name) const;
+
+    /// Preference keys declared as inputs, sorted and unique. Plain
+    /// calculations only: family instances are not enumerable. No family
+    /// declares a preference today; one that does has to be added here
+    /// explicitly, or changes of that preference will not reach the cached
+    /// logbook columns of unloaded sessions.
+    QStringList declaredPreferenceKeys() const;
+
+    /// `observer` is called after every successful register* / unregister,
+    /// after the enrolled engines were notified. Plain callbacks (this library
+    /// has no QObject), invoked synchronously; an observer must not register or
+    /// unregister. Returns a token for removeObserver().
+    int addObserver(std::function<void()> observer);
+    void removeObserver(int token);
+
 private:
     friend class CalculationEngine;
 
@@ -128,6 +170,12 @@ private:
     QList<CalculationEngine *> m_engines;
     const IPreferenceProvider *m_preferenceProvider = nullptr;
     int m_activeEvaluations = 0;
+
+    // Registration-derived queries (see above)
+    void registrationsChanged();            // drops the memo, then calls the observers
+    mutable QHash<DependencyKey, StaticDependencies> m_staticDependencyMemo;
+    QList<std::pair<int, std::function<void()>>> m_observers;
+    int m_nextObserverToken = 1;
 };
 
 } // namespace FlySight

@@ -10,6 +10,7 @@
 #include <QUuid>
 #include <QDateTime>
 
+#include "calculations/builtincalculations.h"
 #include "dataimporter.h"
 #include "dataexporter.h"
 #include "logbookcolumn.h"
@@ -106,6 +107,17 @@ QString columnDefinitionKey(const LogbookColumn &col)
     return QString();
 }
 
+// Cached value -> JSON: null = "computed, no value"; numbers stay numbers.
+QJsonValue variantToJson(const QVariant &val)
+{
+    if (!val.isValid() || val.isNull())
+        return QJsonValue::Null;
+    if (val.typeId() == QMetaType::Double || val.typeId() == QMetaType::Float
+        || val.typeId() == QMetaType::Int || val.typeId() == QMetaType::LongLong)
+        return QJsonValue(val.toDouble());
+    return QJsonValue(val.toString());
+}
+
 } // anonymous namespace
 
 // ============================================================================
@@ -163,6 +175,21 @@ QList<SessionData> LogbookManager::initialize()
                 const QJsonObject columnsObj = root[QStringLiteral("columns")].toObject();
                 const QJsonObject sessionsObj = root[QStringLiteral("sessions")].toObject();
 
+                // Cached column values are trusted only when they were computed
+                // by compatible calculation code in the same calculation
+                // environment. A released index has neither field (toInt() of
+                // a missing or non-numeric value is 0, which is never a marker).
+                const QString currentEnvironment = calculationEnvironmentFingerprint();
+                const bool valid =
+                    root[QStringLiteral("calculationCompatibility")].toInt() == CalculationCompatibilityVersion
+                    && root[QStringLiteral("calculationEnvironment")].toString() == currentEnvironment;
+                if (!valid) {
+                    // Session files are not touched; the values are recomputed
+                    // lazily and the index is rewritten with the current marker.
+                    m_discardedOnLoad = true;
+                    m_indexNeedsFlush = true;
+                }
+
                 // Build ephemeral UUID → definition key mapping
                 QMap<QString, QString> uuidToDefKey;
                 for (auto it = columnsObj.constBegin(); it != columnsObj.constEnd(); ++it) {
@@ -185,7 +212,7 @@ QList<SessionData> LogbookManager::initialize()
                     }
 
                     // values — translate UUID-keyed entries to definition-key-keyed
-                    if (entry.contains(QStringLiteral("values"))) {
+                    if (valid && entry.contains(QStringLiteral("values"))) {
                         const QJsonObject valuesObj = entry[QStringLiteral("values")].toObject();
                         QMap<QString, QJsonValue> sessionValues;
                         for (auto vit = valuesObj.constBegin(); vit != valuesObj.constEnd(); ++vit) {
@@ -198,6 +225,23 @@ QList<SessionData> LogbookManager::initialize()
                     }
                 }
 
+                // Orphan adoption: a session file the index does not reference
+                // (a new session whose CSV was committed but whose index entry
+                // was not) becomes an identity stub, exactly like the entries
+                // of the filename scan; the model remaps it to the real
+                // SESSION_ID when it first loads the file.
+                QSet<QString> knownUuids;
+                for (auto it = m_sessionIdToUuid.constBegin(); it != m_sessionIdToUuid.constEnd(); ++it)
+                    knownUuids.insert(it.value());
+                const QStringList stems = sessionFileStems();
+                for (const QString &stem : stems) {
+                    if (knownUuids.contains(stem) || m_sessionIdToUuid.contains(stem))
+                        continue;
+                    m_sessionIdToUuid[stem] = stem;
+                    m_indexNeedsFlush = true;
+                }
+
+                m_cacheEnvironment = currentEnvironment;
                 m_hasIndexData = true;
                 return {};
             } else {
@@ -210,6 +254,7 @@ QList<SessionData> LogbookManager::initialize()
                         m_sessionIdToUuid[sessionId] = uuid;
                     }
                 }
+                m_cacheEnvironment = calculationEnvironmentFingerprint();
                 return {};
             }
         }
@@ -219,6 +264,7 @@ QList<SessionData> LogbookManager::initialize()
     // The column worker will parse each CSV in the background and rebuild the index.
     m_scannedUuids = scanSessionFilenames();
     m_deferredScan = true;
+    m_cacheEnvironment = calculationEnvironmentFingerprint();
     return {};
 }
 
@@ -235,6 +281,13 @@ void LogbookManager::reset()
     m_scannedUuids.clear();
     m_hasIndexData = false;
     m_deferredScan = false;
+    m_cacheEnvironment.clear();
+    m_discardedOnLoad = false;
+    m_indexNeedsFlush = false;
+    m_unsavedColumns.clear();
+    m_unsavedAll.clear();
+    m_needsFlushBeforeSave.clear();
+    m_lastSaveError.clear();
 }
 
 // ============================================================================
@@ -314,19 +367,110 @@ void LogbookManager::setCachedValues(const QString &sessionId,
                                      const QMap<LogbookColumn, QVariant> &columnValues)
 {
     QMap<QString, QJsonValue> converted;
-    for (auto it = columnValues.constBegin(); it != columnValues.constEnd(); ++it) {
-        const QString key = columnDefinitionKey(it.key());
-        const QVariant &val = it.value();
-        if (!val.isValid() || val.isNull()) {
-            converted[key] = QJsonValue::Null;
-        } else if (val.typeId() == QMetaType::Double || val.typeId() == QMetaType::Float
-                   || val.typeId() == QMetaType::Int || val.typeId() == QMetaType::LongLong) {
-            converted[key] = QJsonValue(val.toDouble());
-        } else {
-            converted[key] = QJsonValue(val.toString());
-        }
-    }
+    for (auto it = columnValues.constBegin(); it != columnValues.constEnd(); ++it)
+        converted[columnDefinitionKey(it.key())] = variantToJson(it.value());
     m_cachedValues[sessionId] = converted;
+    m_indexNeedsFlush = true;
+}
+
+void LogbookManager::updateCachedValues(const QString &sessionId,
+                                        const QMap<LogbookColumn, QVariant> &columnValues)
+{
+    if (columnValues.isEmpty())
+        return;
+
+    QMap<QString, QJsonValue> &cached = m_cachedValues[sessionId];
+    for (auto it = columnValues.constBegin(); it != columnValues.constEnd(); ++it)
+        cached[columnDefinitionKey(it.key())] = variantToJson(it.value());
+    m_indexNeedsFlush = true;
+}
+
+// ============================================================================
+// Cache validity
+// ============================================================================
+
+QString LogbookManager::cacheEnvironment() const
+{
+    return m_cacheEnvironment;
+}
+
+bool LogbookManager::cachedValuesDiscardedOnLoad() const
+{
+    return m_discardedOnLoad;
+}
+
+bool LogbookManager::indexNeedsFlush() const
+{
+    return m_indexNeedsFlush;
+}
+
+void LogbookManager::discardCachedValues()
+{
+    m_cachedValues.clear();
+    m_cacheEnvironment = calculationEnvironmentFingerprint();
+    m_indexNeedsFlush = true;
+}
+
+// ============================================================================
+// Unsaved-column tracking
+// ============================================================================
+
+void LogbookManager::markColumnsUnsaved(const QString &sessionId, const QVector<LogbookColumn> &columns)
+{
+    if (columns.isEmpty())
+        return;
+
+    QSet<QString> &unsaved = m_unsavedColumns[sessionId];
+    auto cachedIt = m_cachedValues.find(sessionId);
+    for (const LogbookColumn &col : columns) {
+        const QString key = columnDefinitionKey(col);
+        if (cachedIt != m_cachedValues.end())
+            cachedIt->remove(key);
+        unsaved.insert(key);
+    }
+
+    // Only a session the on-disk index can know about needs the pre-save flush
+    if (m_sessionIdToUuid.contains(sessionId))
+        m_needsFlushBeforeSave.insert(sessionId);
+    m_indexNeedsFlush = true;
+}
+
+void LogbookManager::markSessionUnsaved(const QString &sessionId)
+{
+    m_cachedValues.remove(sessionId);
+    m_unsavedAll.insert(sessionId);
+
+    if (m_sessionIdToUuid.contains(sessionId))
+        m_needsFlushBeforeSave.insert(sessionId);
+    m_indexNeedsFlush = true;
+}
+
+void LogbookManager::dropCachedValuesExcept(const QString &sessionId, const QVector<LogbookColumn> &columns)
+{
+    auto cachedIt = m_cachedValues.find(sessionId);
+    if (cachedIt == m_cachedValues.end())
+        return;
+
+    QSet<QString> keep;
+    for (const LogbookColumn &col : columns)
+        keep.insert(columnDefinitionKey(col));
+
+    for (auto it = cachedIt->begin(); it != cachedIt->end();) {
+        if (keep.contains(it.key()))
+            ++it;
+        else
+            it = cachedIt->erase(it);
+    }
+}
+
+bool LogbookManager::hasUnsavedColumns(const QString &sessionId) const
+{
+    return m_unsavedAll.contains(sessionId) || !m_unsavedColumns.value(sessionId).isEmpty();
+}
+
+QString LogbookManager::lastSaveError() const
+{
+    return m_lastSaveError;
 }
 
 const QMap<QString, QJsonValue> &LogbookManager::cachedValuesForSession(const QString &sessionId) const
@@ -407,11 +551,40 @@ std::optional<SessionData> LogbookManager::loadSession(const QString &sessionId)
 // Save Session
 // ============================================================================
 
+// Save ordering (see the class comment). D = on-disk index values of the
+// columns the pending change can affect, F = the session file:
+//
+//   crash point                                   D        F     consistent because
+//   after the edit, before any write              old      old   nothing changed on disk
+//   after step b (pre-save index flush)           absent   old   absent values are recomputed from F
+//   after step c (session file committed)         absent   new   same
+//   after a ColumnTask / SaveTask flush while
+//     the row is still unsaved                    absent   old   same (flushIndex skips unsaved columns)
+//   after the post-save flush                     new      new   computed from the state that was saved
+//
+// Columns that were NOT marked keep their values throughout: by the static
+// dependency closure they cannot depend on the change, so one value is right
+// for both the old and the new file.
 bool LogbookManager::saveSession(const SessionData& session)
 {
-    const QString sessionId = session.getAttribute(SessionKeys::SessionId).toString();
+    m_lastSaveError.clear();
+
+    // a. Stored attribute only: a save never creates or consults an engine.
+    const QString sessionId = session.storedAttribute(SessionKeys::SessionId).toString();
     if (sessionId.isEmpty()) {
+        m_lastSaveError = QStringLiteral("The session has no SESSION_ID");
         return false;
+    }
+
+    // b. The on-disk index may still hold a value for a column this save can
+    //    change: remove it first.
+    if (m_needsFlushBeforeSave.contains(sessionId)) {
+        if (!flushIndex()) {
+            m_lastSaveError = QStringLiteral("index.json could not be written");
+            qWarning("LogbookManager: session %s not saved: %s",
+                     qPrintable(sessionId), qPrintable(m_lastSaveError));
+            return false;
+        }
     }
 
     // Reuse existing UUID or generate a new one
@@ -425,11 +598,19 @@ bool LogbookManager::saveSession(const SessionData& session)
     const QString filePath = sessionsDirectory()
         + QStringLiteral("/") + uuid + QStringLiteral(".csv");
 
-    if (!DataExporter::exportSession(filePath, session)) {
+    // c. The session file. On failure the previous file is intact and the
+    //    unsaved marks stay: the index keeps omitting the affected columns.
+    if (!DataExporter::exportSession(filePath, session, &m_lastSaveError)) {
+        qWarning("LogbookManager: session %s not saved: %s",
+                 qPrintable(sessionId), qPrintable(m_lastSaveError));
         return false;
     }
 
+    // d. Memory and file agree again; the next flush may publish the values.
     m_sessionIdToUuid[sessionId] = uuid;
+    m_unsavedColumns.remove(sessionId);
+    m_unsavedAll.remove(sessionId);
+    m_indexNeedsFlush = true;
 
     // Set lastAccessed for newly imported sessions
     if (!m_lastAccessed.contains(sessionId)) {
@@ -467,7 +648,9 @@ QList<SessionData> LogbookManager::scanSessionFiles()
         DataImporter importer;
         SessionData sessionData;
         if (importer.readFile(filePath, sessionData)) {
-            const QString sessionId = sessionData.getAttribute(SessionKeys::SessionId).toString();
+            // Stored attribute: hundreds of temporary sessions must not each
+            // create a calculation engine.
+            const QString sessionId = sessionData.storedAttribute(SessionKeys::SessionId).toString();
             const QString uuid = QFileInfo(filename).completeBaseName();
             if (!sessionId.isEmpty()) {
                 m_sessionIdToUuid[sessionId] = uuid;
@@ -483,20 +666,24 @@ QList<SessionData> LogbookManager::scanSessionFiles()
 // Scan Session Filenames (no CSV parsing)
 // ============================================================================
 
-QStringList LogbookManager::scanSessionFilenames()
+QStringList LogbookManager::sessionFileStems() const
 {
-    QStringList uuids;
-    const QString dir = sessionsDirectory();
-    const QDir sessDir(dir);
+    QStringList stems;
+    const QDir sessDir(sessionsDirectory());
     const QStringList csvFiles = sessDir.entryList(
         QStringList() << QStringLiteral("*.csv"),
         QDir::Files, QDir::Name);
 
-    for (const QString &filename : csvFiles) {
-        const QString uuid = QFileInfo(filename).completeBaseName();
+    for (const QString &filename : csvFiles)
+        stems.append(QFileInfo(filename).completeBaseName());
+    return stems;
+}
+
+QStringList LogbookManager::scanSessionFilenames()
+{
+    const QStringList uuids = sessionFileStems();
+    for (const QString &uuid : uuids)
         m_sessionIdToUuid[uuid] = uuid;  // identity mapping
-        uuids.append(uuid);
-    }
     return uuids;
 }
 
@@ -523,6 +710,18 @@ bool LogbookManager::remapSessionId(const QString &oldId, const QString &newId)
         m_cachedValues[newId] = m_cachedValues.take(oldId);
     }
 
+    // The unsaved marks travel with the id
+    if (m_unsavedColumns.contains(oldId)) {
+        m_unsavedColumns[newId] = m_unsavedColumns.take(oldId);
+    }
+    if (m_unsavedAll.remove(oldId)) {
+        m_unsavedAll.insert(newId);
+    }
+    if (m_needsFlushBeforeSave.remove(oldId)) {
+        m_needsFlushBeforeSave.insert(newId);
+    }
+    m_indexNeedsFlush = true;
+
     return true;
 }
 
@@ -548,6 +747,10 @@ bool LogbookManager::removeSession(const QString& sessionId)
     m_sessionIdToUuid.remove(sessionId);
     m_lastAccessed.remove(sessionId);
     m_cachedValues.remove(sessionId);
+    m_unsavedColumns.remove(sessionId);
+    m_unsavedAll.remove(sessionId);
+    m_needsFlushBeforeSave.remove(sessionId);
+    m_indexNeedsFlush = true;
     return true;
 }
 
@@ -555,7 +758,7 @@ bool LogbookManager::removeSession(const QString& sessionId)
 // Flush Index
 // ============================================================================
 
-void LogbookManager::flushIndex()
+bool LogbookManager::flushIndex()
 {
     // 1. Get current enabled columns
     const QVector<LogbookColumn> enabledCols = LogbookColumnStore::instance().enabledColumns();
@@ -580,12 +783,17 @@ void LogbookManager::flushIndex()
         entry[QStringLiteral("uuid")] = it.value();
         entry[QStringLiteral("lastAccessed")] = m_lastAccessed.value(sessionId, 0.0);
 
-        // Build values: map cached values (keyed by definition key) to ephemeral UUIDs
+        // Build values: map cached values (keyed by definition key) to ephemeral UUIDs.
+        // Unsaved columns are omitted even when memory already holds their new
+        // value: that value belongs to a session file that is not on disk yet.
         QJsonObject valuesObj;
-        if (m_cachedValues.contains(sessionId)) {
+        if (m_cachedValues.contains(sessionId) && !m_unsavedAll.contains(sessionId)) {
             const QMap<QString, QJsonValue> &cached = m_cachedValues[sessionId];
+            const QSet<QString> unsaved = m_unsavedColumns.value(sessionId);
             for (auto cit = cached.constBegin(); cit != cached.constEnd(); ++cit) {
                 const QString &defKey = cit.key();
+                if (unsaved.contains(defKey))
+                    continue;
                 if (defKeyToEphemeralUuid.contains(defKey)) {
                     valuesObj[defKeyToEphemeralUuid[defKey]] = cit.value();
                 }
@@ -597,7 +805,12 @@ void LogbookManager::flushIndex()
     }
 
     // 4. Write root object
+    // The environment is the one the in-memory values were computed under,
+    // NOT a freshly computed fingerprint: computing it here would bless stale
+    // values after an environment change nobody told the manager about.
     QJsonObject root;
+    root[QStringLiteral("calculationCompatibility")] = CalculationCompatibilityVersion;
+    root[QStringLiteral("calculationEnvironment")] = m_cacheEnvironment;
     root[QStringLiteral("columns")] = columnsObj;
     root[QStringLiteral("sessions")] = sessionsObj;
 
@@ -607,10 +820,16 @@ void LogbookManager::flushIndex()
     QSaveFile saveFile(filePath);
     if (!saveFile.open(QIODevice::WriteOnly)) {
         qWarning("LogbookManager: failed to open %s for writing", qPrintable(filePath));
-        return;
+        return false;
     }
     saveFile.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
     if (!saveFile.commit()) {
         qWarning("LogbookManager: failed to commit %s", qPrintable(filePath));
+        return false;
     }
+
+    // The on-disk index now holds no value for any unsaved column.
+    m_needsFlushBeforeSave.clear();
+    m_indexNeedsFlush = false;
+    return true;
 }

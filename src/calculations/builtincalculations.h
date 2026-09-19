@@ -1,6 +1,8 @@
 #ifndef BUILTINCALCULATIONS_H
 #define BUILTINCALCULATIONS_H
 
+#include <QString>
+
 #include "../engine/calculationregistry.h"
 
 namespace FlySight {
@@ -13,6 +15,39 @@ namespace FlySight {
 ///
 /// Engine registrations only: safe to call on any number of private registries.
 void registerBuiltInCalculations(CalculationRegistry &registry = CalculationRegistry::instance());
+
+/// The calculation-compatibility marker of the logbook column cache
+/// (index.json field "calculationCompatibility"). An index whose marker is
+/// missing or different has ALL its cached column values discarded at startup;
+/// they are recomputed lazily from the session files, which are never touched.
+///
+/// Bump whenever a code change can alter the value that ANY existing session
+/// yields for ANY logbook column: a built-in calculation's arithmetic, inputs,
+/// or candidate order; the schema table or the unit-normalization table
+/// (src/conversion, src/units/unitconversion.h); the interpolation family;
+/// SessionModel::computeColumnValues (what a column stores, or its unit).
+/// Do not bump for pure additions / removals / renames of registrations - the
+/// environment fingerprint below already covers those. Never reuse a value;
+/// never set it to 0 (0 is what an index without the field reads as). Not
+/// related to SCHEMA_VER, which describes recorded data, not this program.
+///
+/// History: 1 - first marker; invalidates every released index.json, whose
+/// gyro-derived columns were computed without the legacy-gyro schema correction.
+constexpr int CalculationCompatibilityVersion = 1;
+
+/// The second half of cache validity (index.json field
+/// "calculationEnvironment"): which calculations are registered, in which
+/// order, and the values of the preferences they declare as inputs.
+///
+/// SHA-1 (lower-case hex, 40 characters) over, in this order:
+///   "id:<id>\n"            for every id in registry.registeredIds()            (registration order)
+///   "pref:<key>=<text>\n"  for every key in registry.declaredPreferenceKeys()  (sorted),
+///        text = CsvFormat::formatAttributeValue(provider value).value_or(QString())
+/// A registry without a preference provider contributes empty texts.
+///
+/// Not covered: a registration whose id is unchanged but whose code changed
+/// (for the built-ins that is what CalculationCompatibilityVersion is for).
+QString calculationEnvironmentFingerprint(const CalculationRegistry &registry = CalculationRegistry::instance());
 
 /// WS-P / SP marker groups and AttributeRegistry entries (UI metadata that
 /// accompanies the built-in calculations). Call once per process.
