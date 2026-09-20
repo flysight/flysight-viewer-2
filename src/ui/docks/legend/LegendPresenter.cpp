@@ -14,6 +14,7 @@
 
 #include <QHash>
 #include <QDateTime>
+#include <QTimeZone>
 #include <QVariant>
 
 #include <algorithm>
@@ -367,7 +368,7 @@ LegendContent legendContentForMoment(const SessionModel &sessionModel,
         utcText = QStringLiteral("%1 UTC")
                       .arg(QDateTime::fromMSecsSinceEpoch(
                                qint64(utcSecs * 1000.0),
-                               Qt::UTC)
+                               QTimeZone::UTC)
                                .toString(QStringLiteral("yy-MM-dd HH:mm:ss.zzz")));
 
         const double lat = interpolateSessionMeasurement(*session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("lat"), utcSecs);

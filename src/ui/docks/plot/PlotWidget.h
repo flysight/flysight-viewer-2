@@ -134,6 +134,7 @@ public slots:
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
+    void changeEvent(QEvent *event) override;
 
 private slots:
     void onHoveredSessionChanged(const QString& sessionId);

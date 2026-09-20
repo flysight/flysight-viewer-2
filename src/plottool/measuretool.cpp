@@ -9,6 +9,7 @@
 #include "../calculations/timecalculations.h"
 
 #include <QDateTime>
+#include <QTimeZone>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -472,7 +473,7 @@ MeasureTool::Measurement MeasureTool::measure(double currentX,
     if (!std::isnan(utcSecs)) {
         utcText = QStringLiteral("%1 UTC")
                       .arg(QDateTime::fromMSecsSinceEpoch(
-                               qint64(utcSecs * 1000.0), Qt::UTC)
+                               qint64(utcSecs * 1000.0), QTimeZone::UTC)
                                .toString(QStringLiteral("yy-MM-dd HH:mm:ss.zzz")));
 
         const double lat = interpolateSessionMeasurement(

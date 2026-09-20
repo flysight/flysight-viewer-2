@@ -202,9 +202,8 @@ PlotWidget::PlotWidget(SessionModel *model,
     applyPlotPreferences();
     applyThemeColors();
 
-    // React to system theme changes at runtime
-    connect(qApp, &QApplication::paletteChanged,
-            this, [this]() { applyThemeColors(); });
+    // System theme changes at runtime arrive as ApplicationPaletteChange (see
+    // changeEvent).
 
     // Initialize coalescing timer for dependencyChanged signals
     m_rebuildTimer.setSingleShot(true);
@@ -897,6 +896,15 @@ void PlotWidget::applyPinchZoom(double factor, const QPointF &centerPos)
 }
 
 // Protected Methods
+void PlotWidget::changeEvent(QEvent *event)
+{
+    // Qt delivers this to every widget when the application palette changes,
+    // for example when the system switches between light and dark.
+    if (event->type() == QEvent::ApplicationPaletteChange)
+        applyThemeColors();
+    QWidget::changeEvent(event);
+}
+
 bool PlotWidget::eventFilter(QObject *obj, QEvent *event)
 {
     // Step 5: Keep reference markers aligned when plot geometry changes (resize/layout, margins).
