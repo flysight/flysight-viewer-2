@@ -9,6 +9,18 @@ namespace pybind11 {
 class scoped_interpreter;
 }
 
+// pybind11 declares its types with hidden symbol visibility. A type that holds
+// one as a member must be hidden too, or GCC warns that it is "declared with
+// greater visibility than the type of its field". These types are only used
+// inside the binary that defines them.
+#ifndef FLYSIGHT_PYBIND_HIDDEN
+#  if defined(__GNUC__)
+#    define FLYSIGHT_PYBIND_HIDDEN __attribute__((visibility("hidden")))
+#  else
+#    define FLYSIGHT_PYBIND_HIDDEN
+#  endif
+#endif
+
 /// What initialise() did with the plugins it found.
 struct PluginLoadReport {
     QStringList registeredIds;     ///< calculation ids, in registration order
@@ -16,7 +28,7 @@ struct PluginLoadReport {
     QStringList failedImports;     ///< plugin file names whose import raised
 };
 
-class PluginHost {
+class FLYSIGHT_PYBIND_HIDDEN PluginHost {
 public:
     // Singleton accessor
     static PluginHost& instance();

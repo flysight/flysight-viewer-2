@@ -27,6 +27,18 @@
 #include "dependencykey.h"
 #include "engine/calculationdescriptor.h"
 
+// pybind11 declares its types with hidden symbol visibility. A type that holds
+// one as a member must be hidden too, or GCC warns that it is "declared with
+// greater visibility than the type of its field". These types are only used
+// inside the binary that defines them.
+#ifndef FLYSIGHT_PYBIND_HIDDEN
+#  if defined(__GNUC__)
+#    define FLYSIGHT_PYBIND_HIDDEN __attribute__((visibility("hidden")))
+#  else
+#    define FLYSIGHT_PYBIND_HIDDEN
+#  endif
+#endif
+
 namespace FlySight::PluginBridge {
 
 /// A problem with one plugin: a bad declaration at registration, or a
@@ -78,7 +90,7 @@ bool toMeasurementValues(pybind11::handle value, QVector<double> *out);
 /// relative to the interpreter is not guaranteed, so they capture a shared_ptr
 /// to this holder, whose deleter only touches Python while it is still
 /// initialised. No py::object is ever captured by value.
-struct PyPluginHolder {
+struct FLYSIGHT_PYBIND_HIDDEN PyPluginHolder {
     pybind11::object plugin;
     pybind11::object undeclaredInputError;  ///< flysight_cpp_bridge.UndeclaredInputError
     pybind11::object numbersReal;           ///< numbers.Real
