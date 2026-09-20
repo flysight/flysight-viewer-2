@@ -46,7 +46,14 @@ void HarnessTest::settingsAreIsolated()
 
     QSettings settings;
     QCOMPARE(settings.format(), QSettings::IniFormat);
+    // On Apple platforms a default QSettings identifies the organization by
+    // its domain when one is set; everywhere else by its name. Either way it
+    // is the test organization, never the application's.
+#ifdef Q_OS_DARWIN
+    QCOMPARE(settings.organizationName(), QStringLiteral("tests.flysight.invalid"));
+#else
     QCOMPARE(settings.organizationName(), QStringLiteral("FlySightTests"));
+#endif
 
     const QString fileName = QDir::cleanPath(settings.fileName());
     QVERIFY2(fileName.startsWith(env.rootPath() + QLatin1Char('/'), Qt::CaseInsensitive),

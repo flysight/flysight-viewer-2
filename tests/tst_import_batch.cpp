@@ -35,6 +35,16 @@ QString writeBytes(const QString &folder, const QString &fileName, const QByteAr
     return path;
 }
 
+// An absolute folder on every platform ("C:/cards/flysight" on Windows,
+// "/cards/flysight" elsewhere). A drive-letter literal is a relative path
+// outside Windows, and QDir::relativeFilePath() returns a relative file path
+// unchanged, so the message would show bare file names there. Nothing is
+// created at this path; it only appears in message text.
+QString cardFolder()
+{
+    return QDir::rootPath() + QStringLiteral("cards/flysight");
+}
+
 MergeResult failure(const QString &path, const QString &error, const QString &hint = QString())
 {
     MergeResult result;
@@ -172,7 +182,7 @@ void ImportBatchTest::progressCancels()
 
 void ImportBatchTest::failureMessageFew()
 {
-    const QString base = QStringLiteral("C:/cards/flysight");
+    const QString base = cardFolder();
 
     // One file: its reason on its line, the hint below the list
     QCOMPARE(SessionImport::failureMessage({firmwareConflict(base + QStringLiteral("/sub/SENSOR.CSV"), "v2024.01.01")},
@@ -214,7 +224,7 @@ void ImportBatchTest::failureMessageFew()
 
 void ImportBatchTest::failureMessageMany()
 {
-    const QString base = QStringLiteral("C:/cards/flysight");
+    const QString base = cardFolder();
 
     // Input order is kept: f12 ... f1, not alphabetical
     QList<MergeResult> twelve;
@@ -256,7 +266,7 @@ void ImportBatchTest::failureMessageMany()
 // occurred; the cap of ten counts files, not lines.
 void ImportBatchTest::failureMessageGroupsSharedReasons()
 {
-    const QString base = QStringLiteral("C:/cards/flysight");
+    const QString base = cardFolder();
 
     // 12 files: a1 (its own reason), then s1..s8 sharing one conflict with
     // b1, b2 in between, then c1
@@ -309,7 +319,7 @@ void ImportBatchTest::failureMessageGroupsSharedReasons()
 // ten that are listed.
 void ImportBatchTest::failureMessageHintsOnce()
 {
-    const QString base = QStringLiteral("C:/cards/flysight");
+    const QString base = cardFolder();
     const QString schemaConflict =
         QStringLiteral("Attribute 'SCHEMA_VER' conflicts with the existing session (session: '2', file: '1').");
 
@@ -350,7 +360,7 @@ void ImportBatchTest::failureMessageHintsOnce()
 
 void ImportBatchTest::failureMessageEmpty()
 {
-    QCOMPARE(SessionImport::failureMessage({}, QStringLiteral("C:/cards")), QString());
+    QCOMPARE(SessionImport::failureMessage({}, cardFolder()), QString());
     QCOMPARE(SessionImport::failureMessage({}, QString()), QString());
 }
 
