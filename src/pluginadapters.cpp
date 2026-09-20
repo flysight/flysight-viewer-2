@@ -33,7 +33,6 @@ namespace {
 // that its rejection is specific.
 constexpr const char *kKindAttribute   = "attribute";
 constexpr const char *kKindMeasurement = "measurement";
-constexpr const char *kKindSource      = "source";
 constexpr const char *kKindPreference  = "preference";
 
 PluginError pluginError(const QString &message)
@@ -102,12 +101,9 @@ DependencyKey toOutputKey(const DecodedKey &key)
     case KeyKind::Attribute:
         return DependencyKey::attribute(key.name);
     case KeyKind::Measurement:
-        return DependencyKey::measurement(key.sensor, key.name);
-    case KeyKind::Source:
         break;
     }
-    throw pluginError(QStringLiteral("%1 cannot be an output: only attr() and meas() keys can")
-                          .arg(key.display()));
+    return DependencyKey::measurement(key.sensor, key.name);
 }
 
 // "<calculation id> (<module>.<qualname>)": what log lines and Python errors name.
@@ -166,7 +162,6 @@ QString DecodedKey::display() const
     switch (kind) {
     case KeyKind::Attribute:   return QStringLiteral("attribute ") + name;
     case KeyKind::Measurement: return QStringLiteral("measurement ") + sensor + QLatin1Char('/') + name;
-    case KeyKind::Source:      return QStringLiteral("source ") + sensor + QLatin1Char('/') + name;
     }
     return QString();
 }
@@ -202,10 +197,6 @@ DecodedKey decodeKey(py::handle key)
         decoded.kind = KeyKind::Measurement;
         if (decoded.sensor.isEmpty() || decoded.name.isEmpty())
             throw pluginError(QStringLiteral("dependency key %1 has an empty sensor or name").arg(safeRepr(key)));
-    } else if (kind == QLatin1String(kKindSource)) {
-        decoded.kind = KeyKind::Source;
-        if (decoded.sensor.isEmpty() || decoded.name.isEmpty())
-            throw pluginError(QStringLiteral("dependency key %1 has an empty sensor or name").arg(safeRepr(key)));
     } else if (kind == QLatin1String(kKindPreference)) {
         throw pluginError(QStringLiteral("preference inputs are not available to plugins"));
     } else {
@@ -214,11 +205,8 @@ DecodedKey decodeKey(py::handle key)
     return decoded;
 }
 
-QList<CalcInput> decodeInputs(py::handle inputsResult, bool *usesSource)
+QList<CalcInput> decodeInputs(py::handle inputsResult)
 {
-    if (usesSource)
-        *usesSource = false;
-
     QList<CalcInput> inputs;
     for (py::handle item : requireSequence(inputsResult, "inputs")) {
         const DecodedKey key = decodeKey(item);
@@ -228,13 +216,6 @@ QList<CalcInput> decodeInputs(py::handle inputsResult, bool *usesSource)
             break;
         case KeyKind::Measurement:
             inputs.append(CalcInput::measurement(key.sensor, key.name));
-            break;
-        case KeyKind::Source:
-            // The recorded samples and the recorded unit text, in this order.
-            inputs.append(CalcInput::sourceMeasurement(key.sensor, key.name));
-            inputs.append(CalcInput::sourceUnit(key.sensor, key.name));
-            if (usesSource)
-                *usesSource = true;
             break;
         }
     }
@@ -365,10 +346,8 @@ CalculationDescriptor makeAttributeAdapter(int index, py::object plugin)
 
     CalculationDescriptor d;
     d.id = QStringLiteral("plugin.attr.%1.%2").arg(index).arg(key);
-    bool usesSource = false;
-    d.inputs = decodeInputs(plugin.attr("inputs")(), &usesSource);
+    d.inputs = decodeInputs(plugin.attr("inputs")());
     d.outputs = { DependencyKey::attribute(key) };
-    d.allowSourceInputs = usesSource;
 
     const QString label = viewLabel(d.id, plugin);
     const std::shared_ptr<PyPluginHolder> holder = makeHolder(std::move(plugin));
@@ -401,10 +380,8 @@ CalculationDescriptor makeMeasurementAdapter(int index, py::object plugin)
 
     CalculationDescriptor d;
     d.id = QStringLiteral("plugin.meas.%1.%2/%3").arg(index).arg(sensor, name);
-    bool usesSource = false;
-    d.inputs = decodeInputs(plugin.attr("inputs")(), &usesSource);
+    d.inputs = decodeInputs(plugin.attr("inputs")());
     d.outputs = { DependencyKey::measurement(sensor, name) };
-    d.allowSourceInputs = usesSource;
 
     const QString label = viewLabel(d.id, plugin);
     const std::shared_ptr<PyPluginHolder> holder = makeHolder(std::move(plugin));
@@ -431,10 +408,8 @@ CalculationDescriptor makeCalculationAdapter(int index, py::object plugin)
 
     CalculationDescriptor d;
     d.id = QStringLiteral("plugin.calc.%1.%2").arg(index).arg(name);
-    bool usesSource = false;
-    d.inputs = decodeInputs(plugin.attr("inputs")(), &usesSource);
+    d.inputs = decodeInputs(plugin.attr("inputs")());
     d.outputs = decodeOutputs(plugin.attr("outputs")());
-    d.allowSourceInputs = usesSource;
 
     // `units`: a unit label per *measurement* output, read once, here.
     QHash<DependencyKey, QString> units;

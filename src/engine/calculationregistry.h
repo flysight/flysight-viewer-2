@@ -83,9 +83,8 @@ public:
     // invalid: empty id; '#' in the id; id already registered (as any kind);
     // no outputs; duplicate outputs; null compute / instantiate; an output that
     // is also one of the calculation's own Attribute / Measurement inputs; a
-    // SourceMeasurement / SourceUnit input on anything that is neither a source
-    // conversion nor a descriptor with the plugin-host opt-in; or a call
-    // made while an engine is evaluating.
+    // SourceMeasurement / SourceUnit input on anything that is not a source
+    // conversion; or a call made while an engine is evaluating.
     bool registerCalculation(const CalculationDescriptor &d);
     bool registerFamily(const CalculationFamily &f);
     /// Source conversions are the ordered candidates for a measurement that has

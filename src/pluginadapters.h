@@ -49,7 +49,7 @@ struct PluginError : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-enum class KeyKind { Attribute, Measurement, Source };
+enum class KeyKind { Attribute, Measurement };
 
 /// A flysight_plugin_sdk.Key, decoded.
 struct DecodedKey {
@@ -57,16 +57,16 @@ struct DecodedKey {
     QString sensor;     ///< empty for attributes
     QString name;       ///< attribute key when kind == Attribute
 
-    QString display() const;    ///< "attribute _X" / "measurement IMU/wx" / "source IMU/wx"
+    QString display() const;    ///< "attribute _X" / "measurement IMU/wx"
 };
 
 /// The only place a Python dependency kind is interpreted. Throws PluginError
-/// for anything that is not a well-formed attribute / measurement / source key.
+/// for anything that is not a well-formed attribute / measurement key.
 DecodedKey decodeKey(pybind11::handle key);
 
 /// `inputsResult` is what plugin.inputs() returned: a list or tuple of Key.
-/// A source key becomes two inputs (samples, then unit text) and sets *usesSource.
-QList<CalcInput> decodeInputs(pybind11::handle inputsResult, bool *usesSource);
+/// Every key is an effective input: plugins have no access to the source layer.
+QList<CalcInput> decodeInputs(pybind11::handle inputsResult);
 
 /// `outputsResult` is what plugin.outputs() returned: a non-empty list or tuple
 /// of attribute / measurement keys.

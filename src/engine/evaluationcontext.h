@@ -37,7 +37,7 @@ public:
 
     /// Whether `input` is one of the calculation's declared inputs. Silent: it
     /// records nothing, warns nothing, and does not mark the evaluation. It
-    /// exists because an empty value can be legitimate (a recorded unit may be
+    /// exists because an empty value can be legitimate (a unit may be
     /// empty), so "empty return" cannot be used to detect an undeclared read.
     bool            isDeclared(const CalcInput &input) const;
 

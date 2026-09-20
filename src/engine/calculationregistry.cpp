@@ -67,8 +67,7 @@ bool CalculationRegistry::validate(const CalculationDescriptor &d, bool sourceIn
         if (in.isSourceKind()) {
             if (!sourceInputsPermitted) {
                 qWarning().noquote() << "CalculationRegistry:" << label << "declares" << describe(in)
-                                     << "- only source conversions (and plugin calculations that opt in)"
-                                     << "may read the source layer";
+                                     << "- only source conversions may read the source layer";
                 return false;
             }
             continue;
@@ -98,9 +97,8 @@ bool CalculationRegistry::registerCalculation(const CalculationDescriptor &d)
         qWarning().noquote() << "CalculationRegistry: id already registered:" << d.id;
         return false;
     }
-    // Source inputs: only through registerSourceConversion, or by the descriptor's
-    // explicit opt-in (set only by the Python plugin host).
-    if (!validate(d, d.allowSourceInputs, d.id))
+    // Source inputs are accepted only through registerSourceConversion.
+    if (!validate(d, /*sourceInputsPermitted=*/false, d.id))
         return false;
 
     Entry entry;

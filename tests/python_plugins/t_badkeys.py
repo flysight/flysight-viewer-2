@@ -8,6 +8,13 @@ class PyBogusKind(AttributePlugin):
     def compute(self, session): return 1.0
 
 
+class PySourceKind(AttributePlugin):
+    """What the SDK's removed source() helper used to build."""
+    name = "_PY_SRCKIND"
+    def inputs(self): return [Key("source", "IMU", "wx")]
+    def compute(self, session): return 1.0
+
+
 class PyPrefKind(AttributePlugin):
     name = "_PY_PREF"
     def inputs(self): return [Key("preference", "", "general/units")]
@@ -47,6 +54,6 @@ class PyGoodNeighbour(AttributePlugin):
     def compute(self, session): return 1.0
 
 
-for cls in (PyBogusKind, PyPrefKind, PyIntKey, PyNonStrKind, PyEmptyField,
+for cls in (PyBogusKind, PySourceKind, PyPrefKind, PyIntKey, PyNonStrKind, PyEmptyField,
             PyInputsRaises, PyNoName, PyGoodNeighbour):
     register_attribute(cls())

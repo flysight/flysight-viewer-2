@@ -1,6 +1,6 @@
 """The multi-output form: one computation, a bundle of declared outputs."""
 import numpy as np
-from flysight_plugin_sdk import CalculationPlugin, attr, meas, source, register_calculation
+from flysight_plugin_sdk import CalculationPlugin, Key, attr, meas, register_calculation
 
 
 class PyGyroStats(CalculationPlugin):
@@ -23,18 +23,13 @@ class PyPartial(CalculationPlugin):
         return {attr("_PY_PART_A"): 1.0, attr("_PY_PART_B"): None}
 
 
-class PySourceProbe(CalculationPlugin):
-    def inputs(self): return [source("IMU", "ax"), meas("IMU", "ax")]
-    def outputs(self):
-        return [meas("IMU", "pySrcAx"), attr("_PY_SRC_UNIT"), attr("_PY_EFF_UNIT"),
-                attr("_PY_EFF_AX0"), attr("_PY_HAS_SRC")]
+class PyEffectiveProbe(CalculationPlugin):
+    def inputs(self): return [meas("IMU", "ax")]
+    def outputs(self): return [attr("_PY_EFF_UNIT"), attr("_PY_EFF_AX0")]
     def compute(self, session):
         return {
-            meas("IMU", "pySrcAx"): session.sourceMeasurement("IMU", "ax"),
-            attr("_PY_SRC_UNIT"): session.sourceUnit("IMU", "ax"),
             attr("_PY_EFF_UNIT"): session.effectiveUnit("IMU", "ax"),
             attr("_PY_EFF_AX0"): float(session.getMeasurement("IMU", "ax")[0]),
-            attr("_PY_HAS_SRC"): 1.0 if session.hasSourceMeasurement("IMU", "ax") else 0.0,
         }
 
 
@@ -70,7 +65,8 @@ class PyBadMember(CalculationPlugin):
 
 
 class PySourceOutput(CalculationPlugin):
-    def outputs(self): return [source("IMU", "wx")]
+    """The source kind is not a plugin key kind, as an output or otherwise."""
+    def outputs(self): return [Key("source", "IMU", "wx")]
     def compute(self, session): return None
 
 
@@ -79,6 +75,6 @@ class PyNoOutputs(CalculationPlugin):
     def compute(self, session): return None
 
 
-for cls in (PyGyroStats, PyPartial, PySourceProbe, PyBundleRaises, PyWrongKey,
+for cls in (PyGyroStats, PyPartial, PyEffectiveProbe, PyBundleRaises, PyWrongKey,
             PyNotDict, PyBadMember, PySourceOutput, PyNoOutputs):
     register_calculation(cls())

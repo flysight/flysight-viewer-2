@@ -80,7 +80,7 @@ The same rules bind the built-in C++ calculations; they are described for
 contributors in [the calculations note](https://github.com/flysight/flysight-viewer-2/blob/master/docs/CALCULATIONS.md)
 (in the repository: `docs/CALCULATIONS.md`).
 
-## 4. Effective versus source values
+## 4. Effective values
 
 `session.getMeasurement(sensor, name)` returns the **effective** values - what
 FlySight Viewer itself uses: corrected for the file's data schema and
@@ -90,33 +90,29 @@ accelerations recorded in `g` arrive in m/s^2, and magnetic fields recorded in
 `gauss` arrive in T. `session.effectiveUnit(sensor, name)` gives the unit of
 what you were handed.
 
-The **source** layer is exactly what the file recorded. Declare it with
-`source(sensor, name)` and read it with `session.sourceMeasurement`,
-`session.sourceUnit` (the recorded unit text, possibly empty) and
-`session.hasSourceMeasurement`. Source reads never compute anything and never
-fall back to a derived value: a plugin that declares the source of a name that
-has no recorded data (for example the derived `IMU/wTotal`) does not run.
-
 ```python
-from flysight_plugin_sdk import CalculationPlugin, attr, meas, source, register_calculation
+from flysight_plugin_sdk import CalculationPlugin, attr, meas, register_calculation
 
-class PySourceProbe(CalculationPlugin):
+class PyEffectiveProbe(CalculationPlugin):
     def inputs(self):
-        return [source("IMU", "ax"), meas("IMU", "ax")]
+        return [meas("IMU", "ax")]
 
     def outputs(self):
-        return [meas("IMU", "pySrcAx"), attr("_PY_SRC_UNIT"), attr("_PY_EFF_UNIT")]
+        return [attr("_PY_EFF_UNIT"), attr("_PY_EFF_AX0")]
 
     def compute(self, session):
         return {
-            meas("IMU", "pySrcAx"): session.sourceMeasurement("IMU", "ax"),   # as recorded, e.g. in g
-            attr("_PY_SRC_UNIT"):   session.sourceUnit("IMU", "ax"),          # "g"
-            attr("_PY_EFF_UNIT"):   session.effectiveUnit("IMU", "ax"),       # "m/s^2"
+            attr("_PY_EFF_UNIT"): session.effectiveUnit("IMU", "ax"),               # "m/s^2", whatever the file used
+            attr("_PY_EFF_AX0"):  float(session.getMeasurement("IMU", "ax")[0]),    # 9.80665 for a recorded 1 g
         }
 
-register_calculation(PySourceProbe())
+register_calculation(PyEffectiveProbe())
 ```
-<!-- exercised by tests/python_plugins/t_multi.py (PySourceProbe) -->
+<!-- exercised by tests/python_plugins/t_multi.py (PyEffectiveProbe) and tst_python_bridge::effectiveReadAndUnitMatchCpp -->
+
+Effective values are the only ones a plugin can read. What the file literally
+recorded (the source layer) is read by FlySight Viewer's conversion layer and
+by nothing else.
 
 The schemas, the unit table, and the conversion rules are described in
 [the data schema document](https://github.com/flysight/flysight-viewer-2/blob/master/docs/DATA_SCHEMA.md#6-the-conversion-layer)
@@ -183,8 +179,7 @@ bool / complex / string / object arrays, `str` and `bytes` are rejected.
 
 Returned arrays are **copied** before `compute()` returns to the host, so
 reusing or mutating a returned buffer afterwards is safe. Reads
-(`getMeasurement`, `sourceMeasurement`) return NumPy `float64` arrays that are
-private copies: modifying one changes nothing in the session.
+(`getMeasurement`) return NumPy `float64` arrays that are private copies: modifying one changes nothing in the session.
 
 `getAttribute` returns a `float` for numbers and numeric-looking text, a `str`
 for other text.
@@ -224,7 +219,14 @@ data or a value the user has set.
 * `session.setCalculatedMeasurement(...)`, the direct cache setter. Plugins
   *return* results; they do not publish them. Use `CalculationPlugin` for
   several outputs.
-* `flysight_cpp_bridge.DependencyKey`. Use `attr()`, `meas()` and `source()`.
+* `flysight_cpp_bridge.DependencyKey`. Use `attr()` and `meas()`.
+* Source access (`source()`, `session.sourceMeasurement`, `session.sourceUnit`,
+  `session.hasSourceMeasurement`) is not offered: plugins read effective values
+  only. A plugin file that still imports `source` from the SDK fails to import
+  (none of its plugins load; the log names the file), and a plugin that still
+  declares a `source` key is rejected at startup.
+  A plugin that needs to know how the data was recorded can declare
+  `attr("SCHEMA_VER")` as an ordinary input.
 * The `Default*` example classes in the SDK.
 * ISO date strings are no longer converted to seconds (section 6).
 

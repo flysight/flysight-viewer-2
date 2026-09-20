@@ -26,13 +26,13 @@ The SDK provides five extension points:
 5. **SimpleMarker**: Register marker definitions that appear on the plot as
    reference or analysis markers (e.g., exit, start, max vertical speed)
 
-Effective and source values
----------------------------
-Ordinary reads (`session.getMeasurement`, declared with `meas()`) return the
+Effective values
+----------------
+Reads (`session.getMeasurement`, declared with `meas()`) return the
 *effective* values FlySight Viewer itself uses: corrected for the file's data
-schema and normalized to SI units, under the recorded names. Declaring
-`source(sensor, name)` additionally gives `session.sourceMeasurement` /
-`session.sourceUnit`: exactly what the file recorded, never computed.
+schema and normalized to SI units, under the recorded names. What the file
+literally recorded is not available to plugins; a plugin that needs to know
+how the data was recorded can declare `attr("SCHEMA_VER")` as an input.
 
 Every key read inside `compute()` must be returned by `inputs()`; any other
 read raises `UndeclaredInputError` and makes the result unavailable.
@@ -88,11 +88,10 @@ _markers:      List[SimpleMarker]      = []
 # ─── dependency keys ────────────────────────────────────────────────────
 KIND_ATTRIBUTE   = "attribute"
 KIND_MEASUREMENT = "measurement"
-KIND_SOURCE      = "source"
 
 @dataclass(frozen=True)
 class Key:
-    """A dependency key: hashable and comparable by value. Build one with attr(), meas() or source()."""
+    """A dependency key: hashable and comparable by value. Build one with attr() or meas()."""
     kind:   str
     sensor: str = ""
     name:   str = ""          # attribute key when kind == "attribute"
@@ -104,10 +103,6 @@ def attr(name: str) -> Key:
 def meas(sensor: str, name: str) -> Key:
     """Key of a measurement, read as its effective (corrected, SI) value (input or output)."""
     return Key(KIND_MEASUREMENT, sensor, name)
-
-def source(sensor: str, name: str) -> Key:
-    """Key of a measurement's recorded samples and unit text (input only)."""
-    return Key(KIND_SOURCE, sensor, name)
 
 
 # ─── base classes for plug-ins ─────────────────────────────────────────

@@ -141,11 +141,11 @@ private slots:
     void unknownKindRejectsPluginOnly();
     void registrationOrderIsDeterministic();
 
-    // undeclared reads, source access, stale views
+    // undeclared reads, no source access, stale views
     void undeclaredReadDiagnostic();
     void swallowedUndeclaredReadStillFails();
-    void undeclaredSourceRead();
-    void sourceOfDerivedNameIsAbsent();
+    void sourceKindIsUnknownToPlugins();
+    void derivedMeasurementReadsEffective();
     void staleViewRaises();
 
     // failures, return types, precedence
@@ -160,7 +160,7 @@ private slots:
     // multi-output (bundle) plugins
     void multiOutputRunsOnce();
     void partialBundle();
-    void sourceAccessMatchesCpp();
+    void effectiveReadAndUnitMatchCpp();
     void bundleExceptionPublishesNothing();
     void malformedBundles_data();
     void malformedBundles();
@@ -418,24 +418,23 @@ void PythonBridgeTest::registrationOrderIsDeterministic()
     // All attributes, then all measurements, then all calculations; files in
     // name order (imu_tilt, t_badkeys, t_multi, t_results, t_single, t_view, t_zdocs);
     // the index is the position in the SDK list, so a rejected plugin still
-    // consumes one (t_badkeys: attributes 0-6; t_multi: calculations 8-9).
+    // consumes one (t_badkeys: attributes 0-7; t_multi: calculations 8-9).
     const QStringList expected{
-        QStringLiteral("plugin.attr.7._PY_GOOD"),
-        QStringLiteral("plugin.attr.8._PY_RAISE"),
-        QStringLiteral("plugin.attr.9._PY_BOOL"),
-        QStringLiteral("plugin.attr.10._PY_LIST"),
-        QStringLiteral("plugin.attr.11._PY_NAN"),
-        QStringLiteral("plugin.attr.12._PY_NONE"),
-        QStringLiteral("plugin.attr.13._PY_INT"),
-        QStringLiteral("plugin.attr.14._PY_NPF"),
-        QStringLiteral("plugin.attr.15._PY_NPI"),
-        QStringLiteral("plugin.attr.16._PY_STR"),
-        QStringLiteral("plugin.attr.17._PY_WX0"),
-        QStringLiteral("plugin.attr.18._PY_FW"),
-        QStringLiteral("plugin.attr.19._PY_UNDECL"),
-        QStringLiteral("plugin.attr.20._PY_UNDECL_SW"),
-        QStringLiteral("plugin.attr.21._PY_UNDECL_SRC"),
-        QStringLiteral("plugin.attr.22._PY_SRC_WTOTAL"),
+        QStringLiteral("plugin.attr.8._PY_GOOD"),
+        QStringLiteral("plugin.attr.9._PY_RAISE"),
+        QStringLiteral("plugin.attr.10._PY_BOOL"),
+        QStringLiteral("plugin.attr.11._PY_LIST"),
+        QStringLiteral("plugin.attr.12._PY_NAN"),
+        QStringLiteral("plugin.attr.13._PY_NONE"),
+        QStringLiteral("plugin.attr.14._PY_INT"),
+        QStringLiteral("plugin.attr.15._PY_NPF"),
+        QStringLiteral("plugin.attr.16._PY_NPI"),
+        QStringLiteral("plugin.attr.17._PY_STR"),
+        QStringLiteral("plugin.attr.18._PY_WX0"),
+        QStringLiteral("plugin.attr.19._PY_FW"),
+        QStringLiteral("plugin.attr.20._PY_UNDECL"),
+        QStringLiteral("plugin.attr.21._PY_UNDECL_SW"),
+        QStringLiteral("plugin.attr.22._PY_VIEW_NO_SOURCE"),
         QStringLiteral("plugin.attr.23._PY_EFF_WTOTAL0"),
         QStringLiteral("plugin.attr.24._PY_STASH"),
         QStringLiteral("plugin.attr.25._PY_DURATION"),
@@ -453,7 +452,7 @@ void PythonBridgeTest::registrationOrderIsDeterministic()
         QStringLiteral("plugin.calc.0.ImuTilt"),
         QStringLiteral("plugin.calc.1.PyGyroStats"),
         QStringLiteral("plugin.calc.2.PyPartial"),
-        QStringLiteral("plugin.calc.3.PySourceProbe"),
+        QStringLiteral("plugin.calc.3.PyEffectiveProbe"),
         QStringLiteral("plugin.calc.4.PyBundleRaises"),
         QStringLiteral("plugin.calc.5.PyWrongKey"),
         QStringLiteral("plugin.calc.6.PyNotDict"),
@@ -467,7 +466,7 @@ void PythonBridgeTest::registrationOrderIsDeterministic()
     QCOMPARE(QStringList(all.mid(0, expected.size())), expected);
 }
 
-// ------------------------------ undeclared reads, source access, stale views
+// ------------------------------ undeclared reads, no source access, stale views
 
 void PythonBridgeTest::undeclaredReadDiagnostic()
 {
@@ -514,38 +513,54 @@ void PythonBridgeTest::swallowedUndeclaredReadStillFails()
             == CalcInput::attribute(QStringLiteral("FIRMWARE_VER")));
 }
 
-void PythonBridgeTest::undeclaredSourceRead()
+void PythonBridgeTest::sourceKindIsUnknownToPlugins()
 {
+    // A key of kind "source" is decoded like any other unrecognised kind: the
+    // plugin that declares it is rejected at load, by name, as an input ...
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+    QCOMPARE(rejectionsFor(QStringLiteral("t_badkeys.PySourceKind"),
+                           QStringLiteral("unknown dependency kind 'source'")), 1);
+    QVERIFY(!registry.hasCandidateFor(DependencyKey::attribute(QStringLiteral("_PY_SRCKIND"))));
+    QVERIFY(idEndingWith(QStringLiteral("._PY_SRCKIND")).isEmpty());
+    // ... and as an output.
+    QCOMPARE(rejectionsFor(QStringLiteral("t_multi.PySourceOutput"),
+                           QStringLiteral("unknown dependency kind 'source'")), 1);
+
+    // The other plugins of the same files still register.
+    QVERIFY(!idEndingWith(QStringLiteral("._PY_GOOD")).isEmpty());
+    QVERIFY(!idEndingWith(QStringLiteral(".PyGyroStats")).isEmpty());
+
+    // The SDK offers no way to build such a key, and the view no way to read
+    // the source layer: checked on the class and on a live view in compute().
+    {
+        py::gil_scoped_acquire gil;
+        const py::module_ sdk = py::module_::import("flysight_plugin_sdk");
+        QVERIFY(!py::hasattr(sdk, "source"));
+        QVERIFY(!py::hasattr(sdk, "KIND_SOURCE"));
+        const py::object view = py::module_::import("flysight_cpp_bridge").attr("SessionData");
+        for (const char *name : {"sourceMeasurement", "sourceUnit", "hasSourceMeasurement"})
+            QVERIFY2(!py::hasattr(view, name), name);
+        for (const char *name : {"getMeasurement", "getAttribute", "effectiveUnit",
+                                 "hasMeasurement", "hasAttribute"})
+            QVERIFY2(py::hasattr(view, name), name);
+    }
     SessionData session;
     QVERIFY(loadFixture(session));
-    const QString id = idEndingWith(QStringLiteral("._PY_UNDECL_SRC"));
-    QVERIFY(!id.isEmpty());
-
-    // Declaring meas() does not open the source layer.
-    QVERIFY(!session.getAttribute(QStringLiteral("_PY_UNDECL_SRC")).isValid());
-    QCOMPARE(session.calculationEngine().resultStatus(id), Status(ResultStatus::UndeclaredRead));
-    QVERIFY(session.calculationEngine().lastUndeclaredRead().second
-            == CalcInput::sourceMeasurement(QStringLiteral("IMU"), QStringLiteral("wx")));
+    QCOMPARE(session.getAttribute(QStringLiteral("_PY_VIEW_NO_SOURCE")).toDouble(), 1.0);
 }
 
-void PythonBridgeTest::sourceOfDerivedNameIsAbsent()
+void PythonBridgeTest::derivedMeasurementReadsEffective()
 {
     SessionData session;
     QVERIFY(loadFixture(session));
 
-    // The derived measurement is there for ordinary reads ...
+    // A derived measurement is an ordinary effective read for a plugin ...
     QVERIFY(near(session.getAttribute(QStringLiteral("_PY_EFF_WTOTAL0")).toDouble(), 160.2813526271849));
 
-    // ... but it has no source, in C++ and in Python alike: never a fallback.
+    // ... and has no source layer at all.
     QVERIFY(!session.hasSourceMeasurement(QStringLiteral("IMU"), QStringLiteral("wTotal")));
     QVERIFY(session.sourceMeasurement(QStringLiteral("IMU"), QStringLiteral("wTotal")).isEmpty());
     QCOMPARE(session.sourceUnit(QStringLiteral("IMU"), QStringLiteral("wTotal")), QString());
-
-    const QString id = idEndingWith(QStringLiteral("._PY_SRC_WTOTAL"));
-    QVERIFY(!id.isEmpty());
-    QVERIFY(!session.getAttribute(QStringLiteral("_PY_SRC_WTOTAL")).isValid());
-    QCOMPARE(session.calculationEngine().resultStatus(id), Status(ResultStatus::MissingInput));
-    QCOMPARE(session.calculationEngine().runCount(id), 0);
 }
 
 void PythonBridgeTest::staleViewRaises()
@@ -774,30 +789,27 @@ void PythonBridgeTest::partialBundle()
     QCOMPARE(session.calculationEngine().runCount(id), 1);
 }
 
-void PythonBridgeTest::sourceAccessMatchesCpp()
+void PythonBridgeTest::effectiveReadAndUnitMatchCpp()
 {
     SessionData session;
     QVERIFY(loadFixture(session));
     const QString imu = QStringLiteral("IMU");
     const QString ax = QStringLiteral("ax");
+    const QString id = QStringLiteral("plugin.calc.3.PyEffectiveProbe");
 
-    // Python's source reads are the C++ source reads: samples and unit text.
+    // Recorded as 1 g; the plugin sees what every other consumer sees.
     QCOMPARE(session.sourceMeasurement(imu, ax), (QVector<double>{1.0, 0.0}));
-    QCOMPARE(session.getMeasurement(imu, QStringLiteral("pySrcAx")), session.sourceMeasurement(imu, ax));
     QCOMPARE(session.sourceUnit(imu, ax), QStringLiteral("g"));
-    QCOMPARE(session.getAttribute(QStringLiteral("_PY_SRC_UNIT")).toString(), session.sourceUnit(imu, ax));
-
-    // ... next to the effective layer, in the same compute().
     QCOMPARE(session.effectiveUnit(imu, ax), QStringLiteral("m/s^2"));
     QCOMPARE(session.getAttribute(QStringLiteral("_PY_EFF_UNIT")).toString(), session.effectiveUnit(imu, ax));
     QVERIFY(near(session.getAttribute(QStringLiteral("_PY_EFF_AX0")).toDouble(), 9.80665));
-    QCOMPARE(session.getAttribute(QStringLiteral("_PY_HAS_SRC")).toDouble(), 1.0);
+    QCOMPARE(session.calculationEngine().runCount(id), 1);
 
-    // A source read is a tracked dependency.
+    // The recorded samples are still a tracked dependency, through the conversion.
     const QSet<DependencyKey> changed = session.setSourceMeasurement(imu, ax, {2.0, 0.0}, QStringLiteral("g"));
-    QVERIFY(changed.contains(DependencyKey::measurement(imu, QStringLiteral("pySrcAx"))));
-    QCOMPARE(session.getMeasurement(imu, QStringLiteral("pySrcAx")), (QVector<double>{2.0, 0.0}));
-    QCOMPARE(session.calculationEngine().runCount(QStringLiteral("plugin.calc.3.PySourceProbe")), 2);
+    QVERIFY(changed.contains(DependencyKey::attribute(QStringLiteral("_PY_EFF_AX0"))));
+    QVERIFY(near(session.getAttribute(QStringLiteral("_PY_EFF_AX0")).toDouble(), 2 * 9.80665));
+    QCOMPARE(session.calculationEngine().runCount(id), 2);
 }
 
 void PythonBridgeTest::bundleExceptionPublishesNothing()
@@ -862,7 +874,7 @@ void PythonBridgeTest::malformedBundles()
 
 void PythonBridgeTest::badOutputDeclarationsRejected()
 {
-    QCOMPARE(rejectionsFor(QStringLiteral("t_multi.PySourceOutput"), QStringLiteral("cannot be an output")), 1);
+    QCOMPARE(rejectionsFor(QStringLiteral("t_multi.PySourceOutput"), QStringLiteral("unknown dependency kind 'source'")), 1);
     QCOMPARE(rejectionsFor(QStringLiteral("t_multi.PyNoOutputs"), QStringLiteral("at least one")), 1);
     QVERIFY(idEndingWith(QStringLiteral(".PySourceOutput")).isEmpty());
     QVERIFY(idEndingWith(QStringLiteral(".PyNoOutputs")).isEmpty());

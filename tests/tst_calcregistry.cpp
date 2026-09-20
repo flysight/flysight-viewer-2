@@ -110,12 +110,9 @@ private slots:
     void declaredPreferenceKeys();
     void observersFire();
 
-    // Opt-in source inputs for the Python plugin host
-    void sourceInputsOptIn();
-
-    // staticDependencies() and the source-input opt-in compose: an opted-in
-    // source input is part of the static closure
-    void staticDependenciesCoverOptInSourceInputs();
+    // Only the conversion layer reads the source layer
+    void sourceInputsOnlyInSourceConversions();
+    void staticDependenciesFollowSourceConversions();
     void candidateOrderIgnoresUnrelatedOrder();
 };
 
@@ -681,52 +678,73 @@ void CalcRegistryTest::observersFire()
     registry.removeObserver(12345);     // unknown tokens are ignored
 }
 
-// ---- CalculationDescriptor::allowSourceInputs (Python plugin host) ---------
+// ---- only the conversion layer reads the source layer -----------------------
 
-void CalcRegistryTest::sourceInputsOptIn()
+namespace {
+
+// A family whose instance for S/m declares the source inputs of S/m plus `extra`.
+CalculationFamily sourceReadingFamily(const QString &id, const QList<CalcInput> &extra = {})
 {
-    CalculationRegistry registry;
-
-    CalculationDescriptor d = simple(QStringLiteral("reader"), QStringLiteral("out"));
-    d.inputs = {CalcInput::sourceMeasurement("S", "m"), CalcInput::sourceUnit("S", "m")};
-
-    // Default: a plain calculation may not read the source layer.
-    QVERIFY(!d.allowSourceInputs);
-    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("may read the source layer")));
-    QVERIFY(!registry.registerCalculation(d));
-    QVERIFY(!registry.contains(QStringLiteral("reader")));
-
-    // With the opt-in the same descriptor is accepted, as an ordinary candidate.
-    d.allowSourceInputs = true;
-    QVERIFY(registry.registerCalculation(d));
-    QVERIFY(registry.hasCandidateFor(attr("out")));
-    QVERIFY(registry.sourceConversionsFor(QStringLiteral("S"), QStringLiteral("m")).isEmpty());
-
-    // The flag opens nothing else: an own output as an input is still refused.
-    CalculationDescriptor own = simple(QStringLiteral("own"), QStringLiteral("own"));
-    own.allowSourceInputs = true;
-    own.inputs = {CalcInput::attribute("own")};
-    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("its own output")));
-    QVERIFY(!registry.registerCalculation(own));
+    CalculationFamily f;
+    f.id = id;
+    f.instantiate = [extra](const DependencyKey &name) -> std::optional<CalculationDescriptor> {
+        if (!(name == measKey("S", "m")))
+            return std::nullopt;
+        CalculationDescriptor d;
+        d.id = QStringLiteral("S/m");
+        d.inputs = QList<CalcInput>{CalcInput::sourceMeasurement("S", "m"), CalcInput::sourceUnit("S", "m")} + extra;
+        d.outputs = {name};
+        d.compute = [](const EvaluationContext &) { return CalculationResult(); };
+        return d;
+    };
+    return f;
 }
 
-// ---- staticDependencies() and the source-input opt-in compose --------------
+} // namespace
 
-// A logbook column fed by a source-reading plugin must refresh when its source
-// column is merged: staticDependencies has to see opt-in source inputs as the
-// public measurement name whose source layer they read.
-void CalcRegistryTest::staticDependenciesCoverOptInSourceInputs()
+void CalcRegistryTest::sourceInputsOnlyInSourceConversions()
 {
     CalculationRegistry registry;
 
-    CalculationDescriptor d = simple(QStringLiteral("srcProbe"), QStringLiteral("SRC0"));
-    d.allowSourceInputs = true;
-    d.inputs = {CalcInput::sourceMeasurement("S", "m"), CalcInput::sourceUnit("S", "m"),
-                CalcInput::attribute("A")};
+    // A plain calculation that declares a source input is refused, whatever
+    // else it declares; there is no way for a descriptor to ask for more.
+    CalculationDescriptor d = simple(QStringLiteral("reader"), QStringLiteral("out"));
+    d.inputs = {CalcInput::attribute("A"), CalcInput::sourceMeasurement("S", "m"), CalcInput::sourceUnit("S", "m")};
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("only source conversions may read the source layer")));
+    QVERIFY(!registry.registerCalculation(d));
+    QVERIFY(!registry.contains(QStringLiteral("reader")));
+    QVERIFY(!registry.hasCandidateFor(attr("out")));
+
+    // An ordinary family registers (its instances are made lazily), but an
+    // instance that declares a source input never matches.
+    QVERIFY(registry.registerFamily(sourceReadingFamily(QStringLiteral("fam"))));
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("only source conversions may read the source layer")));
+    QVERIFY(registry.candidatesFor(measKey("S", "m")).isEmpty());
+
+    // The same instance is accepted from a source conversion.
+    QVERIFY(registry.registerSourceConversion(sourceReadingFamily(QStringLiteral("conv"))));
+    const QList<CalculationInstance> list = registry.sourceConversionsFor("S", "m");
+    QCOMPARE(ids(list), QStringList({"conv#S/m"}));
+    QVERIFY(list.first().sourceConversion);
+}
+
+// A logbook column fed by a converted measurement must refresh when anything
+// its conversion reads changes: staticDependencies follows source conversions,
+// and a source input contributes the public measurement name.
+void CalcRegistryTest::staticDependenciesFollowSourceConversions()
+{
+    CalculationRegistry registry;
+    QVERIFY(registry.registerSourceConversion(
+        sourceReadingFamily(QStringLiteral("conv"), {CalcInput::attribute("K")})));
+
+    CalculationDescriptor d = simple(QStringLiteral("first"), QStringLiteral("M0"));
+    d.inputs = {CalcInput::measurement("S", "m")};
     QVERIFY(registry.registerCalculation(d));
 
-    const StaticDependencies deps = registry.staticDependencies(attr("SRC0"));
-    QCOMPARE(deps.names, QSet<DependencyKey>({attr("SRC0"), measKey("S", "m"), attr("A")}));
+    QCOMPARE(registry.staticDependencies(measKey("S", "m")).names,
+             QSet<DependencyKey>({measKey("S", "m"), attr("K")}));
+    const StaticDependencies deps = registry.staticDependencies(attr("M0"));
+    QCOMPARE(deps.names, QSet<DependencyKey>({attr("M0"), measKey("S", "m"), attr("K")}));
     QVERIFY(deps.preferences.isEmpty());
 }
 

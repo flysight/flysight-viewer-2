@@ -40,7 +40,7 @@ There are 24 executables plus the audit.
 
 | Test | Covers |
 |------|--------|
-| `tst_calcregistry` | Calculation engine: value types, registration order and validation, family instances, private registries, registration-derived static dependencies (including opt-in source inputs) |
+| `tst_calcregistry` | Calculation engine: value types, registration order and validation, family instances, private registries, registration-derived static dependencies (followed through source conversions), source inputs refused outside source conversions |
 | `tst_calcengine` | Calculation engine: resolution, caching, dependency recording, invalidation across sessions, explicit policy, preferences, families, measurement layers |
 | `tst_calcengine_safety` | Calculation engine: nested scopes, cycles (single and overlapping rings: the same literal answers for every read order), exceptions, re-entrancy guards |
 | `tst_calcengine_oracle` | Calculation engine: randomized (seeded) sequences, and randomized (seeded) topologies full of overlapping rings, compared against a fresh evaluation |
@@ -86,7 +86,7 @@ There are 24 executables plus the audit.
 
 | Test | Covers |
 |------|--------|
-| `tst_python_bridge` | The Python plugin bridge through the real embedded interpreter and the real `flysight_cpp_bridge` module (acceptance 17, plugin half): effective reads in single-output plugins, declared-read diagnostics (`UndeclaredInputError`), source access matching C++, the multi-output form running once, exceptions and malformed output giving a clean unavailable result with negative caching, returned arrays copied, explicit key decoding with per-plugin rejection, plugin-before-built-in precedence, the bundled `imu_tilt.py` example. See "The embedded-Python bridge test" below. `pluginWorkflowThroughModel`: a plugin-fed logbook column through import, save and restart (acceptance 17 / 19) |
+| `tst_python_bridge` | The Python plugin bridge through the real embedded interpreter and the real `flysight_cpp_bridge` module (acceptance 17, plugin half): effective reads in single-output plugins, declared-read diagnostics (`UndeclaredInputError`), effective values and units matching C++, no source access (a `source` key is an unknown kind; the view has no source methods), the multi-output form running once, exceptions and malformed output giving a clean unavailable result with negative caching, returned arrays copied, explicit key decoding with per-plugin rejection, plugin-before-built-in precedence, the bundled `imu_tilt.py` example. See "The embedded-Python bridge test" below. `pluginWorkflowThroughModel`: a plugin-fed logbook column through import, save and restart (acceptance 17 / 19) |
 
 **Audit**
 
@@ -226,7 +226,8 @@ build tree, and runs the SDK (`python_plugins/flysight_plugin_sdk.py`), the
 test plugins in `tests/python_plugins/*.py`, and the bundled example
 (`python_plugins/examples/imu_tilt.py`) against real `SessionData` objects. It
 covers acceptance 17 and the plugin half of acceptance 19: effective reads in existing
-single-output plugins, source access matching C++, the multi-output form
+single-output plugins, effective values and units matching C++, no source
+access from Python, the multi-output form
 running once, exceptions and malformed output giving a clean unavailable
 result, explicit key decoding, and registration-order precedence.
 `pluginhost.cpp` and `pluginadapters.cpp` are not part of `flysight_core`
@@ -507,7 +508,7 @@ keep the two in sync.
 | 16 | file-supplied `wTotal` wins | `tst_source_layer::fileSuppliedWTotalWins` |
 | 17 | single-output plugins, real bridge, effective reads | `tst_python_bridge::bootsRealBridge`, `singleOutputPluginsReadEffectiveValues` |
 | 17 | multi-output plugin runs once | `tst_python_bridge::multiOutputRunsOnce`, `bundledExampleRuns` |
-| 17 | source access from Python matches C++ (and reaches the column cache) | `tst_python_bridge::sourceAccessMatchesCpp`, `sourceOfDerivedNameIsAbsent`; `tst_calcregistry::staticDependenciesCoverOptInSourceInputs` |
+| 17 | plugin reads are effective values and units, matching C++; plugins have no source access | `tst_python_bridge::effectiveReadAndUnitMatchCpp`, `derivedMeasurementReadsEffective`, `sourceKindIsUnknownToPlugins`; `tst_calcregistry::sourceInputsOnlyInSourceConversions` |
 | 17 | Python exception: clean unavailable | `tst_python_bridge::exceptionYieldsCleanUnavailable`, `bundleExceptionPublishesNothing` |
 | 18 | upgrade discards and recomputes cached gyro columns | `tst_logbook_index::missingMarkerDiscardsValues`; `tst_column_cache::upgradeDiscardsAndRecomputes`; `tst_workflow::releasedLogbookUpgrade` |
 | 18 | a session edit refreshes only affected columns | `tst_column_cache::editRefreshesOnlyAffectedColumn_warm` / `_cold`, `markerEditRefreshesDependents`; `tst_import_merge::mergeEffects` |
@@ -538,8 +539,11 @@ takes about a second. It fails, listing **all** violations, when
 - names of the superseded import-time correction (`master` commit `4668f48`)
   or alternate column names (`wx_source`, `source:wx`) appear;
 - there is more than one `emit dependencyChanged`, a second caller of
-  `exportSession`, `mergeSessions`, or `importFile` in `src`, or a C++ file other
-  than the plugin host sets `allowSourceInputs`;
+  `exportSession`, `mergeSessions`, or `importFile` in `src`;
+- anything outside `src/conversion`, `src/engine` and the listed engine tests
+  declares a source input, or the name of the removed per-descriptor
+  permission to do so reappears in `src`, `tests`, `python_plugins`: only the
+  conversion layer reads the source layer;
 - a line of `tests/acceptance_map.txt` names a test function that does not
   exist, or an acceptance item 1-19 has no line.
 
@@ -619,9 +623,10 @@ stated independently rather than computed by the code under test.
     corrected values and follow source changes; a file-supplied `wTotal`
     keeps precedence over the derived one.
 17. Existing single-output Python plugins work through the real bridge with
-    effective reads; a multi-output plugin runs once across its outputs;
-    source access from Python matches C++; a Python exception yields a clean
-    unavailable result.
+    effective reads; a multi-output plugin runs once across its outputs; a
+    Python exception yields a clean unavailable result. (The original clause
+    "source access from Python matches C++" no longer applies: plugin source
+    access was removed by decision; plugins read effective values only.)
 18. Upgrading a logbook with cached gyro-dependent column values discards and
     recomputes them; a session edit refreshes only the affected columns.
 19. The full application builds and ordinary import, plot, marker, logbook,

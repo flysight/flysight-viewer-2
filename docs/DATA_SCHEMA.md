@@ -130,8 +130,10 @@ never appears in it because it happened to be computed.
 
 In C++ (`SessionData`): `getMeasurement` and `effectiveUnit` read the effective
 layer; `sourceMeasurement`, `sourceUnit`, `hasSourceMeasurement`, and
-`sourceData` read the source layer. For Python see
-[the plugin README](../python_plugins/README.md).
+`sourceData` read the source layer; they serve the exporter, the merge, and
+tests. Among calculations, only the conversion layer reads the source layer:
+every other calculation, built-in or Python plugin, reads effective values
+(for Python see [the plugin README](../python_plugins/README.md)).
 
 ## 6. The conversion layer
 

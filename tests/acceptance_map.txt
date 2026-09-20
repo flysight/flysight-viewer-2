@@ -154,12 +154,13 @@
 17 tst_python_bridge singleOutputPluginsReadEffectiveValues
 17 tst_python_bridge multiOutputRunsOnce
 17 tst_python_bridge bundledExampleRuns
-17 tst_python_bridge sourceAccessMatchesCpp
-17 tst_python_bridge sourceOfDerivedNameIsAbsent
+17 tst_python_bridge effectiveReadAndUnitMatchCpp
+17 tst_python_bridge derivedMeasurementReadsEffective
+17 tst_python_bridge sourceKindIsUnknownToPlugins
 17 tst_python_bridge exceptionYieldsCleanUnavailable
 17 tst_python_bridge bundleExceptionPublishesNothing
 17 tst_python_bridge pluginWorkflowThroughModel
-17 tst_calcregistry staticDependenciesCoverOptInSourceInputs
+17 tst_calcregistry sourceInputsOnlyInSourceConversions
 
 # 18 - upgrade discards and recomputes cached gyro columns; an edit refreshes only affected columns
 18 tst_logbook_index missingMarkerDiscardsValues

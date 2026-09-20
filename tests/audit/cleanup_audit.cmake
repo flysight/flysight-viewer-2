@@ -184,10 +184,19 @@ expect_none("pure compute functions"
   "PreferencesManager|QSettings|QDateTime::current|std::rand|QRandomGenerator|_SESSION_ID"
   src/calculations src/conversion src/engine)
 
-# ─────────────────────────────── source-input opt-in: the plugin host only
-# Allow: another legitimate setter is added to the allowed-file regex.
-expect_only("source-input opt-in" "allowSourceInputs *= *" "^src/pluginadapters\\.cpp$|^src/engine/calculationdescriptor\\.h$" src)
-expect_count("source-input opt-in (default)" "allowSourceInputs *= *false" 1 src/engine/calculationdescriptor.h)
+# ─────────────────────────────── only the conversion layer reads the source layer
+# The registry refuses a source input anywhere but in a source conversion, and
+# a descriptor has no field that says otherwise. The second rule finds code
+# that declares a source input (or tests for one) outside the conversion layer
+# and the engine.
+# Allow: a test that builds source conversions on a private registry, or that
+# proves a source input is refused, is added to the allowed-file regex. No file
+# under src outside src/conversion and src/engine ever is.
+expect_none("no source-input permission" "allowSourceInputs" src tests python_plugins)
+expect_only("source inputs: conversion layer only"
+  "CalcInput::source(Measurement|Unit)|Kind::Source(Measurement|Unit)|isSourceKind"
+  "^src/conversion/|^src/engine/|^tests/tst_calcregistry\\.cpp$|^tests/tst_calcengine\\.cpp$|^tests/tst_conversion_engine\\.cpp$"
+  src tests python_plugins)
 
 # ─────────────────────────────── one mutation path, one emission path
 # Allow: a new legitimate caller of exportSession( / mergeSessions( /

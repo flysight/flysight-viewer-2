@@ -1,6 +1,6 @@
-"""The session view: undeclared reads, source access, and the stale view."""
+"""The session view: undeclared reads, what it exposes, and the stale view."""
 import numpy as np
-from flysight_plugin_sdk import (AttributePlugin, UndeclaredInputError, meas, source,
+from flysight_plugin_sdk import (AttributePlugin, UndeclaredInputError, meas,
                                  register_attribute)
 
 stash = None
@@ -24,19 +24,13 @@ class PyUndeclaredSwallowed(AttributePlugin):
         return 1.0
 
 
-class PyUndeclaredSource(AttributePlugin):
-    name = "_PY_UNDECL_SRC"
+class PyViewSurface(AttributePlugin):
+    """1.0 iff the view offers no way to reach the source layer."""
+    name = "_PY_VIEW_NO_SOURCE"
     def inputs(self): return [meas("IMU", "wx")]
     def compute(self, session):
-        # The effective value is declared; the source layer is not.
-        return float(session.sourceMeasurement("IMU", "wx")[0])
-
-
-class PySrcOfDerived(AttributePlugin):
-    """IMU/wTotal is derived, never recorded: this must never run."""
-    name = "_PY_SRC_WTOTAL"
-    def inputs(self): return [source("IMU", "wTotal")]
-    def compute(self, session): return 1.0
+        gone = ("sourceMeasurement", "sourceUnit", "hasSourceMeasurement")
+        return 0.0 if any(hasattr(session, n) for n in gone) else 1.0
 
 
 class PyDerivedWTotal(AttributePlugin):
@@ -66,6 +60,6 @@ def poke_stale():
     return False
 
 
-for cls in (PyUndeclared, PyUndeclaredSwallowed, PyUndeclaredSource,
-            PySrcOfDerived, PyDerivedWTotal, PyStash):
+for cls in (PyUndeclared, PyUndeclaredSwallowed, PyViewSurface,
+            PyDerivedWTotal, PyStash):
     register_attribute(cls())

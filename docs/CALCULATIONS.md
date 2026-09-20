@@ -67,10 +67,10 @@ accepted the descriptor.
   inside `compute`. A calculation that consults anything else is not a function
   of state, and no invalidation scheme can make it correct.
 - Ordinary calculations cannot declare source inputs
-  (`CalcInput::sourceMeasurement` / `sourceUnit`). Only the two conversion
-  families depend on the source layer, with one exception: Python plugins that
-  declare `source()` inputs, for which the plugin host sets
-  `CalculationDescriptor::allowSourceInputs`. Never set it in C++.
+  (`CalcInput::sourceMeasurement` / `sourceUnit`): the registry refuses them
+  everywhere except in `registerSourceConversion`. Only the conversion layer
+  reads the source layer; everything else, Python plugins included, reads
+  effective values.
 
 ## 4. Multi-output calculations and partial results
 

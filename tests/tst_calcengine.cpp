@@ -90,8 +90,7 @@ private slots:
     void invalidOutputRejected();
     void clearDropsEverything();
     void rebindKeepsCaches();
-    // Engine opt-ins needed by the Python plugin bridge
-    void optInSourceRead();
+    // Needed by the Python plugin view
     void isDeclaredIsSilent();
 };
 
@@ -1026,90 +1025,7 @@ void CalcEngineTest::rebindKeepsCaches()
     w.engine.clear();
 }
 
-// ---- engine opt-ins needed by the Python plugin bridge ---------------------
-
-namespace {
-
-// The doubling conversion of sourceConversionHook, for every S/<name>.
-CalculationFamily doublingConversion()
-{
-    CalculationFamily conv;
-    conv.id = QStringLiteral("conv");
-    conv.instantiate = [](const DependencyKey &name) -> std::optional<CalculationDescriptor> {
-        if (name.type != DependencyKey::Type::Measurement || name.measurementKey.first != QLatin1String("S"))
-            return std::nullopt;
-        const QString sensor = name.measurementKey.first;
-        const QString meas = name.measurementKey.second;
-        CalculationDescriptor d;
-        d.id = sensor + QLatin1Char('/') + meas;
-        d.inputs = {CalcInput::sourceMeasurement(sensor, meas), CalcInput::sourceUnit(sensor, meas)};
-        d.outputs = {name};
-        d.compute = [sensor, meas](const EvaluationContext &ctx) {
-            QVector<double> values = ctx.sourceMeasurement(sensor, meas);
-            for (double &v : values)
-                v *= 2.0;
-            return CalculationResult().setMeasurement(sensor, meas, values, QStringLiteral("conv"));
-        };
-        return d;
-    };
-    return conv;
-}
-
-// A calculation with the plugin host's opt-in: SRC0 = first *source* sample of S/m.
-CalculationDescriptor sourceReader()
-{
-    CalculationDescriptor d;
-    d.id = QStringLiteral("srcReader");
-    d.inputs = {CalcInput::sourceMeasurement("S", "m"), CalcInput::sourceUnit("S", "m")};
-    d.outputs = {attr("SRC0")};
-    d.allowSourceInputs = true;
-    d.compute = [](const EvaluationContext &ctx) {
-        const QVector<double> values = ctx.sourceMeasurement("S", "m");
-        (void)ctx.sourceUnit("S", "m");
-        return CalculationResult().setAttribute("SRC0", values.first());
-    };
-    return d;
-}
-
-} // namespace
-
-// A calculation that opted in reads the recorded layer (never the converted
-// one), and the read is a tracked dependency like any other.
-void CalcEngineTest::optInSourceRead()
-{
-    {
-        World w(false);
-        QVERIFY(w.registry.registerSourceConversion(doublingConversion()));
-        QVERIFY(w.registry.registerCalculation(sourceReader()));
-        w.state.setMeasurement("S", "m", kOneTwoThree, "raw");
-
-        QCOMPARE(w.engine.measurement("S", "m"), (QVector<double>{2.0, 4.0, 6.0}));    // effective
-        QCOMPARE(w.engine.attribute("SRC0").toDouble(), 1.0);                          // source, not 2
-        QCOMPARE(w.engine.attribute("SRC0").toDouble(), 1.0);
-        QCOMPARE(w.engine.runCount("srcReader"), 1);
-        QCOMPARE(w.engine.dependenciesOf(GraphNode::result("srcReader")),
-                 QSet<GraphNode>({GraphNode::sourceMeasurement("S", "m"), GraphNode::sourceUnit("S", "m")}));
-
-        const Names changed = w.state.setMeasurement(w.engine, "S", "m", {5.0, 6.0, 7.0}, "raw");
-        QVERIFY(changed.contains(attr("SRC0")));
-        QCOMPARE(w.engine.attribute("SRC0").toDouble(), 5.0);
-        QCOMPARE(w.engine.runCount("srcReader"), 2);
-
-        const Names unitChanged = w.state.setUnit(w.engine, "S", "m", "cooked");
-        QVERIFY(unitChanged.contains(attr("SRC0")));
-        QCOMPARE(w.engine.attribute("SRC0").toDouble(), 5.0);
-        QCOMPARE(w.engine.runCount("srcReader"), 3);
-    }
-    {
-        // No source data: a missing input, and the calculation never runs.
-        World w(false);
-        QVERIFY(w.registry.registerSourceConversion(doublingConversion()));
-        QVERIFY(w.registry.registerCalculation(sourceReader()));
-        QVERIFY(!w.engine.attribute("SRC0").isValid());
-        QCOMPARE(w.engine.resultStatus("srcReader"), std::optional<ResultStatus>(ResultStatus::MissingInput));
-        QCOMPARE(w.engine.runCount("srcReader"), 0);
-    }
-}
+// ---- what the Python plugin view needs from the evaluation context --------
 
 // isDeclared answers without going down the undeclared-read path.
 void CalcEngineTest::isDeclaredIsSilent()

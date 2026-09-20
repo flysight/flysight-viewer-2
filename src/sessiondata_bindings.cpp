@@ -14,7 +14,7 @@ using namespace FlySight;
 namespace {
 
 // A new 1-D float64 array that OWNS A COPY of the samples. The QVector buffer
-// is implicitly shared with the source layer and the engine's cache, so it is
+// is implicitly shared with the session and the engine's cache, so it is
 // never exposed to Python, writable or not.
 py::array_t<double> copyToArray(const QVector<double> &values)
 {
@@ -43,7 +43,7 @@ void register_sessiondata(py::module_ &m) {
     py::register_exception<UndeclaredInputError>(m, "UndeclaredInputError", PyExc_RuntimeError);
 
     py::class_<PluginSessionView, std::shared_ptr<PluginSessionView>>(m, "SessionData")
-        // ---- effective layer: the key must be a declared attr() / meas() input
+        // Effective values only; the key must be a declared attr() / meas() input.
 
         // session.getMeasurement(sensor, measurement) -> numpy.ndarray (float64, private copy)
         .def("getMeasurement",
@@ -95,30 +95,5 @@ void register_sessiondata(py::module_ &m) {
                  return self.hasAttribute(qs(key));
              },
              py::arg("key"))
-
-        // ---- source layer: the key must be a declared source() input
-
-        // session.sourceMeasurement(sensor, measurement) -> numpy.ndarray (float64, private copy)
-        .def("sourceMeasurement",
-             [](PluginSessionView &self, const std::string &sensor, const std::string &measurement) {
-                 return copyToArray(self.sourceMeasurement(qs(sensor), qs(measurement)));
-             },
-             py::arg("sensorKey"),
-             py::arg("measurementKey"))
-
-        // session.sourceUnit(sensor, measurement) -> str (the recorded unit text; may be "")
-        .def("sourceUnit",
-             [](PluginSessionView &self, const std::string &sensor, const std::string &measurement) {
-                 return self.sourceUnit(qs(sensor), qs(measurement)).toStdString();
-             },
-             py::arg("sensorKey"),
-             py::arg("measurementKey"))
-
-        .def("hasSourceMeasurement",
-             [](PluginSessionView &self, const std::string &sensor, const std::string &measurement) {
-                 return self.hasSourceMeasurement(qs(sensor), qs(measurement));
-             },
-             py::arg("sensorKey"),
-             py::arg("measurementKey"))
         ;
 }
