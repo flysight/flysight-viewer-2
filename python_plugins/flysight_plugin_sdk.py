@@ -4,23 +4,42 @@ FlySight Plugin SDK
 
 This module provides the Python SDK for creating FlySight Viewer plugins.
 Plugins can define custom attributes, measurements, and plots that integrate
-seamlessly with the FlySight Viewer application.
+seamlessly with the FlySight Viewer application. The full guide is README.md,
+next to this file.
 
 Overview
 --------
-The SDK provides four main extension points:
+The SDK provides five extension points:
 
-1. **AttributePlugin**: Compute single-value attributes from session data
-   (e.g., start time, duration, exit time)
+1. **AttributePlugin**: Compute one single-value attribute from session data
+   (e.g., a duration, a peak value, a time in UTC seconds)
 
-2. **MeasurementPlugin**: Compute array-based measurements that align with
-   sensor timestamps (e.g., derived calculations, filtered data)
+2. **MeasurementPlugin**: Compute one array-based measurement that aligns with
+   a sensor's timestamps (e.g., derived calculations, filtered data)
 
-3. **SimplePlot**: Register plots that display measurements in the plot view
+3. **CalculationPlugin**: One computation that returns several declared
+   outputs (attributes and/or measurements) as a bundle
+
+4. **SimplePlot**: Register plots that display measurements in the plot view
    with automatic unit conversion support
 
-4. **SimpleMarker**: Register marker definitions that appear on the plot as
+5. **SimpleMarker**: Register marker definitions that appear on the plot as
    reference or analysis markers (e.g., exit, start, max vertical speed)
+
+Effective values
+----------------
+Reads (`session.getMeasurement`, declared with `meas()`) return the
+*effective* values FlySight Viewer itself uses: corrected for the file's data
+schema and normalized to SI units, under the recorded names. What the file
+literally recorded is not available to plugins; a plugin that needs to know
+how the data was recorded can declare `attr("SCHEMA_VER")` as an input.
+
+Every key read inside `compute()` must be returned by `inputs()`; any other
+read raises `UndeclaredInputError` and makes the result unavailable.
+
+Header attributes (`FIRMWARE_VER`, `SCHEMA_VER`, ...) are single-valued per
+session: a merged file with a different value is rejected (see README, 'Header
+attributes and the conflict rule').
 
 Unit Conversion
 ---------------
@@ -46,69 +65,130 @@ To create a simple plugin that registers a plot:
         measurement_type="speed"  # Enables m/s <-> mph conversion
     ))
 
-For more complex calculations, subclass AttributePlugin or MeasurementPlugin
-and implement the `inputs()` and `compute()` methods.
+For calculations, subclass AttributePlugin, MeasurementPlugin or
+CalculationPlugin and implement `inputs()` and `compute()` (see README.md and
+examples/imu_tilt.py).
 """
 from __future__ import annotations
 import numpy as np
-from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import List, Union, Optional
-# Pull in the C++ bridge for DependencyKey
-from flysight_cpp_bridge import DependencyKey
+from typing import Dict, List, Union, Optional
+# Raised by the session object for a read that inputs() did not declare.
+from flysight_cpp_bridge import UndeclaredInputError
 
 
-# ─── internal registries ────────────────────────────────────────────────
+# ─── internal registries (read by the host, in this order) ──────────────
 _attributes:   List[AttributePlugin]   = []
 _measurements: List[MeasurementPlugin] = []
+_calculations: List[CalculationPlugin] = []
 _simple_plots: List[SimplePlot]        = []
 _markers:      List[SimpleMarker]      = []
 
 
-# ─── helpers to construct DependencyKey ─────────────────────────────────
-def meas(sensor: str, name: str) -> DependencyKey:
-    k = DependencyKey()
-    k.kind            = DependencyKey.Type.Measurement
-    k.sensorKey       = sensor
-    k.measurementKey  = name
-    return k
+# ─── dependency keys ────────────────────────────────────────────────────
+KIND_ATTRIBUTE   = "attribute"
+KIND_MEASUREMENT = "measurement"
 
-def attr(name: str) -> DependencyKey:
-    k = DependencyKey()
-    k.kind           = DependencyKey.Type.Attribute
-    k.attributeKey   = name
-    return k
+@dataclass(frozen=True)
+class Key:
+    """A dependency key: hashable and comparable by value. Build one with attr() or meas()."""
+    kind:   str
+    sensor: str = ""
+    name:   str = ""          # attribute key when kind == "attribute"
+
+def attr(name: str) -> Key:
+    """Key of a session attribute (input or output)."""
+    return Key(KIND_ATTRIBUTE, "", name)
+
+def meas(sensor: str, name: str) -> Key:
+    """Key of a measurement, read as its effective (corrected, SI) value (input or output)."""
+    return Key(KIND_MEASUREMENT, sensor, name)
 
 
 # ─── base classes for plug-ins ─────────────────────────────────────────
 class AttributePlugin:
-    """Return a single QVariant-compatible value or small NumPy array."""
-    name:  str
-    units: Optional[str] = None
+    """One attribute, named by `name`.
 
-    def inputs(self) -> List[DependencyKey]:
+    Inputs: `compute()` may read only the keys returned by `inputs()` (read
+    once, at startup). All of them are required: the plugin runs only when
+    every one is available. Any other read raises UndeclaredInputError.
+    Return: `float` / `int` (NumPy scalars included), `str`, or `None` for "no
+    value". NaN / inf also mean "no value"; `bool`, lists and arrays are
+    rejected. Times are UTC seconds as `float`; strings are never parsed.
+    Errors: an exception or a malformed return gives an unavailable result,
+    logged once; the plugin is not called again until a declared input changes.
+    See README.md.
+    """
+    name:  str
+    units: Optional[str] = None     # informational only
+
+    def inputs(self) -> List[Key]:
         return []
 
-    def compute(self, session) -> Union[float, str]:
+    def compute(self, session) -> Union[float, int, str, None]:
+        """Return the attribute value: float | int | str | None (see the class docstring)."""
         raise NotImplementedError
 
 def register_attribute(plugin: AttributePlugin) -> None:
     _attributes.append(plugin)
 
 class MeasurementPlugin:
-    """Return a full-length NumPy array (one value per sample)."""
+    """One measurement, `sensor`/`name`, with the unit label `units`.
+
+    Inputs: `compute()` may read only the keys returned by `inputs()` (read
+    once, at startup). All of them are required: the plugin runs only when
+    every one is available. Any other read raises UndeclaredInputError.
+    Return: a 1-D real numeric array-like (NumPy array of a float / integer
+    dtype, list, tuple) with one value per sample of the sensor's time vector,
+    or `None` for "no value". NaN samples are gaps. The host copies the values,
+    so the returned buffer may be reused. Scalars, 2-D arrays, bool / string /
+    object arrays and `str` are rejected.
+    Errors: an exception or a malformed return gives an unavailable result,
+    logged once; the plugin is not called again until a declared input changes.
+    See README.md.
+    """
     name:   str
-    units:  Optional[str] = None
+    units:  Optional[str] = None    # reported as the measurement's effective unit
     sensor: str
 
-    def inputs(self) -> List[DependencyKey]:
+    def inputs(self) -> List[Key]:
         return []
 
-    def compute(self, session) -> np.ndarray:
+    def compute(self, session) -> Optional[np.ndarray]:
+        """Return a 1-D numeric array (one value per sample) or None (see the class docstring)."""
         raise NotImplementedError
 
 def register_measurement(plugin: MeasurementPlugin) -> None:
     _measurements.append(plugin)
+
+class CalculationPlugin:
+    """One computation, several declared outputs.
+
+    Inputs: as for the single-output forms - `inputs()` is read once, every
+    declared input is required, any other read raises UndeclaredInputError.
+    Outputs: `outputs()` returns at least one attr() / meas() key.
+    Return: a dict keyed by those same keys, with values typed as for
+    AttributePlugin / MeasurementPlugin. `None` as a value, or a missing entry,
+    makes that one output unavailable; returning `None` makes all of them
+    unavailable. A key that is not in `outputs()` or a malformed value means
+    nothing at all is published. The computation runs once per session however
+    many of its outputs are read.
+    Errors: as for the single-output forms. See README.md and examples/imu_tilt.py.
+    """
+    name:  str                      # optional; defaults to the class name
+    units: Dict[Key, str] = {}      # optional unit label per *measurement* output
+
+    def inputs(self) -> List[Key]:
+        return []
+
+    def outputs(self) -> List[Key]:
+        raise NotImplementedError
+
+    def compute(self, session) -> Optional[Dict[Key, object]]:
+        raise NotImplementedError
+
+def register_calculation(plugin: CalculationPlugin) -> None:
+    _calculations.append(plugin)
 
 @dataclass(frozen=True)
 class SimplePlot:
@@ -179,7 +259,8 @@ class SimpleMarker:
         short_label: Compact label shown in marker bubbles on the plot
         color: CSS color string for the marker (e.g., "#007ACC", "green")
         attribute_key: Unique session attribute key that stores the marker's time value
-        measurements: List of (sensor, measurement) tuples this marker relates to (default: empty)
+        measurements: List of (sensor, time_vector, data_vector) triples this marker relates to,
+            e.g. ("GNSS", "_time", "velH") (default: empty)
         editable: Whether the user can reposition this marker by dragging (default: False)
 
     Example:
@@ -189,7 +270,7 @@ class SimpleMarker:
             short_label="Max HS",
             color="#FF5722",
             attribute_key="_MAX_VELH_TIME",
-            measurements=[("GNSS", "velH")]
+            measurements=[("GNSS", "_time", "velH")]
         ))
     """
     category:      str
@@ -202,60 +283,3 @@ class SimpleMarker:
 
 def register_marker(meta: SimpleMarker) -> None:
     _markers.append(meta)
-
-
-# ─── default plug-ins ──────────────────────────────────────────────────
-class DefaultStartTime(AttributePlugin):
-    def __init__(self, sensor: str):
-        self.name   = "_START_TIME"
-        self.sensor = sensor
-    def inputs(self):
-        return [ meas(self.sensor, "_time") ]
-    def compute(self, session):
-        times = np.array(session.getMeasurement(self.sensor, "_time"), float)
-        if times.size == 0: return None
-        t0 = float(times.min())
-        dt = datetime.fromtimestamp(t0, tz=timezone.utc)
-        return dt.isoformat().replace("+00:00","Z")
-
-class DefaultDuration(AttributePlugin):
-    units = "s"
-    def __init__(self, sensor: str):
-        self.name   = "_DURATION"
-        self.sensor = sensor
-    def inputs(self):
-        return [ meas(self.sensor, "_time") ]
-    def compute(self, session):
-        times = np.array(session.getMeasurement(self.sensor, "_time"), float)
-        if times.size == 0: return None
-        dur = float(times.max() - times.min())
-        return dur if dur>=0 else None
-
-class DefaultExitTime(AttributePlugin):
-    def __init__(self, sensor: str):
-        self.name   = "_EXIT_TIME"
-        self.sensor = sensor
-    def inputs(self):
-        return [ meas(self.sensor, "_time") ]
-    def compute(self, session):
-        times = np.array(session.getMeasurement(self.sensor, "_time"), float)
-        if times.size == 0: return None
-        t0 = float(times[-1])
-        dt = datetime.fromtimestamp(t0, tz=timezone.utc)
-        return dt.isoformat().replace("+00:00","Z")
-
-class DefaultTime(MeasurementPlugin):
-    units = "s"
-    def __init__(self, sensor: str, time: str):
-        self.name   = "_time"
-        self.sensor = sensor
-        self.time   = time
-    def inputs(self):
-        return [
-            meas(self.sensor, self.time),
-        ]
-    def compute(self, session):
-        raw = np.array(session.getMeasurement(self.sensor, self.time), float)
-        if raw.size==0: return None
-        return raw 
-

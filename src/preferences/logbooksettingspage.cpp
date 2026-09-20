@@ -125,6 +125,19 @@ void LogbookSettingsPage::onAddColumn()
     AddColumnDialog dlg(this);
     if (dlg.exec() == QDialog::Accepted) {
         LogbookColumn col = dlg.result();
+
+        // A column that is already in the list is not added a second time:
+        // the existing entry is selected and switched on instead.
+        const QString key = logbookColumnDefinitionKey(col);
+        for (int row = 0; row < m_columns.size(); ++row) {
+            if (logbookColumnDefinitionKey(m_columns[row]) != key)
+                continue;
+            m_columnList->setCurrentRow(row);
+            m_columnList->item(row)->setCheckState(Qt::Checked);    // onItemChanged updates m_columns
+            m_columnList->scrollToItem(m_columnList->item(row));
+            return;
+        }
+
         m_columns.append(col);
 
         m_columnList->blockSignals(true);

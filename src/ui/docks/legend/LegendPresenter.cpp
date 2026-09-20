@@ -14,6 +14,7 @@
 
 #include <QHash>
 #include <QDateTime>
+#include <QTimeZone>
 #include <QVariant>
 
 #include <algorithm>
@@ -55,6 +56,24 @@ bool sessionOverlapsAtX(const SessionData &session,
 
     return false;
 }
+
+// What the legend shows for a moment, as plain values.
+struct LegendContent
+{
+    bool show = false;          // false: the legend is cleared
+    LegendWidget::Mode mode = LegendWidget::PointDataMode;
+    bool hasHeader = false;
+    QString sessionDesc;
+    QString utcText;
+    QString coordsText;
+    QVector<LegendWidget::Row> rows;
+};
+
+LegendContent legendContentForMoment(const SessionModel &sessionModel,
+                                     const MomentModel::Moment &moment,
+                                     const QVector<PlotValue> &enabledPlots,
+                                     const QString &xVariable,
+                                     const QString &referenceMarkerKey);
 
 } // namespace
 
@@ -188,11 +207,41 @@ void LegendPresenter::recompute()
         return;
     }
 
+    // The sessions are read, into plain values, while a row stability guard is
+    // held; the guard ends before the legend widget is updated.
+    LegendContent content;
+    {
+        const SessionModel::RowStabilityGuard guard(*m_sessionModel);
+        content = legendContentForMoment(*m_sessionModel, moment, enabledPlots,
+                                         xVariable, referenceMarkerKey);
+    }
+
+    if (!content.show) {
+        m_legendWidget->clear();
+        return;
+    }
+
+    m_legendWidget->setMode(content.mode);
+    if (content.hasHeader)
+        m_legendWidget->setHeader(content.sessionDesc, content.utcText, content.coordsText);
+    m_legendWidget->setRows(content.rows);
+}
+
+namespace {
+
+// Reads sessions through pointers into the model: the caller holds a
+// SessionModel::RowStabilityGuard for the whole call.
+LegendContent legendContentForMoment(const SessionModel &sessionModel,
+                                     const MomentModel::Moment &moment,
+                                     const QVector<PlotValue> &enabledPlots,
+                                     const QString &xVariable,
+                                     const QString &referenceMarkerKey)
+{
     // Build a fast id -> session lookup.
     QHash<QString, const SessionData *> sessionById;
-    sessionById.reserve(m_sessionModel->rowCount());
-    for (int si = 0; si < m_sessionModel->rowCount(); ++si) {
-        const SessionRow &sr = m_sessionModel->rowAt(si);
+    sessionById.reserve(sessionModel.rowCount());
+    for (int si = 0; si < sessionModel.rowCount(); ++si) {
+        const SessionRow &sr = sessionModel.rowAt(si);
         if (!sr.isLoaded()) continue;
         if (!sr.sessionId.isEmpty()) {
             sessionById.insert(sr.sessionId, &sr.session.value());
@@ -214,8 +263,8 @@ void LegendPresenter::recompute()
         }
     } else {
         // Auto-visible-overlap: derive from visible sessions that overlap at the moment's position.
-        for (int si = 0; si < m_sessionModel->rowCount(); ++si) {
-            const SessionRow &sr = m_sessionModel->rowAt(si);
+        for (int si = 0; si < sessionModel.rowCount(); ++si) {
+            const SessionRow &sr = sessionModel.rowAt(si);
             if (!sr.isLoaded() || !sr.visible)
                 continue;
 
@@ -239,8 +288,7 @@ void LegendPresenter::recompute()
     }
 
     if (targets.isEmpty()) {
-        m_legendWidget->clear();
-        return;
+        return LegendContent();
     }
 
     // Helper: compute the reference offset for a given session
@@ -259,21 +307,18 @@ void LegendPresenter::recompute()
         const QString targetSessionId = *targets.constBegin();
         const SessionData *session = sessionById.value(targetSessionId, nullptr);
         if (!session) {
-            m_legendWidget->clear();
-            return;
+            return LegendContent();
         }
 
         const auto utcOpt = utcSecondsForMoment(moment, *session);
         if (!utcOpt.has_value()) {
-            m_legendWidget->clear();
-            return;
+            return LegendContent();
         }
         const double utcSecs = *utcOpt;
 
         const auto xOpt = plotAxisXFromUtc(utcSecs, xVariable, referenceMarkerKey, *session);
         if (!xOpt.has_value()) {
-            m_legendWidget->clear();
-            return;
+            return LegendContent();
         }
         const double plotX = *xOpt;
 
@@ -308,8 +353,7 @@ void LegendPresenter::recompute()
         }
 
         if (!hasData) {
-            m_legendWidget->clear();
-            return;
+            return LegendContent();
         }
 
         // Header
@@ -324,7 +368,7 @@ void LegendPresenter::recompute()
         utcText = QStringLiteral("%1 UTC")
                       .arg(QDateTime::fromMSecsSinceEpoch(
                                qint64(utcSecs * 1000.0),
-                               Qt::UTC)
+                               QTimeZone::UTC)
                                .toString(QStringLiteral("yy-MM-dd HH:mm:ss.zzz")));
 
         const double lat = interpolateSessionMeasurement(*session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("lat"), utcSecs);
@@ -345,11 +389,15 @@ void LegendPresenter::recompute()
                              .arg(altUnit);
         }
 
-        m_legendWidget->setMode(LegendWidget::PointDataMode);
-        m_legendWidget->setHeader(sessionDesc, utcText, coordsText);
-        m_legendWidget->setRows(rows);
-
-        return;
+        LegendContent content;
+        content.show = true;
+        content.mode = LegendWidget::PointDataMode;
+        content.hasHeader = true;
+        content.sessionDesc = sessionDesc;
+        content.utcText = utcText;
+        content.coordsText = coordsText;
+        content.rows = rows;
+        return content;
     }
 
     // Prepend independent variable rows (e.g., time).
@@ -413,12 +461,16 @@ void LegendPresenter::recompute()
     }
 
     if (!hasData) {
-        m_legendWidget->clear();
-        return;
+        return LegendContent();
     }
 
-    m_legendWidget->setMode(LegendWidget::RangeStatsMode);
-    m_legendWidget->setRows(rows);
+    LegendContent content;
+    content.show = true;
+    content.mode = LegendWidget::RangeStatsMode;
+    content.rows = rows;
+    return content;
 }
+
+} // namespace
 
 } // namespace FlySight

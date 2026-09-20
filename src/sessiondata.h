@@ -6,16 +6,22 @@
 #include <QString>
 #include <QVector>
 #include <QVariant>
-#include <optional>
-#include <functional>
-#include "calculatedvalue.h"
+#include <QSet>
+#include <QStringList>
+#include <memory>
 #include "dependencykey.h"
-#include "dependencymanager.h"
+#include "engine/sessionstate.h"
 
 namespace FlySight {
 
+class CalculationEngine;
+
 namespace SessionKeys {
     constexpr char DeviceId[] = "DEVICE_ID";
+    /// Placeholder Viewer stores as DEVICE_ID when a new session's file records
+    /// none and no FLYSIGHT.TXT is found. Not a recorded fact: a merge treats
+    /// it as absent on either side.
+    constexpr char DeviceIdUnknown[] = "n/a";
     constexpr char SessionId[] = "SESSION_ID";
     constexpr char Description[] = "_DESCRIPTION";
     constexpr char ImportTime[] = "_IMPORT_TIME";
@@ -84,75 +90,123 @@ namespace SessionKeys {
     constexpr char PlanformArea[] = "_PLANFORM_AREA";
 }
 
-class SessionData {
-public:
-    using AttributeFunction = std::function<std::optional<QVariant>(SessionData&)>;
-    using MeasurementFunction = std::function<std::optional<QVector<double>>(SessionData&)>;
-    using MeasurementKey = QPair<QString, QString>;
+/// One column of the source layer: samples and unit text exactly as recorded.
+struct SourceColumn {
+    QVector<double> samples;
+    QString unit;               ///< recorded unit text, verbatim
 
-    SessionData() = default;
+    bool operator==(const SourceColumn &other) const
+    {
+        return samples == other.samples && unit == other.unit;
+    }
+    bool operator!=(const SourceColumn &other) const { return !(*this == other); }
+};
+using SourceSensor = QMap<QString, SourceColumn>;   ///< measurement name -> column
+using SourceData   = QMap<QString, SourceSensor>;   ///< sensor name -> columns
+
+/// One session: stored attributes, source measurements with their unit text,
+/// and - through a per-session CalculationEngine - every calculated value.
+///
+/// A measurement has one name and two layers behind it:
+///  - the SOURCE layer holds samples and unit text exactly as recorded. It is
+///    read only through the explicit source accessors, which never compute and
+///    never fall back to a derived value;
+///  - the EFFECTIVE layer is what ordinary reads (getMeasurement) return: the
+///    source passed through the built-in conversion layer (schema correction,
+///    then unit normalization), or a derived value when there is no source.
+///
+/// Ordinary attribute reads return the stored attribute when present and a
+/// calculated one otherwise. Enumeration and presence queries describe stored
+/// source data and stored attributes only.
+///
+/// Copying copies the stored state only; the copy computes its own values on
+/// demand, from a cold cache (so never copy a session just to read it). Copy
+/// assignment clears the target's cache without notifying its invalidation
+/// listener. Moving carries the engine (its cache and its invalidation listener)
+/// to the new object.
+class SessionData : public ISessionState {
+public:
+    SessionData();
+    SessionData(const SessionData &other);                 ///< state only: no engine, no cache, no listener
+    SessionData(SessionData &&other) noexcept;             ///< state and engine
+    SessionData &operator=(const SessionData &other);      ///< state only; keeps its own engine, cleared
+    SessionData &operator=(SessionData &&other) noexcept;  ///< state and engine
+    ~SessionData() override;
 
     bool isVisible() const;
     void setVisible(bool visible);
 
+    // Attributes. attributeKeys / hasAttribute describe stored attributes only.
     QStringList attributeKeys() const;
     bool hasAttribute(const QString &key) const;
-    QVariant getAttribute(const QString &key) const;
+    QVariant getAttribute(const QString &key) const;        ///< stored, else calculated
     QSet<DependencyKey> setAttribute(const QString &key, const QVariant &value);
     QSet<DependencyKey> removeAttribute(const QString &key);
 
-    /// Removes a dynamically-registered calculated attribute's global registration
-    /// and flushes this session's cached value for that key.
-    void unregisterCalculatedAttribute(const QString &key);
-
+    // ---- enumeration: stored source data only (never calculation outputs) ----
     QStringList sensorKeys() const;
     bool hasSensor(const QString &key) const;
     QStringList measurementKeys(const QString &sensorKey) const;
-    bool hasMeasurement(const QString& sensorKey, const QString& measurementKey) const;
+    bool hasMeasurement(const QString& sensorKey, const QString& measurementKey) const;  ///< == hasSourceMeasurement
+
+    // ---- effective layer: ordinary consumers; may run calculations ----------
+    /// Effective samples: the conversion layer's output for a measurement with
+    /// source data, a derived value otherwise, empty when unavailable.
     QVector<double> getMeasurement(const QString& sensorKey, const QString& measurementKey) const;
+    /// The unit the effective samples are expressed in: the normalized label
+    /// for a measurement with source data; for a derived measurement whatever
+    /// its calculation reported ("" = not reported); "" when unavailable.
+    QString effectiveUnit(const QString& sensorKey, const QString& measurementKey) const;
+
+    // ---- source layer: never computes, never touches the engine's cache ------
+    // (hasSourceMeasurement / sourceMeasurement / sourceUnit are declared with
+    // the ISessionState overrides below.)
+    /// Everything in the source layer. Shares the sample buffers.
+    SourceData sourceData() const;
+    /// Samples and unit text move together.
+    QSet<DependencyKey> setSourceMeasurement(const QString& sensorKey, const QString& measurementKey,
+                                             const QVector<double>& samples, const QString& unit);
+    /// Bulk source-set path (import, merge): every incoming column replaces the
+    /// same-named column or is added, samples and unit together; columns and
+    /// sensors not mentioned are kept. Shares the incoming sample buffers.
+    QSet<DependencyKey> mergeSourceData(const SourceData &incoming);
+    /// Replaces the source samples; the recorded unit text is kept.
     QSet<DependencyKey> setMeasurement(const QString& sensorKey, const QString& measurementKey, const QVector<double>& data);
+    /// Replaces the recorded unit text. A measurement without source data has
+    /// no unit to set: warns, stores nothing, returns an empty set.
+    QSet<DependencyKey> setUnit(const QString& sensorKey, const QString& measurementKey, const QString& unitString);
 
-    void setUnit(const QString& sensorKey, const QString& measurementKey, const QString& unitString);
-    QString getUnit(const QString& sensorKey, const QString& measurementKey) const;
-    QMap<QString, QString> units(const QString& sensorKey) const;
-    void setCalculatedAttribute(const QString &key, const QVariant &value);
-    void setCalculatedMeasurement(const QString& sensorKey, const QString& measurementKey, const QVector<double>& data);
+    /// This session's engine, created on first use and bound to
+    /// CalculationRegistry::instance(). For SessionModel (invalidation
+    /// listener) and tests (run counts, the fresh-evaluation oracle).
+    CalculationEngine &calculationEngine() const;
 
-    static bool hasRegisteredCalculation(const QString &key);
+    /// Builds an interpolation key: "{timeAttr}:{sensor}/{timeVector}/{dataVector}"
+    static QString interpolationKey(const QString &timeAttr,
+                                    const QString &sensor,
+                                    const QString &timeVector,
+                                    const QString &dataVector);
 
-    static void registerCalculatedAttribute(const QString &key,
-                                            const QList<DependencyKey>& dependencies, AttributeFunction func);
-    static void registerCalculatedMeasurement(const QString &sensorKey, const QString &measurementKey,
-                                              const QList<DependencyKey>& dependencies, MeasurementFunction func);
+    // ISessionState: pure reads of the stored state, for the engine - and the
+    // explicit source accessors for everything that must see recorded data
+    // (exporter, merge). They never compute and never create the engine.
+    // Absence is reported by value: false / empty vector / empty string. The
+    // source of a purely derived name (e.g. IMU/wTotal) is absent.
+    bool hasStoredAttribute(const QString &key) const override;
+    QVariant storedAttribute(const QString &key) const override;
+    bool hasSourceMeasurement(const QString &sensor, const QString &name) const override;
+    QVector<double> sourceMeasurement(const QString &sensor, const QString &name) const override;
+    QString sourceUnit(const QString &sensor, const QString &name) const override;   ///< "" unless hasSourceMeasurement
 
-    void addDependencies(const DependencyKey& thisKey,
-                         const QList<DependencyKey>& deps) {
-        m_dependencyManager.registerDependencies(thisKey, deps);
-    }
 private:
     bool m_visible = false;
     QMap<QString, QVariant> m_attributes;
     QMap<QString, QMap<QString, QVector<double>>> m_sensors;
     QMap<QString, QMap<QString, QString>> m_units;
 
-    CalculatedValue<QString, QVariant> m_calculatedAttributes;
-    CalculatedValue<MeasurementKey, QVector<double>> m_calculatedMeasurements;
-
-    DependencyManager m_dependencyManager;
-
-    QVariant computeAttribute(const QString &key) const;
-    QVariant synthesizeInterpolation(const QString &key) const;
-
-public:
-    /// Builds an interpolation key: "{timeAttr}:{sensor}/{timeVector}/{dataVector}"
-    static QString interpolationKey(const QString &timeAttr,
-                                    const QString &sensor,
-                                    const QString &timeVector,
-                                    const QString &dataVector);
-private:
-    QVector<double> computeMeasurement(const QString &sensorKey, const QString &measurementKey) const;
-
-    friend class DataImporter;
+    // Lazily created. It points back at this object, so it is rebound when it
+    // moves with the session and is never shared or copied.
+    mutable std::unique_ptr<CalculationEngine> m_engine;
 };
 
 } // namespace FlySight

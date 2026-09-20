@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QSet>
 #include <QTimer>
+#include <functional>
 #include <memory>
 #include <optional>
 #include "QCustomPlot/qcustomplot.h"
@@ -126,10 +127,14 @@ public slots:
     void onXVariableChanged(const QString &newXVariable);
     void onReferenceMarkerKeyChanged(const QString &oldKey, const QString &newKey);
     void zoomToExtent();
-    void zoomToExtent(const QVector<SessionData> &sessions);
+    /// Frames the given sessions. Each id is resolved to the model's own live
+    /// (warm) session when it is read (SessionModel::forEachLoadedSession); ids
+    /// without a loaded row are skipped, and nothing is loaded or evicted.
+    void zoomToExtent(const QStringList &sessionIds);
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
+    void changeEvent(QEvent *event) override;
 
 private slots:
     void onHoveredSessionChanged(const QString& sessionId);
@@ -159,7 +164,11 @@ private:
     void writeMouseMoment(const QPoint &pixelPos, const QSet<QString> &tracedSessions);
 
     // View management
-    const SessionData* referenceSession() const;
+    /// Calls `fn` with the reference session (the hovered session, else the
+    /// first visible one) under a SessionModel::RowStabilityGuard; false when
+    /// there is none. `fn` must only read, and the reference is not valid
+    /// after it returns.
+    bool withReferenceSession(const std::function<void(const SessionData &)> &fn) const;
     std::optional<double> referenceOffsetForSession(const SessionData &session) const;
     QCPRange keyRangeOf(const SessionData& s,
                         const QString& sensor,

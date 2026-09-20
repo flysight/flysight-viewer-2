@@ -1,5 +1,6 @@
 #include "logbookcolumn.h"
 
+#include <QHash>
 #include <QSettings>
 
 #include "attributeregistry.h"
@@ -96,6 +97,51 @@ QString FlySight::logbookColumnLabel(const LogbookColumn &col)
 }
 
 // ============================================================================
+// Column identity
+// ============================================================================
+
+QString FlySight::logbookColumnDefinitionKey(const LogbookColumn &col)
+{
+    switch (col.type) {
+    case ColumnType::SessionAttribute:
+        return QStringLiteral("SessionAttribute|") + col.attributeKey;
+    case ColumnType::MeasurementAtMarker:
+        return QStringLiteral("MeasurementAtMarker|")
+               + col.sensorID + QStringLiteral("|")
+               + col.measurementID + QStringLiteral("|")
+               + col.measurementType + QStringLiteral("|")
+               + col.markerAttributeKey;
+    case ColumnType::Delta:
+        return QStringLiteral("Delta|")
+               + col.sensorID + QStringLiteral("|")
+               + col.measurementID + QStringLiteral("|")
+               + col.measurementType + QStringLiteral("|")
+               + col.markerAttributeKey + QStringLiteral("|")
+               + col.marker2AttributeKey;
+    }
+    return QString();
+}
+
+QVector<LogbookColumn> FlySight::uniqueLogbookColumns(const QVector<LogbookColumn> &columns)
+{
+    QVector<LogbookColumn> result;
+    result.reserve(columns.size());
+
+    QHash<QString, int> keptIndex;      // definition key -> index in result
+    for (const LogbookColumn &col : columns) {
+        const QString key = logbookColumnDefinitionKey(col);
+        const auto it = keptIndex.constFind(key);
+        if (it == keptIndex.constEnd()) {
+            keptIndex.insert(key, result.size());
+            result.append(col);
+        } else if (col.enabled) {
+            result[it.value()].enabled = true;
+        }
+    }
+    return result;
+}
+
+// ============================================================================
 // LogbookColumnStore
 // ============================================================================
 
@@ -131,10 +177,13 @@ QVector<LogbookColumn> LogbookColumnStore::enabledColumns() const
 
 void LogbookColumnStore::setColumns(const QVector<LogbookColumn> &columns)
 {
-    if (columns == m_columns)
+    // Two columns with one definition share a single cached value in the
+    // logbook index, so the list never holds more than one of them.
+    const QVector<LogbookColumn> unique = uniqueLogbookColumns(columns);
+    if (unique == m_columns)
         return;
 
-    m_columns = columns;
+    m_columns = unique;
     save();
     emit columnsChanged();
 }
@@ -167,6 +216,14 @@ void LogbookColumnStore::load()
         m_columns.append(col);
     }
     settings.endArray();
+
+    // Settings written before duplicates were refused may hold some: collapse
+    // them and write the cleaned list back so this happens once.
+    const QVector<LogbookColumn> unique = uniqueLogbookColumns(m_columns);
+    if (unique.size() != m_columns.size()) {
+        m_columns = unique;
+        save();
+    }
 
     if (m_columns.isEmpty())
         loadDefaults();

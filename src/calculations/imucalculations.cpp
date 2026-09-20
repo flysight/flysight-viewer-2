@@ -1,72 +1,63 @@
 #include "imucalculations.h"
 #include "../sessiondata.h"
 #include "../dependencykey.h"
+#include "registration.h"
 #include <QVector>
 #include <cmath>
 
 using namespace FlySight;
 
-void Calculations::registerImuCalculations()
+namespace {
+
+// Registers builtin.imu.<output>: the magnitude of the vector (x, y, z).
+void registerImuMagnitude(CalculationRegistry &registry, const char *output,
+                          const char *x, const char *y, const char *z)
+{
+    const QString outputName = QString::fromLatin1(output);
+    const QString xName = QString::fromLatin1(x);
+    const QString yName = QString::fromLatin1(y);
+    const QString zName = QString::fromLatin1(z);
+
+    CalculationDescriptor d;
+    d.id = QStringLiteral("builtin.imu.") + outputName;
+    d.inputs = {
+        CalcInput::measurement("IMU", xName),
+        CalcInput::measurement("IMU", yName),
+        CalcInput::measurement("IMU", zName)
+    };
+    d.outputs = { DependencyKey::measurement("IMU", outputName) };
+    d.compute = [outputName, xName, yName, zName](const EvaluationContext &ctx) -> CalculationResult {
+        QVector<double> vx = ctx.measurement("IMU", xName);
+        QVector<double> vy = ctx.measurement("IMU", yName);
+        QVector<double> vz = ctx.measurement("IMU", zName);
+
+        if (vx.isEmpty() || vy.isEmpty() || vz.isEmpty()) {
+            qWarning() << "Cannot calculate" << outputName << "due to missing" << xName << yName << "or" << zName;
+            return CalculationResult::unavailable();
+        }
+
+        if ((vx.size() != vy.size()) || (vx.size() != vz.size())) {
+            qWarning() << xName << yName << "or" << zName << "size mismatch";
+            return CalculationResult::unavailable();
+        }
+
+        QVector<double> total;
+        total.reserve(vx.size());
+        for(int i = 0; i < vx.size(); ++i){
+            total.append(std::sqrt(vx[i]*vx[i] + vy[i]*vy[i] + vz[i]*vz[i]));
+        }
+        return CalculationResult().setMeasurement("IMU", outputName, total);
+    };
+    Calculations::addCalculation(registry, d);
+}
+
+} // namespace
+
+void Calculations::registerImuCalculations(CalculationRegistry &registry)
 {
     // IMU total acceleration (aTotal)
-    SessionData::registerCalculatedMeasurement(
-        "IMU", "aTotal",
-        {
-            DependencyKey::measurement("IMU", "ax"),
-            DependencyKey::measurement("IMU", "ay"),
-            DependencyKey::measurement("IMU", "az")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> ax = session.getMeasurement("IMU", "ax");
-        QVector<double> ay = session.getMeasurement("IMU", "ay");
-        QVector<double> az = session.getMeasurement("IMU", "az");
-
-        if (ax.isEmpty() || ay.isEmpty() || az.isEmpty()) {
-            qWarning() << "Cannot calculate aTotal due to missing ax, ay, or az";
-            return std::nullopt;
-        }
-
-        if ((ax.size() != ay.size()) || (ax.size() != az.size())) {
-            qWarning() << "az, ay, or az size mismatch in session:" << session.getAttribute("_SESSION_ID");
-            return std::nullopt;
-        }
-
-        QVector<double> aTotal;
-        aTotal.reserve(ax.size());
-        for(int i = 0; i < ax.size(); ++i){
-            aTotal.append(std::sqrt(ax[i]*ax[i] + ay[i]*ay[i] + az[i]*az[i]));
-        }
-        return aTotal;
-    });
+    registerImuMagnitude(registry, "aTotal", "ax", "ay", "az");
 
     // IMU total angular velocity (wTotal)
-    SessionData::registerCalculatedMeasurement(
-        "IMU", "wTotal",
-        {
-            DependencyKey::measurement("IMU", "wx"),
-            DependencyKey::measurement("IMU", "wy"),
-            DependencyKey::measurement("IMU", "wz")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> wx = session.getMeasurement("IMU", "wx");
-        QVector<double> wy = session.getMeasurement("IMU", "wy");
-        QVector<double> wz = session.getMeasurement("IMU", "wz");
-
-        if (wx.isEmpty() || wy.isEmpty() || wz.isEmpty()) {
-            qWarning() << "Cannot calculate wTotal due to missing wx, wy, or wz";
-            return std::nullopt;
-        }
-
-        if ((wx.size() != wy.size()) || (wx.size() != wz.size())) {
-            qWarning() << "wz, wy, or wz size mismatch in session:" << session.getAttribute("_SESSION_ID");
-            return std::nullopt;
-        }
-
-        QVector<double> wTotal;
-        wTotal.reserve(wx.size());
-        for(int i = 0; i < wx.size(); ++i){
-            wTotal.append(std::sqrt(wx[i]*wx[i] + wy[i]*wy[i] + wz[i]*wz[i]));
-        }
-        return wTotal;
-    });
+    registerImuMagnitude(registry, "wTotal", "wx", "wy", "wz");
 }

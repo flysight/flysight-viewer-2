@@ -195,7 +195,7 @@ void AltitudeMarkersSettingsPage::saveSettings()
     settings.endArray();
 
     // Now write scalar prefs — each may trigger preferenceChanged -> refresh(),
-    // but the array is already persisted so registerAll() reads the correct data.
+    // but the array is already persisted so refresh() reads the correct data.
     prefs.setValue(PreferenceKeys::AltitudeMarkersUnits, units);
     prefs.setValue(PreferenceKeys::AltitudeMarkersColor, m_currentColor);
     prefs.setValue(PreferenceKeys::AltitudeMarkersSize, altitudes.size());

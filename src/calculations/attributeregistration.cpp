@@ -21,7 +21,7 @@ void FlySight::registerBuiltInAttributes() {
         QStringLiteral("Device Name"),
         SessionKeys::DeviceId,
         AttributeFormatType::Text,
-        true
+        false   // recorded by the device: a header attribute is never edited
     });
 
     reg.registerAttribute({

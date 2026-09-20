@@ -4,66 +4,213 @@
 #include "../markerregistry.h"
 #include "../attributeregistry.h"
 #include "../units/unitdefinitions.h"
+#include "registration.h"
 #include <GeographicLib/Geodesic.hpp>
 #include <QColor>
+#include <algorithm>
+#include <optional>
 
 using namespace FlySight;
 
-void Calculations::registerWspCalculations()
+namespace {
+
+// Everything the window-gate computation can produce. A disengaged member is
+// an output that could not be determined (a partial result).
+struct WspResults {
+    std::optional<double> entryTime, exitTime;
+    std::optional<double> entryLat, entryLon, exitLat, exitLon;
+    std::optional<double> timeResult, distResult, speedResult, sepResult;
+};
+
+// Window gate crossings and results.
+//  - no entry crossing: nothing is set;
+//  - entry but no exit crossing: only the three entry members;
+//  - speed only when the time result is positive;
+//  - SEP only when the validation window contains a sample.
+WspResults computeWspResults(double topAlt, double bottomAlt, double exitTime,
+                             const QVariant &ref1Var,
+                             const QVector<double> &z, const QVector<double> &lat,
+                             const QVector<double> &lon, const QVector<double> &time,
+                             const QVector<double> &hAcc, const QVector<double> &vAcc)
 {
-    // ── Group A: Parameter defaults (5 calculated attributes) ──────────
+    WspResults results;
 
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspVersion,
-        {},
-        [](SessionData&) -> std::optional<QVariant> {
-            return QVariant(QStringLiteral("1.0"));
-        });
+    if (z.isEmpty() || lat.isEmpty() || lon.isEmpty() || time.isEmpty())
+        return results;
+    if (z.size() != time.size() || lat.size() != time.size() || lon.size() != time.size())
+        return results;
 
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspTopAlt,
-        {},
-        [](SessionData&) -> std::optional<QVariant> {
-            return QVariant(2500.0);
-        });
+    const int n = z.size();
 
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspBottomAlt,
-        {},
-        [](SessionData&) -> std::optional<QVariant> {
-            return QVariant(1500.0);
-        });
+    // Find the starting index: first sample where time >= exitTime
+    int startIdx = -1;
+    for (int i = 0; i < n; ++i) {
+        if (time[i] >= exitTime) {
+            startIdx = i;
+            break;
+        }
+    }
+    if (startIdx < 0)
+        return results;
 
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspTask,
-        {},
-        [](SessionData&) -> std::optional<QVariant> {
-            return QVariant(QStringLiteral("Time"));
-        });
+    // Find window entry (first downward crossing of topAlt starting from startIdx)
+    double entryTime = 0.0;
+    double entryLat  = 0.0;
+    double entryLon  = 0.0;
+    bool foundEntry  = false;
+
+    for (int i = std::max(startIdx, 1); i < n; ++i) {
+        if (z[i - 1] >= topAlt && z[i] < topAlt) {
+            double a = (topAlt - z[i - 1]) / (z[i] - z[i - 1]);
+            entryTime = time[i - 1] + a * (time[i] - time[i - 1]);
+            entryLat  = lat[i - 1]  + a * (lat[i]  - lat[i - 1]);
+            entryLon  = lon[i - 1]  + a * (lon[i]  - lon[i - 1]);
+            foundEntry = true;
+            startIdx = i; // continue search from here for the bottom gate
+            break;
+        }
+    }
+
+    if (!foundEntry)
+        return results;     // no entry crossing: every result is unavailable
+
+    results.entryTime = entryTime;
+    results.entryLat  = entryLat;
+    results.entryLon  = entryLon;
+
+    // Find window exit (first downward crossing of bottomAlt after entry)
+    double wspExitTime = 0.0;
+    double exitLat     = 0.0;
+    double exitLon     = 0.0;
+    bool foundExit     = false;
+    int exitIdx        = -1;
+
+    for (int i = startIdx; i < n; ++i) {
+        if (i < 1) continue;
+        if (z[i - 1] >= bottomAlt && z[i] < bottomAlt) {
+            double a = (bottomAlt - z[i - 1]) / (z[i] - z[i - 1]);
+            wspExitTime = time[i - 1] + a * (time[i] - time[i - 1]);
+            exitLat     = lat[i - 1]  + a * (lat[i]  - lat[i - 1]);
+            exitLon     = lon[i - 1]  + a * (lon[i]  - lon[i - 1]);
+            foundExit   = true;
+            exitIdx     = i;
+            break;
+        }
+    }
+
+    if (!foundExit)
+        return results;     // entry found but no exit crossing
+
+    results.exitTime = wspExitTime;
+    results.exitLat  = exitLat;
+    results.exitLon  = exitLon;
+
+    // Compute derived results
+    double timeResult = wspExitTime - entryTime;
+    results.timeResult = timeResult;
+
+    double dist = 0.0;
+    GeographicLib::Geodesic::WGS84().Inverse(entryLat, entryLon, exitLat, exitLon, dist);
+    results.distResult = dist;
+
+    if (timeResult > 0.0)
+        results.speedResult = dist / timeResult;
+
+    // Compute max SEP within the validation window.
+    // Start: Lane Reference 1 (9 s after vertical speed first reaches 10 m/s).
+    // End:   20 m below the bottom of the competition window.
+    // (Ref1 time is a declared input, so it is always present here.)
+    if (hAcc.size() == n && vAcc.size() == n) {
+        double ref1Time = ref1Var.toDouble();
+
+        // Find first sample at or after Ref1 time
+        int valStart = -1;
+        for (int i = 0; i < n; ++i) {
+            if (time[i] >= ref1Time) {
+                valStart = i;
+                break;
+            }
+        }
+
+        // Search forward from exit crossing until altitude <= bottomAlt - 20
+        int valEnd = exitIdx;
+        for (int i = exitIdx + 1; i < n; ++i) {
+            if (z[i] <= bottomAlt - 20.0)
+                break;
+            valEnd = i;
+        }
+
+        double maxSep = -1.0;
+        if (valStart >= 0 && valStart <= valEnd) {
+            for (int i = valStart; i <= valEnd; ++i) {
+                double sep = 0.5127 * (2.0 * hAcc[i] + vAcc[i]);
+                if (sep > maxSep)
+                    maxSep = sep;
+            }
+        }
+
+        if (maxSep >= 0.0)
+            results.sepResult = maxSep;
+    }
+
+    return results;
+}
+
+// Registers a parameter default: no inputs, one constant output. A stored
+// attribute of the same name (the user's choice) takes precedence.
+void registerWspDefault(CalculationRegistry &registry, const QString &id,
+                        const char *key, const QVariant &value)
+{
+    const QString outputKey = QString::fromLatin1(key);
+
+    CalculationDescriptor d;
+    d.id = id;
+    d.outputs = { DependencyKey::attribute(outputKey) };
+    d.compute = [outputKey, value](const EvaluationContext &) -> CalculationResult {
+        return CalculationResult().setAttribute(outputKey, value);
+    };
+    Calculations::addCalculation(registry, d);
+}
+
+} // namespace
+
+void Calculations::registerWspCalculations(CalculationRegistry &registry)
+{
+    // ── Group A: Parameter defaults ────────────────────────────────────
+
+    registerWspDefault(registry, QStringLiteral("builtin.wsp.default.version"),
+                       SessionKeys::WspVersion, QVariant(QStringLiteral("1.0")));
+    registerWspDefault(registry, QStringLiteral("builtin.wsp.default.topAlt"),
+                       SessionKeys::WspTopAlt, QVariant(2500.0));
+    registerWspDefault(registry, QStringLiteral("builtin.wsp.default.bottomAlt"),
+                       SessionKeys::WspBottomAlt, QVariant(1500.0));
+    registerWspDefault(registry, QStringLiteral("builtin.wsp.default.task"),
+                       SessionKeys::WspTask, QVariant(QStringLiteral("Time")));
 
     // ── Group A2: Lane Reference 1 (Ref1) ─────────────────────────────
     // Ref1 = 9 seconds after the competitor's vertical speed first
     // reaches 10 m/s (starting from exit).  Used as the validation
     // window start and, later, as a lane reference endpoint.
-
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspRef1Time,
-        {
-            DependencyKey::attribute(SessionKeys::ExitTime),
-            DependencyKey::measurement("GNSS", "velD"),
-            DependencyKey::measurement("GNSS", SessionKeys::Time)
-        },
-        [](SessionData& session) -> std::optional<QVariant> {
-            QVariant exitVar = session.getAttribute(SessionKeys::ExitTime);
+    {
+        CalculationDescriptor d;
+        d.id = QStringLiteral("builtin.wsp.ref1Time");
+        d.inputs = {
+            CalcInput::attribute(SessionKeys::ExitTime),
+            CalcInput::measurement("GNSS", "velD"),
+            CalcInput::measurement("GNSS", SessionKeys::Time)
+        };
+        d.outputs = { DependencyKey::attribute(SessionKeys::WspRef1Time) };
+        d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
+            QVariant exitVar = ctx.attribute(SessionKeys::ExitTime);
             if (!exitVar.canConvert<double>())
-                return std::nullopt;
+                return CalculationResult::unavailable();
             double exitTime = exitVar.toDouble();
 
-            QVector<double> velD = session.getMeasurement("GNSS", "velD");
-            QVector<double> time = session.getMeasurement("GNSS", SessionKeys::Time);
+            QVector<double> velD = ctx.measurement("GNSS", "velD");
+            QVector<double> time = ctx.measurement("GNSS", SessionKeys::Time);
 
             if (velD.isEmpty() || time.isEmpty() || velD.size() != time.size())
-                return std::nullopt;
+                return CalculationResult::unavailable();
 
             const int n = velD.size();
             const double vThreshold = 10.0;
@@ -74,281 +221,92 @@ void Calculations::registerWspCalculations()
                 if (velD[i - 1] < vThreshold && velD[i] >= vThreshold) {
                     double a = (vThreshold - velD[i - 1]) / (velD[i] - velD[i - 1]);
                     double crossingTime = time[i - 1] + a * (time[i] - time[i - 1]);
-                    return QVariant(crossingTime + 9.0);
+                    return CalculationResult().setAttribute(SessionKeys::WspRef1Time,
+                                                            crossingTime + 9.0);
                 }
             }
 
-            return std::nullopt;
-        });
+            return CalculationResult::unavailable();
+        };
+        addCalculation(registry, d);
+    }
 
     // ── Group B: Window gate crossing and result calculations ──────────
+    // One computation, ten outputs; a partial result leaves the outputs that
+    // could not be determined unset (unavailable).
+    {
+        CalculationDescriptor d;
+        d.id = QStringLiteral("builtin.wsp.results");
+        d.inputs = {
+            CalcInput::attribute(SessionKeys::WspTopAlt),
+            CalcInput::attribute(SessionKeys::WspBottomAlt),
+            CalcInput::attribute(SessionKeys::ExitTime),
+            // Carried over from the previous dependency list; not read by compute.
+            CalcInput::attribute(SessionKeys::GroundElev),
+            CalcInput::measurement("GNSS", "z"),
+            CalcInput::measurement("GNSS", "lat"),
+            CalcInput::measurement("GNSS", "lon"),
+            CalcInput::measurement("GNSS", SessionKeys::Time),
+            CalcInput::measurement("GNSS", "hAcc"),
+            CalcInput::measurement("GNSS", "vAcc"),
+            CalcInput::attribute(SessionKeys::WspRef1Time)
+        };
+        d.outputs = {
+            DependencyKey::attribute(SessionKeys::WspEntryTime),
+            DependencyKey::attribute(SessionKeys::WspExitTime),
+            DependencyKey::attribute(SessionKeys::WspEntryLat),
+            DependencyKey::attribute(SessionKeys::WspEntryLon),
+            DependencyKey::attribute(SessionKeys::WspExitLat),
+            DependencyKey::attribute(SessionKeys::WspExitLon),
+            DependencyKey::attribute(SessionKeys::WspTimeResult),
+            DependencyKey::attribute(SessionKeys::WspDistResult),
+            DependencyKey::attribute(SessionKeys::WspSpeedResult),
+            DependencyKey::attribute(SessionKeys::WspSepResult)
+        };
+        d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
+            // Retrieve parameters
+            QVariant topVar = ctx.attribute(SessionKeys::WspTopAlt);
+            if (!topVar.canConvert<double>())
+                return CalculationResult::unavailable();
 
-    auto computeWspResults = [](SessionData& session, const QString& outputKey) -> std::optional<QVariant> {
-        // Retrieve parameters
-        QVariant topVar = session.getAttribute(SessionKeys::WspTopAlt);
-        if (!topVar.canConvert<double>())
-            return std::nullopt;
-        double topAlt = topVar.toDouble();
+            QVariant botVar = ctx.attribute(SessionKeys::WspBottomAlt);
+            if (!botVar.canConvert<double>())
+                return CalculationResult::unavailable();
 
-        QVariant botVar = session.getAttribute(SessionKeys::WspBottomAlt);
-        if (!botVar.canConvert<double>())
-            return std::nullopt;
-        double bottomAlt = botVar.toDouble();
+            QVariant exitVar = ctx.attribute(SessionKeys::ExitTime);
+            if (!exitVar.canConvert<double>())
+                return CalculationResult::unavailable();
 
-        QVariant exitVar = session.getAttribute(SessionKeys::ExitTime);
-        if (!exitVar.canConvert<double>())
-            return std::nullopt;
-        double exitTime = exitVar.toDouble();
+            const WspResults r = computeWspResults(
+                topVar.toDouble(), botVar.toDouble(), exitVar.toDouble(),
+                ctx.attribute(SessionKeys::WspRef1Time),
+                ctx.measurement("GNSS", "z"), ctx.measurement("GNSS", "lat"),
+                ctx.measurement("GNSS", "lon"), ctx.measurement("GNSS", SessionKeys::Time),
+                ctx.measurement("GNSS", "hAcc"), ctx.measurement("GNSS", "vAcc"));
 
-        QVariant geVar = session.getAttribute(SessionKeys::GroundElev);
-        if (!geVar.canConvert<double>())
-            return std::nullopt;
+            CalculationResult result;
+            auto publish = [&result](const char *key, const std::optional<double> &value) {
+                if (value)
+                    result.setAttribute(key, *value);
+            };
+            publish(SessionKeys::WspEntryTime,   r.entryTime);
+            publish(SessionKeys::WspExitTime,    r.exitTime);
+            publish(SessionKeys::WspEntryLat,    r.entryLat);
+            publish(SessionKeys::WspEntryLon,    r.entryLon);
+            publish(SessionKeys::WspExitLat,     r.exitLat);
+            publish(SessionKeys::WspExitLon,     r.exitLon);
+            publish(SessionKeys::WspTimeResult,  r.timeResult);
+            publish(SessionKeys::WspDistResult,  r.distResult);
+            publish(SessionKeys::WspSpeedResult, r.speedResult);
+            publish(SessionKeys::WspSepResult,   r.sepResult);
+            return result;
+        };
+        addCalculation(registry, d);
+    }
+}
 
-        // Retrieve measurement vectors
-        QVector<double> z    = session.getMeasurement("GNSS", "z");
-        QVector<double> lat  = session.getMeasurement("GNSS", "lat");
-        QVector<double> lon  = session.getMeasurement("GNSS", "lon");
-        QVector<double> time = session.getMeasurement("GNSS", SessionKeys::Time);
-
-        if (z.isEmpty() || lat.isEmpty() || lon.isEmpty() || time.isEmpty())
-            return std::nullopt;
-        if (z.size() != time.size() || lat.size() != time.size() || lon.size() != time.size())
-            return std::nullopt;
-
-        const int n = z.size();
-
-        // Find the starting index: first sample where time >= exitTime
-        int startIdx = -1;
-        for (int i = 0; i < n; ++i) {
-            if (time[i] >= exitTime) {
-                startIdx = i;
-                break;
-            }
-        }
-        if (startIdx < 0)
-            return std::nullopt;
-
-        // Find window entry (first downward crossing of topAlt starting from startIdx)
-        double entryTime = 0.0;
-        double entryLat  = 0.0;
-        double entryLon  = 0.0;
-        bool foundEntry  = false;
-
-        for (int i = std::max(startIdx, 1); i < n; ++i) {
-            if (z[i - 1] >= topAlt && z[i] < topAlt) {
-                double a = (topAlt - z[i - 1]) / (z[i] - z[i - 1]);
-                entryTime = time[i - 1] + a * (time[i] - time[i - 1]);
-                entryLat  = lat[i - 1]  + a * (lat[i]  - lat[i - 1]);
-                entryLon  = lon[i - 1]  + a * (lon[i]  - lon[i - 1]);
-                foundEntry = true;
-                startIdx = i; // continue search from here for the bottom gate
-                break;
-            }
-        }
-
-        if (!foundEntry) {
-            // No entry crossing found -- all results are nullopt
-            session.setCalculatedAttribute(SessionKeys::WspEntryTime,   QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspExitTime,    QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspEntryLat,    QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspEntryLon,    QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspExitLat,     QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspExitLon,     QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspTimeResult,  QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspDistResult,  QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspSpeedResult, QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspSepResult,   QVariant());
-            return session.getAttribute(outputKey);
-        }
-
-        // Store entry results
-        session.setCalculatedAttribute(SessionKeys::WspEntryTime, entryTime);
-        session.setCalculatedAttribute(SessionKeys::WspEntryLat,  entryLat);
-        session.setCalculatedAttribute(SessionKeys::WspEntryLon,  entryLon);
-
-        // Find window exit (first downward crossing of bottomAlt after entry)
-        double wspExitTime = 0.0;
-        double exitLat     = 0.0;
-        double exitLon     = 0.0;
-        bool foundExit     = false;
-        int exitIdx        = -1;
-
-        for (int i = startIdx; i < n; ++i) {
-            if (i < 1) continue;
-            if (z[i - 1] >= bottomAlt && z[i] < bottomAlt) {
-                double a = (bottomAlt - z[i - 1]) / (z[i] - z[i - 1]);
-                wspExitTime = time[i - 1] + a * (time[i] - time[i - 1]);
-                exitLat     = lat[i - 1]  + a * (lat[i]  - lat[i - 1]);
-                exitLon     = lon[i - 1]  + a * (lon[i]  - lon[i - 1]);
-                foundExit   = true;
-                exitIdx     = i;
-                break;
-            }
-        }
-
-        if (!foundExit) {
-            // Entry found but no exit crossing
-            session.setCalculatedAttribute(SessionKeys::WspExitTime,    QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspExitLat,     QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspExitLon,     QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspTimeResult,  QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspDistResult,  QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspSpeedResult, QVariant());
-            session.setCalculatedAttribute(SessionKeys::WspSepResult,   QVariant());
-            return session.getAttribute(outputKey);
-        }
-
-        // Store exit results
-        session.setCalculatedAttribute(SessionKeys::WspExitTime, wspExitTime);
-        session.setCalculatedAttribute(SessionKeys::WspExitLat,  exitLat);
-        session.setCalculatedAttribute(SessionKeys::WspExitLon,  exitLon);
-
-        // Compute derived results
-        double timeResult = wspExitTime - entryTime;
-        session.setCalculatedAttribute(SessionKeys::WspTimeResult, timeResult);
-
-        double dist = 0.0;
-        GeographicLib::Geodesic::WGS84().Inverse(entryLat, entryLon, exitLat, exitLon, dist);
-        session.setCalculatedAttribute(SessionKeys::WspDistResult, dist);
-
-        if (timeResult > 0.0) {
-            session.setCalculatedAttribute(SessionKeys::WspSpeedResult, dist / timeResult);
-        } else {
-            session.setCalculatedAttribute(SessionKeys::WspSpeedResult, QVariant());
-        }
-
-        // Compute max SEP within the validation window.
-        // Start: Lane Reference 1 (9 s after vertical speed first reaches 10 m/s).
-        // End:   20 m below the bottom of the competition window.
-        QVariant ref1Var = session.getAttribute(SessionKeys::WspRef1Time);
-        QVector<double> hAcc = session.getMeasurement("GNSS", "hAcc");
-        QVector<double> vAcc = session.getMeasurement("GNSS", "vAcc");
-
-        if (ref1Var.canConvert<double>() && hAcc.size() == n && vAcc.size() == n) {
-            double ref1Time = ref1Var.toDouble();
-
-            // Find first sample at or after Ref1 time
-            int valStart = -1;
-            for (int i = 0; i < n; ++i) {
-                if (time[i] >= ref1Time) {
-                    valStart = i;
-                    break;
-                }
-            }
-
-            // Search forward from exit crossing until altitude <= bottomAlt - 20
-            int valEnd = exitIdx;
-            for (int i = exitIdx + 1; i < n; ++i) {
-                if (z[i] <= bottomAlt - 20.0)
-                    break;
-                valEnd = i;
-            }
-
-            double maxSep = -1.0;
-            if (valStart >= 0 && valStart <= valEnd) {
-                for (int i = valStart; i <= valEnd; ++i) {
-                    double sep = 0.5127 * (2.0 * hAcc[i] + vAcc[i]);
-                    if (sep > maxSep)
-                        maxSep = sep;
-                }
-            }
-
-            if (maxSep >= 0.0)
-                session.setCalculatedAttribute(SessionKeys::WspSepResult, maxSep);
-            else
-                session.setCalculatedAttribute(SessionKeys::WspSepResult, QVariant());
-        } else {
-            session.setCalculatedAttribute(SessionKeys::WspSepResult, QVariant());
-        }
-
-        return session.getAttribute(outputKey);
-    };
-
-    // Dependency list shared by all result attributes
-    QVector<DependencyKey> wspResultDeps = {
-        DependencyKey::attribute(SessionKeys::WspTopAlt),
-        DependencyKey::attribute(SessionKeys::WspBottomAlt),
-        DependencyKey::attribute(SessionKeys::ExitTime),
-        DependencyKey::attribute(SessionKeys::GroundElev),
-        DependencyKey::measurement("GNSS", "z"),
-        DependencyKey::measurement("GNSS", "lat"),
-        DependencyKey::measurement("GNSS", "lon"),
-        DependencyKey::measurement("GNSS", SessionKeys::Time),
-        DependencyKey::measurement("GNSS", "hAcc"),
-        DependencyKey::measurement("GNSS", "vAcc"),
-        DependencyKey::attribute(SessionKeys::WspRef1Time)
-    };
-
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspEntryTime,
-        wspResultDeps,
-        [computeWspResults](SessionData& session) -> std::optional<QVariant> {
-            return computeWspResults(session, SessionKeys::WspEntryTime);
-        });
-
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspExitTime,
-        wspResultDeps,
-        [computeWspResults](SessionData& session) -> std::optional<QVariant> {
-            return computeWspResults(session, SessionKeys::WspExitTime);
-        });
-
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspEntryLat,
-        wspResultDeps,
-        [computeWspResults](SessionData& session) -> std::optional<QVariant> {
-            return computeWspResults(session, SessionKeys::WspEntryLat);
-        });
-
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspEntryLon,
-        wspResultDeps,
-        [computeWspResults](SessionData& session) -> std::optional<QVariant> {
-            return computeWspResults(session, SessionKeys::WspEntryLon);
-        });
-
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspExitLat,
-        wspResultDeps,
-        [computeWspResults](SessionData& session) -> std::optional<QVariant> {
-            return computeWspResults(session, SessionKeys::WspExitLat);
-        });
-
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspExitLon,
-        wspResultDeps,
-        [computeWspResults](SessionData& session) -> std::optional<QVariant> {
-            return computeWspResults(session, SessionKeys::WspExitLon);
-        });
-
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspTimeResult,
-        wspResultDeps,
-        [computeWspResults](SessionData& session) -> std::optional<QVariant> {
-            return computeWspResults(session, SessionKeys::WspTimeResult);
-        });
-
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspDistResult,
-        wspResultDeps,
-        [computeWspResults](SessionData& session) -> std::optional<QVariant> {
-            return computeWspResults(session, SessionKeys::WspDistResult);
-        });
-
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspSpeedResult,
-        wspResultDeps,
-        [computeWspResults](SessionData& session) -> std::optional<QVariant> {
-            return computeWspResults(session, SessionKeys::WspSpeedResult);
-        });
-
-    SessionData::registerCalculatedAttribute(
-        SessionKeys::WspSepResult,
-        wspResultDeps,
-        [computeWspResults](SessionData& session) -> std::optional<QVariant> {
-            return computeWspResults(session, SessionKeys::WspSepResult);
-        });
-
+void Calculations::registerWspMetadata()
+{
     // ── Group C: Marker registration (3 markers) ──────────────────────
 
     QVector<MarkerDefinition> defs;
@@ -391,7 +349,7 @@ void Calculations::registerWspCalculations()
 
     MarkerRegistry::instance()->replaceMarkerGroup(QStringLiteral("wsp"), defs);
 
-    // ── Group D: Attribute registry entries (3 registrations) ─────────
+    // ── Group D: Attribute registry entries (5 registrations) ─────────
 
     auto& reg = AttributeRegistry::instance();
 

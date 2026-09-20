@@ -2,12 +2,14 @@
 #define ATTRIBUTECALCULATIONS_H
 
 namespace FlySight {
+
+class CalculationRegistry;
+
 namespace Calculations {
 
-/// Register all session-wide attribute calculations.
-/// These attributes are computed from measurement data and preferences,
-/// but do not themselves generate new measurement arrays.
-void registerAttributeCalculations();
+/// Register the session-wide attribute calculations with the calculation
+/// engine (ids builtin.attr.*).
+void registerAttributeCalculations(CalculationRegistry &registry);
 
 } // namespace Calculations
 } // namespace FlySight

@@ -1,12 +1,84 @@
 #include "sessiondata.h"
 #include "dependencykey.h"
-#include "dependencymanager.h"
-#include <algorithm>
+#include "engine/calculationengine.h"
 #include <QDebug>
-#include <QDateTime>
-#include <QCryptographicHash>
+#include <utility>
 
 namespace FlySight {
+
+SessionData::SessionData() = default;
+
+SessionData::~SessionData() = default;
+
+// A copy has the same stored state and nothing else: it gets its own engine,
+// cold, on its first calculated read. The original's cache and invalidation
+// listener stay with the original. A copy is therefore COLD: every calculated
+// read of it (unit conversion, time fit, markers) recomputes from scratch. Do
+// not copy a session in order to read it; pass a pointer or reference to the
+// live one.
+SessionData::SessionData(const SessionData &other)
+    : m_visible(other.m_visible)
+    , m_attributes(other.m_attributes)
+    , m_sensors(other.m_sensors)
+    , m_units(other.m_units)
+{
+}
+
+// A move is the same session at a new address: the engine comes along with its
+// cache and listener, and is told where its state now lives. The moved-from
+// object is left without an engine and lazily gets a new one if it is reused.
+SessionData::SessionData(SessionData &&other) noexcept
+    : m_visible(other.m_visible)
+    , m_attributes(std::move(other.m_attributes))
+    , m_sensors(std::move(other.m_sensors))
+    , m_units(std::move(other.m_units))
+    , m_engine(std::move(other.m_engine))
+{
+    if (m_engine)
+        m_engine->rebind(this);
+}
+
+SessionData &SessionData::operator=(const SessionData &other)
+{
+    if (this == &other)
+        return *this;
+
+    m_visible = other.m_visible;
+    m_attributes = other.m_attributes;
+    m_sensors = other.m_sensors;
+    m_units = other.m_units;
+
+    // Still this session (same engine, same listener), with new contents, and
+    // COLD like a copy. clear() returns the set of names that were cached; it
+    // is discarded here and the listener is NOT called, so whoever assigns over
+    // a session that others observe must publish the invalidation itself.
+    if (m_engine)
+        m_engine->clear();
+    return *this;
+}
+
+SessionData &SessionData::operator=(SessionData &&other) noexcept
+{
+    if (this == &other)
+        return *this;
+
+    m_visible = other.m_visible;
+    m_attributes = std::move(other.m_attributes);
+    m_sensors = std::move(other.m_sensors);
+    m_units = std::move(other.m_units);
+
+    m_engine = std::move(other.m_engine);   // this object's own engine is destroyed
+    if (m_engine)
+        m_engine->rebind(this);
+    return *this;
+}
+
+CalculationEngine &SessionData::calculationEngine() const
+{
+    if (!m_engine)
+        m_engine = std::make_unique<CalculationEngine>(this);
+    return *m_engine;
+}
 
 bool SessionData::isVisible() const {
     return m_visible;
@@ -25,34 +97,28 @@ bool SessionData::hasAttribute(const QString &key) const {
 }
 
 QVariant SessionData::getAttribute(const QString &key) const {
-    if (m_attributes.contains(key)) {
-        return m_attributes.value(key);
-    }
-
-    // If not directly stored, try to compute it from a calculated attribute
-    return computeAttribute(key);
+    // One read path: the engine resolves the stored value first, then the
+    // registered calculations.
+    return calculationEngine().attribute(key);
 }
 
 QSet<DependencyKey> SessionData::setAttribute(const QString &key, const QVariant &value) {
-    // Store the attribute
     m_attributes.insert(key, value);
 
-    // Invalidate dependencies and return the set of all visited keys
-    return m_dependencyManager.invalidateKeyAndDependents(
-        DependencyKey::attribute(key),
-        m_calculatedAttributes,
-        m_calculatedMeasurements);
+    // Without an engine nothing is cached, so only the name itself changed.
+    if (!m_engine)
+        return { DependencyKey::attribute(key) };
+    return m_engine->attributeChanged(key);
 }
 
 QSet<DependencyKey> SessionData::removeAttribute(const QString &key) {
-    // Remove the stored attribute (no-op if key is absent)
+    // Remove the stored attribute (no-op if key is absent); dependents then
+    // recompute from the calculated value.
     m_attributes.remove(key);
 
-    // Invalidate dependencies so downstream caches recompute from the calculated value
-    return m_dependencyManager.invalidateKeyAndDependents(
-        DependencyKey::attribute(key),
-        m_calculatedAttributes,
-        m_calculatedMeasurements);
+    if (!m_engine)
+        return { DependencyKey::attribute(key) };
+    return m_engine->attributeChanged(key);
 }
 
 QStringList SessionData::sensorKeys() const {
@@ -75,160 +141,71 @@ bool SessionData::hasMeasurement(const QString &sensorKey, const QString &measur
 }
 
 QVector<double> SessionData::getMeasurement(const QString &sensorKey, const QString &measurementKey) const {
-    if (hasMeasurement(sensorKey, measurementKey)) {
-        return m_sensors.value(sensorKey).value(measurementKey);
+    // One read path: a measurement with source data comes back as the
+    // conversion layer's output (the implicitly shared source vector when the
+    // conversion is the identity); anything else is calculated.
+    return calculationEngine().measurement(sensorKey, measurementKey);
+}
+
+QString SessionData::effectiveUnit(const QString &sensorKey, const QString &measurementKey) const {
+    return calculationEngine().measurementUnit(sensorKey, measurementKey);
+}
+
+SourceData SessionData::sourceData() const {
+    SourceData data;
+    for (auto sensorIt = m_sensors.constBegin(); sensorIt != m_sensors.constEnd(); ++sensorIt) {
+        const QMap<QString, QString> units = m_units.value(sensorIt.key());
+        SourceSensor &sensor = data[sensorIt.key()];
+        for (auto it = sensorIt.value().constBegin(); it != sensorIt.value().constEnd(); ++it)
+            sensor.insert(it.key(), SourceColumn{ it.value(), units.value(it.key()) });
     }
-
-    // If not directly stored, try to compute it from a calculated measurement
-    return computeMeasurement(sensorKey, measurementKey);
+    return data;
 }
 
-void SessionData::setUnit(const QString &sensorKey, const QString &measurementKey, const QString &unitString) {
-    m_units[sensorKey][measurementKey] = unitString;
+QSet<DependencyKey> SessionData::setSourceMeasurement(const QString &sensorKey, const QString &measurementKey,
+                                                      const QVector<double> &samples, const QString &unit) {
+    m_sensors[sensorKey].insert(measurementKey, samples);
+    m_units[sensorKey].insert(measurementKey, unit);
+
+    if (!m_engine)
+        return { DependencyKey::measurement(sensorKey, measurementKey) };
+    QSet<DependencyKey> invalidated = m_engine->sourceMeasurementChanged(sensorKey, measurementKey);
+    invalidated.unite(m_engine->sourceUnitChanged(sensorKey, measurementKey));
+    return invalidated;
 }
 
-QString SessionData::getUnit(const QString &sensorKey, const QString &measurementKey) const {
-    auto sensorIt = m_units.find(sensorKey);
-    if (sensorIt == m_units.end()) return QString();
-    auto unitIt = sensorIt.value().find(measurementKey);
-    if (unitIt == sensorIt.value().end()) return QString();
-    return unitIt.value();
-}
-
-QMap<QString, QString> SessionData::units(const QString &sensorKey) const {
-    return m_units.value(sensorKey);
+QSet<DependencyKey> SessionData::mergeSourceData(const SourceData &incoming) {
+    QSet<DependencyKey> invalidated;
+    for (auto sensorIt = incoming.constBegin(); sensorIt != incoming.constEnd(); ++sensorIt) {
+        for (auto it = sensorIt.value().constBegin(); it != sensorIt.value().constEnd(); ++it) {
+            invalidated.unite(setSourceMeasurement(sensorIt.key(), it.key(),
+                                                   it.value().samples, it.value().unit));
+        }
+    }
+    return invalidated;
 }
 
 QSet<DependencyKey> SessionData::setMeasurement(const QString &sensorKey, const QString &measurementKey, const QVector<double> &data) {
-    // Store the measurement
     m_sensors[sensorKey].insert(measurementKey, data);
 
-    // Invalidate dependencies and return the set of all visited keys
-    return m_dependencyManager.invalidateKeyAndDependents(
-        DependencyKey::measurement(sensorKey, measurementKey),
-        m_calculatedAttributes,
-        m_calculatedMeasurements);
+    if (!m_engine)
+        return { DependencyKey::measurement(sensorKey, measurementKey) };
+    return m_engine->sourceMeasurementChanged(sensorKey, measurementKey);
 }
 
-void SessionData::setCalculatedAttribute(const QString &key, const QVariant &value)
-{
-    m_calculatedAttributes.setValue(key, value);
-}
-
-void SessionData::setCalculatedMeasurement(const QString& sensorKey, const QString& measurementKey, const QVector<double>& data)
-{
-    MeasurementKey k(sensorKey, measurementKey);
-    m_calculatedMeasurements.setValue(k, data);
-}
-
-bool SessionData::hasRegisteredCalculation(const QString &key)
-{
-    return CalculatedValue<QString, QVariant>::hasRegisteredCalculation(key);
-}
-
-void SessionData::unregisterCalculatedAttribute(const QString &key)
-{
-    // Remove from global calculation registry (affects all sessions)
-    CalculatedValue<QString, QVariant>::unregisterCalculation(key);
-    // Cascade invalidation through the dependency graph
-    m_dependencyManager.invalidateKeyAndDependents(
-        DependencyKey::attribute(key),
-        m_calculatedAttributes,
-        m_calculatedMeasurements);
-}
-
-void SessionData::registerCalculatedAttribute(
-    const QString& key,
-    const QList<DependencyKey>& dependencies,
-    AttributeFunction func)
-{
-    // Register the calculation function
-    CalculatedValue<QString, QVariant>::
-        registerCalculation(key, dependencies, func);
-}
-
-void SessionData::registerCalculatedMeasurement(
-    const QString &sensorKey,
-    const QString &measurementKey,
-    const QList<DependencyKey>& dependencies,
-    MeasurementFunction func)
-{
-    // Register the calculation function
-    MeasurementKey key(sensorKey, measurementKey);
-    CalculatedValue<MeasurementKey, QVector<double>>::
-        registerCalculation(key, dependencies, func);
-}
-
-QVariant SessionData::computeAttribute(const QString &key) const {
-    auto result = m_calculatedAttributes.getValue(*const_cast<SessionData*>(this), key);
-    if (result.has_value()) {
-        return result.value();
+QSet<DependencyKey> SessionData::setUnit(const QString &sensorKey, const QString &measurementKey, const QString &unitString) {
+    // Unit text belongs to a source measurement; samples and unit exist together.
+    if (!hasSourceMeasurement(sensorKey, measurementKey)) {
+        qWarning().noquote() << "SessionData::setUnit:" << sensorKey + QLatin1Char('/') + measurementKey
+                             << "has no source data; unit not stored";
+        return {};
     }
-    return synthesizeInterpolation(key);
-}
 
-QVariant SessionData::synthesizeInterpolation(const QString &key) const {
-    // 1. Parse the key: {timeAttr}:{sensor}/{timeVector}/{dataVector}
-    const int colonPos = key.indexOf(':');
-    if (colonPos < 0)
-        return QVariant();
+    m_units[sensorKey][measurementKey] = unitString;
 
-    const QString timeAttrKey = key.left(colonPos);
-    const QStringList parts = key.mid(colonPos + 1).split('/');
-    if (parts.size() != 3)
-        return QVariant();
-
-    const QString &sensor     = parts[0];
-    const QString &timeVector = parts[1];
-    const QString &dataVector = parts[2];
-
-    // 2. Resolve the time attribute
-    const QVariant timeVar = getAttribute(timeAttrKey);
-    if (!timeVar.canConvert<double>())
-        return QVariant();
-    const double markerTime = timeVar.toDouble();
-
-    // 3. Read the measurement vectors
-    const QVector<double> timeVec = getMeasurement(sensor, timeVector);
-    if (timeVec.isEmpty())
-        return QVariant();
-
-    const QVector<double> dataVec = getMeasurement(sensor, dataVector);
-    if (dataVec.isEmpty() || dataVec.size() != timeVec.size())
-        return QVariant();
-
-    // 4. Binary search and linear interpolation
-    //    lower_bound returns cbegin() when markerTime <= first element, and
-    //    cend() when markerTime > last element. Both cases mean the query
-    //    falls outside the interpolatable range (we need two bracketing
-    //    points). This matches interpolateAtX() in plotutils.cpp.
-    auto it = std::lower_bound(timeVec.cbegin(), timeVec.cend(), markerTime);
-    if (it == timeVec.cbegin() || it == timeVec.cend())
-        return QVariant();
-
-    const int idx = static_cast<int>(std::distance(timeVec.cbegin(), it));
-    const double t1 = timeVec[idx - 1], v1 = dataVec[idx - 1];
-    const double t2 = timeVec[idx],     v2 = dataVec[idx];
-
-    if (t2 == t1)
-        return QVariant();
-
-    const double result = v1 + (v2 - v1) * (markerTime - t1) / (t2 - t1);
-
-    // 5. Cache the result
-    const_cast<CalculatedValue<QString, QVariant>&>(m_calculatedAttributes).setValue(key, QVariant(result));
-
-    // 6. Register dependency edges for DAG invalidation
-    DependencyKey thisKey = DependencyKey::attribute(key);
-    QList<DependencyKey> deps = {
-        DependencyKey::attribute(timeAttrKey),
-        DependencyKey::measurement(sensor, timeVector),
-        DependencyKey::measurement(sensor, dataVector)
-    };
-    const_cast<SessionData*>(this)->addDependencies(thisKey, deps);
-
-    // 7. Return the interpolated value
-    return QVariant(result);
+    if (!m_engine)
+        return { DependencyKey::measurement(sensorKey, measurementKey) };
+    return m_engine->sourceUnitChanged(sensorKey, measurementKey);
 }
 
 QString SessionData::interpolationKey(const QString &timeAttr,
@@ -245,14 +222,39 @@ QString SessionData::interpolationKey(const QString &timeAttr,
         + dataVector;
 }
 
-QVector<double> SessionData::computeMeasurement(const QString &sensorKey, const QString &measurementKey) const {
-    MeasurementKey k(sensorKey, measurementKey);
-    auto result = m_calculatedMeasurements.getValue(*const_cast<SessionData*>(this), k);
-    if (!result.has_value()) {
-        // handle failure
-        return QVector<double>();
-    }
-    return result.value();
+// ---- ISessionState: pure reads of the stored state -------------------------
+
+bool SessionData::hasStoredAttribute(const QString &key) const
+{
+    return m_attributes.contains(key);
+}
+
+QVariant SessionData::storedAttribute(const QString &key) const
+{
+    return m_attributes.value(key);
+}
+
+bool SessionData::hasSourceMeasurement(const QString &sensor, const QString &name) const
+{
+    return hasMeasurement(sensor, name);
+}
+
+QVector<double> SessionData::sourceMeasurement(const QString &sensor, const QString &name) const
+{
+    auto sensorIt = m_sensors.constFind(sensor);
+    if (sensorIt == m_sensors.constEnd()) return QVector<double>();
+    return sensorIt.value().value(name);
+}
+
+QString SessionData::sourceUnit(const QString &sensor, const QString &name) const
+{
+    // Unit text exists exactly when the measurement has source data.
+    if (!hasSourceMeasurement(sensor, name))
+        return QString();
+
+    auto sensorIt = m_units.constFind(sensor);
+    if (sensorIt == m_units.constEnd()) return QString();
+    return sensorIt.value().value(name);
 }
 
 } // namespace FlySight

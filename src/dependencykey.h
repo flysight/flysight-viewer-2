@@ -69,16 +69,6 @@ inline uint qHash(const DependencyKey &key, uint seed = 0) {
     return result;
 }
 
-inline DependencyKey toDependencyKey(const QString& attrKey)
-{
-    return DependencyKey::attribute(attrKey);
-}
-
-inline DependencyKey toDependencyKey(const QPair<QString,QString>& measKey)
-{
-    return DependencyKey::measurement(measKey.first, measKey.second);
-}
-
 } // namespace FlySight
 
 #endif // DEPENDENCYKEY_H

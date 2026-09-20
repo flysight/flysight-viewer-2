@@ -1,0 +1,179 @@
+# Acceptance traceability. The acceptance items 1-19 are stated in full in
+# tests/README.md, appendix A. (The rule "only SCHEMA_VER decides", which is
+# not one of the 19 items, is filed under item 19.)
+#
+# One line per demonstrated clause: <item> <target> <function>
+# Checked by the audit_cleanup test (tests/audit/cleanup_audit.cmake): the file
+# tests/<target>.cpp must contain "void <Class>::<function>(" and every item
+# 1..19 must have at least one line. The human-readable matrix is in
+# tests/README.md; keep the two in sync.
+
+# 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
+1 tst_source_layer unmarkedFileIsCorrected
+1 tst_source_layer sourceAccessNeverComputes
+1 tst_conversion_engine legacyGyroCorrected
+1 tst_smoke importFs2Sensor
+1 tst_importer neverStampsSchema
+
+# 2 - SCHEMA_VER 2 file unchanged
+2 tst_source_layer schema2FileIsLiteral
+2 tst_conversion_engine schema2Unchanged
+
+# 3 - SCHEMA_VER 3 / abc rejected, existing session unmodified
+3 tst_importer rejectsUnsupportedSchema
+3 tst_importer failedImportLeavesTargetUntouched
+3 tst_import_merge rejectedSchemaLeavesSession_loaded
+3 tst_import_merge rejectedSchemaLeavesSession_unloaded
+
+# 4 - g, gauss, source retained, custom unit passes through
+4 tst_source_layer unitNormalization
+4 tst_conversion_engine unitNormalization
+4 tst_conversion_engine internalLabelsAreIdentity
+4 tst_schema_units convertingUnits
+4 tst_schema_units identityUnits
+4 tst_schema_units unknownUnitsPassThroughVerbatim
+
+# 5 - save / reload
+5 tst_persistence_roundtrip samplesAreBitIdentical
+5 tst_csvformat roundTripBits
+5 tst_csvformat roundTripSweep
+5 tst_csvformat negativeZero
+5 tst_persistence_roundtrip unitsAndHeaderAttributesPreserved
+5 tst_persistence_roundtrip typedAttributesRoundTrip
+5 tst_persistence_roundtrip schemaVerOnlyIfRecorded
+5 tst_persistence_roundtrip effectiveValuesUnchanged
+5 tst_session_oracle modelSequences
+5 tst_persistence_roundtrip secondCycleIsByteIdentical
+5 tst_persistence_roundtrip logbookSaveReloadCycle
+5 tst_persistence_roundtrip warmAndColdCachesSameFile
+5 tst_persistence_roundtrip fileAndMemoryWritersAgree
+5 tst_workflow warmModelSaveEqualsColdExport
+5 tst_persistence_roundtrip unsupportedSchemaIsNotSaved
+
+# 6 - released-format logbook
+6 tst_source_layer releasedLogbookFormatLoads
+6 tst_persistence_roundtrip releasedLogbookSaveKeepsBytes
+6 tst_persistence_roundtrip releasedLogbookBackfillIsAdditive
+6 tst_workflow releasedLogbookUpgrade
+
+# 7 - merge in either order, loaded or not; conflicts; what survives
+7 tst_import_merge mergeOrderLoaded
+7 tst_import_merge mergeInOneBatch
+7 tst_import_merge mergeOrderUnloaded
+7 tst_import_merge identityStubIsMatched
+7 tst_import_merge conflictChangesNothing_loaded
+7 tst_import_merge conflictChangesNothing_unloaded
+7 tst_session_merge differentAttributeConflicts
+7 tst_session_merge planIsPure
+7 tst_import_merge editsSurviveMerge
+7 tst_import_merge unmatchedMeasurementsSurvive
+7 tst_session_merge columnsReplaceAddKeep
+7 tst_session_merge viewerAttributesExistingWins
+7 tst_import_merge viewerSavedFileKeepsExistingEdits
+
+# 8 - escape hatch
+8 tst_import_merge escapeHatch
+8 tst_source_layer schemaAttributeFlipsGyro
+
+# 9 - multi-output runs once; declared input change -> one run; unrelated -> none
+9 tst_calcengine threeOutputsRunOnce
+9 tst_session_engine multiOutputRunsOnce
+9 tst_calcengine declaredInputChangeRunsOnceMore
+9 tst_calcengine unrelatedChangeRunsNothing
+9 tst_session_engine declaredInputChangeRunsOnceMore
+9 tst_session_engine unrelatedChangeRunsNothing
+
+# 10 - preferred candidate replaces a cached fallback; randomized sequences equal a fresh evaluation
+10 tst_calcengine preferredCandidateReplacesFallback
+10 tst_calcengine rejectedCandidatesAreDependencies
+10 tst_session_engine preferredSensorReplacesFallback
+10 tst_import_merge candidateSwitchAfterMerge
+10 tst_calcengine_oracle randomizedSequences
+10 tst_calcengine_oracle randomizedTopologies
+10 tst_calcengine_safety overlappingRingsIndependentOfReadOrder
+10 tst_session_oracle sessionSequences
+10 tst_session_oracle modelSequences
+
+# 11 - user override of one output
+11 tst_calcengine overrideOneOutput
+11 tst_calcengine overrideFeedsDownstream
+11 tst_session_engine overrideOneOutput
+11 tst_session_engine overrideFlareStart
+11 tst_session_oracle sessionSequences
+
+# 12 - nested calculations, cycles, exceptions
+12 tst_calcengine_safety nestedChainFromOneRead
+12 tst_calcengine_safety cycleFallsBackIndependentOfReadOrder
+12 tst_calcengine_safety pureCycleTerminates
+12 tst_calcengine_safety overlappingRingsIndependentOfReadOrder
+12 tst_calcengine_safety overlappingRingsFollowEdits
+12 tst_calcengine_safety provisionalResultsAreNotCached
+12 tst_calcengine_safety ringBeneathAcyclicAncestorIsCached
+12 tst_calcengine_safety requestThroughOwnOutputIsCycle
+12 tst_calcengine_safety requestOnRingWithFallback
+12 tst_calcengine_safety exceptionLeavesNoPartialResult
+12 tst_calcengine_safety innerExceptionKeepsUnrelatedResults
+12 tst_calcengine_safety foreignExceptionPublishesNothing
+12 tst_python_bridge exceptionYieldsCleanUnavailable
+12 tst_python_bridge bundleExceptionPublishesNothing
+12 tst_session_engine safetyOnRealSession
+
+# 13 - two sessions, one registration; unregister invalidates every session
+13 tst_calcengine twoSessionsIndependent
+13 tst_session_model_engine twoSessionsOneRegistration
+13 tst_calcengine unregisterInvalidatesEverySession
+13 tst_session_model_engine unregisterInvalidatesEverySession
+13 tst_session_model_engine reRegisterRestores
+13 tst_column_cache altitudeMarkerChangeDiscards
+13 tst_column_cache altitudeMarkerRemovalDiscardsStubValues
+
+# 14 - explicit policy
+14 tst_calcengine explicitPolicy
+14 tst_session_engine explicitPolicyOnSession
+
+# 15 - declared preference invalidates; snapshotted preference does not
+15 tst_calcengine declaredPreferenceInvalidates
+15 tst_builtins_engine analysisRangeFollowsPreference
+15 tst_session_engine declaredPreferenceInvalidates
+15 tst_session_model_engine preferenceBroadcastReachesModel
+15 tst_column_cache preferenceChangeDiscardsUnloadedRows
+15 tst_calcengine snapshottedPreferenceDoesNot
+15 tst_session_engine snapshotPreferencesDoNot
+15 tst_column_cache snapshotPreferenceDoesNotDiscard
+15 tst_import_merge defaultsNotReappliedOnMerge
+
+# 16 - derived wTotal and interpolated gyro attribute; file-supplied wTotal wins
+16 tst_source_layer derivedWTotalUsesCorrectedGyro
+16 tst_source_layer interpolatedGyroAttribute
+16 tst_session_engine derivedWTotalFollowsSource
+16 tst_session_engine interpolatedAttributeFollows
+16 tst_source_layer fileSuppliedWTotalWins
+
+# 17 - Python plugins through the real bridge
+17 tst_python_bridge bootsRealBridge
+17 tst_python_bridge singleOutputPluginsReadEffectiveValues
+17 tst_python_bridge multiOutputRunsOnce
+17 tst_python_bridge bundledExampleRuns
+17 tst_python_bridge effectiveReadAndUnitMatchCpp
+17 tst_python_bridge derivedMeasurementReadsEffective
+17 tst_python_bridge sourceKindIsUnknownToPlugins
+17 tst_python_bridge exceptionYieldsCleanUnavailable
+17 tst_python_bridge bundleExceptionPublishesNothing
+17 tst_python_bridge pluginWorkflowThroughModel
+17 tst_calcregistry sourceInputsOnlyInSourceConversions
+
+# 18 - upgrade discards and recomputes cached gyro columns; an edit refreshes only affected columns
+18 tst_logbook_index missingMarkerDiscardsValues
+18 tst_column_cache upgradeDiscardsAndRecomputes
+18 tst_workflow releasedLogbookUpgrade
+18 tst_column_cache editRefreshesOnlyAffectedColumn_warm
+18 tst_column_cache editRefreshesOnlyAffectedColumn_cold
+18 tst_column_cache markerEditRefreshesDependents
+18 tst_import_merge mergeEffects
+18 tst_column_cache interruptedSaveViaModel
+18 tst_column_cache indexFlushWhileDirtyOmitsUnsaved
+
+# 19 - workflows end to end; nothing old remains (the build itself: README / CI; audit: audit_cleanup)
+19 tst_workflow importEditSaveReopen
+19 tst_python_bridge pluginWorkflowThroughModel
+19 tst_source_layer onlySchemaVerDecides

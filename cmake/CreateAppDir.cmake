@@ -277,6 +277,9 @@ install(DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/../python_plugins/"
     COMPONENT AppImage
     PATTERN "__pycache__" EXCLUDE
     PATTERN "*.pyc" EXCLUDE
+    # site-packages is no place for an `examples` package or a README
+    PATTERN "examples" EXCLUDE
+    PATTERN "*.md" EXCLUDE
 )
 
 message(STATUS "CreateAppDir.cmake: AppDir structure will be created at install time")

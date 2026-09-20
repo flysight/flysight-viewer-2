@@ -5,18 +5,21 @@ A desktop application for viewing and analyzing FlySight GPS data with advanced 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
+- [Data schema and conversion layer](docs/DATA_SCHEMA.md)
 - [Prerequisites](#prerequisites)
 - [Build Instructions](#build-instructions)
   - [Full Build (Third-Party + Application)](#full-build-third-party--application)
   - [Third-Party Only Build](#third-party-only-build)
   - [Application Only Build](#application-only-build)
   - [Build Options](#build-options)
+  - [Running the Tests](#running-the-tests)
   - [Build Output Locations](#build-output-locations)
 - [Clean Targets](#clean-targets)
   - [Individual Clean Targets](#individual-clean-targets)
   - [Manual Reset](#manual-reset)
   - [Clean Target Reference](#clean-target-reference)
 - [Project Structure](#project-structure)
+- [Developer Documentation](#developer-documentation)
 - [Deployment](#deployment)
   - [How It Works](#how-it-works)
   - [Windows Deployment](#windows-deployment)
@@ -212,6 +215,8 @@ cmake --build build
 | `FLYSIGHT_BUILD_APP` | `ON` | Build the main FlySight Viewer application |
 | `FLYSIGHT_THIRD_PARTY_ONLY` | `OFF` | Build only third-party dependencies (automatically disables app build) |
 | `GOOGLE_MAPS_API_KEY` | (none) | Google Maps JavaScript API key for the map view |
+| `FLYSIGHT_BUILD_TESTS` | `OFF` | Build the Qt Test suite under `tests/`; run with CTest |
+| `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | With tests enabled: build the embedded-Python plugin bridge test (needs NumPy in the build interpreter) |
 
 **Path Variables:**
 
@@ -221,6 +226,28 @@ cmake --build build
 | `GEOGRAPHIC_INSTALL_DIR` | `<third-party>/GeographicLib-install` | GeographicLib installation directory |
 | `KDDW_INSTALL_DIR` | `<third-party>/KDDockWidgets-install` | KDDockWidgets installation directory |
 | `BOOST_ROOT` | Platform-dependent | Boost root directory |
+
+### Running the Tests
+
+The test suite is opt-in. Add `-DFLYSIGHT_BUILD_TESTS=ON` to any of the configure commands above, build as usual, then run CTest against the application build tree:
+
+**Windows:**
+
+```bash
+cmake -G "Visual Studio 17 2022" -A x64 -B build -S . -DCMAKE_PREFIX_PATH="C:/Qt/6.9.3/msvc2022_64" -DGOOGLE_MAPS_API_KEY="your-api-key" -DFLYSIGHT_BUILD_THIRD_PARTY=OFF -DFLYSIGHT_BUILD_TESTS=ON
+cmake --build build --config Release
+ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure
+```
+
+**macOS / Linux:**
+
+```bash
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DGOOGLE_MAPS_API_KEY="your-api-key" -DFLYSIGHT_BUILD_THIRD_PARTY=OFF -DFLYSIGHT_BUILD_TESTS=ON
+cmake --build build
+ctest --test-dir build/FlySightViewer-build --output-on-failure
+```
+
+The tests use temporary directories and isolated settings; they never touch your preferences or logbook. On Windows only the Release configuration is supported. See [tests/README.md](tests/README.md) for the options and labels, running a single test, the isolation guarantees, reproducing a randomized-test failure from its seed, the acceptance traceability matrix, and how to write a new test.
 
 ### Build Output Locations
 
@@ -279,6 +306,10 @@ rm -rf third-party/{GeographicLib,KDDockWidgets}-{build,install}
 flysight-viewer-2/
 ├── CMakeLists.txt                         # Root superbuild configuration
 ├── README.md                              # This file
+├── docs/
+│   ├── DATA_SCHEMA.md                     # Recorded schema, source preservation, conversion layer,
+│   │                                      #   escape hatch, saved-file guarantees
+│   └── CALCULATIONS.md                    # Developer note: writing a registered calculation
 ├── cmake/
 │   ├── ThirdPartySuperbuild.cmake         # ExternalProject definitions for GeographicLib, KDDockWidgets
 │   ├── BoostDiscovery.cmake               # Cross-platform Boost discovery
@@ -296,7 +327,40 @@ flysight-viewer-2/
 │   ├── fix_macos_rpaths.sh                # Post-install rpath repair for macOS bundles
 │   └── diagnose_macos_bundle.sh           # Diagnostic tool for macOS bundle issues
 ├── src/
-│   └── CMakeLists.txt                     # Main application build configuration
+│   ├── CMakeLists.txt                     # Main application build configuration; defines the
+│                                          #   flysight_model library (session data + calculation
+│                                          #   engine, Qt Core only, also linked by the Python
+│                                          #   bridge), the flysight_core library (import/export,
+│                                          #   logbook, session model, registries, calculations;
+│                                          #   Qt Core + Gui, no UI), and the FlySightViewer
+│                                          #   executable (UI, docks, plugin host)
+│   ├── engine/                            # Calculation engine: registry, per-session results,
+│   │                                      #   one dependency graph behind every SessionData read
+│   ├── conversion/                        # Schema table (SCHEMA_VER) and the source -> effective
+│   │                                      #   conversion layer
+│   ├── calculations/                      # Built-in registered calculations
+│   │                                      #   (builtincalculations.* is the entry point)
+│   ├── units/                             # Unit normalization table and the display-unit layer
+│   ├── preferences/                       # Preferences manager, keys, settings pages
+│   ├── ui/                                # Docks, plot, map, video, analysis widgets
+│   ├── csvformat.*                        # The one definition of the on-disk text forms
+│   ├── dataimporter.*, parsedfile.h       # Parser: a file as recorded, nothing added
+│   ├── dataexporter.*                     # Writer: source data and stored attributes only
+│   ├── sessionmerge.*, sessionimport.*    # Merge rules (plan / apply) and the import flow
+│   └── pluginhost.*, pluginadapters.*,    # Python plugin host and the adapters that turn
+│       pluginsessionview.h                #   plugins into registered calculations
+├── python_plugins/
+│   ├── flysight_plugin_sdk.py             # Plugin SDK
+│   ├── README.md                          # Plugin guide
+│   └── examples/imu_tilt.py               # Multi-output example plugin
+├── tests/
+│   ├── CMakeLists.txt                     # Test targets (built when FLYSIGHT_BUILD_TESTS=ON)
+│   ├── README.md                          # How to build, run, and write tests; acceptance matrix
+│   ├── acceptance_map.txt                 # Acceptance item -> test function (machine-checked)
+│   ├── support/                           # Shared test support: isolation, fixture builders, shared helpers
+│   ├── python_plugins/                    # Plugins loaded by tst_python_bridge
+│   ├── audit/                             # cleanup_audit.cmake (the audit_cleanup test)
+│   └── tst_*.cpp                          # One Qt Test class per executable, linked to flysight_core
 ├── third-party/
 │   ├── CMakeLists.txt                     # Standalone third-party build
 │   ├── GeographicLib/                     # GeographicLib source
@@ -307,6 +371,13 @@ flysight-viewer-2/
 ├── third-party/KDDockWidgets-install/     # [Build artifact] KDDockWidgets installation
 └── build/                                 # [Build artifact] CMake build directory
 ```
+
+## Developer Documentation
+
+- [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md): the recorded file format, `SCHEMA_VER`, source versus effective values, the conversion layer, import / merge rules, and what saved files contain
+- [docs/CALCULATIONS.md](docs/CALCULATIONS.md): how to write a registered calculation (declared inputs, multi-output, candidates, cache versioning)
+- [python_plugins/README.md](python_plugins/README.md): writing Python plugins
+- [tests/README.md](tests/README.md): building, running, and writing tests
 
 ## Deployment
 
@@ -416,9 +487,10 @@ GitHub Actions (`.github/workflows/build.yml`) automates the full pipeline on al
 
 1. Caches third-party dependencies between runs
 2. Builds third-party deps (on cache miss) then the application
-3. Runs `cmake --install` to trigger all deployment logic
-4. Packages with CPack (ZIP on Windows, DMG on macOS, AppImage on Linux)
-5. Uploads artifacts and creates GitHub Releases on version tags
+3. Runs the test suite on branch and pull-request builds (not on release tags)
+4. Runs `cmake --install` to trigger all deployment logic
+5. Packages with CPack (ZIP on Windows, DMG on macOS, AppImage on Linux)
+6. Uploads artifacts and creates GitHub Releases on version tags
 
 ### CI/CD Secrets
 

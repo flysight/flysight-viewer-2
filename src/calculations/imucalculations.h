@@ -2,11 +2,14 @@
 #define IMUCALCULATIONS_H
 
 namespace FlySight {
+
+class CalculationRegistry;
+
 namespace Calculations {
 
-/// Register all IMU-based calculated measurements.
-/// Depends only on IMU sensor data.
-void registerImuCalculations();
+/// Register the IMU-based measurements with the calculation engine (ids
+/// builtin.imu.<measurement>).
+void registerImuCalculations(CalculationRegistry &registry);
 
 } // namespace Calculations
 } // namespace FlySight

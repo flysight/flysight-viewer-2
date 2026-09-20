@@ -6,14 +6,15 @@
 namespace FlySight {
 
 class SessionData;  // forward declaration
+class CalculationRegistry;
 
 namespace Calculations {
 
-/// Register time-related calculated measurements for all sensors.
-/// This includes:
-/// - _time: Converted UTC time for each sensor
-/// - _system_time: System time for each sensor (passthrough for non-GNSS, inverse fit for GNSS)
-void registerTimeCalculations();
+/// Register the time-related calculations with the calculation engine:
+/// - builtin.time.fit: _TIME_FIT_A and _TIME_FIT_B (system time -> UTC linear fit)
+/// - builtin.time.utc.<SENSOR>: {sensor}/_time (GNSS passthrough, others through the fit)
+/// - builtin.time.system.<SENSOR>: {sensor}/_system_time (GNSS inverse fit, others passthrough)
+void registerTimeCalculations(CalculationRegistry &registry);
 
 /// Convert a single system-time value to UTC using cached linear-fit coefficients.
 /// Returns std::nullopt if the fit coefficients are not available.

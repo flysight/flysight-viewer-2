@@ -3,26 +3,171 @@
 #include "isadensity.h"
 #include "../sessiondata.h"
 #include "../dependencykey.h"
+#include "registration.h"
 #include <QVector>
+#include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
+#include <optional>
 
 using namespace FlySight;
 
-void Calculations::registerGnssCalculations()
+namespace {
+
+using GnssFunction = std::function<std::optional<QVector<double>>(const EvaluationContext &)>;
+
+CalcInput gnss(const char *name)
+{
+    return CalcInput::measurement(QStringLiteral("GNSS"), QString::fromLatin1(name));
+}
+
+// Registers the single-output calculation builtin.gnss.<name> -> GNSS/<name>.
+// No unit is reported for derived measurements.
+void registerGnss(CalculationRegistry &registry, const char *name,
+                  const QList<CalcInput> &inputs, GnssFunction fn)
+{
+    const QString measurement = QString::fromLatin1(name);
+
+    CalculationDescriptor d;
+    d.id = QStringLiteral("builtin.gnss.") + measurement;
+    d.inputs = inputs;
+    d.outputs = { DependencyKey::measurement(QStringLiteral("GNSS"), measurement) };
+    d.compute = [measurement, fn](const EvaluationContext &ctx) -> CalculationResult {
+        const std::optional<QVector<double>> values = fn(ctx);
+        if (!values)
+            return CalculationResult::unavailable();
+        return CalculationResult().setMeasurement(QStringLiteral("GNSS"), measurement, *values);
+    };
+    Calculations::addCalculation(registry, d);
+}
+
+// Time derivative of GNSS/<source> against the raw GNSS time.
+void registerGnssDerivative(CalculationRegistry &registry, const char *name, const char *source)
+{
+    const QString sourceName = QString::fromLatin1(source);
+    registerGnss(registry, name, { gnss(source), gnss("time") },
+        [sourceName](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+            QVector<double> values = ctx.measurement("GNSS", sourceName);
+            QVector<double> time = ctx.measurement("GNSS", "time");
+
+            if (values.isEmpty()) {
+                return std::nullopt;
+            }
+
+            return Calculations::computeDerivative(values, time);
+        });
+}
+
+// A wind component; a stored non-numeric value counts as no wind.
+double windComponent(const EvaluationContext &ctx, const char *key)
+{
+    bool ok;
+    double wind = ctx.attribute(key).toDouble(&ok);
+    if (!ok) wind = 0.0;
+    return wind;
+}
+
+enum class AeroCoefficient { Lift, Drag };
+
+// Lift / drag coefficient.
+// Uses gravity-corrected acceleration: aeroD = accD - g, so that
+// level constant-speed flight (zero kinematic acceleration) correctly
+// shows ~1g of lift. Drag is negated so that deceleration along track gives
+// positive values.
+std::optional<QVector<double>> computeAeroCoefficient(const EvaluationContext &ctx,
+                                                      AeroCoefficient which)
+{
+    constexpr double g = 9.80665;
+
+    QVector<double> accN = ctx.measurement("GNSS", "accN");
+    QVector<double> accE = ctx.measurement("GNSS", "accE");
+    QVector<double> accD = ctx.measurement("GNSS", "accD");
+    QVector<double> velN = ctx.measurement("GNSS", "velN");
+    QVector<double> velE = ctx.measurement("GNSS", "velE");
+    QVector<double> velD = ctx.measurement("GNSS", "velD");
+    QVector<double> wcVel = ctx.measurement("GNSS", "wcVel");
+    QVector<double> hMSL = ctx.measurement("GNSS", "hMSL");
+
+    if (accN.isEmpty() || accE.isEmpty() || accD.isEmpty() ||
+        velN.isEmpty() || velE.isEmpty() || velD.isEmpty() ||
+        wcVel.isEmpty() || hMSL.isEmpty()) {
+        return std::nullopt;
+    }
+
+    int n = accN.size();
+    if (accE.size() != n || accD.size() != n ||
+        velN.size() != n || velE.size() != n || velD.size() != n ||
+        wcVel.size() != n || hMSL.size() != n) {
+        return std::nullopt;
+    }
+
+    const double windN = windComponent(ctx, SessionKeys::WindN);
+    const double windE = windComponent(ctx, SessionKeys::WindE);
+
+    QVariant massVar = ctx.attribute(SessionKeys::JumperMass);
+    QVariant areaVar = ctx.attribute(SessionKeys::PlanformArea);
+    if (!massVar.isValid() || !areaVar.isValid()) return std::nullopt;
+    double mass = massVar.toDouble();
+    double area = areaVar.toDouble();
+
+    QVector<double> result;
+    result.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        double rho = Calculations::isaDensity(hMSL[i]);
+        double mu = wcVel[i];
+        if (mu < 1e-9 || rho < 1e-12 || area < 1e-12) {
+            result.append(std::numeric_limits<double>::quiet_NaN());
+            continue;
+        }
+
+        // Gravity-corrected acceleration
+        double aeroN = accN[i];
+        double aeroE = accE[i];
+        double aeroD = accD[i] - g;
+
+        // Wind-corrected velocity unit vector
+        double wcN = velN[i] - windN;
+        double wcE = velE[i] - windE;
+        double wcD = velD[i];
+        double wcMag = std::sqrt(wcN * wcN + wcE * wcE + wcD * wcD);
+
+        if (wcMag < 1e-9) {
+            result.append(std::numeric_limits<double>::quiet_NaN());
+            continue;
+        }
+
+        double uN = wcN / wcMag;
+        double uE = wcE / wcMag;
+        double uD = wcD / wcMag;
+
+        double alongTrack = aeroN * uN + aeroE * uE + aeroD * uD;
+
+        if (which == AeroCoefficient::Lift) {
+            // Cross-track magnitude
+            double aMag2 = aeroN * aeroN + aeroE * aeroE + aeroD * aeroD;
+            double crossTrack = std::sqrt(std::max(0.0, aMag2 - alongTrack * alongTrack));
+            result.append(2.0 * mass * crossTrack / (rho * mu * mu * area));
+        } else {
+            // Along-track component (negated: drag positive)
+            result.append(-2.0 * mass * alongTrack / (rho * mu * mu * area));
+        }
+    }
+    return result;
+}
+
+} // namespace
+
+void Calculations::registerGnssCalculations(CalculationRegistry &registry)
 {
     // GNSS altitude above ground (z)
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "z",
-        {
-            DependencyKey::measurement("GNSS", "hMSL"),
-            DependencyKey::attribute(SessionKeys::GroundElev)
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> hMSL = session.getMeasurement("GNSS", "hMSL");
+    registerGnss(registry, "z",
+        { gnss("hMSL"), CalcInput::attribute(SessionKeys::GroundElev) },
+        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+        QVector<double> hMSL = ctx.measurement("GNSS", "hMSL");
 
         bool ok;
-        double groundElev = session.getAttribute(SessionKeys::GroundElev).toDouble(&ok);
+        double groundElev = ctx.attribute(SessionKeys::GroundElev).toDouble(&ok);
         if (!ok) {
             qWarning() << "Cannot calculate z due to missing groundElev";
             return std::nullopt;
@@ -42,15 +187,11 @@ void Calculations::registerGnssCalculations()
     });
 
     // GNSS horizontal velocity (velH)
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "velH",
-        {
-            DependencyKey::measurement("GNSS", "velN"),
-            DependencyKey::measurement("GNSS", "velE")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> velN = session.getMeasurement("GNSS", "velN");
-        QVector<double> velE = session.getMeasurement("GNSS", "velE");
+    registerGnss(registry, "velH",
+        { gnss("velN"), gnss("velE") },
+        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+        QVector<double> velN = ctx.measurement("GNSS", "velN");
+        QVector<double> velE = ctx.measurement("GNSS", "velE");
 
         if (velN.isEmpty() || velE.isEmpty()) {
             qWarning() << "Cannot calculate velH due to missing velN or velE";
@@ -58,7 +199,7 @@ void Calculations::registerGnssCalculations()
         }
 
         if (velN.size() != velE.size()) {
-            qWarning() << "velN and velE size mismatch in session:" << session.getAttribute("_SESSION_ID");
+            qWarning() << "velN and velE size mismatch";
             return std::nullopt;
         }
 
@@ -71,15 +212,11 @@ void Calculations::registerGnssCalculations()
     });
 
     // GNSS total velocity (vel)
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "vel",
-        {
-            DependencyKey::measurement("GNSS", "velH"),
-            DependencyKey::measurement("GNSS", "velD")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> velH = session.getMeasurement("GNSS", "velH");
-        QVector<double> velD = session.getMeasurement("GNSS", "velD");
+    registerGnss(registry, "vel",
+        { gnss("velH"), gnss("velD") },
+        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+        QVector<double> velH = ctx.measurement("GNSS", "velH");
+        QVector<double> velD = ctx.measurement("GNSS", "velD");
 
         if (velH.isEmpty() || velD.isEmpty()) {
             qWarning() << "Cannot calculate vel due to missing velH or velD";
@@ -87,7 +224,7 @@ void Calculations::registerGnssCalculations()
         }
 
         if (velH.size() != velD.size()) {
-            qWarning() << "velH and velD size mismatch in session:" << session.getAttribute("_SESSION_ID");
+            qWarning() << "velH and velD size mismatch";
             return std::nullopt;
         }
 
@@ -99,75 +236,19 @@ void Calculations::registerGnssCalculations()
         return vel;
     });
 
-    // GNSS vertical acceleration (accD)
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "accD",
-        {
-            DependencyKey::measurement("GNSS", "velD"),
-            DependencyKey::measurement("GNSS", "time")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> velD = session.getMeasurement("GNSS", "velD");
-        QVector<double> time = session.getMeasurement("GNSS", "time");
-
-        if (velD.isEmpty()) {
-            qWarning() << "Cannot calculate accD due to missing velD";
-            return std::nullopt;
-        }
-
-        return Calculations::computeDerivative(velD, time);
-    });
-
-    // GNSS northward acceleration (accN)
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "accN",
-        {
-            DependencyKey::measurement("GNSS", "velN"),
-            DependencyKey::measurement("GNSS", "time")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> velN = session.getMeasurement("GNSS", "velN");
-        QVector<double> time = session.getMeasurement("GNSS", "time");
-
-        if (velN.isEmpty()) {
-            return std::nullopt;
-        }
-
-        return Calculations::computeDerivative(velN, time);
-    });
-
-    // GNSS eastward acceleration (accE)
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "accE",
-        {
-            DependencyKey::measurement("GNSS", "velE"),
-            DependencyKey::measurement("GNSS", "time")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> velE = session.getMeasurement("GNSS", "velE");
-        QVector<double> time = session.getMeasurement("GNSS", "time");
-
-        if (velE.isEmpty()) {
-            return std::nullopt;
-        }
-
-        return Calculations::computeDerivative(velE, time);
-    });
+    // GNSS vertical / northward / eastward acceleration
+    registerGnssDerivative(registry, "accD", "velD");
+    registerGnssDerivative(registry, "accN", "velN");
+    registerGnssDerivative(registry, "accE", "velE");
 
     // GNSS wind-corrected total speed (wcVel)
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "wcVel",
-        {
-            DependencyKey::measurement("GNSS", "velN"),
-            DependencyKey::measurement("GNSS", "velE"),
-            DependencyKey::measurement("GNSS", "velD"),
-            DependencyKey::attribute(SessionKeys::WindN),
-            DependencyKey::attribute(SessionKeys::WindE)
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> velN = session.getMeasurement("GNSS", "velN");
-        QVector<double> velE = session.getMeasurement("GNSS", "velE");
-        QVector<double> velD = session.getMeasurement("GNSS", "velD");
+    registerGnss(registry, "wcVel",
+        { gnss("velN"), gnss("velE"), gnss("velD"),
+          CalcInput::attribute(SessionKeys::WindN), CalcInput::attribute(SessionKeys::WindE) },
+        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+        QVector<double> velN = ctx.measurement("GNSS", "velN");
+        QVector<double> velE = ctx.measurement("GNSS", "velE");
+        QVector<double> velD = ctx.measurement("GNSS", "velD");
 
         if (velN.isEmpty() || velE.isEmpty() || velD.isEmpty()) {
             return std::nullopt;
@@ -176,11 +257,8 @@ void Calculations::registerGnssCalculations()
             return std::nullopt;
         }
 
-        bool ok;
-        double windN = session.getAttribute(SessionKeys::WindN).toDouble(&ok);
-        if (!ok) windN = 0.0;
-        double windE = session.getAttribute(SessionKeys::WindE).toDouble(&ok);
-        if (!ok) windE = 0.0;
+        const double windN = windComponent(ctx, SessionKeys::WindN);
+        const double windE = windComponent(ctx, SessionKeys::WindE);
 
         QVector<double> result;
         result.reserve(velN.size());
@@ -194,18 +272,13 @@ void Calculations::registerGnssCalculations()
     });
 
     // GNSS course (unwrapped heading minus reference)
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "course",
-        {
-            DependencyKey::measurement("GNSS", "velN"),
-            DependencyKey::measurement("GNSS", "velE"),
-            DependencyKey::measurement("GNSS", SessionKeys::Time),
-            DependencyKey::attribute(SessionKeys::CourseRef)
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> velN = session.getMeasurement("GNSS", "velN");
-        QVector<double> velE = session.getMeasurement("GNSS", "velE");
-        QVector<double> time = session.getMeasurement("GNSS", SessionKeys::Time);
+    registerGnss(registry, "course",
+        { gnss("velN"), gnss("velE"), gnss(SessionKeys::Time),
+          CalcInput::attribute(SessionKeys::CourseRef) },
+        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+        QVector<double> velN = ctx.measurement("GNSS", "velN");
+        QVector<double> velE = ctx.measurement("GNSS", "velE");
+        QVector<double> time = ctx.measurement("GNSS", SessionKeys::Time);
 
         if (velN.isEmpty() || velE.isEmpty() || time.isEmpty()) {
             return std::nullopt;
@@ -235,7 +308,7 @@ void Calculations::registerGnssCalculations()
         // Determine reference angle from CourseRef time
         double courseRef = 0.0;
         bool ok;
-        double refTime = session.getAttribute(SessionKeys::CourseRef).toDouble(&ok);
+        double refTime = ctx.attribute(SessionKeys::CourseRef).toDouble(&ok);
         if (ok && refTime >= time.first() && refTime <= time.last()) {
             auto it = std::lower_bound(time.constBegin(), time.constEnd(), refTime);
             int idx = std::clamp<int>(int(it - time.constBegin()), 1, time.size() - 1);
@@ -258,33 +331,14 @@ void Calculations::registerGnssCalculations()
     });
 
     // GNSS course rate (rate of change of course)
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "courseRate",
-        {
-            DependencyKey::measurement("GNSS", "course"),
-            DependencyKey::measurement("GNSS", "time")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> course = session.getMeasurement("GNSS", "course");
-        QVector<double> time = session.getMeasurement("GNSS", "time");
-
-        if (course.isEmpty()) {
-            return std::nullopt;
-        }
-
-        return Calculations::computeDerivative(course, time);
-    });
+    registerGnssDerivative(registry, "courseRate", "course");
 
     // GNSS glide ratio
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "glideRatio",
-        {
-            DependencyKey::measurement("GNSS", "velH"),
-            DependencyKey::measurement("GNSS", "velD")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> velH = session.getMeasurement("GNSS", "velH");
-        QVector<double> velD = session.getMeasurement("GNSS", "velD");
+    registerGnss(registry, "glideRatio",
+        { gnss("velH"), gnss("velD") },
+        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+        QVector<double> velH = ctx.measurement("GNSS", "velH");
+        QVector<double> velD = ctx.measurement("GNSS", "velD");
 
         if (velH.isEmpty() || velD.isEmpty()) {
             return std::nullopt;
@@ -306,15 +360,11 @@ void Calculations::registerGnssCalculations()
     });
 
     // GNSS dive angle
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "diveAngle",
-        {
-            DependencyKey::measurement("GNSS", "velH"),
-            DependencyKey::measurement("GNSS", "velD")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> velH = session.getMeasurement("GNSS", "velH");
-        QVector<double> velD = session.getMeasurement("GNSS", "velD");
+    registerGnss(registry, "diveAngle",
+        { gnss("velH"), gnss("velD") },
+        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+        QVector<double> velH = ctx.measurement("GNSS", "velH");
+        QVector<double> velD = ctx.measurement("GNSS", "velD");
 
         if (velH.isEmpty() || velD.isEmpty()) {
             return std::nullopt;
@@ -332,35 +382,16 @@ void Calculations::registerGnssCalculations()
     });
 
     // GNSS dive angle rate (rate of change of dive angle)
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "diveAngleRate",
-        {
-            DependencyKey::measurement("GNSS", "diveAngle"),
-            DependencyKey::measurement("GNSS", "time")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> diveAngle = session.getMeasurement("GNSS", "diveAngle");
-        QVector<double> time = session.getMeasurement("GNSS", "time");
-
-        if (diveAngle.isEmpty()) {
-            return std::nullopt;
-        }
-
-        return Calculations::computeDerivative(diveAngle, time);
-    });
+    registerGnssDerivative(registry, "diveAngleRate", "diveAngle");
 
     // GNSS horizontal acceleration (accH)
     // Magnitude of the horizontal component of the total acceleration vector,
     // so that sqrt(accH^2 + accD^2) equals the total acceleration magnitude.
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "accH",
-        {
-            DependencyKey::measurement("GNSS", "accN"),
-            DependencyKey::measurement("GNSS", "accE")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> accN = session.getMeasurement("GNSS", "accN");
-        QVector<double> accE = session.getMeasurement("GNSS", "accE");
+    registerGnss(registry, "accH",
+        { gnss("accN"), gnss("accE") },
+        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+        QVector<double> accN = ctx.measurement("GNSS", "accN");
+        QVector<double> accE = ctx.measurement("GNSS", "accE");
 
         if (accN.isEmpty() || accE.isEmpty()) {
             return std::nullopt;
@@ -378,17 +409,12 @@ void Calculations::registerGnssCalculations()
     });
 
     // GNSS wind-corrected horizontal speed (wcVelH)
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "wcVelH",
-        {
-            DependencyKey::measurement("GNSS", "velN"),
-            DependencyKey::measurement("GNSS", "velE"),
-            DependencyKey::attribute(SessionKeys::WindN),
-            DependencyKey::attribute(SessionKeys::WindE)
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> velN = session.getMeasurement("GNSS", "velN");
-        QVector<double> velE = session.getMeasurement("GNSS", "velE");
+    registerGnss(registry, "wcVelH",
+        { gnss("velN"), gnss("velE"),
+          CalcInput::attribute(SessionKeys::WindN), CalcInput::attribute(SessionKeys::WindE) },
+        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+        QVector<double> velN = ctx.measurement("GNSS", "velN");
+        QVector<double> velE = ctx.measurement("GNSS", "velE");
 
         if (velN.isEmpty() || velE.isEmpty()) {
             return std::nullopt;
@@ -397,11 +423,8 @@ void Calculations::registerGnssCalculations()
             return std::nullopt;
         }
 
-        bool ok;
-        double windN = session.getAttribute(SessionKeys::WindN).toDouble(&ok);
-        if (!ok) windN = 0.0;
-        double windE = session.getAttribute(SessionKeys::WindE).toDouble(&ok);
-        if (!ok) windE = 0.0;
+        const double windN = windComponent(ctx, SessionKeys::WindN);
+        const double windE = windComponent(ctx, SessionKeys::WindE);
 
         QVector<double> result;
         result.reserve(velN.size());
@@ -413,26 +436,22 @@ void Calculations::registerGnssCalculations()
         return result;
     });
 
+    // Inputs shared by the track-relative accelerations
+    const QList<CalcInput> trackInputs = {
+        gnss("accN"), gnss("accE"), gnss("accD"),
+        gnss("velN"), gnss("velE"), gnss("velD"),
+        CalcInput::attribute(SessionKeys::WindN), CalcInput::attribute(SessionKeys::WindE)
+    };
+
     // GNSS along-track acceleration (accAlongTrack)
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "accAlongTrack",
-        {
-            DependencyKey::measurement("GNSS", "accN"),
-            DependencyKey::measurement("GNSS", "accE"),
-            DependencyKey::measurement("GNSS", "accD"),
-            DependencyKey::measurement("GNSS", "velN"),
-            DependencyKey::measurement("GNSS", "velE"),
-            DependencyKey::measurement("GNSS", "velD"),
-            DependencyKey::attribute(SessionKeys::WindN),
-            DependencyKey::attribute(SessionKeys::WindE)
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> accN = session.getMeasurement("GNSS", "accN");
-        QVector<double> accE = session.getMeasurement("GNSS", "accE");
-        QVector<double> accD = session.getMeasurement("GNSS", "accD");
-        QVector<double> velN = session.getMeasurement("GNSS", "velN");
-        QVector<double> velE = session.getMeasurement("GNSS", "velE");
-        QVector<double> velD = session.getMeasurement("GNSS", "velD");
+    registerGnss(registry, "accAlongTrack", trackInputs,
+        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+        QVector<double> accN = ctx.measurement("GNSS", "accN");
+        QVector<double> accE = ctx.measurement("GNSS", "accE");
+        QVector<double> accD = ctx.measurement("GNSS", "accD");
+        QVector<double> velN = ctx.measurement("GNSS", "velN");
+        QVector<double> velE = ctx.measurement("GNSS", "velE");
+        QVector<double> velD = ctx.measurement("GNSS", "velD");
 
         if (accN.isEmpty() || accE.isEmpty() || accD.isEmpty() ||
             velN.isEmpty() || velE.isEmpty() || velD.isEmpty()) {
@@ -445,11 +464,8 @@ void Calculations::registerGnssCalculations()
             return std::nullopt;
         }
 
-        bool ok;
-        double windN = session.getAttribute(SessionKeys::WindN).toDouble(&ok);
-        if (!ok) windN = 0.0;
-        double windE = session.getAttribute(SessionKeys::WindE).toDouble(&ok);
-        if (!ok) windE = 0.0;
+        const double windN = windComponent(ctx, SessionKeys::WindN);
+        const double windE = windComponent(ctx, SessionKeys::WindE);
 
         QVector<double> result;
         result.reserve(n);
@@ -473,25 +489,14 @@ void Calculations::registerGnssCalculations()
     });
 
     // GNSS cross-track acceleration (accCrossTrack)
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "accCrossTrack",
-        {
-            DependencyKey::measurement("GNSS", "accN"),
-            DependencyKey::measurement("GNSS", "accE"),
-            DependencyKey::measurement("GNSS", "accD"),
-            DependencyKey::measurement("GNSS", "velN"),
-            DependencyKey::measurement("GNSS", "velE"),
-            DependencyKey::measurement("GNSS", "velD"),
-            DependencyKey::attribute(SessionKeys::WindN),
-            DependencyKey::attribute(SessionKeys::WindE)
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> accN = session.getMeasurement("GNSS", "accN");
-        QVector<double> accE = session.getMeasurement("GNSS", "accE");
-        QVector<double> accD = session.getMeasurement("GNSS", "accD");
-        QVector<double> velN = session.getMeasurement("GNSS", "velN");
-        QVector<double> velE = session.getMeasurement("GNSS", "velE");
-        QVector<double> velD = session.getMeasurement("GNSS", "velD");
+    registerGnss(registry, "accCrossTrack", trackInputs,
+        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+        QVector<double> accN = ctx.measurement("GNSS", "accN");
+        QVector<double> accE = ctx.measurement("GNSS", "accE");
+        QVector<double> accD = ctx.measurement("GNSS", "accD");
+        QVector<double> velN = ctx.measurement("GNSS", "velN");
+        QVector<double> velE = ctx.measurement("GNSS", "velE");
+        QVector<double> velD = ctx.measurement("GNSS", "velD");
 
         if (accN.isEmpty() || accE.isEmpty() || accD.isEmpty() ||
             velN.isEmpty() || velE.isEmpty() || velD.isEmpty()) {
@@ -504,11 +509,8 @@ void Calculations::registerGnssCalculations()
             return std::nullopt;
         }
 
-        bool ok;
-        double windN = session.getAttribute(SessionKeys::WindN).toDouble(&ok);
-        if (!ok) windN = 0.0;
-        double windE = session.getAttribute(SessionKeys::WindE).toDouble(&ok);
-        if (!ok) windE = 0.0;
+        const double windN = windComponent(ctx, SessionKeys::WindN);
+        const double windE = windComponent(ctx, SessionKeys::WindE);
 
         QVector<double> result;
         result.reserve(n);
@@ -535,206 +537,31 @@ void Calculations::registerGnssCalculations()
         return result;
     });
 
-    // GNSS lift coefficient (lift)
-    // Uses gravity-corrected acceleration: aeroD = accD - g, so that
-    // level constant-speed flight (zero kinematic acceleration) correctly
-    // shows ~1g of lift.
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "lift",
-        {
-            DependencyKey::measurement("GNSS", "accN"),
-            DependencyKey::measurement("GNSS", "accE"),
-            DependencyKey::measurement("GNSS", "accD"),
-            DependencyKey::measurement("GNSS", "velN"),
-            DependencyKey::measurement("GNSS", "velE"),
-            DependencyKey::measurement("GNSS", "velD"),
-            DependencyKey::measurement("GNSS", "wcVel"),
-            DependencyKey::measurement("GNSS", "hMSL"),
-            DependencyKey::attribute(SessionKeys::WindN),
-            DependencyKey::attribute(SessionKeys::WindE),
-            DependencyKey::attribute(SessionKeys::JumperMass),
-            DependencyKey::attribute(SessionKeys::PlanformArea)
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        constexpr double g = 9.80665;
+    // GNSS lift and drag coefficients
+    const QList<CalcInput> aeroInputs = {
+        gnss("accN"), gnss("accE"), gnss("accD"),
+        gnss("velN"), gnss("velE"), gnss("velD"),
+        gnss("wcVel"), gnss("hMSL"),
+        CalcInput::attribute(SessionKeys::WindN), CalcInput::attribute(SessionKeys::WindE),
+        CalcInput::attribute(SessionKeys::JumperMass), CalcInput::attribute(SessionKeys::PlanformArea)
+    };
 
-        QVector<double> accN = session.getMeasurement("GNSS", "accN");
-        QVector<double> accE = session.getMeasurement("GNSS", "accE");
-        QVector<double> accD = session.getMeasurement("GNSS", "accD");
-        QVector<double> velN = session.getMeasurement("GNSS", "velN");
-        QVector<double> velE = session.getMeasurement("GNSS", "velE");
-        QVector<double> velD = session.getMeasurement("GNSS", "velD");
-        QVector<double> wcVel = session.getMeasurement("GNSS", "wcVel");
-        QVector<double> hMSL = session.getMeasurement("GNSS", "hMSL");
+    registerGnss(registry, "lift", aeroInputs,
+        [](const EvaluationContext &ctx) {
+            return computeAeroCoefficient(ctx, AeroCoefficient::Lift);
+        });
 
-        if (accN.isEmpty() || accE.isEmpty() || accD.isEmpty() ||
-            velN.isEmpty() || velE.isEmpty() || velD.isEmpty() ||
-            wcVel.isEmpty() || hMSL.isEmpty()) {
-            return std::nullopt;
-        }
-
-        int n = accN.size();
-        if (accE.size() != n || accD.size() != n ||
-            velN.size() != n || velE.size() != n || velD.size() != n ||
-            wcVel.size() != n || hMSL.size() != n) {
-            return std::nullopt;
-        }
-
-        bool ok;
-        double windN = session.getAttribute(SessionKeys::WindN).toDouble(&ok);
-        if (!ok) windN = 0.0;
-        double windE = session.getAttribute(SessionKeys::WindE).toDouble(&ok);
-        if (!ok) windE = 0.0;
-
-        QVariant massVar = session.getAttribute(SessionKeys::JumperMass);
-        QVariant areaVar = session.getAttribute(SessionKeys::PlanformArea);
-        if (!massVar.isValid() || !areaVar.isValid()) return std::nullopt;
-        double mass = massVar.toDouble();
-        double area = areaVar.toDouble();
-
-        QVector<double> result;
-        result.reserve(n);
-        for (int i = 0; i < n; ++i) {
-            double rho = Calculations::isaDensity(hMSL[i]);
-            double mu = wcVel[i];
-            if (mu < 1e-9 || rho < 1e-12 || area < 1e-12) {
-                result.append(std::numeric_limits<double>::quiet_NaN());
-                continue;
-            }
-
-            // Gravity-corrected acceleration
-            double aeroN = accN[i];
-            double aeroE = accE[i];
-            double aeroD = accD[i] - g;
-
-            // Wind-corrected velocity unit vector
-            double wcN = velN[i] - windN;
-            double wcE = velE[i] - windE;
-            double wcD = velD[i];
-            double wcMag = std::sqrt(wcN * wcN + wcE * wcE + wcD * wcD);
-
-            if (wcMag < 1e-9) {
-                result.append(std::numeric_limits<double>::quiet_NaN());
-                continue;
-            }
-
-            double uN = wcN / wcMag;
-            double uE = wcE / wcMag;
-            double uD = wcD / wcMag;
-
-            // Cross-track magnitude
-            double dot = aeroN * uN + aeroE * uE + aeroD * uD;
-            double aMag2 = aeroN * aeroN + aeroE * aeroE + aeroD * aeroD;
-            double crossTrack = std::sqrt(std::max(0.0, aMag2 - dot * dot));
-
-            result.append(2.0 * mass * crossTrack / (rho * mu * mu * area));
-        }
-        return result;
-    });
-
-    // GNSS drag coefficient (drag)
-    // Uses gravity-corrected acceleration, same as lift.
-    // Negated so that drag (deceleration along track) gives positive values.
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "drag",
-        {
-            DependencyKey::measurement("GNSS", "accN"),
-            DependencyKey::measurement("GNSS", "accE"),
-            DependencyKey::measurement("GNSS", "accD"),
-            DependencyKey::measurement("GNSS", "velN"),
-            DependencyKey::measurement("GNSS", "velE"),
-            DependencyKey::measurement("GNSS", "velD"),
-            DependencyKey::measurement("GNSS", "wcVel"),
-            DependencyKey::measurement("GNSS", "hMSL"),
-            DependencyKey::attribute(SessionKeys::WindN),
-            DependencyKey::attribute(SessionKeys::WindE),
-            DependencyKey::attribute(SessionKeys::JumperMass),
-            DependencyKey::attribute(SessionKeys::PlanformArea)
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        constexpr double g = 9.80665;
-
-        QVector<double> accN = session.getMeasurement("GNSS", "accN");
-        QVector<double> accE = session.getMeasurement("GNSS", "accE");
-        QVector<double> accD = session.getMeasurement("GNSS", "accD");
-        QVector<double> velN = session.getMeasurement("GNSS", "velN");
-        QVector<double> velE = session.getMeasurement("GNSS", "velE");
-        QVector<double> velD = session.getMeasurement("GNSS", "velD");
-        QVector<double> wcVel = session.getMeasurement("GNSS", "wcVel");
-        QVector<double> hMSL = session.getMeasurement("GNSS", "hMSL");
-
-        if (accN.isEmpty() || accE.isEmpty() || accD.isEmpty() ||
-            velN.isEmpty() || velE.isEmpty() || velD.isEmpty() ||
-            wcVel.isEmpty() || hMSL.isEmpty()) {
-            return std::nullopt;
-        }
-
-        int n = accN.size();
-        if (accE.size() != n || accD.size() != n ||
-            velN.size() != n || velE.size() != n || velD.size() != n ||
-            wcVel.size() != n || hMSL.size() != n) {
-            return std::nullopt;
-        }
-
-        bool ok;
-        double windN = session.getAttribute(SessionKeys::WindN).toDouble(&ok);
-        if (!ok) windN = 0.0;
-        double windE = session.getAttribute(SessionKeys::WindE).toDouble(&ok);
-        if (!ok) windE = 0.0;
-
-        QVariant massVar = session.getAttribute(SessionKeys::JumperMass);
-        QVariant areaVar = session.getAttribute(SessionKeys::PlanformArea);
-        if (!massVar.isValid() || !areaVar.isValid()) return std::nullopt;
-        double mass = massVar.toDouble();
-        double area = areaVar.toDouble();
-
-        QVector<double> result;
-        result.reserve(n);
-        for (int i = 0; i < n; ++i) {
-            double rho = Calculations::isaDensity(hMSL[i]);
-            double mu = wcVel[i];
-            if (mu < 1e-9 || rho < 1e-12 || area < 1e-12) {
-                result.append(std::numeric_limits<double>::quiet_NaN());
-                continue;
-            }
-
-            // Gravity-corrected acceleration
-            double aeroN = accN[i];
-            double aeroE = accE[i];
-            double aeroD = accD[i] - g;
-
-            // Wind-corrected velocity unit vector
-            double wcN = velN[i] - windN;
-            double wcE = velE[i] - windE;
-            double wcD = velD[i];
-            double wcMag = std::sqrt(wcN * wcN + wcE * wcE + wcD * wcD);
-
-            if (wcMag < 1e-9) {
-                result.append(std::numeric_limits<double>::quiet_NaN());
-                continue;
-            }
-
-            double uN = wcN / wcMag;
-            double uE = wcE / wcMag;
-            double uD = wcD / wcMag;
-
-            // Along-track component (negated: drag positive)
-            double alongTrack = aeroN * uN + aeroE * uE + aeroD * uD;
-            result.append(-2.0 * mass * alongTrack / (rho * mu * mu * area));
-        }
-        return result;
-    });
+    registerGnss(registry, "drag", aeroInputs,
+        [](const EvaluationContext &ctx) {
+            return computeAeroCoefficient(ctx, AeroCoefficient::Drag);
+        });
 
     // GNSS specific energy
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "specificEnergy",
-        {
-            DependencyKey::measurement("GNSS", "vel"),
-            DependencyKey::measurement("GNSS", "z")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> vel = session.getMeasurement("GNSS", "vel");
-        QVector<double> z = session.getMeasurement("GNSS", "z");
+    registerGnss(registry, "specificEnergy",
+        { gnss("vel"), gnss("z") },
+        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+        QVector<double> vel = ctx.measurement("GNSS", "vel");
+        QVector<double> z = ctx.measurement("GNSS", "z");
 
         if (vel.isEmpty() || z.isEmpty()) {
             return std::nullopt;
@@ -754,20 +581,5 @@ void Calculations::registerGnssCalculations()
     });
 
     // GNSS specific energy rate
-    SessionData::registerCalculatedMeasurement(
-        "GNSS", "specificEnergyRate",
-        {
-            DependencyKey::measurement("GNSS", "specificEnergy"),
-            DependencyKey::measurement("GNSS", "time")
-        },
-        [](SessionData& session) -> std::optional<QVector<double>> {
-        QVector<double> specificEnergy = session.getMeasurement("GNSS", "specificEnergy");
-        QVector<double> time = session.getMeasurement("GNSS", "time");
-
-        if (specificEnergy.isEmpty()) {
-            return std::nullopt;
-        }
-
-        return Calculations::computeDerivative(specificEnergy, time);
-    });
+    registerGnssDerivative(registry, "specificEnergyRate", "specificEnergy");
 }

@@ -1,9 +1,14 @@
 // dataexporter.cpp
 
 #include "dataexporter.h"
+
+#include <functional>
+
+#include <QDebug>
 #include <QSaveFile>
-#include <QTextStream>
-#include <QStringConverter>
+
+#include "conversion/schematable.h"
+#include "csvformat.h"
 
 namespace FlySight {
 
@@ -53,109 +58,237 @@ QStringList reorder(const QStringList &keys, const QStringList &preferredOrder)
     return result;
 }
 
-} // anonymous namespace
+// Everything the writer needs for one sensor, gathered and validated before a
+// single byte is produced. Sample buffers are shared with the session, never
+// copied.
+struct SensorPlan {
+    QString name;
+    QStringList columns;                // output order
+    QList<SourceColumn> data;           // parallel to columns
+    qsizetype rowCount = 0;             // the validated common length
+};
 
-bool DataExporter::exportSession(const QString &filePath, const SessionData &sessionData)
+QString textError(const QString &sensor, const QString &text)
 {
-    // Atomic write via QSaveFile
-    QSaveFile saveFile(filePath);
-    if (!saveFile.open(QIODevice::WriteOnly)) {
-        return false;
+    return QStringLiteral("Sensor '%1': name/column/unit text cannot be written ('%2')")
+        .arg(sensor, text);
+}
+
+// Builds the per-sensor plan from the source layer. Returns false with *error
+// set when the source layer cannot be expressed in the row format.
+bool planSensors(const SourceData &source, QList<SensorPlan> &plans, QString *error)
+{
+    const QStringList sensors = reorder(source.keys(), kSensorOrder);
+    for (const QString &sensorKey : sensors) {
+        const SourceSensor sensor = source.value(sensorKey);
+
+        SensorPlan plan;
+        plan.name = sensorKey;
+        plan.columns = reorder(sensor.keys(), kMeasurementOrder.value(sensorKey));
+
+        if (!CsvFormat::isValidName(sensorKey)) {
+            if (error)
+                *error = textError(sensorKey, sensorKey);
+            return false;
+        }
+
+        for (const QString &col : std::as_const(plan.columns)) {
+            const SourceColumn column = sensor.value(col);
+            if (!CsvFormat::isValidName(col)) {
+                if (error)
+                    *error = textError(sensorKey, col);
+                return false;
+            }
+            if (!CsvFormat::isValidUnit(column.unit)) {
+                if (error)
+                    *error = textError(sensorKey, column.unit);
+                return false;
+            }
+            plan.data.append(column);
+        }
+
+        // Ragged sensors are an error, checked up front so that the row loop
+        // can never read out of range.
+        if (!plan.data.isEmpty()) {
+            plan.rowCount = plan.data.first().samples.size();
+            for (qsizetype c = 1; c < plan.data.size(); ++c) {
+                if (plan.data[c].samples.size() == plan.rowCount)
+                    continue;
+                if (error) {
+                    *error = QStringLiteral("Sensor '%1' has columns of unequal length (%2: %3, %4: %5)")
+                                 .arg(sensorKey, plan.columns.first())
+                                 .arg(plan.rowCount)
+                                 .arg(plan.columns[c])
+                                 .arg(plan.data[c].samples.size());
+                }
+                return false;
+            }
+        }
+
+        plans.append(plan);
     }
+    return true;
+}
 
-    QTextStream stream(&saveFile);
-    stream.setEncoding(QStringConverter::Utf8);
-    stream.setGenerateByteOrderMark(false);
-    stream.setRealNumberPrecision(15);
-    stream.setRealNumberNotation(QTextStream::SmartNotation);
+// A stored SCHEMA_VER the importer would reject must never reach a file: the
+// session could not be loaded again. No UI path stores one, but setAttribute
+// is public. Absence is fine (and is never filled in).
+bool validateSchema(const SessionData &sessionData, QString *error)
+{
+    const QString key = QString::fromLatin1(Schema::AttributeKey);
+    if (!sessionData.hasStoredAttribute(key))
+        return true;
+    const QVariant recorded = sessionData.storedAttribute(key);
+    if (Schema::parseVersion(recorded))
+        return true;
+    if (error)
+        *error = Schema::unsupportedMessage(recorded);
+    return false;
+}
 
-    // Version line
-    stream << "$FLYS,1\n";
+// "$FLYS" line through "$DATA" line. Only stored attributes are read.
+QByteArray headerBytes(const SessionData &sessionData, const QList<SensorPlan> &plans)
+{
+    QString header = QStringLiteral("$FLYS,1\n");
 
     // Attribute lines (standard attributes first, then any others)
     const QStringList attrKeys = reorder(sessionData.attributeKeys(), kAttributeOrder);
     for (const QString &key : attrKeys) {
-        stream << "$VAR," << key << "," << sessionData.getAttribute(key).toString() << "\n";
+        if (!CsvFormat::isValidName(key)) {
+            qWarning("DataExporter: attribute '%s' cannot be written (%s)",
+                     qPrintable(key), "the key contains ',' or a line break");
+            continue;
+        }
+        const std::optional<QString> text =
+            CsvFormat::formatAttributeValue(sessionData.storedAttribute(key));
+        if (!text) {
+            qWarning("DataExporter: attribute '%s' cannot be written (%s)",
+                     qPrintable(key), "the value has no text form");
+            continue;
+        }
+        header += QStringLiteral("$VAR,") + key + QLatin1Char(',') + *text + QLatin1Char('\n');
     }
 
     // Column and unit headers (standard sensors/columns first, then any others)
-    const QStringList sensors = reorder(sessionData.sensorKeys(), kSensorOrder);
-    for (const QString &sensorKey : sensors) {
-        const QStringList columns = reorder(sessionData.measurementKeys(sensorKey),
-                                            kMeasurementOrder.value(sensorKey));
+    for (const SensorPlan &plan : plans) {
+        header += QStringLiteral("$COL,") + plan.name;
+        for (const QString &col : plan.columns)
+            header += QLatin1Char(',') + col;
+        header += QLatin1Char('\n');
 
-        // $COL line
-        stream << "$COL," << sensorKey;
-        for (const QString &col : columns) {
-            stream << "," << col;
-        }
-        stream << "\n";
-
-        // $UNIT line
-        stream << "$UNIT," << sensorKey;
-        for (const QString &col : columns) {
-            stream << "," << sessionData.getUnit(sensorKey, col);
-        }
-        stream << "\n";
+        header += QStringLiteral("$UNIT,") + plan.name;
+        for (const SourceColumn &column : plan.data)
+            header += QLatin1Char(',') + column.unit;
+        header += QLatin1Char('\n');
     }
 
-    // Data marker
-    stream << "$DATA\n";
-    stream.flush();
+    header += QStringLiteral("$DATA\n");
+    return header.toUtf8();
+}
 
-    // Data rows: build into a QByteArray buffer, then write in bulk.
-    // This avoids per-value QTextStream overhead for double formatting.
+// Data rows, handed to `sink` in chunks of about 4 MB so that a large session
+// is never held in memory as text. Every number goes through
+// CsvFormat::formatDouble - nothing else may format a number.
+void writeRows(const QList<SensorPlan> &plans, const std::function<void(const QByteArray &)> &sink)
+{
     QByteArray buf;
     buf.reserve(1024 * 1024); // pre-allocate 1 MB
 
-    for (const QString &sensorKey : sensors) {
-        const QStringList columns = reorder(sessionData.measurementKeys(sensorKey),
-                                            kMeasurementOrder.value(sensorKey));
-        if (columns.isEmpty()) {
+    for (const SensorPlan &plan : plans) {
+        if (plan.data.isEmpty() || plan.rowCount == 0)
             continue;
-        }
 
-        const QByteArray sensorPrefix = QByteArray("$") + sensorKey.toUtf8();
+        const QByteArray sensorPrefix = QByteArray("$") + plan.name.toUtf8();
 
-        // Determine sample count from the first column
-        const QVector<double> firstCol = sessionData.getMeasurement(sensorKey, columns.first());
-        const int sampleCount = firstCol.size();
+        QVector<const double *> columnData;
+        columnData.reserve(plan.data.size());
+        for (const SourceColumn &column : plan.data)
+            columnData.append(column.samples.constData());
 
-        // Gather all column vectors to avoid repeated lookups
-        QVector<QVector<double>> columnData;
-        columnData.reserve(columns.size());
-        for (const QString &col : columns) {
-            columnData.append(sessionData.getMeasurement(sensorKey, col));
-        }
-
-        const int numCols = columnData.size();
-        for (int i = 0; i < sampleCount; ++i) {
+        const qsizetype numCols = columnData.size();
+        for (qsizetype i = 0; i < plan.rowCount; ++i) {
             buf.append(sensorPrefix);
-            for (int c = 0; c < numCols; ++c) {
+            for (qsizetype c = 0; c < numCols; ++c) {
                 buf.append(',');
-                buf.append(QByteArray::number(columnData[c][i], 'g', 15));
+                buf.append(CsvFormat::formatDouble(columnData[c][i]));
             }
             buf.append('\n');
 
             // Flush buffer periodically to avoid excessive memory use
             if (buf.size() > 4 * 1024 * 1024) {
-                saveFile.write(buf);
+                sink(buf);
                 buf.clear();
             }
         }
     }
 
-    if (!buf.isEmpty()) {
-        saveFile.write(buf);
+    if (!buf.isEmpty())
+        sink(buf);
+}
+
+QString writeError(const QString &filePath, const QSaveFile &file)
+{
+    return QStringLiteral("Couldn't write file '%1': %2").arg(filePath, file.errorString());
+}
+
+} // anonymous namespace
+
+std::optional<QByteArray> DataExporter::toBytes(const SessionData &sessionData, QString *error)
+{
+    if (error)
+        error->clear();
+
+    // Snapshot of the source layer: implicitly shared, no sample is copied.
+    const SourceData source = sessionData.sourceData();
+
+    QList<SensorPlan> plans;
+    if (!validateSchema(sessionData, error) || !planSensors(source, plans, error))
+        return std::nullopt;
+
+    QByteArray bytes = headerBytes(sessionData, plans);
+    writeRows(plans, [&bytes](const QByteArray &chunk) { bytes.append(chunk); });
+    return bytes;
+}
+
+bool DataExporter::exportSession(const QString &filePath, const SessionData &sessionData, QString *error)
+{
+    if (error)
+        error->clear();
+
+    // Snapshot of the source layer: implicitly shared, no sample is copied.
+    const SourceData source = sessionData.sourceData();
+
+    // Validate before the file is opened: on failure nothing is written and
+    // whatever is at filePath stays as it is.
+    QList<SensorPlan> plans;
+    if (!validateSchema(sessionData, error) || !planSensors(source, plans, error))
+        return false;
+
+    // Atomic write via QSaveFile
+    QSaveFile saveFile(filePath);
+    if (!saveFile.open(QIODevice::WriteOnly)) {
+        if (error)
+            *error = writeError(filePath, saveFile);
+        return false;
     }
 
-    // Flush and commit atomically
+    saveFile.write(headerBytes(sessionData, plans));
+    writeRows(plans, [&saveFile](const QByteArray &chunk) { saveFile.write(chunk); });
+
     if (saveFile.error() != QFileDevice::NoError) {
+        if (error)
+            *error = writeError(filePath, saveFile);
         saveFile.cancelWriting();
         return false;
     }
 
-    return saveFile.commit();
+    // Commit atomically
+    if (!saveFile.commit()) {
+        if (error)
+            *error = writeError(filePath, saveFile);
+        return false;
+    }
+    return true;
 }
 
 } // namespace FlySight

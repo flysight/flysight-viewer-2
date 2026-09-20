@@ -5,6 +5,7 @@
 #include "calculations/timecalculations.h"
 
 #include <QDateTime>
+#include <QTimeZone>
 #include <QVariant>
 #include <QStringLiteral>
 
@@ -107,7 +108,7 @@ QString formatXAxisValue(double plotX,
 
     // Absolute UTC mode: no reference marker and x-variable is _time.
     if (referenceMarkerKey.isEmpty() && xVariable == QLatin1String(SessionKeys::Time)) {
-        return QDateTime::fromMSecsSinceEpoch(qint64(plotX * 1000.0), Qt::UTC)
+        return QDateTime::fromMSecsSinceEpoch(qint64(plotX * 1000.0), QTimeZone::UTC)
                    .toString(QStringLiteral("HH:mm:ss.zzz"));
     }
 
