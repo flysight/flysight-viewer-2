@@ -307,6 +307,83 @@ void registerSharedWorld(CalculationRegistry &registry)
     registry.registerCalculation(S());
 }
 
+// ---- overlapping rings
+
+namespace {
+
+struct TangleSpec {
+    const char *id;
+    const char *output;
+    QList<const char *> inputs;
+    int constant;
+};
+
+const QList<TangleSpec> &tangleSpecs()
+{
+    static const QList<TangleSpec> specs = {
+        {"oP", "OX", {"OY"}, 1},       {"oQ", "OX", {}, 100},
+        {"oR", "OY", {"OX"}, 1},       {"oS", "OY", {"OX"}, 2},
+        {"eA", "E1", {"OX"}, 1},
+        {"eB", "E2", {"OY"}, 1},       {"eF", "E2", {}, 7},
+        {"tT", "C1", {"A1", "B1"}, 0}, {"tC", "C1", {}, 50},
+        {"tU", "A1", {"C1"}, 1},       {"tA", "A1", {}, 1},
+        {"tV", "B1", {"C1"}, 1},       {"tB", "B1", {}, 2},
+        {"k1", "K1", {"K2", "K3"}, 1}, {"c1", "K1", {}, 10},
+        {"k2", "K2", {"K1", "K3"}, 1}, {"c2", "K2", {}, 20},
+        {"k3", "K3", {"K1", "K2"}, 1}, {"c3", "K3", {}, 30},
+    };
+    return specs;
+}
+
+} // namespace
+
+QStringList tangleIds()
+{
+    QStringList ids;
+    for (const TangleSpec &spec : tangleSpecs())
+        ids.append(QString::fromLatin1(spec.id));
+    return ids;
+}
+
+CalculationDescriptor tangle(const QString &id)
+{
+    CalculationDescriptor d;
+    for (const TangleSpec &spec : tangleSpecs()) {
+        if (id != QLatin1String(spec.id))
+            continue;
+        const QString output = QString::fromLatin1(spec.output);
+        QStringList inputs;
+        for (const char *input : spec.inputs)
+            inputs.append(QString::fromLatin1(input));
+        const int constant = spec.constant;
+
+        d.id = id;
+        for (const QString &input : inputs)
+            d.inputs.append(CalcInput::attribute(input));
+        d.outputs = {DependencyKey::attribute(output)};
+        d.compute = [output, inputs, constant](const EvaluationContext &ctx) {
+            int value = constant;
+            for (const QString &input : inputs)
+                value += ctx.attribute(input).toInt();
+            return CalculationResult().setAttribute(output, value);
+        };
+        break;
+    }
+    return d;
+}
+
+QList<DependencyKey> tangleNames()
+{
+    return {attr("OX"), attr("OY"), attr("E1"), attr("E2"), attr("C1"), attr("A1"), attr("B1"),
+            attr("K1"), attr("K2"), attr("K3")};
+}
+
+void registerTangleWorld(CalculationRegistry &registry)
+{
+    for (const QString &id : tangleIds())
+        registry.registerCalculation(tangle(id));
+}
+
 } // namespace Synthetic
 
 } // namespace FlySightTest

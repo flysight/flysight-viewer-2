@@ -5,6 +5,7 @@
 #include <QPair>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QVariant>
 #include <QVector>
 
@@ -106,6 +107,36 @@ FlySight::CalculationDescriptor S();
 
 /// Registers, in this order: sum, fallbackX, constX, triple, wAlt, meas, neg, P, Q, R, S.
 void registerSharedWorld(FlySight::CalculationRegistry &registry);
+
+/// Overlapping dependency rings, separate from the shared world. Every
+/// calculation here has one attribute output, whose value is the sum of its
+/// attribute inputs (read in the order listed) plus a constant. Candidates of a
+/// name are tried in the order listed.
+///
+/// | Name | Candidates (id: inputs + constant)                     | Value               |
+/// |------|--------------------------------------------------------|---------------------|
+/// | OX   | oP: OY + 1;        oQ: 100                             | 100                 |
+/// | OY   | oR: OX + 1;        oS: OX + 2                          | unavailable         |
+/// | E1   | eA: OX + 1                                             | 101                 |
+/// | E2   | eB: OY + 1;        eF: 7                               | 7                   |
+/// | C1   | tT: A1 + B1 + 0;   tC: 50                              | 50                  |
+/// | A1   | tU: C1 + 1;        tA: 1                               | 1                   |
+/// | B1   | tV: C1 + 1;        tB: 2                               | 51                  |
+/// | K1   | k1: K2 + K3 + 1;   c1: 10                              | 10                  |
+/// | K2   | k2: K1 + K3 + 1;   c2: 20                              | 20                  |
+/// | K3   | k3: K1 + K2 + 1;   c3: 30                              | 31                  |
+///
+/// OX/OY: oS is a SECOND candidate on a ring (oS -> OX -> oP -> OY), reached
+/// either with OX on the stack or after OX was answered; E1/E2 enter that
+/// tangle from outside and eF is a fallback outside it. C1/A1/B1: two rings
+/// through the one calculation tT. tT is cut at its first input, so it never
+/// reads B1 and tV is on no ring that is ever closed. K1..K3: each name's first
+/// candidate reads both other names. k1 and k2 cut each other, so k3 finds both
+/// of its inputs at their fallbacks and runs.
+QStringList tangleIds();                                        ///< in registration order
+FlySight::CalculationDescriptor tangle(const QString &id);      ///< one of tangleIds()
+QList<FlySight::DependencyKey> tangleNames();
+void registerTangleWorld(FlySight::CalculationRegistry &registry);
 
 // Shorthand for public names
 inline FlySight::DependencyKey attr(const char *key)

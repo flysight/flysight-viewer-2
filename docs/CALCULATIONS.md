@@ -97,10 +97,22 @@ always wins over any calculation.
 The engine records everything a resolution looked at, including the candidates
 it rejected, so a cached fallback is replaced when a preferred candidate
 becomes viable. A dependency cycle makes every calculation on the ring
-unavailable and logs a warning; never rely on that. (Known limitation: for
-*overlapping* cycles, which calculation is reported unavailable can depend on
-read order. The built-ins are acyclic, and `tst_session_oracle` asserts that no
-cycle ever occurs with them.)
+unavailable and logs a warning; never rely on that. The answers do not depend
+on read order, also when rings overlap: a result is cached only if its
+evaluation never ran into something that was being evaluated *above* it (so it
+is what an evaluation started at that node produces; the root of a read always
+qualifies, and so does a node with a ring closed entirely beneath it), anything
+else is used once and its dependencies pass to the nearest cached ancestor, and
+a cached answer that involved a cycle is re-evaluated rather than served when
+something it looked at is being evaluated right now. Work is repeated only
+inside cyclic regions; acyclic graphs cost exactly what they did.
+`resultStatus` for a calculation whose last evaluation was provisional is only
+a diagnostic from the most recent such evaluation: in tangled rings it can
+depend on read order (values never do), and it can revert to "no status" when
+a differing verdict replaced an earlier one and the answer holding the new one
+is invalidated, although an older answer is still cached. The built-ins
+are acyclic, and `tst_session_oracle` asserts that no cycle ever occurs with
+them.
 
 ## 6. Parameterized families
 

@@ -1,9 +1,10 @@
 // CalculationEngine safety (acceptance 12): nested evaluation with per-scope
-// dependency recording, cycle detection (read-order independent for a single
-// ring, including a ring closed through request()),
+// dependency recording, cycle detection (read-order independent for single and
+// for overlapping rings, including a ring closed through request()),
 // exception safety, and the re-entrancy guards. After every scenario the cached
 // answers are compared with a fresh evaluation.
 
+#include <algorithm>
 #include <optional>
 #include <stdexcept>
 
@@ -109,6 +110,31 @@ CalculationDescriptor feedsE()
     return d;
 }
 
+// constEY: output EY = 7. Registered after feedsE it is the fallback for EY.
+CalculationDescriptor constEY()
+{
+    CalculationDescriptor d;
+    d.id = QStringLiteral("constEY");
+    d.outputs = {attr("EY")};
+    d.compute = [](const EvaluationContext &) { return CalculationResult().setAttribute("EY", 7); };
+    return d;
+}
+
+// One attribute output = one attribute input + add.
+CalculationDescriptor plus(const char *id, const char *input, const char *output, int add)
+{
+    const QString in = QString::fromLatin1(input);
+    const QString out = QString::fromLatin1(output);
+    CalculationDescriptor d;
+    d.id = QString::fromLatin1(id);
+    d.inputs = {CalcInput::attribute(in)};
+    d.outputs = {DependencyKey::attribute(out)};
+    d.compute = [in, out, add](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(out, ctx.attribute(in).toInt() + add);
+    };
+    return d;
+}
+
 // A state whose reads can be made to throw: an exception that does not come
 // from a compute function.
 class ThrowingState : public FakeSessionState {
@@ -132,8 +158,15 @@ private slots:
     void cycleFallsBackIndependentOfReadOrder_data();
     void cycleFallsBackIndependentOfReadOrder();
     void pureCycleTerminates();
+    void overlappingRingsIndependentOfReadOrder_data();
+    void overlappingRingsIndependentOfReadOrder();
+    void overlappingRingsFollowEdits();
+    void provisionalResultsAreNotCached();
+    void ringBeneathAcyclicAncestorIsCached();
     void requestThroughOwnOutputIsCycle_data();
     void requestThroughOwnOutputIsCycle();
+    void requestOnRingWithFallback_data();
+    void requestOnRingWithFallback();
     void exceptionLeavesNoPartialResult_data();
     void exceptionLeavesNoPartialResult();
     void innerExceptionKeepsUnrelatedResults();
@@ -251,6 +284,231 @@ void CalcEngineSafetyTest::pureCycleTerminates()
     QCOMPARE(w.engine.scopeDepth(), 0);
 }
 
+void CalcEngineSafetyTest::overlappingRingsIndependentOfReadOrder_data()
+{
+    QTest::addColumn<QStringList>("keys");
+    QTest::addColumn<QVariantList>("expected");     // invalid = unavailable
+
+    // See Synthetic::registerTangleWorld for the topologies and the reasoning
+    // behind each literal.
+    QTest::newRow("second candidate on a ring")
+        << QStringList({"OX", "OY"}) << QVariantList({100, QVariant()});
+    QTest::newRow("ring entered from two names, fallback outside")
+        << QStringList({"E1", "E2", "OX", "OY"}) << QVariantList({101, 7, 100, QVariant()});
+    QTest::newRow("two rings through one calculation")
+        << QStringList({"A1", "B1", "C1"}) << QVariantList({1, 51, 50});
+    QTest::newRow("three-name tangle")
+        << QStringList({"K1", "K2", "K3"}) << QVariantList({10, 20, 31});
+}
+
+// Acceptance 10 / 12: with overlapping rings, which calculations are on the
+// stack when a ring closes depends on where the read started. The answers must
+// not: every permutation of the read order gives the same literal values, the
+// first read (nothing cached) as well as the later ones (served from, or next
+// to, what the earlier reads cached), and all of them equal a fresh evaluation.
+void CalcEngineSafetyTest::overlappingRingsIndependentOfReadOrder()
+{
+    QFETCH(QStringList, keys);
+    QFETCH(QVariantList, expected);
+    QCOMPARE(keys.size(), expected.size());
+
+    QList<int> order;
+    for (int i = 0; i < int(keys.size()); ++i)
+        order.append(i);
+
+    int permutations = 0;
+    do {
+        QByteArray where = "order";
+        for (int i : std::as_const(order))
+            where += ' ' + keys.at(i).toLatin1();
+
+        World w(false);
+        Synthetic::registerTangleWorld(w.registry);
+
+        for (int i : std::as_const(order))
+            QVERIFY2(w.engine.attribute(keys.at(i)) == expected.at(i),
+                     (where + ": first read of " + keys.at(i).toLatin1()).constData());
+        QVERIFY2(w.engine.cycleCount() >= 1, where.constData());
+
+        // Again, now that every name has been read at the top level.
+        for (int i = 0; i < int(keys.size()); ++i)
+            QVERIFY2(w.engine.attribute(keys.at(i)) == expected.at(i),
+                     (where + ": second read of " + keys.at(i).toLatin1()).constData());
+
+        const QList<DependencyKey> mismatch = w.engine.verifyAgainstFresh(Synthetic::tangleNames());
+        QVERIFY2(mismatch.isEmpty(),
+                 (where + ": differs from fresh: "
+                  + (mismatch.isEmpty() ? QByteArray() : describe(mismatch.first()).toUtf8())).constData());
+        QCOMPARE(w.engine.scopeDepth(), 0);
+        ++permutations;
+    } while (std::next_permutation(order.begin(), order.end()));
+
+    QVERIFY(permutations >= 2);
+}
+
+// Breaking and closing the rings by storing a value re-resolves everything
+// that was shaped by them, cached or provisional, from either side.
+void CalcEngineSafetyTest::overlappingRingsFollowEdits()
+{
+    for (const bool yFirst : {false, true}) {
+        World w(false);
+        Synthetic::registerTangleWorld(w.registry);
+        const QList<DependencyKey> names = Synthetic::tangleNames();
+
+        if (yFirst)
+            QVERIFY(!w.engine.attribute("OY").isValid());
+        QCOMPARE(w.engine.attribute("E2"), QVariant(7));
+        QCOMPARE(w.engine.attribute("OX"), QVariant(100));
+        QVERIFY(w.engine.verifyAgainstFresh(names).isEmpty());
+
+        // A stored OY cuts both rings: oP runs, and eB sees OY.
+        Names dropped = w.state.setAttribute(w.engine, "OY", 5);
+        QVERIFY(dropped.contains(attr("OX")));
+        QVERIFY(dropped.contains(attr("E2")));
+        w.engine.resetRunCounts();
+        QCOMPARE(w.engine.attribute("OX"), QVariant(6));
+        QCOMPARE(w.engine.attribute("E2"), QVariant(6));
+        QCOMPARE(w.engine.attribute("E1"), QVariant(7));
+        QCOMPARE(w.engine.attribute("OY"), QVariant(5));
+        QCOMPARE(w.engine.runCount("oP"), 1);       // no ring left: nothing is provisional
+        QCOMPARE(w.engine.runCount("eA"), 1);
+        QCOMPARE(w.engine.runCount("eB"), 1);
+        QCOMPARE(w.engine.totalRunCount(), 3);
+        QVERIFY(w.engine.verifyAgainstFresh(names).isEmpty());
+
+        // Removing it closes them again.
+        dropped = w.state.removeAttribute(w.engine, "OY");
+        QVERIFY(dropped.contains(attr("OX")));
+        QVERIFY(dropped.contains(attr("E1")));
+        QVERIFY(dropped.contains(attr("E2")));
+        if (!yFirst)
+            QCOMPARE(w.engine.attribute("OX"), QVariant(100));
+        QVERIFY(!w.engine.attribute("OY").isValid());
+        QCOMPARE(w.engine.attribute("OX"), QVariant(100));
+        QCOMPARE(w.engine.attribute("E1"), QVariant(101));
+        QCOMPARE(w.engine.attribute("E2"), QVariant(7));
+        QVERIFY(w.engine.verifyAgainstFresh(names).isEmpty());
+
+        // A registry change reaches an answer through a provisional candidate:
+        // without oQ, OX has nothing to fall back to.
+        QVERIFY(w.registry.unregister("oQ"));
+        QVERIFY(!w.engine.attribute("OX").isValid());
+        QVERIFY(!w.engine.attribute("E1").isValid());
+        QVERIFY(w.engine.verifyAgainstFresh(names).isEmpty());
+        QCOMPARE(w.engine.scopeDepth(), 0);
+    }
+}
+
+// What a read caches when it crosses a ring: the root and everything that did
+// not depend on the entry point; never a verdict that did. Inspection reports
+// the provisional verdicts without computing.
+void CalcEngineSafetyTest::provisionalResultsAreNotCached()
+{
+    using CachedState = CalculationEngine::CachedState;
+    World w(false);
+    Synthetic::registerTangleWorld(w.registry);
+
+    QCOMPARE(w.engine.attribute("OX"), QVariant(100));
+
+    // OY was unavailable BENEATH OX (oR and oS both met OX on the stack); that
+    // is not the answer for OY itself, so nothing was cached for it. oQ met no ring.
+    QCOMPARE(w.engine.cachedState(attr("OX")), CachedState::Available);
+    QCOMPARE(w.engine.cachedState(attr("OY")), CachedState::NotCached);
+    QCOMPARE(w.engine.cachedNodeCount(), 2);        // Resolution(OX), Result(oQ)
+    QCOMPARE(w.engine.resultStatus("oQ"), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(w.engine.resultStatus("oP"), std::optional<ResultStatus>(ResultStatus::Cycle));
+    QCOMPARE(w.engine.resultStatus("oR"), std::optional<ResultStatus>(ResultStatus::Cycle));
+    QCOMPARE(w.engine.resultStatus("oS"), std::optional<ResultStatus>(ResultStatus::Cycle));
+    QCOMPARE(w.engine.resultStatus("eA"), std::optional<ResultStatus>());
+
+    // The cached answer depends on everything the provisional results looked at.
+    const QSet<GraphNode> deps = w.engine.dependenciesOf(GraphNode::resolution(attr("OX")));
+    QVERIFY(deps.contains(GraphNode::storedAttribute("OX")));
+    QVERIFY(deps.contains(GraphNode::storedAttribute("OY")));
+    QVERIFY(deps.contains(GraphNode::resolution(attr("OY"))));
+    QVERIFY(deps.contains(GraphNode::result("oP")));
+    QVERIFY(deps.contains(GraphNode::result("oR")));
+    QVERIFY(deps.contains(GraphNode::result("oS")));
+    QVERIFY(deps.contains(GraphNode::result("oQ")));
+    QVERIFY(!deps.contains(GraphNode::resolution(attr("OX"))));     // no edge to itself
+
+    // Inspecting computed nothing and detected nothing.
+    QCOMPARE(w.engine.totalRunCount(), 1);
+    const int cycles = w.engine.cycleCount();
+    QCOMPARE(cycles, 2);                            // oR and oS each closed a ring on OX
+
+    // Served from the cache at the top level: no evaluation at all.
+    QCOMPARE(w.engine.attribute("OX"), QVariant(100));
+    QCOMPARE(w.engine.cycleCount(), cycles);
+    QCOMPARE(w.engine.totalRunCount(), 1);
+
+    // The evaluation of OY may not use the cached OX: beneath OY, the first
+    // candidate of OX leads back to OY. The cached oQ is used (not run again).
+    QVERIFY(!w.engine.attribute("OY").isValid());
+    QVERIFY(w.engine.cycleCount() > cycles);
+    QCOMPARE(w.engine.totalRunCount(), 1);
+    QCOMPARE(w.engine.cachedState(attr("OY")), CachedState::Unavailable);
+    QCOMPARE(w.engine.resultStatus("oS"), std::optional<ResultStatus>(ResultStatus::Cycle));
+    QVERIFY(w.engine.verifyAgainstFresh(Synthetic::tangleNames()).isEmpty());
+
+    // Invalidation drops the provisional verdicts with the answers that held them.
+    w.engine.clear();
+    QCOMPARE(w.engine.resultStatus("oP"), std::optional<ResultStatus>());
+    QCOMPARE(w.engine.cachedNodeCount(), 0);
+    QCOMPARE(w.engine.edgeCount(), 0);
+}
+
+// A ring that is closed entirely beneath a node does not make that node
+// provisional: the P/R ring closes at X2, so X2 and the acyclic chain above it
+// (h, H, g, G) are cached, and a second read runs nothing.
+void CalcEngineSafetyTest::ringBeneathAcyclicAncestorIsCached()
+{
+    using CachedState = CalculationEngine::CachedState;
+    World w;
+    QVERIFY(w.registry.registerCalculation(plus("h", "X2", "H", 1)));
+    QVERIFY(w.registry.registerCalculation(plus("g", "H", "G", 1)));
+    QVERIFY(w.registry.registerCalculation(plus("g2", "H", "G2", 2)));
+
+    QCOMPARE(w.engine.attribute("G"), QVariant(102));
+    QVERIFY(w.engine.cycleCount() >= 1);
+    QCOMPARE(w.engine.runCount("g"), 1);
+    QCOMPARE(w.engine.runCount("h"), 1);
+    QCOMPARE(w.engine.runCount("Q"), 1);
+    QCOMPARE(w.engine.runCount("S"), 1);
+    QCOMPARE(w.engine.totalRunCount(), 4);
+    QCOMPARE(w.engine.cachedState(attr("G")), CachedState::Available);
+    QCOMPARE(w.engine.cachedState(attr("H")), CachedState::Available);
+    QCOMPARE(w.engine.cachedState(attr("X2")), CachedState::Available);  // the top frame of the ring
+    QCOMPARE(w.engine.cachedState(attr("Y2")), CachedState::NotCached);  // beneath it: provisional
+    QCOMPARE(w.engine.resultStatus("g"), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(w.engine.resultStatus("h"), std::optional<ResultStatus>(ResultStatus::Ok));
+
+    // Second read, and a nested read of H from another calculation: nothing but
+    // g2 runs and no ring is met again.
+    w.engine.resetRunCounts();
+    const int cycles = w.engine.cycleCount();
+    QCOMPARE(w.engine.attribute("G"), QVariant(102));
+    QCOMPARE(w.engine.attribute("H"), QVariant(101));
+    QCOMPARE(w.engine.attribute("X2"), QVariant(100));
+    QCOMPARE(w.engine.totalRunCount(), 0);
+    QCOMPARE(w.engine.attribute("G2"), QVariant(103));
+    QCOMPARE(w.engine.runCount("g2"), 1);
+    QCOMPARE(w.engine.totalRunCount(), 1);
+    QCOMPARE(w.engine.cycleCount(), cycles);
+
+    QList<DependencyKey> names = sharedNames();
+    names << attr("G") << attr("H") << attr("G2");
+    QVERIFY(w.engine.verifyAgainstFresh(names).isEmpty());
+
+    // The chain still depends on the ring: cutting it reaches G.
+    const Names dropped = w.state.setAttribute(w.engine, "Y2", 5);
+    QVERIFY(dropped.contains(attr("G")));
+    QVERIFY(dropped.contains(attr("G2")));
+    QCOMPARE(w.engine.attribute("G"), QVariant(8));
+    QVERIFY(w.engine.verifyAgainstFresh(names).isEmpty());
+    QCOMPARE(w.engine.scopeDepth(), 0);
+}
+
 void CalcEngineSafetyTest::requestThroughOwnOutputIsCycle_data()
 {
     QTest::addColumn<bool>("readFirst");
@@ -283,7 +541,9 @@ void CalcEngineSafetyTest::requestThroughOwnOutputIsCycle()
     const CalculationEngine::RequestOutcome outcome = w.engine.request("explicitE");
     QVERIFY(outcome.found);
     QCOMPARE(outcome.status, ResultStatus::Cycle);
-    QCOMPARE(outcome.invalidated, Names({attr("EX"), attr("EY")}));
+    // Only the "not requested" answers can have been dropped: whatever looked
+    // at the calculation during the evaluation was provisional, never cached.
+    QCOMPARE(outcome.invalidated, readFirst ? Names({attr("EX"), attr("EY")}) : Names());
     QCOMPARE(w.engine.cycleCount(), 1);
     QCOMPARE(w.engine.lastCyclePath(),
              QList<GraphNode>({GraphNode::result("explicitE"), GraphNode::resolution(attr("EY")),
@@ -317,6 +577,55 @@ void CalcEngineSafetyTest::requestThroughOwnOutputIsCycle()
     QCOMPARE(w.engine.runCount("explicitE"), 1);
     QCOMPARE(w.engine.runCount("feedsE"), 0);
     QCOMPARE(w.engine.cycleCount(), cycles);
+    QVERIFY(w.engine.verifyAgainstFresh(names).isEmpty());
+    QCOMPARE(w.engine.scopeDepth(), 0);
+}
+
+void CalcEngineSafetyTest::requestOnRingWithFallback_data()
+{
+    QTest::addColumn<bool>("exFirst");
+    QTest::newRow("EX then EY") << true;
+    QTest::newRow("EY then EX") << false;
+}
+
+// request() obeys the caching rule too. EY has a fallback, so after the request
+// EY = 7 whichever name is read first, although the cached Cycle result of the
+// requested calculation may not be used beneath EY (it looked at EY).
+void CalcEngineSafetyTest::requestOnRingWithFallback()
+{
+    QFETCH(bool, exFirst);
+    World w(false);
+    QVERIFY(w.registry.registerCalculation(explicitE()));
+    QVERIFY(w.registry.registerCalculation(feedsE()));
+    QVERIFY(w.registry.registerCalculation(constEY()));
+    const QList<DependencyKey> names = {attr("EX"), attr("EY")};
+
+    // Not requested: no ring. feedsE is missing EX, so EY falls back.
+    QCOMPARE(w.engine.attribute("EY"), QVariant(7));
+    QVERIFY(!w.engine.attribute("EX").isValid());
+    QCOMPARE(w.engine.cycleCount(), 0);
+
+    const CalculationEngine::RequestOutcome outcome = w.engine.request("explicitE");
+    QCOMPARE(outcome.status, ResultStatus::Cycle);
+    QCOMPARE(outcome.invalidated, Names({attr("EX"), attr("EY")}));
+    QCOMPARE(w.engine.resultStatus("explicitE"), std::optional<ResultStatus>(ResultStatus::Cycle));
+    QCOMPARE(w.engine.cachedState(attr("EX")), CalculationEngine::CachedState::NotCached);
+    QCOMPARE(w.engine.cachedState(attr("EY")), CalculationEngine::CachedState::NotCached);
+
+    if (exFirst) {
+        QVERIFY(!w.engine.attribute("EX").isValid());
+        QCOMPARE(w.engine.attribute("EY"), QVariant(7));
+    } else {
+        QCOMPARE(w.engine.attribute("EY"), QVariant(7));
+        QVERIFY(!w.engine.attribute("EX").isValid());
+    }
+    QCOMPARE(w.engine.runCount("explicitE"), 0);
+    QCOMPARE(w.engine.runCount("feedsE"), 0);
+    QVERIFY(w.engine.verifyAgainstFresh(names).isEmpty());
+
+    // Still requested, still a valid result.
+    QCOMPARE(w.engine.request("explicitE").status, ResultStatus::Cycle);
+    QVERIFY(w.engine.request("explicitE").invalidated.isEmpty());
     QVERIFY(w.engine.verifyAgainstFresh(names).isEmpty());
     QCOMPARE(w.engine.scopeDepth(), 0);
 }

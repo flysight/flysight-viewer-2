@@ -41,6 +41,14 @@ public:
     {
         Scope scope = std::move(m_engine->m_scopes.back());
         pop();
+        if (!m_engine->m_scopes.empty()) {
+            // What a subtree met, its parent's subtree met. (A scope that is
+            // unwound by an exception reports nothing: nothing above it is
+            // published either.)
+            Scope &parent = m_engine->m_scopes.back();
+            parent.minHit = std::min(parent.minHit, scope.minHit);
+            parent.sawCycle = parent.sawCycle || scope.sawCycle;
+        }
         return scope;
     }
 
@@ -102,10 +110,17 @@ void CalculationEngine::registryDestroyed()
 {
     m_registry = nullptr;
     m_enrolled = false;
+    clearCaches();
+}
+
+void CalculationEngine::clearCaches()
+{
     m_resolutions.clear();
     m_results.clear();
     m_dependsOn.clear();
     m_dependents.clear();
+    m_provisional.clear();
+    m_provisionalOwned.clear();
 }
 
 // =============================================================================
@@ -173,13 +188,24 @@ int CalculationEngine::stackIndexOf(const GraphNode &node) const
 
 void CalculationEngine::reportCycle(int stackIndex, const GraphNode &reentered)
 {
-    // Every calculation on the ring is unavailable, whichever node the ring was
-    // entered through; for a SINGLE ring that keeps the answer independent of
-    // read order. It does not for overlapping rings: a calculation that lies on
-    // two rings is marked only for the ring that happened to be closed while it
-    // was on the stack, so which calculations end up unavailable can depend on
-    // where evaluation started (a documented limitation; see docs/CALCULATIONS.md).
-    // Resolution scopes are not marked: they carry on down their candidate list.
+    // Every calculation on the ring - between the two occurrences of the
+    // re-entered node - is unavailable. Resolution scopes are not marked: they
+    // carry on down their candidate list.
+    //
+    // Which calculations are on the stack when a ring closes depends on where
+    // the evaluation started, so by itself this verdict is NOT independent of
+    // read order (with overlapping rings not even the names' values are). What
+    // makes the answers independent is that the verdict never reaches the cache
+    // from a context it depends on: the detecting scope remembers how far up
+    // the stack the ring reached (minHit), that propagates to every scope the
+    // result flows through, and a scope below the ring's top frame is
+    // provisional - see resolve() and ensureResult(). The top frame itself is
+    // not tainted by its own ring: evaluated on its own it closes the same ring
+    // the same way.
+    Scope &detecting = m_scopes.back();
+    detecting.minHit = std::min(detecting.minHit, stackIndex);
+    detecting.sawCycle = true;
+
     QList<GraphNode> path;
     for (size_t i = size_t(stackIndex); i < m_scopes.size(); ++i) {
         if (m_scopes[i].node.kind == GraphNode::Kind::Result)
@@ -200,14 +226,99 @@ void CalculationEngine::reportCycle(int stackIndex, const GraphNode &reentered)
     }
 }
 
+bool CalculationEngine::isContextFree(const Scope &closed) const
+{
+    // Called after the scope was popped, so m_scopes.size() is the stack index
+    // it had. Context-free: no cycle detected beneath it re-entered a frame
+    // ABOVE it. Its evaluation then never consulted the part of the stack it
+    // does not own, so it went exactly as an evaluation started at this node
+    // goes, and the result is a function of state alone. The root (index 0)
+    // always qualifies.
+    return closed.minHit >= int(m_scopes.size());
+}
+
+void CalculationEngine::handUp(const Scope &closed)
+{
+    // A provisional result is not cached and records no edges of its own; the
+    // scope that consumed it inherits everything it looked at. By induction
+    // the nearest cached ancestor depends on all of it, so a change to any of
+    // it still invalidates every cached answer it helped to shape. (There is
+    // a parent: a scope with nothing above it is never provisional.)
+    Scope &parent = m_scopes.back();
+    parent.looked.unite(closed.looked);
+    for (auto it = closed.provisional.constBegin(); it != closed.provisional.constEnd(); ++it)
+        parent.provisional.insert(it.key(), it.value());
+}
+
+bool CalculationEngine::cachedAnswerUsable(const GraphNode &node, bool sawCycle)
+{
+    // A cached answer is the node's value when evaluated on its own. Here it
+    // stands in for an evaluation beneath the current stack, which goes the
+    // same way unless it looks up a node that is on the stack - then it would
+    // close a ring that the stand-alone evaluation did not see (or saw from
+    // the other side). So the answer is usable iff nothing it transitively
+    // looked at is being evaluated now.
+    //
+    // Without the flag there is nothing to check, and a graph without cycles
+    // never gets further than this line. Everything a cycle-free evaluation
+    // visited was cached with it and is invalidated with it, and a node that is
+    // both cached and on the stack was turned away here, so it carries the
+    // flag - which a cycle-free evaluation cannot have visited.
+    if (!sawCycle || m_scopes.empty())
+        return true;
+
+    QSet<GraphNode> onStack;
+    for (const Scope &scope : m_scopes)
+        onStack.insert(scope.node);
+
+    // The edges are complete for this purpose: a cached node's edges include
+    // what its provisional descendants looked at. They can over-approximate;
+    // turning an answer away costs a re-evaluation, never correctness.
+    QSet<GraphNode> visited;
+    QList<GraphNode> queue = {node};
+    while (!queue.isEmpty()) {
+        const GraphNode n = queue.takeLast();
+        if (visited.contains(n))
+            continue;
+        visited.insert(n);
+        if (onStack.contains(n))
+            return false;
+        const auto edges = m_dependsOn.constFind(n);
+        if (edges == m_dependsOn.constEnd())
+            continue;
+        for (const GraphNode &target : edges.value()) {
+            if (target.kind == GraphNode::Kind::Resolution || target.kind == GraphNode::Kind::Result)
+                queue.append(target);
+        }
+    }
+    m_scopes.back().sawCycle = true;    // whoever uses it inherits the check
+    return true;
+}
+
+// Cost. Work is repeated only inside cyclic regions: a provisional result is
+// recomputed by each evaluation that reaches it, and a calculation on a ring
+// may run more than once per read. Every evaluation in progress is a simple
+// path through the strongly connected region it is in, so the repetition is
+// bounded by the number of such paths - exponential in the size of a densely
+// tangled region in the worst case, but a cycle is a registration error that
+// is reported on every detection, regions are a handful of calculations, and
+// everything acyclic hanging off a region is context-free and cached once.
+
 CalculationEngine::ResolutionEntry CalculationEngine::resolve(const DependencyKey &name)
 {
     const GraphNode R = GraphNode::resolution(name);
     note(R);
 
     const auto cached = m_resolutions.constFind(R);
-    if (cached != m_resolutions.constEnd())
+    if (cached != m_resolutions.constEnd() && cachedAnswerUsable(R, cached->sawCycle))
         return cached.value();
+    // A cached answer that was turned away stays cached, and the evaluation
+    // below never replaces it. Usually that evaluation meets the stack and is
+    // provisional. It need not: the walk in cachedAnswerUsable() can
+    // over-approximate, and then the evaluation is context-free and merely
+    // reproduces the cached answer. What it looked at is dropped in that case,
+    // which is sound because the edges of the retained entry already cover it.
+    const bool turnedAway = cached != m_resolutions.constEnd();
 
     const int onStack = stackIndexOf(R);
     if (onStack >= 0) {
@@ -258,10 +369,16 @@ CalculationEngine::ResolutionEntry CalculationEngine::resolve(const DependencyKe
         entry.provider = provider == Provider::Calculation ? Provider::None : provider;
     }
 
-    // Publish last: the scope is gone, then entry and edges go in together.
+    // Publish last: the scope is gone, then entry and edges go in together -
+    // if the answer is context-free. A provisional one goes to the caller only.
     const Scope scope = guard.finish();
-    m_resolutions.insert(R, entry);
-    setEdges(R, scope.looked);
+    entry.sawCycle = scope.sawCycle;
+    if (!isContextFree(scope)) {
+        handUp(scope);
+    } else if (!turnedAway) {
+        m_resolutions.insert(R, entry);
+        publishEdges(R, scope);
+    }
     return entry;
 }
 
@@ -297,8 +414,12 @@ CalculationEngine::ResultEntry CalculationEngine::ensureResult(const Calculation
     note(C);
 
     const auto cached = m_results.constFind(C);
-    if (cached != m_results.constEnd())
+    if (cached != m_results.constEnd() && cachedAnswerUsable(C, cached->sawCycle))
         return cached.value();
+    // Turned away (see resolve()). Whether an explicit calculation has been
+    // requested is not derivable from state, so it carries over.
+    const bool turnedAway = cached != m_results.constEnd();
+    const bool requested = turnedAway && cached->requested;
 
     const int onStack = stackIndexOf(C);
     if (onStack >= 0) {
@@ -308,16 +429,27 @@ CalculationEngine::ResultEntry CalculationEngine::ensureResult(const Calculation
         return unavailable;
     }
 
-    QSet<GraphNode> looked;
-    const ResultEntry entry = computeResult(instance, /*fromRequest=*/false, looked);
-    m_results.insert(C, entry);
-    setEdges(C, looked);
+    // The same rule as for names, and it settles when a Cycle verdict may be
+    // cached: only when it is context-free, i.e. when this calculation is the
+    // top frame of every ring that was closed beneath it (as it always is for
+    // request(), whose scope is the root). A calculation that was
+    // marked because a ring passed THROUGH it to a frame above is provisional,
+    // like everything else computed under that ring.
+    Scope scope;
+    const ResultEntry entry = computeResult(instance, requested, scope);
+    if (!isContextFree(scope)) {
+        scope.provisional.insert(C, entry.status);
+        handUp(scope);
+    } else if (!turnedAway) {
+        m_results.insert(C, entry);
+        publishEdges(C, scope);
+    }
     return entry;
 }
 
 CalculationEngine::ResultEntry CalculationEngine::computeResult(const CalculationInstance &instance,
                                                                 bool fromRequest,
-                                                                QSet<GraphNode> &looked)
+                                                                Scope &closed)
 {
     const CalculationDescriptor &d = *instance.descriptor;
 
@@ -330,7 +462,7 @@ CalculationEngine::ResultEntry CalculationEngine::computeResult(const Calculatio
     if (d.policy == EvaluationPolicy::Explicit && !fromRequest) {
         // Reads never start an explicit calculation. No input was looked at.
         entry.status = ResultStatus::NotRequested;
-        looked = guard.finish().looked;
+        closed = guard.finish();
         return entry;
     }
 
@@ -445,7 +577,8 @@ CalculationEngine::ResultEntry CalculationEngine::computeResult(const Calculatio
     }
 
     entry.status = status;
-    looked = guard.finish().looked;
+    closed = guard.finish();
+    entry.sawCycle = closed.sawCycle;
     return entry;
 }
 
@@ -480,6 +613,97 @@ void CalculationEngine::setEdges(const GraphNode &node, const QSet<GraphNode> &l
         m_dependents[target].insert(node);
 }
 
+void CalculationEngine::publishEdges(const GraphNode &node, const Scope &closed)
+{
+    // A ring closed beneath the node makes it look at itself; an edge to
+    // itself says nothing.
+    // (Checked first: QSet::remove detaches - a deep copy - even when the key
+    // is absent, and without a ring it always is.)
+    if (closed.looked.contains(node)) {
+        QSet<GraphNode> looked = closed.looked;
+        looked.remove(node);
+        setEdges(node, looked);
+    } else {
+        setEdges(node, closed.looked);
+    }
+
+    // Inspection only: the provisional calculations this answer absorbed. A
+    // calculation that has a cached result of its own reports that instead.
+    dropProvisionalOwnedBy(node);
+    if (node.kind == GraphNode::Kind::Result) {
+        const auto stale = m_provisional.constFind(node);
+        if (stale != m_provisional.constEnd()) {
+            const QSet<GraphNode> owners = stale->owners;
+            m_provisional.erase(stale);
+            for (const GraphNode &owner : owners) {
+                const auto owned = m_provisionalOwned.find(owner);
+                if (owned != m_provisionalOwned.end()) {
+                    owned->remove(node);
+                    if (owned->isEmpty())
+                        m_provisionalOwned.erase(owned);
+                }
+            }
+        }
+    }
+    for (auto it = closed.provisional.constBegin(); it != closed.provisional.constEnd(); ++it) {
+        if (m_results.contains(it.key()))
+            continue;
+        ProvisionalStatus &p = m_provisional[it.key()];
+        if (p.status != it.value()) {
+            // The most recent verdict replaces a different earlier one.
+            for (const GraphNode &owner : std::as_const(p.owners)) {
+                const auto owned = m_provisionalOwned.find(owner);
+                if (owned != m_provisionalOwned.end()) {
+                    owned->remove(it.key());
+                    if (owned->isEmpty())
+                        m_provisionalOwned.erase(owned);
+                }
+            }
+            p.owners.clear();
+            p.status = it.value();
+        }
+        p.owners.insert(node);
+        m_provisionalOwned[node].insert(it.key());
+    }
+}
+
+void CalculationEngine::dropProvisionalOwnedBy(const GraphNode &owner)
+{
+    const auto owned = m_provisionalOwned.constFind(owner);
+    if (owned == m_provisionalOwned.constEnd())
+        return;
+    const QSet<GraphNode> nodes = owned.value();
+    m_provisionalOwned.erase(owned);
+    for (const GraphNode &n : nodes) {
+        const auto p = m_provisional.find(n);
+        if (p == m_provisional.end())
+            continue;
+        p->owners.remove(owner);
+        if (p->owners.isEmpty())
+            m_provisional.erase(p);
+    }
+}
+
+QSet<GraphNode> CalculationEngine::knownNodes(GraphNode::Kind kind) const
+{
+    // Cached nodes, plus nodes that are not cached themselves but that a cached
+    // answer depends on: a provisional resolution or result lives on only as an
+    // edge of the answer that absorbed it.
+    QSet<GraphNode> nodes;
+    if (kind == GraphNode::Kind::Resolution) {
+        for (auto it = m_resolutions.constBegin(); it != m_resolutions.constEnd(); ++it)
+            nodes.insert(it.key());
+    } else if (kind == GraphNode::Kind::Result) {
+        for (auto it = m_results.constBegin(); it != m_results.constEnd(); ++it)
+            nodes.insert(it.key());
+    }
+    for (auto it = m_dependents.constBegin(); it != m_dependents.constEnd(); ++it) {
+        if (it.key().kind == kind)
+            nodes.insert(it.key());
+    }
+    return nodes;
+}
+
 QSet<DependencyKey> CalculationEngine::invalidate(const QList<GraphNode> &seeds)
 {
     // Breadth-first over reverse edges. Touches only the cache and the edge
@@ -502,6 +726,7 @@ QSet<DependencyKey> CalculationEngine::invalidate(const QList<GraphNode> &seeds)
         } else if (n.kind == GraphNode::Kind::Result) {
             m_results.remove(n);
         }
+        dropProvisionalOwnedBy(n);
 
         // Propagation does not depend on whether n itself was cached.
         const QSet<GraphNode> dependents = m_dependents.value(n);
@@ -559,10 +784,7 @@ QSet<DependencyKey> CalculationEngine::clear()
     QSet<DependencyKey> names;
     for (auto it = m_resolutions.constBegin(); it != m_resolutions.constEnd(); ++it)
         names.insert(it.key().publicName());
-    m_resolutions.clear();
-    m_results.clear();
-    m_dependsOn.clear();
-    m_dependents.clear();
+    clearCaches();
     return names;
 }
 
@@ -614,10 +836,14 @@ void CalculationEngine::onRegistryChanged(const RegistryChange &change)
     QList<GraphNode> seeds;
 
     if (!change.added) {
-        // No cache entry may outlive its registration.
-        for (auto it = m_results.constBegin(); it != m_results.constEnd(); ++it) {
-            if (it->instance.registrationId == change.registrationId)
-                seeds.append(it.key());
+        // No cache entry may outlive its registration, and neither may an
+        // answer that absorbed a provisional result of it. An instance id is
+        // the registration id, or "<registration id>#<instance key>".
+        const QString familyPrefix = change.registrationId + QLatin1Char('#');
+        const QSet<GraphNode> results = knownNodes(GraphNode::Kind::Result);
+        for (const GraphNode &n : results) {
+            if (n.a == change.registrationId || n.a.startsWith(familyPrefix))
+                seeds.append(n);
         }
     }
 
@@ -629,29 +855,33 @@ void CalculationEngine::onRegistryChanged(const RegistryChange &change)
             seeds.append(GraphNode::resolution(out));
         break;
 
-    case RegistryChange::Kind::Family:
-        for (auto it = m_resolutions.constBegin(); it != m_resolutions.constEnd(); ++it) {
+    case RegistryChange::Kind::Family: {
+        const QSet<GraphNode> resolutions = knownNodes(GraphNode::Kind::Resolution);
+        for (const GraphNode &n : resolutions) {
             bool accepts = false;
             try {
-                accepts = change.instantiate && change.instantiate(it.key().publicName()).has_value();
+                accepts = change.instantiate && change.instantiate(n.publicName()).has_value();
             } catch (...) {
                 accepts = false;    // a throwing family never matches
             }
             if (accepts)
-                seeds.append(it.key());
+                seeds.append(n);
         }
         break;
+    }
 
-    case RegistryChange::Kind::SourceConversion:
+    case RegistryChange::Kind::SourceConversion: {
         // Whether *any* conversion is registered decides between passthrough
         // and the conversion layer for every measurement with source data, so
         // every cached measurement name re-resolves, not only the names this
         // family accepts.
-        for (auto it = m_resolutions.constBegin(); it != m_resolutions.constEnd(); ++it) {
-            if (it.key().measurementName)
-                seeds.append(it.key());
+        const QSet<GraphNode> resolutions = knownNodes(GraphNode::Kind::Resolution);
+        for (const GraphNode &n : resolutions) {
+            if (n.measurementName)
+                seeds.append(n);
         }
         break;
+    }
     }
 
     deliverBroadcast(seeds);
@@ -712,18 +942,19 @@ CalculationEngine::RequestOutcome CalculationEngine::requestInstance(const Calcu
     }
     outcome.invalidated = invalidate(m_dependents.value(C).values());
 
-    QSet<GraphNode> looked;
-    const ResultEntry entry = computeResult(instance, /*fromRequest=*/true, looked);
+    Scope scope;
+    const ResultEntry entry = computeResult(instance, /*fromRequest=*/true, scope);
     if (evaluated)
         *evaluated = true;
 
     // Whatever looked at this calculation DURING the evaluation saw it on the
-    // stack (a cycle) and cached that answer; drop those (not the result node)
-    // so that every output appears at once with the publication below.
-    outcome.invalidated.unite(invalidate(m_dependents.value(C).values()));
-
+    // stack (a cycle), so it was provisional and nothing was cached for it:
+    // every output appears at once with the publication below. This scope is
+    // the root of the evaluation, so its own result - Cycle included - is
+    // context-free by construction and is published.
+    Q_ASSERT(isContextFree(scope));
     m_results.insert(C, entry);
-    setEdges(C, looked);
+    publishEdges(C, scope);
     outcome.status = entry.status;
     return outcome;
 }
@@ -752,10 +983,15 @@ std::optional<ResultStatus> CalculationEngine::resultStatus(const CalculationId 
             return std::nullopt;
         instanceId = instance->instanceId;
     }
-    const auto it = m_results.constFind(GraphNode::result(instanceId));
-    if (it == m_results.constEnd())
-        return std::nullopt;
-    return it->status;
+    const GraphNode C = GraphNode::result(instanceId);
+    const auto it = m_results.constFind(C);
+    if (it != m_results.constEnd())
+        return it->status;
+    // No cached result: the last provisional verdict, if one is still current.
+    const auto provisional = m_provisional.constFind(C);
+    if (provisional != m_provisional.constEnd())
+        return provisional->status;
+    return std::nullopt;
 }
 
 int CalculationEngine::runCount(const CalculationId &registrationId) const

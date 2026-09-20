@@ -42,8 +42,8 @@ There are 24 executables plus the audit.
 |------|--------|
 | `tst_calcregistry` | Calculation engine: value types, registration order and validation, family instances, private registries, registration-derived static dependencies (including opt-in source inputs) |
 | `tst_calcengine` | Calculation engine: resolution, caching, dependency recording, invalidation across sessions, explicit policy, preferences, families, measurement layers |
-| `tst_calcengine_safety` | Calculation engine: nested scopes, cycles, exceptions, re-entrancy guards |
-| `tst_calcengine_oracle` | Calculation engine: randomized (seeded) sequences compared against a fresh evaluation |
+| `tst_calcengine_safety` | Calculation engine: nested scopes, cycles (single and overlapping rings: the same literal answers for every read order), exceptions, re-entrancy guards |
+| `tst_calcengine_oracle` | Calculation engine: randomized (seeded) sequences, and randomized (seeded) topologies full of overlapping rings, compared against a fresh evaluation |
 
 **Built-in calculations and sessions on the engine**
 
@@ -340,7 +340,11 @@ with `evaluateFresh(name)`: the same name evaluated on a throw-away engine with
 empty caches over the same state and registry.
 
 - `tst_calcengine_oracle` applies it to synthetic calculations on a fake
-  session state (seeds 1-25).
+  session state: `randomizedSequences` (seeds 1-25) over the shared world plus
+  the overlapping rings of `Synthetic::registerTangleWorld`, checking a few
+  random names in both sessions after every change; `randomizedTopologies`
+  (seeds 1-300) over generated worlds of six names whose candidates read each
+  other at random, so that rings overlap in ways nobody designed.
 - `tst_session_oracle` applies it to real sessions with the real built-ins.
   Part A (`sessionSequences`, seeds 1-20, 300 operations) interleaves two
   `SessionData` objects: reads, attribute edits (several of them user overrides
@@ -489,7 +493,7 @@ keep the two in sync.
 | 9 | three outputs run once, any order | `tst_calcengine::threeOutputsRunOnce`; `tst_session_engine::multiOutputRunsOnce` |
 | 9 | declared input change: exactly one run; unrelated: none | `tst_calcengine::declaredInputChangeRunsOnceMore`, `unrelatedChangeRunsNothing`; `tst_session_engine`, same names |
 | 10 | absent-input candidate selected once the input appears, replacing a cached fallback | `tst_calcengine::preferredCandidateReplacesFallback`, `rejectedCandidatesAreDependencies`; `tst_session_engine::preferredSensorReplacesFallback`; `tst_import_merge::candidateSwitchAfterMerge` |
-| 10 | randomized reads, edits, registry changes equal a fresh evaluation (engine level) | `tst_calcengine_oracle::randomizedSequences` |
+| 10 | randomized reads, edits, registry changes equal a fresh evaluation (engine level), also across overlapping dependency rings | `tst_calcengine_oracle::randomizedSequences`, `randomizedTopologies`; `tst_calcengine_safety::overlappingRingsIndependentOfReadOrder` |
 | 10 | randomized reads, edits, **merges** on real sessions equal a fresh evaluation | `tst_session_oracle::sessionSequences`, `modelSequences` |
 | 11 | override of one output coexists, no cycle | `tst_calcengine::overrideOneOutput`, `overrideFeedsDownstream`; `tst_session_engine::overrideOneOutput`, `overrideFlareStart`; `tst_session_oracle::sessionSequences` (`cycleCount() == 0` under random overrides) |
 | 12 | nested, cycles, exceptions: no partial result, clean state | `tst_calcengine_safety` (all); `tst_python_bridge::exceptionYieldsCleanUnavailable`, `bundleExceptionPublishesNothing`; `tst_session_engine::safetyOnRealSession` |
