@@ -42,9 +42,6 @@ concurrency:
 env:
   # Qt version to use across all platforms
   QT_VERSION: '6.9.3'
-  # Boost version for Windows (match existing local development setup)
-  BOOST_VERSION: '1.87.0'
-  BOOST_VERSION_UNDERSCORE: '1_87_0'
   # Minimum macOS deployment target (Qt 6.9 requires macOS 12+)
   MACOS_DEPLOYMENT_TARGET: '12.0'
 
@@ -125,51 +122,12 @@ jobs:
         uses: turtlesec-no/get-ninja@main
 
       # =========================================================================
-      # Task 4.5: Configure Boost Installation for Windows
-      # =========================================================================
-      - name: Install Boost (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $BOOST_ROOT = "C:\hostedtoolcache\windows\Boost\$env:BOOST_VERSION\x64"
-
-          # Download prebuilt Boost binaries for MSVC 14.3 (VS 2022)
-          $BOOST_URL = "https://sourceforge.net/projects/boost/files/boost-binaries/$env:BOOST_VERSION/boost_$env:BOOST_VERSION_UNDERSCORE-msvc-14.3-64.exe/download"
-
-          Write-Host "Downloading Boost from: $BOOST_URL"
-
-          # Create WebClient with appropriate settings
-          $wc = New-Object System.Net.WebClient
-          $wc.Headers.Add("User-Agent", "Other")
-          $wc.DownloadFile($BOOST_URL, "$env:TEMP\boost.exe")
-
-          Write-Host "Installing Boost to: $BOOST_ROOT"
-          Start-Process -Wait -FilePath "$env:TEMP\boost.exe" -ArgumentList "/SILENT","/SP-","/SUPPRESSMSGBOXES","/DIR=$BOOST_ROOT"
-
-          # Export environment variables for subsequent steps
-          # Normalize paths to forward slashes to avoid CMake escape sequence issues
-          $BOOST_ROOT_NORMALIZED = $BOOST_ROOT -replace '\\', '/'
-          echo "BOOST_ROOT=$BOOST_ROOT_NORMALIZED" >> $env:GITHUB_ENV
-          echo "BOOST_LIBRARYDIR=$BOOST_ROOT_NORMALIZED/lib64-msvc-14.3" >> $env:GITHUB_ENV
-
-          Write-Host "Boost installed successfully"
-          Get-ChildItem $BOOST_ROOT -Directory | Select-Object -First 5
-
-      # =========================================================================
       # Task 4.3: Platform-Specific Dependency Installation - macOS
       # =========================================================================
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install ninja boost
-          # Export Boost location for CMake
-          # On Apple Silicon (arm64), Homebrew installs to /opt/homebrew
-          # On Intel Macs, Homebrew installs to /usr/local
-          if [ "$(uname -m)" = "arm64" ]; then
-            echo "BOOST_ROOT=/opt/homebrew" >> $GITHUB_ENV
-          else
-            echo "BOOST_ROOT=/usr/local" >> $GITHUB_ENV
-          fi
+          brew install ninja
 
       # =========================================================================
       # macOS Code Signing: Import Certificate
@@ -245,7 +203,6 @@ jobs:
           sudo apt-get install -y \
             ninja-build \
             patchelf \
-            libboost-all-dev \
             libcups2-dev \
             libxcb-cursor0 \
             libxcb-icccm4 \
@@ -260,9 +217,6 @@ jobs:
             libfuse2 \
             libgl1-mesa-dev \
             libegl1-mesa-dev
-          # Export Boost location for CMake
-          # On Ubuntu, Boost is installed via apt-get to /usr
-          echo "BOOST_ROOT=/usr" >> $GITHUB_ENV
 
       - name: Verify build tools (Linux)
         if: runner.os == 'Linux'
@@ -553,48 +507,12 @@ jobs:
             -DONETBB_ROOT="${GITHUB_WORKSPACE}/third-party/oneTBB-install" \
             ${PYTHON_ROOT_DIR:+-DPython_ROOT_DIR="$PYTHON_ROOT_DIR"} \
             ${QT6_INSTALL_PREFIX:+-DQT6_INSTALL_PREFIX="$QT6_INSTALL_PREFIX"} \
-            ${BOOST_ROOT:+-DBOOST_ROOT="$BOOST_ROOT"} \
-            ${BOOST_LIBRARYDIR:+-DBOOST_LIBRARYDIR="$BOOST_LIBRARYDIR"} \
             ${GOOGLE_MAPS_API_KEY:+-DGOOGLE_MAPS_API_KEY="$GOOGLE_MAPS_API_KEY"} \
             ${FLYSIGHT_VERSION:+-DFLYSIGHT_VERSION_OVERRIDE="$FLYSIGHT_VERSION"} \
             -DFLYSIGHT_CODESIGN_IDENTITY="${FLYSIGHT_CODESIGN_IDENTITY:--}" \
             -DFLYSIGHT_CODESIGN_ENTITLEMENTS="${GITHUB_WORKSPACE}/src/FlySightViewer.entitlements" \
             $TEST_ARGS \
             $CMAKE_EXTRA_ARGS
-
-      # =========================================================================
-      # Task 3.5: Verify Boost Discovery
-      # =========================================================================
-      - name: Verify Boost discovery
-        shell: bash
-        run: |
-          echo "=== Boost Discovery Verification ==="
-
-          # Check CMakeCache.txt for Boost variables
-          if [ -f "build/CMakeCache.txt" ]; then
-            echo "BOOST_ROOT:"
-            grep "^BOOST_ROOT:" build/CMakeCache.txt || echo "  (not set)"
-
-            echo "BOOST_LIBRARYDIR:"
-            grep "^BOOST_LIBRARYDIR:" build/CMakeCache.txt || echo "  (not set)"
-
-            echo "Boost_FOUND:"
-            grep "Boost_FOUND" build/CMakeCache.txt || echo "  (not in cache)"
-
-            echo "Boost_VERSION:"
-            grep "Boost_VERSION:" build/CMakeCache.txt || echo "  (not set)"
-
-            echo "Boost_INCLUDE_DIRS:"
-            grep "Boost_INCLUDE_DIR" build/CMakeCache.txt | head -3 || echo "  (not set)"
-
-            echo "Boost component libraries found:"
-            grep "Boost_.*_LIBRARY" build/CMakeCache.txt | head -10 || echo "  (none found)"
-          else
-            echo "ERROR: build/CMakeCache.txt not found"
-            exit 1
-          fi
-
-          echo "=== Boost verification complete ==="
 
       - name: Build main application
         shell: bash
