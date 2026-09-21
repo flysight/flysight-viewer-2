@@ -75,6 +75,7 @@ private slots:
     void cancelIgnoredForOneStepStillCancelled();
     void requestWhileCancellingCreatesNewJob();
     void cancelQueued();
+    void cancelFromRowsInsertedLeavesNoPin();
     void cancelSessionAndCancelAll();
     void cancelUnwantedQueuedSparesRunning();
     void removeSessionWithQueuedJob();
@@ -905,6 +906,43 @@ void JobQueueTest::cancelQueued()
     QCOMPARE(engine("s2").runCount("expA"), 0);
     QCOMPARE(m_queue->request("s2", QStringLiteral("expA")).kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue));
+}
+
+// A view of the job model may cancel a job the moment its row appears. The
+// session is pinned before the row is announced, so the cancel releases that
+// pin: no "session is not pinned" warning and no pin left behind.
+void JobQueueTest::cancelFromRowsInsertedLeavesNoPin()
+{
+    setInput("s1", "EA_IN", 4);
+    QTest::failOnWarning(QRegularExpression(QStringLiteral("unpinSession")));
+    QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
+
+    JobModel *jobs = m_queue->model();
+    bool pinnedWhenAnnounced = false;
+    bool cancelled = false;
+    const QMetaObject::Connection connection = connect(
+        jobs, &QAbstractItemModel::rowsInserted, this, [&](const QModelIndex &, int first, int) {
+            pinnedWhenAnnounced = m_model->isSessionPinned("s1");
+            cancelled = m_queue->cancel(jobs->record(first).id);
+        });
+
+    const JobQueue::RequestResult result = m_queue->request("s1", QStringLiteral("expA"));
+    disconnect(connection);
+
+    QVERIFY(pinnedWhenAnnounced);
+    QVERIFY(cancelled);
+    QCOMPARE(result.kind, Kind::Created);
+    QCOMPARE(stateOf(result.job), JobState::Cancelled);
+    QVERIFY(!m_model->isSessionPinned("s1"));
+    QVERIFY(m_queue->isIdle());
+    QCOMPARE(idleSpy.count(), 1);
+
+    // Nothing runs for it, and the calculation is requestable as before
+    QVERIFY(waitIdle(*m_queue));
+    QCOMPARE(engine("s1").runCount("expA"), 0);
+    QCOMPARE(m_queue->request("s1", QStringLiteral("expA")).kind, Kind::Created);
+    QVERIFY(waitIdle(*m_queue));
+    QVERIFY(!m_model->isSessionPinned("s1"));
 }
 
 void JobQueueTest::cancelSessionAndCancelAll()

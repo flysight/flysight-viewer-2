@@ -181,9 +181,12 @@ JobQueue::RequestResult JobQueue::request(const QString &sessionId, const Calcul
     record.state = JobState::Queued;
     record.queuedAt = QDateTime::currentDateTimeUtc();
 
-    const JobId id = m_model->append(record);
+    // Pin and open the busy period BEFORE the row appears: append() emits
+    // rowsInserted, and a slot on it may cancel the new job at once. endJob()
+    // must then find the pin it releases and announce idle() for this period.
     m_idleAnnounced = false;
     m_sessionModel->pinSession(sessionId);      // one pin per job; released in endJob()
+    const JobId id = m_model->append(record);
 
     emit jobQueued(id);
     emit jobsChanged();
