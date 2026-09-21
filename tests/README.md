@@ -1507,9 +1507,9 @@ middle is rejected for its IMU gap. The script needs the fusion plots (the
 step; for M5 note what you did while the fit ran, for M6 and M9 the wait you
 observed.
 
-**M1 Startup (116).** Check "Sensor fusion > Roll" with three fusable tracks visible, let it compute, quit, restart. After restart the row is checked and shows the refresh control with the count 3; no job ever starts (no progress appears, CPU idle). The debug output contains no "No data available" line for the fusion plot.
+**M1 Startup (116).** Check "Sensor fusion > Roll" with three fusable tracks visible, let it compute, quit, restart. After restart the row is still checked. Track visibility is not kept across restarts, so no track is visible and the row is plain; show the three tracks again: the row shows the refresh control with the count 3 and no job starts (no progress appears, CPU idle) until the control is pressed. The debug output contains no "No data available" line for the fusion plot.
 
-**M2 Profile and menu (116).** Uncheck Roll. Apply a profile that checks fusion plots; toggle a fusion plot through the Plots menu and its shortcut: rows show refresh with counts; nothing starts.
+**M2 Profile (116).** Uncheck Roll. With fusable tracks visible, apply a profile that checks fusion plots: the rows show refresh with counts; nothing starts. (The Plots menu and its shortcuts list a fixed set of GNSS plots; no fusion plot can be toggled from there.)
 
 **M3 Refresh (115).** Press Roll's refresh control: the row shows "0 of 3" and the cancel control; Pitch and Yaw, if checked, show the same progress. The tooltip lists the computing track with the solver's progress text and the queued tracks. As each fit publishes, its graph appears without any further action, the label advances ("1 of 3", "2 of 3"), and finally the row is plain. The legend and any fusion logbook column fill in at the same moments.
 
