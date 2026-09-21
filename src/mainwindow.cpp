@@ -957,13 +957,13 @@ void MainWindow::registerBuiltInPlots()
         {"GNSS (Advanced)", "Specific energy rate",            "W/kg",  Qt::darkBlue,                      "GNSS", "specificEnergyRate","specific_power"},
 
         // Category: GNSS (Local frame) - recording-wide north/east/down frame
-        // (red/green/blue per axis; positions deep, velocities standard)
-        {"GNSS (Local frame)", "North position", "m",   QColor::fromHsl(  0, S_dk, L_dw), "Local", "north", "distance"},
-        {"GNSS (Local frame)", "East position",  "m",   QColor::fromHsl(120, S_dk, L_dc), "Local", "east",  "distance"},
-        {"GNSS (Local frame)", "Down position",  "m",   QColor::fromHsl(240, S_dk, L_db), "Local", "down",  "distance"},
-        {"GNSS (Local frame)", "North velocity", "m/s", QColor::fromHsl(  0, S,    L_w),  "Local", "velN",  "speed"},
-        {"GNSS (Local frame)", "East velocity",  "m/s", QColor::fromHsl(120, S,    L_c),  "Local", "velE",  "speed"},
-        {"GNSS (Local frame)", "Down velocity",  "m/s", QColor::fromHsl(240, S,    L_b),  "Local", "velD",  "vertical_speed"},
+        // (Qt's dark red/green/blue per axis, as the "Sensor fusion" plots of the same frame)
+        {"GNSS (Local frame)", "North position", "m",   Qt::darkRed,                      "Local", "north", "distance"},
+        {"GNSS (Local frame)", "East position",  "m",   Qt::darkGreen,                    "Local", "east",  "distance"},
+        {"GNSS (Local frame)", "Down position",  "m",   Qt::darkBlue,                     "Local", "down",  "distance"},
+        {"GNSS (Local frame)", "North velocity", "m/s", Qt::darkRed,                      "Local", "velN",  "speed"},
+        {"GNSS (Local frame)", "East velocity",  "m/s", Qt::darkGreen,                    "Local", "velE",  "speed"},
+        {"GNSS (Local frame)", "Down velocity",  "m/s", Qt::darkBlue,                     "Local", "velD",  "vertical_speed"},
 
         // Category: IMU · Acceleration (red group, H ≈ 0°)
         {"IMU", "Acceleration X",     "g", QColor::fromHsl(360 - group_a, S, L_w), "IMU", "ax",     "acceleration"},
@@ -980,23 +980,23 @@ void MainWindow::registerBuiltInPlots()
         {"IMU", "Temperature", QString::fromUtf8("\302\260C"), QColor::fromHsl(45, S, L_w), "IMU", "temperature", "temperature"},
 
         // Category: Sensor fusion (explicit: computed on request from the plot list; same fixed NED frame as "GNSS (Local frame)")
-        {"Sensor fusion", "North position",          "m",     QColor::fromHsl(  0, S_dk, L_dw), "Fusion", "north", "distance"},
-        {"Sensor fusion", "East position",           "m",     QColor::fromHsl(120, S_dk, L_dc), "Fusion", "east",  "distance"},
-        {"Sensor fusion", "Down position",           "m",     QColor::fromHsl(240, S_dk, L_db), "Fusion", "down",  "distance"},
-        {"Sensor fusion", "North velocity",          "m/s",   QColor::fromHsl(  0, S,    L_w),  "Fusion", "velN",  "speed"},
-        {"Sensor fusion", "East velocity",           "m/s",   QColor::fromHsl(120, S,    L_c),  "Fusion", "velE",  "speed"},
-        {"Sensor fusion", "Down velocity",           "m/s",   QColor::fromHsl(240, S,    L_b),  "Fusion", "velD",  "vertical_speed"},
+        {"Sensor fusion", "North position",          "m",     Qt::darkRed,                      "Fusion", "north", "distance"},
+        {"Sensor fusion", "East position",           "m",     Qt::darkGreen,                    "Fusion", "east",  "distance"},
+        {"Sensor fusion", "Down position",           "m",     Qt::darkBlue,                     "Fusion", "down",  "distance"},
+        {"Sensor fusion", "North velocity",          "m/s",   Qt::darkRed,                      "Fusion", "velN",  "speed"},
+        {"Sensor fusion", "East velocity",           "m/s",   Qt::darkGreen,                    "Fusion", "velE",  "speed"},
+        {"Sensor fusion", "Down velocity",           "m/s",   Qt::darkBlue,                     "Fusion", "velD",  "vertical_speed"},
         {"Sensor fusion", "North acceleration",      "m/s^2", QColor::fromHsl(320, S,    L_w),  "Fusion", "accN",  "acceleration"},
         {"Sensor fusion", "East acceleration",       "m/s^2", QColor::fromHsl(  0, S,    L_w),  "Fusion", "accE",  "acceleration"},
         {"Sensor fusion", "Down acceleration",       "m/s^2", QColor::fromHsl( 40, S,    L_w),  "Fusion", "accD",  "acceleration"},
         {"Sensor fusion", "Horizontal acceleration", "m/s^2", QColor::fromHsl( 20, S,    L_w),  "Fusion", "accH",  "acceleration"},
-        {"Sensor fusion", "Roll",                    "deg",   QColor::fromHsl(  0, S_dk, L_dw), "Fusion", "roll",  "angle"},
-        {"Sensor fusion", "Pitch",                   "deg",   QColor::fromHsl(120, S_dk, L_dc), "Fusion", "pitch", "angle"},
-        {"Sensor fusion", "Yaw",                     "deg",   QColor::fromHsl(240, S_dk, L_db), "Fusion", "yaw",   "angle"},
-        {"Sensor fusion", "Quaternion X",            "",      QColor::fromHsl(  0, S,    L_w),  "Fusion", "qx",    "ratio"},
-        {"Sensor fusion", "Quaternion Y",            "",      QColor::fromHsl(120, S,    L_c),  "Fusion", "qy",    "ratio"},
-        {"Sensor fusion", "Quaternion Z",            "",      QColor::fromHsl(240, S,    L_b),  "Fusion", "qz",    "ratio"},
-        {"Sensor fusion", "Quaternion W",            "",      QColor::fromHsl(  0, 0,    L_g),  "Fusion", "qw",    "ratio"},
+        {"Sensor fusion", "Roll",                    "deg",   Qt::darkRed,                      "Fusion", "roll",  "angle"},
+        {"Sensor fusion", "Pitch",                   "deg",   Qt::darkGreen,                    "Fusion", "pitch", "angle"},
+        {"Sensor fusion", "Yaw",                     "deg",   Qt::darkBlue,                     "Fusion", "yaw",   "angle"},
+        {"Sensor fusion", "Quaternion X",            "",      Qt::darkRed,                      "Fusion", "qx",    "ratio"},
+        {"Sensor fusion", "Quaternion Y",            "",      Qt::darkGreen,                    "Fusion", "qy",    "ratio"},
+        {"Sensor fusion", "Quaternion Z",            "",      Qt::darkBlue,                     "Fusion", "qz",    "ratio"},
+        {"Sensor fusion", "Quaternion W",            "",      Qt::darkGray,                     "Fusion", "qw",    "ratio"},
 
         // Category: Magnetometer (blue group, H ≈ 240°)
         {"Magnetometer", "Magnetic field X",     "gauss", QColor::fromHsl(240 - group_a, S, L_b), "MAG", "x",     "magnetic_field"},
