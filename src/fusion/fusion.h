@@ -60,7 +60,8 @@ struct Result {
 /// Receives a short text describing the stage the fit has reached. Must not throw.
 using ProgressFn = std::function<void(const QString &text)>;
 /// Asked at each boundary whether to abandon the fit; true abandons it at that
-/// boundary. Must not throw.
+/// boundary. Asked more often than ProgressFn is called: preparation asks
+/// without reporting. Must not throw.
 using CancelFn = std::function<bool()>;
 
 /// The batch GNSS/IMU factor-graph fit.
@@ -69,10 +70,17 @@ using CancelFn = std::function<bool()>;
 /// or GUI object and keeps no state between calls, so it may run on any
 /// thread (give that thread a 64 MiB stack: large elimination trees recurse
 /// deeply). The callbacks cannot influence the result except by abandoning it.
-/// Cancellation is observed between graph-construction blocks and before each
-/// optimizer iteration; a linear solve in progress finishes first.
+/// Cancellation is observed during preparation before each candidate window
+/// of the initializer's stationary-window scan (nothing is reported there),
+/// then before the fit starts, between graph-construction blocks and before
+/// each optimizer iteration; a linear solve in progress finishes first. The
+/// rest of preparation is a few single passes over the recording.
 ///
-/// Throws nothing except std::bad_alloc.
+/// Every std::exception raised inside (the checks, the solver) becomes a
+/// Rejected or SolverFailed result. Two things propagate: std::bad_alloc,
+/// which is not a function of the inputs, and an exception that is not a
+/// std::exception, which neither this library nor the solver throws and a
+/// callback must not.
 Result run(const Channels &channels, const ProgressFn &progress = {},
            const CancelFn &cancelRequested = {});
 

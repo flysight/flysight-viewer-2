@@ -53,12 +53,20 @@ QJsonArray residualArray(const FitResult &fit)
 
 } // namespace
 
-void channelsFrom(const DenseTrajectory &dense, double epoch, Result &result)
+void fillOutputChannels(const DenseTrajectory &dense, double epoch, Result &result)
 {
+    const qsizetype count = qsizetype(dense.time.size());
+    for (QVector<double> *channel : { &result.time, &result.north, &result.east, &result.down,
+                                      &result.velN, &result.velE, &result.velD,
+                                      &result.accN, &result.accE, &result.accD,
+                                      &result.roll, &result.pitch, &result.yaw,
+                                      &result.qx, &result.qy, &result.qz, &result.qw })
+        channel->reserve(count);
+
     for (size_t i = 0; i < dense.time.size(); ++i) {
         result.time.append(epoch+dense.time[i]);
         const auto a = dense.acceleration[i], p = dense.position[i], v = dense.velocity[i];
-        const gtsam::Vector3 rpy = dense.rotation[i].rpy()*180/3.14159265358979323846;
+        const gtsam::Vector3 rpy = dense.rotation[i].rpy()*180/kPi;
         const auto q = dense.rotation[i].toQuaternion();
         result.accN.append(a.x());   result.accE.append(a.y());   result.accD.append(a.z());
         result.north.append(p.x());  result.east.append(p.y());   result.down.append(p.z());

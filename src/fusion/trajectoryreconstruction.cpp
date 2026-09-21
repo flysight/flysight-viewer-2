@@ -36,33 +36,34 @@ std::vector<gtsam::Rot3> propagateThroughInterval(const Samples &d, const std::v
 DenseTrajectory reconstructTrajectory(const Samples &d, const FitResult &fit)
 {
     DenseTrajectory dense;
-    auto bias = fit.values.at<gtsam::imuBias::ConstantBias>(B(0));
+    const auto bias = fit.values.at<gtsam::imuBias::ConstantBias>(B(0));
     for (size_t k = 0; k+1 < d.gnssTime.size(); ++k) {
-        double start = d.gnssTime[k], end = d.gnssTime[k+1];
-        auto e = integrationEdges(d, start, end);
-        auto p0 = fit.values.at<gtsam::Pose3>(X(k)), p1 = fit.values.at<gtsam::Pose3>(X(k+1));
-        auto v0 = fit.values.at<gtsam::Vector3>(V(k)), v1 = fit.values.at<gtsam::Vector3>(V(k+1));
-        const std::vector<gtsam::Rot3> rotations = propagateThroughInterval(d, e, p0.rotation(), bias.gyroscope());
+        const double start = d.gnssTime[k], end = d.gnssTime[k+1];
+        const std::vector<double> edges = integrationEdges(d, start, end);
+        const auto startPose = fit.values.at<gtsam::Pose3>(X(k)), endPose = fit.values.at<gtsam::Pose3>(X(k+1));
+        const auto startVelocity = fit.values.at<gtsam::Vector3>(V(k)), endVelocity = fit.values.at<gtsam::Vector3>(V(k+1));
+        const std::vector<gtsam::Rot3> rotations = propagateThroughInterval(d, edges, startPose.rotation(), bias.gyroscope());
 
         // What the gyro integration misses of the next state's fitted
         // attitude, as a rotation vector applied on the left (NED side).
-        gtsam::Vector3 error = gtsam::Rot3::Logmap(p1.rotation().compose(rotations.back().inverse()));
+        const gtsam::Vector3 error = gtsam::Rot3::Logmap(endPose.rotation().compose(rotations.back().inverse()));
         dense.endpointCorrection.push_back(error.norm()*180/kPi);
 
         // Every original IMU sample in [start, end)
-        auto a = std::lower_bound(d.imuTime.begin(), d.imuTime.end(), start);
-        auto b = std::lower_bound(d.imuTime.begin(), d.imuTime.end(), end);
-        for (auto it = a; it != b; ++it) {
-            double t = *it, fraction = (t-start)/(end-start);
-            size_t j = std::lower_bound(e.begin(), e.end(), t)-e.begin(), index = it-d.imuTime.begin();
-            gtsam::Rot3 adjusted = gtsam::Rot3::Expmap(error*fraction).compose(rotations[j]);
+        const auto firstSample = std::lower_bound(d.imuTime.begin(), d.imuTime.end(), start);
+        const auto lastSample = std::lower_bound(d.imuTime.begin(), d.imuTime.end(), end);
+        for (auto it = firstSample; it != lastSample; ++it) {
+            const double t = *it, fraction = (t-start)/(end-start);
+            const size_t edge = std::lower_bound(edges.begin(), edges.end(), t)-edges.begin();
+            const size_t sample = it-d.imuTime.begin();
+            const gtsam::Rot3 adjusted = gtsam::Rot3::Expmap(error*fraction).compose(rotations[edge]);
             dense.time.push_back(t);
             dense.rotation.push_back(adjusted);
-            dense.acceleration.push_back(adjusted.rotate(d.force[index]-bias.accelerometer())+kGravity);
+            dense.acceleration.push_back(adjusted.rotate(d.force[sample]-bias.accelerometer())+kGravity);
             // Display-only linear interpolation of optimized GNSS states; it is
             // independent of the gyro/force acceleration reconstruction above.
-            dense.position.push_back((1-fraction)*p0.translation()+fraction*p1.translation());
-            dense.velocity.push_back((1-fraction)*v0+fraction*v1);
+            dense.position.push_back((1-fraction)*startPose.translation()+fraction*endPose.translation());
+            dense.velocity.push_back((1-fraction)*startVelocity+fraction*endVelocity);
         }
     }
     return dense;

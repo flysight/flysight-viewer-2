@@ -123,6 +123,8 @@ private slots:
     void progressMatchesReferenceBoundaries();
     void cancelAtEachKindOfBoundary_data();
     void cancelAtEachKindOfBoundary();
+    void cancelDuringPreparation_data();
+    void cancelDuringPreparation();
     void cancelNeverRequestedChangesNothing();
     void twoRunsAreBitIdentical();
     void workerThreadMatchesMainThread();
@@ -264,6 +266,49 @@ void FusionParityTest::cancelAtEachKindOfBoundary()
     QCOMPARE(received.size(), cancelAtCall);
     QCOMPARE(calls, cancelAtCall);
     QCOMPARE(received.last(), lastText);
+
+    // Nothing of the abandoned run leaks into the next one.
+    const Fusion::Result after = Fusion::run(channels);
+    QVERIFY(after.outcome == Fusion::Outcome::Succeeded);
+    const QString difference = channelsDifference(after, loadFusionGolden(name));
+    QVERIFY2(difference.isEmpty(), qPrintable(difference));
+}
+
+void FusionParityTest::cancelDuringPreparation_data()
+{
+    // stationary_spin is 40 s long: the initializer assesses two candidate
+    // windows, [0, 30) and [5, 35), and asks once before each without
+    // reporting anything. (coarse_maneuver, which the test above runs, is 6 s
+    // long and has no candidate window: there the first question comes with
+    // "Starting fit".)
+    QTest::addColumn<int>("cancelAtCall");
+    QTest::addColumn<QStringList>("expectedTexts");
+    QTest::newRow("first candidate window") << 1 << QStringList();
+    QTest::newRow("second candidate window") << 2 << QStringList();
+    QTest::newRow("first reported boundary") << 3 << QStringList({QStringLiteral("Starting fit")});
+}
+
+void FusionParityTest::cancelDuringPreparation()
+{
+    QFETCH(int, cancelAtCall);
+    QFETCH(QStringList, expectedTexts);
+    const QString name = QStringLiteral("stationary_spin");
+    const Fusion::Channels channels = toChannels(fusionFixture(name));
+
+    QStringList received;
+    int calls = 0;
+    const Fusion::Result cancelled = Fusion::run(channels,
+        [&received](const QString &text) { received.append(text); },
+        [&calls, cancelAtCall]() { return ++calls >= cancelAtCall; });
+
+    QVERIFY(cancelled.outcome == Fusion::Outcome::Cancelled);
+    QVERIFY(cancelled.reason.isEmpty());
+    QVERIFY(cancelled.diagnosticsJson.isEmpty());
+    QVERIFY(allArraysEmpty(cancelled));
+    // It stopped at the question that was answered "yes", and preparation
+    // reported nothing: the texts are those of the boundaries of the fit.
+    QCOMPARE(calls, cancelAtCall);
+    QCOMPARE(received, expectedTexts);
 
     // Nothing of the abandoned run leaks into the next one.
     const Fusion::Result after = Fusion::run(channels);

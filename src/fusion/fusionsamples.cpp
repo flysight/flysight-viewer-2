@@ -16,6 +16,14 @@ const gtsam::Vector3 kGravity(0, 0, 9.80665);
 
 namespace {
 
+// Rejection reasons that more than one check reports. The whole recording
+// and the fitted window are checked for the same defects in different words;
+// the words are part of the reference's behavior and stay as they are.
+const char kWindowLengthsMessage[] = "Mismatched input array lengths";
+const char kWindowNonfiniteMessage[] = "Nonfinite input";
+const char kRecordingLengthsMessage[] = "Mismatched fusion input array lengths";
+const char kRecordingNonfiniteMessage[] = "Nonfinite fusion input";
+
 /// Each field must have `count` entries (checked first) and only finite ones.
 void requireFiniteArrays(size_t count, std::initializer_list<const Vectors *> fields,
                          const char *lengthMessage, const char *finiteMessage)
@@ -140,11 +148,11 @@ void validateSamples(const Samples &samples, const Tuning &tuning)
     requireIncreasingFiniteTimes(samples.imuTime);
     requireIncreasingFiniteTimes(samples.gnssTime);
     requireFiniteArrays(samples.imuTime.size(), { &samples.force, &samples.gyro },
-                        "Mismatched input array lengths", "Nonfinite input");
+                        kWindowLengthsMessage, kWindowNonfiniteMessage);
     requireFiniteArrays(samples.gnssTime.size(),
                         { &samples.position, &samples.velocity,
                           &samples.positionSigma, &samples.velocitySigma },
-                        "Mismatched input array lengths", "Nonfinite input");
+                        kWindowLengthsMessage, kWindowNonfiniteMessage);
     requirePositiveSigmas(samples);
     requireValidTuning(tuning);
     requireGnssInsideImuCoverage(samples);
@@ -176,11 +184,11 @@ void requireUsableRecording(const Samples &recording, double epoch, double usabl
     if (!std::isfinite(epoch) || !std::isfinite(usableStart))
         throw std::invalid_argument("Nonfinite fusion epoch or usable start");
     requireFiniteArrays(recording.imuTime.size(), { &recording.force, &recording.gyro },
-                        "Mismatched fusion input array lengths", "Nonfinite fusion input");
+                        kRecordingLengthsMessage, kRecordingNonfiniteMessage);
     requireFiniteArrays(recording.gnssTime.size(),
                         { &recording.position, &recording.velocity,
                           &recording.positionSigma, &recording.velocitySigma },
-                        "Mismatched fusion input array lengths", "Nonfinite fusion input");
+                        kRecordingLengthsMessage, kRecordingNonfiniteMessage);
     requirePositiveSigmas(recording);
 }
 

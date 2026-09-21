@@ -27,7 +27,21 @@ struct StationaryWindow {
 /// Assesses the samples of `samples` with start <= t < end. Every gate is
 /// evaluated (not only the first that fails), so `rejected` says everything
 /// that is wrong with the window; only too little data ends the test early.
+/// The samples are found by bisection: both time axes must be strictly
+/// increasing (requireIncreasingFiniteTimes).
+///
+/// `imuGap` is the longest IMU interval that is not missing data,
+/// imuGapLimit(samples). It belongs to the recording, not to the window, so a
+/// caller that assesses many windows computes it once.
+StationaryWindow assessStationaryWindow(const Samples &samples, double start, double end,
+                                        double imuGap);
+
+/// The same, for a single window.
 StationaryWindow assessStationaryWindow(const Samples &samples, double start, double end);
+
+/// kImuGapMedians median IMU intervals of `samples`, in seconds. Sorts every
+/// IMU interval of the recording.
+double imuGapLimit(const Samples &samples);
 
 } // namespace FlySight::Fusion::Detail
 

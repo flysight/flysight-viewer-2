@@ -271,6 +271,7 @@
 
 # 110 - cancel stops at the next solver boundary, publishes nothing, requestable; the next job starts
 110 tst_fusion_parity cancelAtEachKindOfBoundary
+110 tst_fusion_parity cancelDuringPreparation
 110 tst_fusion_session cancelStopsAtNextBoundary
 110 tst_jobqueue cancelRunningThenNextStarts
 110 tst_fusion_jobs cancelDuringFitThenNextJobStarts

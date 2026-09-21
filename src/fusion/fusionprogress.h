@@ -16,9 +16,10 @@ class FusionCancelled {};
 
 /// The kernel's one progress-and-cancel facility: a boundary of the fit.
 ///
-/// Calling it reports `text`, then asks whether to stop, in that order. It is
-/// called from sequential code only, never from inside a solver's parallel
-/// region, so the exception never crosses GTSAM.
+/// Calling it reports `text`, then asks whether to stop, in that order.
+/// pollCancel() is the silent form, for work that comes before the first
+/// reported stage. Both are called from sequential code only, never from
+/// inside a solver's parallel region, so the exception never crosses GTSAM.
 class Checkpoint {
 public:
     Checkpoint() = default;
@@ -30,6 +31,15 @@ public:
     {
         if (m_progress)
             m_progress(text);
+        if (m_cancelRequested && m_cancelRequested())
+            throw FusionCancelled();
+    }
+
+    /// Asks whether to stop and reports nothing: the sequence of progress
+    /// texts is the reference's, and preparation is not one of its stages.
+    /// Throws FusionCancelled when cancellation was requested.
+    void pollCancel() const
+    {
         if (m_cancelRequested && m_cancelRequested())
             throw FusionCancelled();
     }

@@ -65,7 +65,7 @@ void appendGnssSamples(Samples &d, const Channels &c, double epoch)
 /// effective rate is deg/s and the model works in rad/s.
 void appendImuSamples(Samples &d, const Channels &c, double epoch)
 {
-    constexpr double radians = 3.14159265358979323846 / 180;
+    constexpr double radians = kPi / 180;
     for (qsizetype k = 0; k < c.imuTime.size(); ++k) {
         if (!std::isfinite(c.imuTime[k]))
             throw std::invalid_argument("Nonfinite IMU UTC timestamp");
@@ -107,9 +107,10 @@ PreparedInput prepareInput(const Channels &c)
     appendGnssSamples(out.recording, c, out.epoch);
     appendImuSamples(out.recording, c, out.epoch);
 
-    // Called for their checks: both time axes must be strictly increasing.
-    medianInterval(out.recording.imuTime);
-    medianInterval(out.recording.gnssTime);
+    // Both time axes must be strictly increasing: every later stage searches
+    // them by bisection.
+    requireIncreasingFiniteTimes(out.recording.imuTime);
+    requireIncreasingFiniteTimes(out.recording.gnssTime);
 
     out.audit = inputAudit(c, out.epoch);
     return out;

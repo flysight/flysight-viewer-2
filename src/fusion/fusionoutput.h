@@ -18,7 +18,7 @@ namespace FlySight::Fusion::Detail {
 /// Fills the seventeen arrays of `result` from `dense`: UTC time restored by
 /// adding `epoch`, roll / pitch / yaw in degrees and unwrapped over the whole
 /// fit with the rule the GNSS course uses, quaternion xyzw.
-void channelsFrom(const DenseTrajectory &dense, double epoch, Result &result);
+void fillOutputChannels(const DenseTrajectory &dense, double epoch, Result &result);
 
 /// The diagnostics of a converged fit: input audit, initializer, objective,
 /// biases, per-factor residuals, and the statements of what the outputs mean.

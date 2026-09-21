@@ -1,6 +1,7 @@
 #include "fusion/stationarywindow.h"
 
 #include <algorithm>
+#include <utility>
 
 #include "fusion/samplestatistics.h"
 
@@ -43,16 +44,27 @@ struct GnssWindow {
     std::vector<double> sigmaComponents;  // every component of every velocity sigma
 };
 
+/// Index range [first, second) of the entries with start <= t < end. `times`
+/// is strictly increasing, so these are exactly the entries that a scan of the
+/// whole axis with that test selects, in the same order, without the scan.
+std::pair<size_t, size_t> indexRange(const std::vector<double> &times, double start, double end)
+{
+    if (!(start < end))
+        return { 0, 0 };
+    const auto first = std::lower_bound(times.begin(), times.end(), start);
+    const auto last = std::lower_bound(first, times.end(), end);
+    return { size_t(first-times.begin()), size_t(last-times.begin()) };
+}
+
 ImuWindow collectImuWindow(const Samples &d, double start, double end)
 {
     ImuWindow w;
-    for (size_t i = 0; i < d.imuTime.size(); ++i) {
-        if (d.imuTime[i] >= start && d.imuTime[i] < end) {
-            w.time.push_back(d.imuTime[i]);
-            w.rate.push_back(d.gyro[i]*180/kPi);
-            w.force.push_back(d.force[i]);
-            (d.imuTime[i] < (start+end)/2 ? w.forceFirstHalf : w.forceSecondHalf).push_back(d.force[i]);
-        }
+    const auto [first, last] = indexRange(d.imuTime, start, end);
+    for (size_t i = first; i < last; ++i) {
+        w.time.push_back(d.imuTime[i]);
+        w.rate.push_back(d.gyro[i]*180/kPi);
+        w.force.push_back(d.force[i]);
+        (d.imuTime[i] < (start+end)/2 ? w.forceFirstHalf : w.forceSecondHalf).push_back(d.force[i]);
     }
     return w;
 }
@@ -60,15 +72,14 @@ ImuWindow collectImuWindow(const Samples &d, double start, double end)
 GnssWindow collectGnssWindow(const Samples &d, double start, double end)
 {
     GnssWindow w;
-    for (size_t i = 0; i < d.gnssTime.size(); ++i) {
-        if (d.gnssTime[i] >= start && d.gnssTime[i] < end) {
-            w.time.push_back(d.gnssTime[i]);
-            w.velocity.push_back(d.velocity[i]);
-            w.velocitySigma.push_back(d.velocitySigma[i]);
-            (d.gnssTime[i] < (start+end)/2 ? w.velocityFirstHalf : w.velocitySecondHalf).push_back(d.velocity[i]);
-            for (int j = 0; j < 3; ++j)
-                w.sigmaComponents.push_back(d.velocitySigma[i][j]);
-        }
+    const auto [first, last] = indexRange(d.gnssTime, start, end);
+    for (size_t i = first; i < last; ++i) {
+        w.time.push_back(d.gnssTime[i]);
+        w.velocity.push_back(d.velocity[i]);
+        w.velocitySigma.push_back(d.velocitySigma[i]);
+        (d.gnssTime[i] < (start+end)/2 ? w.velocityFirstHalf : w.velocitySecondHalf).push_back(d.velocity[i]);
+        for (int j = 0; j < 3; ++j)
+            w.sigmaComponents.push_back(d.velocitySigma[i][j]);
     }
     return w;
 }
@@ -121,55 +132,67 @@ bool coversWindow(const ImuWindow &imu, const GnssWindow &gnss, double start, do
 
 } // namespace
 
+double imuGapLimit(const Samples &samples)
+{
+    return kImuGapMedians*medianInterval(samples.imuTime);
+}
+
 StationaryWindow assessStationaryWindow(const Samples &samples, double start, double end)
 {
-    StationaryWindow c;
-    c.start = start;
-    c.end = end;
+    return assessStationaryWindow(samples, start, end, imuGapLimit(samples));
+}
+
+StationaryWindow assessStationaryWindow(const Samples &samples, double start, double end,
+                                        double imuGap)
+{
+    StationaryWindow verdict;
+    verdict.start = start;
+    verdict.end = end;
 
     const ImuWindow imu = collectImuWindow(samples, start, end);
     const GnssWindow gnss = collectGnssWindow(samples, start, end);
-    c.imuCount = imu.time.size();
-    c.gnssCount = gnss.time.size();
+    verdict.imuCount = imu.time.size();
+    verdict.gnssCount = gnss.time.size();
     if (!hasMinimumSamples(imu, gnss)) {
-        c.rejected = {"coverage"};
-        return c;
+        verdict.rejected = {"coverage"};
+        return verdict;
     }
 
-    const gtsam::Vector3 wm = componentMean(imu.rate, true), fm = componentMean(imu.force, true),
-                         ws = componentStddev(imu.rate), fs = componentStddev(imu.force);
+    const gtsam::Vector3 rateMean = componentMean(imu.rate, true),
+                         forceMean = componentMean(imu.force, true),
+                         rateStddev = componentStddev(imu.rate),
+                         forceStddev = componentStddev(imu.force);
     // Constant translation is compatible with gravity-based initialization.
     // Test the velocity vector's stability, independent of its nonzero offset.
-    const gtsam::Vector3 vm = componentMean(gnss.velocity, true);
+    const gtsam::Vector3 velocityMean = componentMean(gnss.velocity, true);
     std::vector<double> velocityDeviation, normalized;
-    velocityDeviations(gnss, vm, velocityDeviation, normalized);
-    const std::vector<double> wd = deviationNorms(imu.rate, wm);
-    const std::vector<double> fd = deviationNorms(imu.force, fm);
+    velocityDeviations(gnss, velocityMean, velocityDeviation, normalized);
+    const std::vector<double> rateDeviation = deviationNorms(imu.rate, rateMean);
+    const std::vector<double> forceDeviation = deviationNorms(imu.force, forceMean);
 
-    auto check = [&c](bool ok, const char *name) { if (!ok) c.rejected.push_back(name); };
-    const double gap = kImuGapMedians*medianInterval(samples.imuTime);
+    auto check = [&verdict](bool ok, const char *name) { if (!ok) verdict.rejected.push_back(name); };
 
     // Gate order is the order of `rejected`.
-    check(coversWindow(imu, gnss, start, end, gap), "coverage");
+    check(coversWindow(imu, gnss, start, end, imuGap), "coverage");
     check(quantile(velocityDeviation, .95) <= kMaxVelocityDeviationP95, "velocity_variability");
     check(quantile(gnss.sigmaComponents, .95) <= kMaxVelocitySigmaP95, "uncertainty");
     check(quantile(normalized, .95) <= kMaxNormalizedVelocityP95, "normalized_velocity_variability");
     check((componentMean(gnss.velocityFirstHalf)-componentMean(gnss.velocitySecondHalf)).norm() <= kMaxVelocityDrift, "velocity_drift");
-    check(ws.maxCoeff() <= kMaxGyroStddev, "gyro_variability");
-    check(quantile(wd, .95) <= kMaxGyroDeviationP95, "gyro_p95");
-    check(quantile(wd, 1) <= kMaxGyroDeviationPeak, "gyro_peak");
-    check(wm.norm() <= kMaxMeanRate, "mean_rate");
-    check(fs.maxCoeff() <= kMaxForceStddev, "force_variability");
-    check(quantile(fd, .95) <= kMaxForceDeviationP95, "force_p95");
-    check(quantile(fd, 1) <= kMaxForceDeviationPeak, "force_peak");
+    check(rateStddev.maxCoeff() <= kMaxGyroStddev, "gyro_variability");
+    check(quantile(rateDeviation, .95) <= kMaxGyroDeviationP95, "gyro_p95");
+    check(quantile(rateDeviation, 1) <= kMaxGyroDeviationPeak, "gyro_peak");
+    check(rateMean.norm() <= kMaxMeanRate, "mean_rate");
+    check(forceStddev.maxCoeff() <= kMaxForceStddev, "force_variability");
+    check(quantile(forceDeviation, .95) <= kMaxForceDeviationP95, "force_p95");
+    check(quantile(forceDeviation, 1) <= kMaxForceDeviationPeak, "force_peak");
     check((componentMean(imu.forceFirstHalf)-componentMean(imu.forceSecondHalf)).norm() <= kMaxTiltDrift, "tilt_drift");
-    check(fm.norm() > kMinGravityRatio*kGravity.z() && fm.norm() < kMaxGravityRatio*kGravity.z(), "plausible_gravity");
+    check(forceMean.norm() > kMinGravityRatio*kGravity.z() && forceMean.norm() < kMaxGravityRatio*kGravity.z(), "plausible_gravity");
 
-    c.accepted = c.rejected.empty();
-    c.forceMean = fm;
-    c.gyroMean = wm*kPi/180;
-    c.score = fs.norm();
-    return c;
+    verdict.accepted = verdict.rejected.empty();
+    verdict.forceMean = forceMean;
+    verdict.gyroMean = rateMean*kPi/180;
+    verdict.score = forceStddev.norm();
+    return verdict;
 }
 
 } // namespace FlySight::Fusion::Detail

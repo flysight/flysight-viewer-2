@@ -162,6 +162,7 @@ private slots:
     void headingIsUnconstrained();
     void reconstructionTimingAndEndpointCorrection();
     void stationaryGates();
+    void stationaryScanPollsSilently();
     void shortInputUsesCoarseInitializer();
     void exactConstantVelocityFit();
     void fitTraceMatchesGolden_data();
@@ -389,6 +390,61 @@ void FusionKernelTest::stationaryGates()
     const StationaryWindow outside = assessStationaryWindow(quiet, 100, 130);
     QVERIFY(!outside.accepted);
     QCOMPARE(outside.rejected, std::vector<std::string>{"coverage"});
+}
+
+void FusionKernelTest::stationaryScanPollsSilently()
+{
+    const Samples quiet = quietSamples(Vector3(.004, -.003, .006));
+    QStringList texts;
+    int asked = 0;
+    const auto report = [&texts](const QString &text) { texts.append(text); };
+
+    // 40 s: two candidate windows, [0, 30) and [5, 35); one question before
+    // each, and nothing reported.
+    const InitialAttitude polled = initialAttitude(quiet, quiet.gnssTime.front(),
+        Checkpoint(report, [&asked] { ++asked; return false; }));
+    QCOMPARE(asked, 2);
+    QVERIFY(texts.isEmpty());
+
+    // Asking changes nothing
+    const InitialAttitude plain = initialAttitude(quiet, quiet.gnssTime.front());
+    QCOMPARE(polled.method, plain.method);
+    QCOMPARE(polled.intervalStart, plain.intervalStart);
+    QCOMPARE(polled.anchorTime, plain.anchorTime);
+    QVERIFY(polled.gyroBias == plain.gyroBias);
+    QVERIFY(polled.rotation.matrix() == plain.rotation.matrix());
+
+    // "Yes" at the second window abandons the scan there
+    asked = 0;
+    bool cancelled = false;
+    try {
+        initialAttitude(quiet, quiet.gnssTime.front(),
+                        Checkpoint(report, [&asked] { return ++asked >= 2; }));
+    } catch (const FusionCancelled &) {
+        cancelled = true;
+    }
+    QVERIFY(cancelled);
+    QCOMPARE(asked, 2);
+    QVERIFY(texts.isEmpty());
+
+    // A recording shorter than a window has no candidate: nobody is asked
+    asked = 0;
+    const Samples linear = linearSamples(Vector3(12, -4, 2), Vector3(7, 8, 9));
+    initialAttitude(linear, linear.gnssTime.front(),
+                    Checkpoint(report, [&asked] { ++asked; return false; }));
+    QCOMPARE(asked, 0);
+
+    // The gap limit belongs to the recording: handing it in is the same
+    // assessment as deriving it per window.
+    const StationaryWindow derived = assessStationaryWindow(quiet, 5, 35);
+    const StationaryWindow given = assessStationaryWindow(quiet, 5, 35, imuGapLimit(quiet));
+    QCOMPARE(given.accepted, derived.accepted);
+    QCOMPARE(given.rejected, derived.rejected);
+    QCOMPARE(given.imuCount, derived.imuCount);
+    QCOMPARE(given.gnssCount, derived.gnssCount);
+    QCOMPARE(given.score, derived.score);
+    QVERIFY(given.forceMean == derived.forceMean);
+    QVERIFY(given.gyroMean == derived.gyroMean);
 }
 
 void FusionKernelTest::shortInputUsesCoarseInitializer()

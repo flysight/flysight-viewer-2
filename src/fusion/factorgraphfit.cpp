@@ -24,6 +24,14 @@ namespace {
 constexpr int kMaxBiasPasses = 5;
 constexpr size_t kStatesPerCheckpoint = 256;
 
+// An iteration may raise the cost by this much (rounding) before it counts as
+// an increase, which is a failure.
+constexpr double kCostIncreaseTolerance = 1e-6;
+// The bias has settled when a pass moves it by less than this: accelerometer
+// m/s^2, gyro rad/s.
+constexpr double kAccBiasSettled = 1e-5;
+constexpr double kGyroBiasSettled = 1e-6;
+
 /// The GNSS measurement of state k: position, then velocity.
 void addGnssFactors(gtsam::NonlinearFactorGraph &graph, const Samples &d, size_t k)
 {
@@ -68,7 +76,7 @@ bool runOptimizerPass(const gtsam::NonlinearFactorGraph &graph, gtsam::Values &v
         optimizer.iterate();
         const double after = optimizer.error();
         history.push_back({outer, i, before, after});
-        if (!std::isfinite(after) || after > before+1e-6)
+        if (!std::isfinite(after) || after > before+kCostIncreaseTolerance)
             throw std::runtime_error("Nonfinite or increasing optimizer cost");
         if (before-after <= c.relativeTolerance*std::max(1., before)) {
             settled = true;
@@ -82,7 +90,7 @@ bool runOptimizerPass(const gtsam::NonlinearFactorGraph &graph, gtsam::Values &v
 /// The bias moved so little that re-preintegrating would change nothing.
 bool biasSettled(const gtsam::Vector6 &shift)
 {
-    return shift.head<3>().norm() < 1e-5 && shift.tail<3>().norm() < 1e-6;
+    return shift.head<3>().norm() < kAccBiasSettled && shift.tail<3>().norm() < kGyroBiasSettled;
 }
 
 /// Per-factor residuals and the RMS misfit to the GNSS measurements. The

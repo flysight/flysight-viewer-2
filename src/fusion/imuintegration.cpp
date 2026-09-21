@@ -8,6 +8,13 @@ namespace FlySight::Fusion::Detail {
 
 namespace {
 
+// GTSAM's integrationCovariance: the continuous-time variance of the error
+// made by integrating position from velocity.
+constexpr double kIntegrationVariance = 1e-8;
+// The preintegrated steps must add up to the interval between the two fixes
+// to within this many seconds.
+constexpr double kDurationTolerance = 1e-10;
+
 /// No step between successive `edges` may exceed `limit` seconds.
 void requireNoImuGap(const std::vector<double> &edges, double limit)
 {
@@ -78,7 +85,7 @@ std::shared_ptr<gtsam::PreintegrationParams> preintegrationParams(const Tuning &
     auto params = gtsam::PreintegrationParams::MakeSharedD(kGravity.z());
     params->accelerometerCovariance = gtsam::I_3x3*tuning.accDensity*tuning.accDensity;
     params->gyroscopeCovariance = gtsam::I_3x3*tuning.gyroDensity*tuning.gyroDensity;
-    params->integrationCovariance = gtsam::I_3x3*1e-8;
+    params->integrationCovariance = gtsam::I_3x3*kIntegrationVariance;
     return params;
 }
 
@@ -95,7 +102,7 @@ gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, doub
     }
     // The steps must add up to the interval, or the factor would relate the
     // two states over the wrong duration.
-    if (std::abs(pim.deltaTij()-(end-start)) > 1e-10)
+    if (std::abs(pim.deltaTij()-(end-start)) > kDurationTolerance)
         throw std::runtime_error("Preintegration duration mismatch");
     return pim;
 }

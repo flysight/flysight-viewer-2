@@ -6,6 +6,7 @@
 #include <gtsam/geometry/Rot3.h>
 #include <gtsam/nonlinear/Values.h>
 
+#include "fusion/fusionprogress.h"
 #include "fusion/fusionsamples.h"
 
 // Internal to the fusion library: where the optimizer starts. Roll and pitch
@@ -34,7 +35,10 @@ gtsam::Rot3 rotationAligning(const gtsam::Vector3 &from, const gtsam::Vector3 &t
 /// quietest stationary 30 s window, including samples outside the fitted
 /// window (a stationary minute before the origin fix is still the best place
 /// to measure gravity), and falls back to the coarse method when none passes.
-InitialAttitude initialAttitude(const Samples &fullRecording, double graphStart);
+/// Polls `checkpoint` for cancellation once per candidate window, reporting
+/// nothing; throws FusionCancelled when asked to stop.
+InitialAttitude initialAttitude(const Samples &fullRecording, double graphStart,
+                                const Checkpoint &checkpoint = Checkpoint());
 
 /// The optimizer's initial values for `window`: the shared bias B(0), and per
 /// fix the pose X(k) (the initial attitude carried forward by the gyro, the

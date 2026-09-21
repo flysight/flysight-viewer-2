@@ -226,10 +226,13 @@ nobody can use). Such a job ends as superseded, nothing is published or
 cached, and the row shows the refresh control again at once; a refresh queues
 a new fit, which starts when the old one has stopped.
 
-**Cancellation** is observed at three kinds of boundary: before the fit starts,
-every 256 states of graph construction, and before each optimizer iteration. A
-linear solve in progress finishes first. A cancelled fit publishes nothing and
-caches nothing.
+**Cancellation** is observed at four kinds of boundary: during preparation,
+before each candidate window of the search for a stationary interval (the one
+part of preparation that grows with the recording beyond a few single passes;
+nothing is reported there, so the progress texts begin with the fit); before
+the fit starts; every 256 states of graph construction; and before each
+optimizer iteration. A linear solve in progress finishes first. A cancelled fit
+publishes nothing and caches nothing.
 
 **Outcomes.** A rejection (section 6) and a solver failure are functions of the
 inputs, so they are cached like any result: the row shows the warning badge,
@@ -243,7 +246,8 @@ stays "not computed".
 it. Moving markers, zooming, and display preferences do not.
 
 **One at a time.** Jobs run one after another in the order requested. Quitting
-cancels them and waits for at most one solver step.
+cancels them and waits for the running fit to reach its next cancellation
+boundary: at most one solver step.
 
 **Logbook columns** over fusion values show the live value for a loaded
 recording and are never cached for unloaded ones, because the result is not

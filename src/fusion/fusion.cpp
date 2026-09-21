@@ -35,14 +35,16 @@ struct FitPlan {
 };
 
 /// Stage 1: is this a recording the model can use, and where does the fit
-/// start? Throws the rejection reason.
-FitPlan planFit(const Channels &channels, const Tuning &baseTuning)
+/// start? Throws the rejection reason. Everything here is a single pass over
+/// the recording except the initializer's scan for a stationary window, which
+/// polls `checkpoint` for cancellation (silently: no stage is reported before
+/// "Starting fit") and throws FusionCancelled.
+FitPlan planFit(const Channels &channels, const Tuning &baseTuning, const Checkpoint &checkpoint)
 {
     FitPlan plan;
     plan.prepared = prepareInput(channels);
     const Samples &full = plan.prepared.recording;
     requireUsableRecording(full, plan.prepared.epoch, plan.prepared.usableStart);
-    medianInterval(full.gnssTime);
 
     plan.tuning = baseTuning;
     plan.tuning.maxGap = kImuGapMedians*medianInterval(full.imuTime);
@@ -51,7 +53,7 @@ FitPlan planFit(const Channels &channels, const Tuning &baseTuning)
     requireNoGnssOutage(plan.window, std::max(kGnssOutageSeconds, kGnssOutageMedians*medianInterval(full.gnssTime)));
 
     // The initializer looks at the full recording, not only at the window.
-    plan.attitude = initialAttitude(full, plan.window.gnssTime.front());
+    plan.attitude = initialAttitude(full, plan.window.gnssTime.front(), checkpoint);
     return plan;
 }
 
@@ -72,7 +74,7 @@ Result fitAndAssemble(const FitPlan &plan, const Checkpoint &checkpoint, Pipelin
     const DenseTrajectory dense = reconstructTrajectory(plan.window, fit);
     Result result;
     result.outcome = Outcome::Succeeded;
-    channelsFrom(dense, plan.prepared.epoch, result);
+    fillOutputChannels(dense, plan.prepared.epoch, result);
     result.diagnosticsJson = toCompactJson(
         successDiagnostics(plan.prepared, plan.attitude, fit, plan.window, dense));
     return result;
@@ -95,10 +97,14 @@ Result runPipeline(const Channels &channels, const Tuning &baseTuning,
 {
     // Classification is by stage, not by exception type: the solver may throw
     // std::invalid_argument from inside a solve. Memory exhaustion is not a
-    // function of the inputs and is never turned into a result.
+    // function of the inputs and is never turned into a result. Anything that
+    // is not a std::exception is not caught either: neither this library nor
+    // the solver throws one, so it would be a defect, and the caller (the
+    // engine) reports it as one instead of caching it as a property of the
+    // recording.
     FitPlan plan;
     try {
-        plan = planFit(channels, baseTuning);
+        plan = planFit(channels, baseTuning, checkpoint);
     } catch (const FusionCancelled &) {
         return Result();
     } catch (const std::bad_alloc &) {
