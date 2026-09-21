@@ -14,8 +14,11 @@
 // FLYSIGHT_FUSION_EXACT=1 switches every numeric comparison to bit equality;
 // see fusiongolden.h.
 
+#include <cmath>
+#include <limits>
 #include <memory>
 
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QThread>
@@ -66,17 +69,19 @@ bool allArraysEmpty(const Fusion::Result &result)
 }
 
 /// Empty when every channel of `result` matches the golden, else the first
-/// channel's difference.
+/// channel's difference. Every channel is compared even after a difference,
+/// so that the statistics in the log always cover all seventeen.
 QString channelsDifference(const Fusion::Result &result, const FusionGolden &golden,
                            ParityStatistics *statistics = nullptr)
 {
+    QString first;
     for (const QString &name : fusionChannelNames()) {
         const QString difference =
             compareSamples(name, fusionChannel(result, name), golden.channels.value(name), statistics);
-        if (!difference.isEmpty())
-            return difference;
+        if (first.isEmpty())
+            first = difference;
     }
-    return QString();
+    return first;
 }
 
 double largestStep(const QVector<double> &angles)
@@ -104,6 +109,7 @@ class FusionParityTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void comparatorHoldsItsBounds();
     void fixturesAreDeterministic();
     void successFixturesMatchGolden_data();
     void successFixturesMatchGolden();
@@ -119,6 +125,130 @@ private slots:
     void workerThreadMatchesMainThread();
     void resultIsIndependentOfCallerState();
 };
+
+namespace {
+
+/// FLYSIGHT_FUSION_EXACT set to `exact` for as long as it lives, then restored.
+class ParityModeOverride {
+public:
+    explicit ParityModeOverride(bool exact)
+        : m_wasSet(qEnvironmentVariableIsSet(kName)), m_previous(qgetenv(kName))
+    {
+        qputenv(kName, exact ? "1" : "0");
+    }
+    ~ParityModeOverride()
+    {
+        if (m_wasSet)
+            qputenv(kName, m_previous);
+        else
+            qunsetenv(kName);
+    }
+
+private:
+    static constexpr const char *kName = "FLYSIGHT_FUSION_EXACT";
+    const bool m_wasSet;
+    const QByteArray m_previous;
+};
+
+bool samplesPass(const QString &channel, double got, double golden)
+{
+    return compareSamples(channel, {1.0, got, 2.0}, {1.0, golden, 2.0}).isEmpty();
+}
+
+bool jsonPasses(const char *key, double got, double golden)
+{
+    return compareJson(QStringLiteral("j"), QJsonObject{{QLatin1String(key), got}},
+                       QJsonObject{{QLatin1String(key), golden}}).isEmpty();
+}
+
+} // namespace
+
+// The comparator itself: a bound wide enough for every compiler must still be
+// a bound. Both modes are exercised whatever mode the executable runs in.
+void FusionParityTest::comparatorHoldsItsBounds()
+{
+    const double NaN = std::numeric_limits<double>::quiet_NaN();
+    const double oneUlpAboveOne = std::nextafter(1.0, 2.0);
+    const double time = 1700000000.25, timeOneUlpLater = std::nextafter(time, 2e9);
+    const QString accN = QStringLiteral("accN"), timeChannel = QStringLiteral("_time");
+
+    {
+        const ParityModeOverride portable(false);
+        QVERIFY(!exactParityRequested());
+        QCOMPARE(kPortableAbsolute, 1e-7);
+        QCOMPARE(kPortableRelative, 1e-7);
+        QVERIFY(std::abs(kPortableAbsoluteDegrees - 5.7295779513082323e-6) < 1e-20);
+
+        // Identical, including the golden's own NaN
+        QVERIFY(samplesPass(accN, -0.0116330, -0.0116330));
+        QVERIFY(samplesPass(accN, NaN, NaN));
+        QVERIFY(samplesPass(accN, oneUlpAboveOne, 1.0));
+
+        // Just inside and just outside, at zero, at a small and at a large golden
+        for (const double golden : {0.0, -0.0116330, 1.0, -120.0, 810.0}) {
+            const double bound = kPortableAbsolute + kPortableRelative * std::abs(golden);
+            QVERIFY2(samplesPass(accN, golden + .99 * bound, golden), qPrintable(QString::number(golden)));
+            QVERIFY2(samplesPass(accN, golden - .99 * bound, golden), qPrintable(QString::number(golden)));
+            QVERIFY2(!samplesPass(accN, golden + 1.01 * bound, golden), qPrintable(QString::number(golden)));
+            QVERIFY2(!samplesPass(accN, golden - 1.01 * bound, golden), qPrintable(QString::number(golden)));
+            QVERIFY(jsonPasses("objective", golden + .99 * bound, golden));
+            QVERIFY(!jsonPasses("objective", golden + 1.01 * bound, golden));
+        }
+        // Numbers in degrees have the floor of 1e-7 rad; nothing else has
+        for (const char *name : {"roll", "pitch", "yaw"}) {
+            const QString channel = QString::fromLatin1(name);
+            QVERIFY2(samplesPass(channel, 5e-6, 0.0), name);
+            QVERIFY2(!samplesPass(channel, 6e-6, 0.0), name);
+        }
+        QVERIFY(jsonPasses("max_endpoint_correction_deg", 5e-6, 0.0));
+        QVERIFY(!jsonPasses("max_endpoint_correction_deg", 6e-6, 0.0));
+        for (const char *name : {"north", "velD", "accE", "qx", "qw"})
+            QVERIFY2(!samplesPass(QString::fromLatin1(name), 2e-7, 0.0), name);
+        QVERIFY(!jsonPasses("gyro_bias_rad_s", 2e-7, 0.0));
+
+        // What CI observed passes (coarse_maneuver accN, sample 332; the worst
+        // absolute difference of any channel, 1.06e-8) ...
+        QVERIFY(samplesPass(accN, -0.011632997851554951, -0.011633000025670442));
+        QVERIFY(samplesPass(accN, 3.0 + 1.06e-8, 3.0));
+        // ... and a real regression does not: one part in 100 000 of that
+        // sample or of a velocity, a NaN, a missing sample
+        QVERIFY(!samplesPass(accN, -0.011633000025670442 * (1 + 1e-5), -0.011633000025670442));
+        QVERIFY(!samplesPass(QStringLiteral("velN"), 20.0 * (1 + 1e-5), 20.0));
+        QVERIFY(!samplesPass(accN, NaN, 1.0));
+        QVERIFY(!samplesPass(accN, 1.0, NaN));
+        QVERIFY(!compareSamples(accN, {1.0}, {1.0, 2.0}).isEmpty());
+
+        // Exact in both modes: the time stamps, the counts, and every text
+        QVERIFY(samplesPass(timeChannel, time, time));
+        QVERIFY(!samplesPass(timeChannel, timeOneUlpLater, time));
+        QVERIFY(jsonPasses("iterations", 7, 7));
+        QVERIFY(!jsonPasses("iterations", 7 + 1e-9, 7));
+        QVERIFY(!jsonPasses("epoch_utc_s", timeOneUlpLater, time));
+        QVERIFY(!compareJson(QStringLiteral("j"), QJsonObject{{"algorithm", "a"}},
+                             QJsonObject{{"algorithm", "b"}}).isEmpty());
+        QVERIFY(!compareJson(QStringLiteral("j"), QJsonArray{1.0}, QJsonArray{1.0, 1.0}).isEmpty());
+
+        // A value the test recomputes: a few ulp, no more
+        QVERIFY(sameRecomputedValue(oneUlpAboveOne, 1.0));
+        QVERIFY(sameRecomputedValue(0.0, 0.0));
+        QVERIFY(!sameRecomputedValue(1.0 + 1e-14, 1.0));
+        QVERIFY(!sameRecomputedValue(1e-20, 0.0));
+        QVERIFY(!sameRecomputedValue(NaN, 1.0));
+    }
+    {
+        const ParityModeOverride exact(true);
+        QVERIFY(exactParityRequested());
+        QVERIFY(samplesPass(accN, 1.0, 1.0));
+        QVERIFY(samplesPass(accN, NaN, NaN));
+        QVERIFY(!samplesPass(accN, oneUlpAboveOne, 1.0));
+        QVERIFY(!samplesPass(accN, -0.0, 0.0));
+        QVERIFY(!samplesPass(timeChannel, timeOneUlpLater, time));
+        QVERIFY(jsonPasses("objective", 1.0, 1.0));
+        QVERIFY(!jsonPasses("objective", oneUlpAboveOne, 1.0));
+        QVERIFY(sameRecomputedValue(1.0, 1.0));
+        QVERIFY(!sameRecomputedValue(oneUlpAboveOne, 1.0));
+    }
+}
 
 void FusionParityTest::fixturesAreDeterministic()
 {

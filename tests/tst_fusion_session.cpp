@@ -369,7 +369,13 @@ void FusionSessionTest::requestRunsOnceAndPublishesTogether()
     QCOMPARE(accH.size(), length);
     QCOMPARE(systemTime.size(), length);
     for (qsizetype i = 0; i < length; ++i) {
-        QVERIFY(sameBits(accH[i], std::sqrt(accN[i] * accN[i] + accE[i] * accE[i])));
+        // accH is recomputed here from products, which a contracting compiler
+        // (clang on arm64) may fuse differently from the library: bit-exact in
+        // exact mode, within 4 ulp otherwise. The system time is not like
+        // that: with the fixture's fit (a = 1) it is one IEEE subtraction and
+        // a division by one, which no compiler can round differently.
+        QVERIFY2(sameRecomputedValue(accH[i], std::sqrt(accN[i] * accN[i] + accE[i] * accE[i])),
+                 qPrintable(QStringLiteral("accH[%1] = %2").arg(i).arg(accH[i], 0, 'g', 17)));
         QVERIFY(sameBits(systemTime[i], time[i] - kFixtureTimeFitB));
     }
     QVERIFY(session.getAttribute(fusionRollAtExit()).isValid());

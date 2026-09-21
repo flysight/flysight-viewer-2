@@ -932,20 +932,78 @@ About 650 KB in total.
   for the output length, `_time` (one IEEE addition of the epoch), counts
   (`gnss_states`, `imu_outputs`, `iterations`, the input audit, residual
   nodes), and every string, bool and null; for every other number
-  `|got - golden| <= 1e-9 + 1e-7 * |golden|`. Other platforms differ
-  legitimately in the last bits (a different `sin`/`cos` in the C library, fma
-  contraction inside GTSAM, a GTSAM compiled by another compiler) and the solver
-  amplifies that by its conditioning. `1e-7` is about nine orders of magnitude
-  above one unit in the last place and still far below anything physical or any
-  transcription error: the branch's `docs/PORT_VALIDATION.md` records that
-  sub-microsecond timestamp changes moved orientation by 5e-5 degrees and
-  acceleration by 7e-6 m/s^2, while a wrong constant, index or term moves
-  outputs by many orders more. The absolute floor covers the near-zero
-  objective and residuals of `coarse_linear`. Every run logs, per success
-  fixture, how many samples are not bit-identical and the worst absolute and
-  relative difference, so drift is visible in CI logs. If a platform
-  legitimately exceeds the bound, the remedy is a wider portable bound for that
-  platform, with the observed numbers; never a change to the goldens.
+  `|got - golden| <= floor + 1e-7 * |golden|`, where the floor is `1e-7` in
+  the solver's own units (m, m/s, m/s^2, rad, rad/s, quaternion components)
+  and therefore `1e-7 * 180/pi = 5.73e-6` for a number expressed in degrees
+  (`roll`, `pitch`, `yaw`, and JSON keys ending in `_deg`)
+  (`kPortableAbsolute`, `kPortableAbsoluteDegrees`, `kPortableRelative`,
+  `portableFloor()` and `withinPortableBound()` in
+  `tests/fusion/fusiongolden.h`; the same bound serves the channels, the
+  diagnostics and the fit trace). Other platforms differ legitimately in the
+  last bits (a different `sin`/`cos` in the C library, fma contraction inside
+  GTSAM, a GTSAM compiled by another compiler) and the solver amplifies that by
+  its conditioning: the fit stops at a relative cost decrease of `1e-8`, so
+  where it stops is known no better than that.
+
+  The bound rests on what the first CI run measured (2026-09-21, goldens from
+  MSVC 19.44; GCC 11.4 on Ubuntu 22.04 x86_64, AppleClang 17 on macOS 15 x86_64
+  and on macOS 15 arm64; `successFixturesMatchGolden` logs these numbers on
+  every run):
+
+  | Fixture | GCC x86_64 | AppleClang x86_64 | AppleClang arm64 |
+  |---|---|---|---|
+  | `coarse_linear` (2720 samples) | 0 differ | 0 differ | 1271 differ; abs 1.9e-20, rel 8.57e-06 |
+  | `coarse_maneuver` (4320 of 9180) | 3780 differ; abs 1.06e-08, rel 2.45e-07 | the same | the same |
+  | `stationary_spin` (16 915) | 14 874 differ; abs 6.17e-11, rel 1.05e-08 | 14 921; abs 8.89e-10, rel 1.3e-06 | 14 960; abs 2.31e-09, rel 3.12e-06 |
+
+  ("abs" and "rel" are the worst absolute and the worst relative difference of
+  any sample of any channel; the large relative differences belong to samples
+  near zero.) The `coarse_maneuver` numbers cover `_time` to `accN` only: the
+  comparison then stopped at the first failing channel, so `accE`, `accD`, the
+  angles and the quaternion of that fixture were not measured on those
+  compilers (the comparison now always covers all seventeen channels, so the
+  next run's log is complete). The iteration counts and every cost of the fit trace agreed on
+  all three, within the bound as it then was. That bound, `1e-9 + 1e-7 *
+  |golden|`, was too tight in its absolute floor only: `coarse_maneuver` failed
+  at `accN[332] = -0.011633` with a difference of 2.17e-09 where it allowed
+  2.16e-09. The floor is now `1e-7`, about ten times the largest difference
+  observed (1.06e-08). For the angles in degrees it is the same angle,
+  `1e-7` rad, in their unit: the solver works in radians, the output is that
+  times 57.3, and so is its rounding difference (an estimate for the unmeasured
+  `coarse_maneuver` yaw, from the 2.5e-09 m/s^2 seen in `accN` and horizontal
+  accelerations of a few m/s^2, is of the order of 1e-9 rad, 6e-8 degrees:
+  too near `1e-7` degrees for that to be the floor). The relative term is unchanged, because nothing observed
+  needed more (it serves the large channels: positions in metres, unwrapped
+  angles in degrees, UTC-sized numbers in the diagnostics).
+
+  What the floor means per channel: 0.1 micrometre of position; `1e-7` m/s of
+  velocity; `1e-7` m/s^2 of acceleration, a hundred-millionth of g; 5.7e-6
+  degrees of roll, pitch or yaw; and for a unit quaternion component (bound
+  `2e-7` at magnitude one) a rotation of about 2e-5 degrees. All of that is
+  below the sensitivity the branch's `docs/PORT_VALIDATION.md` records for
+  sub-microsecond timestamp changes (5e-5 degrees of orientation, 7e-6 m/s^2 of
+  acceleration), and far below anything physical or any transcription error: a
+  wrong constant, index or term moves outputs by many orders more.
+  `comparatorHoldsItsBounds` (`tst_fusion_parity`) holds the comparator to
+  this: values just inside the bound pass and just outside fail, at zero and at
+  small and large goldens; one part in 100 000 of a sample fails; `_time` and
+  the counts fail on one unit in the last place; and exact mode rejects one
+  unit in the last place everywhere. The absolute floor also covers the
+  near-zero objective and residuals of `coarse_linear`. If a platform
+  legitimately exceeds the bound, the remedy is a wider portable bound, with
+  the observed numbers recorded here; never a change to the goldens, and never
+  a compiler flag that changes the product's arithmetic.
+
+  Values a test **recomputes** from floating-point products are a separate
+  matter. `requestRunsOnceAndPublishesTogether` recomputes `accH` as
+  `sqrt(accN^2 + accE^2)`; `accH` is not a golden channel. A compiler that
+  contracts `a*a + b*b` into a fused multiply-add (clang on arm64 by default)
+  may do so in the library and differently in the test, so the last bit can
+  differ: `sameRecomputedValue()` demands the same bits in exact mode and
+  4 ulp in portable mode. Comparisons of two runs of the same binary
+  (determinism, worker thread against main thread, queue against synchronous
+  request) and of copied values (the fit's inputs, `_time` against `IMU/_time`)
+  stay bit-exact in both modes.
 
 ```powershell
 ctest --test-dir build/FlySightViewer-build -C Release -L exact --output-on-failure

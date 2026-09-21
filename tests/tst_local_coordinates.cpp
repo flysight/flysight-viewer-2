@@ -539,7 +539,13 @@ void LocalCoordinatesTest::sourceChangesInvalidate()
     QCOMPARE(session.getAttribute("_LOCAL_ORIGIN_INDEX").toLongLong(), 1LL);
     QVERIFY(session.getAttribute("_LOCAL_ORIGIN_HMSL").toDouble() == 1100.0);
     QVERIFY(downIs(session, {100.0, 0.0, -100.0, -200.0}));
-    QCOMPARE(session.getMeasurement("Local", "velE"), QVector<double>({1, 1, 1, 1}));
+    // A rotated velocity, so the tolerance of knownVelocityRotation, not
+    // equality: where the rotation is contracted into fused multiply-adds
+    // (clang on arm64) the last bit of 1.0 differs.
+    const QVector<double> velE = session.getMeasurement("Local", "velE");
+    QCOMPARE(velE.size(), 4);
+    for (double value : velE)
+        QVERIFY2(isNear(value, 1.0, 1e-12), qPrintable(QString::number(value, 'g', 17)));
     QCOMPARE(engine.runCount("builtin.local.coordinates"), 3);
 
     // No qualifying fix: everything becomes unavailable ...

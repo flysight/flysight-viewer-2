@@ -1,7 +1,9 @@
 #include "fusiongolden.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 #include <QFile>
 #include <QJsonArray>
@@ -85,11 +87,6 @@ bool isExactKey(const QString &key)
     return keys.contains(key);
 }
 
-bool withinPortableBound(double got, double golden)
-{
-    return std::abs(got - golden) <= 1e-9 + 1e-7 * std::abs(golden);
-}
-
 QString describeNumbers(double got, double golden)
 {
     const double absolute = std::abs(got - golden);
@@ -110,7 +107,7 @@ QString compareJsonUnder(const QString &path, const QString &key,
     case QJsonValue::Double: {
         const double a = got.toDouble(), b = golden.toDouble();
         const bool exact = exactParityRequested() || isExactKey(key);
-        if (exact ? (a == b) : withinPortableBound(a, b))
+        if (exact ? (a == b) : withinPortableBound(a, b, portableFloor(key)))
             return QString();
         return QStringLiteral("%1: %2").arg(path, describeNumbers(a, b));
     }
@@ -212,6 +209,31 @@ bool exactParityRequested()
     return qEnvironmentVariableIntValue("FLYSIGHT_FUSION_EXACT") == 1;
 }
 
+double portableFloor(const QString &channelOrKey)
+{
+    const bool degrees = channelOrKey == QStringLiteral("roll") || channelOrKey == QStringLiteral("pitch")
+                         || channelOrKey == QStringLiteral("yaw")
+                         || channelOrKey.endsWith(QStringLiteral("_deg"));
+    return degrees ? kPortableAbsoluteDegrees : kPortableAbsolute;
+}
+
+bool withinPortableBound(double got, double golden, double floor)
+{
+    return std::abs(got - golden) <= floor + kPortableRelative * std::abs(golden);
+}
+
+bool sameRecomputedValue(double got, double recomputed)
+{
+    if (sameBitPattern(got, recomputed))
+        return true;
+    if (exactParityRequested())
+        return false;
+    // The floor lets two subnormal results differ by their last bit as well.
+    const double scale = std::max(std::abs(got), std::abs(recomputed));
+    return std::abs(got - recomputed) <= 4 * std::numeric_limits<double>::epsilon() * scale
+                                             + std::numeric_limits<double>::denorm_min();
+}
+
 QString ParityStatistics::summary() const
 {
     return QStringLiteral("%1 of %2 samples not bit-identical; worst absolute difference %3, "
@@ -227,6 +249,7 @@ QString compareSamples(const QString &name, const QVector<double> &got,
 
     // Output time is one IEEE addition of the epoch: exact everywhere.
     const bool exact = exactParityRequested() || name == QStringLiteral("_time");
+    const double floor = portableFloor(name);
     qsizetype firstBad = -1, worstBad = -1;
     double worstExcess = -1;
     for (qsizetype i = 0; i < golden.size(); ++i) {
@@ -242,7 +265,7 @@ QString compareSamples(const QString &name, const QVector<double> &got,
             }
         }
         // A NaN that is not the golden's NaN is outside every bound, so it fails.
-        const bool passes = exact ? identical : (identical || withinPortableBound(got[i], golden[i]));
+        const bool passes = exact ? identical : (identical || withinPortableBound(got[i], golden[i], floor));
         if (passes)
             continue;
         if (firstBad < 0)

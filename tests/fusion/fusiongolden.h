@@ -36,9 +36,33 @@ FusionGolden loadFusionGolden(const QString &name);
 
 /// True when FLYSIGHT_FUSION_EXACT=1: every number must equal the golden bit
 /// for bit. This is the mode that decides parity on the capture configuration.
-/// Otherwise the portable bound |got - golden| <= 1e-9 + 1e-7 * |golden|
-/// applies to everything that is not a count, a time stamp or text.
+/// Otherwise the portable bound (withinPortableBound) applies to everything
+/// that is not a count, a time stamp or text.
 bool exactParityRequested();
+
+/// The portable bound: |got - golden| <= floor + kPortableRelative * |golden|.
+/// The numbers and the observations they rest on are in tests/README.md,
+/// "Tolerance policy". The floor is 1e-7 in the solver's own units (m, m/s,
+/// m/s^2, rad, rad/s, unit quaternion components), ten times the largest
+/// difference any CI compiler has shown (1.06e-8) and far below anything
+/// physical. A number expressed in degrees is the solver's angle times
+/// 180/pi, and so is its floor: kPortableAbsoluteDegrees applies to roll,
+/// pitch and yaw and to JSON keys ending in "_deg" (portableFloor()). The
+/// relative term serves the large numbers (positions in metres, unwrapped
+/// angles, costs). False for a NaN on either side.
+constexpr double kPortableAbsolute = 1e-7;
+constexpr double kPortableAbsoluteDegrees = kPortableAbsolute * 57.295779513082323;
+constexpr double kPortableRelative = 1e-7;
+double portableFloor(const QString &channelOrKey);
+bool withinPortableBound(double got, double golden, double floor = kPortableAbsolute);
+
+/// For a value the TEST recomputes from floating-point products (accH from
+/// accN and accE, say), as opposed to a golden or a copy. Exact mode: the same
+/// bits, which holds on the capture compiler (no contraction). Portable mode:
+/// within 4 ulp, because a compiler that contracts a*a + b*b into a fused
+/// multiply-add (clang on arm64 by default) may do so in the library and not
+/// in the test, or the other way round, and the last bit then differs.
+bool sameRecomputedValue(double got, double recomputed);
 
 /// Accumulated over compareSamples() calls, for the per-fixture log line.
 struct ParityStatistics {
