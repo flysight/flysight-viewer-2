@@ -47,10 +47,10 @@ namespace FlySight {
 /// surface for refresh and cancel.
 ///
 /// WHAT IS NOT A GESTURE never reaches this class, by construction: the Plots
-/// menu and its shortcuts (MainWindow::togglePlot, src/mainwindow.cpp),
-/// applying a profile (applyProfile(), src/profilestatebridge.cpp), and the
-/// restore of checked plots from the settings (PlotModel::setPlots(),
-/// src/plotmodel.cpp) all write the model directly. The delegate never
+/// menu and its shortcuts (MainWindow::togglePlot()), applying a profile
+/// (applyProfile()), and the restore of checked plots from the settings
+/// (PlotModel::setPlots()) all write the model directly (docs/CALCULATIONS.md,
+/// section 16.9). The delegate never
 /// connects to the model's dataChanged and never infers a gesture from a model
 /// change.
 ///

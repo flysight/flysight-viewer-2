@@ -286,6 +286,12 @@ private:
     // and by prepare() / publish(), so the two paths cannot diverge. (The
     // middle one is PreparedCalculation::run().)
     ResultStatus gatherInputs(const CalculationInstance &instance, EvaluationContext &ctx);
+    /// The value of a LEAF input - a preference, a source measurement or a
+    /// source unit - or nullopt when it is unavailable. The one definition of
+    /// leaf availability, for evaluation (gatherInputs) and for inspection
+    /// (inspectInstance). A pure read of the providers: no edge is noted and
+    /// nothing is cached. Not for Attribute / Measurement inputs (nullopt).
+    std::optional<EvaluationContext::InputValue> readLeafInput(const CalcInput &input) const;
     ResultEntry acceptRun(const CalculationInstance &instance, ComputedCalculation &&computed,
                           bool requested, bool logUndeclaredReads);
     bool cachedAnswerUsable(const GraphNode &node, bool sawCycle);

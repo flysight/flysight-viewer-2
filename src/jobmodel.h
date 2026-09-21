@@ -32,6 +32,12 @@ enum class JobState {
     Failed          ///< the environment prevented completion; nothing was cached
 };
 
+/// One of the four end states.
+constexpr bool isEndState(JobState state)
+{
+    return state != JobState::Queued && state != JobState::Running;
+}
+
 /// Everything known about one job: a job is one explicit calculation for one
 /// session. A plain value; the copy a caller holds never changes.
 struct JobRecord {
@@ -52,7 +58,7 @@ struct JobRecord {
     std::optional<ResultStatus> resultStatus;   ///< Succeeded only: the published status
 
     /// The state is one of the four end states.
-    bool isFinished() const { return state != JobState::Queued && state != JobState::Running; }
+    bool isFinished() const { return isEndState(state); }
     /// Queued or Running.
     bool isActive() const { return !isFinished(); }
 };
@@ -61,8 +67,9 @@ struct JobRecord {
 ///
 /// The model is the STORE of the job records, not a copy of them: JobQueue
 /// keeps no job list of its own, so what a view sees is, by construction, what
-/// the queue acts on. Only JobQueue changes job state (it is a friend); anyone
-/// may remove FINISHED rows. Main thread only. A pure container: it never
+/// the queue acts on. Only JobQueue changes job state (it is a friend, for the
+/// private mutators and nothing else: it reads through records() like anyone);
+/// anyone may remove FINISHED rows. Main thread only. A pure container: it never
 /// reads the clock, the sessions, or the settings, and nothing is persisted.
 ///
 /// ROWS. One row per job, in request order (ascending JobId). New rows are
@@ -143,6 +150,9 @@ public:
     int rowOf(JobId id) const;              ///< -1 when unknown (or already removed)
     JobRecord record(int row) const;        ///< by value; a default record (id 0) when out of range
     JobRecord record(JobId id) const;       ///< a default record (id 0) when unknown
+    /// Every record, in row order. The reference is valid until the next
+    /// change of the model: do not hold it across anything that can emit.
+    const QVector<JobRecord> &records() const { return m_jobs; }
     static QString stateText(JobState state);   ///< tr(): "Queued", "Running", ...
 
     bool removeFinished(JobId id);          ///< false for an active or unknown job
@@ -151,10 +161,10 @@ public:
     void setFinishedLimit(int limit);       ///< >= 0; trims at once, oldest finished first
 
 private:
-    friend class JobQueue;
-
-    // The mutators of JobQueue. Each emits exactly the signals listed under
-    // SIGNALS. Times come from the queue: the model never reads the clock.
+    // The mutators of JobQueue, and the only members it uses as a friend. Each
+    // emits exactly the signals listed under SIGNALS. Times come from the
+    // queue: the model never reads the clock.
+    friend class JobQueue;      // append() ... trimFinished()
     JobId append(const JobRecord &record);      // the queue assigns the id; returns it
     void markRunning(JobId id, const QDateTime &startedAt);
     void markCancelRequested(JobId id);

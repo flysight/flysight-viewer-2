@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include <QDebug>
+
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
 #include "jobqueue.h"
@@ -37,6 +39,13 @@ bool wasRefused(const JobQueue::RequestResult &result)
     using Kind = JobQueue::RequestResult::Kind;
     return result.kind == Kind::MissingInput || result.kind == Kind::NothingToDo
         || result.kind == Kind::UnknownCalculation;
+}
+
+// A track is a row the plot widget draws: loaded, visible, and not a
+// failed-load placeholder. Call under a RowStabilityGuard.
+bool isVisibleLoadedTrack(const SessionRow &row)
+{
+    return row.isLoaded() && row.visible && !row.loadFailed;
 }
 
 } // namespace
@@ -204,9 +213,32 @@ PlotRequests::LiveJobs PlotRequests::liveJobs() const
     return live;
 }
 
-BlockerReport PlotRequests::inspectLocked(const SessionData &session, const PlotValue &plot) const
+// Call under a RowStabilityGuard: `session` is a row of the model read in place.
+BlockerReport PlotRequests::inspectUnderGuard(const SessionData &session, const PlotValue &plot) const
 {
-    return session.calculationEngine().blockers(yName(plot));
+    const BlockerReport report = session.calculationEngine().blockers(yName(plot));
+
+#ifndef QT_NO_DEBUG
+    // "y available implies x available" (see the class comment) is a property
+    // of the registrations that nothing else checks. Which time axis is drawn
+    // is a view setting, so the registry cannot check it at registration; both
+    // axes are inspected here instead. blockers() never starts explicit work
+    // and never loads a session. A time axis that is unavailable for ordinary
+    // reasons is not a violation: only one that waits on an explicit
+    // calculation would leave an Available track undrawn.
+    if (report.state == BlockerReport::State::Available) {
+        for (const char *axis : {SessionKeys::Time, SessionKeys::SystemTime}) {
+            const DependencyKey xName = DependencyKey::measurement(plot.sensorID, QLatin1String(axis));
+            if (session.calculationEngine().blockers(xName).state == BlockerReport::State::Blocked) {
+                qWarning().noquote() << "PlotRequests:" << plotId(plot)
+                                     << "is available but its time axis" << QLatin1String(axis)
+                                     << "waits on an explicit calculation";
+            }
+        }
+    }
+#endif
+
+    return report;
 }
 
 // The one guarded read of the component. The tracks are the rows the plot
@@ -226,7 +258,7 @@ PlotRequests::Inspections PlotRequests::inspect(const QVector<PlotValue> &plots,
     const int rows = model.rowCount();
     for (int row = 0; row < rows; ++row) {
         const SessionRow &sr = model.rowAt(row);
-        if (!sr.isLoaded() || !sr.visible || sr.loadFailed)
+        if (!isVisibleLoadedTrack(sr))
             continue;
         if (!onlySessionId.isEmpty() && sr.sessionId != onlySessionId)
             continue;
@@ -239,7 +271,7 @@ PlotRequests::Inspections PlotRequests::inspect(const QVector<PlotValue> &plots,
             track.sessionName = sr.sessionId;
 
         for (const PlotValue &plot : plots)
-            result[plotId(plot)].append(Inspection{track, inspectLocked(session, plot)});
+            result[plotId(plot)].append(Inspection{track, inspectUnderGuard(session, plot)});
     }
     return result;
 }
@@ -533,6 +565,31 @@ void PlotRequests::markRefused(const QString &sessionId, const CalculationBlocke
     m_refused.insert(JobKey(sessionId, blocker.instanceId));
 }
 
+// The one call of JobQueue::request(). Whether the track may be requested at
+// all is the caller's decision (a gesture, or a track a gesture asked about);
+// this only issues the requests and records the answers.
+PlotRequests::RequestOutcome PlotRequests::requestBlockers(const QString &sessionId,
+                                                           const BlockerReport &report,
+                                                           const LiveJobs &live)
+{
+    RequestOutcome outcome;
+    // An already pending track counts as having a job
+    outcome.hasJob = hasLiveJob(sessionId, report, live);
+    const QList<CalculationBlocker> blockers = requestable(sessionId, report, live);
+    for (const CalculationBlocker &blocker : blockers) {
+        if (!m_jobQueue)
+            break;
+        const JobQueue::RequestResult result = m_jobQueue->request(sessionId, blocker);
+        if (result.created())
+            ++outcome.created;
+        if (gotJob(result))
+            outcome.hasJob = true;
+        else if (wasRefused(result))
+            markRefused(sessionId, blocker);
+    }
+    return outcome;
+}
+
 int PlotRequests::plotCheckedByUser(const QString &plotId)
 {
     return requestMissing(plotId);
@@ -583,20 +640,9 @@ int PlotRequests::requestMissing(const QString &plotId)
 
         // An already pending track is adopted, so that a plot checked while
         // another row's job runs still continues its own chain
-        bool hasJob = hasLiveJob(sessionId, inspection.report, live);
-        const QList<CalculationBlocker> blockers = requestable(sessionId, inspection.report, live);
-        for (const CalculationBlocker &blocker : blockers) {
-            if (!m_jobQueue)
-                break;
-            const JobQueue::RequestResult result = m_jobQueue->request(sessionId, blocker);
-            if (result.created())
-                ++created;
-            if (gotJob(result))
-                hasJob = true;
-            else if (wasRefused(result))
-                markRefused(sessionId, blocker);
-        }
-        if (hasJob)
+        const RequestOutcome outcome = requestBlockers(sessionId, inspection.report, live);
+        created += outcome.created;
+        if (outcome.hasJob)
             waitedFor.append(sessionId);
     }
 
@@ -648,19 +694,8 @@ void PlotRequests::continueAfter(const JobRecord &job)
 
         const BlockerReport &report = inspected.first().report;
         bool hasJob = false;
-        if (report.state == BlockerReport::State::Blocked) {
-            hasJob = hasLiveJob(sessionId, report, live);
-            const QList<CalculationBlocker> blockers = requestable(sessionId, report, live);
-            for (const CalculationBlocker &blocker : blockers) {
-                if (!m_jobQueue)
-                    break;
-                const JobQueue::RequestResult result = m_jobQueue->request(sessionId, blocker);
-                if (gotJob(result))
-                    hasJob = true;
-                else if (wasRefused(result))
-                    markRefused(sessionId, blocker);
-            }
-        }
+        if (report.state == BlockerReport::State::Blocked)
+            hasJob = requestBlockers(sessionId, report, live).hasJob;
 
         if (!hasJob) {
             // The chain ended (available, failed, or nothing requestable)
@@ -807,7 +842,7 @@ void PlotRequests::dropVanishedTracks()
         const int rows = model.rowCount();
         for (int row = 0; row < rows; ++row) {
             const SessionRow &sr = model.rowAt(row);
-            if (sr.isLoaded() && sr.visible && !sr.loadFailed)
+            if (isVisibleLoadedTrack(sr))
                 tracks.insert(sr.sessionId);
         }
     }

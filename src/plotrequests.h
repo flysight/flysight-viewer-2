@@ -134,6 +134,8 @@ struct PlotRowState {
 /// again and is simply Missing. The x axis is not inspected: every time axis of
 /// a sensor produced by an explicit calculation is produced by that calculation
 /// or derived on demand from its outputs, so y available implies x available.
+/// Debug builds check that for every track classified Available (a warning
+/// when a time axis of the plot's sensor is Blocked); release builds do not.
 ///
 /// WHAT INSPECTION COSTS. CalculationEngine::blockers() is called only for
 /// (checked AND explicit-backed plots) x (visible AND loaded tracks) - names
@@ -148,8 +150,9 @@ struct PlotRowState {
 /// loaded, evicted, or touched in the LRU. Classifications are not cached
 /// across passes; passes are coalesced to one per event-loop pass.
 ///
-/// ONLY GESTURES START WORK. JobQueue::request() is called from exactly two
-/// private functions: requestMissing() - shared by plotCheckedByUser() and
+/// ONLY GESTURES START WORK. JobQueue::request() is called from one private
+/// function, requestBlockers(), and that has exactly two callers, both
+/// private: requestMissing() - shared by plotCheckedByUser() and
 /// refreshPressed(), a one-shot request for the blockers of the plot's
 /// currently missing tracks - and continueAfter(), which, when a job SUCCEEDED,
 /// requests the next blockers of the tracks a gesture asked about (chained
@@ -253,7 +256,8 @@ private:
     // Inspection and classification
     LiveJobs liveJobs() const;
     Inspections inspect(const QVector<PlotValue> &plots, const QString &onlySessionId = QString()) const;
-    BlockerReport inspectLocked(const SessionData &session, const PlotValue &plot) const;
+    /// Call under a RowStabilityGuard (inspect() holds it).
+    BlockerReport inspectUnderGuard(const SessionData &session, const PlotValue &plot) const;
     PlotTrackState classify(const Track &track, const BlockerReport &report, const LiveJobs &live) const;
     static bool hasLiveJob(const QString &sessionId, const BlockerReport &report, const LiveJobs &live);
     static QString failureReason(const QList<UnproducedNote> &notes);
@@ -264,9 +268,17 @@ private:
     PlotRowState buildRowState(const QString &plotId, const QList<PlotTrackState> &tracks);
     void applyStates(const QStringList &order, const QHash<QString, PlotRowState> &states);
 
-    // What starts work: the only two callers of JobQueue::request()
+    // What starts work: the only two callers of requestBlockers()
     int requestMissing(const QString &plotId);
     void continueAfter(const JobRecord &job);
+    struct RequestOutcome {
+        int  created = 0;       ///< jobs the queue created
+        bool hasJob = false;    ///< the track has a live job now (created, already active, or found pending)
+    };
+    /// The only caller of JobQueue::request(): requests the requestable
+    /// blockers of one Blocked track and marks the ones the queue refused.
+    RequestOutcome requestBlockers(const QString &sessionId, const BlockerReport &report,
+                                   const LiveJobs &live);
     /// The blockers of `report` worth requesting: no live job, not refused.
     QList<CalculationBlocker> requestable(const QString &sessionId, const BlockerReport &report,
                                           const LiveJobs &live) const;

@@ -122,12 +122,17 @@ public:
     /// Never throws and never logs. A second call asserts and returns Cancelled.
     ComputedCalculation compute(CalculationProgress *progress = nullptr);
 
-    /// MAIN THREAD, at most once, after compute() has returned. Checks, in this
-    /// order: engine destroyed; registration removed; inputs invalidated since
-    /// prepare; the run was cancelled / out of memory; a result was published
-    /// in between. Otherwise installs the result for all outputs at once, with
-    /// the semantics of CalculationEngine::request(). Whatever the outcome the
-    /// ticket is spent; a second call asserts and returns RefusedStale.
+    /// MAIN THREAD, at most once, after compute() has returned, and BETWEEN
+    /// evaluations: never from inside a compute function or an engine
+    /// callback. Checks, in this order: engine destroyed; registration
+    /// removed; inputs invalidated since prepare; called during an evaluation
+    /// (asserts in a debug build; a release build refuses as RefusedStale /
+    /// InputsChanged, because nothing may be installed in the middle of an
+    /// evaluation); the run was cancelled / out of memory; a result was
+    /// published in between. Otherwise installs the result for all outputs at
+    /// once, with the semantics of CalculationEngine::request(). Whatever the
+    /// outcome the ticket is spent; a second call asserts and returns
+    /// RefusedStale.
     PublishOutcome publish(ComputedCalculation computed);
 
     /// MAIN THREAD. True while a publish() still to come is already certain to

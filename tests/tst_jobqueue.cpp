@@ -40,6 +40,7 @@ Q_DECLARE_METATYPE(FlySight::DependencyKey)
 namespace {
 
 const char kRemoved[] = "Session removed or unloaded";
+const char kReplaced[] = "Session data replaced";
 
 // Written by the probe's compute function on the worker, read after the job ended
 std::atomic<quintptr> g_probeThread{0};
@@ -90,6 +91,7 @@ private slots:
     void evictionDeferredWhileJobActive();
     void repopulateWithJobs();
     void mergeIntoSessionWithRunningJobSupersedes();
+    void sessionDataReplacedWithRunningJobSupersedes();
     void sortWhileRunningStillPublishes();
     void shutdownWithQueuedAndRunning();
     void shutdownIsIdempotentAndRefusesRequests();
@@ -1118,6 +1120,8 @@ void JobQueueTest::cancelFromRowsInsertedLeavesNoPin()
     setInput("s1", "EA_IN", 4);
     QTest::failOnWarning(QRegularExpression(QStringLiteral("unpinSession")));
     QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
+    QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
+    QSignalSpy finishedSpy(m_queue.get(), &JobQueue::jobFinished);
 
     JobModel *jobs = m_queue->model();
     bool pinnedWhenAnnounced = false;
@@ -1138,6 +1142,11 @@ void JobQueueTest::cancelFromRowsInsertedLeavesNoPin()
     QVERIFY(!m_model->isSessionPinned("s1"));
     QVERIFY(m_queue->isIdle());
     QCOMPARE(idleSpy.count(), 1);
+
+    // A job that has ended is not announced as queued afterwards
+    QCOMPARE(finishedSpy.count(), 1);
+    QCOMPARE(finishedSpy.at(0).at(0).value<JobId>(), result.job);
+    QCOMPARE(queuedSpy.count(), 0);
 
     // Nothing runs for it, and the calculation is requestable as before
     QVERIFY(waitIdle(*m_queue));
@@ -1321,6 +1330,58 @@ void JobQueueTest::repopulateWithJobs()
 }
 
 // A merge that changes a declared input is an input change like any other.
+// The row stays loaded but its SessionData becomes another object: the old
+// engine dies with its ticket (SessionGone), and the reason says what happened
+// instead of "removed or unloaded". The application's merge never does this to
+// a loaded row (it merges in place: "Inputs changed", below); an assignment
+// through sessionRef() does.
+void JobQueueTest::sessionDataReplacedWithRunningJobSupersedes()
+{
+    // Refused at publish: nothing announces the replacement
+    setInput("s1", "G_IN", 4);
+    const JobId first = m_queue->request("s1", QStringLiteral("gated")).job;
+    QVERIFY(first != 0);
+    QVERIFY(gate().waitEntered());
+
+    {
+        // A move-assignment: the row gets the other object's engine
+        SessionData replacement = JobWorld::sessions({"s1"}).first();
+        session("s1") = std::move(replacement);
+    }
+    QVERIFY(isLoaded("s1"));
+    QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
+
+    gate().open(1);
+    QVERIFY(waitIdle(*m_queue));
+    QCOMPARE(stateOf(first), JobState::Superseded);
+    QCOMPARE(m_queue->job(first).reason, QString::fromLatin1(kReplaced));
+    QVERIFY(!m_queue->job(first).resultStatus.has_value());
+    QCOMPARE(publishedTrace(dependencySpy, "s1", "gated", "G_OUT"), QString());
+    QVERIFY(!m_model->isSessionPinned("s1"));
+
+    // Seen coming: the next model signal (an edit of another session) finds
+    // the ticket marked, and the job is stopped with the same reason
+    setInput("s1", "G_IN", 6);
+    const JobId second = m_queue->request("s1", QStringLiteral("gated")).job;
+    QVERIFY(second != 0);
+    QVERIFY(gate().waitEntered());
+
+    {
+        // A move-assignment: the row gets the other object's engine
+        SessionData replacement = JobWorld::sessions({"s1"}).first();
+        session("s1") = std::move(replacement);
+    }
+    setInput("s2", "EA_IN", 1);
+    QVERIFY(m_queue->job(second).cancelRequested);
+
+    QTRY_COMPARE(stateOf(second), JobState::Superseded);        // the gate is never opened
+    QCOMPARE(m_queue->job(second).reason, QString::fromLatin1(kReplaced));
+    QVERIFY(waitIdle(*m_queue));
+    QVERIFY(!m_model->isSessionPinned("s1"));
+
+    verifyEndTransitions(m_queue->model());
+}
+
 void JobQueueTest::mergeIntoSessionWithRunningJobSupersedes()
 {
     // MP_OUT = the first effective sample of IMU/wx, held at the fixture's gate

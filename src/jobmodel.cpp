@@ -13,11 +13,6 @@ QString timeText(const QDateTime &utc)
     return QLocale().toString(utc.toLocalTime(), QLocale::ShortFormat);
 }
 
-bool isEndState(JobState state)
-{
-    return state != JobState::Queued && state != JobState::Running;
-}
-
 } // namespace
 
 JobModel::JobModel(QObject *parent)

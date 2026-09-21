@@ -1,13 +1,15 @@
 #include "fusion/fusionregistration.h"
 
-#include "calculations/registration.h"
-#include "engine/calculationprogress.h"
-#include "fusion/fusion.h"
-#include "sessiondata.h"
+#include <cmath>
 
 #include <QCoreApplication>
 #include <QVector>
-#include <cmath>
+
+#include "calculations/registration.h"
+#include "calculations/timefithelper.h"
+#include "engine/calculationprogress.h"
+#include "fusion/fusion.h"
+#include "sessiondata.h"
 
 // Sensor fusion as registered calculations: a thin adapter between the engine
 // and the kernel (fusion.h). The adapter copies values and nothing else: every
@@ -48,34 +50,49 @@ constexpr FitOutput kFitOutputs[] = {
     { "qw",    &Fusion::Result::qw }
 };
 
-// Exactly the members of Fusion::Channels, in member order. Everything behind
-// them (GNSS/lat, the TIME sensor, the time fit) is transitive and tracked by
-// the engine. Markers and preferences are not inputs: they do not move the fit.
+// The seventeen measurement inputs of the fit and the member of the kernel's
+// Channels each one fills: exactly its vector members, in member order. One
+// table serves the declaration and the hand-over, like kFitOutputs.
+struct FitInput {
+    const char *sensor;
+    const char *name;
+    QVector<double> Fusion::Channels::*samples;
+};
+
+constexpr FitInput kFitInputs[] = {
+    { "GNSS",  SessionKeys::Time, &Fusion::Channels::gnssTime },
+    { "Local", "north", &Fusion::Channels::north },
+    { "Local", "east",  &Fusion::Channels::east },
+    { "Local", "down",  &Fusion::Channels::down },
+    { "Local", "velN",  &Fusion::Channels::velN },
+    { "Local", "velE",  &Fusion::Channels::velE },
+    { "Local", "velD",  &Fusion::Channels::velD },
+    { "GNSS",  "hAcc",  &Fusion::Channels::hAcc },
+    { "GNSS",  "vAcc",  &Fusion::Channels::vAcc },
+    { "GNSS",  "sAcc",  &Fusion::Channels::sAcc },
+    { "IMU",   SessionKeys::Time, &Fusion::Channels::imuTime },
+    { "IMU",   "ax",    &Fusion::Channels::ax },
+    { "IMU",   "ay",    &Fusion::Channels::ay },
+    { "IMU",   "az",    &Fusion::Channels::az },
+    { "IMU",   "wx",    &Fusion::Channels::wx },
+    { "IMU",   "wy",    &Fusion::Channels::wy },
+    { "IMU",   "wz",    &Fusion::Channels::wz }
+};
+
+// The measurements of kFitInputs, then the four origin attributes. Everything
+// behind them (GNSS/lat, the TIME sensor, the time fit) is transitive and
+// tracked by the engine. Markers and preferences are not inputs: they do not
+// move the fit.
 QList<CalcInput> fitInputs()
 {
-    return {
-        CalcInput::measurement("GNSS", SessionKeys::Time),
-        CalcInput::measurement("Local", "north"),
-        CalcInput::measurement("Local", "east"),
-        CalcInput::measurement("Local", "down"),
-        CalcInput::measurement("Local", "velN"),
-        CalcInput::measurement("Local", "velE"),
-        CalcInput::measurement("Local", "velD"),
-        CalcInput::measurement("GNSS", "hAcc"),
-        CalcInput::measurement("GNSS", "vAcc"),
-        CalcInput::measurement("GNSS", "sAcc"),
-        CalcInput::measurement("IMU", SessionKeys::Time),
-        CalcInput::measurement("IMU", "ax"),
-        CalcInput::measurement("IMU", "ay"),
-        CalcInput::measurement("IMU", "az"),
-        CalcInput::measurement("IMU", "wx"),
-        CalcInput::measurement("IMU", "wy"),
-        CalcInput::measurement("IMU", "wz"),
-        CalcInput::attribute(SessionKeys::LocalOriginIndex),
-        CalcInput::attribute(SessionKeys::LocalOriginLat),
-        CalcInput::attribute(SessionKeys::LocalOriginLon),
-        CalcInput::attribute(SessionKeys::LocalOriginHmsl)
-    };
+    QList<CalcInput> inputs;
+    for (const FitInput &input : kFitInputs)
+        inputs.append(CalcInput::measurement(input.sensor, input.name));
+    inputs.append(CalcInput::attribute(SessionKeys::LocalOriginIndex));
+    inputs.append(CalcInput::attribute(SessionKeys::LocalOriginLat));
+    inputs.append(CalcInput::attribute(SessionKeys::LocalOriginLon));
+    inputs.append(CalcInput::attribute(SessionKeys::LocalOriginHmsl));
+    return inputs;
 }
 
 QList<DependencyKey> fitOutputs()
@@ -92,23 +109,8 @@ QList<DependencyKey> fitOutputs()
 Fusion::Channels channelsFrom(const EvaluationContext &ctx)
 {
     Fusion::Channels channels;
-    channels.gnssTime = ctx.measurement("GNSS", SessionKeys::Time);
-    channels.north = ctx.measurement("Local", "north");
-    channels.east = ctx.measurement("Local", "east");
-    channels.down = ctx.measurement("Local", "down");
-    channels.velN = ctx.measurement("Local", "velN");
-    channels.velE = ctx.measurement("Local", "velE");
-    channels.velD = ctx.measurement("Local", "velD");
-    channels.hAcc = ctx.measurement("GNSS", "hAcc");
-    channels.vAcc = ctx.measurement("GNSS", "vAcc");
-    channels.sAcc = ctx.measurement("GNSS", "sAcc");
-    channels.imuTime = ctx.measurement("IMU", SessionKeys::Time);
-    channels.ax = ctx.measurement("IMU", "ax");
-    channels.ay = ctx.measurement("IMU", "ay");
-    channels.az = ctx.measurement("IMU", "az");
-    channels.wx = ctx.measurement("IMU", "wx");
-    channels.wy = ctx.measurement("IMU", "wy");
-    channels.wz = ctx.measurement("IMU", "wz");
+    for (const FitInput &input : kFitInputs)
+        channels.*(input.samples) = ctx.measurement(input.sensor, input.name);
 
     // A stored, hand-edited origin index that is not a number must not
     // silently mean "fix 0": -1 is the kernel's "outside the GNSS samples".
@@ -214,20 +216,19 @@ void registerSystemTime(CalculationRegistry &registry)
     };
     d.outputs = { DependencyKey::measurement(kSensor, SessionKeys::SystemTime) };
     d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
-        const QVector<double> utcTime = ctx.measurement(kSensor, SessionKeys::Time);
-        const double a = ctx.attribute(SessionKeys::TimeFitA).toDouble();
-        const double b = ctx.attribute(SessionKeys::TimeFitB).toDouble();
-        if (a == 0.0)
+        const std::optional<QVector<double>> systemTime = Calculations::systemTimeFromUtc(
+            ctx.measurement(kSensor, SessionKeys::Time),
+            ctx.attribute(SessionKeys::TimeFitA).toDouble(),
+            ctx.attribute(SessionKeys::TimeFitB).toDouble());
+        if (!systemTime.has_value())
             return CalculationResult::unavailable();  // Cannot invert: degenerate fit
 
-        QVector<double> result(utcTime.size());
-        for (int i = 0; i < utcTime.size(); ++i) {
-            result[i] = (utcTime[i] - b) / a;
-            // An axis with a hole in it is no axis
-            if (!std::isfinite(result[i]))
+        // An axis with a hole in it is no axis
+        for (const double t : *systemTime) {
+            if (!std::isfinite(t))
                 return CalculationResult::unavailable();
         }
-        return CalculationResult().setMeasurement(kSensor, SessionKeys::SystemTime, result);
+        return CalculationResult().setMeasurement(kSensor, SessionKeys::SystemTime, *systemTime);
     };
     Calculations::addCalculation(registry, d);
 }

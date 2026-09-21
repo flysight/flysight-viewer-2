@@ -513,6 +513,39 @@ CalculationEngine::ResultEntry CalculationEngine::computeResult(const Calculatio
     return entry;
 }
 
+std::optional<EvaluationContext::InputValue> CalculationEngine::readLeafInput(const CalcInput &input) const
+{
+    EvaluationContext::InputValue value;
+
+    switch (input.kind) {
+    case CalcInput::Kind::Preference: {
+        const IPreferenceProvider *provider = m_registry ? m_registry->preferenceProvider() : nullptr;
+        if (provider)
+            value.value = provider->preferenceValue(input.key);
+        if (!value.value.isValid())
+            return std::nullopt;
+        return value;
+    }
+    case CalcInput::Kind::SourceMeasurement:
+        if (m_state && m_state->hasSourceMeasurement(input.sensor, input.name))
+            value.samples = m_state->sourceMeasurement(input.sensor, input.name);
+        if (value.samples.isEmpty())
+            return std::nullopt;
+        return value;
+    case CalcInput::Kind::SourceUnit:
+        // The unit exists exactly when the measurement does; empty unit text
+        // is a value
+        if (!m_state || !m_state->hasSourceMeasurement(input.sensor, input.name))
+            return std::nullopt;
+        value.unit = m_state->sourceUnit(input.sensor, input.name);
+        return value;
+    case CalcInput::Kind::Attribute:
+    case CalcInput::Kind::Measurement:
+        break;      // resolved names, not leaves
+    }
+    return std::nullopt;
+}
+
 ResultStatus CalculationEngine::gatherInputs(const CalculationInstance &instance, EvaluationContext &ctx)
 {
     // The availability pass: declared order, stop at the first unavailable
@@ -537,31 +570,26 @@ ResultStatus CalculationEngine::gatherInputs(const CalculationInstance &instance
             value.unit = r.unit;
             break;
         }
-        case CalcInput::Kind::Preference: {
+        // The leaves: the edge is recorded here, available or not; what
+        // "available" means is readLeafInput()'s, shared with inspection.
+        case CalcInput::Kind::Preference:
             note(GraphNode::preference(input.key));
-            const IPreferenceProvider *provider = m_registry ? m_registry->preferenceProvider() : nullptr;
-            if (provider)
-                value.value = provider->preferenceValue(input.key);
-            available = value.value.isValid();
             break;
-        }
-        case CalcInput::Kind::SourceMeasurement: {
+        case CalcInput::Kind::SourceMeasurement:
             note(GraphNode::sourceMeasurement(input.sensor, input.name));
-            if (m_state && m_state->hasSourceMeasurement(input.sensor, input.name))
-                value.samples = m_state->sourceMeasurement(input.sensor, input.name);
-            available = !value.samples.isEmpty();
             break;
-        }
-        case CalcInput::Kind::SourceUnit: {
+        case CalcInput::Kind::SourceUnit:
             // The unit exists exactly when the measurement does, so both leaves matter.
             note(GraphNode::sourceMeasurement(input.sensor, input.name));
             note(GraphNode::sourceUnit(input.sensor, input.name));
-            if (m_state && m_state->hasSourceMeasurement(input.sensor, input.name)) {
-                value.unit = m_state->sourceUnit(input.sensor, input.name);
-                available = true;   // empty unit text is a value
-            }
             break;
         }
+
+        if (input.kind != CalcInput::Kind::Attribute && input.kind != CalcInput::Kind::Measurement) {
+            if (std::optional<EvaluationContext::InputValue> leaf = readLeafInput(input)) {
+                value = std::move(*leaf);
+                available = true;
+            }
         }
 
         if (m_scopes.back().cycle)
@@ -1435,23 +1463,12 @@ CalculationEngine::InstanceInspection CalculationEngine::inspectInstance(const C
                 inspection.notApplicable = true;
             break;
         }
-        case CalcInput::Kind::Preference: {
-            const IPreferenceProvider *provider = m_registry ? m_registry->preferenceProvider() : nullptr;
-            if (!provider || !provider->preferenceValue(input.key).isValid()) {
-                anyUnavailable = true;
-                inspection.notApplicable = true;
-            }
-            break;
-        }
+        case CalcInput::Kind::Preference:
         case CalcInput::Kind::SourceMeasurement:
-            if (!m_state || !m_state->hasSourceMeasurement(input.sensor, input.name)
-                || m_state->sourceMeasurement(input.sensor, input.name).isEmpty()) {
-                anyUnavailable = true;
-                inspection.notApplicable = true;
-            }
-            break;
         case CalcInput::Kind::SourceUnit:
-            if (!m_state || !m_state->hasSourceMeasurement(input.sensor, input.name)) {
+            // The same decision as gatherInputs(), without its edges: a leaf
+            // no request could provide
+            if (!readLeafInput(input).has_value()) {
                 anyUnavailable = true;
                 inspection.notApplicable = true;
             }

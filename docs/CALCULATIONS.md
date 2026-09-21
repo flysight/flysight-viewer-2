@@ -500,7 +500,7 @@ When the worker has returned, in this order:
 | `Published`, any other status | Succeeded | "Calculation failed: %1"; `resultStatus` = that status. The failure is a function of the inputs: published, cached, not requestable again |
 | `RefusedStale / InputsChanged` | Superseded | "Inputs changed" |
 | `RefusedStale / AlreadyPublished` | Superseded | "Result is already available" |
-| `RefusedGone / SessionGone` | Superseded | "Session removed or unloaded" |
+| `RefusedGone / SessionGone` | Superseded | "Session removed or unloaded"; "Session data replaced" when the session model still has a loaded row with that id (see below) |
 | `RefusedGone / RegistrationRemoved` | Superseded | "Calculation is no longer registered" |
 | `Discarded / ResourceExhausted` | Failed | "Out of memory"; nothing cached, requestable again |
 | `Discarded / Cancelled` | Cancelled | "Cancelled by the calculation" (it threw `CalculationCancelled` unasked) |
@@ -508,7 +508,14 @@ When the worker has returned, in this order:
 `publish()` is always called when no end is pending, so the engine's staleness
 verdict wins over a discarded run. The four refusal rows are also what a job
 stopped early for a stale ticket ends with (section 15.3): one mapping from
-`PublishOutcome::Reason` to the reason text serves both. A worker thread that
+`PublishOutcome::Reason` to the reason text serves both. `SessionGone` says
+only that the engine died; that also happens when the row's `SessionData` is
+replaced by another object (a move-assignment brings its own engine) while
+the row stays. The engine cannot tell the two apart and the session model
+can, so the queue asks it (`loadedSession()`) at the moment it maps the
+refusal: a loaded row with the job's session id means "Session data replaced",
+anything else - no row, a stub, a model that is being destroyed - "Session
+removed or unloaded". A worker thread that
 cannot be started ends the job Failed ("The worker thread could not be
 started") with nothing cached. "Succeeded" means *this job published a
 result*; `AlreadyValid` and `AlreadyPublished` are therefore Superseded.
@@ -541,8 +548,8 @@ signals may call `request()`, `cancel*()` and `shutdown()`.
   call. There is no timer and no polling. When the answer is yes it requests
   cancellation through the same flag and records the end `publish()` would
   have reported: **Superseded**, with the refusal's reason text ("Inputs
-  changed", "Session removed or unloaded", "Calculation is no longer
-  registered"). `jobCancelRequested` is emitted and the job is, from that
+  changed", "Session removed or unloaded", "Session data replaced",
+  "Calculation is no longer registered"). `jobCancelRequested` is emitted and the job is, from that
   moment, a running job that was asked to stop: `activeJob()` does not return
   it, a new request for the same calculation is `Created` and runs after the
   old worker has been joined, with the new inputs. Nothing is published,
@@ -673,8 +680,8 @@ engine callback (they inspect or publish to engines).
 | `cancelUnwantedQueued(isWanted)` | number cancelled; never the running job |
 | `shutdown()` | 15.3 |
 | `failNextWorkerStarts(n)` | test seam: thread-creation failure cannot be provoked portably |
-| signals `jobQueued(id)`, `jobStarted(id)`, `jobProgress(id, text)`, `jobCancelRequested(id)`, `jobFinished(id, state)`, `jobsChanged()` (after each of the others except `jobProgress`), `idle()` (the last active job ended) | |
-| `JobModel(QObject *parent)`; `rowCount`, `columnCount`, `data`, `headerData`, `flags`, `roleNames`, `removeRows`; `rowOf(id)`, `record(row)`, `record(id)`, `stateText(state)`, `removeFinished(id)`, `clearFinished()`, `finishedLimit()`, `setFinishedLimit(n)`, `kDefaultFinishedLimit` | 15.6. Only `JobQueue` (a friend) appends rows and changes job state |
+| signals `jobQueued(id)`, `jobStarted(id)`, `jobProgress(id, text)`, `jobCancelRequested(id)`, `jobFinished(id, state)`, `jobsChanged()` (after each of the others except `jobProgress`), `idle()` (the last active job ended) | `jobQueued` follows the model's `rowsInserted`. A job that a `rowsInserted` slot ended (cancel, shutdown) is not announced as queued afterwards: `jobFinished` was its only signal, and `request()` still returns `Created` |
+| `JobModel(QObject *parent)`; `rowCount`, `columnCount`, `data`, `headerData`, `flags`, `roleNames`, `removeRows`; `rowOf(id)`, `record(row)`, `record(id)`, `records()`, `stateText(state)`, `removeFinished(id)`, `clearFinished()`, `finishedLimit()`, `setFinishedLimit(n)`, `kDefaultFinishedLimit` | 15.6. Only `JobQueue` appends rows and changes job state: it is a friend for the private mutators only, and reads through `records()` like any view. `records()` is a reference to the rows, valid until the model next changes |
 | `JobId`, `JobState`, `JobRecord` (`isFinished()`, `isActive()`) | the vocabulary, `src/jobmodel.h` |
 | `SessionModel::pinSession(id)`, `unpinSession(id)`, `isSessionPinned(id)` | 15.4. `unpinSession()` never evicts synchronously, so it is safe in a slot |
 | `SessionModel::publishCalculationInvalidation(id, keys)` | 15.4. Not while a `RowStabilityGuard` is held (it emits) |
@@ -745,6 +752,12 @@ and is not read here. This requires of every sensor produced by an explicit
 calculation that **each of its time axes is an output of that calculation or is
 derived on demand from its outputs**, so that "y available" implies "x
 available" and a track whose y is blocked gets its x from the same job.
+The registry cannot check this when a calculation is registered (plots and the
+view's choice of axis belong to the application), so a **debug build** checks
+it where a track is classified `Available`: `blockers()` of `<sensor>/_time`
+and `<sensor>/_system_time` must not report `Blocked`, else a warning is
+logged. Like every inspection it starts nothing and loads nothing; a release
+build does not contain the check.
 
 ### 16.2 Row state
 
@@ -1094,7 +1107,10 @@ holds no state and logs nothing (section 14).
 
 **Derived values.** `Fusion/accH[i] = sqrt(accN[i]*accN[i] + accE[i]*accE[i])`.
 `Fusion/_system_time[i] = (Fusion/_time[i] - b) / a` with the time fit's `a`
-and `b`, as `builtin.time.system.GNSS`; unavailable when `a == 0` or when any
+and `b`, as `builtin.time.system.GNSS` (both call
+`Calculations::systemTimeFromUtc()`, `src/calculations/timefithelper.h`,
+header-only because the fusion library does not link the built-in
+calculations); unavailable when `a == 0` or when any
 result is not finite. It is not a passthrough of `IMU/time`: the fused samples
 are a subset of the IMU samples. Both are on demand, but their inputs exist
 only once the fit has published, so they are blocked by the fit (section 13),

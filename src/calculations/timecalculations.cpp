@@ -1,5 +1,6 @@
 #include "timecalculations.h"
 #include "registration.h"
+#include "timefithelper.h"
 #include "../sessiondata.h"
 #include "../dependencykey.h"
 #include <QVector>
@@ -158,18 +159,13 @@ void Calculations::registerTimeCalculations(CalculationRegistry &registry)
         };
         d.outputs = { DependencyKey::measurement("GNSS", SessionKeys::SystemTime) };
         d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
-            const QVector<double> utcTime = ctx.measurement("GNSS", "time");
-            const double a = ctx.attribute(SessionKeys::TimeFitA).toDouble();
-            const double b = ctx.attribute(SessionKeys::TimeFitB).toDouble();
-            if (a == 0.0) {
+            const std::optional<QVector<double>> systemTime = systemTimeFromUtc(
+                ctx.measurement("GNSS", "time"),
+                ctx.attribute(SessionKeys::TimeFitA).toDouble(),
+                ctx.attribute(SessionKeys::TimeFitB).toDouble());
+            if (!systemTime.has_value())
                 return CalculationResult::unavailable();  // Cannot invert: degenerate fit
-            }
-
-            QVector<double> result(utcTime.size());
-            for (int i = 0; i < utcTime.size(); ++i) {
-                result[i] = (utcTime[i] - b) / a;
-            }
-            return CalculationResult().setMeasurement("GNSS", SessionKeys::SystemTime, result);
+            return CalculationResult().setMeasurement("GNSS", SessionKeys::SystemTime, *systemTime);
         };
         addCalculation(registry, d);
     }

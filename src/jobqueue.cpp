@@ -101,12 +101,19 @@ QString blockerTitles(const QList<CalculationBlocker> &blockers)
 
 /// The reason text of a job whose result the engine refuses. The one
 /// vocabulary for a refusal, whether it is met at publish or seen coming.
-QString refusalText(PublishOutcome::Reason reason)
+/// SessionGone says only that the engine died. That happens when the session's
+/// row is removed or unloaded, and also when the row's SessionData is replaced
+/// by another object (a move-assignment brings its own engine). The session
+/// model tells the two apart: `sessionStillLoaded` is its answer at the moment
+/// the refusal is mapped (a model that is being destroyed has no loaded row).
+QString refusalText(PublishOutcome::Reason reason, bool sessionStillLoaded)
 {
     switch (reason) {
     case PublishOutcome::Reason::AlreadyPublished:    return JobQueue::tr("Result is already available");
     case PublishOutcome::Reason::RegistrationRemoved: return JobQueue::tr("Calculation is no longer registered");
-    case PublishOutcome::Reason::SessionGone:         return JobQueue::tr("Session removed or unloaded");
+    case PublishOutcome::Reason::SessionGone:
+        return sessionStillLoaded ? JobQueue::tr("Session data replaced")
+                                  : JobQueue::tr("Session removed or unloaded");
     default:                                          return JobQueue::tr("Inputs changed");
     }
 }
@@ -216,6 +223,13 @@ JobQueue::RequestResult JobQueue::request(const QString &sessionId, const Calcul
     m_sessionModel->pinSession(sessionId);      // one pin per job; released in endJob()
     const JobId id = m_model->append(record);
 
+    // A rowsInserted slot may have ended the job (cancel, shutdown) and even
+    // removed its row. jobFinished was emitted then, and a job is not
+    // announced as queued after it has ended.
+    const JobRecord appended = m_model->record(id);
+    if (appended.id == 0 || appended.isFinished())
+        return {Kind::Created, id};
+
     emit jobQueued(id);
     emit jobsChanged();
     scheduleStart();
@@ -227,8 +241,7 @@ JobQueue::RequestResult JobQueue::request(const QString &sessionId, const Calcul
 
 JobId JobQueue::activeJob(const QString &sessionId, const QString &instanceId) const
 {
-    for (int row = 0; row < m_model->m_jobs.size(); ++row) {
-        const JobRecord &job = m_model->m_jobs.at(row);
+    for (const JobRecord &job : m_model->records()) {
         if (job.isActive() && !job.cancelRequested
             && job.sessionId == sessionId && job.instanceId == instanceId)
             return job.id;
@@ -240,7 +253,7 @@ QList<JobId> JobQueue::activeJobs() const
 {
     // Request order; the running job is older than every queued one
     QList<JobId> ids;
-    for (const JobRecord &job : std::as_const(m_model->m_jobs)) {
+    for (const JobRecord &job : m_model->records()) {
         if (job.isActive())
             ids.append(job.id);
     }
@@ -261,7 +274,7 @@ bool JobQueue::isIdle() const
 {
     if (m_run)
         return false;
-    for (const JobRecord &job : std::as_const(m_model->m_jobs)) {
+    for (const JobRecord &job : m_model->records()) {
         if (job.isActive())
             return false;
     }
@@ -270,7 +283,7 @@ bool JobQueue::isIdle() const
 
 JobId JobQueue::oldestQueued() const
 {
-    for (const JobRecord &job : std::as_const(m_model->m_jobs)) {
+    for (const JobRecord &job : m_model->records()) {
         if (job.state == JobState::Queued)
             return job.id;
     }
@@ -451,7 +464,7 @@ void JobQueue::finishRun()
         case Kind::RefusedStale:
         case Kind::RefusedGone:
             state = JobState::Superseded;
-            reason = refusalText(outcome.reason);
+            reason = refusalText(outcome.reason, isSessionLoaded(m_model->record(run->jobId).sessionId));
             break;
         case Kind::Discarded:
             if (outcome.reason == Reason::ResourceExhausted) {
@@ -565,7 +578,7 @@ int JobQueue::cancelUnwantedQueued(const std::function<bool(const JobRecord &)> 
 {
     // Decide first, end afterwards: ending emits
     QList<JobId> unwanted;
-    for (const JobRecord &job : std::as_const(m_model->m_jobs)) {
+    for (const JobRecord &job : m_model->records()) {
         if (job.state == JobState::Queued && !isWanted(job))
             unwanted.append(job.id);
     }
@@ -596,14 +609,15 @@ void JobQueue::stopRunIfRefused()
     if (!m_run || m_run->pendingEnd || !m_run->ticket->willBeRefused())
         return;
 
-    requestStop({JobState::Superseded, refusalText(m_run->ticket->refusalReason())});
+    const bool stillLoaded = isSessionLoaded(m_model->record(m_run->jobId).sessionId);
+    requestStop({JobState::Superseded, refusalText(m_run->ticket->refusalReason(), stillLoaded)});
 }
 
 void JobQueue::onSessionRowsChanged()
 {
     // Queued jobs whose session is gone end now; nothing promised to load it
     QList<JobId> orphaned;
-    for (const JobRecord &job : std::as_const(m_model->m_jobs)) {
+    for (const JobRecord &job : m_model->records()) {
         if (job.state == JobState::Queued && !isSessionLoaded(job.sessionId))
             orphaned.append(job.id);
     }
@@ -628,7 +642,7 @@ void JobQueue::shutdown()
     m_shutDown = true;
 
     QList<JobId> queued;
-    for (const JobRecord &job : std::as_const(m_model->m_jobs)) {
+    for (const JobRecord &job : m_model->records()) {
         if (job.state == JobState::Queued)
             queued.append(job.id);
     }
