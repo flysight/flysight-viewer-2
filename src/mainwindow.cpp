@@ -49,6 +49,7 @@
 #include "plotrequests.h"
 #include "units/unitconverter.h"
 #include "calculations/builtincalculations.h"
+#include "fusion/fusionregistration.h"
 #include "preferences/enginepreferenceprovider.h"
 #include "calculations/attributeregistration.h"
 #include "altitudemarkerfeature.h"
@@ -170,6 +171,9 @@ MainWindow::MainWindow(QWidget *parent)
     // Register the built-in calculations. Plugins registered theirs above, so
     // a plugin that declares a built-in output is tried first.
     registerBuiltInCalculations();
+    // Sensor fusion lives in its own library (the only one that links GTSAM);
+    // it is explicit, so registering it costs nothing until a plot asks for it.
+    Fusion::registerFusionCalculations();
     registerBuiltInCalculationMetadata();
 
     // Instantiate and register altitude markers (must come after calculations are registered)
@@ -974,6 +978,25 @@ void MainWindow::registerBuiltInPlots()
         {"IMU", "Total rotation", "deg/s", QColor::fromHsl(120,           S, L_c), "IMU", "wTotal", "rotation"},
 
         {"IMU", "Temperature", QString::fromUtf8("\302\260C"), QColor::fromHsl(45, S, L_w), "IMU", "temperature", "temperature"},
+
+        // Category: Sensor fusion (explicit: computed on request from the plot list; same fixed NED frame as "GNSS (Local frame)")
+        {"Sensor fusion", "North position",          "m",     QColor::fromHsl(  0, S_dk, L_dw), "Fusion", "north", "distance"},
+        {"Sensor fusion", "East position",           "m",     QColor::fromHsl(120, S_dk, L_dc), "Fusion", "east",  "distance"},
+        {"Sensor fusion", "Down position",           "m",     QColor::fromHsl(240, S_dk, L_db), "Fusion", "down",  "distance"},
+        {"Sensor fusion", "North velocity",          "m/s",   QColor::fromHsl(  0, S,    L_w),  "Fusion", "velN",  "speed"},
+        {"Sensor fusion", "East velocity",           "m/s",   QColor::fromHsl(120, S,    L_c),  "Fusion", "velE",  "speed"},
+        {"Sensor fusion", "Down velocity",           "m/s",   QColor::fromHsl(240, S,    L_b),  "Fusion", "velD",  "vertical_speed"},
+        {"Sensor fusion", "North acceleration",      "m/s^2", QColor::fromHsl(320, S,    L_w),  "Fusion", "accN",  "acceleration"},
+        {"Sensor fusion", "East acceleration",       "m/s^2", QColor::fromHsl(  0, S,    L_w),  "Fusion", "accE",  "acceleration"},
+        {"Sensor fusion", "Down acceleration",       "m/s^2", QColor::fromHsl( 40, S,    L_w),  "Fusion", "accD",  "acceleration"},
+        {"Sensor fusion", "Horizontal acceleration", "m/s^2", QColor::fromHsl( 20, S,    L_w),  "Fusion", "accH",  "acceleration"},
+        {"Sensor fusion", "Roll",                    "deg",   QColor::fromHsl(  0, S_dk, L_dw), "Fusion", "roll",  "angle"},
+        {"Sensor fusion", "Pitch",                   "deg",   QColor::fromHsl(120, S_dk, L_dc), "Fusion", "pitch", "angle"},
+        {"Sensor fusion", "Yaw",                     "deg",   QColor::fromHsl(240, S_dk, L_db), "Fusion", "yaw",   "angle"},
+        {"Sensor fusion", "Quaternion X",            "",      QColor::fromHsl(  0, S,    L_w),  "Fusion", "qx",    "ratio"},
+        {"Sensor fusion", "Quaternion Y",            "",      QColor::fromHsl(120, S,    L_c),  "Fusion", "qy",    "ratio"},
+        {"Sensor fusion", "Quaternion Z",            "",      QColor::fromHsl(240, S,    L_b),  "Fusion", "qz",    "ratio"},
+        {"Sensor fusion", "Quaternion W",            "",      QColor::fromHsl(  0, 0,    L_g),  "Fusion", "qw",    "ratio"},
 
         // Category: Magnetometer (blue group, H ≈ 240°)
         {"Magnetometer", "Magnetic field X",     "gauss", QColor::fromHsl(240 - group_a, S, L_b), "MAG", "x",     "magnetic_field"},

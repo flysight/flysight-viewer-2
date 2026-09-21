@@ -312,6 +312,16 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
   flysight_add_fusion_test(tst_fusion_parity SOURCES tst_fusion_parity.cpp LIBS flysight_fusion_test_support)
   flysight_add_fusion_test(tst_fusion_kernel SOURCES tst_fusion_kernel.cpp LIBS flysight_fusion_test_support gtsam)
 
+  # Fusion as a registered calculation: sessions, engine, job queue (tests/README.md)
+  add_library(flysight_fusion_session_support STATIC
+    fusion/fusionsessions.cpp fusion/fusionsessions.h)
+  target_link_libraries(flysight_fusion_session_support
+    PUBLIC flysight_fusion_test_support flysight_test_support)
+  flysight_add_fusion_test(tst_fusion_session SOURCES tst_fusion_session.cpp
+    LIBS flysight_fusion_session_support Threads::Threads)
+  flysight_add_fusion_test(tst_fusion_jobs SOURCES tst_fusion_jobs.cpp
+    LIBS flysight_fusion_session_support Threads::Threads)
+
   # Not a test and not installed: copied into an installed application tree
   # and run there to prove the deployed solver runtime is complete (see
   # tests/README.md).

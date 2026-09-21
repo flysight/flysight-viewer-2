@@ -19,6 +19,37 @@
 
 namespace FlySight {
 
+namespace {
+
+bool hasExplicitCandidate(const QList<CalculationInstance> &candidates)
+{
+    return std::any_of(candidates.cbegin(), candidates.cend(), [](const CalculationInstance &candidate) {
+        return candidate.descriptor && candidate.descriptor->policy == EvaluationPolicy::Explicit;
+    });
+}
+
+// Whether `name` is backed by an explicitly requested calculation: any name in
+// its static dependency closure (the name itself included) has a candidate
+// with explicit policy, looking through source conversions. A function of the
+// registrations alone: no engine, no session, and nothing runs. The plot
+// request component decides "explicit-backed" by the same definition.
+bool dependsOnExplicitCalculation(const DependencyKey &name)
+{
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+    const QSet<DependencyKey> closure = registry.staticDependencies(name).names;
+    for (const DependencyKey &reached : closure) {
+        if (hasExplicitCandidate(registry.candidatesFor(reached)))
+            return true;
+        if (reached.type == DependencyKey::Type::Measurement
+            && hasExplicitCandidate(registry.sourceConversionsFor(reached.measurementKey.first,
+                                                                  reached.measurementKey.second)))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
 SessionModel::SessionModel(QObject *parent)
     : QAbstractTableModel(parent)
 {
@@ -2024,6 +2055,16 @@ QMap<LogbookColumn, QVariant> SessionModel::computeColumnValues(const SessionDat
             continue;
         const LogbookColumn &col = m_columns[columnIndex];
         QVariant value;
+
+        // An explicit result is never persisted, so the value for the on-disk
+        // state is 'unavailable' whatever happens to be published in memory
+        // right now. The session is not read for such a column.
+        const QList<DependencyKey> names = columnNames(col);
+        if (std::any_of(names.cbegin(), names.cend(), dependsOnExplicitCalculation)) {
+            result[col] = value;
+            continue;
+        }
+
         switch (col.type) {
         case ColumnType::SessionAttribute:
             value = session.getAttribute(col.attributeKey);

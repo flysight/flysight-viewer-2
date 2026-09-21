@@ -148,6 +148,8 @@ private slots:
     void indexValueReachesEveryColumnOfItsDefinition();
     void duplicateColumnCausesNoWorkAfterRestart();
 
+    void explicitBackedColumnIsNeverCached();
+
 private:
     // A model whose rows were merged, saved, and indexed.
     void startWithLoadedSessions(const QList<SessionData> &sessions);
@@ -1268,6 +1270,77 @@ void ColumnCacheTest::duplicateColumnCausesNoWorkAfterRestart()
     QVERIFY(!m_model->rowAt(0).isLoaded());
     QVERIFY(!m_model->rowAt(1).isLoaded());
     QCOMPARE(readFileBytes(TestEnvironment::instance().indexPath()), indexBefore);
+}
+
+// An explicit result is never persisted, so a column that depends on one is
+// cached as unavailable - for the on-disk state that is its value - whatever
+// is published in memory. The loaded row still displays the live value.
+void ColumnCacheTest::explicitBackedColumnIsNeverCached()
+{
+    constexpr int kX = 3;
+    const QString id = QStringLiteral("test.explicit");
+    LogbookColumn explicitColumn;
+    explicitColumn.type = ColumnType::SessionAttribute;
+    explicitColumn.attributeKey = QStringLiteral("X_OUT");
+
+    // The registration goes before cleanup() compares the registry, also when
+    // an assertion below fails; the model goes first, so that it does not see
+    // the change.
+    const auto unregister = qScopeGuard([this, id] {
+        m_model.reset();
+        CalculationRegistry::instance().unregister(id);
+    });
+    CalculationDescriptor d;
+    d.id = id;
+    d.inputs = { CalcInput::attribute(QStringLiteral("_DESCRIPTION")) };
+    d.outputs = { DependencyKey::attribute(QStringLiteral("X_OUT")) };
+    d.policy = EvaluationPolicy::Explicit;
+    d.compute = [](const EvaluationContext &) {
+        return CalculationResult().setAttribute(QStringLiteral("X_OUT"), QStringLiteral("computed"));
+    };
+    QVERIFY(CalculationRegistry::instance().registerCalculation(d));
+
+    // As the application does: registrations are complete before initialize()
+    LogbookManager &logbook = LogbookManager::instance();
+    TestEnvironment::instance().reopenLogbook();
+    logbook.initialize();
+    LogbookColumnStore::instance().setColumns({m_d, m_g, m_e, explicitColumn});    // restored in cleanup()
+
+    startWithLoadedSessions({gyroSession()});
+    if (QTest::currentTestFailed())
+        return;
+    const QModelIndex cell = m_model->index(0, kX);
+
+    // Never requested: computed, and no value
+    QVERIFY(m_model->rowAt(0).cachedValues.contains(kX));
+    QVERIFY(!cached(0, kX).isValid());
+    QCOMPARE(m_model->sessionRef(0).calculationEngine().runCount(id), 0);
+    QVERIFY(!m_model->data(cell, Qt::DisplayRole).isValid());
+
+    // Published in memory; then an edit of its input makes the column worker
+    // compute the column again, with a fresh result published
+    QCOMPARE(m_model->sessionRef(0).calculationEngine().request(id).status, ResultStatus::Ok);
+    QCOMPARE(m_model->data(cell, Qt::DisplayRole).toString(), QStringLiteral("computed"));
+    QVERIFY(m_model->updateAttribute("g1", "_DESCRIPTION", QStringLiteral("second")));
+    QVERIFY(!m_model->rowAt(0).cachedValues.contains(kX));
+    QCOMPARE(m_model->sessionRef(0).calculationEngine().request(id).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+
+    QVERIFY(m_model->rowAt(0).cachedValues.contains(kX));
+    QVERIFY(!cached(0, kX).isValid());
+    const QJsonObject root = readIndex();
+    QVERIFY(indexValue(root, "g1", explicitColumn).toString() != QStringLiteral("computed"));
+    QCOMPARE(indexValue(root, "g1", m_d).toString(), QStringLiteral("second"));
+
+    // The loaded row shows the live value all the same
+    QVERIFY(m_model->rowAt(0).isLoaded());
+    QCOMPARE(m_model->data(cell, Qt::DisplayRole).toString(), QStringLiteral("computed"));
+    QCOMPARE(m_model->sessionRef(0).calculationEngine().runCount(id), 2);
+
+    // After a restart the stub shows what a reload would: nothing
+    restartAsStubs();
+    QVERIFY(m_model->rowAt(0).cachedValues.contains(kX));
+    QVERIFY(!m_model->data(m_model->index(0, kX), Qt::DisplayRole).isValid());
 }
 
 FLYSIGHT_TEST_MAIN(ColumnCacheTest)

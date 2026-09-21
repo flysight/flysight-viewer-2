@@ -67,6 +67,11 @@ struct MergeResult {
 /// looks for, and every maintenance site computes only missing columns
 /// (fillMissingColumns) - an edit of _DESCRIPTION does not re-run the time
 /// fit for the other columns.
+/// A column that depends on an explicitly requested calculation (sensor
+/// fusion) is cached as present and invalid, i.e. unavailable, whatever is
+/// published in memory: explicit results are never saved, so that is the
+/// column's value for the on-disk state. Loaded rows still display the live
+/// value, and publishing a result does not touch the cache.
 ///
 /// RULE for every code path that mutates a row's PERSISTENT state
 /// (SessionData::setAttribute / removeAttribute / mergeSourceData /

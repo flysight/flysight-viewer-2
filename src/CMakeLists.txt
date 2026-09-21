@@ -333,9 +333,12 @@ target_link_libraries(flysight_core
 # ─────────────────────────────── sensor fusion library
 # The batch GNSS/IMU factor-graph fit. The ONLY target that links GTSAM
 # (PRIVATE: fusion/fusion.h is GTSAM-free, so consumers get the link
-# dependency but none of GTSAM's headers or definitions). Pure: no engine, no
-# session, no Qt GUI. Registration joins it in a later phase.
+# dependency but none of GTSAM's headers or definitions). Pure kernel plus its
+# registration (fusion/fusionregistration.*, the only file here that sees the
+# engine); no session model, no job queue, no Qt GUI. flysight_core never
+# references this library: the application calls its one entry point.
 add_library(flysight_fusion STATIC
+  fusion/fusionregistration.cpp        fusion/fusionregistration.h
   fusion/fusion.cpp                    fusion/fusion.h
   fusion/fusionpipeline.h              fusion/fusionprogress.h
   fusion/fusionsamples.cpp             fusion/fusionsamples.h
@@ -349,7 +352,7 @@ add_library(flysight_fusion STATIC
   fusion/fusionoutput.cpp              fusion/fusionoutput.h
 )
 target_include_directories(flysight_fusion PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(flysight_fusion PUBLIC Qt${QT_VERSION_MAJOR}::Core PRIVATE gtsam)
+target_link_libraries(flysight_fusion PUBLIC flysight_model Qt${QT_VERSION_MAJOR}::Core PRIVATE gtsam)
 set_target_properties(flysight_fusion PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
 if(MSVC)
   target_compile_options(flysight_fusion PRIVATE /EHsc /bigobj)
@@ -472,6 +475,7 @@ qt_add_resources(FlySightViewer profile_resources
 target_link_libraries(FlySightViewer PRIVATE
   flysight_core
   flysight_model
+  flysight_fusion
   qcustomplot
   ${GeographicLib_LIBRARIES}
 

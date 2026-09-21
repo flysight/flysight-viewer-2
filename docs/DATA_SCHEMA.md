@@ -127,6 +127,9 @@ distinguished by how they are accessed, never by renaming: there is no
 Enumeration (`sensorKeys`, `measurementKeys`, `hasMeasurement`,
 `attributeKeys`, `hasAttribute`) describes stored data only. A calculated value
 never appears in it because it happened to be computed.
+The purely derived sensors `Local`, `Simplified`, and `Fusion` therefore never
+appear in enumeration or in saved files, and `Fusion` additionally reads
+unavailable until sensor fusion has been requested for the session.
 
 In C++ (`SessionData`): `getMeasurement` and `effectiveUnit` read the effective
 layer; `sourceMeasurement`, `sourceUnit`, `hasSourceMeasurement`, and
@@ -307,6 +310,11 @@ saved session file. A save that fails (a full disk, say) loses nothing: the
 session stays in memory with its changes, its affected columns stay out of
 `index.json`, and the save is tried again at the next edit and when the
 application closes.
+
+A column that depends on an explicitly requested calculation (a sensor fusion
+value at a marker, for example) is cached as unavailable, because such results
+are not saved: after a restart the session reads unavailable until the
+calculation is requested again. Loaded rows show the live value.
 
 Developers: when to change the marker is described in
 [CALCULATIONS.md](CALCULATIONS.md#9-when-to-bump-calculationcompatibilityversion).

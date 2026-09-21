@@ -28,7 +28,7 @@ The tests are not a standalone project. `tests/` is added by
 test is registered with CTest. Test executables have no install rules, so
 packages are the same whether or not the option is set.
 
-There are 38 executables plus the audit.
+There are 40 executables plus the audit.
 
 **Harness**
 
@@ -107,6 +107,8 @@ There are 38 executables plus the audit.
 | `tst_solver_smoke` | GTSAM's exported CMake target compiles, links and runs in a test: the install is the shipped configuration (`4.3a0`, TBB on, bundled Eigen 3.4, built without Boost: `GTSAM_ENABLE_BOOST_SERIALIZATION` and `GTSAM_USE_BOOST_FEATURES` are `0`), a small pose graph optimizes to its analytic answer (Eigen, METIS, TBB, library loading), and the main thread really has the 64 MiB stack of `flysight_solver_stack()` (the test uses 48 MiB of it; with a default stack it crashes). Label `fusion`. Nothing from the fusion model is involved |
 | `tst_fusion_parity` | The fusion kernel (`flysight_fusion`) through its public API, `src/fusion/fusion.h`, only: for every committed synthetic fixture the fit reproduces the golden outputs captured from `sensor-fusion-clean-port` (three successes: seventeen channels and the diagnostics; nine rejections: the exact reason), progress texts at the reference's boundaries, cancellation at each kind of boundary leaving an empty result and no state behind, two runs bit-identical with TBB on, a 64 MiB worker thread matching the main thread, and no dependence on the caller's data (sensor-fusion-jobs acceptance 4; section 12). Label `fusion` |
 | `tst_fusion_kernel` | The kernel's internals, with the literal expectations of the reference's self-test: the shared unwrap rule, preintegration across exact boundaries, every validation defect, backward attitude propagation, heading freedom, dense reconstruction timing and endpoint correction, the ten stationary-gate cases, the coarse initializer, an exact constant-velocity fit, non-convergence as a solver failure, TBB really on, and the fit trace (initializer result and cost before and after every optimizer iteration) against the goldens, which localizes a parity failure to a stage (acceptance 4; section 12). The only test that includes internal `src/fusion/` headers. Label `fusion` |
+| `tst_fusion_session` | Sensor fusion as a registered calculation (`src/fusion/fusionregistration.cpp`) on real `SessionData` engines bound to the global registry, with the real fit on the test's main thread: the shape of the three registrations (21 inputs, 18 outputs, explicit, title "Sensor fusion"); fixture sessions whose effective inputs are bit-identical to the kernel's fixtures; reads of every fusion value, `accH`, the system-time axis, the diagnostics and an interpolated logbook value never run the fit, in any order, nor does the exporter (sensor-fusion-jobs acceptance 5); a request runs once, publishes all outputs together, matches the kernel's goldens, and brings `accH` and `_system_time` with it (6); prepare / compute / publish equals `request()` bit for bit (7); an input change after publication drops everything while markers do not (8); a rejection is a cached result with its reason, `NotProduced` for inspection, and requestable again after an input change (9); cancellation at each kind of boundary through the engine's facility publishes and caches nothing (10); sessions without IMU data, without a local origin or without a time fit are `MissingInput` / `NotApplicable` (11); blocker inspection reports the fit through on-demand intermediates and never starts it (12); a natural session through the real input chain; two sessions are independent. Label `fusion` |
+| `tst_fusion_jobs` | The real fit through `JobQueue` on a real `SessionModel`, on the queue's 64 MiB worker: one job publishes all outputs together and announces them through the session model (acceptance 6); the queue gives the bits a synchronous request gives (7); an input edit during the fit ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job (11); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before and after a published fit; shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the queue delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 12 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
 
 `solver_deploy_probe` is built with it but is not a test and is not counted
 above: a plain executable (no Qt) around the same pose-graph exercise
@@ -214,7 +216,7 @@ where they run. CMake 3.22 or newer is needed for the automatic DLL and
 | `FLYSIGHT_BUILD_TESTS` | `OFF` | Adds `tests/` to the application build. No install rules: packaging is unaffected |
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | Only with the first: also build `tst_python_bridge`. `OFF` removes the target. If NumPy is missing from the build-time Python the test is still built but listed as **Disabled**, not omitted (section 5) |
 | `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | Only with the first: also build `tst_plot_row_delegate`, the one test that links Qt Widgets (it runs an offscreen `QTreeView`). `OFF` removes the target, and then no test target links Widgets. Forwarded by the root `CMakeLists.txt` like the others |
-| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | Only with the first: also build the GTSAM-linked tests (`tst_solver_smoke`, `tst_fusion_parity`, `tst_fusion_kernel`) and `solver_deploy_probe`, all defined in one block of `tests/CMakeLists.txt` through `flysight_add_fusion_test()`. `OFF` removes the targets, and then no test target references GTSAM. Forwarded by the root `CMakeLists.txt` like the other two |
+| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | Only with the first: also build the GTSAM-linked tests (`tst_solver_smoke`, `tst_fusion_parity`, `tst_fusion_kernel`, `tst_fusion_session`, `tst_fusion_jobs`) and `solver_deploy_probe`, all defined in one block of `tests/CMakeLists.txt` through `flysight_add_fusion_test()`. `OFF` removes the targets, and then no test target references GTSAM. Forwarded by the root `CMakeLists.txt` like the other two |
 
 Both are forwarded by the root (superbuild) `CMakeLists.txt` to the application
 project, unconditionally, so switching one back reaches the inner cache too.
@@ -1167,13 +1169,60 @@ int main(int argc, char **argv)
 }
 ```
 
+### Fusion sessions
+
+`tst_fusion_session` and `tst_fusion_jobs` test sensor fusion as a registered
+calculation, on real sessions. `tests/fusion/fusionsessions.h`
+(`flysight_fusion_session_support`) turns a fixture into a `SessionData` whose
+twenty-one effective inputs are bit-identical to the fixture, so that
+session-level results are held to the same goldens as the kernel. It relies on
+"stored data always wins": the fit's inputs are stored as source data under
+their own names - `Local/north` ... `velD`, `IMU/_time`, the
+`_LOCAL_ORIGIN_*` attributes, an exact stored time fit (`_TIME_FIT_A = "1"`,
+`_TIME_FIT_B = "1699999900"`) - with unit texts the conversion layer passes
+through unchanged (`m`, `m/s`, `m/s^2`, `deg/s`, `s`); only `GNSS/_time` comes
+from a calculation, the passthrough of the stored `GNSS/time`. Fixture sessions
+carry `SCHEMA_VER = 2`: without it the conversion layer multiplies the gyro
+channels by 1.14688 and nothing matches. `inputsAreBitIdenticalToFixture`
+asserts the premise. Only fixtures with equal-length columns per sensor can go
+into a `SessionModel` (the saver refuses a ragged sensor): not `reject_length`.
+`naturalSession()` is the opposite: a recording as the importer leaves it
+(GNSS, IMU, TIME; nothing under `Local`, no stored origin, no stored fit), for
+the real input chain; its expectations are structural, not golden.
+`registerFusionOnce()` registers the fusion calculations on the global registry
+after `TestEnvironment::registerBuiltIns()`, as the application does;
+`TestEnvironment` itself stays GTSAM-free. The real fit is never run on
+`asyncdriver.h`'s thread modes (default stacks): `ComputeMode::Inline` or the
+job queue's worker.
+
 ### Real recordings
 
-The comparison against a real recording documented in the branch's
-`docs/PORT_VALIDATION.md` (recording 17-26-24: objective 65602.22485051976,
-9247 GNSS states, 24411 outputs) is an optional local check that becomes
-possible once a session can be run through the registered fusion calculation.
-Real recordings are not in the repository, and it is not a CI test.
+Real recordings are not in the repository. The comparison against one,
+documented in the branch's `docs/PORT_VALIDATION.md` (recording 17-26-24:
+objective 65602.22485051976, 9247 GNSS states, 24411 outputs), is an optional
+local check and not a CI test: `tst_fusion_jobs::realRecordingCheck`. It skips
+unless the environment variable `FLYSIGHT_FUSION_RECORDING` names a folder that
+contains `TRACK.CSV` and `SENSOR.CSV`; then it imports both through the
+application's import path into the test's temporary logbook, requests the fit
+through the job queue, waits up to 30 minutes, requires a Succeeded job without
+a reason, aligned outputs and `Fusion/_time` as a contiguous run of
+`IMU/_time`, and logs the objective, `gnss_states`, `imu_outputs`, the elapsed
+time and the diagnostics. Run the executable directly (section 4), not under
+CTest, whose timeout for fusion tests is 600 s:
+
+```
+$env:FLYSIGHT_FUSION_RECORDING = "D:\recordings\17-26-24"
+.\tst_fusion_jobs.exe realRecordingCheck
+```
+
+Nothing in code asserts the reference's numbers. The counts should match as
+they are. **The objective matches only if the gyro input is the branch's**:
+the branch predates the legacy gyroscope correction, while here a recording
+without `SCHEMA_VER` has its gyro channels multiplied by 1.14688
+(`docs/DATA_SCHEMA.md` section 4). To reproduce the branch's objective, run the
+check on a copy of the folder whose `SENSOR.CSV` has `$VAR,SCHEMA_VER,2` added
+after the `$FLYS,1` line (the documented escape hatch). With the unmodified
+legacy file a different objective is expected and correct.
 
 ## Appendix A. The acceptance items
 

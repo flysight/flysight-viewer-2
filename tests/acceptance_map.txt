@@ -239,6 +239,21 @@
 # SFJ 16 manual  tests/README.md "Manual verification: plot-driven jobs" steps 1-2
 # SFJ 17 manual  tests/README.md "Manual verification: plot-driven jobs" steps 8-9
 # SFJ 19 manual  tests/README.md "Manual verification: plot-driven jobs" step 5
+# SFJ 5  tst_fusion_session readsNeverRunTheFit
+# SFJ 5  tst_fusion_jobs readersNeverStartAFit
+# SFJ 6  tst_fusion_session requestRunsOnceAndPublishesTogether
+# SFJ 6  tst_fusion_jobs jobPublishesAllOutputsTogether
+# SFJ 7  tst_fusion_session asyncMatchesSync
+# SFJ 7  tst_fusion_jobs queueMatchesSynchronousRequest
+# SFJ 8  tst_fusion_jobs inputChangeDuringFitSupersedes
+# SFJ 8  tst_fusion_session changeAfterPublicationDropsEverything
+# SFJ 9  tst_fusion_session rejectionIsACachedResult
+# SFJ 9  tst_fusion_jobs rejectedRecordingIsSucceededJob
+# SFJ 10 tst_fusion_session cancelStopsAtNextBoundary
+# SFJ 10 tst_fusion_jobs cancelDuringFitThenNextJobStarts
+# SFJ 11 tst_fusion_session missingInputsAreNotApplicable
+# SFJ 11 tst_fusion_jobs noImuSessionCannotHaveAJob
+# SFJ 12 tst_fusion_session blockersReportFusion
 
 # 104 - the ported fusion reproduces the goldens captured from sensor-fusion-clean-port
 104 tst_fusion_parity successFixturesMatchGolden

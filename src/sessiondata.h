@@ -53,6 +53,9 @@ namespace SessionKeys {
     constexpr char LocalOriginHmsl[]  = "_LOCAL_ORIGIN_HMSL";
     constexpr char LocalOriginIndex[] = "_LOCAL_ORIGIN_INDEX";
 
+    // Sensor fusion diagnostics (calculated; compact JSON)
+    constexpr char FusionDiagnostics[] = "_FUSION_DIAGNOSTICS";
+
     // Wingsuit Performance (WS-P) parameter keys
     constexpr char WspVersion[]      = "_WSP_VERSION";
     constexpr char WspTopAlt[]       = "_WSP_TOP_ALT";

@@ -96,6 +96,9 @@ Registration order is the order in `registerBuiltInCalculations`: the
 conversion families, attribute, GNSS, IMU, MAG, time, local coordinates,
 simplification, WS-P, SP, interpolation. Python plugins are registered before the built-ins. Stored data
 always wins over any calculation.
+The application then registers sensor fusion from its own library
+(`Fusion::registerFusionCalculations`, `src/fusion/fusionregistration.cpp`);
+`flysight_core` does not know it.
 
 The engine records everything a resolution looked at, including the candidates
 it rejected, so a cached fallback is replaced when a preferred candidate
@@ -152,7 +155,8 @@ answer was dropped: a future model-level caller must publish that set through
 calculation whose input transitively depends on its own output is a cycle like
 any other: `request` drops the cached "not requested" answers before it
 evaluates, reports the cycle, returns `ResultStatus::Cycle`, and publishes
-nothing.
+nothing. `builtin.fusion.fit` (title "Sensor fusion") is the first explicit
+calculation (section 17).
 
 ## 9. When to bump `CalculationCompatibilityVersion`
 
@@ -941,3 +945,107 @@ Tests: `tests/tst_plot_row_layout.cpp` (geometry, no widgets) and
 the only test that links Qt Widgets, behind `FLYSIGHT_BUILD_WIDGET_TESTS`). The
 real `MainWindow` paths - start-up, profiles, quit with jobs running, and
 interactivity during a fit - are the manual script in `tests/README.md`.
+
+## 17. Sensor fusion as a registered calculation
+
+The batch GNSS/IMU fit (`src/fusion/fusion.h`, the kernel) reaches the engine
+through one file, `src/fusion/fusionregistration.cpp`, and one entry point,
+`Fusion::registerFusionCalculations(registry)`. Both live in the static library
+`flysight_fusion`, the only product target that links GTSAM. `flysight_core`
+never references it: `MainWindow` calls the entry point directly after
+`registerBuiltInCalculations()`, and the fusion tests call it after
+`TestEnvironment::registerBuiltIns()` (`FlySightTest::registerFusionOnce()`).
+Three calculations are registered, in this order:
+
+| Id | Policy | Inputs | Outputs |
+| --- | --- | --- | --- |
+| `builtin.fusion.fit` (title "Sensor fusion") | Explicit | the 21 below | the 18 below |
+| `builtin.fusion.accH` | OnDemand | `Fusion/accN`, `Fusion/accE` | `Fusion/accH` |
+| `builtin.fusion.systemTime` | OnDemand | `Fusion/_time`, `_TIME_FIT_A`, `_TIME_FIT_B` | `Fusion/_system_time` |
+
+**Inputs of the fit** (all required; exactly the members of `Fusion::Channels`,
+in member order):
+
+```
+GNSS/_time
+Local/north  Local/east  Local/down  Local/velN  Local/velE  Local/velD
+GNSS/hAcc    GNSS/vAcc   GNSS/sAcc
+IMU/_time
+IMU/ax  IMU/ay  IMU/az  IMU/wx  IMU/wy  IMU/wz
+_LOCAL_ORIGIN_INDEX  _LOCAL_ORIGIN_LAT  _LOCAL_ORIGIN_LON  _LOCAL_ORIGIN_HMSL
+```
+
+Effective values only: accelerations in m/s^2, rates in deg/s (the kernel
+converts to radians), times in shared UTC. Everything behind them - `GNSS/lat`,
+the `TIME` sensor, the time fit, `SCHEMA_VER` - is transitive and tracked by
+the engine. Markers and preferences are not inputs: dragging the exit marker
+does not drop a fit. A recording without IMU data, without a local origin (no
+fix under 10 m), or without a time fit has a **missing input**: there is
+nothing to compute, no job can be created, and blocker inspection reports
+`NotApplicable`, never "not requested".
+
+**Outputs of the fit**, published together: the measurements `Fusion/_time`,
+`north`, `east`, `down`, `velN`, `velE`, `velD`, `accN`, `accE`, `accD`, `roll`,
+`pitch`, `yaw`, `qx`, `qy`, `qz`, `qw` (no unit reported, like every derived
+measurement), and the attribute `_FUSION_DIAGNOSTICS`
+(`SessionKeys::FusionDiagnostics`, compact JSON as a string; not a logbook
+attribute).
+
+**No arithmetic in the adapter.** `channelsFrom()` copies the implicitly shared
+input vectors field by field; the only logic is that a stored
+`_LOCAL_ORIGIN_INDEX` that is not a number becomes -1 (the kernel's "outside
+the GNSS samples") instead of silently meaning fix 0. Every validation rule,
+unit conversion, and message is the kernel's and is held to the reference by
+the golden tests, so the session-level outputs are bit-identical to the
+kernel's goldens.
+
+**Outcome mapping.**
+
+| `Fusion::Outcome` | The compute function |
+| --- | --- |
+| `Succeeded` | returns all seventeen measurements and `_FUSION_DIAGNOSTICS` |
+| `Rejected`, `SolverFailed` | returns **only** `_FUSION_DIAGNOSTICS` and `setReason(reason)`: the measurements are unset, so unavailable. A function of the inputs, cached like any result (`ResultStatus::Ok`): the job ends Succeeded with that reason, `resultDetail()` returns it, blocker inspection reports `NotProduced` with that detail, and a second request runs nothing until a declared input changes |
+| `Cancelled` | throws `CalculationCancelled`: nothing is published, nothing is cached |
+| `std::bad_alloc` | not handled: it propagates to the engine (`ResourceExhausted` on the asynchronous path; nothing cached) |
+
+**Progress and cancellation.** The compute function hands the kernel two
+callbacks over `ctx.progress()`: one forwards each progress text to
+`report()`, the other returns `isCancelled()`. The kernel calls them, in that
+order, at its boundaries only (before the fit, between graph-construction
+blocks, before each optimizer iteration); a linear solve in progress finishes
+first. `CalculationCancelled` is thrown by the compute function itself after
+`run()` has returned `Cancelled`, never from a callback. On the synchronous
+path the facility is `CalculationProgress::none()`, so `request()` and the
+three-step path run the same fit on the same values. The compute function
+holds no state and logs nothing (section 14).
+
+**Derived values.** `Fusion/accH[i] = sqrt(accN[i]*accN[i] + accE[i]*accE[i])`.
+`Fusion/_system_time[i] = (Fusion/_time[i] - b) / a` with the time fit's `a`
+and `b`, as `builtin.time.system.GNSS`; unavailable when `a == 0` or when any
+result is not finite. It is not a passthrough of `IMU/time`: the fused samples
+are a subset of the IMU samples. Both are on demand, but their inputs exist
+only once the fit has published, so they are blocked by the fit (section 13),
+appear with it through ordinary invalidation, and never start one. Together
+with `Fusion/_time` (an output of the fit) they satisfy the time-axis rule of
+section 16.1.
+
+**Plots.** Seventeen plots in the category "Sensor fusion"
+(`MainWindow::registerBuiltInPlots`): the sixteen measurements other than
+`_time`, and `accH`. They are explicit-backed (16.3), so they are computed
+from the plot list and nowhere else.
+
+**Logbook columns.** A column that depends on an explicit calculation - any
+name in the static dependency closure of the names it reads has a candidate
+with explicit policy, looking through source conversions; the same definition
+as 16.3 - is cached as *unavailable* (`SessionModel::computeColumnValues`),
+whatever is published in memory: explicit results are never saved, and a cached
+value is the column's value for the session as it is on disk. Loaded rows
+display the live value; publication does not touch the cache; a stub shows
+nothing, which is what a reload would show. This changes no value an existing
+session yields, so `CalculationCompatibilityVersion` was not bumped (section 9).
+
+Tests (label `fusion`, behind `FLYSIGHT_BUILD_FUSION_TESTS`):
+`tests/tst_fusion_session.cpp` (real `SessionData` engines, the fit on the
+test's main thread) and `tests/tst_fusion_jobs.cpp` (the job queue's worker on
+a real `SessionModel`); the column rule without GTSAM in
+`tst_column_cache::explicitBackedColumnIsNeverCached`.
