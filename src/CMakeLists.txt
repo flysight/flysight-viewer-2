@@ -323,11 +323,41 @@ add_library(flysight_core STATIC
   calculations/wspcalculations.cpp            calculations/wspcalculations.h
   calculations/spcalculations.cpp             calculations/spcalculations.h
   calculations/derivativehelper.cpp            calculations/derivativehelper.h
+  calculations/anglehelper.h
   calculations/isadensity.cpp                  calculations/isadensity.h
 )
 target_link_libraries(flysight_core
   PUBLIC  flysight_model Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui
   PRIVATE ${GeographicLib_LIBRARIES} Boost::boost)
+
+# ─────────────────────────────── sensor fusion library
+# The batch GNSS/IMU factor-graph fit. The ONLY target that links GTSAM
+# (PRIVATE: fusion/fusion.h is GTSAM-free, so consumers get the link
+# dependency but none of GTSAM's headers or definitions). Pure: no engine, no
+# session, no Qt GUI. Registration joins it in a later phase.
+add_library(flysight_fusion STATIC
+  fusion/fusion.cpp                    fusion/fusion.h
+  fusion/fusionpipeline.h              fusion/fusionprogress.h
+  fusion/fusionsamples.cpp             fusion/fusionsamples.h
+  fusion/inputadapter.cpp              fusion/inputadapter.h
+  fusion/samplestatistics.cpp          fusion/samplestatistics.h
+  fusion/imuintegration.cpp            fusion/imuintegration.h
+  fusion/stationarywindow.cpp          fusion/stationarywindow.h
+  fusion/initializer.cpp               fusion/initializer.h
+  fusion/factorgraphfit.cpp            fusion/factorgraphfit.h
+  fusion/trajectoryreconstruction.cpp  fusion/trajectoryreconstruction.h
+  fusion/fusionoutput.cpp              fusion/fusionoutput.h
+)
+target_include_directories(flysight_fusion PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(flysight_fusion PUBLIC Qt${QT_VERSION_MAJOR}::Core PRIVATE gtsam)
+set_target_properties(flysight_fusion PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+if(MSVC)
+  target_compile_options(flysight_fusion PRIVATE /EHsc /bigobj)
+else()
+  # Keep the kernel's own arithmetic IEEE-exact like the MSVC reference build
+  # (GCC and Clang otherwise contract a*b+c into fma on targets that have it).
+  target_compile_options(flysight_fusion PRIVATE -ffp-contract=off)
+endif()
 
 # ─────────────────────────────── application
 set(PROJECT_SOURCES

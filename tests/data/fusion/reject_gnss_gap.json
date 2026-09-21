@@ -1,0 +1,10 @@
+{
+    "diagnostics": {
+        "algorithm": "batch-shared-bias-v1",
+        "failure": "GNSS gap: fusion unavailable for a disconnected session"
+    },
+    "fixture": "reject_gnss_gap",
+    "outcome": "rejected",
+    "progress": [
+    ]
+}

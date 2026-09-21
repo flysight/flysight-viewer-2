@@ -1,0 +1,266 @@
+{
+    "channels_file": "coarse_linear.channels.txt",
+    "diagnostics": {
+        "algorithm": "batch-shared-bias-v1",
+        "anchor_time_s": 0,
+        "display_position_velocity": "linear interpolation of optimized GNSS states at original IMU times",
+        "end_s": 1.6000001430511475,
+        "gnss_states": 9,
+        "imu_outputs": 160,
+        "initialization": "coarse GNSS/force initialization; heading unknown",
+        "input": {
+            "epoch_utc_s": 1700000000.037,
+            "gnss_count": 9,
+            "height_method": "CSV hMSL used as approximate ellipsoid height in GeographicLib local frame",
+            "imu_count": 201,
+            "origin": [
+                45,
+                -75,
+                100
+            ],
+            "origin_index": 0,
+            "time_method": "SessionData shared UTC conversion; common epoch subtraction only"
+        },
+        "limitations": "Local batch convergence; heading may be ambiguous. Dense output is not an IMU-rate smoothing posterior.",
+        "max_endpoint_correction_deg": 3.976314124209462e-12,
+        "max_seed_vs_selected_acceleration_m_s2": null,
+        "max_seed_vs_selected_angle_deg": null,
+        "objective": 2.899361808753532e-12,
+        "orientation": "body to fixed NED; quaternion xyzw; RPY degrees",
+        "residuals": [
+            {
+                "kind": "position",
+                "node": 0,
+                "squared_whitened_error": 5.556664682773212e-13,
+                "time_s": 0
+            },
+            {
+                "kind": "velocity",
+                "node": 0,
+                "squared_whitened_error": 5.321057986522925e-17,
+                "time_s": 0
+            },
+            {
+                "kind": "position",
+                "node": 1,
+                "squared_whitened_error": 1.8208758307648576e-14,
+                "time_s": 0.20000004768371582
+            },
+            {
+                "kind": "velocity",
+                "node": 1,
+                "squared_whitened_error": 7.408123566848683e-17,
+                "time_s": 0.20000004768371582
+            },
+            {
+                "kind": "imu",
+                "node": 1,
+                "squared_whitened_error": 8.5102620784349e-20,
+                "time_s": 0.20000004768371582
+            },
+            {
+                "kind": "position",
+                "node": 2,
+                "squared_whitened_error": 2.261228281790901e-13,
+                "time_s": 0.40000009536743164
+            },
+            {
+                "kind": "velocity",
+                "node": 2,
+                "squared_whitened_error": 9.983040940077713e-17,
+                "time_s": 0.40000009536743164
+            },
+            {
+                "kind": "imu",
+                "node": 2,
+                "squared_whitened_error": 3.9279376136246013e-19,
+                "time_s": 0.40000009536743164
+            },
+            {
+                "kind": "position",
+                "node": 3,
+                "squared_whitened_error": 1.1793064210900523e-12,
+                "time_s": 0.6000001430511475
+            },
+            {
+                "kind": "velocity",
+                "node": 3,
+                "squared_whitened_error": 1.3155886643311307e-16,
+                "time_s": 0.6000001430511475
+            },
+            {
+                "kind": "imu",
+                "node": 3,
+                "squared_whitened_error": 5.510488753227347e-19,
+                "time_s": 0.6000001430511475
+            },
+            {
+                "kind": "position",
+                "node": 4,
+                "squared_whitened_error": 1.8411366456358965e-12,
+                "time_s": 0.7999999523162842
+            },
+            {
+                "kind": "velocity",
+                "node": 4,
+                "squared_whitened_error": 1.7212800248928733e-16,
+                "time_s": 0.7999999523162842
+            },
+            {
+                "kind": "imu",
+                "node": 4,
+                "squared_whitened_error": 1.5163375752303894e-19,
+                "time_s": 0.7999999523162842
+            },
+            {
+                "kind": "position",
+                "node": 5,
+                "squared_whitened_error": 5.572859475595848e-13,
+                "time_s": 1
+            },
+            {
+                "kind": "velocity",
+                "node": 5,
+                "squared_whitened_error": 2.230863085610825e-16,
+                "time_s": 1
+            },
+            {
+                "kind": "imu",
+                "node": 5,
+                "squared_whitened_error": 1.3329169408990464e-18,
+                "time_s": 1
+            },
+            {
+                "kind": "position",
+                "node": 6,
+                "squared_whitened_error": 1.85461027310851e-14,
+                "time_s": 1.2000000476837158
+            },
+            {
+                "kind": "velocity",
+                "node": 6,
+                "squared_whitened_error": 2.832930284068224e-16,
+                "time_s": 1.2000000476837158
+            },
+            {
+                "kind": "imu",
+                "node": 6,
+                "squared_whitened_error": 8.290067738119151e-19,
+                "time_s": 1.2000000476837158
+            },
+            {
+                "kind": "position",
+                "node": 7,
+                "squared_whitened_error": 2.2477965483270476e-13,
+                "time_s": 1.4000000953674316
+            },
+            {
+                "kind": "velocity",
+                "node": 7,
+                "squared_whitened_error": 3.5244768816526993e-16,
+                "time_s": 1.4000000953674316
+            },
+            {
+                "kind": "imu",
+                "node": 7,
+                "squared_whitened_error": 4.075369089566692e-19,
+                "time_s": 1.4000000953674316
+            },
+            {
+                "kind": "position",
+                "node": 8,
+                "squared_whitened_error": 1.1758436665796973e-12,
+                "time_s": 1.6000001430511475
+            },
+            {
+                "kind": "velocity",
+                "node": 8,
+                "squared_whitened_error": 4.321032876029188e-16,
+                "time_s": 1.6000001430511475
+            },
+            {
+                "kind": "imu",
+                "node": 8,
+                "squared_whitened_error": 6.231700899804332e-19,
+                "time_s": 1.6000001430511475
+            },
+            {
+                "kind": "bias_prior",
+                "node": 0,
+                "squared_whitened_error": 1.0116976615499056e-18,
+                "time_s": 0
+            }
+        ],
+        "seed_comparison_performed": false,
+        "seeds": [
+            {
+                "acc_bias_m_s2": [
+                    6.673901197251683e-17,
+                    -2.22467936373224e-17,
+                    1.2582077891218478e-10
+                ],
+                "converged": true,
+                "gyro_bias_rad_s": [
+                    -8.67305730329277e-12,
+                    -2.601917155383654e-11,
+                    3.3393246741231047e-25
+                ],
+                "heading_deg": 0,
+                "iterations": 2,
+                "objective": 2.899361808753532e-12,
+                "position_residual_rms_m": 8.025581663373608e-07,
+                "velocity_residual_rms_m_s": 1.4227279768861053e-09
+            }
+        ],
+        "selected_heading_deg": 0,
+        "start_s": 0,
+        "stationary_interval_s": [
+            0,
+            0
+        ]
+    },
+    "fixture": "coarse_linear",
+    "outcome": "succeeded",
+    "progress": [
+        "Starting heading 0 deg",
+        "Integrating IMU factors",
+        "Heading 0 deg, pass 1, iteration 1",
+        "Heading 0 deg, pass 1, iteration 2",
+        "Integrating IMU factors"
+    ],
+    "rows": 160,
+    "trace": {
+        "anchor_time_s": 0,
+        "converged": true,
+        "gyro_bias_rad_s": [
+            0,
+            0,
+            0
+        ],
+        "history": [
+            [
+                0,
+                0,
+                2.8271953420865204e-05,
+                2.8993618086574953e-12
+            ],
+            [
+                0,
+                1,
+                2.8993618086574953e-12,
+                2.8993618086574953e-12
+            ]
+        ],
+        "interval_s": [
+            0,
+            0
+        ],
+        "method": "coarse GNSS/force initialization; heading unknown",
+        "start_quaternion_xyzw": [
+            0,
+            0,
+            0,
+            1
+        ]
+    }
+}

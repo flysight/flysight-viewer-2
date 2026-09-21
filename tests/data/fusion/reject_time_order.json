@@ -1,0 +1,10 @@
+{
+    "diagnostics": {
+        "algorithm": "batch-shared-bias-v1",
+        "failure": "Timestamps must be finite and strictly increasing"
+    },
+    "fixture": "reject_time_order",
+    "outcome": "rejected",
+    "progress": [
+    ]
+}

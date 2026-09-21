@@ -1,0 +1,3733 @@
+{
+    "channels_file": "stationary_spin.channels.txt",
+    "diagnostics": {
+        "algorithm": "batch-shared-bias-v1",
+        "anchor_time_s": 15,
+        "display_position_velocity": "linear interpolation of optimized GNSS states at original IMU times",
+        "end_s": 39.80000019073486,
+        "gnss_states": 200,
+        "imu_outputs": 995,
+        "initialization": "stationary initialization only; heading unknown",
+        "input": {
+            "epoch_utc_s": 1700000000.1,
+            "gnss_count": 200,
+            "height_method": "CSV hMSL used as approximate ellipsoid height in GeographicLib local frame",
+            "imu_count": 1001,
+            "origin": [
+                45,
+                -75,
+                100
+            ],
+            "origin_index": 0,
+            "time_method": "SessionData shared UTC conversion; common epoch subtraction only"
+        },
+        "limitations": "Local batch convergence; heading may be ambiguous. Dense output is not an IMU-rate smoothing posterior.",
+        "max_endpoint_correction_deg": 0.0008559345375957092,
+        "max_seed_vs_selected_acceleration_m_s2": null,
+        "max_seed_vs_selected_angle_deg": null,
+        "objective": 11.095095993796871,
+        "orientation": "body to fixed NED; quaternion xyzw; RPY degrees",
+        "residuals": [
+            {
+                "kind": "position",
+                "node": 0,
+                "squared_whitened_error": 0.013749362419775132,
+                "time_s": 0
+            },
+            {
+                "kind": "velocity",
+                "node": 0,
+                "squared_whitened_error": 0.11971848378664939,
+                "time_s": 0
+            },
+            {
+                "kind": "position",
+                "node": 1,
+                "squared_whitened_error": 0.013756033480801086,
+                "time_s": 0.20000004768371582
+            },
+            {
+                "kind": "velocity",
+                "node": 1,
+                "squared_whitened_error": 0.04346553342083919,
+                "time_s": 0.20000004768371582
+            },
+            {
+                "kind": "imu",
+                "node": 1,
+                "squared_whitened_error": 0.000540656491172016,
+                "time_s": 0.20000004768371582
+            },
+            {
+                "kind": "position",
+                "node": 2,
+                "squared_whitened_error": 0.010029837043926432,
+                "time_s": 0.40000009536743164
+            },
+            {
+                "kind": "velocity",
+                "node": 2,
+                "squared_whitened_error": 0.03367002494267769,
+                "time_s": 0.40000009536743164
+            },
+            {
+                "kind": "imu",
+                "node": 2,
+                "squared_whitened_error": 9.076006820410545e-05,
+                "time_s": 0.40000009536743164
+            },
+            {
+                "kind": "position",
+                "node": 3,
+                "squared_whitened_error": 0.030402119042965567,
+                "time_s": 0.6000001430511475
+            },
+            {
+                "kind": "velocity",
+                "node": 3,
+                "squared_whitened_error": 0.056467749333442424,
+                "time_s": 0.6000001430511475
+            },
+            {
+                "kind": "imu",
+                "node": 3,
+                "squared_whitened_error": 0.00029975995289793425,
+                "time_s": 0.6000001430511475
+            },
+            {
+                "kind": "position",
+                "node": 4,
+                "squared_whitened_error": 0.029473382436137365,
+                "time_s": 0.8000001907348633
+            },
+            {
+                "kind": "velocity",
+                "node": 4,
+                "squared_whitened_error": 0.031075542017752256,
+                "time_s": 0.8000001907348633
+            },
+            {
+                "kind": "imu",
+                "node": 4,
+                "squared_whitened_error": 0.00016748781711697775,
+                "time_s": 0.8000001907348633
+            },
+            {
+                "kind": "position",
+                "node": 5,
+                "squared_whitened_error": 0.0035697604284079514,
+                "time_s": 1
+            },
+            {
+                "kind": "velocity",
+                "node": 5,
+                "squared_whitened_error": 0.11963802875670575,
+                "time_s": 1
+            },
+            {
+                "kind": "imu",
+                "node": 5,
+                "squared_whitened_error": 0.0003475121094516121,
+                "time_s": 1
+            },
+            {
+                "kind": "position",
+                "node": 6,
+                "squared_whitened_error": 0.0365417756318082,
+                "time_s": 1.2000000476837158
+            },
+            {
+                "kind": "velocity",
+                "node": 6,
+                "squared_whitened_error": 0.07628583254786002,
+                "time_s": 1.2000000476837158
+            },
+            {
+                "kind": "imu",
+                "node": 6,
+                "squared_whitened_error": 0.0009104499703289125,
+                "time_s": 1.2000000476837158
+            },
+            {
+                "kind": "position",
+                "node": 7,
+                "squared_whitened_error": 0.024051295251435657,
+                "time_s": 1.4000000953674316
+            },
+            {
+                "kind": "velocity",
+                "node": 7,
+                "squared_whitened_error": 0.07496832369055467,
+                "time_s": 1.4000000953674316
+            },
+            {
+                "kind": "imu",
+                "node": 7,
+                "squared_whitened_error": 0.0016513199664378397,
+                "time_s": 1.4000000953674316
+            },
+            {
+                "kind": "position",
+                "node": 8,
+                "squared_whitened_error": 0.03697141347740586,
+                "time_s": 1.6000001430511475
+            },
+            {
+                "kind": "velocity",
+                "node": 8,
+                "squared_whitened_error": 0.08445901731443722,
+                "time_s": 1.6000001430511475
+            },
+            {
+                "kind": "imu",
+                "node": 8,
+                "squared_whitened_error": 0.0007624280929769287,
+                "time_s": 1.6000001430511475
+            },
+            {
+                "kind": "position",
+                "node": 9,
+                "squared_whitened_error": 0.008781784391235675,
+                "time_s": 1.8000001907348633
+            },
+            {
+                "kind": "velocity",
+                "node": 9,
+                "squared_whitened_error": 0.15427998237894736,
+                "time_s": 1.8000001907348633
+            },
+            {
+                "kind": "imu",
+                "node": 9,
+                "squared_whitened_error": 0.000969032896202746,
+                "time_s": 1.8000001907348633
+            },
+            {
+                "kind": "position",
+                "node": 10,
+                "squared_whitened_error": 0.020969630853188464,
+                "time_s": 2
+            },
+            {
+                "kind": "velocity",
+                "node": 10,
+                "squared_whitened_error": 0.004262620262445807,
+                "time_s": 2
+            },
+            {
+                "kind": "imu",
+                "node": 10,
+                "squared_whitened_error": 0.00027243481127225456,
+                "time_s": 2
+            },
+            {
+                "kind": "position",
+                "node": 11,
+                "squared_whitened_error": 0.04035197867473318,
+                "time_s": 2.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 11,
+                "squared_whitened_error": 0.10592653611079562,
+                "time_s": 2.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 11,
+                "squared_whitened_error": 0.00029105203067564885,
+                "time_s": 2.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 12,
+                "squared_whitened_error": 0.03528756223171268,
+                "time_s": 2.4000000953674316
+            },
+            {
+                "kind": "velocity",
+                "node": 12,
+                "squared_whitened_error": 0.1254689274906284,
+                "time_s": 2.4000000953674316
+            },
+            {
+                "kind": "imu",
+                "node": 12,
+                "squared_whitened_error": 0.0010303437599815078,
+                "time_s": 2.4000000953674316
+            },
+            {
+                "kind": "position",
+                "node": 13,
+                "squared_whitened_error": 0.027189603199087326,
+                "time_s": 2.6000001430511475
+            },
+            {
+                "kind": "velocity",
+                "node": 13,
+                "squared_whitened_error": 0.15633012433336899,
+                "time_s": 2.6000001430511475
+            },
+            {
+                "kind": "imu",
+                "node": 13,
+                "squared_whitened_error": 0.0023173818926888697,
+                "time_s": 2.6000001430511475
+            },
+            {
+                "kind": "position",
+                "node": 14,
+                "squared_whitened_error": 0.036013864289890785,
+                "time_s": 2.8000001907348633
+            },
+            {
+                "kind": "velocity",
+                "node": 14,
+                "squared_whitened_error": 0.06036978304633096,
+                "time_s": 2.8000001907348633
+            },
+            {
+                "kind": "imu",
+                "node": 14,
+                "squared_whitened_error": 0.0011730973057869061,
+                "time_s": 2.8000001907348633
+            },
+            {
+                "kind": "position",
+                "node": 15,
+                "squared_whitened_error": 0.025655834214473386,
+                "time_s": 3
+            },
+            {
+                "kind": "velocity",
+                "node": 15,
+                "squared_whitened_error": 0.06949513224707043,
+                "time_s": 3
+            },
+            {
+                "kind": "imu",
+                "node": 15,
+                "squared_whitened_error": 0.0017665345483355189,
+                "time_s": 3
+            },
+            {
+                "kind": "position",
+                "node": 16,
+                "squared_whitened_error": 0.0502608725195478,
+                "time_s": 3.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 16,
+                "squared_whitened_error": 0.07728215251482264,
+                "time_s": 3.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 16,
+                "squared_whitened_error": 0.0012686876975289418,
+                "time_s": 3.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 17,
+                "squared_whitened_error": 0.033463714927681396,
+                "time_s": 3.4000000953674316
+            },
+            {
+                "kind": "velocity",
+                "node": 17,
+                "squared_whitened_error": 0.18858849340718353,
+                "time_s": 3.4000000953674316
+            },
+            {
+                "kind": "imu",
+                "node": 17,
+                "squared_whitened_error": 0.00133594604980318,
+                "time_s": 3.4000000953674316
+            },
+            {
+                "kind": "position",
+                "node": 18,
+                "squared_whitened_error": 0.003930315937193266,
+                "time_s": 3.6000001430511475
+            },
+            {
+                "kind": "velocity",
+                "node": 18,
+                "squared_whitened_error": 0.06269159677634388,
+                "time_s": 3.6000001430511475
+            },
+            {
+                "kind": "imu",
+                "node": 18,
+                "squared_whitened_error": 0.0008400737472627,
+                "time_s": 3.6000001430511475
+            },
+            {
+                "kind": "position",
+                "node": 19,
+                "squared_whitened_error": 0.021538265709251627,
+                "time_s": 3.8000001907348633
+            },
+            {
+                "kind": "velocity",
+                "node": 19,
+                "squared_whitened_error": 0.03272199049753359,
+                "time_s": 3.8000001907348633
+            },
+            {
+                "kind": "imu",
+                "node": 19,
+                "squared_whitened_error": 0.0009908137468781037,
+                "time_s": 3.8000001907348633
+            },
+            {
+                "kind": "position",
+                "node": 20,
+                "squared_whitened_error": 0.07270803390024562,
+                "time_s": 4
+            },
+            {
+                "kind": "velocity",
+                "node": 20,
+                "squared_whitened_error": 0.046852641010202284,
+                "time_s": 4
+            },
+            {
+                "kind": "imu",
+                "node": 20,
+                "squared_whitened_error": 0.0008008527882587795,
+                "time_s": 4
+            },
+            {
+                "kind": "position",
+                "node": 21,
+                "squared_whitened_error": 0.022964466589358183,
+                "time_s": 4.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 21,
+                "squared_whitened_error": 0.09246193354506496,
+                "time_s": 4.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 21,
+                "squared_whitened_error": 0.0009591857670547454,
+                "time_s": 4.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 22,
+                "squared_whitened_error": 0.025105047789664558,
+                "time_s": 4.400000095367432
+            },
+            {
+                "kind": "velocity",
+                "node": 22,
+                "squared_whitened_error": 0.01769289878152112,
+                "time_s": 4.400000095367432
+            },
+            {
+                "kind": "imu",
+                "node": 22,
+                "squared_whitened_error": 0.0009822592887682889,
+                "time_s": 4.400000095367432
+            },
+            {
+                "kind": "position",
+                "node": 23,
+                "squared_whitened_error": 0.006644470386418034,
+                "time_s": 4.6000001430511475
+            },
+            {
+                "kind": "velocity",
+                "node": 23,
+                "squared_whitened_error": 0.06959593497728522,
+                "time_s": 4.6000001430511475
+            },
+            {
+                "kind": "imu",
+                "node": 23,
+                "squared_whitened_error": 0.0009193885441704567,
+                "time_s": 4.6000001430511475
+            },
+            {
+                "kind": "position",
+                "node": 24,
+                "squared_whitened_error": 0.007339340423729477,
+                "time_s": 4.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 24,
+                "squared_whitened_error": 0.06749405293249318,
+                "time_s": 4.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 24,
+                "squared_whitened_error": 0.0010676582468858717,
+                "time_s": 4.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 25,
+                "squared_whitened_error": 0.04117942493109113,
+                "time_s": 5
+            },
+            {
+                "kind": "velocity",
+                "node": 25,
+                "squared_whitened_error": 0.11043612821953849,
+                "time_s": 5
+            },
+            {
+                "kind": "imu",
+                "node": 25,
+                "squared_whitened_error": 0.0023388733492379146,
+                "time_s": 5
+            },
+            {
+                "kind": "position",
+                "node": 26,
+                "squared_whitened_error": 0.02492533356620672,
+                "time_s": 5.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 26,
+                "squared_whitened_error": 0.15579624523736627,
+                "time_s": 5.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 26,
+                "squared_whitened_error": 0.002641185945650698,
+                "time_s": 5.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 27,
+                "squared_whitened_error": 0.040238471394976695,
+                "time_s": 5.400000095367432
+            },
+            {
+                "kind": "velocity",
+                "node": 27,
+                "squared_whitened_error": 0.08940358214361371,
+                "time_s": 5.400000095367432
+            },
+            {
+                "kind": "imu",
+                "node": 27,
+                "squared_whitened_error": 0.003201088496543227,
+                "time_s": 5.400000095367432
+            },
+            {
+                "kind": "position",
+                "node": 28,
+                "squared_whitened_error": 0.04397725890330412,
+                "time_s": 5.6000001430511475
+            },
+            {
+                "kind": "velocity",
+                "node": 28,
+                "squared_whitened_error": 0.0816481981228661,
+                "time_s": 5.6000001430511475
+            },
+            {
+                "kind": "imu",
+                "node": 28,
+                "squared_whitened_error": 0.001864220202396221,
+                "time_s": 5.6000001430511475
+            },
+            {
+                "kind": "position",
+                "node": 29,
+                "squared_whitened_error": 0.010899699535981232,
+                "time_s": 5.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 29,
+                "squared_whitened_error": 0.082746031749897,
+                "time_s": 5.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 29,
+                "squared_whitened_error": 0.0009935467130902465,
+                "time_s": 5.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 30,
+                "squared_whitened_error": 0.020975590169400118,
+                "time_s": 6
+            },
+            {
+                "kind": "velocity",
+                "node": 30,
+                "squared_whitened_error": 0.12258299276501197,
+                "time_s": 6
+            },
+            {
+                "kind": "imu",
+                "node": 30,
+                "squared_whitened_error": 0.0006756482345065293,
+                "time_s": 6
+            },
+            {
+                "kind": "position",
+                "node": 31,
+                "squared_whitened_error": 0.009231182173073737,
+                "time_s": 6.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 31,
+                "squared_whitened_error": 0.02931075303216256,
+                "time_s": 6.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 31,
+                "squared_whitened_error": 0.0010993917635869449,
+                "time_s": 6.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 32,
+                "squared_whitened_error": 0.027086640793369386,
+                "time_s": 6.400000095367432
+            },
+            {
+                "kind": "velocity",
+                "node": 32,
+                "squared_whitened_error": 0.027947358680332837,
+                "time_s": 6.400000095367432
+            },
+            {
+                "kind": "imu",
+                "node": 32,
+                "squared_whitened_error": 0.0009346799451250208,
+                "time_s": 6.400000095367432
+            },
+            {
+                "kind": "position",
+                "node": 33,
+                "squared_whitened_error": 0.022583533884021838,
+                "time_s": 6.6000001430511475
+            },
+            {
+                "kind": "velocity",
+                "node": 33,
+                "squared_whitened_error": 0.11504957139594396,
+                "time_s": 6.6000001430511475
+            },
+            {
+                "kind": "imu",
+                "node": 33,
+                "squared_whitened_error": 0.0011967127587306364,
+                "time_s": 6.6000001430511475
+            },
+            {
+                "kind": "position",
+                "node": 34,
+                "squared_whitened_error": 0.001548071940010403,
+                "time_s": 6.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 34,
+                "squared_whitened_error": 0.09191742820881191,
+                "time_s": 6.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 34,
+                "squared_whitened_error": 0.002367569764507583,
+                "time_s": 6.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 35,
+                "squared_whitened_error": 0.047045160714471984,
+                "time_s": 7
+            },
+            {
+                "kind": "velocity",
+                "node": 35,
+                "squared_whitened_error": 0.04319650723875296,
+                "time_s": 7
+            },
+            {
+                "kind": "imu",
+                "node": 35,
+                "squared_whitened_error": 0.001153548508490132,
+                "time_s": 7
+            },
+            {
+                "kind": "position",
+                "node": 36,
+                "squared_whitened_error": 0.030048415143745195,
+                "time_s": 7.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 36,
+                "squared_whitened_error": 0.06823939942278398,
+                "time_s": 7.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 36,
+                "squared_whitened_error": 0.000999085454085774,
+                "time_s": 7.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 37,
+                "squared_whitened_error": 0.026867688242649783,
+                "time_s": 7.400000095367432
+            },
+            {
+                "kind": "velocity",
+                "node": 37,
+                "squared_whitened_error": 0.0797316138431965,
+                "time_s": 7.400000095367432
+            },
+            {
+                "kind": "imu",
+                "node": 37,
+                "squared_whitened_error": 0.0012601737484638032,
+                "time_s": 7.400000095367432
+            },
+            {
+                "kind": "position",
+                "node": 38,
+                "squared_whitened_error": 0.026710039800378175,
+                "time_s": 7.6000001430511475
+            },
+            {
+                "kind": "velocity",
+                "node": 38,
+                "squared_whitened_error": 0.012100057996541338,
+                "time_s": 7.6000001430511475
+            },
+            {
+                "kind": "imu",
+                "node": 38,
+                "squared_whitened_error": 0.0016143565604054965,
+                "time_s": 7.6000001430511475
+            },
+            {
+                "kind": "position",
+                "node": 39,
+                "squared_whitened_error": 0.024693578246396314,
+                "time_s": 7.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 39,
+                "squared_whitened_error": 0.1001352618327238,
+                "time_s": 7.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 39,
+                "squared_whitened_error": 0.0022550216364535173,
+                "time_s": 7.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 40,
+                "squared_whitened_error": 0.014024129860120567,
+                "time_s": 8
+            },
+            {
+                "kind": "velocity",
+                "node": 40,
+                "squared_whitened_error": 0.10021301391995786,
+                "time_s": 8
+            },
+            {
+                "kind": "imu",
+                "node": 40,
+                "squared_whitened_error": 0.0021288140202601006,
+                "time_s": 8
+            },
+            {
+                "kind": "position",
+                "node": 41,
+                "squared_whitened_error": 0.028177687736570416,
+                "time_s": 8.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 41,
+                "squared_whitened_error": 0.08163191675344321,
+                "time_s": 8.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 41,
+                "squared_whitened_error": 0.002097409592503842,
+                "time_s": 8.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 42,
+                "squared_whitened_error": 0.06470976175916657,
+                "time_s": 8.400000095367432
+            },
+            {
+                "kind": "velocity",
+                "node": 42,
+                "squared_whitened_error": 0.10675240612178444,
+                "time_s": 8.400000095367432
+            },
+            {
+                "kind": "imu",
+                "node": 42,
+                "squared_whitened_error": 0.001431826049063151,
+                "time_s": 8.400000095367432
+            },
+            {
+                "kind": "position",
+                "node": 43,
+                "squared_whitened_error": 0.02335093136704433,
+                "time_s": 8.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 43,
+                "squared_whitened_error": 0.03375360378038246,
+                "time_s": 8.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 43,
+                "squared_whitened_error": 0.002502417611912838,
+                "time_s": 8.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 44,
+                "squared_whitened_error": 0.02419358824482486,
+                "time_s": 8.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 44,
+                "squared_whitened_error": 0.10061528082684817,
+                "time_s": 8.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 44,
+                "squared_whitened_error": 0.0017437107774246293,
+                "time_s": 8.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 45,
+                "squared_whitened_error": 0.02585694605829178,
+                "time_s": 9
+            },
+            {
+                "kind": "velocity",
+                "node": 45,
+                "squared_whitened_error": 0.11210772743007083,
+                "time_s": 9
+            },
+            {
+                "kind": "imu",
+                "node": 45,
+                "squared_whitened_error": 0.0016281841106141524,
+                "time_s": 9
+            },
+            {
+                "kind": "position",
+                "node": 46,
+                "squared_whitened_error": 0.03814782878996952,
+                "time_s": 9.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 46,
+                "squared_whitened_error": 0.09419918950392626,
+                "time_s": 9.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 46,
+                "squared_whitened_error": 0.0012011791555561673,
+                "time_s": 9.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 47,
+                "squared_whitened_error": 0.011583818739954387,
+                "time_s": 9.400000095367432
+            },
+            {
+                "kind": "velocity",
+                "node": 47,
+                "squared_whitened_error": 0.08087914510082984,
+                "time_s": 9.400000095367432
+            },
+            {
+                "kind": "imu",
+                "node": 47,
+                "squared_whitened_error": 0.0018970354086574773,
+                "time_s": 9.400000095367432
+            },
+            {
+                "kind": "position",
+                "node": 48,
+                "squared_whitened_error": 0.01153514433532802,
+                "time_s": 9.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 48,
+                "squared_whitened_error": 0.11920435213859547,
+                "time_s": 9.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 48,
+                "squared_whitened_error": 0.0017022222805296253,
+                "time_s": 9.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 49,
+                "squared_whitened_error": 0.0269479644727128,
+                "time_s": 9.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 49,
+                "squared_whitened_error": 0.02544181645663484,
+                "time_s": 9.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 49,
+                "squared_whitened_error": 0.0008465370344434974,
+                "time_s": 9.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 50,
+                "squared_whitened_error": 0.02274867888448242,
+                "time_s": 10
+            },
+            {
+                "kind": "velocity",
+                "node": 50,
+                "squared_whitened_error": 0.13537364088690812,
+                "time_s": 10
+            },
+            {
+                "kind": "imu",
+                "node": 50,
+                "squared_whitened_error": 0.0010137256884794146,
+                "time_s": 10
+            },
+            {
+                "kind": "position",
+                "node": 51,
+                "squared_whitened_error": 0.014285939134351954,
+                "time_s": 10.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 51,
+                "squared_whitened_error": 0.09235701953528783,
+                "time_s": 10.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 51,
+                "squared_whitened_error": 0.0008186218393353329,
+                "time_s": 10.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 52,
+                "squared_whitened_error": 0.048787527277598115,
+                "time_s": 10.400000095367432
+            },
+            {
+                "kind": "velocity",
+                "node": 52,
+                "squared_whitened_error": 0.11404974307946111,
+                "time_s": 10.400000095367432
+            },
+            {
+                "kind": "imu",
+                "node": 52,
+                "squared_whitened_error": 0.002186071931876055,
+                "time_s": 10.400000095367432
+            },
+            {
+                "kind": "position",
+                "node": 53,
+                "squared_whitened_error": 0.02889145838340286,
+                "time_s": 10.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 53,
+                "squared_whitened_error": 0.04119300876119395,
+                "time_s": 10.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 53,
+                "squared_whitened_error": 0.0008247327394872306,
+                "time_s": 10.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 54,
+                "squared_whitened_error": 0.03789022317884393,
+                "time_s": 10.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 54,
+                "squared_whitened_error": 0.021260991691691447,
+                "time_s": 10.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 54,
+                "squared_whitened_error": 0.0014595503792688017,
+                "time_s": 10.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 55,
+                "squared_whitened_error": 0.01236590018894366,
+                "time_s": 11
+            },
+            {
+                "kind": "velocity",
+                "node": 55,
+                "squared_whitened_error": 0.07683758818782666,
+                "time_s": 11
+            },
+            {
+                "kind": "imu",
+                "node": 55,
+                "squared_whitened_error": 0.0011036198235237105,
+                "time_s": 11
+            },
+            {
+                "kind": "position",
+                "node": 56,
+                "squared_whitened_error": 0.06063426534914043,
+                "time_s": 11.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 56,
+                "squared_whitened_error": 0.16792476539915863,
+                "time_s": 11.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 56,
+                "squared_whitened_error": 0.0006502215284327712,
+                "time_s": 11.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 57,
+                "squared_whitened_error": 0.02442858683186592,
+                "time_s": 11.400000095367432
+            },
+            {
+                "kind": "velocity",
+                "node": 57,
+                "squared_whitened_error": 0.12611732592513872,
+                "time_s": 11.400000095367432
+            },
+            {
+                "kind": "imu",
+                "node": 57,
+                "squared_whitened_error": 0.0005415762557266651,
+                "time_s": 11.400000095367432
+            },
+            {
+                "kind": "position",
+                "node": 58,
+                "squared_whitened_error": 0.07936953951472944,
+                "time_s": 11.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 58,
+                "squared_whitened_error": 0.014124293296464271,
+                "time_s": 11.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 58,
+                "squared_whitened_error": 0.0003316861302875053,
+                "time_s": 11.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 59,
+                "squared_whitened_error": 0.04386919053420442,
+                "time_s": 11.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 59,
+                "squared_whitened_error": 0.020413067349589774,
+                "time_s": 11.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 59,
+                "squared_whitened_error": 0.0005100282730438059,
+                "time_s": 11.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 60,
+                "squared_whitened_error": 0.05333008913855192,
+                "time_s": 12
+            },
+            {
+                "kind": "velocity",
+                "node": 60,
+                "squared_whitened_error": 0.21992210125105693,
+                "time_s": 12
+            },
+            {
+                "kind": "imu",
+                "node": 60,
+                "squared_whitened_error": 0.0008073131899532257,
+                "time_s": 12
+            },
+            {
+                "kind": "position",
+                "node": 61,
+                "squared_whitened_error": 0.05268039581200376,
+                "time_s": 12.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 61,
+                "squared_whitened_error": 0.09840058991161438,
+                "time_s": 12.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 61,
+                "squared_whitened_error": 0.0009012328050809568,
+                "time_s": 12.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 62,
+                "squared_whitened_error": 0.016903089956211762,
+                "time_s": 12.400000095367432
+            },
+            {
+                "kind": "velocity",
+                "node": 62,
+                "squared_whitened_error": 0.06956609988964736,
+                "time_s": 12.400000095367432
+            },
+            {
+                "kind": "imu",
+                "node": 62,
+                "squared_whitened_error": 0.0011617371601534395,
+                "time_s": 12.400000095367432
+            },
+            {
+                "kind": "position",
+                "node": 63,
+                "squared_whitened_error": 0.030329725178940243,
+                "time_s": 12.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 63,
+                "squared_whitened_error": 0.021292161523082772,
+                "time_s": 12.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 63,
+                "squared_whitened_error": 0.0014592776385966033,
+                "time_s": 12.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 64,
+                "squared_whitened_error": 0.03245080213581607,
+                "time_s": 12.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 64,
+                "squared_whitened_error": 0.06318158627994175,
+                "time_s": 12.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 64,
+                "squared_whitened_error": 0.0007777335188631041,
+                "time_s": 12.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 65,
+                "squared_whitened_error": 0.08500551826231427,
+                "time_s": 13
+            },
+            {
+                "kind": "velocity",
+                "node": 65,
+                "squared_whitened_error": 0.003307405861041324,
+                "time_s": 13
+            },
+            {
+                "kind": "imu",
+                "node": 65,
+                "squared_whitened_error": 0.00044861632818762583,
+                "time_s": 13
+            },
+            {
+                "kind": "position",
+                "node": 66,
+                "squared_whitened_error": 0.012769458129441278,
+                "time_s": 13.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 66,
+                "squared_whitened_error": 0.051033842859163736,
+                "time_s": 13.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 66,
+                "squared_whitened_error": 0.00045812334135584285,
+                "time_s": 13.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 67,
+                "squared_whitened_error": 0.05353721315399016,
+                "time_s": 13.400000095367432
+            },
+            {
+                "kind": "velocity",
+                "node": 67,
+                "squared_whitened_error": 0.0516888561067055,
+                "time_s": 13.400000095367432
+            },
+            {
+                "kind": "imu",
+                "node": 67,
+                "squared_whitened_error": 0.0006441523940070017,
+                "time_s": 13.400000095367432
+            },
+            {
+                "kind": "position",
+                "node": 68,
+                "squared_whitened_error": 0.05746164189807226,
+                "time_s": 13.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 68,
+                "squared_whitened_error": 0.0963488662645684,
+                "time_s": 13.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 68,
+                "squared_whitened_error": 0.00029808693278701146,
+                "time_s": 13.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 69,
+                "squared_whitened_error": 0.08519879758974579,
+                "time_s": 13.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 69,
+                "squared_whitened_error": 0.08470979688260771,
+                "time_s": 13.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 69,
+                "squared_whitened_error": 0.0005558449238397924,
+                "time_s": 13.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 70,
+                "squared_whitened_error": 0.018247017193457282,
+                "time_s": 14
+            },
+            {
+                "kind": "velocity",
+                "node": 70,
+                "squared_whitened_error": 0.030462564978090096,
+                "time_s": 14
+            },
+            {
+                "kind": "imu",
+                "node": 70,
+                "squared_whitened_error": 0.0006496614469673419,
+                "time_s": 14
+            },
+            {
+                "kind": "position",
+                "node": 71,
+                "squared_whitened_error": 0.043713761219554066,
+                "time_s": 14.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 71,
+                "squared_whitened_error": 0.006354347364957367,
+                "time_s": 14.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 71,
+                "squared_whitened_error": 0.0004887241601230402,
+                "time_s": 14.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 72,
+                "squared_whitened_error": 0.05711876485851833,
+                "time_s": 14.400000095367432
+            },
+            {
+                "kind": "velocity",
+                "node": 72,
+                "squared_whitened_error": 0.06721262446220436,
+                "time_s": 14.400000095367432
+            },
+            {
+                "kind": "imu",
+                "node": 72,
+                "squared_whitened_error": 0.0004071897424432699,
+                "time_s": 14.400000095367432
+            },
+            {
+                "kind": "position",
+                "node": 73,
+                "squared_whitened_error": 0.039785759556368594,
+                "time_s": 14.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 73,
+                "squared_whitened_error": 0.15395315386773523,
+                "time_s": 14.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 73,
+                "squared_whitened_error": 0.0008410865706785749,
+                "time_s": 14.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 74,
+                "squared_whitened_error": 0.038657273245229065,
+                "time_s": 14.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 74,
+                "squared_whitened_error": 0.021946137175751106,
+                "time_s": 14.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 74,
+                "squared_whitened_error": 0.001340961454269654,
+                "time_s": 14.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 75,
+                "squared_whitened_error": 0.012395413395561774,
+                "time_s": 15
+            },
+            {
+                "kind": "velocity",
+                "node": 75,
+                "squared_whitened_error": 0.08423691124695457,
+                "time_s": 15
+            },
+            {
+                "kind": "imu",
+                "node": 75,
+                "squared_whitened_error": 0.0013122183586777878,
+                "time_s": 15
+            },
+            {
+                "kind": "position",
+                "node": 76,
+                "squared_whitened_error": 0.04322993187390686,
+                "time_s": 15.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 76,
+                "squared_whitened_error": 0.12320982645000972,
+                "time_s": 15.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 76,
+                "squared_whitened_error": 0.0010634358011068358,
+                "time_s": 15.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 77,
+                "squared_whitened_error": 0.03260466837128363,
+                "time_s": 15.400000095367432
+            },
+            {
+                "kind": "velocity",
+                "node": 77,
+                "squared_whitened_error": 0.06865576135953252,
+                "time_s": 15.400000095367432
+            },
+            {
+                "kind": "imu",
+                "node": 77,
+                "squared_whitened_error": 0.0013973516886269736,
+                "time_s": 15.400000095367432
+            },
+            {
+                "kind": "position",
+                "node": 78,
+                "squared_whitened_error": 0.06445085600560484,
+                "time_s": 15.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 78,
+                "squared_whitened_error": 0.03877255767796234,
+                "time_s": 15.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 78,
+                "squared_whitened_error": 0.0013828570952350659,
+                "time_s": 15.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 79,
+                "squared_whitened_error": 0.014241408065934531,
+                "time_s": 15.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 79,
+                "squared_whitened_error": 0.1415390788242923,
+                "time_s": 15.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 79,
+                "squared_whitened_error": 0.0009855145575423565,
+                "time_s": 15.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 80,
+                "squared_whitened_error": 0.0514910923911307,
+                "time_s": 16
+            },
+            {
+                "kind": "velocity",
+                "node": 80,
+                "squared_whitened_error": 0.05081586255119555,
+                "time_s": 16
+            },
+            {
+                "kind": "imu",
+                "node": 80,
+                "squared_whitened_error": 0.001431082394351696,
+                "time_s": 16
+            },
+            {
+                "kind": "position",
+                "node": 81,
+                "squared_whitened_error": 0.038234728077661526,
+                "time_s": 16.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 81,
+                "squared_whitened_error": 0.144888853588351,
+                "time_s": 16.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 81,
+                "squared_whitened_error": 0.0017854798834363614,
+                "time_s": 16.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 82,
+                "squared_whitened_error": 0.018069090836851293,
+                "time_s": 16.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 82,
+                "squared_whitened_error": 0.10029390093309629,
+                "time_s": 16.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 82,
+                "squared_whitened_error": 0.0010034901315589336,
+                "time_s": 16.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 83,
+                "squared_whitened_error": 0.008143952557318689,
+                "time_s": 16.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 83,
+                "squared_whitened_error": 0.06605869103076698,
+                "time_s": 16.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 83,
+                "squared_whitened_error": 0.001247951953489677,
+                "time_s": 16.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 84,
+                "squared_whitened_error": 0.016520474684668083,
+                "time_s": 16.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 84,
+                "squared_whitened_error": 0.15997516367402667,
+                "time_s": 16.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 84,
+                "squared_whitened_error": 0.0007924097121277773,
+                "time_s": 16.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 85,
+                "squared_whitened_error": 0.020985327090925994,
+                "time_s": 17
+            },
+            {
+                "kind": "velocity",
+                "node": 85,
+                "squared_whitened_error": 0.01813951979405054,
+                "time_s": 17
+            },
+            {
+                "kind": "imu",
+                "node": 85,
+                "squared_whitened_error": 0.001259774543351744,
+                "time_s": 17
+            },
+            {
+                "kind": "position",
+                "node": 86,
+                "squared_whitened_error": 0.05157398412633867,
+                "time_s": 17.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 86,
+                "squared_whitened_error": 0.13208186215591822,
+                "time_s": 17.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 86,
+                "squared_whitened_error": 0.0009739247075553024,
+                "time_s": 17.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 87,
+                "squared_whitened_error": 0.03643160821698205,
+                "time_s": 17.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 87,
+                "squared_whitened_error": 0.04658615763767749,
+                "time_s": 17.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 87,
+                "squared_whitened_error": 0.0013220433180261741,
+                "time_s": 17.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 88,
+                "squared_whitened_error": 0.03717635874742363,
+                "time_s": 17.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 88,
+                "squared_whitened_error": 0.09754890573192286,
+                "time_s": 17.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 88,
+                "squared_whitened_error": 0.0019053996163366465,
+                "time_s": 17.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 89,
+                "squared_whitened_error": 0.04127481450916913,
+                "time_s": 17.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 89,
+                "squared_whitened_error": 0.05028968349346515,
+                "time_s": 17.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 89,
+                "squared_whitened_error": 0.0018149210154488529,
+                "time_s": 17.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 90,
+                "squared_whitened_error": 0.03499196712961156,
+                "time_s": 18
+            },
+            {
+                "kind": "velocity",
+                "node": 90,
+                "squared_whitened_error": 0.10663717590756722,
+                "time_s": 18
+            },
+            {
+                "kind": "imu",
+                "node": 90,
+                "squared_whitened_error": 0.0022692236716607356,
+                "time_s": 18
+            },
+            {
+                "kind": "position",
+                "node": 91,
+                "squared_whitened_error": 0.033857969357582285,
+                "time_s": 18.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 91,
+                "squared_whitened_error": 0.017397177195904532,
+                "time_s": 18.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 91,
+                "squared_whitened_error": 0.0014088760480190374,
+                "time_s": 18.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 92,
+                "squared_whitened_error": 0.03785844732505633,
+                "time_s": 18.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 92,
+                "squared_whitened_error": 0.05029796765467592,
+                "time_s": 18.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 92,
+                "squared_whitened_error": 0.00122571647932171,
+                "time_s": 18.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 93,
+                "squared_whitened_error": 0.040705971108911686,
+                "time_s": 18.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 93,
+                "squared_whitened_error": 0.04887711316011484,
+                "time_s": 18.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 93,
+                "squared_whitened_error": 0.0004172234752908648,
+                "time_s": 18.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 94,
+                "squared_whitened_error": 0.03703554159130286,
+                "time_s": 18.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 94,
+                "squared_whitened_error": 0.034408981004041723,
+                "time_s": 18.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 94,
+                "squared_whitened_error": 0.0006025300294619956,
+                "time_s": 18.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 95,
+                "squared_whitened_error": 0.023563593096812628,
+                "time_s": 19
+            },
+            {
+                "kind": "velocity",
+                "node": 95,
+                "squared_whitened_error": 0.1596576575145905,
+                "time_s": 19
+            },
+            {
+                "kind": "imu",
+                "node": 95,
+                "squared_whitened_error": 0.0011872911391038745,
+                "time_s": 19
+            },
+            {
+                "kind": "position",
+                "node": 96,
+                "squared_whitened_error": 0.04114616497296478,
+                "time_s": 19.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 96,
+                "squared_whitened_error": 0.07595757925060409,
+                "time_s": 19.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 96,
+                "squared_whitened_error": 0.0009094022254740841,
+                "time_s": 19.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 97,
+                "squared_whitened_error": 0.02665445169583837,
+                "time_s": 19.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 97,
+                "squared_whitened_error": 0.027758231580799757,
+                "time_s": 19.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 97,
+                "squared_whitened_error": 0.0018669550485394966,
+                "time_s": 19.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 98,
+                "squared_whitened_error": 0.050982923212501204,
+                "time_s": 19.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 98,
+                "squared_whitened_error": 0.1463643818634861,
+                "time_s": 19.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 98,
+                "squared_whitened_error": 0.0023609471590182477,
+                "time_s": 19.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 99,
+                "squared_whitened_error": 0.012510220614129996,
+                "time_s": 19.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 99,
+                "squared_whitened_error": 0.0676924952614615,
+                "time_s": 19.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 99,
+                "squared_whitened_error": 0.0019141128962113737,
+                "time_s": 19.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 100,
+                "squared_whitened_error": 0.0598609512480978,
+                "time_s": 20
+            },
+            {
+                "kind": "velocity",
+                "node": 100,
+                "squared_whitened_error": 0.036206746533430395,
+                "time_s": 20
+            },
+            {
+                "kind": "imu",
+                "node": 100,
+                "squared_whitened_error": 0.001974511212772967,
+                "time_s": 20
+            },
+            {
+                "kind": "position",
+                "node": 101,
+                "squared_whitened_error": 0.024153713239834087,
+                "time_s": 20.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 101,
+                "squared_whitened_error": 0.13985374568366893,
+                "time_s": 20.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 101,
+                "squared_whitened_error": 0.0022829074194838823,
+                "time_s": 20.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 102,
+                "squared_whitened_error": 0.02341610986899272,
+                "time_s": 20.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 102,
+                "squared_whitened_error": 0.08328582269296135,
+                "time_s": 20.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 102,
+                "squared_whitened_error": 0.0016955551738295407,
+                "time_s": 20.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 103,
+                "squared_whitened_error": 0.015558911026273936,
+                "time_s": 20.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 103,
+                "squared_whitened_error": 0.2177691196167715,
+                "time_s": 20.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 103,
+                "squared_whitened_error": 0.0012045109482781073,
+                "time_s": 20.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 104,
+                "squared_whitened_error": 0.045546422524854566,
+                "time_s": 20.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 104,
+                "squared_whitened_error": 0.0785148812950951,
+                "time_s": 20.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 104,
+                "squared_whitened_error": 0.0014984184881015315,
+                "time_s": 20.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 105,
+                "squared_whitened_error": 0.04700698925846843,
+                "time_s": 21
+            },
+            {
+                "kind": "velocity",
+                "node": 105,
+                "squared_whitened_error": 0.031800138226159125,
+                "time_s": 21
+            },
+            {
+                "kind": "imu",
+                "node": 105,
+                "squared_whitened_error": 0.0011966009874694232,
+                "time_s": 21
+            },
+            {
+                "kind": "position",
+                "node": 106,
+                "squared_whitened_error": 0.03830466451791619,
+                "time_s": 21.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 106,
+                "squared_whitened_error": 0.051319115995918756,
+                "time_s": 21.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 106,
+                "squared_whitened_error": 0.0012781339709862672,
+                "time_s": 21.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 107,
+                "squared_whitened_error": 0.009266578702510037,
+                "time_s": 21.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 107,
+                "squared_whitened_error": 0.11070466983591234,
+                "time_s": 21.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 107,
+                "squared_whitened_error": 0.0012518464717713794,
+                "time_s": 21.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 108,
+                "squared_whitened_error": 0.03973765514295133,
+                "time_s": 21.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 108,
+                "squared_whitened_error": 0.03388001049817626,
+                "time_s": 21.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 108,
+                "squared_whitened_error": 0.0015978342321838793,
+                "time_s": 21.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 109,
+                "squared_whitened_error": 0.013296425682272324,
+                "time_s": 21.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 109,
+                "squared_whitened_error": 0.13989358452272824,
+                "time_s": 21.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 109,
+                "squared_whitened_error": 0.0012774062658219905,
+                "time_s": 21.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 110,
+                "squared_whitened_error": 0.02724967338810326,
+                "time_s": 22
+            },
+            {
+                "kind": "velocity",
+                "node": 110,
+                "squared_whitened_error": 0.12644933849572518,
+                "time_s": 22
+            },
+            {
+                "kind": "imu",
+                "node": 110,
+                "squared_whitened_error": 0.0011609336673313213,
+                "time_s": 22
+            },
+            {
+                "kind": "position",
+                "node": 111,
+                "squared_whitened_error": 0.018355926925051756,
+                "time_s": 22.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 111,
+                "squared_whitened_error": 0.0689656924548547,
+                "time_s": 22.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 111,
+                "squared_whitened_error": 0.0010494479734498355,
+                "time_s": 22.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 112,
+                "squared_whitened_error": 0.002492502376235416,
+                "time_s": 22.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 112,
+                "squared_whitened_error": 0.04448391796549532,
+                "time_s": 22.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 112,
+                "squared_whitened_error": 0.0014545175227994595,
+                "time_s": 22.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 113,
+                "squared_whitened_error": 0.019228440683759236,
+                "time_s": 22.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 113,
+                "squared_whitened_error": 0.10873816120873965,
+                "time_s": 22.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 113,
+                "squared_whitened_error": 0.0006848344136637912,
+                "time_s": 22.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 114,
+                "squared_whitened_error": 0.0464786543845031,
+                "time_s": 22.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 114,
+                "squared_whitened_error": 0.04045141118823893,
+                "time_s": 22.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 114,
+                "squared_whitened_error": 0.0014255935351623053,
+                "time_s": 22.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 115,
+                "squared_whitened_error": 0.04789413556062913,
+                "time_s": 23
+            },
+            {
+                "kind": "velocity",
+                "node": 115,
+                "squared_whitened_error": 0.09915878161488578,
+                "time_s": 23
+            },
+            {
+                "kind": "imu",
+                "node": 115,
+                "squared_whitened_error": 0.0016552791527058843,
+                "time_s": 23
+            },
+            {
+                "kind": "position",
+                "node": 116,
+                "squared_whitened_error": 0.005287151316615809,
+                "time_s": 23.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 116,
+                "squared_whitened_error": 0.024340200538790845,
+                "time_s": 23.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 116,
+                "squared_whitened_error": 0.0020223277944399153,
+                "time_s": 23.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 117,
+                "squared_whitened_error": 0.047263407595821975,
+                "time_s": 23.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 117,
+                "squared_whitened_error": 0.021145307409697174,
+                "time_s": 23.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 117,
+                "squared_whitened_error": 0.0026983416039678843,
+                "time_s": 23.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 118,
+                "squared_whitened_error": 0.03556739829798979,
+                "time_s": 23.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 118,
+                "squared_whitened_error": 0.09117077808063767,
+                "time_s": 23.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 118,
+                "squared_whitened_error": 0.002554311978374179,
+                "time_s": 23.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 119,
+                "squared_whitened_error": 0.052038253340695916,
+                "time_s": 23.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 119,
+                "squared_whitened_error": 0.05399990798949929,
+                "time_s": 23.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 119,
+                "squared_whitened_error": 0.0011992477744400508,
+                "time_s": 23.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 120,
+                "squared_whitened_error": 0.06820096764754544,
+                "time_s": 24
+            },
+            {
+                "kind": "velocity",
+                "node": 120,
+                "squared_whitened_error": 0.09740732173712674,
+                "time_s": 24
+            },
+            {
+                "kind": "imu",
+                "node": 120,
+                "squared_whitened_error": 0.0015053618448543815,
+                "time_s": 24
+            },
+            {
+                "kind": "position",
+                "node": 121,
+                "squared_whitened_error": 0.025230768172715017,
+                "time_s": 24.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 121,
+                "squared_whitened_error": 0.11549785185847976,
+                "time_s": 24.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 121,
+                "squared_whitened_error": 0.0012154189897693398,
+                "time_s": 24.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 122,
+                "squared_whitened_error": 0.008549124675782628,
+                "time_s": 24.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 122,
+                "squared_whitened_error": 0.10884552558498015,
+                "time_s": 24.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 122,
+                "squared_whitened_error": 0.00026924153826409755,
+                "time_s": 24.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 123,
+                "squared_whitened_error": 0.006333315072774854,
+                "time_s": 24.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 123,
+                "squared_whitened_error": 0.06016851904338442,
+                "time_s": 24.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 123,
+                "squared_whitened_error": 0.0003066362651293268,
+                "time_s": 24.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 124,
+                "squared_whitened_error": 0.05385398825988466,
+                "time_s": 24.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 124,
+                "squared_whitened_error": 0.045629282479902895,
+                "time_s": 24.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 124,
+                "squared_whitened_error": 0.0005384500487800735,
+                "time_s": 24.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 125,
+                "squared_whitened_error": 0.013831144130641262,
+                "time_s": 25
+            },
+            {
+                "kind": "velocity",
+                "node": 125,
+                "squared_whitened_error": 0.054092209109218525,
+                "time_s": 25
+            },
+            {
+                "kind": "imu",
+                "node": 125,
+                "squared_whitened_error": 0.00027105635030919614,
+                "time_s": 25
+            },
+            {
+                "kind": "position",
+                "node": 126,
+                "squared_whitened_error": 0.027636740246935833,
+                "time_s": 25.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 126,
+                "squared_whitened_error": 0.11095717471494301,
+                "time_s": 25.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 126,
+                "squared_whitened_error": 0.0006249070580512583,
+                "time_s": 25.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 127,
+                "squared_whitened_error": 0.005414541110489797,
+                "time_s": 25.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 127,
+                "squared_whitened_error": 0.0498991150284213,
+                "time_s": 25.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 127,
+                "squared_whitened_error": 0.0021071055377013042,
+                "time_s": 25.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 128,
+                "squared_whitened_error": 0.013549705162142295,
+                "time_s": 25.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 128,
+                "squared_whitened_error": 0.05973871388852614,
+                "time_s": 25.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 128,
+                "squared_whitened_error": 0.002051446432311585,
+                "time_s": 25.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 129,
+                "squared_whitened_error": 0.06249601413459629,
+                "time_s": 25.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 129,
+                "squared_whitened_error": 0.0675030117929496,
+                "time_s": 25.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 129,
+                "squared_whitened_error": 0.0033303187819563903,
+                "time_s": 25.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 130,
+                "squared_whitened_error": 0.020439848671530186,
+                "time_s": 26
+            },
+            {
+                "kind": "velocity",
+                "node": 130,
+                "squared_whitened_error": 0.005549571514073234,
+                "time_s": 26
+            },
+            {
+                "kind": "imu",
+                "node": 130,
+                "squared_whitened_error": 0.0026513303059076034,
+                "time_s": 26
+            },
+            {
+                "kind": "position",
+                "node": 131,
+                "squared_whitened_error": 0.03562287080682466,
+                "time_s": 26.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 131,
+                "squared_whitened_error": 0.07906122933961666,
+                "time_s": 26.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 131,
+                "squared_whitened_error": 0.002250892481222319,
+                "time_s": 26.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 132,
+                "squared_whitened_error": 0.03284122472347845,
+                "time_s": 26.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 132,
+                "squared_whitened_error": 0.0291270342090357,
+                "time_s": 26.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 132,
+                "squared_whitened_error": 0.003669187355949327,
+                "time_s": 26.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 133,
+                "squared_whitened_error": 0.05425276183580206,
+                "time_s": 26.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 133,
+                "squared_whitened_error": 0.10380233880055723,
+                "time_s": 26.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 133,
+                "squared_whitened_error": 0.003778012107889179,
+                "time_s": 26.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 134,
+                "squared_whitened_error": 0.02455351210384353,
+                "time_s": 26.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 134,
+                "squared_whitened_error": 0.07312248049108806,
+                "time_s": 26.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 134,
+                "squared_whitened_error": 0.002378643609333203,
+                "time_s": 26.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 135,
+                "squared_whitened_error": 0.01223156657370523,
+                "time_s": 27
+            },
+            {
+                "kind": "velocity",
+                "node": 135,
+                "squared_whitened_error": 0.06951358554324093,
+                "time_s": 27
+            },
+            {
+                "kind": "imu",
+                "node": 135,
+                "squared_whitened_error": 0.0010488874437484751,
+                "time_s": 27
+            },
+            {
+                "kind": "position",
+                "node": 136,
+                "squared_whitened_error": 0.037208994171519356,
+                "time_s": 27.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 136,
+                "squared_whitened_error": 0.014450773386180279,
+                "time_s": 27.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 136,
+                "squared_whitened_error": 0.0008741357527864767,
+                "time_s": 27.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 137,
+                "squared_whitened_error": 0.015951697519820025,
+                "time_s": 27.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 137,
+                "squared_whitened_error": 0.11799169970490393,
+                "time_s": 27.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 137,
+                "squared_whitened_error": 0.0005732980133266597,
+                "time_s": 27.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 138,
+                "squared_whitened_error": 0.03302280671185073,
+                "time_s": 27.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 138,
+                "squared_whitened_error": 0.03688835415651213,
+                "time_s": 27.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 138,
+                "squared_whitened_error": 0.00039131728943232877,
+                "time_s": 27.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 139,
+                "squared_whitened_error": 0.007411556038673896,
+                "time_s": 27.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 139,
+                "squared_whitened_error": 0.14838035793953738,
+                "time_s": 27.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 139,
+                "squared_whitened_error": 0.00011661688206888982,
+                "time_s": 27.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 140,
+                "squared_whitened_error": 0.05059122526526456,
+                "time_s": 28
+            },
+            {
+                "kind": "velocity",
+                "node": 140,
+                "squared_whitened_error": 0.09370356073326196,
+                "time_s": 28
+            },
+            {
+                "kind": "imu",
+                "node": 140,
+                "squared_whitened_error": 0.0011864678226030934,
+                "time_s": 28
+            },
+            {
+                "kind": "position",
+                "node": 141,
+                "squared_whitened_error": 0.05211969233888051,
+                "time_s": 28.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 141,
+                "squared_whitened_error": 0.10894228625881554,
+                "time_s": 28.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 141,
+                "squared_whitened_error": 0.0011878907838110753,
+                "time_s": 28.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 142,
+                "squared_whitened_error": 0.012846145931413682,
+                "time_s": 28.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 142,
+                "squared_whitened_error": 0.043001843656306285,
+                "time_s": 28.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 142,
+                "squared_whitened_error": 0.0015967205559745754,
+                "time_s": 28.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 143,
+                "squared_whitened_error": 0.058101201352963906,
+                "time_s": 28.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 143,
+                "squared_whitened_error": 0.0763851060921534,
+                "time_s": 28.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 143,
+                "squared_whitened_error": 0.0014226709094081373,
+                "time_s": 28.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 144,
+                "squared_whitened_error": 0.016365838178930107,
+                "time_s": 28.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 144,
+                "squared_whitened_error": 0.02399457154202566,
+                "time_s": 28.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 144,
+                "squared_whitened_error": 0.0004135614244746063,
+                "time_s": 28.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 145,
+                "squared_whitened_error": 0.029022446615434516,
+                "time_s": 29
+            },
+            {
+                "kind": "velocity",
+                "node": 145,
+                "squared_whitened_error": 0.08888457964087315,
+                "time_s": 29
+            },
+            {
+                "kind": "imu",
+                "node": 145,
+                "squared_whitened_error": 0.0003088996091273017,
+                "time_s": 29
+            },
+            {
+                "kind": "position",
+                "node": 146,
+                "squared_whitened_error": 0.023957583868048086,
+                "time_s": 29.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 146,
+                "squared_whitened_error": 0.04265474260127151,
+                "time_s": 29.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 146,
+                "squared_whitened_error": 0.00023820996256151758,
+                "time_s": 29.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 147,
+                "squared_whitened_error": 0.010150980673944805,
+                "time_s": 29.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 147,
+                "squared_whitened_error": 0.09769086956925821,
+                "time_s": 29.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 147,
+                "squared_whitened_error": 0.00019446836609758616,
+                "time_s": 29.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 148,
+                "squared_whitened_error": 0.020078547132157686,
+                "time_s": 29.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 148,
+                "squared_whitened_error": 0.03353514991147076,
+                "time_s": 29.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 148,
+                "squared_whitened_error": 0.0009175188753659024,
+                "time_s": 29.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 149,
+                "squared_whitened_error": 0.01357553897918425,
+                "time_s": 29.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 149,
+                "squared_whitened_error": 0.08676627452067193,
+                "time_s": 29.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 149,
+                "squared_whitened_error": 0.0016759662563357845,
+                "time_s": 29.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 150,
+                "squared_whitened_error": 0.052448705815837555,
+                "time_s": 30
+            },
+            {
+                "kind": "velocity",
+                "node": 150,
+                "squared_whitened_error": 0.040964798272467705,
+                "time_s": 30
+            },
+            {
+                "kind": "imu",
+                "node": 150,
+                "squared_whitened_error": 0.0017088546514155778,
+                "time_s": 30
+            },
+            {
+                "kind": "position",
+                "node": 151,
+                "squared_whitened_error": 0.061558190067712376,
+                "time_s": 30.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 151,
+                "squared_whitened_error": 0.047834191142226486,
+                "time_s": 30.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 151,
+                "squared_whitened_error": 0.0028580499753816935,
+                "time_s": 30.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 152,
+                "squared_whitened_error": 0.009663495676900342,
+                "time_s": 30.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 152,
+                "squared_whitened_error": 0.10968325653913925,
+                "time_s": 30.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 152,
+                "squared_whitened_error": 0.004097131231620006,
+                "time_s": 30.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 153,
+                "squared_whitened_error": 0.04033504448657356,
+                "time_s": 30.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 153,
+                "squared_whitened_error": 0.11713448915841734,
+                "time_s": 30.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 153,
+                "squared_whitened_error": 0.002097411293494514,
+                "time_s": 30.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 154,
+                "squared_whitened_error": 0.0656983731595166,
+                "time_s": 30.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 154,
+                "squared_whitened_error": 0.1205367782031716,
+                "time_s": 30.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 154,
+                "squared_whitened_error": 0.0019936686105966428,
+                "time_s": 30.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 155,
+                "squared_whitened_error": 0.028457592042888367,
+                "time_s": 31
+            },
+            {
+                "kind": "velocity",
+                "node": 155,
+                "squared_whitened_error": 0.06489839777377958,
+                "time_s": 31
+            },
+            {
+                "kind": "imu",
+                "node": 155,
+                "squared_whitened_error": 0.0008883192151049346,
+                "time_s": 31
+            },
+            {
+                "kind": "position",
+                "node": 156,
+                "squared_whitened_error": 0.008769358003739559,
+                "time_s": 31.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 156,
+                "squared_whitened_error": 0.15181066589488934,
+                "time_s": 31.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 156,
+                "squared_whitened_error": 0.0007772873757905615,
+                "time_s": 31.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 157,
+                "squared_whitened_error": 0.034667067349448036,
+                "time_s": 31.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 157,
+                "squared_whitened_error": 0.0678483955310167,
+                "time_s": 31.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 157,
+                "squared_whitened_error": 0.0009458145273188684,
+                "time_s": 31.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 158,
+                "squared_whitened_error": 0.02204777837706004,
+                "time_s": 31.600000143051147
+            },
+            {
+                "kind": "velocity",
+                "node": 158,
+                "squared_whitened_error": 0.05135980086819563,
+                "time_s": 31.600000143051147
+            },
+            {
+                "kind": "imu",
+                "node": 158,
+                "squared_whitened_error": 0.0009175626383233712,
+                "time_s": 31.600000143051147
+            },
+            {
+                "kind": "position",
+                "node": 159,
+                "squared_whitened_error": 0.019525564770342778,
+                "time_s": 31.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 159,
+                "squared_whitened_error": 0.14165666592678328,
+                "time_s": 31.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 159,
+                "squared_whitened_error": 0.0005609844827527078,
+                "time_s": 31.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 160,
+                "squared_whitened_error": 0.02312776843736266,
+                "time_s": 32
+            },
+            {
+                "kind": "velocity",
+                "node": 160,
+                "squared_whitened_error": 0.0512278399759215,
+                "time_s": 32
+            },
+            {
+                "kind": "imu",
+                "node": 160,
+                "squared_whitened_error": 0.0009135605828556939,
+                "time_s": 32
+            },
+            {
+                "kind": "position",
+                "node": 161,
+                "squared_whitened_error": 0.006983827001721598,
+                "time_s": 32.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 161,
+                "squared_whitened_error": 0.011874012322275003,
+                "time_s": 32.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 161,
+                "squared_whitened_error": 0.0010059884394373582,
+                "time_s": 32.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 162,
+                "squared_whitened_error": 0.025607388323001013,
+                "time_s": 32.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 162,
+                "squared_whitened_error": 0.06785749937984167,
+                "time_s": 32.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 162,
+                "squared_whitened_error": 0.0014453850754604783,
+                "time_s": 32.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 163,
+                "squared_whitened_error": 0.015022627672758642,
+                "time_s": 32.60000014305115
+            },
+            {
+                "kind": "velocity",
+                "node": 163,
+                "squared_whitened_error": 0.016977580116264997,
+                "time_s": 32.60000014305115
+            },
+            {
+                "kind": "imu",
+                "node": 163,
+                "squared_whitened_error": 0.0011305373961545263,
+                "time_s": 32.60000014305115
+            },
+            {
+                "kind": "position",
+                "node": 164,
+                "squared_whitened_error": 0.014030438053479274,
+                "time_s": 32.80000019073486
+            },
+            {
+                "kind": "velocity",
+                "node": 164,
+                "squared_whitened_error": 0.10696914128549553,
+                "time_s": 32.80000019073486
+            },
+            {
+                "kind": "imu",
+                "node": 164,
+                "squared_whitened_error": 0.0009608547380969092,
+                "time_s": 32.80000019073486
+            },
+            {
+                "kind": "position",
+                "node": 165,
+                "squared_whitened_error": 0.06572237118583565,
+                "time_s": 33
+            },
+            {
+                "kind": "velocity",
+                "node": 165,
+                "squared_whitened_error": 0.05575113461501632,
+                "time_s": 33
+            },
+            {
+                "kind": "imu",
+                "node": 165,
+                "squared_whitened_error": 0.001952783708349786,
+                "time_s": 33
+            },
+            {
+                "kind": "position",
+                "node": 166,
+                "squared_whitened_error": 0.04435216891475327,
+                "time_s": 33.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 166,
+                "squared_whitened_error": 0.04687301130369649,
+                "time_s": 33.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 166,
+                "squared_whitened_error": 0.0011025435016198864,
+                "time_s": 33.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 167,
+                "squared_whitened_error": 0.05964933250723003,
+                "time_s": 33.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 167,
+                "squared_whitened_error": 0.04063591535827877,
+                "time_s": 33.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 167,
+                "squared_whitened_error": 0.0016916838972336292,
+                "time_s": 33.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 168,
+                "squared_whitened_error": 0.04361769243258212,
+                "time_s": 33.60000014305115
+            },
+            {
+                "kind": "velocity",
+                "node": 168,
+                "squared_whitened_error": 0.06769188176258864,
+                "time_s": 33.60000014305115
+            },
+            {
+                "kind": "imu",
+                "node": 168,
+                "squared_whitened_error": 0.0008739300256151868,
+                "time_s": 33.60000014305115
+            },
+            {
+                "kind": "position",
+                "node": 169,
+                "squared_whitened_error": 0.043571745329302324,
+                "time_s": 33.80000019073486
+            },
+            {
+                "kind": "velocity",
+                "node": 169,
+                "squared_whitened_error": 0.022824939684932495,
+                "time_s": 33.80000019073486
+            },
+            {
+                "kind": "imu",
+                "node": 169,
+                "squared_whitened_error": 0.0007235058542417463,
+                "time_s": 33.80000019073486
+            },
+            {
+                "kind": "position",
+                "node": 170,
+                "squared_whitened_error": 0.02036443340177814,
+                "time_s": 34
+            },
+            {
+                "kind": "velocity",
+                "node": 170,
+                "squared_whitened_error": 0.05436327094838861,
+                "time_s": 34
+            },
+            {
+                "kind": "imu",
+                "node": 170,
+                "squared_whitened_error": 0.0009387167648891092,
+                "time_s": 34
+            },
+            {
+                "kind": "position",
+                "node": 171,
+                "squared_whitened_error": 0.0371195392707774,
+                "time_s": 34.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 171,
+                "squared_whitened_error": 0.08811329655603621,
+                "time_s": 34.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 171,
+                "squared_whitened_error": 0.0004241392599503584,
+                "time_s": 34.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 172,
+                "squared_whitened_error": 0.051315009914027716,
+                "time_s": 34.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 172,
+                "squared_whitened_error": 0.12435042461377233,
+                "time_s": 34.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 172,
+                "squared_whitened_error": 0.00043641628676126807,
+                "time_s": 34.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 173,
+                "squared_whitened_error": 0.01588434168469552,
+                "time_s": 34.60000014305115
+            },
+            {
+                "kind": "velocity",
+                "node": 173,
+                "squared_whitened_error": 0.05979857055042728,
+                "time_s": 34.60000014305115
+            },
+            {
+                "kind": "imu",
+                "node": 173,
+                "squared_whitened_error": 0.0006457588225203299,
+                "time_s": 34.60000014305115
+            },
+            {
+                "kind": "position",
+                "node": 174,
+                "squared_whitened_error": 0.048371149041521205,
+                "time_s": 34.80000019073486
+            },
+            {
+                "kind": "velocity",
+                "node": 174,
+                "squared_whitened_error": 0.053672698693880055,
+                "time_s": 34.80000019073486
+            },
+            {
+                "kind": "imu",
+                "node": 174,
+                "squared_whitened_error": 0.000522922912508669,
+                "time_s": 34.80000019073486
+            },
+            {
+                "kind": "position",
+                "node": 175,
+                "squared_whitened_error": 0.0035028246630476453,
+                "time_s": 35
+            },
+            {
+                "kind": "velocity",
+                "node": 175,
+                "squared_whitened_error": 0.05325155907247276,
+                "time_s": 35
+            },
+            {
+                "kind": "imu",
+                "node": 175,
+                "squared_whitened_error": 0.0011064569538961585,
+                "time_s": 35
+            },
+            {
+                "kind": "position",
+                "node": 176,
+                "squared_whitened_error": 0.047273988870589444,
+                "time_s": 35.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 176,
+                "squared_whitened_error": 0.10621061379362293,
+                "time_s": 35.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 176,
+                "squared_whitened_error": 0.0015533366307376136,
+                "time_s": 35.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 177,
+                "squared_whitened_error": 0.04141843267900377,
+                "time_s": 35.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 177,
+                "squared_whitened_error": 0.03830865652467408,
+                "time_s": 35.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 177,
+                "squared_whitened_error": 0.0013463247697057012,
+                "time_s": 35.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 178,
+                "squared_whitened_error": 0.034999279050331206,
+                "time_s": 35.60000014305115
+            },
+            {
+                "kind": "velocity",
+                "node": 178,
+                "squared_whitened_error": 0.14380446624055213,
+                "time_s": 35.60000014305115
+            },
+            {
+                "kind": "imu",
+                "node": 178,
+                "squared_whitened_error": 0.002355776996510129,
+                "time_s": 35.60000014305115
+            },
+            {
+                "kind": "position",
+                "node": 179,
+                "squared_whitened_error": 0.005231603759947668,
+                "time_s": 35.80000019073486
+            },
+            {
+                "kind": "velocity",
+                "node": 179,
+                "squared_whitened_error": 0.12230753888928181,
+                "time_s": 35.80000019073486
+            },
+            {
+                "kind": "imu",
+                "node": 179,
+                "squared_whitened_error": 0.0028573392835262537,
+                "time_s": 35.80000019073486
+            },
+            {
+                "kind": "position",
+                "node": 180,
+                "squared_whitened_error": 0.003705853472175183,
+                "time_s": 36
+            },
+            {
+                "kind": "velocity",
+                "node": 180,
+                "squared_whitened_error": 0.06078467988201443,
+                "time_s": 36
+            },
+            {
+                "kind": "imu",
+                "node": 180,
+                "squared_whitened_error": 0.0017544255465988929,
+                "time_s": 36
+            },
+            {
+                "kind": "position",
+                "node": 181,
+                "squared_whitened_error": 0.03978927182879725,
+                "time_s": 36.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 181,
+                "squared_whitened_error": 0.14316047548496727,
+                "time_s": 36.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 181,
+                "squared_whitened_error": 0.0012647119264320803,
+                "time_s": 36.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 182,
+                "squared_whitened_error": 0.04121429889534055,
+                "time_s": 36.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 182,
+                "squared_whitened_error": 0.05321993139856731,
+                "time_s": 36.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 182,
+                "squared_whitened_error": 0.0011274160815459978,
+                "time_s": 36.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 183,
+                "squared_whitened_error": 0.06716578928549606,
+                "time_s": 36.60000014305115
+            },
+            {
+                "kind": "velocity",
+                "node": 183,
+                "squared_whitened_error": 0.003356907673732797,
+                "time_s": 36.60000014305115
+            },
+            {
+                "kind": "imu",
+                "node": 183,
+                "squared_whitened_error": 0.0017017580304347223,
+                "time_s": 36.60000014305115
+            },
+            {
+                "kind": "position",
+                "node": 184,
+                "squared_whitened_error": 0.014987993240089032,
+                "time_s": 36.80000019073486
+            },
+            {
+                "kind": "velocity",
+                "node": 184,
+                "squared_whitened_error": 0.04204755465302057,
+                "time_s": 36.80000019073486
+            },
+            {
+                "kind": "imu",
+                "node": 184,
+                "squared_whitened_error": 0.0013080814082212073,
+                "time_s": 36.80000019073486
+            },
+            {
+                "kind": "position",
+                "node": 185,
+                "squared_whitened_error": 0.017633238704982977,
+                "time_s": 37
+            },
+            {
+                "kind": "velocity",
+                "node": 185,
+                "squared_whitened_error": 0.09844822650056025,
+                "time_s": 37
+            },
+            {
+                "kind": "imu",
+                "node": 185,
+                "squared_whitened_error": 0.0015211459110970513,
+                "time_s": 37
+            },
+            {
+                "kind": "position",
+                "node": 186,
+                "squared_whitened_error": 0.0218939390740063,
+                "time_s": 37.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 186,
+                "squared_whitened_error": 0.05414468642315194,
+                "time_s": 37.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 186,
+                "squared_whitened_error": 0.0007959972989884746,
+                "time_s": 37.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 187,
+                "squared_whitened_error": 0.010431872792727039,
+                "time_s": 37.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 187,
+                "squared_whitened_error": 0.08665030102949117,
+                "time_s": 37.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 187,
+                "squared_whitened_error": 0.0005460213746333497,
+                "time_s": 37.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 188,
+                "squared_whitened_error": 0.014099781049429985,
+                "time_s": 37.60000014305115
+            },
+            {
+                "kind": "velocity",
+                "node": 188,
+                "squared_whitened_error": 0.02613243173416987,
+                "time_s": 37.60000014305115
+            },
+            {
+                "kind": "imu",
+                "node": 188,
+                "squared_whitened_error": 0.0012707396621032987,
+                "time_s": 37.60000014305115
+            },
+            {
+                "kind": "position",
+                "node": 189,
+                "squared_whitened_error": 0.028211288736842546,
+                "time_s": 37.80000019073486
+            },
+            {
+                "kind": "velocity",
+                "node": 189,
+                "squared_whitened_error": 0.11805666227963285,
+                "time_s": 37.80000019073486
+            },
+            {
+                "kind": "imu",
+                "node": 189,
+                "squared_whitened_error": 0.0007587656767368759,
+                "time_s": 37.80000019073486
+            },
+            {
+                "kind": "position",
+                "node": 190,
+                "squared_whitened_error": 0.026889716689205652,
+                "time_s": 38
+            },
+            {
+                "kind": "velocity",
+                "node": 190,
+                "squared_whitened_error": 0.040845623461647274,
+                "time_s": 38
+            },
+            {
+                "kind": "imu",
+                "node": 190,
+                "squared_whitened_error": 0.0009463185804546101,
+                "time_s": 38
+            },
+            {
+                "kind": "position",
+                "node": 191,
+                "squared_whitened_error": 0.008897003309526724,
+                "time_s": 38.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 191,
+                "squared_whitened_error": 0.14675721699666294,
+                "time_s": 38.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 191,
+                "squared_whitened_error": 0.0008899986563454853,
+                "time_s": 38.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 192,
+                "squared_whitened_error": 0.0037013988790415286,
+                "time_s": 38.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 192,
+                "squared_whitened_error": 0.0922662713877244,
+                "time_s": 38.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 192,
+                "squared_whitened_error": 0.0017394189925352267,
+                "time_s": 38.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 193,
+                "squared_whitened_error": 0.040432619197868294,
+                "time_s": 38.60000014305115
+            },
+            {
+                "kind": "velocity",
+                "node": 193,
+                "squared_whitened_error": 0.11796946580464367,
+                "time_s": 38.60000014305115
+            },
+            {
+                "kind": "imu",
+                "node": 193,
+                "squared_whitened_error": 0.00048344180733025683,
+                "time_s": 38.60000014305115
+            },
+            {
+                "kind": "position",
+                "node": 194,
+                "squared_whitened_error": 0.06841097899267183,
+                "time_s": 38.80000019073486
+            },
+            {
+                "kind": "velocity",
+                "node": 194,
+                "squared_whitened_error": 0.07361885764095075,
+                "time_s": 38.80000019073486
+            },
+            {
+                "kind": "imu",
+                "node": 194,
+                "squared_whitened_error": 0.00022763592390559101,
+                "time_s": 38.80000019073486
+            },
+            {
+                "kind": "position",
+                "node": 195,
+                "squared_whitened_error": 0.012999425146731077,
+                "time_s": 39
+            },
+            {
+                "kind": "velocity",
+                "node": 195,
+                "squared_whitened_error": 0.1332400058820955,
+                "time_s": 39
+            },
+            {
+                "kind": "imu",
+                "node": 195,
+                "squared_whitened_error": 0.0008222088654091598,
+                "time_s": 39
+            },
+            {
+                "kind": "position",
+                "node": 196,
+                "squared_whitened_error": 0.023884225203770468,
+                "time_s": 39.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 196,
+                "squared_whitened_error": 0.07533250990799666,
+                "time_s": 39.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 196,
+                "squared_whitened_error": 0.0005782969850501756,
+                "time_s": 39.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 197,
+                "squared_whitened_error": 0.00986565639586405,
+                "time_s": 39.40000009536743
+            },
+            {
+                "kind": "velocity",
+                "node": 197,
+                "squared_whitened_error": 0.1521432889748171,
+                "time_s": 39.40000009536743
+            },
+            {
+                "kind": "imu",
+                "node": 197,
+                "squared_whitened_error": 0.0007458600223774157,
+                "time_s": 39.40000009536743
+            },
+            {
+                "kind": "position",
+                "node": 198,
+                "squared_whitened_error": 0.05113343103721424,
+                "time_s": 39.60000014305115
+            },
+            {
+                "kind": "velocity",
+                "node": 198,
+                "squared_whitened_error": 0.1514185157519674,
+                "time_s": 39.60000014305115
+            },
+            {
+                "kind": "imu",
+                "node": 198,
+                "squared_whitened_error": 0.0003003138807812923,
+                "time_s": 39.60000014305115
+            },
+            {
+                "kind": "position",
+                "node": 199,
+                "squared_whitened_error": 0.059590795543851285,
+                "time_s": 39.80000019073486
+            },
+            {
+                "kind": "velocity",
+                "node": 199,
+                "squared_whitened_error": 0.07865866253449574,
+                "time_s": 39.80000019073486
+            },
+            {
+                "kind": "imu",
+                "node": 199,
+                "squared_whitened_error": 0.00034755418661516595,
+                "time_s": 39.80000019073486
+            },
+            {
+                "kind": "bias_prior",
+                "node": 0,
+                "squared_whitened_error": 0.05968488497810991,
+                "time_s": 0
+            }
+        ],
+        "seed_comparison_performed": false,
+        "seeds": [
+            {
+                "acc_bias_m_s2": [
+                    0.030478316476872852,
+                    -0.01998005350495419,
+                    0.049919871093177616
+                ],
+                "converged": true,
+                "gyro_bias_rad_s": [
+                    0.0035127341713157728,
+                    -0.0017663767080025974,
+                    -0.00023615675842140866
+                ],
+                "heading_deg": 0,
+                "iterations": 6,
+                "objective": 11.095095993796871,
+                "position_residual_rms_m": 0.19433909861157514,
+                "velocity_residual_rms_m_s": 0.02800324644257726
+            }
+        ],
+        "selected_heading_deg": 0,
+        "start_s": 0,
+        "stationary_interval_s": [
+            0,
+            30
+        ]
+    },
+    "fixture": "stationary_spin",
+    "outcome": "succeeded",
+    "progress": [
+        "Starting heading 0 deg",
+        "Integrating IMU factors",
+        "Heading 0 deg, pass 1, iteration 1",
+        "Heading 0 deg, pass 1, iteration 2",
+        "Heading 0 deg, pass 1, iteration 3",
+        "Heading 0 deg, pass 1, iteration 4",
+        "Heading 0 deg, pass 1, iteration 5",
+        "Integrating IMU factors",
+        "Heading 0 deg, pass 2, iteration 1",
+        "Integrating IMU factors"
+    ],
+    "rows": 995,
+    "trace": {
+        "anchor_time_s": 15,
+        "converged": true,
+        "gyro_bias_rad_s": [
+            0.003503503133217865,
+            -0.0017507781352754752,
+            0.0026004278106227683
+        ],
+        "history": [
+            [
+                0,
+                0,
+                52353630.058294035,
+                1579.4388907567768
+            ],
+            [
+                0,
+                1,
+                1579.4388907567768,
+                11.176619405883967
+            ],
+            [
+                0,
+                2,
+                11.176619405883967,
+                11.095204557304301
+            ],
+            [
+                0,
+                3,
+                11.095204557304301,
+                11.095090242136267
+            ],
+            [
+                0,
+                4,
+                11.095090242136267,
+                11.095090242136267
+            ],
+            [
+                1,
+                0,
+                11.095095993796871,
+                11.095095993796871
+            ]
+        ],
+        "interval_s": [
+            0,
+            30
+        ],
+        "method": "stationary initialization only; heading unknown",
+        "start_quaternion_xyzw": [
+            0.000997853565779343,
+            0.0015154260565429032,
+            7.698671670981289e-05,
+            0.9999983509212262
+        ]
+    }
+}

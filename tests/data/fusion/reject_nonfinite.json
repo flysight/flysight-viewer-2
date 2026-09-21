@@ -1,0 +1,10 @@
+{
+    "diagnostics": {
+        "algorithm": "batch-shared-bias-v1",
+        "failure": "Nonfinite IMU/ax"
+    },
+    "fixture": "reject_nonfinite",
+    "outcome": "rejected",
+    "progress": [
+    ]
+}

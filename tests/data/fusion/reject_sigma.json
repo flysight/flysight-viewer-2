@@ -1,0 +1,10 @@
+{
+    "diagnostics": {
+        "algorithm": "batch-shared-bias-v1",
+        "failure": "GNSS measurement sigmas must be positive"
+    },
+    "fixture": "reject_sigma",
+    "outcome": "rejected",
+    "progress": [
+    ]
+}

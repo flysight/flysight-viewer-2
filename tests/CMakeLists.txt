@@ -298,6 +298,20 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
     SOURCES tst_solver_smoke.cpp solverprobe.h
     LIBS gtsam)
 
+  # Fusion kernel: golden parity against sensor-fusion-clean-port (tests/README.md section 12)
+  add_library(flysight_fusion_test_support STATIC
+    fusion/fusionfixtures.cpp fusion/fusionfixtures.h
+    fusion/fusiongolden.cpp   fusion/fusiongolden.h)
+  target_include_directories(flysight_fusion_test_support PUBLIC "${CMAKE_CURRENT_LIST_DIR}/fusion")
+  target_link_libraries(flysight_fusion_test_support PUBLIC flysight_fusion Qt${QT_VERSION_MAJOR}::Core)
+  target_compile_definitions(flysight_fusion_test_support PUBLIC
+    FLYSIGHT_FUSION_GOLDEN_DIR="${CMAKE_CURRENT_LIST_DIR}/data/fusion")
+  if(NOT MSVC)
+    target_compile_options(flysight_fusion_test_support PRIVATE -ffp-contract=off)  # fixture bits
+  endif()
+  flysight_add_fusion_test(tst_fusion_parity SOURCES tst_fusion_parity.cpp LIBS flysight_fusion_test_support)
+  flysight_add_fusion_test(tst_fusion_kernel SOURCES tst_fusion_kernel.cpp LIBS flysight_fusion_test_support gtsam)
+
   # Not a test and not installed: copied into an installed application tree
   # and run there to prove the deployed solver runtime is complete (see
   # tests/README.md).

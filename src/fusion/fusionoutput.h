@@ -1,0 +1,36 @@
+#ifndef FLYSIGHT_FUSION_FUSIONOUTPUT_H
+#define FLYSIGHT_FUSION_FUSIONOUTPUT_H
+
+#include <QJsonObject>
+#include <QString>
+
+#include "fusion/factorgraphfit.h"
+#include "fusion/fusion.h"
+#include "fusion/initializer.h"
+#include "fusion/inputadapter.h"
+#include "fusion/trajectoryreconstruction.h"
+
+// Internal to the fusion library: from the fitted trajectory to what run()
+// returns, i.e. the seventeen channels and the diagnostics JSON.
+
+namespace FlySight::Fusion::Detail {
+
+/// Fills the seventeen arrays of `result` from `dense`: UTC time restored by
+/// adding `epoch`, roll / pitch / yaw in degrees and unwrapped over the whole
+/// fit with the rule the GNSS course uses, quaternion xyzw.
+void channelsFrom(const DenseTrajectory &dense, double epoch, Result &result);
+
+/// The diagnostics of a converged fit: input audit, initializer, objective,
+/// biases, per-factor residuals, and the statements of what the outputs mean.
+QJsonObject successDiagnostics(const PreparedInput &prepared, const InitialAttitude &attitude,
+                               const FitResult &fit, const Samples &window,
+                               const DenseTrajectory &dense);
+
+/// The diagnostics of a rejected recording or a failed fit.
+QJsonObject failureDiagnostics(const QString &reason);
+
+QString toCompactJson(const QJsonObject &object);
+
+} // namespace FlySight::Fusion::Detail
+
+#endif // FLYSIGHT_FUSION_FUSIONOUTPUT_H

@@ -1,4 +1,5 @@
 #include "gnsscalculations.h"
+#include "anglehelper.h"
 #include "derivativehelper.h"
 #include "isadensity.h"
 #include "../sessiondata.h"
@@ -295,15 +296,7 @@ void Calculations::registerGnssCalculations(CalculationRegistry &registry)
         }
 
         // Unwrap phase
-        QVector<double> course;
-        course.reserve(rawDeg.size());
-        course.append(rawDeg[0]);
-        for (int i = 1; i < rawDeg.size(); ++i) {
-            double delta = rawDeg[i] - rawDeg[i - 1];
-            if (delta > 180.0) delta -= 360.0;
-            if (delta < -180.0) delta += 360.0;
-            course.append(course[i - 1] + delta);
-        }
+        QVector<double> course = Calculations::unwrapDegrees(rawDeg);
 
         // Determine reference angle from CourseRef time
         double courseRef = 0.0;

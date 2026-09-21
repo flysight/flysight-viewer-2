@@ -1,0 +1,75 @@
+#ifndef FLYSIGHT_FUSION_FUSIONSAMPLES_H
+#define FLYSIGHT_FUSION_FUSIONSAMPLES_H
+
+#include <vector>
+
+#include <gtsam/base/Vector.h>
+
+// Internal to the fusion library: the recording as the numerical stages see
+// it, the tuning constants, and every rule that decides whether a recording
+// can be fitted. A rule that is violated throws with the text that becomes the
+// rejection reason; fusion.cpp is the only place that catches.
+
+namespace FlySight::Fusion::Detail {
+
+/// Three-vectors per sample. The aligned allocator is what GTSAM's fixed-size
+/// Eigen types require inside standard containers.
+using Vectors = std::vector<gtsam::Vector3, Eigen::aligned_allocator<gtsam::Vector3>>;
+
+/// A recording, or a window of one. Times are seconds since the recording's
+/// epoch (its first GNSS fix), strictly increasing. NED frame.
+struct Samples {
+    std::vector<double> imuTime, gnssTime;
+    Vectors force;            ///< specific force, m/s^2, per IMU sample
+    Vectors gyro;             ///< angular rate, rad/s, per IMU sample
+    Vectors position;         ///< m, per GNSS fix
+    Vectors velocity;         ///< m/s, per GNSS fix
+    Vectors positionSigma;    ///< m (hAcc, hAcc, vAcc), per GNSS fix
+    Vectors velocitySigma;    ///< m/s (sAcc three times), per GNSS fix
+};
+
+/// The model's tuning. The defaults are the model; only maxGap is derived
+/// from the recording (1.6 median IMU intervals), and only a test changes
+/// anything else.
+struct Tuning {
+    double accDensity = .015, gyroDensity = .001;   ///< IMU noise densities
+    double accBiasSigma = .3, gyroBiasSigma = .03;  ///< prior on the shared biases
+    double maxGap = .025;                           ///< longest IMU interval the fit integrates across, s
+    double relativeTolerance = 1e-8;                ///< cost decrease at which a pass has settled
+    int maxIterations = 100;                        ///< per bias pass
+};
+
+constexpr double kPi = 3.14159265358979323846;
+
+/// Gravity in the NED frame, m/s^2.
+extern const gtsam::Vector3 kGravity;
+
+/// An IMU interval above this many median intervals is missing data.
+constexpr double kImuGapMedians = 1.6;
+
+/// Throws unless `times` has at least two entries, all finite and strictly
+/// increasing. Every later stage searches these arrays by bisection.
+void requireIncreasingFiniteTimes(const std::vector<double> &times);
+
+/// The median of the successive differences of `times` (validated first).
+double medianInterval(const std::vector<double> &times);
+
+/// Everything the fit assumes about the samples it is given, checked in a
+/// fixed order because the first violation is the reported reason.
+void validateSamples(const Samples &samples, const Tuning &tuning);
+
+/// The part of `recording` the graph covers: the GNSS fixes in [start, end]
+/// that lie inside IMU coverage, and the IMU samples from one before the first
+/// kept fix to one past the last. Throws when fewer than three fixes remain.
+Samples fittedWindow(const Samples &recording, double start, double end);
+
+/// The checks made on a whole prepared recording before anything indexes it.
+void requireUsableRecording(const Samples &recording, double epoch, double usableStart);
+
+/// Throws when two successive fixes of `window` are more than `limit` seconds
+/// apart: a disconnected recording is not joined across the outage.
+void requireNoGnssOutage(const Samples &window, double limit);
+
+} // namespace FlySight::Fusion::Detail
+
+#endif // FLYSIGHT_FUSION_FUSIONSAMPLES_H

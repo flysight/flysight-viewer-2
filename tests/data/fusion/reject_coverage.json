@@ -1,0 +1,10 @@
+{
+    "diagnostics": {
+        "algorithm": "batch-shared-bias-v1",
+        "failure": "Fewer than three GNSS fixes in IMU coverage"
+    },
+    "fixture": "reject_coverage",
+    "outcome": "rejected",
+    "progress": [
+    ]
+}

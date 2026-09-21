@@ -1,0 +1,10 @@
+{
+    "diagnostics": {
+        "algorithm": "batch-shared-bias-v1",
+        "failure": "Local origin index outside GNSS samples"
+    },
+    "fixture": "reject_origin",
+    "outcome": "rejected",
+    "progress": [
+    ]
+}

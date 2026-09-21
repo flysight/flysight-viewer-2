@@ -1,0 +1,10 @@
+{
+    "diagnostics": {
+        "algorithm": "batch-shared-bias-v1",
+        "failure": "Sensor fusion needs GNSS, IMU and shared UTC time conversion"
+    },
+    "fixture": "reject_too_few_fixes",
+    "outcome": "rejected",
+    "progress": [
+    ]
+}
