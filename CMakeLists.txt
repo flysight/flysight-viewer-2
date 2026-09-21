@@ -72,12 +72,21 @@ endif()
 #   - Forwarded to the application project; tests/CMakeLists.txt owns the option
 #   - Needs NumPy in the build-time Python; without it the test is registered but disabled
 #
+# FLYSIGHT_BUILD_SOLVER_DEPS: With FLYSIGHT_BUILD_THIRD_PARTY, also build GTSAM and oneTBB (default ON)
+#   - Defined in cmake/SolverSuperbuild.cmake, which pins and downloads both libraries
+#   - Set to OFF to reuse the installs in GTSAM_INSTALL_DIR / ONETBB_INSTALL_DIR
+#
+# FLYSIGHT_BUILD_FUSION_TESTS: With FLYSIGHT_BUILD_TESTS, also build the GTSAM-linked tests (default ON)
+#   - Forwarded to the application project; tests/CMakeLists.txt owns the option
+#   - With it OFF no test target references GTSAM (ctest -LE fusion is the equivalent at run time)
+#
 
 option(FLYSIGHT_BUILD_THIRD_PARTY "Build third-party dependencies" ON)
 option(FLYSIGHT_BUILD_APP "Build the main FlySight Viewer application" ON)
 option(FLYSIGHT_THIRD_PARTY_ONLY "Build only third-party dependencies (skip application)" OFF)
 option(FLYSIGHT_BUILD_TESTS "Build the FlySight Viewer test suite" OFF)
 option(FLYSIGHT_BUILD_PYTHON_TESTS "With FLYSIGHT_BUILD_TESTS: also build the embedded-Python plugin bridge test" ON)
+option(FLYSIGHT_BUILD_FUSION_TESTS "With FLYSIGHT_BUILD_TESTS: also build the GTSAM-linked tests" ON)
 
 # Handle option interaction: THIRD_PARTY_ONLY implies no app build
 if(FLYSIGHT_THIRD_PARTY_ONLY)
@@ -103,13 +112,20 @@ set(GEOGRAPHIC_INSTALL_DIR "${THIRD_PARTY_DIR}/GeographicLib-install"
 set(KDDW_INSTALL_DIR "${THIRD_PARTY_DIR}/KDDockWidgets-install"
     CACHE PATH "KDDockWidgets installation directory")
 
+set(GTSAM_INSTALL_DIR "${THIRD_PARTY_DIR}/GTSAM-install"
+    CACHE PATH "GTSAM installation directory")
+
+set(ONETBB_INSTALL_DIR "${THIRD_PARTY_DIR}/oneTBB-install"
+    CACHE PATH "oneTBB installation directory")
+
 # =============================================================================
 # Third-Party Superbuild
 # =============================================================================
 #
 # Include the third-party build definitions if enabled.
 # The ThirdPartySuperbuild.cmake file defines ExternalProject_Add calls
-# for GeographicLib and KDDockWidgets.
+# for GeographicLib and KDDockWidgets, and includes cmake/SolverSuperbuild.cmake
+# for oneTBB and GTSAM.
 #
 
 if(FLYSIGHT_BUILD_THIRD_PARTY)
@@ -147,6 +163,12 @@ if(FLYSIGHT_BUILD_APP)
         if(TARGET ext_KDDockWidgets)
             list(APPEND THIRD_PARTY_TARGETS ext_KDDockWidgets)
         endif()
+        if(TARGET ext_oneTBB)
+            list(APPEND THIRD_PARTY_TARGETS ext_oneTBB)
+        endif()
+        if(TARGET ext_GTSAM)
+            list(APPEND THIRD_PARTY_TARGETS ext_GTSAM)
+        endif()
     endif()
 
     # Build the main FlySight Viewer application
@@ -159,10 +181,13 @@ if(FLYSIGHT_BUILD_APP)
         -DTHIRD_PARTY_DIR=${THIRD_PARTY_DIR}
         -DGEOGRAPHIC_ROOT=${GEOGRAPHIC_INSTALL_DIR}
         -DKDDW_ROOT=${KDDW_INSTALL_DIR}
+        -DGTSAM_ROOT=${GTSAM_INSTALL_DIR}
+        -DONETBB_ROOT=${ONETBB_INSTALL_DIR}
         # Forwarded unconditionally so that turning the option back OFF also
         # reaches the inner cache.
         -DFLYSIGHT_BUILD_TESTS=${FLYSIGHT_BUILD_TESTS}
         -DFLYSIGHT_BUILD_PYTHON_TESTS=${FLYSIGHT_BUILD_PYTHON_TESTS}
+        -DFLYSIGHT_BUILD_FUSION_TESTS=${FLYSIGHT_BUILD_FUSION_TESTS}
     )
     if(CMAKE_PREFIX_PATH)
         list(APPEND _APP_CMAKE_ARGS "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}")
@@ -235,11 +260,18 @@ message(STATUS "  FLYSIGHT_BUILD_APP:         ${FLYSIGHT_BUILD_APP}")
 message(STATUS "  FLYSIGHT_THIRD_PARTY_ONLY:  ${FLYSIGHT_THIRD_PARTY_ONLY}")
 message(STATUS "  FLYSIGHT_BUILD_TESTS:       ${FLYSIGHT_BUILD_TESTS}")
 message(STATUS "  FLYSIGHT_BUILD_PYTHON_TESTS: ${FLYSIGHT_BUILD_PYTHON_TESTS}")
+if(DEFINED FLYSIGHT_BUILD_SOLVER_DEPS)
+    # Defined by cmake/SolverSuperbuild.cmake, so only with FLYSIGHT_BUILD_THIRD_PARTY
+    message(STATUS "  FLYSIGHT_BUILD_SOLVER_DEPS: ${FLYSIGHT_BUILD_SOLVER_DEPS}")
+endif()
+message(STATUS "  FLYSIGHT_BUILD_FUSION_TESTS: ${FLYSIGHT_BUILD_FUSION_TESTS}")
 message(STATUS "")
 message(STATUS "Path Variables:")
 message(STATUS "  THIRD_PARTY_DIR:       ${THIRD_PARTY_DIR}")
 message(STATUS "  GEOGRAPHIC_INSTALL_DIR: ${GEOGRAPHIC_INSTALL_DIR}")
 message(STATUS "  KDDW_INSTALL_DIR:      ${KDDW_INSTALL_DIR}")
+message(STATUS "  GTSAM_INSTALL_DIR:     ${GTSAM_INSTALL_DIR}")
+message(STATUS "  ONETBB_INSTALL_DIR:    ${ONETBB_INSTALL_DIR}")
 message(STATUS "")
 message(STATUS "========================================")
 message(STATUS "")

@@ -9,7 +9,8 @@
 # compiling application sources. The one exception is tst_python_bridge, which
 # compiles pluginhost.cpp and pluginadapters.cpp directly: they belong to the
 # application executable, not to flysight_core, because they need the embedded
-# interpreter.
+# interpreter. The FLYSIGHT_BUILD_FUSION_TESTS block near the end of this file
+# is the only place a test may link GTSAM.
 #
 # Conventions:
 #   - one QObject test class per executable
@@ -212,6 +213,48 @@ if(FLYSIGHT_BUILD_PYTHON_TESTS)
     message(WARNING "tst_python_bridge is DISABLED: NumPy is not importable by ${Python_EXECUTABLE} "
                     "(python -m pip install numpy) or CMake < 3.22.")
     set_tests_properties(tst_python_bridge PROPERTIES DISABLED TRUE)
+  endif()
+endif()
+
+# ---- GTSAM-linked (fusion) tests -------------------------------------------
+# Everything that links GTSAM is defined inside this block, so with the option
+# OFF no test target references GTSAM, and `ctest -LE fusion` is the GTSAM-free
+# run of a build that has them. flysight_test_support and flysight_add_test()
+# know nothing about the solver.
+#
+# The gtsam target, flysight_solver_stack() and flysight_solver_test_environment()
+# come from cmake/SolverDependencies.cmake (included by src/CMakeLists.txt).
+option(FLYSIGHT_BUILD_FUSION_TESTS "Build and run the GTSAM-linked tests" ON)
+if(FLYSIGHT_BUILD_FUSION_TESTS)
+  # flysight_add_fusion_test(<name> SOURCES <files...> [LIBS <targets...>] [ENVIRONMENT <VAR=value...>])
+  #
+  # flysight_add_test() plus what a test that runs the solver needs: a 64 MiB
+  # main-thread stack, the solver libraries on the library search path, the
+  # "fusion" label, a longer timeout, and /bigobj for GTSAM's and Eigen's
+  # templates. It does not link GTSAM itself: the caller names what it links
+  # in LIBS (gtsam, or a library that carries it).
+  function(flysight_add_fusion_test name)
+    flysight_add_test(${name} ${ARGN})
+    flysight_solver_stack(${name})
+    flysight_solver_test_environment(${name})
+    set_tests_properties(${name} PROPERTIES LABELS "core;fusion" TIMEOUT 600)
+    if(MSVC)
+      target_compile_options(${name} PRIVATE /bigobj)
+    endif()
+  endfunction()
+
+  # Solver dependencies: the exported target compiles, links, loads and solves
+  flysight_add_fusion_test(tst_solver_smoke
+    SOURCES tst_solver_smoke.cpp solverprobe.h
+    LIBS gtsam)
+
+  # Not a test and not installed: copied into an installed application tree
+  # and run there to prove the deployed solver runtime is complete (see
+  # tests/README.md).
+  add_executable(solver_deploy_probe solver_deploy_probe.cpp solverprobe.h)
+  target_link_libraries(solver_deploy_probe PRIVATE gtsam)
+  if(MSVC)
+    target_compile_options(solver_deploy_probe PRIVATE /bigobj)
   endif()
 endif()
 

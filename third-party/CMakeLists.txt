@@ -47,6 +47,12 @@ set(GEOGRAPHIC_INSTALL_DIR "${THIRD_PARTY_DIR}/GeographicLib-install"
 set(KDDW_INSTALL_DIR "${THIRD_PARTY_DIR}/KDDockWidgets-install"
     CACHE PATH "KDDockWidgets installation directory")
 
+set(GTSAM_INSTALL_DIR "${THIRD_PARTY_DIR}/GTSAM-install"
+    CACHE PATH "GTSAM installation directory")
+
+set(ONETBB_INSTALL_DIR "${THIRD_PARTY_DIR}/oneTBB-install"
+    CACHE PATH "oneTBB installation directory")
+
 # =============================================================================
 # Include ThirdPartySuperbuild.cmake
 # =============================================================================
@@ -101,10 +107,16 @@ message(STATUS "")
 message(STATUS "Install Directories:")
 message(STATUS "  GeographicLib: ${GEOGRAPHIC_INSTALL_DIR}")
 message(STATUS "  KDDockWidgets: ${KDDW_INSTALL_DIR}")
+message(STATUS "  GTSAM:         ${GTSAM_INSTALL_DIR}")
+message(STATUS "  oneTBB:        ${ONETBB_INSTALL_DIR}")
 message(STATUS "")
 message(STATUS "Build Targets:")
 message(STATUS "  ext_GeographicLib - Build GeographicLib")
 message(STATUS "  ext_KDDockWidgets - Build KDDockWidgets")
+if(TARGET ext_GTSAM)
+    message(STATUS "  ext_oneTBB        - Build oneTBB")
+    message(STATUS "  ext_GTSAM         - Build GTSAM (after ext_oneTBB)")
+endif()
 message(STATUS "")
 message(STATUS "Clean Targets:")
 message(STATUS "  clean-all           - Clean all third-party (alias for clean-third-party)")

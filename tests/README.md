@@ -27,7 +27,7 @@ The tests are not a standalone project. `tests/` is added by
 test is registered with CTest. Test executables have no install rules, so
 packages are the same whether or not the option is set.
 
-There are 24 executables plus the audit.
+There are 25 executables plus the audit.
 
 **Harness**
 
@@ -87,6 +87,26 @@ There are 24 executables plus the audit.
 | Test | Covers |
 |------|--------|
 | `tst_python_bridge` | The Python plugin bridge through the real embedded interpreter and the real `flysight_cpp_bridge` module (acceptance 17, plugin half): effective reads in single-output plugins, declared-read diagnostics (`UndeclaredInputError`), effective values and units matching C++, no source access (a `source` key is an unknown kind; the view has no source methods), the multi-output form running once, exceptions and malformed output giving a clean unavailable result with negative caching, returned arrays copied, explicit key decoding with per-plugin rejection, plugin-before-built-in precedence, the bundled `imu_tilt.py` example. See "The embedded-Python bridge test" below. `pluginWorkflowThroughModel`: a plugin-fed logbook column through import, save and restart (acceptance 17 / 19) |
+
+**Solver dependencies**
+
+| Test | Covers |
+|------|--------|
+| `tst_solver_smoke` | GTSAM's exported CMake target compiles, links and runs in a test: the install is the shipped configuration (`4.3a0`, TBB on, bundled Eigen 3.4, built without Boost: `GTSAM_ENABLE_BOOST_SERIALIZATION` and `GTSAM_USE_BOOST_FEATURES` are `0`), a small pose graph optimizes to its analytic answer (Eigen, METIS, TBB, library loading), and the main thread really has the 64 MiB stack of `flysight_solver_stack()` (the test uses 48 MiB of it; with a default stack it crashes). Label `fusion`. Nothing from the fusion model is involved |
+
+`solver_deploy_probe` is built with it but is not a test and is not counted
+above: a plain executable (no Qt) around the same pose-graph exercise
+(`solverprobe.h`). A QtTest executable cannot run inside an installed
+application tree, because Qt Test is not deployed; this one can. Copy it into
+the installed tree, run it with a minimal `PATH`, and remove it again: it
+starts only if every solver library was deployed.
+
+```bash
+# Windows (Git Bash); the CI workflow does the same on non-tag builds
+cp build/FlySightViewer-build/Release/solver_deploy_probe.exe build/install/
+(cd build/install && PATH=/c/Windows/System32 ./solver_deploy_probe.exe)   # prints "solver probe ok, error=..."
+rm build/install/solver_deploy_probe.exe
+```
 
 **Audit**
 
@@ -179,16 +199,19 @@ where they run. CMake 3.22 or newer is needed for the automatic DLL and
 |--------|---------|--------|
 | `FLYSIGHT_BUILD_TESTS` | `OFF` | Adds `tests/` to the application build. No install rules: packaging is unaffected |
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | Only with the first: also build `tst_python_bridge`. `OFF` removes the target. If NumPy is missing from the build-time Python the test is still built but listed as **Disabled**, not omitted (section 5) |
+| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | Only with the first: also build the GTSAM-linked tests (`tst_solver_smoke`) and `solver_deploy_probe`, all defined in one block of `tests/CMakeLists.txt` through `flysight_add_fusion_test()`. `OFF` removes the targets, and then no test target references GTSAM. Forwarded by the root `CMakeLists.txt` like the other two |
 
 Both are forwarded by the root (superbuild) `CMakeLists.txt` to the application
 project, unconditionally, so switching one back reaches the inner cache too.
 
 CTest labels: every executable has `core`; `tst_python_bridge` also `python`;
-`tst_session_oracle` also `oracle`; `audit_cleanup` has `audit`.
+`tst_session_oracle` also `oracle`; `audit_cleanup` has `audit`. GTSAM-linked
+tests also have `fusion`, so `ctest -LE fusion` is the GTSAM-free run.
 
 ```bash
 ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -L core
 ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -LE python   # everything but the Python bridge
+ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -LE fusion   # everything that does not link GTSAM
 ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -L oracle
 ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -L audit
 ```

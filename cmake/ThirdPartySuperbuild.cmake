@@ -3,7 +3,8 @@
 # =============================================================================
 #
 # This file defines ExternalProject targets for the third-party dependencies:
-# GeographicLib and KDDockWidgets. It implements a superbuild pattern that
+# GeographicLib and KDDockWidgets, and (through SolverSuperbuild.cmake) the
+# solver dependencies oneTBB and GTSAM. It implements a superbuild pattern that
 # builds these libraries with proper dependency handling.
 #
 # This replaces the Windows-specific BUILD.BAT with a portable, cross-platform
@@ -12,6 +13,7 @@
 # Build Order and Dependencies:
 #   1. GeographicLib  - No dependencies
 #   2. KDDockWidgets  - No dependencies, can build in parallel
+#   3. oneTBB, GTSAM  - See SolverSuperbuild.cmake (GTSAM depends on oneTBB)
 #
 # Each library is built in the configuration specified by CMAKE_BUILD_TYPE.
 # For local development requiring both Debug and Release, run the build twice
@@ -138,6 +140,17 @@ ExternalProject_Add(ext_KDDockWidgets
 )
 
 # =============================================================================
+# ext_oneTBB and ext_GTSAM - Solver dependencies
+# =============================================================================
+#
+# Defined in their own file, together with their pinned revisions and the
+# FLYSIGHT_BUILD_SOLVER_DEPS option. With that option OFF the file defines no
+# target, which is why everything below tests for the targets.
+#
+
+include("${CMAKE_CURRENT_LIST_DIR}/SolverSuperbuild.cmake")
+
+# =============================================================================
 # Clean Targets
 # =============================================================================
 #
@@ -167,6 +180,10 @@ add_custom_target(clean-third-party
     COMMENT "Cleaning all third-party build and install directories..."
 )
 
+if(TARGET clean-GTSAM)
+    add_dependencies(clean-third-party clean-oneTBB clean-GTSAM)
+endif()
+
 # =============================================================================
 # Build Status Summary
 # =============================================================================
@@ -182,16 +199,30 @@ message(STATUS "")
 message(STATUS "ExternalProject Targets:")
 message(STATUS "  ext_GeographicLib -> ${GEOGRAPHIC_INSTALL_DIR}")
 message(STATUS "  ext_KDDockWidgets -> ${KDDW_INSTALL_DIR}")
+if(TARGET ext_GTSAM)
+    message(STATUS "  ext_oneTBB        -> ${ONETBB_INSTALL_DIR}")
+    message(STATUS "  ext_GTSAM         -> ${GTSAM_INSTALL_DIR}")
+endif()
 message(STATUS "")
 message(STATUS "Dependency Graph:")
 message(STATUS "  ext_GeographicLib : (no dependencies)")
 message(STATUS "  ext_KDDockWidgets: (no dependencies)")
+if(TARGET ext_GTSAM)
+    message(STATUS "  ext_oneTBB       : (no dependencies)")
+    message(STATUS "  ext_GTSAM        : depends on ext_oneTBB")
+endif()
 message(STATUS "")
 message(STATUS "Build Order:")
 message(STATUS "  1. ext_GeographicLib and ext_KDDockWidgets (in parallel)")
+if(TARGET ext_GTSAM)
+    message(STATUS "  2. ext_oneTBB, then ext_GTSAM (independent of step 1)")
+endif()
 message(STATUS "")
 message(STATUS "Clean Targets Available:")
 message(STATUS "  clean-GeographicLib, clean-KDDockWidgets, clean-third-party")
+if(TARGET clean-GTSAM)
+    message(STATUS "  clean-oneTBB, clean-GTSAM")
+endif()
 message(STATUS "")
 message(STATUS "----------------------------------------")
 message(STATUS "")

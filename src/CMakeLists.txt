@@ -34,6 +34,7 @@ endif()
 # Third-party path variables (defined once, cached, can be overridden):
 #   THIRD_PARTY_DIR, QCUSTOMPLOT_ROOT, QCUSTOMPLOT_DIR,
 #   GEOGRAPHIC_ROOT, KDDW_ROOT, BOOST_ROOT, BOOST_LIBRARYDIR
+#   GTSAM_ROOT, ONETBB_ROOT (consumed by cmake/SolverDependencies.cmake)
 #
 # Build configuration variables:
 #   GOOGLE_MAPS_API_KEY  - Google Maps JavaScript API key (CACHE STRING)
@@ -65,6 +66,8 @@ set(QCUSTOMPLOT_ROOT "${THIRD_PARTY_DIR}/QCustomPlot"         CACHE PATH "QCusto
 set(QCUSTOMPLOT_DIR  "${QCUSTOMPLOT_ROOT}/QCustomPlot"        CACHE PATH "QCustomPlot sources dir")
 set(GEOGRAPHIC_ROOT  "${THIRD_PARTY_DIR}/GeographicLib-install" CACHE PATH "GeographicLib install prefix")
 set(KDDW_ROOT      "${THIRD_PARTY_DIR}/KDDockWidgets-install" CACHE PATH "KDDockWidgets install prefix")
+set(GTSAM_ROOT     "${THIRD_PARTY_DIR}/GTSAM-install"         CACHE PATH "GTSAM install prefix")
+set(ONETBB_ROOT    "${THIRD_PARTY_DIR}/oneTBB-install"        CACHE PATH "oneTBB install prefix")
 
 # Google Maps API key for the embedded map view
 set(GOOGLE_MAPS_API_KEY "" CACHE STRING "Google Maps JavaScript API key")
@@ -219,6 +222,11 @@ message(STATUS "  Libraries: ${GeographicLib_LIBRARIES}")
 # platform-appropriate defaults.
 
 find_package(Boost REQUIRED)
+
+# GTSAM and oneTBB (prebuilt by superbuild): exported target "gtsam", the
+# runtime libraries to deploy, and the flysight_solver_* helpers. Must stay
+# after the GeographicLib lookup above; the module explains why.
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/SolverDependencies.cmake")
 
 # KDDockWidgets (KDDW)
 find_package(KDDockWidgets-qt6 CONFIG REQUIRED)
@@ -665,6 +673,7 @@ if(WIN32)
 
   # Deploy third-party DLLs (GeographicLib, KDDockWidgets, Boost)
   include("${FLYSIGHT_CMAKE_DIR}/DeployThirdPartyWindows.cmake")
+  flysight_install_solver_runtime(".")
 
   # Bundle MSVC runtime DLLs (vcruntime140.dll, msvcp140.dll, etc.) directly
   # into the application folder for app-local deployment. This is the Microsoft-
@@ -758,6 +767,7 @@ if(APPLE)
       KDDW_ROOT "${KDDW_ROOT}"
     )
   endif()
+  flysight_install_solver_runtime("FlySightViewer.app/Contents/Frameworks")
 
   # Run rpath fixing script after installation
   install(CODE "
@@ -945,6 +955,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
   # Third-party library deployment
   include("${FLYSIGHT_CMAKE_DIR}/DeployThirdPartyLinux.cmake" OPTIONAL)
+  flysight_install_solver_runtime("${FLYSIGHT_APPDIR_USR}/lib")
 
   # linuxdeployqt integration (optional enhancement)
   include("${FLYSIGHT_CMAKE_DIR}/RunLinuxDeployQt.cmake" OPTIONAL)

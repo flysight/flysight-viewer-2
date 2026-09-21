@@ -138,6 +138,8 @@ These flags are forwarded automatically to sub-builds.
 
 This is the default build mode that builds all third-party dependencies (GeographicLib, KDDockWidgets) and the main application.
 
+It also builds the solver dependencies of the sensor fusion, oneTBB and GTSAM. Their sources are not part of the repository: the first build downloads the pinned revisions into `<build>/solver-sources/`, which needs `git` and network access, and GTSAM takes tens of minutes to compile. See [Solver dependencies (GTSAM, oneTBB)](#solver-dependencies-gtsam-onetbb) for how to reuse an existing install instead.
+
 **Windows:**
 
 ```bash
@@ -217,6 +219,8 @@ cmake --build build
 | `GOOGLE_MAPS_API_KEY` | (none) | Google Maps JavaScript API key for the map view |
 | `FLYSIGHT_BUILD_TESTS` | `OFF` | Build the Qt Test suite under `tests/`; run with CTest |
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | With tests enabled: build the embedded-Python plugin bridge test (needs NumPy in the build interpreter) |
+| `FLYSIGHT_BUILD_SOLVER_DEPS` | `ON` | With `FLYSIGHT_BUILD_THIRD_PARTY`: also download and build oneTBB and GTSAM. `OFF` reuses the installs in `GTSAM_INSTALL_DIR` / `ONETBB_INSTALL_DIR` |
+| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | With tests enabled: build the GTSAM-linked tests (`tst_solver_smoke`) and `solver_deploy_probe`. With `OFF` no test target references GTSAM |
 
 **Path Variables:**
 
@@ -226,6 +230,21 @@ cmake --build build
 | `GEOGRAPHIC_INSTALL_DIR` | `<third-party>/GeographicLib-install` | GeographicLib installation directory |
 | `KDDW_INSTALL_DIR` | `<third-party>/KDDockWidgets-install` | KDDockWidgets installation directory |
 | `BOOST_ROOT` | Platform-dependent | Boost root directory |
+| `GTSAM_INSTALL_DIR` | `<third-party>/GTSAM-install` | GTSAM installation directory (built there, and handed to the application build as `GTSAM_ROOT`) |
+| `ONETBB_INSTALL_DIR` | `<third-party>/oneTBB-install` | oneTBB installation directory (handed to the application build as `ONETBB_ROOT`) |
+| `GTSAM_ROOT`, `ONETBB_ROOT` | `<third-party>/GTSAM-install`, `<third-party>/oneTBB-install` | The same two prefixes when configuring `src/` directly instead of the root project |
+| `GTSAM_SOURCE_DIR`, `ONETBB_SOURCE_DIR` | (empty) | Existing source tree to build instead of downloading the pinned revision (offline builds) |
+
+#### Solver dependencies (GTSAM, oneTBB)
+
+The sensor fusion solver is [GTSAM](https://github.com/borglab/gtsam) 4.3a0 with [oneTBB](https://github.com/uxlfoundation/oneTBB) 2022.1.0. Both are built by the third-party superbuild (targets `ext_oneTBB`, then `ext_GTSAM`) with the options in `cmake/SolverSuperbuild.cmake`.
+
+- **Pinned revisions.** Each library is pinned to a full commit SHA in `cmake/SolverSuperbuild.cmake` and downloaded into `<build>/solver-sources/`; build directories are `<build>/oneTBB-build` and `<build>/gtsam-build`. To move a pin, edit the SHA there. The CI cache key hashes that file, so it follows. To build an existing source tree offline, pass `-DGTSAM_SOURCE_DIR=<dir>` / `-DONETBB_SOURCE_DIR=<dir>`.
+- **Reusing an install.** `-DFLYSIGHT_BUILD_SOLVER_DEPS=OFF` defines none of the solver targets and leaves GeographicLib and KDDockWidgets in the superbuild; the application then uses whatever is installed in `GTSAM_INSTALL_DIR` and `ONETBB_INSTALL_DIR`. Combine it with those two variables to keep a solver install outside `third-party/`.
+- **GTSAM is built without Boost** (`GTSAM_ENABLE_BOOST_SERIALIZATION=OFF`, `GTSAM_USE_BOOST_FEATURES=OFF`). It needs no Boost to build, to configure against, or at run time. The application refuses a Boost-enabled GTSAM install at configure time (`cmake/SolverDependencies.cmake`).
+- **Exported target.** Code that uses GTSAM links the exported CMake target `gtsam` and nothing else. The target supplies GTSAM's ABI definitions and its own bundled Eigen headers; do not add another Eigen to the include path of such a target.
+- **Debug builds.** The exported targets only carry the configurations that were built. A Debug application build needs a Debug build of both libraries as well (`cmake --build build --config Debug`); against a Release-only install it would silently mix MSVC runtimes.
+- **Helpers** (`cmake/SolverDependencies.cmake`): `flysight_solver_stack(<target>)` gives an executable's main thread the 64 MiB stack a large fit needs (on Linux through `cmake/solver_stack_linux.cpp`), `flysight_solver_test_environment(<test>)` puts the solver libraries on a CTest test's library search path, and `flysight_install_solver_runtime(<destination>)` deploys the runtime libraries selected by exported target.
 
 ### Running the Tests
 
@@ -257,6 +276,8 @@ After a successful build:
 |-----------|-------------------|
 | GeographicLib | `third-party/GeographicLib-install/` |
 | KDDockWidgets | `third-party/KDDockWidgets-install/` |
+| oneTBB | `third-party/oneTBB-install/` (`ONETBB_INSTALL_DIR`) |
+| GTSAM | `third-party/GTSAM-install/` (`GTSAM_INSTALL_DIR`) |
 | Application | `build/` (executables in build root) |
 
 ## Clean Targets
@@ -268,6 +289,8 @@ Clean individual third-party components:
 ```bash
 cmake --build build --target clean-GeographicLib
 cmake --build build --target clean-KDDockWidgets
+cmake --build build --target clean-oneTBB
+cmake --build build --target clean-GTSAM
 cmake --build build --target clean-third-party   # all third-party
 ```
 
@@ -283,6 +306,7 @@ For a complete reset, delete the build and install directories:
 Remove-Item -Recurse -Force build
 Remove-Item -Recurse -Force third-party\GeographicLib-build, third-party\GeographicLib-install
 Remove-Item -Recurse -Force third-party\KDDockWidgets-build, third-party\KDDockWidgets-install
+Remove-Item -Recurse -Force third-party\GTSAM-install, third-party\oneTBB-install
 ```
 
 **macOS / Linux:**
@@ -290,6 +314,7 @@ Remove-Item -Recurse -Force third-party\KDDockWidgets-build, third-party\KDDockW
 ```bash
 rm -rf build
 rm -rf third-party/{GeographicLib,KDDockWidgets}-{build,install}
+rm -rf third-party/{GTSAM,oneTBB}-install
 ```
 
 ### Clean Target Reference
@@ -298,6 +323,8 @@ rm -rf third-party/{GeographicLib,KDDockWidgets}-{build,install}
 |--------|-------------|
 | `clean-GeographicLib` | Removes `third-party/GeographicLib-build` and `third-party/GeographicLib-install` |
 | `clean-KDDockWidgets` | Removes `third-party/KDDockWidgets-build` and `third-party/KDDockWidgets-install` |
+| `clean-oneTBB` | Removes `<build>/oneTBB-build` and the oneTBB install directory (only with `FLYSIGHT_BUILD_SOLVER_DEPS=ON`) |
+| `clean-GTSAM` | Removes `<build>/gtsam-build` and the GTSAM install directory (only with `FLYSIGHT_BUILD_SOLVER_DEPS=ON`) |
 | `clean-third-party` | Cleans all third-party components |
 
 ## Project Structure
@@ -312,6 +339,10 @@ flysight-viewer-2/
 │   └── CALCULATIONS.md                    # Developer note: writing a registered calculation
 ├── cmake/
 │   ├── ThirdPartySuperbuild.cmake         # ExternalProject definitions for GeographicLib, KDDockWidgets
+│   ├── SolverSuperbuild.cmake             # Pinned oneTBB and GTSAM: download, options, clean targets
+│   ├── SolverDependencies.cmake           # Finds GTSAM (exported target), solver runtime deployment,
+│   │                                      #   64 MiB stack and test-environment helpers
+│   ├── solver_stack_linux.cpp             # Linux half of flysight_solver_stack()
 │   ├── BoostDiscovery.cmake               # Cross-platform Boost discovery
 │   ├── QtPathDiscovery.cmake              # Finds Qt plugin/QML directories
 │   ├── GenerateIcon.cmake                 # Application icon generation
@@ -369,6 +400,8 @@ flysight-viewer-2/
 │   └── pybind11/                          # pybind11 submodule
 ├── third-party/GeographicLib-install/     # [Build artifact] GeographicLib installation
 ├── third-party/KDDockWidgets-install/     # [Build artifact] KDDockWidgets installation
+├── third-party/oneTBB-install/            # [Build artifact] oneTBB installation
+├── third-party/GTSAM-install/             # [Build artifact] GTSAM installation
 └── build/                                 # [Build artifact] CMake build directory
 ```
 
@@ -392,6 +425,7 @@ FlySight Viewer deploys as a self-contained application with a bundled Python in
 | Qt libraries & plugins | `qt_generate_deploy_app_script` | `qt_generate_deploy_app_script` | `qt_generate_deploy_app_script` |
 | map.html (Google Maps) | Installed to `resources/` | Installed to `Resources/resources/` | Installed to `usr/resources/` |
 | Third-party libs (GeographicLib, KDDW) | DLLs copied to app root | dylibs copied to `Frameworks/` | `.so` files copied to `usr/lib/` |
+| Solver runtime (GTSAM, METIS, Cephes, TBB, TBB allocator), selected by exported target | `gtsam.dll`, `metis-gtsam.dll`, `cephes-gtsam.dll`, `tbb12.dll`, `tbbmalloc.dll` in app root | `libgtsam`, `libmetis-gtsam`, `libcephes-gtsam`, `libtbb`, `libtbbmalloc` dylibs in `Frameworks/` | the same five `.so` files in `usr/lib/` |
 | Python runtime | Embeddable package downloaded | python-build-standalone downloaded | python-build-standalone downloaded |
 | Library path fixups | N/A (flat DLL layout) | `install_name_tool` (automatic) | `patchelf` (automatic) |
 | `qt.conf` | Generated in app root | Generated in `Resources/` | Generated in `usr/bin/` |
