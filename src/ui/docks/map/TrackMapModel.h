@@ -21,7 +21,11 @@ class SessionData;
  *
  * Each row corresponds to one visible session.
  * The "trackPoints" role is a QVariantList of QVariantMaps:
- *   { "lat": <double>, "lon": <double> }
+ *   { "lat": <double>, "lon": <double>, "t": <UTC seconds> }
+ *
+ * A visible recording whose "Simplified" track is unavailable (no local-frame
+ * origin) or shorter than two points contributes no row and nothing to the
+ * bounds. With no row, hasData is false and center and bounds are all 0.
  *
  * Center and bounds are exposed as plain doubles so that QWebChannel
  * can serialize them natively (no QGeoCoordinate / QGeoRectangle).

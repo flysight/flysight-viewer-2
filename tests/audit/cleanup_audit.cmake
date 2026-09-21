@@ -165,6 +165,14 @@ expect_only("one authority: SCHEMA_VER literal" "\"SCHEMA_VER\"" "^src/conversio
 expect_count("one authority: compatibility marker" "CalculationCompatibilityVersion *=" 1 src)
 expect_only("one authority: number formatting" "FloatingPointShortest" "^src/csvformat\\.cpp$" src)
 expect_none("one authority: number formatting" "<charconv>" src)
+# The recording-wide local frame is the only projection: the simplified track
+# (and anything else that needs metres) consumes Local/..., never its own.
+# Allow: a second legitimate user of LocalCartesian is added to the
+# allowed-file regex - after asking why it cannot read Local/... instead.
+expect_only("one authority: local projection" "LocalCartesian"
+  "^src/calculations/localcoordinatecalculations\.cpp$" src)
+expect_none("simplified track: shared frame only" "GeographicLib|boost"
+  "src/calculations/simplificationcalculations.*")
 
 # ─────────────────────────────── nothing infers the schema
 # Allow: the first rule bans file-name/date vocabulary (fileName, filePath,

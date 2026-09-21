@@ -1,124 +1,184 @@
 #include "simplificationcalculations.h"
+#include "registration.h"
 #include "../sessiondata.h"
 #include "../dependencykey.h"
 #include <QVector>
-#include <boost/geometry.hpp>
-#include <boost/geometry/geometries/point_xy.hpp>
-#include <boost/geometry/geometries/linestring.hpp>
-#include <GeographicLib/LocalCartesian.hpp>
-#include "registration.h"
-#include <optional>
-#include <vector>
+#include <algorithm>
 #include <cmath>
+#include <utility>
+#include <vector>
 
 using namespace FlySight;
 
 namespace {
 
-struct SimplifiedTrack {
-    QVector<double> lat, lon, hMSL, time;
-};
+// Epsilon: 0.5 meters (sensor noise floor)
+constexpr double kToleranceMetres = 0.5;
 
-// Ramer-Douglas-Peucker simplification of the ground track (epsilon 0.5 m in
-// a local Cartesian projection). The simplified points are a subset of the
-// original points, so altitude and time are taken from the matching sample.
-std::optional<SimplifiedTrack> simplifyTrack(const QVector<double> &rawLat,
-                                             const QVector<double> &rawLon,
-                                             const QVector<double> &rawAlt,
-                                             const QVector<double> &rawTime)
+// The samples the track can use: those whose three local coordinates are all
+// finite, ascending. Anything else is left out and the path is joined across
+// it, so one invalid fix does not poison the track.
+QVector<qsizetype> finiteSampleIndices(const QVector<double> &north,
+                                       const QVector<double> &east,
+                                       const QVector<double> &down)
 {
-    if (rawLat.isEmpty() || rawLat.size() != rawLon.size() ||
-        rawLat.size() != rawAlt.size() || rawLat.size() != rawTime.size()) {
-        return std::nullopt;
+    QVector<qsizetype> indices;
+    indices.reserve(north.size());
+    for (qsizetype i = 0; i < north.size(); ++i) {
+        if (std::isfinite(north[i]) && std::isfinite(east[i]) && std::isfinite(down[i]))
+            indices.append(i);
     }
+    return indices;
+}
 
-    namespace bg = boost::geometry;
-    using PointXY = bg::model::d2::point_xy<double>;
-    using LineString = bg::model::linestring<PointXY>;
+// Horizontal squared distance from sample i to the segment first-last. The
+// clamp makes it a distance to the segment, not to the infinite line; with
+// coincident ends (a closed track, duplicate positions) it degenerates to the
+// distance to that point.
+double squaredDistanceToSegment(const QVector<double> &north,
+                                const QVector<double> &east,
+                                qsizetype first, qsizetype last, qsizetype i)
+{
+    const double dn = north[last] - north[first];
+    const double de = east[last] - east[first];
+    const double lengthSquared = dn * dn + de * de;
 
-    // Project to Local Cartesian (metres), centred on the first point
-    GeographicLib::LocalCartesian proj(rawLat[0], rawLon[0], rawAlt[0]);
+    const double n = north[i] - north[first];
+    const double e = east[i] - east[first];
+    const double t = lengthSquared > 0.0
+        ? std::clamp((n * dn + e * de) / lengthSquared, 0.0, 1.0)
+        : 0.0;
 
-    LineString pathInMeters;
-    pathInMeters.reserve(rawLat.size());
+    const double rn = n - t * dn;
+    const double re = e - t * de;
+    return rn * rn + re * re;
+}
 
-    for (int i = 0; i < rawLat.size(); ++i) {
-        double x, y, z;
-        proj.Forward(rawLat[i], rawLon[i], rawAlt[i], x, y, z);
+// Ramer-Douglas-Peucker over the positions of the candidate samples, returning
+// the candidates that survive, ascending. It retains sample indices, not
+// points: two samples at one position (a stationary start or end) stay two
+// samples, and nothing has to be matched back to the recording afterwards.
+QVector<qsizetype> retainedIndices(const QVector<double> &north,
+                                   const QVector<double> &east,
+                                   const QVector<qsizetype> &candidates)
+{
+    // One point stays one point; two stay two, also when they coincide
+    const qsizetype count = candidates.size();
+    if (count <= 2)
+        return candidates;
 
-        // RDP here is a 2D simplification of the ground track, which is
-        // sufficient for maps.
-        bg::append(pathInMeters, PointXY(x, y));
-    }
+    QVector<bool> keep(count, false);
+    keep[0] = true;
+    keep[count - 1] = true;
 
-    // Epsilon: 0.5 meters (sensor noise floor)
-    LineString simplifiedPath;
-    bg::simplify(pathInMeters, simplifiedPath, 0.5);
+    // An explicit stack of spans (positions in candidates), not recursion: a
+    // long recording that spirals can nest tens of thousands deep.
+    std::vector<std::pair<qsizetype, qsizetype>> pending;
+    pending.emplace_back(0, count - 1);
 
-    // RDP preserves vertices, so each simplified point exists in the original
-    // path, in order. Search forward from the last match, comparing in
-    // projected metre space to avoid floating-point fuzziness in lat/lon.
-    SimplifiedTrack out;
-    out.lat.reserve(simplifiedPath.size());
-    out.lon.reserve(simplifiedPath.size());
-    out.hMSL.reserve(simplifiedPath.size());
-    out.time.reserve(simplifiedPath.size());
+    while (!pending.empty()) {
+        const auto [first, last] = pending.back();
+        pending.pop_back();
 
-    size_t rawIdx = 0;
-    for (const auto& pt : simplifiedPath) {
-        double targetX = pt.x();
-        double targetY = pt.y();
-
-        for (; rawIdx < size_t(rawLat.size()); ++rawIdx) {
-            double x, y, z;
-            proj.Forward(rawLat[rawIdx], rawLon[rawIdx], rawAlt[rawIdx], x, y, z);
-
-            if (std::abs(x - targetX) < 1e-3 && std::abs(y - targetY) < 1e-3) {
-                // Match found
-                out.lat.append(rawLat[rawIdx]);
-                out.lon.append(rawLon[rawIdx]);
-                out.hMSL.append(rawAlt[rawIdx]);
-                out.time.append(rawTime[rawIdx]);
-                break;
+        // The furthest candidate strictly inside the span. It survives only
+        // when strictly further than the tolerance, and the first of equally
+        // distant candidates wins (hence ">" on an ascending scan).
+        double maxDistanceSquared = kToleranceMetres * kToleranceMetres;
+        qsizetype furthest = first;
+        for (qsizetype k = first + 1; k < last; ++k) {
+            const double distanceSquared = squaredDistanceToSegment(
+                north, east, candidates[first], candidates[last], candidates[k]);
+            if (distanceSquared > maxDistanceSquared) {
+                maxDistanceSquared = distanceSquared;
+                furthest = k;
             }
+        }
+
+        if (furthest != first) {
+            keep[furthest] = true;
+            pending.emplace_back(first, furthest);
+            pending.emplace_back(furthest, last);
         }
     }
 
-    return out;
+    QVector<qsizetype> indices;
+    for (qsizetype k = 0; k < count; ++k) {
+        if (keep[k])
+            indices.append(candidates[k]);
+    }
+    return indices;
+}
+
+// values[i] for each index
+QVector<double> samplesAt(const QVector<double> &values, const QVector<qsizetype> &indices)
+{
+    QVector<double> samples;
+    samples.reserve(indices.size());
+    for (const qsizetype i : indices)
+        samples.append(values[i]);
+    return samples;
 }
 
 } // namespace
 
 void Calculations::registerSimplificationCalculations(CalculationRegistry &registry)
 {
-    // One calculation, four measurement outputs: whichever is read first, the
-    // track is simplified once.
+    // One calculation, seven measurement outputs: whichever is read first, the
+    // track is simplified once. The horizontal geometry is the shared local
+    // frame (Local/north, Local/east); this calculation has no projection and
+    // no origin of its own, so without that frame there is no track.
     CalculationDescriptor d;
     d.id = QStringLiteral("builtin.simplified.track");
     d.inputs = {
         CalcInput::measurement("GNSS", "lat"),
         CalcInput::measurement("GNSS", "lon"),
         CalcInput::measurement("GNSS", "hMSL"),
-        CalcInput::measurement("GNSS", SessionKeys::Time)
+        CalcInput::measurement("GNSS", SessionKeys::Time),
+        CalcInput::measurement("Local", "north"),
+        CalcInput::measurement("Local", "east"),
+        CalcInput::measurement("Local", "down")
     };
     d.outputs = {
         DependencyKey::measurement("Simplified", "lat"),
         DependencyKey::measurement("Simplified", "lon"),
         DependencyKey::measurement("Simplified", "hMSL"),
-        DependencyKey::measurement("Simplified", SessionKeys::Time)
+        DependencyKey::measurement("Simplified", SessionKeys::Time),
+        DependencyKey::measurement("Simplified", "north"),
+        DependencyKey::measurement("Simplified", "east"),
+        DependencyKey::measurement("Simplified", "down")
     };
     d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
-        const auto track = simplifyTrack(ctx.measurement("GNSS", "lat"),
-                                         ctx.measurement("GNSS", "lon"),
-                                         ctx.measurement("GNSS", "hMSL"),
-                                         ctx.measurement("GNSS", SessionKeys::Time));
-        if (!track)
+        const QVector<double> lat = ctx.measurement("GNSS", "lat");
+        const QVector<double> lon = ctx.measurement("GNSS", "lon");
+        const QVector<double> hMSL = ctx.measurement("GNSS", "hMSL");
+        const QVector<double> time = ctx.measurement("GNSS", SessionKeys::Time);
+        const QVector<double> north = ctx.measurement("Local", "north");
+        const QVector<double> east = ctx.measurement("Local", "east");
+        const QVector<double> down = ctx.measurement("Local", "down");
+
+        // Ragged channels have no common sample index
+        const auto n = lat.size();
+        if (lon.size() != n || hMSL.size() != n || time.size() != n ||
+            north.size() != n || east.size() != n || down.size() != n) {
             return CalculationResult::unavailable();
+        }
+
+        // No sample with local coordinates: no track
+        const QVector<qsizetype> finite = finiteSampleIndices(north, east, down);
+        if (finite.isEmpty())
+            return CalculationResult::unavailable();
+
+        // Every output is the recorded sample at the same retained indices,
+        // so all seven always have the same length
+        const QVector<qsizetype> indices = retainedIndices(north, east, finite);
         return CalculationResult()
-            .setMeasurement("Simplified", "lat", track->lat)
-            .setMeasurement("Simplified", "lon", track->lon)
-            .setMeasurement("Simplified", "hMSL", track->hMSL)
-            .setMeasurement("Simplified", SessionKeys::Time, track->time);
+            .setMeasurement("Simplified", "lat", samplesAt(lat, indices))
+            .setMeasurement("Simplified", "lon", samplesAt(lon, indices))
+            .setMeasurement("Simplified", "hMSL", samplesAt(hMSL, indices))
+            .setMeasurement("Simplified", SessionKeys::Time, samplesAt(time, indices))
+            .setMeasurement("Simplified", "north", samplesAt(north, indices))
+            .setMeasurement("Simplified", "east", samplesAt(east, indices))
+            .setMeasurement("Simplified", "down", samplesAt(down, indices));
     };
     addCalculation(registry, d);
 }

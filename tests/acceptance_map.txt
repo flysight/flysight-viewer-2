@@ -186,7 +186,7 @@
 102 tst_time_fit highUptimeExactClock
 102 tst_time_fit fitFollowsTimeSource
 
-# 103 - local coordinates (the simplified-track half is added by its own phase)
+# 103 - local coordinates
 103 tst_local_coordinates originGates
 103 tst_local_coordinates speedAccuracyPlaysNoPart
 103 tst_local_coordinates knownDisplacement
@@ -195,3 +195,16 @@
 103 tst_local_coordinates noQualifyingFixMakesEverythingUnavailable
 103 tst_local_coordinates sourceChangesInvalidate
 103 tst_local_coordinates markersAndDisplayDoNotAffectTheFrame
+# 103 (continued) - simplified track on the shared frame; the map without an origin
+103 tst_simplified_track sevenOutputsShareIndices
+103 tst_simplified_track droppedSamplesWithinTolerance
+103 tst_simplified_track duplicatePositionEndpoints
+103 tst_simplified_track closedTrack
+103 tst_simplified_track degenerateTracks
+103 tst_simplified_track emptyTrack
+103 tst_simplified_track nonFiniteSamplesAreSkipped
+103 tst_simplified_track projectionRunsOncePerRecording
+103 tst_simplified_track unavailableWithoutOriginAndRecovers
+103 tst_map_models noOriginRemovesTrackAndDot
+103 tst_map_models boundsClearedWhenNoTrack
+103 tst_map_models recoversAfterSourceCorrection

@@ -9,7 +9,9 @@
 # compiling application sources. The one exception is tst_python_bridge, which
 # compiles pluginhost.cpp and pluginadapters.cpp directly: they belong to the
 # application executable, not to flysight_core, because they need the embedded
-# interpreter. The FLYSIGHT_BUILD_FUSION_TESTS block near the end of this file
+# interpreter. The second is tst_map_models, which compiles the two map models
+# and their two helpers directly: they are application sources that need Qt
+# Core and Gui only, so the test needs no Widgets, WebEngine or Quick. The FLYSIGHT_BUILD_FUSION_TESTS block near the end of this file
 # is the only place a test may link GTSAM.
 #
 # Conventions:
@@ -115,6 +117,7 @@ flysight_add_test(tst_builtins_golden SOURCES tst_builtins_golden.cpp)
 flysight_add_test(tst_builtins_engine SOURCES tst_builtins_engine.cpp)
 flysight_add_test(tst_time_fit SOURCES tst_time_fit.cpp)
 flysight_add_test(tst_local_coordinates SOURCES tst_local_coordinates.cpp)
+flysight_add_test(tst_simplified_track SOURCES tst_simplified_track.cpp)
 
 # SessionData / SessionModel on the engine (real built-ins, global registry)
 flysight_add_test(tst_session_engine       SOURCES tst_session_engine.cpp)
@@ -151,6 +154,17 @@ set_tests_properties(tst_session_oracle PROPERTIES TIMEOUT 300 LABELS "core;orac
 
 # End-to-end workflows on the application's import path (acceptance 19)
 flysight_add_test(tst_workflow SOURCES tst_workflow.cpp)
+
+# Map models on the simplified track (no track without a local origin). The
+# two models and their two helpers are application sources that need Qt Core
+# and Gui only, so they are compiled into the test; nothing here needs
+# Widgets, WebEngine or Quick.
+flysight_add_test(tst_map_models
+  SOURCES tst_map_models.cpp
+          "${FLYSIGHT_SRC_DIR}/ui/docks/map/TrackMapModel.cpp"
+          "${FLYSIGHT_SRC_DIR}/ui/docks/map/MapCursorDotModel.cpp"
+          "${FLYSIGHT_SRC_DIR}/plotrangemodel.cpp"
+          "${FLYSIGHT_SRC_DIR}/plotutils.cpp")
 
 # ---- embedded-Python bridge test -----------------------------------------
 # tst_python_bridge boots the real embedded interpreter, imports the real

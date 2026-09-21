@@ -23,7 +23,8 @@ class PlotRangeModel;
  *
  * Dots are derived from all enabled moments with map presence, sampled from
  * the "Simplified" GNSS track (lat/lon vs SessionKeys::Time) for each
- * targeted visible session.
+ * targeted visible session. A session whose Simplified track is unavailable
+ * gets no dot.
  */
 class MapCursorDotModel : public QAbstractListModel
 {

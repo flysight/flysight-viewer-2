@@ -270,7 +270,10 @@ QList<GoldenValue> goldenValues()
     g << meas("Simplified", "lat", 2, {{0, 45.0}, {1, 45.0295}})
       << meas("Simplified", "lon", 2, {{0, -75.0}, {1, -75.0}})
       << meas("Simplified", "hMSL", 2, {{0, 4000.0}, {1, 100.0}})
-      << meas("Simplified", "_time", 2, {{0, T0}, {1, T0 + 295.0}});
+      << meas("Simplified", "_time", 2, {{0, T0}, {1, T0 + 295.0}})
+      << meas("Simplified", "north", 2, {{0, 0.0}}, 1e-6)
+      << meas("Simplified", "east", 2, {{0, 0.0}, {1, 0.0}}, 1e-6)   // same meridian as the origin
+      << meas("Simplified", "down", 2, {{0, 0.0}}, 1e-6);
 
     return g;
 }

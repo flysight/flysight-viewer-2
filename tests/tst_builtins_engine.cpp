@@ -416,9 +416,14 @@ void BuiltinsEngineTest::simplifiedRunsOnce()
         QCOMPARE(engine.measurement("Simplified", "_time"), QVector<double>({T0, T0 + 295.0}));
         QCOMPARE(engine.measurement("Simplified", "lon"), QVector<double>({-75.0, -75.0}));
         QCOMPARE(engine.measurement("Simplified", "lat").size(), 2);
+        QCOMPARE(engine.measurement("Simplified", "north").size(), 2);
+        QCOMPARE(engine.measurement("Simplified", "east").size(), 2);
+        QCOMPARE(engine.measurement("Simplified", "down").size(), 2);
     }
     QCOMPARE(engine.runCount("builtin.simplified.track"), 1);
     QCOMPARE(engine.measurementUnit("Simplified", "lat"), QString());
+    QCOMPARE(engine.runCount("builtin.local.coordinates"), 1);
+    QCOMPARE(engine.measurementUnit("Simplified", "north"), QString());
 }
 
 // One family registration, one instance per distinct expression.

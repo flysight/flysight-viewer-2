@@ -83,3 +83,41 @@ geoid separation.
 displacements and velocity rotation, NaN placement, the no-origin case, the
 time axes, and invalidation. The golden rows for the descent fixture are in
 `tests/support/builtinfixture.cpp`.
+
+## Simplified map track
+
+The map draws `Simplified/lat`, `lon`, `hMSL` and `_time`: the recorded
+geographic samples and their UTC time. `Simplified/north`, `east` and `down`
+are the same samples in the local frame. One on-demand calculation,
+`builtin.simplified.track`, produces all seven; its inputs are `GNSS/lat`,
+`lon`, `hMSL`, `_time` and `Local/north`, `east`, `down`.
+
+The simplification is a horizontal Ramer-Douglas-Peucker on `Local/north` and
+`Local/east` with a tolerance of 0.5 m: a sample survives only when it is
+strictly further than that from the segment it would be dropped onto. The
+calculation performs no projection and has no second origin. The projection
+runs once per recording, in the local-coordinates calculation.
+
+It retains sample indices. Every output is the recorded sample at those
+indices, all seven outputs always have the same length, and distinct samples
+at the same position (a stationary start or end) stay distinct. There is no
+coordinate re-matching.
+
+A sample whose local coordinates are not all finite is left out of the
+simplified track and the path is joined across it. One invalid fix does not
+cost the recording its track, and the track ends at the first and last samples
+that have coordinates.
+
+With no qualifying origin the simplified track is unavailable (a missing
+input). The map then shows no track and no cursor dot for that recording and
+leaves it out of its bounds; when no visible recording has a track, the model's
+bounds are cleared and the map keeps its current view. There is no fallback to
+an unsimplified or privately projected track: a recording in which no fix ever
+reaches 10 m horizontal accuracy has no track worth drawing. Correcting the
+source brings track, dot and bounds back through ordinary invalidation.
+
+`tst_simplified_track` covers index alignment, the tolerance,
+duplicate-position endpoints, closed, degenerate and empty tracks, non-finite
+samples, the single projection, and the no-origin case with recovery.
+`tst_map_models` covers the two map models on a real session model. The golden
+rows for the descent fixture are in `tests/support/builtinfixture.cpp`.
