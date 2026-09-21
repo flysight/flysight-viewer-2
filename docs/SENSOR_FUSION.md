@@ -219,8 +219,12 @@ inputs and nothing else: no session, no engine, no preference. *Publish*, back
 on the main thread, installs all eighteen outputs at once; ordinary
 invalidation then repaints the plots, the legend and everything else that had
 read "unavailable". The engine itself refuses a result whose inputs changed
-while it was being computed; such a job ends as superseded, nothing is
-published, and the row shows the refresh control again.
+while it was being computed, and it knows that at the moment of the change: the
+job queue asks the fit to stop there and then (it stops at its next
+cancellation boundary, below, instead of running for minutes towards a result
+nobody can use). Such a job ends as superseded, nothing is published or
+cached, and the row shows the refresh control again at once; a refresh queues
+a new fit, which starts when the old one has stopped.
 
 **Cancellation** is observed at three kinds of boundary: before the fit starts,
 every 256 states of graph construction, and before each optimizer iteration. A

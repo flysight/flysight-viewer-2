@@ -83,8 +83,9 @@ struct JobQueue::Run {
     // crosses. Never destroyed while the worker may still be inside compute().
     std::unique_ptr<PreparedCalculation> ticket;
     std::unique_ptr<JobWorker> worker;
-    // An end decided while the job runs (cancel, abandonment, shutdown, a
-    // failed start). First writer wins; when set, nothing is published.
+    // An end decided while the job runs (cancel, a stale ticket, abandonment,
+    // shutdown, a failed start). First writer wins; when set, nothing is
+    // published.
     std::optional<PendingEnd> pendingEnd;
 };
 
@@ -96,6 +97,18 @@ QString blockerTitles(const QList<CalculationBlocker> &blockers)
     for (const CalculationBlocker &blocker : blockers)
         titles.append(blocker.title.isEmpty() ? blocker.instanceId : blocker.title);
     return titles.join(QStringLiteral(", "));
+}
+
+/// The reason text of a job whose result the engine refuses. The one
+/// vocabulary for a refusal, whether it is met at publish or seen coming.
+QString refusalText(PublishOutcome::Reason reason)
+{
+    switch (reason) {
+    case PublishOutcome::Reason::AlreadyPublished:    return JobQueue::tr("Result is already available");
+    case PublishOutcome::Reason::RegistrationRemoved: return JobQueue::tr("Calculation is no longer registered");
+    case PublishOutcome::Reason::SessionGone:         return JobQueue::tr("Session removed or unloaded");
+    default:                                          return JobQueue::tr("Inputs changed");
+    }
 }
 
 } // namespace
@@ -116,11 +129,26 @@ JobQueue::JobQueue(SessionModel *sessionModel, QObject *parent)
     if (sessionModel) {
         connect(sessionModel, &QAbstractItemModel::modelReset, this, &JobQueue::onSessionRowsChanged);
         connect(sessionModel, &QAbstractItemModel::rowsRemoved, this, &JobQueue::onSessionRowsChanged);
+
+        // Whatever makes the engine mark the running job's ticket is followed
+        // by one of these on the main thread: an edit or a merge announces the
+        // changed names, a bulk edit and an environment change repaint rows,
+        // and a model that dies has destroyed its engines by then. The ticket
+        // is asked again each time (stopRunIfRefused() is a flag read).
+        connect(sessionModel, &SessionModel::dependencyChanged, this, &JobQueue::stopRunIfRefused);
+        connect(sessionModel, &SessionModel::modelChanged, this, &JobQueue::stopRunIfRefused);
+        connect(sessionModel, &QAbstractItemModel::dataChanged, this, &JobQueue::stopRunIfRefused);
+        connect(sessionModel, &QObject::destroyed, this, &JobQueue::stopRunIfRefused);
     }
+
+    // A registration that goes away reaches no model signal synchronously. The
+    // registry calls its observers after the engines were notified.
+    m_registryObserver = CalculationRegistry::instance().addObserver([this] { stopRunIfRefused(); });
 }
 
 JobQueue::~JobQueue()
 {
+    CalculationRegistry::instance().removeObserver(m_registryObserver);
     shutdown();
 }
 
@@ -421,14 +449,9 @@ void JobQueue::finishRun()
             }
             break;
         case Kind::RefusedStale:
-            state = JobState::Superseded;
-            reason = outcome.reason == Reason::AlreadyPublished ? tr("Result is already available")
-                                                                : tr("Inputs changed");
-            break;
         case Kind::RefusedGone:
             state = JobState::Superseded;
-            reason = outcome.reason == Reason::RegistrationRemoved ? tr("Calculation is no longer registered")
-                                                                   : tr("Session removed or unloaded");
+            reason = refusalText(outcome.reason);
             break;
         case Kind::Discarded:
             if (outcome.reason == Reason::ResourceExhausted) {
@@ -557,6 +580,25 @@ int JobQueue::cancelUnwantedQueued(const std::function<bool(const JobRecord &)> 
     return cancelled;
 }
 
+// The engine marks a ticket the moment its result can no longer be installed;
+// the worker cannot see that and would compute to the end - minutes, for a fit
+// - only to be refused. Asked here, on the main thread, whenever something
+// happened that can have marked it. The engine still decides: this reads its
+// verdict and publishes nothing. The pending end is what publish() would have
+// reported, so the job ends Superseded with the same reason, only sooner; and
+// from now on it is "a running job that was asked to cancel" for activeJob(),
+// so a new request for the same calculation queues behind it. A staleness no
+// signal announces, and a compute function that ignores the request, end
+// Superseded at publish as before.
+void JobQueue::stopRunIfRefused()
+{
+    // An end is pending: the job was asked to stop already, and first writer wins
+    if (!m_run || m_run->pendingEnd || !m_run->ticket->willBeRefused())
+        return;
+
+    requestStop({JobState::Superseded, refusalText(m_run->ticket->refusalReason())});
+}
+
 void JobQueue::onSessionRowsChanged()
 {
     // Queued jobs whose session is gone end now; nothing promised to load it
@@ -574,6 +616,9 @@ void JobQueue::onSessionRowsChanged()
     // does not hold the queue. What happened is still "superseded".
     if (m_run && !isSessionLoaded(m_model->record(m_run->jobId).sessionId))
         requestStop({JobState::Superseded, tr("Session removed or unloaded")});
+
+    // A reset that replaced the session's contents (a merge) marked the ticket
+    stopRunIfRefused();
 }
 
 void JobQueue::shutdown()

@@ -102,6 +102,7 @@ private slots:
     void mergeStartsNothing();
     void inputInvalidationStartsNothing();
     void supersededJobStartsNothing();
+    void staleRunningJobShowsRefreshAtOnce();
     void sessionWithoutInputIsNeverListed();
     void gestureNeverRequestsTheUnrequestable();
     void failedBadgeAndReason();
@@ -712,7 +713,11 @@ void PlotRequestsTest::chainStopsWhenFirstJobDoesNotSucceed()
         QVERIFY(m_queue->cancel(first));
     } else {
         giveInput({"s1"}, "G_IN", 7);
-        QCOMPARE(row("Syn/h").pendingCount, 1);     // still running: the engine decides at publish
+        // Still running, but the engine has marked the ticket and the queue
+        // has asked the job to stop: not live any more
+        QCOMPARE(stateOf(first), JobState::Running);
+        QCOMPARE(row("Syn/h").pendingCount, 0);
+        QCOMPARE(row("Syn/h").missingCount, 1);
         gate().open(1);
     }
     QVERIFY(waitIdle(*m_queue));
@@ -1012,6 +1017,58 @@ void PlotRequestsTest::supersededJobStartsNothing()
     QCOMPARE(state.control(), Control::Refresh);
     QCOMPARE(m_queue->model()->rowCount(), 1);      // the queue did not ask again, and neither did the row
     QVERIFY(values("s1", "g").isEmpty());
+}
+
+// The queue stops a running job whose inputs went stale. From that moment it
+// is a job that was asked to stop: the track is Missing and the row offers
+// refresh, not cancel - before the worker has returned. Nothing is requested
+// for it; a refresh pressed then queues a new job behind the old one.
+void PlotRequestsTest::staleRunningJobShowsRefreshAtOnce()
+{
+    const QString plot = QStringLiteral("Syn/g");
+    giveInput({"s1"}, "G_IN", 4);
+    show({"s1"});
+    check("g2");                            // a second row waiting on the same job
+    QCOMPARE(checkByUser("g"), 1);
+    QVERIFY(gate().waitEntered());
+    const JobId stale = jobOf("s1", "gated").id;
+    QCOMPARE(row("Syn/g").pendingCount, 1);
+    QCOMPARE(row("Syn/g").control(), Control::Cancel);
+
+    giveInput({"s1"}, "G_IN", 7);
+
+    // Before the worker has returned; the gate is never opened for this job
+    QCOMPARE(stateOf(stale), JobState::Running);
+    QVERIFY(m_queue->job(stale).cancelRequested);
+    for (const char *id : {"Syn/g", "Syn/g2"}) {
+        const PlotRowState state = row(id);
+        QCOMPARE(state.pendingCount, 0);
+        QCOMPARE(state.missingCount, 1);
+        QCOMPARE(state.control(), Control::Refresh);
+        QVERIFY(state.progressLabel.isEmpty());
+    }
+    QCOMPARE(m_queue->model()->rowCount(), 1);      // nobody asked again
+
+    QCOMPARE(stateOf(stale), JobState::Running);
+    QCOMPARE(m_requests->refreshPressed(plot), 1);
+    const JobId again = jobOf("s1", "gated").id;
+    QVERIFY(again != stale);
+    PlotRowState state = m_requests->rowState(plot);
+    QCOMPARE(state.pendingCount, 1);
+    QCOMPARE(state.pending.at(0).job, again);
+    QCOMPARE(state.pending.at(0).jobState, JobState::Queued);
+    QCOMPARE(state.control(), Control::Cancel);
+
+    QTRY_COMPARE(stateOf(stale), JobState::Superseded);
+    QCOMPARE(m_queue->job(stale).reason, QStringLiteral("Inputs changed"));
+    QVERIFY(gate().waitEntered());                  // the new job
+    gate().open(1);
+    QVERIFY(waitIdle(*m_queue));
+    QCOMPARE(stateOf(again), JobState::Succeeded);
+    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(row("Syn/g2").isPlain());
+    QCOMPARE(values("s1", "g"), QVector<double>({8.0}));
+    QCOMPARE(m_queue->model()->rowCount(), 2);
 }
 
 // ---- Acceptance 11 (row half) ---------------------------------------------------------------------

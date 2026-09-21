@@ -225,6 +225,9 @@ private slots:
     void registrationRemovedRefuses();
     void engineDestroyedRefuses_data() { addComputeModeRows(); }
     void engineDestroyedRefuses();
+    void willBeRefusedReportsTheEnginesMarks_data();
+    void willBeRefusedReportsTheEnginesMarks();
+    void willBeRefusedIsAboutAPublishToCome();
     void computeNeedsNoEngine_data() { addComputeModeRows(); }
     void computeNeedsNoEngine();
     void cancelPublishesNothing_data() { addComputeModeRows(); }
@@ -679,6 +682,135 @@ void CalcEngineAsyncTest::engineDestroyedRefuses()
     QCOMPARE(prepared.kind, Prepare::Kind::Ready);
     engine.reset();
     prepared.ticket.reset();
+}
+
+void CalcEngineAsyncTest::willBeRefusedReportsTheEnginesMarks_data()
+{
+    using Reason = PublishOutcome::Reason;
+    QTest::addColumn<QString>("cause");
+    QTest::addColumn<int>("reason");
+    QTest::newRow("declared input") << "input" << int(Reason::InputsChanged);
+    QTest::newRow("on-demand intermediate") << "intermediate" << int(Reason::InputsChanged);
+    QTest::newRow("declared preference") << "preference" << int(Reason::InputsChanged);
+    QTest::newRow("registry change of an input candidate") << "candidate" << int(Reason::InputsChanged);
+    QTest::newRow("clear()") << "clear" << int(Reason::InputsChanged);
+    QTest::newRow("registration removed") << "unregister" << int(Reason::RegistrationRemoved);
+    QTest::newRow("registration removed and added again") << "reregister" << int(Reason::RegistrationRemoved);
+    QTest::newRow("stale, then registration removed") << "staleThenGone" << int(Reason::RegistrationRemoved);
+    QTest::newRow("engine destroyed") << "engine" << int(Reason::SessionGone);
+}
+
+// What a queue may ask while compute() is still running: is publish() already
+// certain to refuse? The answer is the engine's own mark, for every cause of a
+// refusal that can be known in advance, and it names the reason publish() gives.
+void CalcEngineAsyncTest::willBeRefusedReportsTheEnginesMarks()
+{
+    QFETCH(QString, cause);
+    QFETCH(int, reason);
+
+    CalculationRegistry registry;
+    FakePreferenceProvider prefs;
+    registry.setPreferenceProvider(&prefs);
+    Synthetic::registerSharedWorld(registry);
+    QVERIFY(registry.registerCalculation(trans()));
+    FakeSessionState state;
+    state.setAttribute("A", 1);
+    state.setAttribute("B", 2);
+    prefs.set("p", 5);
+    auto engine = std::make_unique<CalculationEngine>(&state, &registry);
+
+    Prepare prepared = engine->prepare("trans");
+    QCOMPARE(prepared.kind, Prepare::Kind::Ready);
+    const PreparedCalculation &ticket = *prepared.ticket;
+
+    // Healthy, and still healthy after reads and changes that reach none of
+    // its inputs
+    QVERIFY(!ticket.willBeRefused());
+    QCOMPARE(ticket.refusalReason(), PublishOutcome::Reason::None);
+    QVERIFY(!engine->isAvailable(attr("TR")));
+    state.setAttribute(*engine, "UNRELATED", 1);
+    prefs.set(registry, "q", 1);
+    QVERIFY(!ticket.willBeRefused());
+
+    // The run itself changes nothing either way: compute() neither reads nor
+    // writes the mark
+    ComputedCalculation computed = computeOn(ComputeMode::StdThread, *prepared.ticket);
+    QVERIFY(!ticket.willBeRefused());
+
+    if (cause == QLatin1String("input")) {
+        state.setAttribute(*engine, "X", 40);       // stored: wins over the calculation
+    } else if (cause == QLatin1String("intermediate")) {
+        state.setAttribute(*engine, "A", 2);
+    } else if (cause == QLatin1String("preference")) {
+        prefs.set(registry, "p", 6);
+    } else if (cause == QLatin1String("candidate")) {
+        QVERIFY(registry.unregister("sum"));
+    } else if (cause == QLatin1String("clear")) {
+        engine->clear();
+    } else if (cause == QLatin1String("unregister")) {
+        QVERIFY(registry.unregister("trans"));
+    } else if (cause == QLatin1String("reregister")) {
+        QVERIFY(registry.unregister("trans"));
+        QVERIFY(registry.registerCalculation(trans()));
+    } else if (cause == QLatin1String("staleThenGone")) {
+        state.setAttribute(*engine, "A", 2);
+        QCOMPARE(ticket.refusalReason(), PublishOutcome::Reason::InputsChanged);
+        QVERIFY(registry.unregister("trans"));      // "gone" outranks "stale"
+    } else {
+        engine.reset();
+    }
+
+    QVERIFY(ticket.willBeRefused());
+    QCOMPARE(int(ticket.refusalReason()), reason);
+
+    // It stays that way: undoing the change does not revive the ticket
+    if (cause == QLatin1String("intermediate")) {
+        state.setAttribute(*engine, "A", 1);
+        QVERIFY(ticket.willBeRefused());
+    }
+
+    // And publish() says the same
+    const PublishOutcome outcome = prepared.ticket->publish(std::move(computed));
+    QVERIFY(outcome.kind == PublishOutcome::Kind::RefusedStale || outcome.kind == PublishOutcome::Kind::RefusedGone);
+    QCOMPARE(int(outcome.reason), reason);
+
+    // Spent: the question is about a publish() to come
+    QVERIFY(!ticket.willBeRefused());
+    QCOMPARE(ticket.refusalReason(), PublishOutcome::Reason::None);
+}
+
+// False never means "was published", and true never outlives publish():
+// willBeRefused() is false after a successful publication (and stays false when
+// the published result is invalidated later), and false after a refusal it did
+// not predict. A synchronous request() in between is such a refusal: only
+// publish() decides it.
+void CalcEngineAsyncTest::willBeRefusedIsAboutAPublishToCome()
+{
+    {
+        World w;
+        Prepare prepared = w.engine.prepare("expA");
+        QCOMPARE(prepared.kind, Prepare::Kind::Ready);
+        ComputedCalculation computed = computeOn(ComputeMode::StdThread, *prepared.ticket);
+        QVERIFY(!prepared.ticket->willBeRefused());
+        QCOMPARE(prepared.ticket->publish(std::move(computed)).kind, PublishOutcome::Kind::Published);
+        QVERIFY(!prepared.ticket->willBeRefused());
+
+        // The published result goes stale; the spent ticket has nothing to say
+        w.state.setAttribute(w.engine, "EA_IN", 6);
+        QVERIFY(!w.engine.isAvailable(attr("EA1")));
+        QVERIFY(!prepared.ticket->willBeRefused());
+        QCOMPARE(prepared.ticket->refusalReason(), PublishOutcome::Reason::None);
+    }
+    {
+        World w;
+        Prepare prepared = w.engine.prepare("expA");
+        QCOMPARE(prepared.kind, Prepare::Kind::Ready);
+        ComputedCalculation computed = computeOn(ComputeMode::StdThread, *prepared.ticket);
+        QCOMPARE(w.engine.request("expA").status, ResultStatus::Ok);
+        QVERIFY(!prepared.ticket->willBeRefused());     // not a mark of the engine's
+        QCOMPARE(prepared.ticket->publish(std::move(computed)).reason, PublishOutcome::Reason::AlreadyPublished);
+        QVERIFY(!prepared.ticket->willBeRefused());
+    }
 }
 
 // The narrow rule of spec 7.1: compute() sees the captured inputs and nothing

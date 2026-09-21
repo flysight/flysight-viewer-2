@@ -355,13 +355,20 @@ void FusionJobsTest::inputChangeDuringFitSupersedes()
     const JobQueue::RequestResult result = m_queue->request("a", kFit);
     QCOMPARE(result.kind, Kind::Created);
     bool edited = false;
-    onFirstProgress(result.job, [this, &edited, job = result.job] {
+    bool askedToStop = false;
+    onFirstProgress(result.job, [this, &edited, &askedToStop, job = result.job] {
         // The origin moves from fix 3 to fix 4 (both under 10 m)
         edited = m_queue->job(job).state == JobState::Running
             && m_model->updateAttribute("a", "_LOCAL_ORIGIN_INDEX", QVariant::fromValue(qlonglong(4)));
+        // With the edit the queue asks the fit to stop (it ends at its next
+        // solver boundary instead of running to the end: the boundary stop is
+        // proven in tst_fusion_session::cancelStopsAtNextBoundary), and the
+        // fit is requestable again while the old one winds down
+        askedToStop = m_queue->job(job).cancelRequested && m_queue->activeJob("a", kFit) == 0;
     });
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QVERIFY(edited);
+    QVERIFY(askedToStop);
 
     const JobRecord job = m_queue->job(result.job);
     QCOMPARE(job.state, JobState::Superseded);

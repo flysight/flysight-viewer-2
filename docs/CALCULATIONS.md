@@ -281,6 +281,27 @@ function or an engine callback). A debug build asserts that; a release build
 refuses such a call as `RefusedStale` / `InputsChanged`, because nothing may be
 installed in the middle of an evaluation.
 
+**Knowing a refusal in advance.** The engine marks a ticket the moment it
+becomes stale or gone, not at publish. `PreparedCalculation::willBeRefused()`
+(**main thread**, like everything of a ticket except `compute()`) reads that
+mark back: true while a `publish()` still to come is certain to be refused as
+`SessionGone`, `RegistrationRemoved` or `InputsChanged`, and `refusalReason()`
+names which (`None` otherwise). The engine still decides staleness, from its
+own records; the query hands its verdict to a caller that may want to stop a
+computation nobody can use (section 15.3), and that caller decides nothing.
+`compute()` never reads it, and there is still no lock and no atomic in the
+library: the mark is a main-thread field of the ticket. Its semantics are
+narrow on purpose:
+
+- once true it stays true until `publish()`; undoing the edit does not revive
+  the ticket;
+- it is false for a healthy ticket, and false again once `publish()` was
+  called, whatever that returned. It says nothing about a publication that has
+  happened, and it does not follow the published result's later invalidation;
+- false is not a promise. `AlreadyPublished` (a synchronous `request` in
+  between) and an invalidation that arrived during an evaluation and was
+  deferred are decided by `publish()` alone.
+
 A refused or discarded result is dropped whole and is not counted as a run. A
 published one leaves the engine exactly as `request` would have: same status,
 edges, run and undeclared-read counters, and the same warnings (logged at
@@ -310,6 +331,8 @@ Vocabulary that goes with it:
   `std::exception`, so code that catches `std::exception` cannot swallow it.
 - `PreparedCalculation::registrationId()`, `instanceId()`, `title()` - what a
   job record shows. Main thread.
+- `PreparedCalculation::willBeRefused()`, `refusalReason()` - the engine's
+  mark on an outstanding ticket, above. Main thread; never read by `compute()`.
 - `CalculationEngine::preparedCount()` - outstanding tickets (instrumentation;
   main thread). `edgeCount()` includes their edges, `cachedNodeCount()` does not.
 
@@ -374,8 +397,8 @@ One thread owns all state. The engine, the registry, and every session are used
 from the main thread only. The library creates no thread and contains no lock
 and no atomic. The single exception is narrow and must stay narrow:
 
-- A `PreparedCalculation` is created, inspected, published, and destroyed on the
-  main thread. **Only `compute()` may run elsewhere**, once, and the caller
+- A `PreparedCalculation` is created, inspected (`willBeRefused()` included),
+  published, and destroyed on the main thread. **Only `compute()` may run elsewhere**, once, and the caller
   guarantees it has returned before `publish()` or the destructor runs (a
   thread join, or a queued "finished" signal).
 - `compute()` sees the captured inputs, the descriptor (kept alive by the
@@ -445,10 +468,11 @@ failure included, or not an explicit calculation), `Ready` -> a new Queued job
 
 **Deduplication.** A request whose `(sessionId, instanceId)` equals that of a
 queued or running job creates nothing. The exception: a *running job that has
-been asked to cancel* does not count. It is winding down, and a new request
+been asked to stop* - cancelled, or stopped because its inputs went stale
+(section 15.3) - does not count. It is winding down, and a new request
 creates a new queued job, which cannot start before the old one has ended.
-Without this a refresh pressed right after a cancel would be lost.
-`activeJob()` applies the same rule.
+Without this a refresh pressed right after a cancel, or right after an edit,
+would be lost. `activeJob()` applies the same rule.
 
 **Inputs are captured when a job starts**, not when it is requested: a job
 queued behind a five-minute fit sees the session as it is five minutes later.
@@ -471,7 +495,7 @@ When the worker has returned, in this order:
 
 | Condition | End state | Reason / extras |
 |---|---|---|
-| an end was decided while it ran (cancel, abandonment, shutdown, failed start) | that state | that reason; the ticket is destroyed **without** `publish()` |
+| an end was decided while it ran (cancel, a stale ticket, abandonment, shutdown, failed start) | that state | that reason; the ticket is destroyed **without** `publish()` |
 | `Published`, status `Ok` | Succeeded | `PublishOutcome::detail` (a rejection's reason; empty for a plain success); `resultStatus` = `Ok` |
 | `Published`, any other status | Succeeded | "Calculation failed: %1"; `resultStatus` = that status. The failure is a function of the inputs: published, cached, not requestable again |
 | `RefusedStale / InputsChanged` | Superseded | "Inputs changed" |
@@ -482,10 +506,12 @@ When the worker has returned, in this order:
 | `Discarded / Cancelled` | Cancelled | "Cancelled by the calculation" (it threw `CalculationCancelled` unasked) |
 
 `publish()` is always called when no end is pending, so the engine's staleness
-verdict wins over a discarded run. A worker thread that cannot be started ends
-the job Failed ("The worker thread could not be started") with nothing cached.
-"Succeeded" means *this job published a result*; `AlreadyValid` and
-`AlreadyPublished` are therefore Superseded.
+verdict wins over a discarded run. The four refusal rows are also what a job
+stopped early for a stale ticket ends with (section 15.3): one mapping from
+`PublishOutcome::Reason` to the reason text serves both. A worker thread that
+cannot be started ends the job Failed ("The worker thread could not be
+started") with nothing cached. "Succeeded" means *this job published a
+result*; `AlreadyValid` and `AlreadyPublished` are therefore Superseded.
 
 **Order of a job's end**, whatever the path: (1) the model's end transition;
 (2) for a publication, `SessionModel::publishCalculationInvalidation()` with
@@ -504,6 +530,32 @@ signals may call `request()`, `cancel*()` and `shutdown()`.
 - **Cancel wins over a late result.** Once cancellation was requested the job
   ends Cancelled and publishes nothing, even if the compute function returned a
   complete result. The outcome does not depend on a race the user cannot see.
+- **A running job whose ticket is certain to be refused is stopped early.** An
+  input edit, a merge, a removed session, a removed registration or a cleared
+  cache makes the engine mark the ticket at once (section 12), but the worker
+  cannot see that and would compute to the end - minutes, for a fit - only to
+  be refused. So the queue asks the ticket (`willBeRefused()`, main thread) on
+  every main-thread signal that follows such a change:
+  `SessionModel::dependencyChanged`, `modelChanged`, `dataChanged`,
+  `modelReset`, `rowsRemoved` and `destroyed`, and the registry's observer
+  call. There is no timer and no polling. When the answer is yes it requests
+  cancellation through the same flag and records the end `publish()` would
+  have reported: **Superseded**, with the refusal's reason text ("Inputs
+  changed", "Session removed or unloaded", "Calculation is no longer
+  registered"). `jobCancelRequested` is emitted and the job is, from that
+  moment, a running job that was asked to stop: `activeJob()` does not return
+  it, a new request for the same calculation is `Created` and runs after the
+  old worker has been joined, with the new inputs. Nothing is published,
+  nothing is cached, and the queue still re-requests nothing by itself. The
+  engine decides; the queue only stops waiting for a verdict it already has.
+  A compute function that ignores the request, and a staleness none of those
+  signals announces (an engine cleared behind the model's back), end
+  Superseded at publish exactly as before.
+- **The pending end is decided once: the first writer wins.** A job the user
+  cancelled ends Cancelled even if its inputs change afterwards; a job stopped
+  for a stale ticket ends Superseded ("Inputs changed") even if the user
+  cancels it afterwards (`cancel()` still returns true; `cancelSession()` and
+  `cancelAll()` do not count it again). `shutdown()` follows the same rule.
 - `cancelUnwantedQueued(isWanted)` ends the *queued* jobs the predicate rejects
   ("No longer needed"). The running job is never offered to the predicate: its
   result is valid and worth keeping.
@@ -532,8 +584,8 @@ by LRU eviction exactly like a row whose save failed, so the cache may exceed
 its capacity by the number of pinned rows; releasing the last pin schedules one
 eviction pass for the next event-loop pass. A pin prevents eviction and nothing
 else: `removeSessions()`, a merge, and a repopulation go ahead, the engine
-refuses the ticket, and the job ends Superseded. `SessionModel` knows pinned
-ids and nothing about jobs.
+marks the ticket, and the job is stopped and ends Superseded (section 15.3).
+`SessionModel` knows pinned ids and nothing about jobs.
 
 `SessionModel::publishCalculationInvalidation(sessionId, keys)` is how
 engine-returned invalidations reach consumers: one publishing `dataChanged` for
@@ -613,7 +665,7 @@ engine callback (they inspect or publish to engines).
 | `JobQueue::kWorkerStackSize` | 64 MiB |
 | `model()` | the `JobModel` (a child of the queue) |
 | `request(sessionId, CalculationBlocker)` / `request(sessionId, plainCalculationId)` -> `RequestResult {kind, job, created()}` | 15.2; `job` is non-zero for `Created` and `AlreadyActive` |
-| `activeJob(sessionId, instanceId)` | the job a request would be deduplicated against, 0 if none |
+| `activeJob(sessionId, instanceId)` | the job a request would be deduplicated against, 0 if none; never a running job that was asked to stop |
 | `activeJobs()` | queued and running ids in request order; the running job first |
 | `runningJob()`, `job(id)`, `isIdle()`, `isShutDown()` | queries; `job()` returns a default record (id 0) for an unknown or removed job |
 | `cancel(id)` | false: unknown or already finished |
@@ -663,11 +715,14 @@ and from the job queue:
 | `NotProduced` | `Failed`, with a reason built from the notes |
 | `NotApplicable` | `NotApplicable`: silently absent, as plots treat missing data today |
 
-- A **live job** is a queued or running job that was **not asked to cancel**
+- A **live job** is a queued or running job that was **not asked to stop**
   (the rule of `JobQueue::activeJob()`, section 15.2). A track whose job is
-  winding down after a cancel is `Missing` at once; if a newer queued job exists
-  for the same (session, instance), that one is the live job. The index is
-  built once per pass from `activeJobs()` and `job(id)`.
+  winding down after a cancel is `Missing` at once, and so is a track whose
+  running job the queue stopped because its inputs went stale (section 15.3):
+  the row shows the refresh control, not cancel, from the moment of the edit,
+  and a refresh pressed then queues a new job behind the old one. If a newer
+  queued job exists for the same (session, instance), that one is the live
+  job. The index is built once per pass from `activeJobs()` and `job(id)`.
 - There is no "stale" condition. A result invalidated by an input change
   reports `Blocked` again and the track is simply `Missing`; a failed track
   whose inputs change becomes `Missing`, and therefore refreshable, the same
@@ -823,7 +878,8 @@ publication's `dependencyChanged` precedes `jobFinished` (section 15).
 
 Continuation stops - the flag is reset, the track is `Missing`, the refresh
 control returns - when a job of the session ends `Cancelled`, `Superseded`, or
-`Failed`, or is asked to cancel (unless the track still has another live job
+`Failed`, or is asked to stop - by a cancel, or by the queue because its
+inputs went stale - (unless the track still has another live job
 among its blockers); when the plot is unchecked; and when the track is hidden,
 unloaded, or removed. A track that is shown again does not regain it. A row
 that is only observed pending (checked programmatically while another row's

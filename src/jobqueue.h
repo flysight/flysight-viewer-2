@@ -27,8 +27,9 @@ class SessionModel;
 ///   request() --> Queued --> Running --> Succeeded   the result was published (a rejection or
 ///                   |           |                    a failed result included: see resultStatus)
 ///                   |           +------> Cancelled   cancel() / shutdown(); nothing published
-///                   |           +------> Superseded  the engine refused the result, or the
-///                   |           |                    session went away; nothing published
+///                   |           +------> Superseded  the engine refused the result (or was
+///                   |           |                    certain to: see STALE WHILE RUNNING), or
+///                   |           |                    the session went away; nothing published
 ///                   |           +------> Failed      worker could not start / out of memory;
 ///                   |                                nothing published, nothing cached
 ///                   +--> Cancelled | Superseded      ended before it ever ran (startedAt invalid)
@@ -47,6 +48,30 @@ class SessionModel;
 /// cross threads: progress text, posted to the main thread as a queued
 /// invocation, and the cancel request, the one atomic flag of the facility.
 /// There is no lock.
+///
+/// STALE WHILE RUNNING. The engine marks the running job's ticket the moment
+/// its result can no longer be installed: a declared input changed, the
+/// session's data was replaced or removed, the registration went away, the
+/// caches were cleared. The queue asks the ticket
+/// (PreparedCalculation::willBeRefused()) on the main-thread signals that follow
+/// such a change - SessionModel::dependencyChanged / modelChanged / dataChanged
+/// / modelReset / rowsRemoved / destroyed and the registry's observer call;
+/// there is no timer - and then asks the compute function to stop through the
+/// cancel flag. The job's end is recorded as what publish() would have
+/// reported: Superseded, with the same reason ("Inputs changed", ...). From
+/// that moment the job is a running job that was asked to cancel
+/// (jobCancelRequested is emitted, activeJob() no longer returns it), so
+/// whoever wants the result sees it missing and a new request queues behind
+/// it; the new job starts only after the old worker has been joined. Nothing
+/// is published or cached for the stopped job. A compute function that ignores
+/// the request, or a staleness that none of those signals announces, still
+/// ends Superseded at publish.
+///
+/// A PENDING END (cancel, stale ticket, session gone, shutdown) is decided once:
+/// the first writer wins. A job the user cancelled ends Cancelled even if its
+/// inputs change afterwards; a job stopped because it went stale ends
+/// Superseded even if the user cancels it afterwards (cancel() still returns
+/// true). shutdown() follows the same rule.
 ///
 /// The queue NEVER LOADS A SESSION: it looks sessions up with
 /// SessionModel::loadedSession() only, and a job whose session is not loaded
@@ -114,8 +139,9 @@ public:
     // ---- queries -------------------------------------------------------------
     /// The job a request for (sessionId, instanceId) would be deduplicated
     /// against: the queued or running job with that key, EXCEPT a running job
-    /// that has been asked to cancel - that one is winding down, and a new
-    /// request creates a new job behind it. 0 if none.
+    /// that has been asked to stop (cancelled, or stale: see STALE WHILE
+    /// RUNNING) - that one is winding down, and a new request creates a new
+    /// job behind it. 0 if none.
     JobId        activeJob(const QString &sessionId, const QString &instanceId) const;
     QList<JobId> activeJobs() const;    ///< request order; the running job, if any, is first
     JobId        runningJob() const;    ///< 0 if none
@@ -154,7 +180,7 @@ signals:
     void jobQueued(FlySight::JobId id);
     void jobStarted(FlySight::JobId id);
     void jobProgress(FlySight::JobId id, const QString &text);
-    void jobCancelRequested(FlySight::JobId id);    ///< the running job was asked to stop
+    void jobCancelRequested(FlySight::JobId id);    ///< the running job was asked to stop (cancel, or stale)
     void jobFinished(FlySight::JobId id, FlySight::JobState state);
     void jobsChanged();                             ///< after every one of the above except jobProgress
     void idle();                                    ///< the last active job ended
@@ -176,6 +202,7 @@ private:
                 std::optional<ResultStatus> resultStatus = std::nullopt,
                 const QSet<DependencyKey> &invalidated = {});
     void requestStop(const PendingEnd &end);
+    void stopRunIfRefused();
     void onProgress(JobId id, const QString &text);
     void onSessionRowsChanged();
     bool isSessionLoaded(const QString &sessionId) const;
@@ -188,6 +215,7 @@ private:
     bool m_startQueued = false;         // a queued startNext() is pending
     bool m_idleAnnounced = true;        // idle() was emitted since the last job was created
     int m_failWorkerStarts = 0;
+    int m_registryObserver = 0;         // CalculationRegistry::addObserver() token
     std::unique_ptr<Run> m_run;         // non-null from a job's start until its worker was joined
 };
 

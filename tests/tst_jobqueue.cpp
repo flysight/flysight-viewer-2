@@ -67,6 +67,13 @@ private slots:
     void inputChangeWhileRunningSupersedes();
     void inputChangeWhileQueuedSupersedesAtStart();
     void registrationRemovedSupersedes();
+    void staleRunningJobIsStoppedAtOnce();
+    void requestWhileStaleJobWindsDown();
+    void staleJobThatReturnsAResultIsStillSuperseded();
+    void registrationRemovedStopsRunningJobAtOnce();
+    void modelDestroyedStopsRunningJobAtOnce();
+    void userCancelThenStaleEndsCancelled();
+    void staleThenUserCancelEndsSuperseded();
     void rejectionSucceedsWithReason();
     void exceptionSucceedsAsFailedResult();
     void resourceExhaustionFails();
@@ -695,6 +702,201 @@ void JobQueueTest::registrationRemovedSupersedes()
     m_model->flushPendingInvalidations();
 }
 
+// ---- Stale while running: stopped early, ended Superseded ---------------------------------------
+
+// Acceptance 8 (queue half), sooner: the engine marked the ticket when the
+// input changed, and the queue asks the compute function to stop there and
+// then. The gate is never opened, so the run cannot have reached its end.
+void JobQueueTest::staleRunningJobIsStoppedAtOnce()
+{
+    setInput("s1", "G_IN", 4);
+    setInput("s2", "EA_IN", 4);
+    QVERIFY(!session("s1").getAttribute("G_OUT").isValid());
+    QSignalSpy cancelSpy(m_queue.get(), &JobQueue::jobCancelRequested);
+    QSignalSpy progressSpy(m_queue.get(), &JobQueue::jobProgress);
+
+    const JobId first = m_queue->request("s1", QStringLiteral("gated")).job;
+    const JobId next = m_queue->request("s2", QStringLiteral("expA")).job;
+    QVERIFY(gate().waitEntered());
+    QCOMPARE(m_queue->activeJob("s1", "gated"), first);
+
+    // An edit of another session, or of a name the job does not depend on,
+    // stops nothing
+    setInput("s2", "G_IN", 1);
+    setInput("s1", "S_IN", 1);
+    QVERIFY(!m_queue->job(first).cancelRequested);
+    QCOMPARE(cancelSpy.count(), 0);
+
+    setInput("s1", "G_IN", 7);
+    QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
+
+    // Synchronously with the edit: asked to stop, still running, no longer
+    // what a new request is deduplicated against
+    QCOMPARE(cancelSpy.count(), 1);
+    QCOMPARE(cancelSpy.at(0).at(0).toULongLong(), first);
+    QVERIFY(m_queue->job(first).cancelRequested);
+    QCOMPARE(stateOf(first), JobState::Running);
+    QCOMPARE(m_queue->runningJob(), first);
+    QCOMPARE(m_queue->activeJob("s1", "gated"), JobId(0));
+    QCOMPARE(stateOf(next), JobState::Queued);
+
+    // A second change asks nothing twice
+    setInput("s1", "G_IN", 8);
+    QCOMPARE(cancelSpy.count(), 1);
+
+    QTRY_COMPARE(stateOf(first), JobState::Superseded);
+    QCOMPARE(m_queue->job(first).reason, QStringLiteral("Inputs changed"));
+    QVERIFY(!m_queue->job(first).cancelRequested);
+    QVERIFY(!m_queue->job(first).resultStatus.has_value());
+    QCOMPARE(gate().proceed.available(), 0);        // nobody let it through
+    for (const QList<QVariant> &args : progressSpy)
+        QVERIFY(args.at(1).toString() != QStringLiteral("step 2"));
+    QCOMPARE(publishedTrace(dependencySpy, "s1", "gated", "G_OUT"), QString());
+    QCOMPARE(engine("s1").runCount("gated"), 0);
+    QCOMPARE(engine("s1").readiness("gated").state, CalculationReadiness::State::Ready);
+
+    // The worker is free for the next job, and nothing is re-requested
+    QVERIFY(waitIdle(*m_queue));
+    QCOMPARE(stateOf(next), JobState::Succeeded);
+    QVERIFY(m_queue->job(next).startedAt >= m_queue->job(first).finishedAt);
+    QCOMPARE(m_queue->model()->rowCount(), 2);
+}
+
+// A refresh pressed while the stale job is still winding down is a new job,
+// which runs after the old worker has returned, with the new inputs.
+void JobQueueTest::requestWhileStaleJobWindsDown()
+{
+    setInput("s1", "G_IN", 4);
+    const JobId first = m_queue->request("s1", QStringLiteral("gated")).job;
+    QVERIFY(gate().waitEntered());
+    QCOMPARE(m_queue->request("s1", QStringLiteral("gated")).kind, Kind::AlreadyActive);
+
+    setInput("s1", "G_IN", 7);
+    QCOMPARE(stateOf(first), JobState::Running);        // still winding down
+
+    const JobQueue::RequestResult second = m_queue->request("s1", QStringLiteral("gated"));
+    QCOMPARE(second.kind, Kind::Created);
+    QVERIFY(second.job != first);
+    QCOMPARE(stateOf(second.job), JobState::Queued);
+    QCOMPARE(m_queue->activeJob("s1", "gated"), second.job);
+    QCOMPARE(m_queue->request("s1", QStringLiteral("gated")).kind, Kind::AlreadyActive);
+    QCOMPARE(m_queue->activeJobs(), QList<JobId>({first, second.job}));
+
+    QVERIFY(gate().waitEntered());                      // the new job: the old one has ended
+    QCOMPARE(stateOf(first), JobState::Superseded);
+    QCOMPARE(m_queue->job(first).reason, QStringLiteral("Inputs changed"));
+    gate().open(1);
+    QVERIFY(waitIdle(*m_queue));
+    QCOMPARE(stateOf(second.job), JobState::Succeeded);
+    QCOMPARE(session("s1").getAttribute("G_OUT"), QVariant(8));
+    QVERIFY(m_queue->job(second.job).startedAt >= m_queue->job(first).finishedAt);
+    QCOMPARE(gate().maxRunning.load(), 1);
+    QCOMPARE(gate().startOrder(), QList<int>({4, 7}));
+}
+
+// A compute function that answers the request with a complete result changes
+// nothing: the job is superseded, and the result goes nowhere.
+void JobQueueTest::staleJobThatReturnsAResultIsStillSuperseded()
+{
+    setInput("s1", "S_IN", 4);
+    QVERIFY(!session("s1").getAttribute("S_OUT").isValid());
+
+    const JobId id = m_queue->request("s1", QStringLiteral("stubborn")).job;
+    QVERIFY(gate().waitEntered());
+    setInput("s1", "S_IN", 7);
+    QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
+    QVERIFY(m_queue->job(id).cancelRequested);
+    QVERIFY(waitIdle(*m_queue));
+
+    QCOMPARE(stateOf(id), JobState::Superseded);
+    QCOMPARE(m_queue->job(id).reason, QStringLiteral("Inputs changed"));
+    QCOMPARE(publishedTrace(dependencySpy, "s1", "stubborn", "S_OUT"), QString());
+    QCOMPARE(engine("s1").runCount("stubborn"), 0);
+    QCOMPARE(engine("s1").readiness("stubborn").state, CalculationReadiness::State::Ready);
+}
+
+void JobQueueTest::registrationRemovedStopsRunningJobAtOnce()
+{
+    CalculationRegistry &registry = CalculationRegistry::instance();
+    setInput("s1", "G_IN", 4);
+    const JobId running = m_queue->request("s1", QStringLiteral("gated")).job;
+    QVERIFY(gate().waitEntered());
+
+    // An unrelated registration change stops nothing
+    const CalculationDescriptor throwerDescriptor = *registry.instance(QStringLiteral("thrower"))->descriptor;
+    QVERIFY(registry.unregister(QStringLiteral("thrower")));
+    QVERIFY(!m_queue->job(running).cancelRequested);
+
+    const CalculationDescriptor gatedDescriptor = *registry.instance(QStringLiteral("gated"))->descriptor;
+    QVERIFY(registry.unregister(QStringLiteral("gated")));
+    QVERIFY(m_queue->job(running).cancelRequested);     // from the registry's notification
+    QCOMPARE(stateOf(running), JobState::Running);
+
+    // Registered again at once: the old run is refused all the same
+    QVERIFY(registry.registerCalculation(gatedDescriptor));
+    QVERIFY(registry.registerCalculation(throwerDescriptor));
+    m_model->flushPendingInvalidations();
+
+    QTRY_COMPARE(stateOf(running), JobState::Superseded);       // the gate is never opened
+    QCOMPARE(m_queue->job(running).reason, QStringLiteral("Calculation is no longer registered"));
+    QVERIFY(!session("s1").getAttribute("G_OUT").isValid());
+    QCOMPARE(engine("s1").preparedCount(), 0);
+    QVERIFY(waitIdle(*m_queue));
+}
+
+void JobQueueTest::modelDestroyedStopsRunningJobAtOnce()
+{
+    setInput("s1", "G_IN", 4);
+    const JobId running = m_queue->request("s1", QStringLiteral("gated")).job;
+    QVERIFY(gate().waitEntered());
+
+    m_model.reset();
+    QVERIFY(m_queue->job(running).cancelRequested);
+
+    QTRY_COMPARE(stateOf(running), JobState::Superseded);       // the gate is never opened
+    QCOMPARE(m_queue->job(running).reason, QString::fromLatin1(kRemoved));
+    QVERIFY(waitIdle(*m_queue));
+
+    verifyEndTransitions(m_queue->model());
+    m_queue.reset();
+}
+
+// The pending end is decided once: the first writer wins.
+void JobQueueTest::userCancelThenStaleEndsCancelled()
+{
+    setInput("s1", "G_IN", 4);
+    QSignalSpy cancelSpy(m_queue.get(), &JobQueue::jobCancelRequested);
+    const JobId id = m_queue->request("s1", QStringLiteral("gated")).job;
+    QVERIFY(gate().waitEntered());
+
+    QVERIFY(m_queue->cancel(id));
+    setInput("s1", "G_IN", 7);
+    QCOMPARE(cancelSpy.count(), 1);
+
+    QVERIFY(waitIdle(*m_queue));
+    QCOMPARE(stateOf(id), JobState::Cancelled);
+    QCOMPARE(m_queue->job(id).reason, QStringLiteral("Cancelled"));
+    QVERIFY(!session("s1").getAttribute("G_OUT").isValid());
+}
+
+void JobQueueTest::staleThenUserCancelEndsSuperseded()
+{
+    setInput("s1", "G_IN", 4);
+    QSignalSpy cancelSpy(m_queue.get(), &JobQueue::jobCancelRequested);
+    const JobId id = m_queue->request("s1", QStringLiteral("gated")).job;
+    QVERIFY(gate().waitEntered());
+
+    setInput("s1", "G_IN", 7);
+    QVERIFY(m_queue->cancel(id));           // accepted: the job is still active
+    QCOMPARE(m_queue->cancelAll(), 0);      // but it had been asked to stop before
+    QCOMPARE(cancelSpy.count(), 1);
+
+    QVERIFY(waitIdle(*m_queue));
+    QCOMPARE(stateOf(id), JobState::Superseded);
+    QCOMPARE(m_queue->job(id).reason, QStringLiteral("Inputs changed"));
+    QVERIFY(!session("s1").getAttribute("G_OUT").isValid());
+}
+
 // ---- Results that are functions of the inputs, and failures that are not ----------------------
 
 void JobQueueTest::rejectionSucceedsWithReason()
@@ -1154,6 +1356,7 @@ void JobQueueTest::mergeIntoSessionWithRunningJobSupersedes()
     sensorOnly.setMeasurement("IMU", "wx", {30.0, 60.0, 90.0});
     m_model->mergeSessions({sensorOnly});
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
+    QVERIFY(m_queue->job(first).cancelRequested);       // stale: asked to stop during the merge
 
     gate().open(1);
     QVERIFY(waitIdle(*m_queue));

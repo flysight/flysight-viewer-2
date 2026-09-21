@@ -127,8 +127,9 @@ struct PlotRowState {
 ///   NotProduced                                            Failed (reason from the notes)
 ///   NotApplicable                                          NotApplicable
 ///
-/// A LIVE job is a queued or running job that was not asked to cancel: a track
-/// whose job is winding down after a cancel is Missing at once. There is no
+/// A LIVE job is a queued or running job that was not asked to stop: a track
+/// whose job is winding down after a cancel - or after the queue stopped it
+/// because its inputs went stale - is Missing at once. There is no
 /// "stale" condition - a result invalidated by an input change reports Blocked
 /// again and is simply Missing. The x axis is not inspected: every time axis of
 /// a sensor produced by an explicit calculation is produced by that calculation

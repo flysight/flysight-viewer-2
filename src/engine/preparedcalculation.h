@@ -130,6 +130,24 @@ public:
     /// ticket is spent; a second call asserts and returns RefusedStale.
     PublishOutcome publish(ComputedCalculation computed);
 
+    /// MAIN THREAD. True while a publish() still to come is already certain to
+    /// refuse: the engine has marked the ticket stale (something the prepared
+    /// inputs depended on was invalidated, the caches were cleared), the
+    /// registration was removed, or the engine - the session - is gone. It
+    /// reports what the ENGINE recorded; the caller decides nothing and may use
+    /// it only to stop a computation nobody can use. Once true it stays true
+    /// until publish(). False for a healthy ticket, and false again once
+    /// publish() was called, whatever that returned: it says nothing about a
+    /// publication that has happened. False does not promise a publication
+    /// either: a synchronous request() in between (AlreadyPublished) and an
+    /// invalidation the engine had to defer are decided by publish() alone.
+    /// compute() never reads this.
+    bool willBeRefused() const;
+    /// MAIN THREAD. The reason publish() would give for that refusal
+    /// (InputsChanged, RegistrationRemoved, SessionGone); None while
+    /// willBeRefused() is false.
+    PublishOutcome::Reason refusalReason() const;
+
 private:
     friend class CalculationEngine;
 

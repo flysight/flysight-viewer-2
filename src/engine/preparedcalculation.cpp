@@ -107,6 +107,20 @@ PublishOutcome PreparedCalculation::publish(ComputedCalculation computed)
     return m_engine->publishPrepared(*this, std::move(computed));
 }
 
+bool PreparedCalculation::willBeRefused() const
+{
+    // The engine's own marks, read back: nothing is decided here. A ticket
+    // whose engine is gone was marked by the engine's destructor.
+    return !m_spent && (m_refused || !m_engine);
+}
+
+PublishOutcome::Reason PreparedCalculation::refusalReason() const
+{
+    if (!willBeRefused())
+        return PublishOutcome::Reason::None;
+    return m_refused ? m_refusalReason : PublishOutcome::Reason::SessionGone;
+}
+
 void PreparedCalculation::markStale()
 {
     if (m_refused)

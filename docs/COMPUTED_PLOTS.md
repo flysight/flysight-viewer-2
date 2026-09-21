@@ -99,8 +99,10 @@ computation.
 - **When the recording's data changes** - a re-import, a merge of another file
   into the recording, a changed input - results that depended on the old data
   are discarded and the track is "not computed" again. If that happens while
-  the track is being computed, the computation's result is discarded too.
-  Nothing is recomputed automatically; the refresh icon shows.
+  the track is being computed, that computation is stopped - its result could
+  not be used - and the row shows the refresh icon at once instead of the
+  cancel control. Nothing is recomputed automatically; pressing refresh computes the track
+  from the new data as soon as the old computation has stopped.
 - **When you quit.** Results are not saved. After a restart the plots are
   still checked and the rows show the refresh icon.
 - Moving markers, zooming, panning and changing display settings never discard
