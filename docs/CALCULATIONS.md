@@ -613,3 +613,249 @@ engine callback (they inspect or publish to engines).
 
 Tests: `tests/tst_jobqueue.cpp`, `tests/tst_jobmodel.cpp`, and the controllable
 calculations of `tests/support/jobfixture.h`.
+
+## 16. Plot-driven requests
+
+Users think in plots, not calculations: "show fusion roll for these tracks" is
+the request. `PlotRequests` (`src/plotrequests.h`) is the widget-free component
+that turns that into jobs. It lives in `flysight_core` (Qt Core and Gui only)
+next to `SessionModel`, `JobQueue` and `PlotModel` - the store of plot check
+state, which is in `flysight_core` for this reason - and it is the **only place
+in the application that calls `JobQueue::request()`**. The plot list's view
+paints what it reports and forwards clicks to it; every decision about state,
+counts, and what to request is made here and tested without widgets
+(`tests/tst_plot_requests.cpp`).
+
+A plot's checkbox means "show this plot wherever its data is available". It
+makes no promise that the data will be computed: "checked but not computed" is
+an ordinary state.
+
+### 16.1 Track conditions
+
+For each checked plot that is explicit-backed (16.3), every **visible, loaded
+track** - a session-model row with `isLoaded() && visible && !loadFailed`,
+exactly the rows the plot widget draws - is in one `PlotTrackCondition`. It is
+derived from `CalculationEngine::blockers()` (section 13) of the plot's y name
+and from the job queue:
+
+| `BlockerReport::state` | Condition |
+|---|---|
+| `Available` | `Available`: the plot draws it |
+| `Blocked`, at least one blocker has a live job | `Pending` |
+| `Blocked`, every blocker was refused by the queue (below) | `NotApplicable` |
+| `Blocked`, otherwise | `Missing` |
+| `NotProduced` | `Failed`, with a reason built from the notes |
+| `NotApplicable` | `NotApplicable`: silently absent, as plots treat missing data today |
+
+- A **live job** is a queued or running job that was **not asked to cancel**
+  (the rule of `JobQueue::activeJob()`, section 15.2). A track whose job is
+  winding down after a cancel is `Missing` at once; if a newer queued job exists
+  for the same (session, instance), that one is the live job. The index is
+  built once per pass from `activeJobs()` and `job(id)`.
+- There is no "stale" condition. A result invalidated by an input change
+  reports `Blocked` again and the track is simply `Missing`; a failed track
+  whose inputs change becomes `Missing`, and therefore refreshable, the same
+  way. `Blocked` wins over `NotProduced` as in section 13.
+- A session without the explicit calculation's inputs reports `NotApplicable`:
+  it is never missing, pending, or failed, and nothing is ever requested for it.
+  As a second line of defence, a blocker for which `request()` answered
+  `MissingInput`, `NothingToDo`, or `UnknownCalculation` is remembered as
+  *refused* for that session until any of the session's names changes (or the
+  session model is reset, or the registry changes); a track all of whose
+  blockers are refused is `NotApplicable`, so that a row never shows a refresh
+  control that can do nothing.
+- The failure reason is, per note, `"<title>: <detail>"`; when the detail is
+  empty, "Calculation failed" for `ResultStatus::Failed` and "No result for
+  this recording" otherwise. Several notes are joined with `"; "`.
+
+**Only the y name is inspected**: `DependencyKey::measurement(sensorID,
+measurementID)`. The x-axis variable is a per-view setting of the application
+and is not read here. This requires of every sensor produced by an explicit
+calculation that **each of its time axes is an output of that calculation or is
+derived on demand from its outputs**, so that "y available" implies "x
+available" and a track whose y is blocked gets its x from the same job.
+
+### 16.2 Row state
+
+`PlotRequests::rowState(plotId)` returns a `PlotRowState`, a plain value;
+`plotId` is `"<sensorID>/<measurementID>"`, equal to
+`PlotModel::PlotValueIdRole` (`PlotRequests::plotId()` builds it). Over the
+visible loaded tracks in session-model row order:
+
+- `pending`, `missing`, `failed`: lists of `PlotTrackState` (`sessionId`,
+  `sessionName` - `_DESCRIPTION`, else the id, read live - `condition`,
+  `calculationTitles`, `reason` for a failed track, and for a pending one
+  `job`, `jobState` and `jobProgressText`; `job` is the running live job among
+  the track's blockers, else the oldest queued one). `pendingCount`,
+  `missingCount`, `failedCount` are their sizes. Available and not-applicable
+  tracks appear nowhere.
+- `control()`: `Cancel` while anything is pending; else `Refresh` while anything
+  is missing; else `None`. `controlCount()` is the number next to it
+  (`pendingCount` / `missingCount` / 0). `showsWarning()` (`failedCount > 0`) is
+  independent of both. There is no retry for a failed track: the same inputs
+  give the same failure.
+- `waitingTotal` / `waitingDone` and `progressLabel` ("1 of 3", empty unless
+  `control() == Cancel`) come from the row's **waiting set**: the tracks the row
+  is or was waiting for in the current episode. A gesture enters the tracks it
+  got a job for, or found pending; a pass enters every track it observes
+  pending (a row checked programmatically while another row's jobs run waits on
+  them too). A waited-for track counts as done once it is available, failed, or
+  not applicable. The set ends when the row has no pending track, on cancel,
+  and on uncheck; a hidden or removed session leaves it at once.
+- `jobProgressText`: the running job's progress text when this row waits on it.
+  Rows that wait on the same job (roll, pitch and yaw share one fit) carry the
+  same text - they are waiting on the same thing.
+- `toolTip`: ready-made plain text, also available as the pure function
+  `PlotRequests::buildToolTip(state)`. Sections are omitted when empty:
+
+  ```
+  Computing (1 of 3 done):
+    <session name> - <titles>: <progress text | running | queued>
+  Not computed (press refresh to compute):
+    <session name>
+  Could not be computed:
+    <session name> - <reason>
+  ```
+
+  Until a jobs dock exists, this is where failures are reported; no message box
+  is shown for a calculation outcome.
+- `isPlain()`: nothing pending, missing, or failed - the row is painted exactly
+  as today. `explicitBacked` is false, and the whole state is the default
+  value, for an unchecked plot, a plot that is not explicit-backed, and an
+  unknown id.
+
+`rowStateChanged(plotId)` is emitted for each row whose state differs after a
+pass (`operator==` on the whole value) and `rowStatesChanged()` once per pass in
+which any did. A plot that stops being inspected falls back to the default
+state and is announced once. `jobProgress` updates the texts of the stored
+states without a pass and without inspection.
+
+### 16.3 Explicit-backed plots, and what inspection costs
+
+A plot is **explicit-backed** when any name in the static dependency closure of
+its y name - `CalculationRegistry::staticDependencies(name).names`, which
+includes the name itself and looks through source conversions - has a candidate
+(`candidatesFor()`) with explicit policy. This is a pure function of the
+registrations, memoized per plot id, and dropped by a registry observer. It is
+exact: `staticDependencies()` is a superset of every dynamic dependency set and
+a blocker is always reached through declared inputs, so a plot that is not
+explicit-backed can never report a blocker.
+
+Such plots are **never inspected**: no `blockers()` call, no read, no signal.
+They cost one hash lookup. `blockers()` is called only for (checked and
+explicit-backed plots) x (visible and loaded tracks) - names the plot widget
+reads for the same tracks anyway, plus the cheap on-demand inputs the job would
+capture - through `SessionModel::loadedSession()` under a `RowStabilityGuard`:
+nothing is loaded, evicted, or touched in the LRU, and the guard is released
+before anything is requested, cancelled, or emitted. Classifications are not
+cached across passes (after A publishes, the blocker of B's output changes
+from A to B although B's output may not be re-announced); the engine's caches
+make a repeated `blockers()` cheap, and passes are coalesced to one per
+event-loop pass with a zero-interval timer.
+
+A pass is scheduled by: the queue's `jobsChanged`, `jobFinished`,
+`jobCancelRequested`; `SessionModel::dependencyChanged` for a name in the
+static closure of a checked explicit-backed plot (other names are ignored),
+`visibilityChanged`, `modelChanged`, `sessionLoaded`, `modelReset`; the
+`PlotModel`'s check-state `dataChanged` and `modelReset`; and a registry change.
+
+### 16.4 What starts work: two gestures
+
+| Gesture | Call |
+|---|---|
+| The user checked the plot by direct interaction with its row | `plotCheckedByUser(plotId)`, **after** the check state was written to the `PlotModel` |
+| The user pressed the row's refresh control | `refreshPressed(plotId)` - the same request |
+
+Both request, once, the blockers of every visible track that is missing for
+that plot (blockers with a live job, and refused ones, are skipped), and return
+the number of jobs created. It is a one-shot request, not a standing order. The
+pass runs before the call returns, so the row is `Pending` when the view
+repaints. A gesture on a plot that is not checked in the `PlotModel` (read
+directly, so a wrong call order degrades to "nothing requested"), not
+explicit-backed, or unknown does nothing and returns 0.
+
+**A gesture is an explicit call from the view. It is never inferred from a
+model change** ("when in doubt, it is not a gesture"). None of the following
+starts a job; the affected tracks are `Missing` and the refresh control shows:
+
+- restoring checked plots at startup (`PlotModel::setPlots()` with settings),
+  applying a profile (`setPlotEnabled()`), the Plots menu and its shortcuts
+  (`togglePlot()`), and any other programmatic write of the check state,
+  `setData(CheckStateRole)` included - the write is not the gesture;
+- showing a track, loading a session, importing or merging a file;
+- an input change that invalidates a published result;
+- a job ending cancelled, superseded, or failed;
+- a registry change; `rowState()`, `flush()`, and the pass itself;
+- reads by the plot, legend, measure tool, logbook columns, the idle scheduler,
+  the map, exports, and plugins (sections 8 and 13).
+
+### 16.5 Chained continuation
+
+When explicit calculation B consumes an output of unrequested explicit
+calculation A, the blocker of a plot of B's output is A, and once A publishes
+it is B (section 13). When a job **succeeded**, `PlotRequests` inspects, for
+the job's session, every checked plot whose waiting set holds that session
+with its `continues` flag set - the tracks **a gesture asked about** - and
+requests the blockers that remain, without another gesture. This happens
+synchronously in the `jobFinished` slot, that is inside `JobQueue::endJob()`
+between `jobFinished` and the idle check, so the queue never reports `idle()`
+between the links of a chain; the engine state is current there because the
+publication's `dependencyChanged` precedes `jobFinished` (section 15).
+
+Continuation stops - the flag is reset, the track is `Missing`, the refresh
+control returns - when a job of the session ends `Cancelled`, `Superseded`, or
+`Failed`, or is asked to cancel (unless the track still has another live job
+among its blockers); when the plot is unchecked; and when the track is hidden,
+unloaded, or removed. A track that is shown again does not regain it. A row
+that is only observed pending (checked programmatically while another row's
+job runs) shows progress and continues nothing; a plot the *user* checks while
+another row's job runs adopts the pending tracks and completes its own chain.
+
+### 16.6 Cancel
+
+`cancelPressed(plotId)` cancels every live job among the blockers of the row's
+visible tracks - queued jobs end at once, the running job is asked to stop -
+ends the row's waiting set, and returns the number of jobs cancelled or asked
+to cancel. The plot stays checked: the component never writes to the
+`PlotModel`. By the live-job rule the tracks are `Missing` before the worker
+has returned, and every other row waiting on the same jobs changes the same
+way in the same pass, because all rows are derived from the same queue state. A
+refresh pressed while the cancelled job winds down creates a new job behind it.
+
+### 16.7 Jobs nobody wants
+
+When a plot is unchecked (or vanishes from the `PlotModel`) or a track is
+hidden, the component ends, synchronously, the **queued** jobs that no checked
+plot needs on a visible track (`JobQueue::cancelUnwantedQueued()`, reason "No
+longer needed"). "Needed" is derived from (checked, explicit-backed plots) x
+(visible, loaded tracks) - the (session, instance) of every reported blocker -
+and never from who requested a job, so a queued job another checked plot still
+needs survives. The running job is never offered: its result is valid and
+cached, and hiding a track for a moment must not throw away minutes of work.
+Only a cancel gesture or shutdown stops a running job. Removed sessions need no
+pruning: the queue supersedes their jobs itself (section 15.3).
+
+### 16.8 API and threading rules
+
+Everything is **main thread only**, and no member may be called from inside a
+calculation or an engine callback (they call `blockers()` and the queue).
+Create the component after the `JobQueue` and destroy it before the queue. Every
+collaborator is held weakly; a missing one makes the component inert (default
+states, gestures return 0).
+
+| Member | Meaning |
+|---|---|
+| `PlotRequests(SessionModel *, PlotModel *, JobQueue *, QObject *parent)` / `~PlotRequests()` | schedules one initial pass, so rows restored at startup show their refresh control without any event; the destructor removes the registry observer |
+| `plotId(sensorId, measurementId)`, `plotId(PlotValue)` | the row's id, equal to `PlotModel::PlotValueIdRole` |
+| `rowState(plotId)` | 16.2; the last computed state, at most one event-loop pass behind the models. A consumer that must not be behind (the "no data" warning of the plot widget) asks `blockers()` itself |
+| `plotCheckedByUser(plotId)`, `refreshPressed(plotId)` | 16.4; number of jobs created |
+| `cancelPressed(plotId)` | 16.6; number of jobs cancelled or asked to cancel |
+| `flush()`, `hasPendingUpdate()` | run / report a pending pass (tests; the view never needs them) |
+| `buildToolTip(state)` | 16.2; static and pure |
+| `passCount()` | test seam: passes run so far |
+| signals `rowStateChanged(plotId)`, `rowStatesChanged()` | 16.2 |
+| `PlotRowState`: `plotId`, `explicitBacked`, `pendingCount`, `missingCount`, `failedCount`, `waitingTotal`, `waitingDone`, `progressLabel`, `jobProgressText`, `pending`, `missing`, `failed`, `toolTip`, `Control`, `control()`, `showsWarning()`, `controlCount()`, `isPlain()`, `operator==` | 16.2 |
+| `PlotTrackState`: `sessionId`, `sessionName`, `condition`, `calculationTitles`, `reason`, `job`, `jobState`, `jobProgressText`, `operator==`; `PlotTrackCondition` | 16.1, 16.2 |
+
+Tests: `tests/tst_plot_requests.cpp`, with the synthetic plots of
+`tests/support/plotfixture.h` over the calculations of `jobfixture.h`.

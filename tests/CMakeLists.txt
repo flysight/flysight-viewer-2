@@ -47,6 +47,7 @@ add_library(flysight_test_support STATIC
   support/testmain.h           support/testutil.h
   support/asyncdriver.h
   support/jobfixture.cpp      support/jobfixture.h
+  support/plotfixture.cpp     support/plotfixture.h
 )
 target_include_directories(flysight_test_support PUBLIC "${CMAKE_CURRENT_LIST_DIR}/support")
 target_link_libraries(flysight_test_support
@@ -133,6 +134,9 @@ flysight_add_test(tst_session_model_engine SOURCES tst_session_model_engine.cpp)
 # Job queue and job model (synthetic explicit calculations; no GTSAM)
 flysight_add_test(tst_jobqueue SOURCES tst_jobqueue.cpp LIBS Threads::Threads)
 flysight_add_test(tst_jobmodel SOURCES tst_jobmodel.cpp LIBS Threads::Threads)
+
+# Plot request logic (row state, gestures, continuation, cancel, pruning; no widgets)
+flysight_add_test(tst_plot_requests SOURCES tst_plot_requests.cpp LIBS Threads::Threads)
 
 # Source layer and conversion layer: the schema and unit tables, the conversion
 # families on a private registry, the importer, and the session-level suite

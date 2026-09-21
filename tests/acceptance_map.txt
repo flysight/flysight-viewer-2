@@ -227,3 +227,9 @@
 # SFJ 17 tst_jobqueue shutdownWithQueuedAndRunning
 # SFJ 18 tst_jobmodel historyFromSignalsAlone
 # SFJ 18 tst_jobmodel retentionBound
+# SFJ 11 tst_plot_requests sessionWithoutInputIsNeverListed
+# SFJ 13 tst_plot_requests chainedBlockersContinue
+# SFJ 15 tst_plot_requests rowScript
+# SFJ 16 tst_plot_requests startupRestoreStartsNothing
+# SFJ 16 tst_plot_requests profileStyleApplyStartsNothing
+# SFJ 16 tst_plot_requests programmaticCheckStartsNothing

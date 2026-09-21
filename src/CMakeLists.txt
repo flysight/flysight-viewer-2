@@ -291,6 +291,10 @@ add_library(flysight_core STATIC
   attributeregistry.cpp      attributeregistry.h
   markerregistry.cpp         markerregistry.h
   plotregistry.cpp           plotregistry.h
+  # Plot check state (widget-free) and the logic behind the plot list's rows:
+  # row state, the two gestures, chained continuation, cancel, pruning
+  plotmodel.cpp              plotmodel.h
+  plotrequests.cpp           plotrequests.h
   momentmodel.cpp            momentmodel.h
   altitudemarkerfeature.cpp  altitudemarkerfeature.h
   # Header-only Q_OBJECT singleton: must be listed in exactly one target so
@@ -362,7 +366,6 @@ set(PROJECT_SOURCES
   profilestatebridge.cpp     profilestatebridge.h
   manageprofilesdialog.cpp   manageprofilesdialog.h
   python_output_redirector.h
-  plotmodel.cpp              plotmodel.h
   plotrangemodel.cpp         plotrangemodel.h
   markermodel.cpp            markermodel.h
   ui/docks/AppContext.h
