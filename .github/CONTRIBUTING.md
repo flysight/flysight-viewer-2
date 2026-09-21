@@ -23,8 +23,6 @@ FlySight Viewer requires the following tools and dependencies:
 | Python | 3.8+ | All |
 | C++ Compiler | C++17 compatible | All |
 | Ninja | Latest | All (recommended) |
-| Boost | 1.87.0 | Windows |
-| Boost | Latest | macOS/Linux (via package manager) |
 
 ### Platform-Specific Setup
 
@@ -35,8 +33,7 @@ FlySight Viewer requires the following tools and dependencies:
    - Qt Location
    - Qt Positioning
    - Qt Multimedia
-3. Install Boost 1.87.0 (prebuilt binaries for MSVC 14.3)
-4. Install CMake 3.18+ and Ninja
+3. Install CMake 3.18+ and Ninja
 
 #### macOS
 
@@ -45,7 +42,7 @@ FlySight Viewer requires the following tools and dependencies:
 xcode-select --install
 
 # Install dependencies via Homebrew
-brew install cmake ninja boost python@3.13
+brew install cmake ninja python@3.13
 
 # Install Qt via aqtinstall or Qt Online Installer
 pip3 install aqtinstall
@@ -61,7 +58,6 @@ sudo apt-get install -y cmake ninja-build g++
 
 # Install Qt dependencies
 sudo apt-get install -y \
-    libboost-all-dev \
     libxcb-cursor0 \
     libxcb-icccm4 \
     libxcb-image0 \
@@ -258,15 +254,6 @@ Ensure Qt is in your PATH or set `CMAKE_PREFIX_PATH`:
 
 ```bash
 cmake -B build -S src -DCMAKE_PREFIX_PATH=/path/to/Qt/6.7.3/gcc_64
-```
-
-#### Boost not found (Windows)
-
-Set the Boost environment variables:
-
-```powershell
-$env:BOOST_ROOT = "C:\local\boost_1_87_0"
-$env:BOOST_LIBRARYDIR = "C:\local\boost_1_87_0\lib64-msvc-14.3"
 ```
 
 #### Third-party build fails

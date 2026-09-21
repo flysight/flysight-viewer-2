@@ -175,6 +175,43 @@ QStringList fusionMeasurementNames()
     };
 }
 
+QVector<PlotValue> fusionPlots()
+{
+    struct Row { const char *name; const char *units; const char *measurement; const char *type; };
+    static const Row rows[] = {
+        {"North position",          "m",     "north", "distance"},
+        {"East position",           "m",     "east",  "distance"},
+        {"Down position",           "m",     "down",  "distance"},
+        {"North velocity",          "m/s",   "velN",  "speed"},
+        {"East velocity",           "m/s",   "velE",  "speed"},
+        {"Down velocity",           "m/s",   "velD",  "vertical_speed"},
+        {"North acceleration",      "m/s^2", "accN",  "acceleration"},
+        {"East acceleration",       "m/s^2", "accE",  "acceleration"},
+        {"Down acceleration",       "m/s^2", "accD",  "acceleration"},
+        {"Horizontal acceleration", "m/s^2", "accH",  "acceleration"},
+        {"Roll",                    "deg",   "roll",  "angle"},
+        {"Pitch",                   "deg",   "pitch", "angle"},
+        {"Yaw",                     "deg",   "yaw",   "angle"},
+        {"Quaternion X",            "",      "qx",    "ratio"},
+        {"Quaternion Y",            "",      "qy",    "ratio"},
+        {"Quaternion Z",            "",      "qz",    "ratio"},
+        {"Quaternion W",            "",      "qw",    "ratio"},
+    };
+
+    QVector<PlotValue> plots;
+    for (const Row &row : rows) {
+        PlotValue plot;
+        plot.category = QStringLiteral("Sensor fusion");
+        plot.plotName = QString::fromLatin1(row.name);
+        plot.plotUnits = QString::fromLatin1(row.units);
+        plot.sensorID = QStringLiteral("Fusion");
+        plot.measurementID = QString::fromLatin1(row.measurement);
+        plot.measurementType = QString::fromLatin1(row.type);
+        plots.append(plot);
+    }
+    return plots;
+}
+
 QString fusionRollAtExit()
 {
     return SessionData::interpolationKey(SessionKeys::ExitTime, QStringLiteral("Fusion"),

@@ -26,9 +26,10 @@
 #        flysight_solver_stack(<target>)
 #        flysight_solver_test_environment(<test>)
 #        flysight_install_solver_runtime(<destination>)
+#        flysight_assert_solver_confinement()
 #
 # Nothing here links GTSAM to anything. Which targets link it is decided where
-# they are defined.
+# they are defined; flysight_assert_solver_confinement() checks the decision.
 #
 # =============================================================================
 
@@ -458,4 +459,137 @@ function(_flysight_solver_imported_file target location_var soname_var)
 
     set(${location_var} "${_location}" PARENT_SCOPE)
     set(${soname_var} "${_soname}" PARENT_SCOPE)
+endfunction()
+
+# =============================================================================
+# flysight_assert_solver_confinement()
+# =============================================================================
+#
+# "Only the code that needs GTSAM links it. The engine, session model, and job
+# queue do not depend on GTSAM, and their tests build without it."
+#
+# Checked here, at configure time, on the real link closures: a text search
+# cannot see link items that come from variables or from the link interface of
+# another target. (The text half - who includes GTSAM headers - is in
+# tests/audit/cleanup_audit.cmake, group solver-confinement.) The function only
+# reads target properties; it changes nothing.
+#
+# Call it once from src/CMakeLists.txt, after every target of the application
+# project and of tests/ has been defined.
+#
+# Rules, each a FATAL_ERROR naming the target and the path by which it reaches
+# gtsam:
+#   1. only these targets NAME gtsam on their own link line
+set(_FLYSIGHT_GTSAM_NAMERS
+    flysight_fusion tst_solver_smoke solver_deploy_probe tst_fusion_kernel)
+#   2. only those, plus these, REACH gtsam through anything they link
+set(_FLYSIGHT_GTSAM_REACHERS
+    ${_FLYSIGHT_GTSAM_NAMERS}
+    FlySightViewer
+    flysight_fusion_test_support flysight_fusion_session_support
+    tst_fusion_parity tst_fusion_session tst_fusion_jobs tst_fusion_rows)
+#   3. stated separately for a clear message, although implied by 2: the
+#      widget-free core, the Python bridge and the plot library never reach it
+set(_FLYSIGHT_GTSAM_NEVER
+    flysight_model flysight_core flysight_test_support flysight_cpp_bridge qcustomplot)
+
+# _flysight_link_items(<out> <target> <property>): the link items of a target
+# property as plain names. $<LINK_ONLY:x> is unwrapped (the private dependency
+# of a static library still ends up on the consumer's link line); every other
+# generator expression is dropped; ALIAS targets are resolved.
+function(_flysight_link_items out target property)
+    set(_items "")
+    get_target_property(_links "${target}" "${property}")
+    if(_links)
+        foreach(_link IN LISTS _links)
+            if(_link MATCHES "^\\$<LINK_ONLY:([^>]+)>$")
+                set(_link "${CMAKE_MATCH_1}")
+            endif()
+            if(_link MATCHES "\\$<")
+                continue()
+            endif()
+            if(TARGET "${_link}")
+                get_target_property(_aliased "${_link}" ALIASED_TARGET)
+                if(_aliased)
+                    set(_link "${_aliased}")
+                endif()
+            endif()
+            list(APPEND _items "${_link}")
+        endforeach()
+    endif()
+    set(${out} "${_items}" PARENT_SCOPE)
+endfunction()
+
+# _flysight_path_to_gtsam(<out> <target> <property>): "a -> b -> gtsam", or
+# empty when the target does not reach gtsam. <property> is LINK_LIBRARIES for
+# the target being checked and INTERFACE_LINK_LIBRARIES below it.
+function(_flysight_path_to_gtsam out target property)
+    set(${out} "" PARENT_SCOPE)
+    get_property(_visited GLOBAL PROPERTY _FLYSIGHT_CONFINEMENT_VISITED)
+    if("${target}" IN_LIST _visited)
+        return()
+    endif()
+    set_property(GLOBAL APPEND PROPERTY _FLYSIGHT_CONFINEMENT_VISITED "${target}")
+
+    _flysight_link_items(_items "${target}" "${property}")
+    foreach(_item IN LISTS _items)
+        if(_item STREQUAL "gtsam")
+            set(${out} "${target} -> gtsam" PARENT_SCOPE)
+            return()
+        endif()
+        if(TARGET "${_item}")
+            _flysight_path_to_gtsam(_below "${_item}" INTERFACE_LINK_LIBRARIES)
+            if(_below)
+                set(${out} "${target} -> ${_below}" PARENT_SCOPE)
+                return()
+            endif()
+        endif()
+    endforeach()
+endfunction()
+
+function(flysight_assert_solver_confinement)
+    # Every target of the application project, and of tests/ when it was added
+    get_property(_targets DIRECTORY "${CMAKE_SOURCE_DIR}" PROPERTY BUILDSYSTEM_TARGETS)
+    set(_tests_dir "${CMAKE_SOURCE_DIR}/../tests")
+    if(FLYSIGHT_BUILD_TESTS AND IS_DIRECTORY "${_tests_dir}")
+        get_property(_test_targets DIRECTORY "${_tests_dir}" PROPERTY BUILDSYSTEM_TARGETS)
+        list(APPEND _targets ${_test_targets})
+    endif()
+
+    set(_reaching 0)
+    set(_errors "")
+    foreach(_target IN LISTS _targets)
+        get_target_property(_type "${_target}" TYPE)
+        if(_type STREQUAL "UTILITY" OR _type STREQUAL "INTERFACE_LIBRARY")
+            continue()
+        endif()
+
+        _flysight_link_items(_own "${_target}" LINK_LIBRARIES)
+        if("gtsam" IN_LIST _own AND NOT "${_target}" IN_LIST _FLYSIGHT_GTSAM_NAMERS)
+            string(APPEND _errors
+                "\n  ${_target} names gtsam on its link line. Only ${_FLYSIGHT_GTSAM_NAMERS} may.")
+        endif()
+
+        set_property(GLOBAL PROPERTY _FLYSIGHT_CONFINEMENT_VISITED "")
+        _flysight_path_to_gtsam(_path "${_target}" LINK_LIBRARIES)
+        if(NOT _path)
+            continue()
+        endif()
+        math(EXPR _reaching "${_reaching} + 1")
+        if("${_target}" IN_LIST _FLYSIGHT_GTSAM_NEVER)
+            string(APPEND _errors
+                "\n  ${_target} must never depend on GTSAM, but reaches it: ${_path}")
+        elseif(NOT "${_target}" IN_LIST _FLYSIGHT_GTSAM_REACHERS)
+            string(APPEND _errors
+                "\n  ${_target} reaches GTSAM (${_path}) and is not one of: ${_FLYSIGHT_GTSAM_REACHERS}")
+        endif()
+    endforeach()
+
+    if(_errors)
+        message(FATAL_ERROR
+            "GTSAM link confinement violated. Only the fusion library, the application "
+            "and the fusion tests may link GTSAM (cmake/SolverDependencies.cmake, "
+            "flysight_assert_solver_confinement):${_errors}")
+    endif()
+    message(STATUS "GTSAM link confinement: OK (${_reaching} targets reach gtsam)")
 endfunction()

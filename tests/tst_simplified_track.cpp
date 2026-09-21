@@ -303,9 +303,9 @@ void SimplifiedTrackTest::droppedSamplesWithinTolerance()
 }
 
 // Distinct samples at one position stay distinct. The previous implementation
-// simplified points and then searched the recording for each of them; here the
-// search for the second point started at, and matched, the first, so sample 0
-// came back twice and the true last sample was lost. Retaining indices removes
+// simplified points and then searched the recording for each of them; with
+// coincident positions the previous implementation's search re-matched the
+// first sample, and the true last sample was lost. Retaining indices removes
 // that defect.
 void SimplifiedTrackTest::duplicatePositionEndpoints()
 {

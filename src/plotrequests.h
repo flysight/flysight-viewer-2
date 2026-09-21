@@ -137,8 +137,8 @@ struct PlotRowState {
 /// WHAT INSPECTION COSTS. CalculationEngine::blockers() is called only for
 /// (checked AND explicit-backed plots) x (visible AND loaded tracks) - names
 /// the plot widget reads for the same tracks anyway. A plot is EXPLICIT-BACKED
-/// when any name in the static dependency closure of its y name
-/// (CalculationRegistry::staticDependencies(), which looks through source
+/// when CalculationRegistry::dependsOnExplicit() says so for its y name: any
+/// name in the static dependency closure (which looks through source
 /// conversions) has a candidate with explicit policy. That is a pure, memoized
 /// function of the registrations, and exact: a plot that is not explicit-backed
 /// can never report a blocker, so it is never inspected, its row state is the

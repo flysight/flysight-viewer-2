@@ -13,8 +13,9 @@
 # and their two helpers directly: they are application sources that need Qt
 # Core and Gui only, so the test needs no Widgets, WebEngine or Quick. The third
 # is tst_plot_row_delegate, which compiles the plot list's row delegate and is
-# the only test that links Qt Widgets (FLYSIGHT_BUILD_WIDGET_TESTS). The FLYSIGHT_BUILD_FUSION_TESTS block near the end of this file
-# is the only place a test may link GTSAM.
+# the only test that links Qt Widgets (FLYSIGHT_BUILD_WIDGET_TESTS). The
+# FLYSIGHT_BUILD_FUSION_TESTS block near the end of this file is the only place
+# a test may link GTSAM.
 #
 # Conventions:
 #   - one QObject test class per executable
@@ -298,7 +299,7 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
     SOURCES tst_solver_smoke.cpp solverprobe.h
     LIBS gtsam)
 
-  # Fusion kernel: golden parity against sensor-fusion-clean-port (tests/README.md section 12)
+  # Fusion kernel: golden parity against sensor-fusion-clean-port (tests/README.md section 11)
   add_library(flysight_fusion_test_support STATIC
     fusion/fusionfixtures.cpp fusion/fusionfixtures.h
     fusion/fusiongolden.cpp   fusion/fusiongolden.h)
@@ -320,6 +321,10 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
   flysight_add_fusion_test(tst_fusion_session SOURCES tst_fusion_session.cpp
     LIBS flysight_fusion_session_support Threads::Threads)
   flysight_add_fusion_test(tst_fusion_jobs SOURCES tst_fusion_jobs.cpp
+    LIBS flysight_fusion_session_support Threads::Threads)
+
+  # The plot-row script with the real fusion plots (acceptance 15, end to end)
+  flysight_add_fusion_test(tst_fusion_rows SOURCES tst_fusion_rows.cpp
     LIBS flysight_fusion_session_support Threads::Threads)
 
   # Not a test and not installed: copied into an installed application tree

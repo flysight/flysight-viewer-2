@@ -7,7 +7,12 @@
 #     removed rather than living alongside their replacements (acceptance 19);
 #   - each fact has exactly one authority (one gyro factor, one schema-version
 #     attribute name, one compatibility marker, one number formatter, one
-#     emitter of dependencyChanged, one saver, one import path).
+#     emitter of dependencyChanged, one saver, one import path);
+#   - the mechanisms of sensor-fusion-clean-port that have no successor stay
+#     absent (acceptance 120), and the structure that replaced them stays in
+#     place: one worker thread and no locks, GTSAM confined to the fusion
+#     kernel, gestures only from the plot list's row delegate, a widget-free
+#     core.
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -18,6 +23,12 @@
 #
 # Adding a rule: one expect_none / expect_only / expect_count line below. This
 # directory is excluded from every search, so a pattern never matches itself.
+# A pathspec that matches no file is not an error for git grep, so a misspelt
+# path passes silently: plant a hit once to prove a new rule works.
+#
+# Rule groups. audit_group(<slug>) at the head of a block of rules names the
+# group; tests/acceptance_map.txt cites groups as "<item> audit <slug>", and a
+# line that cites an unknown group is a violation.
 #
 # Allowing a legitimate hit. The rules are text searches, so a correct change
 # can trip one. Each rule that is likely to do so carries an "Allow:" comment
@@ -110,9 +121,16 @@ function(expect_count label regex n)
   set(VIOLATIONS "${VIOLATIONS}" PARENT_SCOPE)
 endfunction()
 
+# audit_group(<slug>): the rules that follow belong to this group (see the header)
+function(audit_group slug)
+  set_property(GLOBAL APPEND PROPERTY AUDIT_GROUPS "${slug}")
+endfunction()
+
 # ─────────────────────────────── old engine
+# m_sideEffectFrames: the sibling-frame scaffolding of sensor-fusion-clean-port
+# (seventeen per-output registrations writing each other's results).
 expect_none("old engine"
-  "CalculatedValue\\b|calculatedvalue\\.|DependencyManager|dependencymanager|calculatedvalueregistry|CalculatedValueRegistry|m_sideEffectKeys|m_activeCalculations|toDependencyKey"
+  "CalculatedValue\\b|calculatedvalue\\.|DependencyManager|dependencymanager|calculatedvalueregistry|CalculatedValueRegistry|m_sideEffectKeys|m_sideEffectFrames|m_activeCalculations|toDependencyKey"
   ${P})
 
 # ─────────────────────────────── old registration API and direct cache setters
@@ -169,8 +187,9 @@ expect_none("one authority: number formatting" "<charconv>" src)
 # (and anything else that needs metres) consumes Local/..., never its own.
 # Allow: a second legitimate user of LocalCartesian is added to the
 # allowed-file regex - after asking why it cannot read Local/... instead.
+audit_group(local-projection)
 expect_only("one authority: local projection" "LocalCartesian"
-  "^src/calculations/localcoordinatecalculations\.cpp$" src)
+  "^src/calculations/localcoordinatecalculations\\.cpp$" src)
 expect_none("simplified track: shared frame only" "GeographicLib|boost"
   "src/calculations/simplificationcalculations.*")
 
@@ -190,7 +209,7 @@ expect_none("no schema inference (importer, merge, calculations)"
 # ":!src/<dir>/<file>" exclusion; a compute function never does.
 expect_none("pure compute functions"
   "PreferencesManager|QSettings|QDateTime::current|std::rand|QRandomGenerator|_SESSION_ID"
-  src/calculations src/conversion src/engine)
+  src/calculations src/conversion src/engine src/fusion)
 
 # ─────────────────────────────── only the conversion layer reads the source layer
 # The registry refuses a source input anywhere but in a source conversion, and
@@ -222,46 +241,233 @@ expect_only("one import path" "importFile\\(" "^src/dataimporter\\.(cpp|h)$" src
 expect_none("exporter and merge read stored state only"
   "getAttribute|getMeasurement|effectiveUnit|calculationEngine" src/dataexporter.cpp src/sessionmerge.cpp)
 
+# =============================================================================
+# Sensor fusion as an explicit calculation, with plot-driven background jobs
+# (acceptance items 101-120). The rules below keep the mechanisms of the branch
+# sensor-fusion-clean-port that have no successor out of the tree, and keep the
+# structure that replaced them in place.
+# =============================================================================
+
+# The logic of background work: the job queue, its model, the plot request
+# component, and the fusion library.
+set(FUSION_CORE "src/jobqueue.*" "src/jobmodel.*" "src/plotrequests.*" src/fusion)
+
+# ─────────────────────────────── branch-mechanisms (acceptance 120)
+# The branch ran the fit inside a getter, behind an application-modal progress
+# dialog with a nested event loop, and needed a thread-local re-entrancy guard,
+# an idle-scheduler pause and a plot-widget rebuild guard to survive that.
+# Nothing runs inside a getter any more, so none of them has a successor.
+audit_group(branch-mechanisms)
+# Allow: the import progress dialog in mainwindow.cpp is the only modal
+# progress in the application (the #include and the dialog: two lines). A
+# COMMENT that names the class trips the count - reword the comment. A new
+# modal progress dialog needs a better reason than "a calculation is slow".
+expect_only("modal progress is the import dialog only" "QProgressDialog" "^src/mainwindow\\.cpp$" src)
+expect_count("modal progress is the import dialog only" "QProgressDialog" 2 src)
+# Allow: none expected. A nested event loop is how a slow calculation blocks
+# the application while pretending not to.
+expect_none("no nested event loop" "QEventLoop|processEvents" src)
+expect_none("no re-entrancy guard, no 'a calculation is running' flag"
+  "thread_local|sensorFusionIsRunning|fusionRunning" src tests)
+# Allow: the idle scheduler knows nothing about calculations or jobs. If it
+# ever must, that is a design change to discuss, not an exclusion to add.
+expect_none("the idle scheduler is never paused for a calculation"
+  "[Ff]usion|[Jj]ob[Qq]ueue|calculations/|IsRunning" src/idlescheduler.cpp src/idlescheduler.h)
+expect_none("jobs never touch the idle scheduler" "[Ii]dle[Ss]cheduler" ${FUSION_CORE})
+# m_pendingRebuildLevel is master's own and is not part of this rule.
+expect_none("no plot rebuild guard" "m_rebuildingPlot|QScopedValueRollback" src/ui/docks/plot)
+# Allow: none expected. A calculation outcome is reported by the plot row
+# (badge and tooltip), never by a dialog, a message box or the status bar.
+expect_none("no dialog or message box for a calculation outcome"
+  "QMessageBox|QProgressDialog|QDialog|QErrorMessage|statusBar\\("
+  ${FUSION_CORE} src/engine src/calculations src/ui/docks/plotselection)
+# A rejection and a solver failure are results of the compute function, cached
+# by the engine like any other; the registration never catches and stores one.
+expect_none("no hand-cached failure" "catch *\\(" src/fusion/fusionregistration.cpp)
+
+# ─────────────────────────────── naming
+# The algorithm is a batch factor-graph fit and nothing is named after a
+# filter; the branch's sensor and output names are gone.
+# Allow: tests/README.md reproduces the golden-capture harness verbatim, which
+# names the branch's files and fields, and capture.json records the branch's
+# compiler command line: both are excluded. The patterns are case-sensitive on
+# purpose (SP_MediaSeekForward contains the three letters in lower case after
+# an upper-case S; "[Ee]kf" does not match it).
+audit_group(naming)
+set(NAMING_PATHS src tests docs python_plugins cmake CMakeLists.txt README.md
+    ":!tests/README.md" ":!tests/data/fusion/capture.json")
+expect_none("nothing is named after a filter" "EKF|[Ee]kf" ${NAMING_PATHS})
+expect_none("branch output names are gone" "posN|posE|posD|_IMU_GNSS_EKF|ImuGnssEkf" ${NAMING_PATHS})
+# Allow: these two counts pin the application's plot list to the list the
+# tests use (tests/fusion/fusionsessions.cpp, fusionPlots()). Adding a plot
+# means changing both, and the number here.
+expect_count("seventeen fusion plots" "^ *\\{\"Sensor fusion\", " 17 src/mainwindow.cpp)
+expect_count("six local-frame plots" "^ *\\{\"GNSS \\(Local frame\\)\", " 6 src/mainwindow.cpp)
+
+# ─────────────────────────────── solver-confinement
+# Text half of "only the code that needs GTSAM links it". The link half is
+# checked at configure time by flysight_assert_solver_confinement()
+# (cmake/SolverDependencies.cmake), which sees real link closures.
+audit_group(solver-confinement)
+# Allow: a new kernel file under src/fusion is already allowed. A new TEST
+# that needs GTSAM types is added to the regex and to the FUSION block of
+# tests/CMakeLists.txt; nothing else under src ever is.
+expect_only("GTSAM headers: kernel and its tests only" "#include <gtsam/"
+  "^src/fusion/|^tests/(tst_solver_smoke\\.cpp|solverprobe\\.h|solver_deploy_probe\\.cpp|tst_fusion_kernel\\.cpp|README\\.md)$"
+  src tests cmake)
+expect_none("public and registration files are GTSAM-free" "#include <(gtsam|Eigen)"
+  src/fusion/fusion.h src/fusion/fusionregistration.h src/fusion/fusionregistration.cpp)
+# Allow: only the registration adapter may see the engine and the session keys.
+expect_none("the kernel is pure"
+  "#include [<\"](sessiondata|sessionmodel|engine/|jobqueue|plotrequests|preferences/|QApplication|QWidget|QtWidgets|QtGui)"
+  src/fusion ":!src/fusion/fusionregistration.cpp" ":!src/fusion/fusionregistration.h")
+expect_none("the kernel does not log" "qWarning|qInfo|qDebug|qCritical" src/fusion)
+# flysight_core never references the fusion library; the application calls its
+# one entry point next to the built-in registration.
+expect_none("nobody but the application references the fusion library" "fusion/|Fusion::"
+  src/calculations src/engine "src/sessionmodel.*" "src/jobqueue.*" "src/jobmodel.*" "src/plotrequests.*")
+# Narrow and case-sensitive on purpose: the GTSAM_..._BOOST_... option and
+# macro names and the "Boost::" test of the Boost-free guard in
+# cmake/SolverDependencies.cmake must not match.
+# Allow: tests/README.md (the capture harness's cross-check against a
+# Boost-enabled solver build) is excluded.
+expect_none("no Boost in FlySight sources or build"
+  "#include <boost/|boost::[a-z]|find_package\\(Boost|find_dependency\\(Boost|Boost::boost|BoostDiscovery"
+  src tests cmake CMakeLists.txt third-party/CMakeLists.txt ":!tests/README.md")
+
+# ─────────────────────────────── one-worker
+# One thread owns all state; the worker owns captured inputs and nothing else.
+# Do not add locks to make shared access safe: remove the sharing.
+# Allow: these match comments too. Prose such as "any thread" is fine; the
+# class names are not - reword the comment.
+audit_group(one-worker)
+expect_only("one place creates a thread" "QThread|std::thread|QtConcurrent|QThreadPool|std::async"
+  "^src/jobqueue\\.(cpp|h)$" src)
+expect_none("no locks"
+  "QMutex|QReadWriteLock|QWaitCondition|QSemaphore|std::mutex|std::shared_mutex|std::condition_variable" src)
+expect_only("one atomic: the cancel flag" "std::atomic|QAtomic" "^src/jobqueue\\.cpp$" src)
+
+# ─────────────────────────────── gestures (acceptance 116)
+# Only a gesture starts expensive work, and a gesture is an explicit call from
+# the plot list's row delegate. MainWindow cannot be constructed in the test
+# harness, so that nothing in it (start-up restore, profiles, the Plots menu)
+# calls these is a text rule.
+audit_group(gestures)
+expect_only("gestures come from the row delegate only" "plotCheckedByUser|refreshPressed|cancelPressed"
+  "^src/plotrequests\\.(h|cpp)$|^src/ui/docks/plotselection/PlotRowDelegate\\.(h|cpp)$" src)
+# The opening parenthesis directly after the name keeps publishInvalidation(,
+# publishEdges( and publishCalculationInvalidation( out of this rule.
+expect_only("explicit work is prepared and published in one place" "[.>]prepare\\(|[.>]publish\\("
+  "^src/jobqueue\\.cpp$|^src/engine/" src)
+expect_only("no reader requests" "[.>]request\\("
+  "^src/plotrequests\\.cpp$|^src/jobqueue\\.(cpp|h)$|^src/engine/" src)
+# Allow: a future jobs dock is a pure view of JobQueue::model() and is added to
+# the regex when it exists. Until then AppContext only carries the pointer.
+expect_only("no jobs window, no view of the queue" "[Jj]ob[Qq]ueue|JobModel"
+  "^src/ui/docks/AppContext\\.h$" src/ui)
+# CalculationRegistry::dependsOnExplicit() is the one definition of
+# "explicit-backed"; plot rows and the logbook column cache ask it.
+expect_only("one authority: explicit-backed" "EvaluationPolicy::Explicit"
+  "^src/engine/|^src/fusion/fusionregistration\\.cpp$" src)
+
+# ─────────────────────────────── widget-free-core
+audit_group(widget-free-core)
+expect_none("the logic components see no widget"
+  "QtWidgets|#include <Q(Widget|TreeView|AbstractItemView|StyledItemDelegate|Application|ToolTip)>"
+  "src/jobqueue.*" "src/jobmodel.*" "src/plotrequests.*" "src/plotmodel.*"
+  src/ui/docks/plotselection/PlotRowLayout.h)
+
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 
 # ─────────────────────────────── acceptance traceability
+# tests/acceptance_map.txt: items 1-19 (the schema / engine specification) and
+# 101-120 (sensor fusion and plot-driven jobs, item = 100 + acceptance number).
+# Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
   _violation("[traceability] tests/acceptance_map.txt is missing")
 else()
+  get_property(audit_groups GLOBAL PROPERTY AUDIT_GROUPS)
+  set(manual_file "${REPO}/tests/README.md")
+  set(workflow_file "${REPO}/.github/workflows/build.yml")
+  set(manual_text "")
+  set(workflow_text "")
+  if(EXISTS "${manual_file}")
+    file(READ "${manual_file}" manual_text)
+  endif()
+  if(EXISTS "${workflow_file}")
+    file(READ "${workflow_file}" workflow_text)
+  endif()
+
   file(STRINGS "${map_file}" map_lines)
-  set(items_seen "")
+  set(items_seen "")        # every item with a line of any kind
+  set(items_automated "")   # items with at least one test or audit line
   foreach(line IN LISTS map_lines)
     string(STRIP "${line}" line)
     if(line STREQUAL "" OR line MATCHES "^#")
       continue()
     endif()
-    if(NOT line MATCHES "^([0-9]+) +(tst_[a-z_]+) +([A-Za-z_0-9]+)$")
+
+    if(line MATCHES "^([0-9]+) +manual +M([0-9]+)$")
+      set(item "${CMAKE_MATCH_1}")
+      string(FIND "${manual_text}" "**M${CMAKE_MATCH_2} " position)
+      if(position EQUAL -1)
+        _violation("[traceability] item ${item}: tests/README.md has no manual step **M${CMAKE_MATCH_2}")
+      endif()
+    elseif(line MATCHES "^([0-9]+) +ci +([^ ]+)$")
+      set(item "${CMAKE_MATCH_1}")
+      string(FIND "${workflow_text}" "${CMAKE_MATCH_2}" position)
+      if(position EQUAL -1)
+        _violation("[traceability] item ${item}: .github/workflows/build.yml does not contain '${CMAKE_MATCH_2}'")
+      endif()
+    elseif(line MATCHES "^([0-9]+) +audit +([a-z-]+)$")
+      set(item "${CMAKE_MATCH_1}")
+      list(FIND audit_groups "${CMAKE_MATCH_2}" index)
+      if(index EQUAL -1)
+        _violation("[traceability] item ${item}: no audit rule group '${CMAKE_MATCH_2}' (groups: ${audit_groups})")
+      else()
+        list(APPEND items_automated "${item}")
+      endif()
+    elseif(line MATCHES "^([0-9]+) +(tst_[a-z_]+) +([A-Za-z_0-9]+)$")
+      set(item "${CMAKE_MATCH_1}")
+      set(target "${CMAKE_MATCH_2}")
+      set(function "${CMAKE_MATCH_3}")
+      set(source "${REPO}/tests/${target}.cpp")
+      if(NOT EXISTS "${source}")
+        _violation("[traceability] item ${item}: tests/${target}.cpp does not exist")
+      else()
+        file(READ "${source}" text)
+        string(FIND "${text}" "::${function}()" position)
+        if(position EQUAL -1)
+          _violation("[traceability] item ${item}: tests/${target}.cpp has no test function ${function}()")
+        else()
+          list(APPEND items_automated "${item}")
+        endif()
+      endif()
+    else()
       _violation("[traceability] malformed line: ${line}")
       continue()
     endif()
-    set(item "${CMAKE_MATCH_1}")
-    set(target "${CMAKE_MATCH_2}")
-    set(function "${CMAKE_MATCH_3}")
-    list(APPEND items_seen "${item}")
 
-    set(source "${REPO}/tests/${target}.cpp")
-    if(NOT EXISTS "${source}")
-      _violation("[traceability] item ${item}: tests/${target}.cpp does not exist")
-      continue()
-    endif()
-    file(READ "${source}" text)
-    string(FIND "${text}" "::${function}()" position)
-    if(position EQUAL -1)
-      _violation("[traceability] item ${item}: tests/${target}.cpp has no test function ${function}()")
+    list(APPEND items_seen "${item}")
+    if(NOT ((item GREATER_EQUAL 1 AND item LESS_EQUAL 19) OR (item GREATER_EQUAL 101 AND item LESS_EQUAL 120)))
+      _violation("[traceability] item ${item} is outside 1-19 and 101-120: ${line}")
     endif()
   endforeach()
+
   foreach(item RANGE 1 19)
     list(FIND items_seen "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  # Manual and ci lines never stand alone
+  foreach(item RANGE 101 120)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
     endif()
   endforeach()
 endif()

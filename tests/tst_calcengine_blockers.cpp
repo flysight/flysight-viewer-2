@@ -120,7 +120,7 @@ private slots:
     void readinessStates();
 };
 
-// SFJ acceptance 12: the report sees through on-demand intermediates (the
+// Sensor-fusion-jobs acceptance 12: the report sees through on-demand intermediates (the
 // "accH is blocked by fusion" case), reports nothing after publication, and
 // never triggers the explicit calculation.
 void CalcEngineBlockersTest::derivedNameReportsExplicitBlocker()
@@ -219,7 +219,7 @@ void CalcEngineBlockersTest::missingInputIsNotABlocker()
     }
 }
 
-// SFJ acceptance 13: explicit B consumes unrequested explicit A. The blocker is
+// Sensor-fusion-jobs acceptance 13: explicit B consumes unrequested explicit A. The blocker is
 // A; once A publishes, the blocker is B; a consumer keeps requesting blockers
 // until none remain.
 void CalcEngineBlockersTest::chainedBlockers()

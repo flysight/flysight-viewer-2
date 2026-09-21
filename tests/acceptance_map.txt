@@ -1,12 +1,25 @@
-# Acceptance traceability. The acceptance items 1-19 are stated in full in
-# tests/README.md, appendix A. (The rule "only SCHEMA_VER decides", which is
-# not one of the 19 items, is filed under item 19.)
+# Acceptance traceability, machine-checked by the audit_cleanup test
+# (tests/audit/cleanup_audit.cmake). Two specifications, two item ranges:
 #
-# One line per demonstrated clause: <item> <target> <function>
-# Checked by the audit_cleanup test (tests/audit/cleanup_audit.cmake): the file
-# tests/<target>.cpp must contain "void <Class>::<function>(" and every item
-# 1..19 must have at least one line. The human-readable matrix is in
-# tests/README.md; keep the two in sync.
+#   1-19      the schema / calculation-engine items, stated in full in
+#             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
+#             which is not one of the 19 items, is filed under item 19.)
+#   101-120   sensor fusion as an explicit calculation with plot-driven
+#             background jobs: item = 100 + acceptance number. Stated in full
+#             in tests/README.md, appendix B.
+#
+# One line per piece of evidence, in one of four forms:
+#
+#   <item> <tst_target> <function>   tests/<tst_target>.cpp contains "::<function>()"
+#   <item> manual M<k>               step M<k> of tests/README.md section 12 (the
+#                                    README contains the bold id "**M<k> ")
+#   <item> ci <token>                <token> occurs in .github/workflows/build.yml
+#   <item> audit <group>             rule group <group> of cleanup_audit.cmake
+#
+# Every item must lie in one of the two ranges; every item 1-19 needs a line;
+# every item 101-120 needs at least one test or audit line (manual and ci lines
+# never stand alone). The human-readable matrices are tests/README.md sections
+# 9.1 and 9.2; keep them in sync with this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -178,13 +191,22 @@
 19 tst_python_bridge pluginWorkflowThroughModel
 19 tst_source_layer onlySchemaVerDecides
 
-# ---- Sensor fusion as an explicit calculation (PLANS/sensor-fusion-jobs.md) ----
-# Items of that specification are numbered 100 + n, so that they cannot be
-# confused with items 1-19 above.
+# ---- Sensor fusion as an explicit calculation (PLANS/sensor-fusion-jobs.md): item = 100 + acceptance number ----
 
-# 102 - exact synthetic clock at high uptime: microsecond-level UTC conversion
+# 101 - builds, deploys its solver runtime libraries, passes its tests; only fusion code links GTSAM
+#       (Windows is verified locally; macOS and Linux only by the CI workflow)
+101 tst_solver_smoke gtsamIsTheRightBuild
+101 tst_solver_smoke smallGraphOptimizes
+101 tst_solver_smoke mainThreadHasSolverStack
+101 ci solver_deploy_probe
+101 ci libgtsam
+101 ci gtsam.dll
+101 audit solver-confinement
+
+# 102 - exact synthetic clock at high uptime: microsecond-level UTC conversion; existing tests unchanged
 102 tst_time_fit highUptimeExactClock
 102 tst_time_fit fitFollowsTimeSource
+102 tst_time_fit fixtureFitIsExact
 
 # 103 - local coordinates
 103 tst_local_coordinates originGates
@@ -204,58 +226,113 @@
 103 tst_simplified_track emptyTrack
 103 tst_simplified_track nonFiniteSamplesAreSkipped
 103 tst_simplified_track projectionRunsOncePerRecording
+103 audit local-projection
 103 tst_simplified_track unavailableWithoutOriginAndRecovers
 103 tst_map_models noOriginRemovesTrackAndDot
 103 tst_map_models boundsClearedWhenNoTrack
 103 tst_map_models recoversAfterSourceCorrection
 
-# 107, 108, 112, 113 - engine half, with synthetic explicit calculations.
-# Comment lines in this phase; Phase 10 converts them into audited 100 + n lines.
-# SFJ 7  tst_calcengine_async asyncMatchesSync
-# SFJ 8  tst_calcengine_async inputChangeWhileRunningRefuses
-# SFJ 8  tst_calcengine_async changeAfterPublicationDropsDependents
-# SFJ 12 tst_calcengine_blockers derivedNameReportsExplicitBlocker
-# SFJ 13 tst_calcengine_blockers chainedBlockers
-# SFJ 8  tst_jobqueue inputChangeWhileRunningSupersedes
-# SFJ 10 tst_jobqueue cancelRunningThenNextStarts
-# SFJ 11 tst_jobqueue refusesMissingInput
-# SFJ 14 tst_jobqueue oneAtATimeInRequestOrder
-# SFJ 14 tst_jobqueue duplicateRequestsCreateNoDuplicates
-# SFJ 17 tst_jobqueue removeSessionWithRunningJob
-# SFJ 17 tst_jobqueue removeSessionWithQueuedJob
-# SFJ 17 tst_jobqueue evictionDeferredWhileJobActive
-# SFJ 17 tst_jobqueue shutdownWithQueuedAndRunning
-# SFJ 18 tst_jobmodel historyFromSignalsAlone
-# SFJ 18 tst_jobmodel retentionBound
-# SFJ 11 tst_plot_requests sessionWithoutInputIsNeverListed
-# SFJ 13 tst_plot_requests chainedBlockersContinue
-# SFJ 15 tst_plot_requests rowScript
-# SFJ 16 tst_plot_requests startupRestoreStartsNothing
-# SFJ 16 tst_plot_requests profileStyleApplyStartsNothing
-# SFJ 16 tst_plot_requests programmaticCheckStartsNothing
-# SFJ 16 tst_plot_row_delegate programmaticCheckStartsNothingWithViewAttached
-# SFJ 16 tst_plot_row_delegate startupStyleRestoreStartsNothingWithViewAttached
-# SFJ 16 tst_plot_row_delegate checkBoxClickIsGesture
-# SFJ 16 manual  tests/README.md "Manual verification: plot-driven jobs" steps 1-2
-# SFJ 17 manual  tests/README.md "Manual verification: plot-driven jobs" steps 8-9
-# SFJ 19 manual  tests/README.md "Manual verification: plot-driven jobs" step 5
-# SFJ 5  tst_fusion_session readsNeverRunTheFit
-# SFJ 5  tst_fusion_jobs readersNeverStartAFit
-# SFJ 6  tst_fusion_session requestRunsOnceAndPublishesTogether
-# SFJ 6  tst_fusion_jobs jobPublishesAllOutputsTogether
-# SFJ 7  tst_fusion_session asyncMatchesSync
-# SFJ 7  tst_fusion_jobs queueMatchesSynchronousRequest
-# SFJ 8  tst_fusion_jobs inputChangeDuringFitSupersedes
-# SFJ 8  tst_fusion_session changeAfterPublicationDropsEverything
-# SFJ 9  tst_fusion_session rejectionIsACachedResult
-# SFJ 9  tst_fusion_jobs rejectedRecordingIsSucceededJob
-# SFJ 10 tst_fusion_session cancelStopsAtNextBoundary
-# SFJ 10 tst_fusion_jobs cancelDuringFitThenNextJobStarts
-# SFJ 11 tst_fusion_session missingInputsAreNotApplicable
-# SFJ 11 tst_fusion_jobs noImuSessionCannotHaveAJob
-# SFJ 12 tst_fusion_session blockersReportFusion
-
 # 104 - the ported fusion reproduces the goldens captured from sensor-fusion-clean-port
 104 tst_fusion_parity successFixturesMatchGolden
 104 tst_fusion_parity rejectionFixturesMatchGolden
 104 tst_fusion_kernel fitTraceMatchesGolden
+
+# 105 - reads of fusion outputs, accH, the diagnostics, an interpolated value: unavailable, nothing runs
+105 tst_fusion_session readsNeverRunTheFit
+105 tst_fusion_jobs readersNeverStartAFit
+
+# 106 - a request runs once and publishes together; derived values appear; a second request runs nothing
+106 tst_fusion_session requestRunsOnceAndPublishesTogether
+106 tst_fusion_jobs jobPublishesAllOutputsTogether
+
+# 107 - asynchronous and synchronous requests produce identical results
+107 tst_calcengine_async asyncMatchesSync
+107 tst_session_engine asyncRequestOnSession
+107 tst_fusion_session asyncMatchesSync
+107 tst_fusion_jobs queueMatchesSynchronousRequest
+
+# 108 - input change while running: superseded, nothing published, requestable; after publication: all dropped
+108 tst_calcengine_async inputChangeWhileRunningRefuses
+108 tst_session_engine asyncRequestOnSession
+108 tst_jobqueue inputChangeWhileRunningSupersedes
+108 tst_fusion_jobs inputChangeDuringFitSupersedes
+108 tst_calcengine_async changeAfterPublicationDropsDependents
+108 tst_fusion_session changeAfterPublicationDropsEverything
+
+# 109 - a rejected recording: unavailable, reason in the diagnostics, succeeded job with the reason, no second run
+109 tst_fusion_session rejectionIsACachedResult
+109 tst_fusion_jobs rejectedRecordingIsSucceededJob
+109 tst_jobqueue rejectionSucceedsWithReason
+109 tst_fusion_rows rejectedTrackShowsBadge
+
+# 110 - cancel stops at the next solver boundary, publishes nothing, requestable; the next job starts
+110 tst_fusion_parity cancelAtEachKindOfBoundary
+110 tst_fusion_session cancelStopsAtNextBoundary
+110 tst_jobqueue cancelRunningThenNextStarts
+110 tst_fusion_jobs cancelDuringFitThenNextJobStarts
+
+# 111 - a session without IMU data is never missing, pending or failed; no job can be created for it
+111 tst_jobqueue refusesMissingInput
+111 tst_plot_requests sessionWithoutInputIsNeverListed
+111 tst_fusion_session missingInputsAreNotApplicable
+111 tst_fusion_jobs noImuSessionCannotHaveAJob
+111 tst_fusion_rows noImuSessionIsNeverCounted
+
+# 112 - blocker inspection reports fusion for accH, nothing after publication, and never triggers a fit
+112 tst_calcengine_blockers derivedNameReportsExplicitBlocker
+112 tst_calcengine_blockers inspectionNeverRunsExplicit
+112 tst_fusion_session blockersReportFusion
+
+# 113 - B consumes A: one gesture on a plot of B's output runs A then B
+113 tst_calcengine_blockers chainedBlockers
+113 tst_plot_requests chainedBlockersContinue
+
+# 114 - never more than one job at a time; duplicate requests create no duplicate jobs
+114 tst_jobqueue oneAtATimeInRequestOrder
+114 tst_jobqueue duplicateRequestsCreateNoDuplicates
+
+# 115 - row behaviour without widgets: synthetic, then with the real fusion plots; what the user sees
+115 tst_plot_requests rowScript
+115 tst_fusion_rows realRowScript
+115 tst_fusion_rows rollPitchYawShareOneJob
+115 tst_fusion_rows accHRowIsBlockedByFusion
+115 tst_fusion_rows rejectedTrackShowsBadge
+115 tst_fusion_rows allSeventeenFusionPlotsAreExplicitBacked
+115 manual M3
+115 manual M4
+115 manual M6
+115 manual M7
+
+# 116 - start-up restore and applying a profile start no job; only a direct check is a gesture
+116 tst_plot_requests startupRestoreStartsNothing
+116 tst_plot_requests profileStyleApplyStartsNothing
+116 tst_plot_requests programmaticCheckStartsNothing
+116 tst_plot_row_delegate programmaticCheckStartsNothingWithViewAttached
+116 tst_plot_row_delegate startupStyleRestoreStartsNothingWithViewAttached
+116 tst_plot_row_delegate checkBoxClickIsGesture
+116 audit gestures
+116 manual M1
+116 manual M2
+
+# 117 - removing / unloading a session with a queued or running job, and quitting: no crash, no hang, nothing stale
+117 tst_jobqueue removeSessionWithRunningJob
+117 tst_jobqueue removeSessionWithQueuedJob
+117 tst_jobqueue evictionDeferredWhileJobActive
+117 tst_jobqueue shutdownWithQueuedAndRunning
+117 tst_fusion_jobs shutdownDuringFit
+117 manual M8
+117 manual M9
+
+# 118 - every transition through model signals; a test view renders the whole history from the model alone
+118 tst_jobmodel historyFromSignalsAlone
+118 tst_jobmodel retentionBound
+
+# 119 - the application stays interactive during a fit (pan and zoom: manual only, widgets)
+119 tst_fusion_rows editsAndVisibilityDuringFit
+119 tst_jobqueue idleSchedulerKeepsWorking
+119 manual M5
+
+# 120 - none of the branch's modal dialog, re-entrancy guard, idle-scheduler pause, or rebuild guard exists
+120 audit branch-mechanisms
+120 audit naming
+120 audit one-worker

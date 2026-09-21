@@ -19,6 +19,7 @@ A desktop application for viewing and analyzing FlySight GPS data with advanced 
   - [Manual Reset](#manual-reset)
   - [Clean Target Reference](#clean-target-reference)
 - [Project Structure](#project-structure)
+- [User Documentation](#user-documentation)
 - [Developer Documentation](#developer-documentation)
 - [Deployment](#deployment)
   - [How It Works](#how-it-works)
@@ -73,7 +74,6 @@ The install step produces a self-contained deployment (ZIP-ready directory on Wi
 | C++ Compiler | C++17 | Visual Studio 2022 | Xcode Command Line Tools | GCC 9+ or Clang 10+ |
 | Ninja | (optional) | [ninja-build.org](https://ninja-build.org/) | `brew install ninja` | `apt install ninja-build` |
 | Qt | 6.x | [Qt Online Installer](https://www.qt.io/download-qt-installer) | Qt Online Installer | Qt Online Installer |
-| Boost | 1.65+ | [Prebuilt binaries](https://sourceforge.net/projects/boost/files/boost-binaries/) | `brew install boost` | `apt install libboost-all-dev` |
 | Python | 3.10+ | [python.org](https://www.python.org/downloads/) | `port install python313` or `brew install python` | `apt install python3-dev` |
 | patchelf | (Linux only) | N/A | N/A | `apt install patchelf` |
 
@@ -97,24 +97,6 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/opt/local/li
 ```
 
 This is forwarded automatically to third-party and application sub-builds.
-
-### Boost Components
-
-Required Boost components: header-only (boost::geometry).
-
-If Boost is not found automatically, set `BOOST_ROOT`:
-
-```bash
-# Windows (prebuilt binaries)
-cmake ... -DBOOST_ROOT="C:/Program Files/Boost/boost_1_87_0"
-
-# macOS (Homebrew)
-cmake ... -DBOOST_ROOT=/opt/homebrew   # Apple Silicon
-cmake ... -DBOOST_ROOT=/usr/local      # Intel
-
-# Linux (apt)
-cmake ... -DBOOST_ROOT=/usr
-```
 
 ### Python
 
@@ -220,7 +202,8 @@ cmake --build build
 | `FLYSIGHT_BUILD_TESTS` | `OFF` | Build the Qt Test suite under `tests/`; run with CTest |
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | With tests enabled: build the embedded-Python plugin bridge test (needs NumPy in the build interpreter) |
 | `FLYSIGHT_BUILD_SOLVER_DEPS` | `ON` | With `FLYSIGHT_BUILD_THIRD_PARTY`: also download and build oneTBB and GTSAM. `OFF` reuses the installs in `GTSAM_INSTALL_DIR` / `ONETBB_INSTALL_DIR` |
-| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | With tests enabled: build the GTSAM-linked tests (`tst_solver_smoke`) and `solver_deploy_probe`. With `OFF` no test target references GTSAM |
+| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | With tests enabled: build the GTSAM-linked tests (`tst_solver_smoke` and the `tst_fusion_*` tests) and `solver_deploy_probe`. With `OFF` no test target references GTSAM |
+| `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | With tests enabled: build `tst_plot_row_delegate`, the one test that links Qt Widgets (it runs an offscreen `QTreeView`). With `OFF` no test target links Widgets |
 
 **Path Variables:**
 
@@ -229,7 +212,6 @@ cmake --build build
 | `THIRD_PARTY_DIR` | `<project>/third-party` | Root directory for third-party dependencies |
 | `GEOGRAPHIC_INSTALL_DIR` | `<third-party>/GeographicLib-install` | GeographicLib installation directory |
 | `KDDW_INSTALL_DIR` | `<third-party>/KDDockWidgets-install` | KDDockWidgets installation directory |
-| `BOOST_ROOT` | Platform-dependent | Boost root directory |
 | `GTSAM_INSTALL_DIR` | `<third-party>/GTSAM-install` | GTSAM installation directory (built there, and handed to the application build as `GTSAM_ROOT`) |
 | `ONETBB_INSTALL_DIR` | `<third-party>/oneTBB-install` | oneTBB installation directory (handed to the application build as `ONETBB_ROOT`) |
 | `GTSAM_ROOT`, `ONETBB_ROOT` | `<third-party>/GTSAM-install`, `<third-party>/oneTBB-install` | The same two prefixes when configuring `src/` directly instead of the root project |
@@ -241,7 +223,9 @@ The sensor fusion solver is [GTSAM](https://github.com/borglab/gtsam) 4.3a0 with
 
 - **Pinned revisions.** Each library is pinned to a full commit SHA in `cmake/SolverSuperbuild.cmake` and downloaded into `<build>/solver-sources/`; build directories are `<build>/oneTBB-build` and `<build>/gtsam-build`. To move a pin, edit the SHA there. The CI cache key hashes that file, so it follows. To build an existing source tree offline, pass `-DGTSAM_SOURCE_DIR=<dir>` / `-DONETBB_SOURCE_DIR=<dir>`.
 - **Reusing an install.** `-DFLYSIGHT_BUILD_SOLVER_DEPS=OFF` defines none of the solver targets and leaves GeographicLib and KDDockWidgets in the superbuild; the application then uses whatever is installed in `GTSAM_INSTALL_DIR` and `ONETBB_INSTALL_DIR`. Combine it with those two variables to keep a solver install outside `third-party/`.
-- **GTSAM is built without Boost** (`GTSAM_ENABLE_BOOST_SERIALIZATION=OFF`, `GTSAM_USE_BOOST_FEATURES=OFF`). It needs no Boost to build, to configure against, or at run time. The application refuses a Boost-enabled GTSAM install at configure time (`cmake/SolverDependencies.cmake`).
+- **GTSAM is built without Boost** (`GTSAM_ENABLE_BOOST_SERIALIZATION=OFF`, `GTSAM_USE_BOOST_FEATURES=OFF`). It needs no Boost to build, to configure against, or at run time. The application refuses a Boost-enabled GTSAM install at configure time (`cmake/SolverDependencies.cmake`). FlySight Viewer does not use Boost.
+- **Who links GTSAM.** Only the static library `flysight_fusion` (`src/fusion/`), and through it the application and the fusion tests. `flysight_model`, `flysight_core`, the Python bridge and every other test never reach it; `flysight_assert_solver_confinement()` (`cmake/SolverDependencies.cmake`) fails the configure otherwise.
+- **Unverified on macOS and Linux.** The Boost-free GTSAM build, a build of the application with no Boost installed, and the deployment of the solver libraries have been verified on Windows. On macOS and Linux they are confirmed only by a CI run after a push.
 - **Exported target.** Code that uses GTSAM links the exported CMake target `gtsam` and nothing else. The target supplies GTSAM's ABI definitions and its own bundled Eigen headers; do not add another Eigen to the include path of such a target.
 - **Debug builds.** The exported targets only carry the configurations that were built. A Debug application build needs a Debug build of both libraries as well (`cmake --build build --config Debug`); against a Release-only install it would silently mix MSVC runtimes.
 - **Helpers** (`cmake/SolverDependencies.cmake`): `flysight_solver_stack(<target>)` gives an executable's main thread the 64 MiB stack a large fit needs (on Linux through `cmake/solver_stack_linux.cpp`), `flysight_solver_test_environment(<test>)` puts the solver libraries on a CTest test's library search path, and `flysight_install_solver_runtime(<destination>)` deploys the runtime libraries selected by exported target.
@@ -334,16 +318,20 @@ flysight-viewer-2/
 ├── CMakeLists.txt                         # Root superbuild configuration
 ├── README.md                              # This file
 ├── docs/
+│   ├── COMPUTED_PLOTS.md                  # User guide: plots that are computed on request (refresh,
+│   │                                      #   counts, warning badge, cancel)
+│   ├── SENSOR_FUSION.md                   # The GNSS/IMU fit: inputs, model, limitations, lifecycle
+│   ├── LOCAL_COORDINATES.md               # The recording-wide north/east/down frame; simplified track
 │   ├── DATA_SCHEMA.md                     # Recorded schema, source preservation, conversion layer,
 │   │                                      #   escape hatch, saved-file guarantees
-│   └── CALCULATIONS.md                    # Developer note: writing a registered calculation
+│   └── CALCULATIONS.md                    # Developer note: registered calculations, background
+│                                          #   execution, job queue, plot-driven requests
 ├── cmake/
 │   ├── ThirdPartySuperbuild.cmake         # ExternalProject definitions for GeographicLib, KDDockWidgets
 │   ├── SolverSuperbuild.cmake             # Pinned oneTBB and GTSAM: download, options, clean targets
 │   ├── SolverDependencies.cmake           # Finds GTSAM (exported target), solver runtime deployment,
 │   │                                      #   64 MiB stack and test-environment helpers
 │   ├── solver_stack_linux.cpp             # Linux half of flysight_solver_stack()
-│   ├── BoostDiscovery.cmake               # Cross-platform Boost discovery
 │   ├── QtPathDiscovery.cmake              # Finds Qt plugin/QML directories
 │   ├── GenerateIcon.cmake                 # Application icon generation
 │   ├── BundlePythonWindows.cmake          # Downloads/installs Python embeddable package
@@ -362,18 +350,27 @@ flysight-viewer-2/
 │                                          #   flysight_model library (session data + calculation
 │                                          #   engine, Qt Core only, also linked by the Python
 │                                          #   bridge), the flysight_core library (import/export,
-│                                          #   logbook, session model, registries, calculations;
-│                                          #   Qt Core + Gui, no UI), and the FlySightViewer
-│                                          #   executable (UI, docks, plugin host)
+│                                          #   logbook, session model, registries, calculations,
+│                                          #   job queue, plot request logic; Qt Core + Gui, no
+│                                          #   UI), the flysight_fusion library, and the
+│                                          #   FlySightViewer executable (UI, docks, plugin host)
 │   ├── engine/                            # Calculation engine: registry, per-session results,
 │   │                                      #   one dependency graph behind every SessionData read
 │   ├── conversion/                        # Schema table (SCHEMA_VER) and the source -> effective
 │   │                                      #   conversion layer
 │   ├── calculations/                      # Built-in registered calculations
 │   │                                      #   (builtincalculations.* is the entry point)
+│   ├── fusion/                            # Batch GNSS/IMU fit and its registration; library
+│   │                                      #   flysight_fusion, the only target that links GTSAM
+│   ├── jobqueue.*, jobmodel.*             # Application-wide queue of background calculations
+│   │                                      #   (one worker thread) and its Qt item model
+│   ├── plotrequests.*                     # Widget-free logic behind the plot list's rows: what
+│   │                                      #   needs computing, the two gestures, cancel
 │   ├── units/                             # Unit normalization table and the display-unit layer
 │   ├── preferences/                       # Preferences manager, keys, settings pages
 │   ├── ui/                                # Docks, plot, map, video, analysis widgets
+│   │                                      #   (ui/docks/plotselection/PlotRow*: the plot list's
+│   │                                      #   refresh / progress / cancel / warning controls)
 │   ├── csvformat.*                        # The one definition of the on-disk text forms
 │   ├── dataimporter.*, parsedfile.h       # Parser: a file as recorded, nothing added
 │   ├── dataexporter.*                     # Writer: source data and stored attributes only
@@ -389,6 +386,9 @@ flysight-viewer-2/
 │   ├── README.md                          # How to build, run, and write tests; acceptance matrix
 │   ├── acceptance_map.txt                 # Acceptance item -> test function (machine-checked)
 │   ├── support/                           # Shared test support: isolation, fixture builders, shared helpers
+│   ├── fusion/                            # Fusion test support: synthetic fixtures, golden loader,
+│   │                                      #   fixture sessions (GTSAM-linked tests only)
+│   ├── data/fusion/                       # Golden outputs captured from the reference implementation
 │   ├── python_plugins/                    # Plugins loaded by tst_python_bridge
 │   ├── audit/                             # cleanup_audit.cmake (the audit_cleanup test)
 │   └── tst_*.cpp                          # One Qt Test class per executable, linked to flysight_core
@@ -405,12 +405,18 @@ flysight-viewer-2/
 └── build/                                 # [Build artifact] CMake build directory
 ```
 
+## User Documentation
+
+- [docs/COMPUTED_PLOTS.md](docs/COMPUTED_PLOTS.md): plots that are computed on request - the refresh control and its count, progress and cancel, the warning badge, what starts a computation and what never does
+- [docs/SENSOR_FUSION.md](docs/SENSOR_FUSION.md): the "Sensor fusion" plots - what the GNSS/IMU fit computes, what it needs, what it rejects, and how far to trust it
+- [docs/LOCAL_COORDINATES.md](docs/LOCAL_COORDINATES.md): the "GNSS (Local frame)" plots - the recording-wide north/east/down frame and the simplified map track
+- [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md): the recorded file format, `SCHEMA_VER`, source versus effective values, the conversion layer, import / merge rules, and what saved files contain
+
 ## Developer Documentation
 
-- [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md): the recorded file format, `SCHEMA_VER`, source versus effective values, the conversion layer, import / merge rules, and what saved files contain
-- [docs/CALCULATIONS.md](docs/CALCULATIONS.md): how to write a registered calculation (declared inputs, multi-output, candidates, cache versioning)
+- [docs/CALCULATIONS.md](docs/CALCULATIONS.md): how to write a registered calculation (declared inputs, multi-output, candidates, cache versioning), and how explicit calculations run in the background: the asynchronous request, blocker inspection, the threading rule, the job queue, plot-driven requests, and sensor fusion as a registered calculation
 - [python_plugins/README.md](python_plugins/README.md): writing Python plugins
-- [tests/README.md](tests/README.md): building, running, and writing tests
+- [tests/README.md](tests/README.md): building, running, and writing tests; the acceptance traceability matrices, the cleanup audit, fusion golden parity, and the manual verification script
 
 ## Deployment
 
@@ -690,15 +696,7 @@ FlySightViewer.AppDir/
   cmake ... -DCMAKE_PREFIX_PATH="$HOME/Qt/6.7.3/gcc_64"
   ```
 
-### 2. Boost not found
-
-**Symptom:** CMake error: `Could not find a configuration file for package "Boost"`.
-
-**Solution:**
-- Verify Boost is installed (header-only usage for boost::geometry)
-- Set `BOOST_ROOT` as shown in [Prerequisites > Boost Components](#boost-components)
-
-### 3. Python development headers not found
+### 2. Python development headers not found
 
 **Symptom:** CMake error: `Could not find a package configuration file provided by "Python"` or missing `Python.h`.
 
@@ -711,7 +709,7 @@ FlySightViewer.AppDir/
   cmake ... -DPython_ROOT_DIR="/path/to/python"
   ```
 
-### 3a. Python bundling download fails
+### 2a. Python bundling download fails
 
 **Symptom:** CMake error: `Failed to download after 3 attempts` when downloading from `python-build-standalone`.
 
@@ -721,7 +719,7 @@ FlySightViewer.AppDir/
 - Install a modern Python (3.10+) via MacPorts or Homebrew
 - Point CMake at it with `-DPython_ROOT_DIR` and `-DPython_EXECUTABLE` (see [Prerequisites > Python](#python))
 
-### 4. KDDockWidgets Qt6 not found
+### 3. KDDockWidgets Qt6 not found
 
 **Symptom:** KDDockWidgets build fails with Qt6 not found errors.
 
@@ -730,14 +728,14 @@ FlySightViewer.AppDir/
 - The KDDockWidgets build uses `-DKDDockWidgets_QT6=ON` to enable Qt6 support
 - Set `CMAKE_PREFIX_PATH` if Qt is not in a standard location
 
-### 5. Build takes too long
+### 4. Build takes too long
 
 **Solution:**
 - Use Ninja for faster builds: `-G Ninja`
 - Use parallel builds: `cmake --build build --parallel`
 - After initial build, use `-DFLYSIGHT_BUILD_THIRD_PARTY=OFF` to skip rebuilding dependencies
 
-### 6. Resetting Application Preferences (macOS)
+### 5. Resetting Application Preferences (macOS)
 
 To reset all stored preferences for FlySight Viewer on macOS:
 
@@ -745,7 +743,7 @@ To reset all stored preferences for FlySight Viewer on macOS:
 defaults delete com.flysight.Viewer
 ```
 
-### 7. Resetting Application Preferences (Windows)
+### 6. Resetting Application Preferences (Windows)
 
 To reset all stored preferences for FlySight Viewer on Windows:
 
@@ -759,7 +757,7 @@ To also reset built-in profiles (so they are re-copied on next launch), delete t
 del /q "%USERPROFILE%\Documents\FlySight Viewer\profiles\*.fvprofile"
 ```
 
-### 8. Visual Studio shows many projects
+### 7. Visual Studio shows many projects
 
 **Symptom:** The Visual Studio solution contains many projects (GeographicLib, KDDockWidgets targets).
 

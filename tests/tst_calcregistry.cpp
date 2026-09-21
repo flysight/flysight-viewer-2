@@ -108,6 +108,7 @@ private slots:
 
     // Registration-derived queries for the logbook column cache
     void staticDependenciesClosure();
+    void dependsOnExplicit();
     void declaredPreferenceKeys();
     void observersFire();
 
@@ -651,6 +652,39 @@ void CalcRegistryTest::staticDependenciesClosure()
     // A name nothing produces: only itself
     QCOMPARE(registry.staticDependencies(attr("A")).names, QSet<DependencyKey>({attr("A")}));
 
+    QCOMPARE(engine.totalRunCount(), 0);
+    QCOMPARE(state.readCount(), 0);
+}
+
+// The one authority for "explicit-backed" (plot rows and the logbook column
+// cache): a function of the registrations alone, seen through on-demand levels.
+void CalcRegistryTest::dependsOnExplicit()
+{
+    CalculationRegistry registry;
+    Synthetic::registerExplicitWorld(registry);
+
+    FakeSessionState state;
+    CalculationEngine engine(&state, &registry);
+
+    QVERIFY(registry.dependsOnExplicit(attr("DDA")));       // two on-demand levels above expA
+    QVERIFY(registry.dependsOnExplicit(attr("EA_DIAG")));   // an output of expA itself
+    QVERIFY(!registry.dependsOnExplicit(attr("EA_IN")));    // a stored input
+    QVERIFY(registry.dependsOnExplicit(attr("DB")));        // through expB (and expA behind it)
+    QVERIFY(!registry.dependsOnExplicit(attr("NO_SUCH_NAME")));
+    QVERIFY(!registry.dependsOnExplicit(measKey("S", "nothing")));
+
+    // Memoized: the same answers again
+    QVERIFY(registry.dependsOnExplicit(attr("DDA")));
+    QVERIFY(!registry.dependsOnExplicit(attr("EA_IN")));
+
+    // A registry change drops the memo: without expA nothing behind DDA is
+    // explicit; DB still has expB.
+    QVERIFY(registry.unregister(QStringLiteral("expA")));
+    QVERIFY(!registry.dependsOnExplicit(attr("DDA")));
+    QVERIFY(!registry.dependsOnExplicit(attr("EA_DIAG")));
+    QVERIFY(registry.dependsOnExplicit(attr("DB")));
+
+    // Nothing ran and nothing was read
     QCOMPARE(engine.totalRunCount(), 0);
     QCOMPARE(state.readCount(), 0);
 }

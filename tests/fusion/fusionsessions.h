@@ -4,9 +4,11 @@
 #include <QList>
 #include <QString>
 #include <QStringList>
+#include <QVector>
 
 #include "dependencykey.h"
 #include "fusionfixtures.h"
+#include "plotregistry.h"
 #include "sessiondata.h"
 
 // The fusion fixtures as real sessions, for tests of sensor fusion as a
@@ -54,6 +56,13 @@ FlySight::SessionData sessionWithoutImu(const FusionFixture &fixture, const QStr
 FlySight::SessionData naturalSession(const QString &sessionId);
 
 QStringList fusionMeasurementNames();   ///< the 17 literal names, in output order
+
+/// The seventeen "Sensor fusion" plots as PlotValues, for PlotModel::setPlots():
+/// the sixteen fit measurements other than _time, plus accH, in the
+/// application's order. Mirrors MainWindow::registerBuiltInPlots(), which is
+/// outside the test library boundary; audit_cleanup pins that list at
+/// seventeen rows. Colours are irrelevant here and left default.
+QVector<FlySight::PlotValue> fusionPlots();
 
 /// "Everything": the 17 measurements, Fusion/accH, Fusion/_system_time,
 /// _FUSION_DIAGNOSTICS, and Fusion/roll interpolated at _EXIT_TIME.

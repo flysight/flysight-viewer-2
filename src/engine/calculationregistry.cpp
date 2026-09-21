@@ -454,6 +454,36 @@ StaticDependencies CalculationRegistry::staticDependencies(const DependencyKey &
     return result;
 }
 
+bool CalculationRegistry::dependsOnExplicit(const DependencyKey &name) const
+{
+    const auto memoized = m_dependsOnExplicitMemo.constFind(name);
+    if (memoized != m_dependsOnExplicitMemo.constEnd())
+        return *memoized;
+
+    const auto isExplicit = [](const CalculationInstance &candidate) {
+        return candidate.descriptor && candidate.descriptor->policy == EvaluationPolicy::Explicit;
+    };
+
+    bool result = false;
+    const QSet<DependencyKey> closure = staticDependencies(name).names;
+    for (const DependencyKey &reached : closure) {
+        // Every candidate, as in staticDependencies(): which one wins depends on
+        // session state, and this is a function of the registrations alone
+        QList<CalculationInstance> candidates = candidatesFor(reached);
+        if (reached.type == DependencyKey::Type::Measurement) {
+            candidates += sourceConversionsFor(reached.measurementKey.first,
+                                               reached.measurementKey.second);
+        }
+        if (std::any_of(candidates.cbegin(), candidates.cend(), isExplicit)) {
+            result = true;
+            break;
+        }
+    }
+
+    m_dependsOnExplicitMemo.insert(name, result);
+    return result;
+}
+
 QStringList CalculationRegistry::declaredPreferenceKeys() const
 {
     QSet<QString> keys;
@@ -525,6 +555,7 @@ void CalculationRegistry::removeObserver(int token)
 void CalculationRegistry::registrationsChanged()
 {
     m_staticDependencyMemo.clear();
+    m_dependsOnExplicitMemo.clear();
 
     // A copy: an observer may remove itself (or another observer).
     const auto observers = m_observers;

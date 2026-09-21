@@ -121,3 +121,10 @@ duplicate-position endpoints, closed, degenerate and empty tracks, non-finite
 samples, the single projection, and the no-origin case with recovery.
 `tst_map_models` covers the two map models on a real session model. The golden
 rows for the descent fixture are in `tests/support/builtinfixture.cpp`.
+
+## Consumers
+
+The simplified map track (above) and sensor fusion read this frame and no
+other: the fusion outputs `Fusion/north`, `east`, `down` and the fused
+velocities use this same frame and origin, so they can be compared with
+`Local/...` directly. See [SENSOR_FUSION.md](SENSOR_FUSION.md).

@@ -248,7 +248,7 @@ private slots:
     void valueTypes();
 };
 
-// SFJ acceptance 7: asynchronous and synchronous requests produce identical
+// Sensor-fusion-jobs acceptance 7: asynchronous and synchronous requests produce identical
 // results - every observable of the engine, not only the values.
 void CalcEngineAsyncTest::asyncMatchesSync()
 {
@@ -447,7 +447,7 @@ void CalcEngineAsyncTest::prepareCapturesInputs()
     QCOMPARE(w.engine.runCount("capture"), 1);
 }
 
-// SFJ acceptance 8, first half: a declared input changes WHILE the calculation
+// Sensor-fusion-jobs acceptance 8, first half: a declared input changes WHILE the calculation
 // is running. The engine refuses the result from its own dependency records.
 void CalcEngineAsyncTest::inputChangeWhileRunningRefuses()
 {
@@ -511,7 +511,7 @@ void CalcEngineAsyncTest::transitiveChangesRefuse_data()
     QTest::newRow("clear()") << "clear" << 8;
 }
 
-// SFJ acceptance 8: whatever reaches a prepared input through the dependency
+// Sensor-fusion-jobs acceptance 8: whatever reaches a prepared input through the dependency
 // graph refuses the result - not only a direct edit of a declared attribute.
 void CalcEngineAsyncTest::transitiveChangesRefuse()
 {
@@ -573,7 +573,7 @@ void CalcEngineAsyncTest::unrelatedChangeDoesNotRefuse()
     QVERIFY(w.engine.verifyAgainstFresh(Synthetic::explicitNames()).isEmpty());
 }
 
-// SFJ acceptance 8, second half: a declared input changes AFTER publication.
+// Sensor-fusion-jobs acceptance 8, second half: a declared input changes AFTER publication.
 void CalcEngineAsyncTest::changeAfterPublicationDropsDependents()
 {
     QFETCH(int, mode);

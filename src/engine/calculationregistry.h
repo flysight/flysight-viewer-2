@@ -141,6 +141,15 @@ public:
     /// per name; the memo is dropped by every successful register* / unregister.
     StaticDependencies staticDependencies(const DependencyKey &name) const;
 
+    /// Whether `name` is backed by an explicitly requested calculation: some
+    /// name in staticDependencies(name).names (the name itself included) has a
+    /// candidate - or, for a measurement, a source conversion - whose policy
+    /// is explicit. The one authority for "explicit-backed": the plot rows
+    /// and the logbook column cache both ask here. Memoized and dropped
+    /// exactly like staticDependencies(). An observer must not call it from
+    /// inside its callback; a later pass may.
+    bool dependsOnExplicit(const DependencyKey &name) const;
+
     /// Preference keys declared as inputs, sorted and unique. Plain
     /// calculations only: family instances are not enumerable. No family
     /// declares a preference today; one that does has to be added here
@@ -195,6 +204,7 @@ private:
     // Registration-derived queries (see above)
     void registrationsChanged();            // drops the memo, then calls the observers
     mutable QHash<DependencyKey, StaticDependencies> m_staticDependencyMemo;
+    mutable QHash<DependencyKey, bool> m_dependsOnExplicitMemo;
     QList<std::pair<int, std::function<void()>>> m_observers;
     int m_nextObserverToken = 1;
 };

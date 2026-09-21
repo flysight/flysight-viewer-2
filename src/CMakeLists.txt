@@ -33,7 +33,7 @@ endif()
 #
 # Third-party path variables (defined once, cached, can be overridden):
 #   THIRD_PARTY_DIR, QCUSTOMPLOT_ROOT, QCUSTOMPLOT_DIR,
-#   GEOGRAPHIC_ROOT, KDDW_ROOT, BOOST_ROOT, BOOST_LIBRARYDIR
+#   GEOGRAPHIC_ROOT, KDDW_ROOT
 #   GTSAM_ROOT, ONETBB_ROOT (consumed by cmake/SolverDependencies.cmake)
 #
 # Build configuration variables:
@@ -94,10 +94,6 @@ foreach(_kddw_path ${_KDDW_CMAKE_PATHS})
         break()
     endif()
 endforeach()
-
-# Include cross-platform Boost discovery
-# This sets BOOST_ROOT and BOOST_LIBRARYDIR with platform-appropriate defaults
-include("${CMAKE_CURRENT_LIST_DIR}/../cmake/BoostDiscovery.cmake")
 
 # ─────────────────────────────── Qt
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
@@ -217,12 +213,6 @@ find_package(GeographicLib REQUIRED
 message(STATUS "GeographicLib found: ${GeographicLib_VERSION}")
 message(STATUS "  Libraries: ${GeographicLib_LIBRARIES}")
 
-# Boost (header-only; boost::geometry used by simplification calculations)
-# BOOST_ROOT and BOOST_LIBRARYDIR are set by cmake/BoostDiscovery.cmake with
-# platform-appropriate defaults.
-
-find_package(Boost REQUIRED)
-
 # GTSAM and oneTBB (prebuilt by superbuild): exported target "gtsam", the
 # runtime libraries to deploy, and the flysight_solver_* helpers. Must stay
 # after the GeographicLib lookup above; the module explains why.
@@ -328,7 +318,7 @@ add_library(flysight_core STATIC
 )
 target_link_libraries(flysight_core
   PUBLIC  flysight_model Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui
-  PRIVATE ${GeographicLib_LIBRARIES} Boost::boost)
+  PRIVATE ${GeographicLib_LIBRARIES})
 
 # ─────────────────────────────── sensor fusion library
 # The batch GNSS/IMU factor-graph fit. The ONLY target that links GTSAM
@@ -492,7 +482,6 @@ target_link_libraries(FlySightViewer PRIVATE
   Qt${QT_VERSION_MAJOR}::MultimediaWidgets
 
   pybind11::embed
-  Boost::boost
 )
 
 flysight_set_output_to_build_root(FlySightViewer)
@@ -528,6 +517,11 @@ if(FLYSIGHT_BUILD_TESTS)
   enable_testing()
   add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../tests" "${CMAKE_BINARY_DIR}/tests")
 endif()
+
+# Every target exists now: only the fusion library, the application and the
+# fusion tests may reach GTSAM (cmake/SolverDependencies.cmake). Reads target
+# properties only.
+flysight_assert_solver_confinement()
 
 # ─────────────────────────────── install rules
 include(GNUInstallDirs)
@@ -718,7 +712,7 @@ if(WIN32)
   # Bundle Python embeddable package
   include("${FLYSIGHT_CMAKE_DIR}/BundlePythonWindows.cmake")
 
-  # Deploy third-party DLLs (GeographicLib, KDDockWidgets, Boost)
+  # Deploy third-party DLLs (GeographicLib, KDDockWidgets)
   include("${FLYSIGHT_CMAKE_DIR}/DeployThirdPartyWindows.cmake")
   flysight_install_solver_runtime(".")
 

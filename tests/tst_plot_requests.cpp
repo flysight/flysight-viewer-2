@@ -24,8 +24,10 @@
 #include "engine/evaluationcontext.h"
 #include "jobfixture.h"
 #include "jobmodel.h"
+#include "fixturebuilder.h"
 #include "jobqueue.h"
 #include "logbookcolumn.h"
+#include "logbookprobe.h"
 #include "plotfixture.h"
 #include "plotmodel.h"
 #include "plotrequests.h"
@@ -84,6 +86,7 @@ private slots:
     void ordinaryPlotsAreNeverInspected();
     void uncheckedPlotsAreNeverInspected();
     void hiddenAndStubRowsAreNotTracks();
+    void failedLoadPlaceholderIsNotATrack();
     void rowScript();
     void chainedBlockersContinue();
     void heldChainContinues();
@@ -399,6 +402,58 @@ void PlotRequestsTest::hiddenAndStubRowsAreNotTracks()
     QVERIFY(!isLoaded("s1"));
     QVERIFY(isLoaded("s2"));            // had a pass touched the LRU, s2 would be gone
     QVERIFY(quiet.holds());
+}
+
+// A row whose session file could not be loaded holds an empty placeholder
+// (loadFailed). It is loaded and may be visible, but it is not a track: it is
+// in no count, and a gesture requests nothing for it.
+void PlotRequestsTest::failedLoadPlaceholderIsNotATrack()
+{
+    giveInput({"s1", "s2"}, "G_IN", 4);
+    QVERIFY(waitForIdle(*m_model));     // clean rows: eviction has nothing to save
+    session("s1");
+    session("s2");                      // s1 is the least recently used hidden row
+    {
+        const auto restoreCapacity = qScopeGuard([] {
+            PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+        });
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 1);
+        QVERIFY(!isLoaded("s1"));
+    }
+
+    // The stub's file is damaged; whoever looks at the session gets the placeholder
+    const QString csvPath = sessionFilePath(QStringLiteral("s1"));
+    QVERIFY(!csvPath.isEmpty());
+    QVERIFY(writeFile(csvPath, "corrupt"));
+    const int s1Row = m_model->getSessionRow("s1");
+    QVERIFY(m_model->sessionRef(s1Row).attributeKeys().isEmpty());
+    QVERIFY(std::as_const(*m_model).rowAt(s1Row).isLoaded());
+    QVERIFY(std::as_const(*m_model).rowAt(s1Row).loadFailed);
+
+    // An empty placeholder has no input, so inspecting it would classify it
+    // as not applicable anyway; what shows that it is not inspected at all is
+    // that no engine is ever created for it.
+    const int enginesBefore = CalculationRegistry::instance().enrolledEngineCount();
+    show({"s1", "s2"});
+    QVERIFY(std::as_const(*m_model).rowAt(s1Row).visible);
+    check("g");
+    PlotRowState state = row("Syn/g");
+    QCOMPARE(sessionIdsOf(state.missing), QStringList({"s2"}));
+    QCOMPARE(state.missingCount, 1);
+    QCOMPARE(state.failedCount, 0);
+    QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), enginesBefore);
+
+    // The gesture asks for s2 only
+    QCOMPARE(m_requests->refreshPressed(QStringLiteral("Syn/g")), 1);
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(jobOf("s1", "gated").id, JobId(0));
+    QVERIFY(gate().waitEntered());
+    state = row("Syn/g");
+    QCOMPARE(sessionIdsOf(state.pending), QStringList({"s2"}));
+    gate().open(1);
+    QVERIFY(waitIdle(*m_queue));
+    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(std::as_const(*m_model).rowAt(s1Row).loadFailed);
 }
 
 // ---- Acceptance 15 -----------------------------------------------------------------------

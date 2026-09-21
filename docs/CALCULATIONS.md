@@ -1,9 +1,16 @@
-# Writing a registered calculation
+# Writing a registered calculation, and running one in the background
 
 For C++ contributors. Users and firmware developers want
 [DATA_SCHEMA.md](DATA_SCHEMA.md); Python plugin authors want
 [the plugin README](../python_plugins/README.md), where the same rules apply
 with a simpler surface.
+
+Sections 1-11 are about writing a calculation. Sections 12-17 are about
+explicit calculations that run in the background: the asynchronous request
+(12), blocker inspection (13), the threading rule (14), the job queue (15),
+plot-driven requests (16), and sensor fusion as a registered calculation (17).
+What the user sees of it is in [COMPUTED_PLOTS.md](COMPUTED_PLOTS.md); the
+fusion model itself is in [SENSOR_FUSION.md](SENSOR_FUSION.md).
 
 ## 1. The model
 
@@ -94,8 +101,8 @@ registrations, the one that needs X first.
 
 Registration order is the order in `registerBuiltInCalculations`: the
 conversion families, attribute, GNSS, IMU, MAG, time, local coordinates,
-simplification, WS-P, SP, interpolation. Python plugins are registered before the built-ins. Stored data
-always wins over any calculation.
+simplification, WS-P, SP, interpolation. Python plugins are registered before
+the built-ins. Stored data always wins over any calculation.
 The application then registers sensor fusion from its own library
 (`Fusion::registerFusionCalculations`, `src/fusion/fusionregistration.cpp`);
 `flysight_core` does not know it.
@@ -268,6 +275,11 @@ had, so whatever would have invalidated the published result marks the ticket.
 | `Discarded` / `Cancelled`, `ResourceExhausted` | the run produced nothing to install |
 | `RefusedStale` / `AlreadyPublished` | a synchronous `request` published in between (by purity, the same result) |
 | `Published` | installed for all outputs at once, with `status` and `detail` |
+
+`publish()` is called between evaluations, never from inside one (a compute
+function or an engine callback). A debug build asserts that; a release build
+refuses such a call as `RefusedStale` / `InputsChanged`, because nothing may be
+installed in the middle of an evaluation.
 
 A refused or discarded result is dropped whole and is not counted as a run. A
 published one leaves the engine exactly as `request` would have: same status,
@@ -739,11 +751,14 @@ states without a pass and without inspection.
 A plot is **explicit-backed** when any name in the static dependency closure of
 its y name - `CalculationRegistry::staticDependencies(name).names`, which
 includes the name itself and looks through source conversions - has a candidate
-(`candidatesFor()`) with explicit policy. This is a pure function of the
-registrations, memoized per plot id, and dropped by a registry observer. It is
-exact: `staticDependencies()` is a superset of every dynamic dependency set and
-a blocker is always reached through declared inputs, so a plot that is not
-explicit-backed can never report a blocker.
+or a source conversion with explicit policy. One registry query answers it,
+`CalculationRegistry::dependsOnExplicit(name)`, which the logbook column cache
+(section 17) asks too, so rows and columns cannot disagree. It is a pure
+function of the registrations, memoized in the registry and per plot id, and
+dropped by a registry observer. It is exact: `staticDependencies()` is a
+superset of every dynamic dependency set and a blocker is always reached
+through declared inputs, so a plot that is not explicit-backed can never report
+a blocker.
 
 Such plots are **never inspected**: no `blockers()` call, no read, no signal.
 They cost one hash lookup. `blockers()` is called only for (checked and
@@ -944,7 +959,9 @@ Tests: `tests/tst_plot_row_layout.cpp` (geometry, no widgets) and
 `tests/tst_plot_row_delegate.cpp` (the delegate in an offscreen `QTreeView`;
 the only test that links Qt Widgets, behind `FLYSIGHT_BUILD_WIDGET_TESTS`). The
 real `MainWindow` paths - start-up, profiles, quit with jobs running, and
-interactivity during a fit - are the manual script in `tests/README.md`.
+interactivity during a fit - are the manual script in `tests/README.md`,
+section 12 (steps M1-M9). That `MainWindow` never calls a gesture is a rule of
+the cleanup audit (group `gestures`).
 
 ## 17. Sensor fusion as a registered calculation
 
@@ -1035,9 +1052,8 @@ section 16.1.
 from the plot list and nowhere else.
 
 **Logbook columns.** A column that depends on an explicit calculation - any
-name in the static dependency closure of the names it reads has a candidate
-with explicit policy, looking through source conversions; the same definition
-as 16.3 - is cached as *unavailable* (`SessionModel::computeColumnValues`),
+name it reads answers true to `CalculationRegistry::dependsOnExplicit()`, the
+same query as 16.3 - is cached as *unavailable* (`SessionModel::computeColumnValues`),
 whatever is published in memory: explicit results are never saved, and a cached
 value is the column's value for the session as it is on disk. Loaded rows
 display the live value; publication does not touch the cache; a stub shows
@@ -1046,6 +1062,8 @@ session yields, so `CalculationCompatibilityVersion` was not bumped (section 9).
 
 Tests (label `fusion`, behind `FLYSIGHT_BUILD_FUSION_TESTS`):
 `tests/tst_fusion_session.cpp` (real `SessionData` engines, the fit on the
-test's main thread) and `tests/tst_fusion_jobs.cpp` (the job queue's worker on
-a real `SessionModel`); the column rule without GTSAM in
-`tst_column_cache::explicitBackedColumnIsNeverCached`.
+test's main thread), `tests/tst_fusion_jobs.cpp` (the job queue's worker on a
+real `SessionModel`) and `tests/tst_fusion_rows.cpp` (the plot rows of section
+16 with the seventeen real plots and real fits); the column rule without GTSAM
+in `tst_column_cache::explicitBackedColumnIsNeverCached`. The model, its
+limitations and what is rejected are in [SENSOR_FUSION.md](SENSOR_FUSION.md).

@@ -122,5 +122,10 @@
     "stationary_spin.channels.txt": "ba2b27300a24b3c873f14ad49807db8aa6e024267fb35ebcd6e7d1fd86fc5aa3",
     "stationary_spin.json": "ac7826ee2a3436c9874ba17e52c02ad00b98997e5ef96e42c824d4a63b3755b4"
   },
-  "sha256_note": "Hashes of the files as captured (LF line endings). A checkout with core.autocrlf=true has CRLF in the working tree; the loader accepts both."
+  "sha256_note": "Hashes of the files as captured (LF line endings). A checkout with core.autocrlf=true has CRLF in the working tree; the loader accepts both.",
+  "fixture_generator_sha256_lf": {
+    "tests/fusion/fusionfixtures.cpp": "568b1b6ce8f6244beafe92e3b3e8c08797e57531d6929946ad57ed6952055906",
+    "tests/fusion/fusionfixtures.h": "e30840ef2277c048689f3525427f3da26aaec8e8fea4cd52aaaceda6e9ed43bc"
+  },
+  "fixture_generator_note": "The fixture generator the capture harness was compiled with (LF line endings; unchanged since the capture commit). The goldens are valid for these inputs only: if either file changes, re-capture (tests/README.md, section 11)."
 }

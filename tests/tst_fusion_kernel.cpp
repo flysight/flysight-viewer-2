@@ -456,6 +456,15 @@ void FusionKernelTest::nonConvergenceIsSolverFailure()
 {
     // One iteration per bias pass, and a pass counts as settled only when its
     // cost stops decreasing altogether: five passes are not enough for that.
+    //
+    // THE ONE PLACE TO WATCH ON OTHER PLATFORMS. On the capture machine the
+    // fifth pass still lowers the cost, but only by about 1.9e-12 on a cost of
+    // about 2: roughly a thousand times rounding noise, not more. A platform
+    // whose arithmetic differs in the last bits (another libm, fma contraction
+    // inside GTSAM) could see that pass change nothing, count as settled, and
+    // report convergence. If this test fails elsewhere with Succeeded, that is
+    // the reason; the remedy is a harder non-convergence case for that
+    // platform (fewer passes' worth of progress), never a change to the kernel.
     Tuning tuning;
     tuning.maxIterations = 1;
     tuning.relativeTolerance = 1e-300;

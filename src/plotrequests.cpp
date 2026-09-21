@@ -113,9 +113,8 @@ bool PlotRequests::isInert() const
 
 // ---- Which plots matter -----------------------------------------------------------
 
-// Any name in the static dependency closure (which includes the name itself and
-// looks through source conversions) has a candidate with explicit policy. A
-// source conversion itself is never explicit, so candidatesFor() is enough.
+// The registry is the one authority (CalculationRegistry::dependsOnExplicit());
+// the memo here is per plot id and also keeps the static names of the plot.
 bool PlotRequests::isExplicitBacked(const PlotValue &plot)
 {
     const QString id = plotId(plot);
@@ -125,19 +124,7 @@ bool PlotRequests::isExplicitBacked(const PlotValue &plot)
 
     const CalculationRegistry &registry = CalculationRegistry::instance();
     const QSet<DependencyKey> names = registry.staticDependencies(yName(plot)).names;
-
-    bool backed = false;
-    for (const DependencyKey &name : names) {
-        const QList<CalculationInstance> candidates = registry.candidatesFor(name);
-        for (const CalculationInstance &candidate : candidates) {
-            if (candidate.descriptor && candidate.descriptor->policy == EvaluationPolicy::Explicit) {
-                backed = true;
-                break;
-            }
-        }
-        if (backed)
-            break;
-    }
+    const bool backed = registry.dependsOnExplicit(yName(plot));
 
     m_explicitBacked.insert(id, backed);
     m_staticNames.insert(id, names);
