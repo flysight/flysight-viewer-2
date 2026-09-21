@@ -9,7 +9,7 @@ namespace FlySight {
 
 /// Registers every built-in calculation with the calculation engine, in a
 /// fixed order: the conversion layer (source -> effective values), attributes,
-/// GNSS, IMU, MAG, time, simplified track, WS-P, SP, and last the
+/// GNSS, IMU, MAG, time, local coordinates, simplified track, WS-P, SP, and last the
 /// synthesized-interpolation family. Registration order is the
 /// order in which competing candidates for one output are tried.
 ///
@@ -33,7 +33,9 @@ void registerBuiltInCalculations(CalculationRegistry &registry = CalculationRegi
 ///
 /// History: 1 - first marker; invalidates every released index.json, whose
 /// gyro-derived columns were computed without the legacy-gyro schema correction.
-constexpr int CalculationCompatibilityVersion = 1;
+/// 2 - centered time fit: _TIME_FIT_A/B, and with them every non-GNSS _time,
+/// changed at high device uptime.
+constexpr int CalculationCompatibilityVersion = 2;
 
 /// The second half of cache validity (index.json field
 /// "calculationEnvironment"): which calculations are registered, the order in

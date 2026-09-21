@@ -759,7 +759,7 @@ bool ModelRun::restart(bool crash)
     // The index the crash left behind is valid for the environment it names.
     // Where that is the current one, none of its values may disagree with the
     // session file next to it.
-    if (crash && crashIndex[QStringLiteral("calculationCompatibility")].toInt() == 1
+    if (crash && crashIndex[QStringLiteral("calculationCompatibility")].toInt() == 2
         && crashIndex[QStringLiteral("calculationEnvironment")].toString() == calculationEnvironmentFingerprint()) {
         const QStringList keys = columnAttributeKeys();
         for (const QString &id : m_ids) {
@@ -946,8 +946,8 @@ bool ModelRun::persistedState()
 
     if (!logbook.flushIndex() && logbook.indexNeedsFlush())
         return fail(QStringLiteral("end: index.json could not be written"));
-    if (readIndex()[QStringLiteral("calculationCompatibility")].toInt() != 1)
-        return fail(QStringLiteral("end: index.json has no calculationCompatibility 1"));
+    if (readIndex()[QStringLiteral("calculationCompatibility")].toInt() != 2)
+        return fail(QStringLiteral("end: index.json has no calculationCompatibility 2"));
     return true;
 }
 

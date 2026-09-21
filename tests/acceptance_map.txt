@@ -177,3 +177,21 @@
 19 tst_workflow importEditSaveReopen
 19 tst_python_bridge pluginWorkflowThroughModel
 19 tst_source_layer onlySchemaVerDecides
+
+# ---- Sensor fusion as an explicit calculation (PLANS/sensor-fusion-jobs.md) ----
+# Items of that specification are numbered 100 + n, so that they cannot be
+# confused with items 1-19 above.
+
+# 102 - exact synthetic clock at high uptime: microsecond-level UTC conversion
+102 tst_time_fit highUptimeExactClock
+102 tst_time_fit fitFollowsTimeSource
+
+# 103 - local coordinates (the simplified-track half is added by its own phase)
+103 tst_local_coordinates originGates
+103 tst_local_coordinates speedAccuracyPlaysNoPart
+103 tst_local_coordinates knownDisplacement
+103 tst_local_coordinates knownVelocityRotation
+103 tst_local_coordinates invalidSamplesAreNaNAtTheirIndexOnly
+103 tst_local_coordinates noQualifyingFixMakesEverythingUnavailable
+103 tst_local_coordinates sourceChangesInvalidate
+103 tst_local_coordinates markersAndDisplayDoNotAffectTheFrame

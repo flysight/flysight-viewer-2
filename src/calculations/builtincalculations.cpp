@@ -4,6 +4,7 @@
 #include "imucalculations.h"
 #include "magcalculations.h"
 #include "timecalculations.h"
+#include "localcoordinatecalculations.h"
 #include "simplificationcalculations.h"
 #include "wspcalculations.h"
 #include "spcalculations.h"
@@ -31,6 +32,7 @@ void registerBuiltInCalculations(CalculationRegistry &registry)
     Calculations::registerImuCalculations(registry);
     Calculations::registerMagCalculations(registry);
     Calculations::registerTimeCalculations(registry);
+    Calculations::registerLocalCoordinateCalculations(registry);
     Calculations::registerSimplificationCalculations(registry);
     Calculations::registerWspCalculations(registry);
     Calculations::registerSpCalculations(registry);

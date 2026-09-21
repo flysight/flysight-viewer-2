@@ -47,6 +47,12 @@ namespace SessionKeys {
     constexpr char AnalysisStartTime[] = "_ANALYSIS_START_TIME";
     constexpr char AnalysisEndTime[]   = "_ANALYSIS_END_TIME";
 
+    // Local coordinate frame origin (calculated)
+    constexpr char LocalOriginLat[]   = "_LOCAL_ORIGIN_LAT";
+    constexpr char LocalOriginLon[]   = "_LOCAL_ORIGIN_LON";
+    constexpr char LocalOriginHmsl[]  = "_LOCAL_ORIGIN_HMSL";
+    constexpr char LocalOriginIndex[] = "_LOCAL_ORIGIN_INDEX";
+
     // Wingsuit Performance (WS-P) parameter keys
     constexpr char WspVersion[]      = "_WSP_VERSION";
     constexpr char WspTopAlt[]       = "_WSP_TOP_ALT";

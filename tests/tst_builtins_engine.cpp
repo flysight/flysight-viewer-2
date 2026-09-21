@@ -185,6 +185,10 @@ void BuiltinsEngineTest::inventory()
         "builtin.time.system.IMU",
         "builtin.time.system.TIME",
         "builtin.time.system.VBAT",
+        // localcoordinatecalculations
+        "builtin.local.coordinates",
+        "builtin.local.time",
+        "builtin.local.systemTime",
         // simplificationcalculations
         "builtin.simplified.track",
         // wspcalculations
@@ -206,7 +210,7 @@ void BuiltinsEngineTest::inventory()
 
     const QStringList ids = m_world->registry.registeredIds();
     QCOMPARE(ids, expected);
-    QCOMPARE(ids.size(), 70);   // 2 conversion families + 67 calculations + 1 family
+    QCOMPARE(ids.size(), 73);   // 2 conversion families + 70 calculations + 1 family
 
     const QStringList families = {"builtin.conversion.schema", "builtin.conversion.default",
                                   "builtin.interpolation"};
@@ -273,7 +277,7 @@ void BuiltinsEngineTest::noUndeclaredReads()
         QVERIFY2(status.has_value(), qPrintable(id));
         QVERIFY2(*status == ResultStatus::Ok || *status == ResultStatus::MissingInput, qPrintable(id));
     }
-    QCOMPARE(plain, 67);
+    QCOMPARE(plain, 70);
 
     QCOMPARE(engine.undeclaredReadCount(), 0);
     QCOMPARE(engine.cycleCount(), 0);

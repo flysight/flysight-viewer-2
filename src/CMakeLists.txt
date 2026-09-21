@@ -307,6 +307,7 @@ add_library(flysight_core STATIC
   calculations/imucalculations.cpp            calculations/imucalculations.h
   calculations/magcalculations.cpp            calculations/magcalculations.h
   calculations/timecalculations.cpp           calculations/timecalculations.h
+  calculations/localcoordinatecalculations.cpp calculations/localcoordinatecalculations.h
   calculations/simplificationcalculations.cpp calculations/simplificationcalculations.h
   calculations/wspcalculations.cpp            calculations/wspcalculations.h
   calculations/spcalculations.cpp             calculations/spcalculations.h

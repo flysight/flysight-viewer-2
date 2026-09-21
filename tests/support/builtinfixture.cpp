@@ -249,6 +249,23 @@ QList<GoldenValue> goldenValues()
       << meas("IMU", "aTotal", 3, {{0, 9.80665}, {1, 9.80665}, {2, 9.80665}})
       << meas("MAG", "total", 3, {{0, 0.0005}, {1, 0.0005}, {2, 0.0005}}, 1e-15);
 
+    // ---- localcoordinatecalculations
+    // Every row has hAcc = 1.0, so the origin is row 0 (45 N, 75 W, 4000 m).
+    // The whole track lies on the origin's meridian, and row 0 flies north at
+    // 50 m/s. Derived by hand.
+    g << attr("_LOCAL_ORIGIN_LAT", 45.0, 0.0)
+      << attr("_LOCAL_ORIGIN_LON", -75.0, 0.0)
+      << attr("_LOCAL_ORIGIN_HMSL", 4000.0, 0.0)
+      << attr("_LOCAL_ORIGIN_INDEX", 0.0, 0.0)
+      << meas("Local", "north", 296, {{0, 0.0}}, 1e-6)
+      << meas("Local", "east", 296, {{0, 0.0}, {295, 0.0}}, 1e-6)   // same meridian as the origin
+      << meas("Local", "down", 296, {{0, 0.0}}, 1e-6)
+      << meas("Local", "velN", 296, {{0, 50.0}})
+      << meas("Local", "velE", 296, {{0, 0.0}, {295, 0.0}})        // rotation about the east axis only
+      << meas("Local", "velD", 296, {{0, 0.0}})
+      << meas("Local", "_time", 296, {{0, T0}, {295, T0 + 295.0}})
+      << meas("Local", "_system_time", 296, {{0, 0.0}, {295, 295.0}});
+
     // ---- simplificationcalculations
     g << meas("Simplified", "lat", 2, {{0, 45.0}, {1, 45.0295}})
       << meas("Simplified", "lon", 2, {{0, -75.0}, {1, -75.0}})

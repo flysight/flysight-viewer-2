@@ -914,6 +914,15 @@ void MainWindow::registerBuiltInPlots()
         {"GNSS (Advanced)", "Specific energy",                 "kJ/kg", Qt::darkGreen,                     "GNSS", "specificEnergy",    "specific_energy"},
         {"GNSS (Advanced)", "Specific energy rate",            "W/kg",  Qt::darkBlue,                      "GNSS", "specificEnergyRate","specific_power"},
 
+        // Category: GNSS (Local frame) - recording-wide north/east/down frame
+        // (red/green/blue per axis; positions deep, velocities standard)
+        {"GNSS (Local frame)", "North position", "m",   QColor::fromHsl(  0, S_dk, L_dw), "Local", "north", "distance"},
+        {"GNSS (Local frame)", "East position",  "m",   QColor::fromHsl(120, S_dk, L_dc), "Local", "east",  "distance"},
+        {"GNSS (Local frame)", "Down position",  "m",   QColor::fromHsl(240, S_dk, L_db), "Local", "down",  "distance"},
+        {"GNSS (Local frame)", "North velocity", "m/s", QColor::fromHsl(  0, S,    L_w),  "Local", "velN",  "speed"},
+        {"GNSS (Local frame)", "East velocity",  "m/s", QColor::fromHsl(120, S,    L_c),  "Local", "velE",  "speed"},
+        {"GNSS (Local frame)", "Down velocity",  "m/s", QColor::fromHsl(240, S,    L_b),  "Local", "velD",  "vertical_speed"},
+
         // Category: IMU · Acceleration (red group, H ≈ 0°)
         {"IMU", "Acceleration X",     "g", QColor::fromHsl(360 - group_a, S, L_w), "IMU", "ax",     "acceleration"},
         {"IMU", "Acceleration Y",     "g", QColor::fromHsl(  0,           S, L_w), "IMU", "ay",     "acceleration"},

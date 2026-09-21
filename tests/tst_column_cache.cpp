@@ -256,7 +256,7 @@ void ColumnCacheTest::upgradeDiscardsAndRecomputes()
     QCOMPARE(m_model->columnWorkStats().valuesComputed, 3);
 
     const QJsonObject rewritten = readIndex();
-    QCOMPARE(rewritten[QStringLiteral("calculationCompatibility")].toInt(), 1);
+    QCOMPARE(rewritten[QStringLiteral("calculationCompatibility")].toInt(), 2);
     QCOMPARE(rewritten[QStringLiteral("calculationEnvironment")].toString(), calculationEnvironmentFingerprint());
     QVERIFY(isNear(indexValue(rewritten, "g1", m_g).toDouble(), 1.72032));
     QCOMPARE(indexValue(rewritten, "g1", m_d).toString(), QStringLiteral("first"));

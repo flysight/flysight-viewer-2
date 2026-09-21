@@ -409,7 +409,7 @@ void SessionEngineTest::noUndeclaredReadsAcrossBuiltIns()
         ++plain;
         QVERIFY2(engine.request(id).found, qPrintable(id));
     }
-    QCOMPARE(plain, 67);
+    QCOMPARE(plain, 70);
 
     QCOMPARE(session.getAttribute("_EXIT_TIME:GNSS/_time/hMSL").toDouble(), 4000.0);
     QCOMPARE(session.getAttribute("_WSP_ENTRY_TIME:GNSS/_time/hMSL").toDouble(), 2600.0);

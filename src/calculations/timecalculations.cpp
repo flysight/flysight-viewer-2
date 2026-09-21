@@ -32,25 +32,48 @@ std::optional<TimeFit> fitSystemTimeToUtc(const QVector<double> &systemTime,
         utcTime[i] = week[i] * 604800 + tow[i] + 315964800;
     }
 
-    // Least-squares linear fit: utcTime = a * systemTime + b
-    double sumS = 0.0, sumU = 0.0, sumSS = 0.0, sumSU = 0.0;
+    // Least-squares linear fit: utcTime = a * systemTime + b, with centered
+    // sums. The textbook normal equations (N * sumSU - sumS * sumU, and so on)
+    // subtract huge, nearly equal products of Unix UTC (~1.7e9) and device
+    // uptime (~1e5): the products need more digits than a double has, and the
+    // fit loses tens of milliseconds even for an exactly linear clock. Here
+    // every value is first taken relative to the first sample and then to the
+    // mean, so the sums run over small numbers and nothing cancels.
+    //
+    // The operation order below is part of the contract: consumers compare
+    // times derived from a and b bit for bit.
+    const double systemReference = systemTime[0];
+    const double utcReference = utcTime[0];
+
+    // First pass: means, relative to the first sample
+    double meanS = 0.0, meanU = 0.0;
     for (int i = 0; i < N; ++i) {
-        double S = systemTime[i];
-        double U = utcTime[i];
-        sumS += S;
-        sumU += U;
-        sumSS += S * S;
-        sumSU += S * U;
+        meanS += systemTime[i] - systemReference;
+        meanU += utcTime[i] - utcReference;
+    }
+    meanS /= N;
+    meanU /= N;
+
+    // Second pass: variance of system time and its covariance with UTC
+    double variance = 0.0, covariance = 0.0;
+    for (int i = 0; i < N; ++i) {
+        const double S = (systemTime[i] - systemReference) - meanS;
+        const double U = (utcTime[i] - utcReference) - meanU;
+        variance += S * S;
+        covariance += S * U;
     }
 
-    double denom = (N * sumSS - sumS * sumS);
-    if (denom == 0.0) {
+    // Degenerate fit: every pulse at the same system time (or NaN data)
+    if (!(variance > 0.0)) {
         return std::nullopt;
     }
 
+    // The line passes through the means. The two brackets of b are kept
+    // apart: the first has UTC's magnitude, the second is small-minus-small,
+    // and it is only added once it has been formed at full precision.
     TimeFit fit;
-    fit.a = (N * sumSU - sumS * sumU) / denom;
-    fit.b = (sumU - fit.a * sumS) / N;
+    fit.a = covariance / variance;
+    fit.b = (utcReference - fit.a * systemReference) + (meanU - fit.a * meanS);
     return fit;
 }
 

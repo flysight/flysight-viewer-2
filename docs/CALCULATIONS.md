@@ -81,6 +81,9 @@ an invalid `QVariant` to "clear" something. The result is published atomically,
 and the calculation runs once however many of its outputs are read. When the
 user stores an attribute that is also an output (a marker dragged by hand), the
 stored value overrides that one output while the others stay available.
+`builtin.local.coordinates` is the example of one calculation with attribute
+and measurement outputs together; see
+[LOCAL_COORDINATES.md](LOCAL_COORDINATES.md).
 
 ## 5. Candidates and order
 
@@ -90,8 +93,8 @@ produces the output wins. "Works with or without X" is therefore two
 registrations, the one that needs X first.
 
 Registration order is the order in `registerBuiltInCalculations`: the
-conversion families, attribute, GNSS, IMU, MAG, time, simplification, WS-P, SP,
-interpolation. Python plugins are registered before the built-ins. Stored data
+conversion families, attribute, GNSS, IMU, MAG, time, local coordinates,
+simplification, WS-P, SP, interpolation. Python plugins are registered before the built-ins. Stored data
 always wins over any calculation.
 
 The engine records everything a resolution looked at, including the candidates

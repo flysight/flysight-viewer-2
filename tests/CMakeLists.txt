@@ -113,6 +113,8 @@ flysight_add_test(tst_builtins_golden SOURCES tst_builtins_golden.cpp)
 
 # Built-in calculations on the engine (fake session state, private registry)
 flysight_add_test(tst_builtins_engine SOURCES tst_builtins_engine.cpp)
+flysight_add_test(tst_time_fit SOURCES tst_time_fit.cpp)
+flysight_add_test(tst_local_coordinates SOURCES tst_local_coordinates.cpp)
 
 # SessionData / SessionModel on the engine (real built-ins, global registry)
 flysight_add_test(tst_session_engine       SOURCES tst_session_engine.cpp)

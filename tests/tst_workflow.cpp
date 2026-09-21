@@ -332,7 +332,7 @@ void WorkflowTest::releasedLogbookUpgrade()
     QVERIFY(isNear(cached(0, kG).toDouble(), 1.72032));     // 1.5 * 1.14688, not 1.5
     QCOMPARE(cached(0, kD).toString(), QStringLiteral("old jump"));
     QCOMPARE(readFileBytes(csvPath), kReleased);            // no migration
-    QCOMPARE(readIndex()[QStringLiteral("calculationCompatibility")].toInt(), 1);
+    QCOMPARE(readIndex()[QStringLiteral("calculationCompatibility")].toInt(), 2);
 
     // An edit: only the description line changes, only that column is computed
     m_model->resetColumnWorkStats();
