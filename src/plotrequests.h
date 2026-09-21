@@ -224,6 +224,22 @@ public:
     /// function of its argument.
     static QString buildToolTip(const PlotRowState &state);
 
+    /// True when a plot value that was just read as empty is absent only
+    /// because an explicit calculation has not produced it: it was never
+    /// requested (BlockerReport::State::Blocked; the row shows the refresh
+    /// control) or it ran and rejected its inputs (NotProduced; the warning
+    /// badge). That is an ordinary, supported state, and the plot widget does
+    /// not warn "No data available" about it. False for NotApplicable (a
+    /// missing input, an unknown sensor: the warning stays) and for Available.
+    ///
+    /// The engine is asked, not rowState(): that may be one event-loop pass
+    /// behind. Inspection never runs an explicit calculation, and it reads -
+    /// it neither loads nor evicts - so the call is allowed under a row
+    /// stability guard. Like every engine read: main thread, not from inside a
+    /// calculation.
+    static bool isMerelyUncomputed(const SessionData &session, const QString &sensorId,
+                                   const QString &measurementId);
+
     /// Test seam: the number of recomputation passes run so far.
     int passCount() const { return m_passCount; }
 

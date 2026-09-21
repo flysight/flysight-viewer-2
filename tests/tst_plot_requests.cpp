@@ -22,6 +22,7 @@
 #include "engine/calculationregistry.h"
 #include "engine/calculationresult.h"
 #include "engine/evaluationcontext.h"
+#include "fakesessionstate.h"
 #include "jobfixture.h"
 #include "jobmodel.h"
 #include "fixturebuilder.h"
@@ -84,6 +85,7 @@ private slots:
     void gestureNeverRequestsTheUnrequestable();
     void failedBadgeAndReason();
     void failedAndPendingTogether();
+    void merelyUncomputedIsNotWorthAWarning();
     void sharedJobSameProgress();
     void rowCheckedProgrammaticallyDuringJobShowsPending();
     void cancelThenRefreshWhileWindingDown();
@@ -1200,6 +1202,101 @@ void PlotRequestsTest::failedBadgeAndReason()
 }
 
 // s1 failed, s2 waits behind a held job of another row: badge and cancel together.
+// PlotRequests::isMerelyUncomputed() decides whether the plot widget keeps
+// quiet about a track it could not draw ("No data available for plot"): yes
+// for a value that waits on an explicit calculation or was rejected by one,
+// no for everything else. One case per BlockerReport state. It inspects only:
+// no explicit calculation runs and no job appears, however often it is asked.
+void PlotRequestsTest::merelyUncomputedIsNotWorthAWarning()
+{
+    const auto merelyUncomputed = [this](const char *sessionId, const char *sensor, const char *measurement) {
+        return PlotRequests::isMerelyUncomputed(session(QString::fromLatin1(sessionId)),
+                                                QString::fromLatin1(sensor), QString::fromLatin1(measurement));
+    };
+    const auto explicitRuns = [this](const char *sessionId) {
+        int runs = 0;
+        for (const char *id : {"expA", "expB", "gated", "thrower", "afterG"})
+            runs += engine(QString::fromLatin1(sessionId)).runCount(QString::fromLatin1(id));
+        return runs;
+    };
+
+    QVERIFY(giveInput({"s1"}, "EA_IN", 4));
+    QVERIFY(giveInput({"s1"}, "EB_IN", 10));
+    QVERIFY(giveInput({"s2"}, "EA_IN", -1));
+    QVERIFY(giveInput({"s2"}, "T_IN", 1));
+    QVERIFY(giveInput({"s4"}, "P_IN", 7));
+    // s3 has no input of any synthetic calculation
+
+    // Blocked: never requested. Directly behind the explicit calculation, and
+    // at the end of a chain of two. The value is empty and nobody is warned.
+    {
+        const Quiet quiet(*m_queue);
+        for (int i = 0; i < 3; ++i) {
+            QVERIFY(values("s1", "ea").isEmpty());
+            QVERIFY(merelyUncomputed("s1", "Syn", "ea"));
+            QVERIFY(merelyUncomputed("s1", "Syn", "db"));
+        }
+        QCOMPARE(engine("s1").blockers(Synthetic::measKey("Syn", "ea")).state, BlockerReport::State::Blocked);
+        QCOMPARE(explicitRuns("s1"), 0);
+        QVERIFY(quiet.holds());
+    }
+
+    // NotApplicable: a missing input, a plot over stored data that is not
+    // there, a sensor nobody knows. These keep their warning.
+    {
+        const Quiet quiet(*m_queue);
+        QVERIFY(values("s3", "ea").isEmpty());
+        QVERIFY(!merelyUncomputed("s3", "Syn", "ea"));
+        QVERIFY(!merelyUncomputed("s3", "Syn", "db"));
+        QVERIFY(!merelyUncomputed("s3", "Syn", "plain"));
+        QVERIFY(!merelyUncomputed("s3", "NoSuchSensor", "nothing"));
+        QVERIFY(!merelyUncomputed("s1", "NoSuchSensor", "nothing"));
+        QCOMPARE(engine("s3").blockers(Synthetic::measKey("Syn", "ea")).state,
+                 BlockerReport::State::NotApplicable);
+        QCOMPARE(explicitRuns("s3"), 0);
+        QVERIFY(quiet.holds());
+    }
+
+    // Available: ordinary data ...
+    QCOMPARE(values("s4", "plain"), QVector<double>({7.0}));
+    QVERIFY(!merelyUncomputed("s4", "Syn", "plain"));
+
+    // NotProduced: requested, ran, and rejected its input (a result), or threw
+    // (a cached failure). The row carries the badge; the plot widget is silent.
+    QCOMPARE(m_queue->request("s2", QStringLiteral("expA")).kind, Kind::Created);
+    QCOMPARE(m_queue->request("s2", QStringLiteral("thrower")).kind, Kind::Created);
+    // ... and Available: requested and published
+    QCOMPARE(m_queue->request("s1", QStringLiteral("expA")).kind, Kind::Created);
+    QVERIFY(waitIdle(*m_queue));
+    QCOMPARE(jobOf("s2", "expA").state, JobState::Succeeded);
+    QCOMPARE(jobOf("s2", "thrower").state, JobState::Succeeded);   // a cached failure is a result too
+    QCOMPARE(jobOf("s2", "thrower").resultStatus, std::optional<ResultStatus>(ResultStatus::Failed));
+    QCOMPARE(jobOf("s1", "expA").state, JobState::Succeeded);
+    {
+        const Quiet quiet(*m_queue);
+        const int runsS1 = explicitRuns("s1"), runsS2 = explicitRuns("s2");
+        QCOMPARE(runsS1, 1);
+        QCOMPARE(runsS2, 2);
+        for (int i = 0; i < 3; ++i) {
+            QVERIFY(values("s2", "ea").isEmpty());
+            QVERIFY(merelyUncomputed("s2", "Syn", "ea"));
+            QVERIFY(values("s2", "t").isEmpty());
+            QVERIFY(merelyUncomputed("s2", "Syn", "t"));
+
+            QCOMPARE(values("s1", "ea"), QVector<double>({5.0}));
+            QVERIFY(!merelyUncomputed("s1", "Syn", "ea"));
+            // The chain's second link is still unrequested
+            QVERIFY(values("s1", "db").isEmpty());
+            QVERIFY(merelyUncomputed("s1", "Syn", "db"));
+        }
+        QCOMPARE(engine("s2").blockers(Synthetic::measKey("Syn", "ea")).state, BlockerReport::State::NotProduced);
+        QCOMPARE(engine("s1").blockers(Synthetic::measKey("Syn", "ea")).state, BlockerReport::State::Available);
+        QCOMPARE(explicitRuns("s1"), runsS1);
+        QCOMPARE(explicitRuns("s2"), runsS2);
+        QVERIFY(quiet.holds());
+    }
+}
+
 void PlotRequestsTest::failedAndPendingTogether()
 {
     QVERIFY(giveInput({"s1"}, "EA_IN", -1));

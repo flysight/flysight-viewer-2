@@ -40,6 +40,7 @@
 #include "calculations/builtincalculations.h"
 #include "dataimporter.h"
 #include "dependencykey.h"
+#include "fakesessionstate.h"
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
 #include "fixturebuilder.h"
@@ -147,6 +148,7 @@ private slots:
     void sourceKindIsUnknownToPlugins();
     void derivedMeasurementReadsEffective();
     void staleViewRaises();
+    void pluginsNeverStartExplicitWork();
 
     // failures, return types, precedence
     void exceptionYieldsCleanUnavailable();
@@ -416,7 +418,8 @@ void PythonBridgeTest::unknownKindRejectsPluginOnly()
 void PythonBridgeTest::registrationOrderIsDeterministic()
 {
     // All attributes, then all measurements, then all calculations; files in
-    // name order (imu_tilt, t_badkeys, t_multi, t_results, t_single, t_view, t_zdocs);
+    // name order (imu_tilt, t_badkeys, t_multi, t_results, t_single, t_view, t_zdocs,
+    // t_zexplicit);
     // the index is the position in the SDK list, so a rejected plugin still
     // consumes one (t_badkeys: attributes 0-7; t_multi: calculations 8-9).
     const QStringList expected{
@@ -438,6 +441,9 @@ void PythonBridgeTest::registrationOrderIsDeterministic()
         QStringLiteral("plugin.attr.23._PY_EFF_WTOTAL0"),
         QStringLiteral("plugin.attr.24._PY_STASH"),
         QStringLiteral("plugin.attr.25._PY_DURATION"),
+        QStringLiteral("plugin.attr.26._PY_EXP_DIRECT"),
+        QStringLiteral("plugin.attr.27._PY_EXP_DERIVED"),
+        QStringLiteral("plugin.attr.28._PY_EXP_PROBE"),
         QStringLiteral("plugin.meas.0.IMU/pyTwoD"),
         QStringLiteral("plugin.meas.1.IMU/pyScalar"),
         QStringLiteral("plugin.meas.2.IMU/pyStrArr"),
@@ -511,6 +517,80 @@ void PythonBridgeTest::swallowedUndeclaredReadStillFails()
     QCOMPARE(session.calculationEngine().resultStatus(id), Status(ResultStatus::UndeclaredRead));
     QVERIFY(session.calculationEngine().lastUndeclaredRead().second
             == CalcInput::attribute(QStringLiteral("FIRMWARE_VER")));
+}
+
+void PythonBridgeTest::pluginsNeverStartExplicitWork()
+{
+    // A plugin is an on-demand reader like any other: reading through the
+    // Python-facing API never runs an explicit calculation, whether the plugin
+    // declares the explicit output itself (EA1), an on-demand value derived
+    // from it (DA), or reaches for either without declaring it. The synthetic
+    // explicit world (fakesessionstate.h) stands in for sensor fusion: this
+    // test must not link GTSAM. Literals for EA_IN = 4: EA1 5, DA 105.
+    CalculationRegistry &registry = CalculationRegistry::instance();
+    const QStringList before = registry.registeredIds();
+    Synthetic::registerExplicitWorld(registry);
+    const auto unregister = qScopeGuard([&registry, before] {
+        const QStringList after = registry.registeredIds();
+        for (auto it = after.crbegin(); it != after.crend(); ++it) {
+            if (!before.contains(*it))
+                registry.unregister(*it);
+        }
+    });
+    QCOMPARE(registry.registeredIds().size(), before.size() + 5);
+
+    const QString directId = idEndingWith(QStringLiteral("._PY_EXP_DIRECT"));
+    const QString derivedId = idEndingWith(QStringLiteral("._PY_EXP_DERIVED"));
+    const QString probeId = idEndingWith(QStringLiteral("._PY_EXP_PROBE"));
+    QVERIFY(!directId.isEmpty() && !derivedId.isEmpty() && !probeId.isEmpty());
+
+    SessionData session;
+    QVERIFY(loadFixture(session));
+    session.setAttribute(QStringLiteral("EA_IN"), 4);
+    const CalculationEngine &engine = session.calculationEngine();
+
+    const auto probeCalls = [] {
+        py::gil_scoped_acquire gil;
+        return py::module_::import("t_zexplicit").attr("PROBE_CALLS").cast<int>();
+    };
+    const int probeCallsBefore = probeCalls();
+
+    for (int i = 0; i < 3; ++i) {
+        QVERIFY(!session.getAttribute(QStringLiteral("_PY_EXP_DIRECT")).isValid());
+        QVERIFY(!session.getAttribute(QStringLiteral("_PY_EXP_DERIVED")).isValid());
+        // Its declared input exists, so this plugin's Python code really runs
+        // and really attempts the two reads (swallowing the error).
+        QVERIFY(!session.getAttribute(QStringLiteral("_PY_EXP_PROBE")).isValid());
+    }
+    QCOMPARE(probeCalls(), probeCallsBefore + 1);
+    QCOMPARE(engine.resultStatus(probeId), Status(ResultStatus::UndeclaredRead));
+    // Nothing explicit ran, and the plugins whose input was unavailable never ran either
+    QCOMPARE(engine.runCount(QStringLiteral("expA")), 0);
+    QCOMPARE(engine.runCount(QStringLiteral("expB")), 0);
+    QCOMPARE(engine.runCount(directId), 0);
+    QCOMPARE(engine.runCount(derivedId), 0);
+    QVERIFY(!session.getAttribute(QStringLiteral("EA1")).isValid());
+
+    // The explicit request (in the application: a job) is what makes the value
+    // appear; the plugins then see it like any other input.
+    const CalculationEngine::RequestOutcome outcome =
+        session.calculationEngine().request(QStringLiteral("expA"));
+    QVERIFY(outcome.found);
+    QCOMPARE(outcome.status, ResultStatus::Ok);
+    QCOMPARE(engine.runCount(QStringLiteral("expA")), 1);
+
+    for (int i = 0; i < 3; ++i) {
+        QCOMPARE(session.getAttribute(QStringLiteral("_PY_EXP_DIRECT")).toDouble(), 5.5);
+        QCOMPARE(session.getAttribute(QStringLiteral("_PY_EXP_DERIVED")).toDouble(), 105.5);
+    }
+    QCOMPARE(engine.runCount(QStringLiteral("expA")), 1);
+    QCOMPARE(engine.runCount(directId), 1);
+    QCOMPARE(engine.runCount(derivedId), 1);
+
+    // An undeclared read stays an error after publication, and starts nothing
+    QVERIFY(!session.getAttribute(QStringLiteral("_PY_EXP_PROBE")).isValid());
+    QCOMPARE(engine.runCount(QStringLiteral("expA")), 1);
+    QCOMPARE(engine.runCount(QStringLiteral("expB")), 0);
 }
 
 void PythonBridgeTest::sourceKindIsUnknownToPlugins()

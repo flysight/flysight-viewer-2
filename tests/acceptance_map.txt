@@ -240,10 +240,12 @@
 # 105 - reads of fusion outputs, accH, the diagnostics, an interpolated value: unavailable, nothing runs
 105 tst_fusion_session readsNeverRunTheFit
 105 tst_fusion_jobs readersNeverStartAFit
+105 tst_python_bridge pluginsNeverStartExplicitWork
 
 # 106 - a request runs once and publishes together; derived values appear; a second request runs nothing
 106 tst_fusion_session requestRunsOnceAndPublishesTogether
 106 tst_fusion_jobs jobPublishesAllOutputsTogether
+106 tst_fusion_jobs columnShowsValueStraightAfterPublication
 
 # 107 - asynchronous and synchronous requests produce identical results
 107 tst_calcengine_async asyncMatchesSync
@@ -315,6 +317,7 @@
 116 tst_plot_row_delegate programmaticCheckStartsNothingWithViewAttached
 116 tst_plot_row_delegate startupStyleRestoreStartsNothingWithViewAttached
 116 tst_plot_row_delegate checkBoxClickIsGesture
+116 tst_plot_requests merelyUncomputedIsNotWorthAWarning
 116 audit gestures
 116 manual M1
 116 manual M2

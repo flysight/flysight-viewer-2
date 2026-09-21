@@ -332,6 +332,87 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
   flysight_add_fusion_test(tst_fusion_rows SOURCES tst_fusion_rows.cpp
     LIBS flysight_fusion_session_support)
 
+  # ---- bit-exact golden parity (label "exact") ------------------------------
+  # The same executables run a second time with FLYSIGHT_FUSION_EXACT=1, which
+  # turns every golden comparison into bit equality (tests/README.md section
+  # 11, "Tolerance policy"). Bit identity is a fair demand only on the
+  # configuration the goldens were captured with, which
+  # tests/data/fusion/capture.json records: MSVC, x64, and the same compiler
+  # major.minor (code generation is what decides the last bit; a Visual Studio
+  # update may legitimately change it, and that is a reason to look and
+  # re-validate, not a defect of the port).
+  #
+  #   AUTO  register the exact tests when the compiler matches capture.json,
+  #         otherwise say why not in a STATUS line (never a red test for a
+  #         compiler nobody validated)
+  #   ON    register them whatever the compiler is
+  #   OFF   never register them
+  set(FLYSIGHT_FUSION_EXACT_TESTS "AUTO" CACHE STRING
+      "Run the fusion golden tests a second time in bit-exact mode: AUTO (when the compiler matches tests/data/fusion/capture.json), ON or OFF")
+  set_property(CACHE FLYSIGHT_FUSION_EXACT_TESTS PROPERTY STRINGS AUTO ON OFF)
+
+  set(_fs_exact OFF)
+  string(TOUPPER "${FLYSIGHT_FUSION_EXACT_TESTS}" _fs_exact_mode)
+  if(NOT _fs_exact_mode MATCHES "^(AUTO|ON|OFF|TRUE|FALSE|YES|NO|1|0)$")
+    message(FATAL_ERROR "FLYSIGHT_FUSION_EXACT_TESTS must be AUTO, ON or OFF, not '${FLYSIGHT_FUSION_EXACT_TESTS}'")
+  endif()
+  if(_fs_exact_mode STREQUAL "AUTO")
+    # The captured compiler: "cl_version": "19.44.35220" -> 19.44
+    file(READ "${CMAKE_CURRENT_LIST_DIR}/data/fusion/capture.json" _fs_capture)
+    set(_fs_capture_cl "")
+    if(_fs_capture MATCHES "\"cl_version\" *: *\"([0-9]+\\.[0-9]+)[0-9.]*\"")
+      set(_fs_capture_cl "${CMAKE_MATCH_1}")
+    endif()
+    string(REGEX MATCH "^[0-9]+\\.[0-9]+" _fs_this_cl "${CMAKE_CXX_COMPILER_VERSION}")
+    if(_fs_capture_cl STREQUAL "")
+      message(WARNING "Fusion exact tests not registered: tests/data/fusion/capture.json names no cl_version")
+    elseif(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+      message(STATUS "Fusion exact tests not registered: the goldens were captured with 64-bit MSVC "
+                     "${_fs_capture_cl} (capture.json); this is ${CMAKE_CXX_COMPILER_ID} "
+                     "${CMAKE_CXX_COMPILER_VERSION}. Portable-tolerance parity still runs")
+    elseif(NOT _fs_this_cl STREQUAL _fs_capture_cl)
+      message(STATUS "Fusion exact tests not registered: compiler differs from capture.json "
+                     "(MSVC ${CMAKE_CXX_COMPILER_VERSION}, goldens captured with ${_fs_capture_cl}). "
+                     "Portable-tolerance parity still runs; -DFLYSIGHT_FUSION_EXACT_TESTS=ON forces them")
+    else()
+      set(_fs_exact ON)
+    endif()
+  elseif(FLYSIGHT_FUSION_EXACT_TESTS)
+    set(_fs_exact ON)
+  endif()
+
+  # flysight_add_fusion_exact_test(<test>): CTest test <test>_exact, the
+  # executable and whole environment of <test> plus FLYSIGHT_FUSION_EXACT=1.
+  # (The 64 MiB stack is a link property of the executable.)
+  function(flysight_add_fusion_exact_test name)
+    add_test(NAME ${name}_exact COMMAND ${name})
+    get_test_property(${name} ENVIRONMENT _env)
+    get_test_property(${name} ENVIRONMENT_MODIFICATION _modification)
+    get_test_property(${name} TIMEOUT _timeout)
+    list(APPEND _env "FLYSIGHT_FUSION_EXACT=1")
+    set_tests_properties(${name}_exact PROPERTIES
+      ENVIRONMENT "${_env}"
+      TIMEOUT ${_timeout}
+      LABELS "core;fusion;exact")
+    if(_modification)
+      set_property(TEST ${name}_exact PROPERTY ENVIRONMENT_MODIFICATION "${_modification}")
+    endif()
+  endfunction()
+
+  if(_fs_exact)
+    message(STATUS "Fusion exact tests registered (FLYSIGHT_FUSION_EXACT_TESTS=${FLYSIGHT_FUSION_EXACT_TESTS}, "
+                   "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}): ctest -L exact")
+    # The two that decide parity ...
+    flysight_add_fusion_exact_test(tst_fusion_parity)
+    flysight_add_fusion_exact_test(tst_fusion_kernel)
+    # ... and, because they cost about a second each, the three that hold the
+    # registered calculation, the job queue's worker thread and the plot rows
+    # to the same goldens: the bits survive the engine and the 64 MiB worker.
+    flysight_add_fusion_exact_test(tst_fusion_session)
+    flysight_add_fusion_exact_test(tst_fusion_jobs)
+    flysight_add_fusion_exact_test(tst_fusion_rows)
+  endif()
+
   # Not a test and not installed: copied into an installed application tree
   # and run there to prove the deployed solver runtime is complete (see
   # tests/README.md).

@@ -33,8 +33,11 @@ The tests are not a standalone project. `tests/` is added by
 test is registered with CTest. Test executables have no install rules, so
 packages are the same whether or not the option is set.
 
-There are 41 test executables plus the audit (`ctest -N` lists 42 entries).
-`solver_deploy_probe` is also built, but is not a test (see below).
+There are 41 test executables plus the audit. `ctest -N` lists 42 entries, or
+47 where the bit-exact runs of the five fusion golden tests are registered
+(`tst_fusion_*_exact`: the same executables a second time, label `exact`;
+sections 3 and 11). `solver_deploy_probe` is also built, but is not a test (see
+below).
 
 **Harness**
 
@@ -73,7 +76,7 @@ There are 41 test executables plus the audit (`ctest -N` lists 42 entries).
 |------|--------|
 | `tst_jobqueue` | The application-wide `JobQueue` on a real `SessionModel`, real session engines and the global registry, with the synthetic explicit calculations of `jobfixture.h` (no GTSAM): publication through the session model, the 64 MiB worker thread, deduplication, one job at a time in request order, refusals (missing input, unloaded or unknown session, blocked, done, unknown), never loading a session, every superseded / succeeded / failed / cancelled path with its reason text, a running job whose ticket went stale (input edit, merge, registration removed, model destroyed, the row's session data replaced - "Session data replaced", not "removed or unloaded") asked to stop at once and ended Superseded with the refusal's reason without its compute reaching the end, a new request behind it created rather than deduplicated and run with the new inputs, first writer wins between a user cancel and a stale stop, cancel wins over a completed compute, pruning of unwanted queued jobs, a job cancelled from a `rowsInserted` slot (no pin left, no `jobQueued` after its `jobFinished`), session removal, deferred eviction, repopulation, merge, sort, shutdown in every order, and the idle scheduler working during a job (sensor-fusion-jobs acceptance 8, 10, 11, 14, 17) |
 | `tst_jobmodel` | The `JobModel` contract under `QAbstractItemModelTester`: every role on every column, a test view that renders the whole job history from model signals alone, never more than one running row, ordered UTC timestamps, progress and cancel-requested as their own signals, removal of finished rows only, the retention bound, and nothing persisted (sensor-fusion-jobs acceptance 18) |
-| `tst_plot_requests` | `PlotRequests`, the widget-free logic behind the plot list's rows, on a real `PlotModel`, `JobQueue`, `SessionModel`, real session engines and the global registry, with the synthetic plots of `plotfixture.h` (no widgets, no GTSAM): track conditions and row aggregation (counts, progress label, tooltip text, change signals, coalesced passes, text-only progress updates), ordinary and unchecked plots never inspected, hidden rows, stubs and failed-load placeholders are not tracks, the two gestures as one-shot requests, chained continuation and everything that stops it, everything that is not a gesture (programmatic checks, profile apply, startup restore, showing, loading, merging, input invalidation, a superseded job), a running job gone stale showing refresh instead of cancel at once and a refresh queueing a new job behind it, sessions without input never listed, the failed badge and its reason, rows sharing a job, cancel, cancel then refresh while the job winds down, pruning of queued jobs on uncheck and hide, session removal, registry changes, queue shutdown, and null collaborators (sensor-fusion-jobs acceptance 11, 13, 15, 16) |
+| `tst_plot_requests` | `PlotRequests`, the widget-free logic behind the plot list's rows, on a real `PlotModel`, `JobQueue`, `SessionModel`, real session engines and the global registry, with the synthetic plots of `plotfixture.h` (no widgets, no GTSAM): track conditions and row aggregation (counts, progress label, tooltip text, change signals, coalesced passes, text-only progress updates), ordinary and unchecked plots never inspected, hidden rows, stubs and failed-load placeholders are not tracks, the two gestures as one-shot requests, chained continuation and everything that stops it, everything that is not a gesture (programmatic checks, profile apply, startup restore, showing, loading, merging, input invalidation, a superseded job), a running job gone stale showing refresh instead of cancel at once and a refresh queueing a new job behind it, sessions without input never listed, the failed badge and its reason, `PlotRequests::isMerelyUncomputed()` (the plot widget's "No data available" warning is withheld for a value that waits on an explicit calculation or was rejected by one, and for nothing else: one case per blocker state, and asking runs nothing), rows sharing a job, cancel, cancel then refresh while the job winds down, pruning of queued jobs on uncheck and hide, session removal, registry changes, queue shutdown, and null collaborators (sensor-fusion-jobs acceptance 11, 13, 15, 16) |
 | `tst_plot_row_layout` | `layoutPlotRow()` (`src/ui/docks/plotselection/PlotRowLayout.h`), the pure geometry of a plot-list row's control cluster, without widgets or a font: control only, control and warning, warning only, nothing shown, an empty label, right-to-left as the exact mirror image, and the control's hit rectangle (the icon's column over the full row height, out to the row's edge; label and badge outside it) |
 | `tst_plot_row_delegate` | `PlotRowDelegate` in an offscreen `QTreeView` on a real `PlotRequests`, `PlotModel`, `JobQueue` and `SessionModel`, driven by synthesized mouse and key events; the **only test that links Qt Widgets** (`FLYSIGHT_BUILD_WIDGET_TESTS`, label `widgets`). What the view owns: plain rows are pixel-identical to the base delegate, the control is painted and the name elided rather than the cluster, a click on the check box and Space are the check gesture while unchecking, `setPlotEnabled()`, `togglePlot()`, `setData()` and a start-up style restore with the view attached start nothing, refresh and cancel clicks (no toggle, no selection change), press/release pairs that must do nothing, the inert label and badge, right clicks, a double click on refresh, the tooltip from `PlotRowState`, repaint on `rowStateChanged`, and survival of a destroyed `PlotRequests` (sensor-fusion-jobs acceptance 16, wiring half). The offscreen platform has no fonts, so text is drawn as boxes; the assertions are about geometry, identity and events, not about letter shapes |
 
@@ -109,7 +112,7 @@ There are 41 test executables plus the audit (`ctest -N` lists 42 entries).
 
 | Test | Covers |
 |------|--------|
-| `tst_python_bridge` | The Python plugin bridge through the real embedded interpreter and the real `flysight_cpp_bridge` module (acceptance 17, plugin half): effective reads in single-output plugins, declared-read diagnostics (`UndeclaredInputError`), effective values and units matching C++, no source access (a `source` key is an unknown kind; the view has no source methods), the multi-output form running once, exceptions and malformed output giving a clean unavailable result with negative caching, returned arrays copied, explicit key decoding with per-plugin rejection, plugin-before-built-in precedence, the bundled `imu_tilt.py` example. See "The embedded-Python bridge test" below. `pluginWorkflowThroughModel`: a plugin-fed logbook column through import, save and restart (acceptance 17 / 19) |
+| `tst_python_bridge` | The Python plugin bridge through the real embedded interpreter and the real `flysight_cpp_bridge` module (acceptance 17, plugin half): effective reads in single-output plugins, declared-read diagnostics (`UndeclaredInputError`), effective values and units matching C++, no source access (a `source` key is an unknown kind; the view has no source methods), the multi-output form running once, exceptions and malformed output giving a clean unavailable result with negative caching, returned arrays copied, explicit key decoding with per-plugin rejection, plugin-before-built-in precedence, the bundled `imu_tilt.py` example; plugins never start explicit work (`pluginsNeverStartExplicitWork`, on the synthetic explicit calculation `expA`: a plugin that declares its output, one that declares an on-demand value derived from it, and one whose Python code reaches for both undeclared all stay unavailable with a run count of 0 until the calculation is requested, and the first two show the value afterwards). See "The embedded-Python bridge test" below. `pluginWorkflowThroughModel`: a plugin-fed logbook column through import, save and restart (acceptance 17 / 19) |
 
 **Solver and sensor fusion** (label `fusion`; `FLYSIGHT_BUILD_FUSION_TESTS`)
 
@@ -119,7 +122,8 @@ There are 41 test executables plus the audit (`ctest -N` lists 42 entries).
 | `tst_fusion_parity` | The fusion kernel (`flysight_fusion`) through its public API, `src/fusion/fusion.h`, only: for every committed synthetic fixture the fit reproduces the golden outputs captured from `sensor-fusion-clean-port` (three successes: seventeen channels and the diagnostics; nine rejections: the exact reason), progress texts at the reference's boundaries, cancellation at each kind of boundary leaving an empty result and no state behind (including the silent ones of preparation, before each candidate stationary window, where no progress text is emitted), two runs bit-identical with TBB on, a 64 MiB worker thread matching the main thread, and no dependence on the caller's data (sensor-fusion-jobs acceptance 4; section 11). Label `fusion` |
 | `tst_fusion_kernel` | The kernel's internals, with the literal expectations of the reference's self-test: the shared unwrap rule, preintegration across exact boundaries, every validation defect, backward attitude propagation, heading freedom, dense reconstruction timing and endpoint correction, the ten stationary-gate cases, the stationary-window scan asking for cancellation once per candidate window without reporting (and a window assessed with a given gap limit equal to one that derives it), the coarse initializer, an exact constant-velocity fit, non-convergence as a solver failure, TBB really on, and the fit trace (initializer result and cost before and after every optimizer iteration) against the goldens, which localizes a parity failure to a stage (acceptance 4; section 11). The only test that includes internal `src/fusion/` headers. Label `fusion` |
 | `tst_fusion_session` | Sensor fusion as a registered calculation (`src/fusion/fusionregistration.cpp`) on real `SessionData` engines bound to the global registry, with the real fit on the test's main thread: the shape of the three registrations (21 inputs, 18 outputs, explicit, title "Sensor fusion"); fixture sessions whose effective inputs are bit-identical to the kernel's fixtures; reads of every fusion value, `accH`, the system-time axis, the diagnostics and an interpolated logbook value never run the fit, in any order, nor does the exporter (sensor-fusion-jobs acceptance 5); a request runs once, publishes all outputs together, matches the kernel's goldens, and brings `accH` and `_system_time` with it (6); prepare / compute / publish equals `request()` bit for bit (7); an input change after publication drops everything while markers do not (8); a rejection is a cached result with its reason, `NotProduced` for inspection, and requestable again after an input change (9); cancellation at each kind of boundary through the engine's facility publishes and caches nothing (10); sessions without IMU data, without a local origin or without a time fit are `MissingInput` / `NotApplicable` (11); blocker inspection reports the fit through on-demand intermediates and never starts it (12); a natural session through the real input chain; two sessions are independent. Label `fusion` |
-| `tst_fusion_jobs` | The real fit through `JobQueue` on a real `SessionModel`, on the queue's 64 MiB worker: one job publishes all outputs together and announces them through the session model (acceptance 6); the queue gives the bits a synchronous request gives (7); an input edit during the fit asks the fit to stop at once, ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job (11); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before and after a published fit; shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the queue delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 11 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
+| `tst_fusion_jobs` | The real fit through `JobQueue` on a real `SessionModel`, on the queue's 64 MiB worker: one job publishes all outputs together and announces them through the session model (acceptance 6); the queue gives the bits a synchronous request gives (7); an input edit during the fit asks the fit to stop at once, ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job (11); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before and after a published fit, while the loaded row's cell shows the golden's number the moment the job publishes (`dataChanged` for that row only, and the number already there when the view is told); shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the queue delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 11 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
+| `tst_fusion_parity_exact`, `tst_fusion_kernel_exact`, `tst_fusion_session_exact`, `tst_fusion_jobs_exact`, `tst_fusion_rows_exact` | Not executables: the five tests above that compare with the goldens, run a second time with `FLYSIGHT_FUSION_EXACT=1` and otherwise the same environment, so that every golden comparison is bit equality (section 11, "Tolerance policy"). Registered only where that is a fair demand, the compiler the goldens were captured with (`FLYSIGHT_FUSION_EXACT_TESTS`, section 3). The first two decide parity; the other three show that the bits survive the engine, the queue's worker thread and the plot rows. Labels `fusion` and `exact` |
 | `tst_fusion_rows` | The plot-row script with the **real** fusion plots: `PlotModel` + `PlotRequests` + `JobQueue` + `SessionModel` + the fusion registration, with real fits on the queue's 64 MiB worker and the seventeen plots of `fusionPlots()` (`tests/fusion/fusionsessions.h`, which mirrors `MainWindow::registerBuiltInPlots()`; `audit_cleanup` pins the application's list at seventeen rows). All seventeen plots are explicit-backed and the six local-frame plots are not; the row script of acceptance 15 on three real tracks (three jobs, the count falling as each publishes, unchecking mid-way removes the queued job and lets the running one finish, cancel leaves the plot checked and the track missing with nothing published, a fourth track is missing with a count of one and starts nothing, refresh computes it), with every published track held to the kernel's goldens and the job history as a literal; roll, pitch and yaw share one job and one progress text; `accH` is blocked by the fit and never has a job of its own; a session without IMU data is in no count, list or tooltip of any of the seventeen rows before, during and after a fit (11); a rejected recording shows the warning badge with the reason, offers no retry, and becomes refreshable when its input changes (9); sessions are edited, tracks hidden and shown and other values read while a real fit runs, without disturbing it (19, the half that needs no widget). Steered by the first progress text of a job and by `jobFinished`: no gate, no sleeps. Label `fusion` |
 
 `solver_deploy_probe` is built with these but is not a test and is not counted
@@ -229,8 +233,9 @@ where they run. CMake 3.22 or newer is needed for the automatic DLL and
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | Only with the first: also build `tst_python_bridge`. `OFF` removes the target. If NumPy is missing from the build-time Python the test is still built but listed as **Disabled**, not omitted (section 5) |
 | `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | Only with the first: also build `tst_plot_row_delegate`, the one test that links Qt Widgets (it runs an offscreen `QTreeView`). `OFF` removes the target, and then no test target links Widgets. Forwarded by the root `CMakeLists.txt` like the others |
 | `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | Only with the first: also build the GTSAM-linked tests (`tst_solver_smoke`, `tst_fusion_parity`, `tst_fusion_kernel`, `tst_fusion_session`, `tst_fusion_jobs`, `tst_fusion_rows`) and `solver_deploy_probe`, all defined in one block of `tests/CMakeLists.txt` through `flysight_add_fusion_test()`. `OFF` removes the targets, and then no test target references GTSAM. Forwarded by the root `CMakeLists.txt` like the other two |
+| `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | Only with the fusion tests: register the bit-exact runs `tst_fusion_*_exact` (label `exact`; no new executable). `AUTO` registers them when the compiler is 64-bit MSVC of the same major.minor as `cl_version` in `tests/data/fusion/capture.json` (19.44), and otherwise prints "Fusion exact tests not registered: ..." at configure time; `ON` registers them whatever the compiler is; `OFF` never does. Forwarded by the root `CMakeLists.txt` like the others (section 11, "Tolerance policy") |
 
-All three sub-options are forwarded by the root (superbuild) `CMakeLists.txt` to
+All four sub-options are forwarded by the root (superbuild) `CMakeLists.txt` to
 the application project, unconditionally, so switching one back reaches the
 inner cache too.
 
@@ -238,11 +243,13 @@ CTest labels: every executable has `core`; `tst_python_bridge` also `python`;
 `tst_session_oracle` also `oracle`; `audit_cleanup` has `audit`. GTSAM-linked
 tests also have `fusion`, so `ctest -LE fusion` is the GTSAM-free run. The
 Widgets test also has `widgets` (`ctest -LE widgets` runs everything else).
+The bit-exact runs have `core`, `fusion` and `exact` (`ctest -L exact`).
 
 Environment: `FLYSIGHT_FUSION_EXACT=1` in the calling environment switches the
 golden comparisons of the fusion tests from the portable tolerance to bit-exact
-comparison (section 11). CTest passes the variable through; it needs no CMake
-option. `FLYSIGHT_FUSION_RECORDING=<folder>` enables the optional real-recording
+comparison (section 11). The `tst_fusion_*_exact` tests set it themselves; set
+by hand, CTest passes it through to every fusion test, which is how to run
+exact mode on a configuration where those tests are not registered. `FLYSIGHT_FUSION_RECORDING=<folder>` enables the optional real-recording
 check of `tst_fusion_jobs` (section 11, "Real recordings"); without it that one
 function skips. The oracle's variables are in section 7.
 
@@ -252,6 +259,7 @@ ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -LE p
 ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -LE fusion   # everything that does not link GTSAM
 ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -L oracle
 ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -L audit
+ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -L exact    # bit-exact golden parity, where registered
 ```
 
 ## 4. Running one test / one function
@@ -342,7 +350,7 @@ plots and markers stay registered for the life of the process: use unique
 `_PY_*` / `py*` names and never assert that a registry is empty. Files are
 imported in name order and the calculation ids contain the registration index,
 so a new file that sorts before an existing one shifts the literal list in
-`registrationOrderIsDeterministic` (name it to sort last, like `t_zdocs.py`).
+`registrationOrderIsDeterministic` (name it to sort last, like `t_zdocs.py` and `t_zexplicit.py`).
 Log assertions install their message handler inside the test function (after
 `initTestCase`) and `cleanup()` removes it.
 
@@ -664,9 +672,11 @@ never stand alone.
 | 3 | duplicate endpoints, closed, degenerate, empty; non-finite skipped | `tst_simplified_track::duplicatePositionEndpoints`, `closedTrack`, `degenerateTracks`, `emptyTrack`, `nonFiniteSamplesAreSkipped` |
 | 3 | projection once per recording, in the local-coordinate calculation | `tst_simplified_track::projectionRunsOncePerRecording`; `audit local-projection` |
 | 3 | no origin: no track, no dot, bounds; recovery | `tst_simplified_track::unavailableWithoutOriginAndRecovers`; `tst_map_models::noOriginRemovesTrackAndDot`, `boundsClearedWhenNoTrack`, `recoversAfterSourceCorrection` |
-| 4 | the port reproduces the goldens | `tst_fusion_parity::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden` |
+| 4 | the port reproduces the goldens | `tst_fusion_parity::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`. Bit for bit on the capture compiler: the same functions in the CTest tests `tst_fusion_parity_exact` and `tst_fusion_kernel_exact` (the map names test functions, not CTest tests, so these have no line of their own) |
 | 5 | reads (outputs, `accH`, diagnostics, interpolated value) never run anything | `tst_fusion_session::readsNeverRunTheFit`; `tst_fusion_jobs::readersNeverStartAFit` |
+| 5 | ... nor does a Python plugin that reads an explicit output or a value derived from one (synthetic explicit calculation; no GTSAM) | `tst_python_bridge::pluginsNeverStartExplicitWork`; `audit gestures` (product code never calls the engine's synchronous `request()`) |
 | 6 | runs once, publishes together, derived values appear, second request runs nothing | `tst_fusion_session::requestRunsOnceAndPublishesTogether`; `tst_fusion_jobs::jobPublishesAllOutputsTogether` |
+| 6 | ... and the logbook cell over a fusion output shows the number straight after publication | `tst_fusion_jobs::columnShowsValueStraightAfterPublication` |
 | 7 | asynchronous == synchronous | `tst_calcengine_async::asyncMatchesSync`; `tst_session_engine::asyncRequestOnSession`; `tst_fusion_session::asyncMatchesSync`; `tst_fusion_jobs::queueMatchesSynchronousRequest` |
 | 8 | input change while running: superseded, nothing published, requestable | `tst_calcengine_async::inputChangeWhileRunningRefuses`; `tst_session_engine::asyncRequestOnSession`; `tst_jobqueue::inputChangeWhileRunningSupersedes`; `tst_fusion_jobs::inputChangeDuringFitSupersedes`; (stopped early) `tst_calcengine_async::willBeRefusedReportsTheEnginesMarks`, `tst_jobqueue::staleRunningJobIsStoppedAtOnce`, `requestWhileStaleJobWindsDown`, `tst_plot_requests::staleRunningJobShowsRefreshAtOnce` |
 | 8 | change after publication drops the result and dependents | `tst_calcengine_async::changeAfterPublicationDropsDependents`; `tst_fusion_session::changeAfterPublicationDropsEverything` |
@@ -681,6 +691,7 @@ never stand alone.
 | 15 | what the user sees | `manual M3`, `M4`, `M6`, `M7` |
 | 16 | start-up restore / profile / programmatic check start nothing (logic) | `tst_plot_requests::startupRestoreStartsNothing`, `profileStyleApplyStartsNothing`, `programmaticCheckStartsNothing` |
 | 16 | ... with the view attached; only a direct check is a gesture | `tst_plot_row_delegate::programmaticCheckStartsNothingWithViewAttached`, `startupStyleRestoreStartsNothingWithViewAttached`, `checkBoxClickIsGesture` |
+| 16 | ... and the plot widget does not warn "No data available" about a checked plot that is merely uncomputed (the predicate; the widget's one call of it is M1) | `tst_plot_requests::merelyUncomputedIsNotWorthAWarning` |
 | 16 | ... in the real `MainWindow` (cannot be constructed in the harness) | `audit gestures`; `manual M1`, `M2` |
 | 17 | remove / unload with a queued or running job; shutdown | `tst_jobqueue::removeSessionWithRunningJob`, `removeSessionWithQueuedJob`, `evictionDeferredWhileJobActive`, `shutdownWithQueuedAndRunning`; `tst_fusion_jobs::shutdownDuringFit` |
 | 17 | quitting the application | `manual M8`, `M9` |
@@ -744,7 +755,12 @@ takes about a second. It fails, listing **all** violations, when
 - **group `gestures`** (item 116): `plotCheckedByUser`, `refreshPressed` or
   `cancelPressed` is named outside `PlotRequests` and the row delegate,
   `prepare(` / `publish(` is called outside the queue and the engine,
-  `request(` outside `PlotRequests`, the queue and the engine, the UI refers to
+  `request(` outside `PlotRequests`, the queue and the engine, anything in
+  `src` outside `src/engine` calls the engine's synchronous `request()`
+  (spelled through `calculationEngine()`, `engine.` or `engine->`; and, against
+  an alias, the one line in `src` outside `src/engine` that calls any
+  `request(` through an object is the job request in `plotrequests.cpp`:
+  explicit work runs only as a job), the UI refers to
   the job queue beyond `AppContext.h`, or `EvaluationPolicy::Explicit` is
   tested outside the engine (`CalculationRegistry::dependsOnExplicit()` is the
   one authority for "explicit-backed");
@@ -878,6 +894,32 @@ About 650 KB in total.
   says where: the initializer, or the first optimizer iteration whose cost
   differs. Result at the time of the port: 0 of 28 815 samples not
   bit-identical, all three traces and diagnostics identical.
+
+  Exact mode runs automatically where it is meaningful: the CTest tests
+  `tst_fusion_parity_exact`, `tst_fusion_kernel_exact`,
+  `tst_fusion_session_exact`, `tst_fusion_jobs_exact` and
+  `tst_fusion_rows_exact` (label `exact`) are the ordinary fusion executables
+  run again with `FLYSIGHT_FUSION_EXACT=1`, so on the capture configuration a
+  plain `ctest` fails on the first bit that differs. With
+  `FLYSIGHT_FUSION_EXACT_TESTS=AUTO` (the default) `tests/CMakeLists.txt`
+  registers them only when the compiler is 64-bit MSVC with the major.minor
+  of `compiler.cl_version` in `capture.json` (19.44; the file is read at
+  configure time, so a re-capture moves the gate with it). The gate is the
+  compiler because code generation is what decides the last bit. It
+  deliberately does not register the tests for another compiler and let them
+  fail: a Visual Studio update that changes a bit is not a defect of the port,
+  and a red test that nobody can fix except by touching the goldens invites
+  exactly that. Instead the configure log says `Fusion exact tests not
+  registered: compiler differs from capture.json (...)`, the portable
+  comparison still runs, and the remedy is to look: configure with
+  `-DFLYSIGHT_FUSION_EXACT_TESTS=ON`, and either the new compiler is still
+  bit-identical (re-capture, which records it) or `fitTraceMatchesGolden` says
+  where it stopped being so. The gate cannot see the two other conditions of
+  the capture configuration, Release and a solver built by that same compiler
+  from the pinned revision; the superbuild and CI give both. If the exact
+  tests ever fail on a machine whose solver was built differently, that is
+  what to check first, and `OFF` is the switch for such a machine - never a
+  change to the goldens.
 - **Portable mode** (default; CI on every platform, other compilers): exact
   for the output length, `_time` (one IEEE addition of the epoch), counts
   (`gnss_states`, `imu_outputs`, `iterations`, the input audit, residual
@@ -898,7 +940,9 @@ About 650 KB in total.
   platform, with the observed numbers; never a change to the goldens.
 
 ```powershell
-$env:FLYSIGHT_FUSION_EXACT = "1"; ctest --test-dir build/FlySightViewer-build -C Release -R tst_fusion --output-on-failure
+ctest --test-dir build/FlySightViewer-build -C Release -L exact --output-on-failure
+# where the exact tests are not registered (another compiler), by hand:
+$env:FLYSIGHT_FUSION_EXACT = "1"; ctest --test-dir build/FlySightViewer-build -C Release -R "tst_fusion_(parity|kernel|session|jobs|rows)$" --output-on-failure
 ```
 
 ### Solver configuration of the goldens
@@ -1003,7 +1047,9 @@ MSBuild fails when paths get long: keep `<build>` short (for example
    `include/gtsam/config.h` of both solver builds, the determinism statement,
    the cross-check result, and the hashes. A `capture.json` with
    `"byte_identical": false` is never committed.
-9. Run both fusion tests in exact mode.
+9. Run the fusion tests in exact mode: `ctest -L exact` (section 3,
+   `FLYSIGHT_FUSION_EXACT_TESTS`; its `AUTO` gate reads the `cl_version` just
+   written, so reconfigure first).
 
 `<scratch>/harness/CMakeLists.txt`:
 

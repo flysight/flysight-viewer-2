@@ -92,6 +92,7 @@ private slots:
     void noImuSessionCannotHaveAJob();
     void readersNeverStartAFit();
     void columnOnFusionOutputIsNotCached();
+    void columnShowsValueStraightAfterPublication();
     void shutdownDuringFit();
     void realRecordingCheck();
 
@@ -526,6 +527,11 @@ void FusionJobsTest::columnOnFusionOutputIsNotCached()
     // Publication leaves the cached value alone
     QVERIFY(cachedRoll().contains(kRollColumn));
     QVERIFY(!cachedRoll().value(kRollColumn).isValid());
+    // ... while the loaded row already shows the live number (the literal is in
+    // columnShowsValueStraightAfterPublication; here roll is 1.6e-9 degrees)
+    bool showsNumber = false;
+    m_model->data(m_model->index(row, kRollColumn), Qt::DisplayRole).toString().toDouble(&showsNumber);
+    QVERIFY(showsNumber);
 
     // A marker edit makes the column worker compute the column again, with
     // the fit published (markers are not inputs of the fit)
@@ -543,6 +549,81 @@ void FusionJobsTest::columnOnFusionOutputIsNotCached()
     QVERIFY(!LogbookManager::instance().hasUnsavedColumns("a"));
     QVERIFY(!indexValue("a", column).isDouble());
     QVERIFY(!indexValue("a", column).isString());
+}
+
+// The logbook cell over a fusion output shows the number as soon as the job
+// publishes: the view is told (dataChanged for that row) and what it reads in
+// answer is the value, with no edit, no reload and no second gesture.
+void FusionJobsTest::columnShowsValueStraightAfterPublication()
+{
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a")),
+                          fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("b"))}), QString());
+    const int row = m_model->getSessionRow("a");
+    const int otherRow = m_model->getSessionRow("b");
+    const auto cell = [this](int r) {
+        return m_model->data(m_model->index(r, kRollColumn), Qt::DisplayRole).toString();
+    };
+
+    // The expectation comes from the golden, not from the session: the exit
+    // marker is exactly on an output sample, so the interpolated value is that
+    // sample of the golden roll channel (0.27408971607895843 deg; one decimal
+    // is what the logbook shows for an angle).
+    const FusionGolden golden = loadFusionGolden(QStringLiteral("coarse_maneuver"));
+    const qsizetype sample = golden.channels.value(QStringLiteral("_time")).indexOf(kFixtureExitTime);
+    QVERIFY(sample >= 0);
+    const double expectedRoll = golden.channels.value(QStringLiteral("roll")).at(sample);
+    QVERIFY(qAbs(expectedRoll - 0.27408971607895843) < 1e-15);
+
+    // What a view does first: it reads the cell, which is empty and starts nothing
+    QCOMPARE(cell(row), QString());
+    QCOMPARE(cell(otherRow), QString());
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(engine("a").runCount(kFit), 0);
+
+    // A view's answer to dataChanged is to read the cell again: note what it
+    // would have been shown at that moment.
+    QObject scope;
+    QStringList shownOnChange;
+    QList<int> otherRowsTold;
+    connect(m_model.get(), &QAbstractItemModel::dataChanged, &scope,
+            [&](const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles) {
+                if (!roles.isEmpty() && !roles.contains(Qt::DisplayRole))
+                    return;
+                if (topLeft.column() > kRollColumn || bottomRight.column() < kRollColumn)
+                    return;
+                for (int r = topLeft.row(); r <= bottomRight.row(); ++r) {
+                    if (r == row)
+                        shownOnChange.append(cell(row));
+                    else
+                        otherRowsTold.append(r);
+                }
+            });
+    QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
+
+    const JobQueue::RequestResult result = m_queue->request("a", kFit);
+    QCOMPARE(result.kind, Kind::Created);
+    QCOMPARE(shownOnChange, QStringList());             // requesting is not publishing
+    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QCOMPARE(m_queue->job(result.job).state, JobState::Succeeded);
+
+    // Told once, for that row only, and the number was already there when told.
+    // No waitForIdle() before this: nothing but the publication is needed.
+    QCOMPARE(shownOnChange, QStringList{QStringLiteral("0.3")});
+    QCOMPARE(otherRowsTold, QList<int>());
+    QVERIFY(spyHasAttribute(dependencySpy, "a", fusionRollAtExit()));
+
+    QCOMPARE(cell(row), QStringLiteral("0.3"));
+    const QVariant roll = session("a").getAttribute(fusionRollAtExit());
+    QVERIFY(roll.isValid());
+    QVERIFY2(qAbs(roll.toDouble() - expectedRoll) <= 1e-6, qPrintable(roll.toString()));
+    QCOMPARE(cell(otherRow), QString());                // the other recording was not computed
+    QCOMPARE(engine("a").runCount(kFit), 1);
+    QCOMPARE(engine("b").runCount(kFit), 0);
+
+    // Still there once the model has gone idle (column worker, saver)
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(cell(row), QStringLiteral("0.3"));
+    QCOMPARE(engine("a").runCount(kFit), 1);
 }
 
 // Quitting while a fit runs: shutdown returns, nothing is published, nothing

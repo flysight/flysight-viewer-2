@@ -84,6 +84,11 @@ endif()
 #   - Forwarded to the application project; tests/CMakeLists.txt owns the option
 #   - With it OFF no test target links Qt Widgets (ctest -LE widgets is the equivalent at run time)
 #
+# FLYSIGHT_FUSION_EXACT_TESTS: With the fusion tests, run the golden parity tests again in bit-exact mode (AUTO|ON|OFF, default AUTO)
+#   - Forwarded to the application project; tests/CMakeLists.txt owns the option
+#   - AUTO registers the tst_fusion_*_exact tests (ctest -L exact; no new executables) only when the
+#     compiler is the one the goldens were captured with (tests/data/fusion/capture.json)
+#
 
 option(FLYSIGHT_BUILD_THIRD_PARTY "Build third-party dependencies" ON)
 option(FLYSIGHT_BUILD_APP "Build the main FlySight Viewer application" ON)
@@ -92,6 +97,9 @@ option(FLYSIGHT_BUILD_TESTS "Build the FlySight Viewer test suite" OFF)
 option(FLYSIGHT_BUILD_PYTHON_TESTS "With FLYSIGHT_BUILD_TESTS: also build the embedded-Python plugin bridge test" ON)
 option(FLYSIGHT_BUILD_FUSION_TESTS "With FLYSIGHT_BUILD_TESTS: also build the GTSAM-linked tests" ON)
 option(FLYSIGHT_BUILD_WIDGET_TESTS "With FLYSIGHT_BUILD_TESTS: also build the tests that need Qt Widgets" ON)
+set(FLYSIGHT_FUSION_EXACT_TESTS "AUTO" CACHE STRING
+    "With the fusion tests: run the golden parity tests again in bit-exact mode (AUTO: when the compiler matches capture.json; ON; OFF)")
+set_property(CACHE FLYSIGHT_FUSION_EXACT_TESTS PROPERTY STRINGS AUTO ON OFF)
 
 # Handle option interaction: THIRD_PARTY_ONLY implies no app build
 if(FLYSIGHT_THIRD_PARTY_ONLY)
@@ -194,6 +202,7 @@ if(FLYSIGHT_BUILD_APP)
         -DFLYSIGHT_BUILD_PYTHON_TESTS=${FLYSIGHT_BUILD_PYTHON_TESTS}
         -DFLYSIGHT_BUILD_FUSION_TESTS=${FLYSIGHT_BUILD_FUSION_TESTS}
         -DFLYSIGHT_BUILD_WIDGET_TESTS=${FLYSIGHT_BUILD_WIDGET_TESTS}
+        -DFLYSIGHT_FUSION_EXACT_TESTS=${FLYSIGHT_FUSION_EXACT_TESTS}
     )
     if(CMAKE_PREFIX_PATH)
         list(APPEND _APP_CMAKE_ARGS "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}")
@@ -272,6 +281,7 @@ if(DEFINED FLYSIGHT_BUILD_SOLVER_DEPS)
 endif()
 message(STATUS "  FLYSIGHT_BUILD_FUSION_TESTS: ${FLYSIGHT_BUILD_FUSION_TESTS}")
 message(STATUS "  FLYSIGHT_BUILD_WIDGET_TESTS: ${FLYSIGHT_BUILD_WIDGET_TESTS}")
+message(STATUS "  FLYSIGHT_FUSION_EXACT_TESTS: ${FLYSIGHT_FUSION_EXACT_TESTS}")
 message(STATUS "")
 message(STATUS "Path Variables:")
 message(STATUS "  THIRD_PARTY_DIR:       ${THIRD_PARTY_DIR}")

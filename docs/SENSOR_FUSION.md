@@ -272,7 +272,13 @@ tests, all labelled `fusion`:
 The goldens live in `tests/data/fusion/`. In exact mode
 (`FLYSIGHT_FUSION_EXACT=1`, on the capture configuration) every output sample
 must equal the golden bit for bit; the portable mode used everywhere else
-allows `1e-9 + 1e-7 * |golden|`. The fixtures, the two modes and the capture
+allows `1e-9 + 1e-7 * |golden|`. Exact mode is not opt-in on the capture
+configuration: where the compiler matches `tests/data/fusion/capture.json`
+(64-bit MSVC 19.44), CTest runs each of these five tests a second time as
+`tst_fusion_*_exact` (label `exact`; CMake option
+`FLYSIGHT_FUSION_EXACT_TESTS`, `AUTO` by default). With any other compiler the
+configure log says that they were not registered, and only the portable mode
+runs. The fixtures, the two modes and the capture
 procedure are described in [tests/README.md](../tests/README.md), section 11.
 
 **Optional check against a real recording.** Real recordings are not in the

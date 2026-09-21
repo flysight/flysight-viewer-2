@@ -361,6 +361,24 @@ expect_only("explicit work is prepared and published in one place" "[.>]prepare\
   "^src/jobqueue\\.cpp$|^src/engine/" src)
 expect_only("no reader requests" "[.>]request\\("
   "^src/plotrequests\\.cpp$|^src/jobqueue\\.(cpp|h)$|^src/engine/" src)
+# CalculationEngine::request() is the SYNCHRONOUS request: it runs the explicit
+# calculation on the calling thread, which in the application is the GUI
+# thread. Product code never calls it (tests do, and the engine's own files
+# name it); explicit work runs only as a job, through JobQueue::request().
+# The first rule names the ways src spells a session's engine
+# (calculationEngine().request(, engine.request(, m_engine->request( ...) and
+# does not match m_jobQueue->request(. The second closes the door on an alias
+# (`auto &e = session.calculationEngine(); e.request(`): outside src/engine
+# exactly one line calls any request( through an object, the job request in
+# PlotRequests::requestTracks().
+# Allow: none expected for the first rule. The count changes only when a second
+# legitimate caller of JobQueue::request() appears, which is itself a design
+# change (plotrequests.h: "the only caller").
+expect_none("no synchronous explicit request in product code"
+  "[Ee]ngine(\\(\\))? *(\\.|->) *request\\(" src ":!src/engine")
+expect_count("one call of request( in product code: the job request" "[.>]request\\(" 1 src ":!src/engine")
+expect_only("one call of request( in product code: the job request" "[.>]request\\("
+  "^src/plotrequests\\.cpp$" src ":!src/engine")
 # Allow: a future jobs dock is a pure view of JobQueue::model() and is added to
 # the regex when it exists. Until then AppContext only carries the pointer.
 expect_only("no jobs window, no view of the queue" "[Jj]ob[Qq]ueue|JobModel"

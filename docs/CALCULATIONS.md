@@ -428,7 +428,12 @@ Core and Gui only, no widgets, no GTSAM. There is one queue per application. It
 owns the application's only worker thread.
 
 **Reads never start jobs.** A job is created by `JobQueue::request()` and by
-nothing else; the queue never re-requests on its own. A result that was
+nothing else; the queue never re-requests on its own. Nor does product code
+run explicit work any other way: the engine's synchronous `request()` (section
+8) is for tests, and the cleanup audit (group `gestures`) keeps every call of
+it out of `src/` outside `src/engine`. Python plugins are ordinary on-demand
+readers and start nothing either
+(`tst_python_bridge::pluginsNeverStartExplicitWork`). A result that was
 cancelled, superseded, or failed is simply missing, and whoever still wants it
 asks again.
 
@@ -1010,12 +1015,18 @@ dialog; no message box, status message, or progress dialog reports a
 calculation outcome.
 
 **The "no data" warning.** One reader warns when a checked plot has no data for
-a visible track: `PlotWidget::updatePlot()`. It now asks
-`blockers(y name).state` for the value it just read as empty and stays silent
-for `Blocked` (not computed yet) and `NotProduced` (ran and rejected its
-inputs); both are shown by the plot list instead. It asks the engine, not
-`rowState()`, which may be one event-loop pass behind. A recording that simply
-lacks the sensor (`NotApplicable`) still logs the warning.
+a visible track: `PlotWidget::updatePlot()`. For the value it just read as
+empty it now asks `PlotRequests::isMerelyUncomputed(session, sensor,
+measurement)`, a static predicate of the widget-free core (`src/plotrequests.h`)
+over `blockers(y name).state`, and stays silent when that is true: `Blocked`
+(not computed yet) and `NotProduced` (ran and rejected its inputs, or failed);
+both are shown by the plot list instead. The predicate asks the engine, not
+`rowState()`, which may be one event-loop pass behind; it inspects only, so it
+runs no explicit calculation, creates no job and loads nothing. A recording
+that simply lacks the sensor (`NotApplicable`) still logs the warning. The
+four states are unit-tested in
+`tst_plot_requests::merelyUncomputedIsNotWorthAWarning`; the widget's one call
+is step M1 of the manual script.
 
 **Results appear through ordinary invalidation only.** Publishing a job's
 result emits `dependencyChanged` per name, `dataChanged` for the row, and

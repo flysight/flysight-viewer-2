@@ -213,6 +213,15 @@ PlotRequests::LiveJobs PlotRequests::liveJobs() const
     return live;
 }
 
+bool PlotRequests::isMerelyUncomputed(const SessionData &session, const QString &sensorId,
+                                      const QString &measurementId)
+{
+    using State = BlockerReport::State;
+    const State state = session.calculationEngine()
+        .blockers(DependencyKey::measurement(sensorId, measurementId)).state;
+    return state == State::Blocked || state == State::NotProduced;
+}
+
 // Call under a RowStabilityGuard: `session` is a row of the model read in place.
 BlockerReport PlotRequests::inspectUnderGuard(const SessionData &session, const PlotValue &plot) const
 {

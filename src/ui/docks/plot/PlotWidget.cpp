@@ -30,10 +30,9 @@
 #include "plottool/setcoursetool.h"
 #include "plottool/measuretool.h"
 #include "plotutils.h"
+#include "plotrequests.h"
 #include "calculations/timecalculations.h"
 #include "engine/calculationregistry.h"
-#include "engine/calculationengine.h"
-#include "engine/blockerreport.h"
 
 namespace {
 
@@ -74,27 +73,6 @@ private:
 
 constexpr int kLaneHeightPx    = 32;   // height of one marker lane above the plot
 constexpr int kMinTopMarginPx  = 10;   // clearance so the topmost y-axis tick label isn't clipped
-
-/**
- * @brief True when a plot value is absent only because an explicit
- * calculation has not produced it: it was never requested (the plot list
- * shows the refresh control), or it ran and rejected its inputs (the warning
- * badge). Such a value is an ordinary, supported state, not something to warn
- * about (sensor-fusion-jobs spec 9.6).
- *
- * The engine is asked, not the plot list's row state: that may be one
- * event-loop pass behind, and is none of the plot widget's business.
- * Inspection never runs an explicit calculation, and it reads - it neither
- * loads nor evicts - so it may be called under a row stability guard. Call it
- * only for a value that was just read as empty, from updatePlot().
- */
-bool isMerelyUncomputed(const FlySight::SessionData &session, const QString &sensorId, const QString &measurementId)
-{
-    using State = FlySight::BlockerReport::State;
-    const State state = session.calculationEngine()
-        .blockers(FlySight::DependencyKey::measurement(sensorId, measurementId)).state;
-    return state == State::Blocked || state == State::NotProduced;
-}
 
 } // anonymous namespace
 
@@ -552,8 +530,10 @@ void PlotWidget::updatePlot()
 
                 yData = session.getMeasurement(sensorID, measurementID);
                 if (yData.isEmpty()) {
-                    // Silently absent when it is merely uncomputed
-                    if (!isMerelyUncomputed(session, sensorID, measurementID))
+                    // Silently absent when it is merely uncomputed: waiting on
+                    // an explicit calculation, or rejected by one (the plot
+                    // list's row says so; sensor-fusion-jobs spec 9.6)
+                    if (!PlotRequests::isMerelyUncomputed(session, sensorID, measurementID))
                         qWarning() << "No data available for plot:" << plotName << "in session:" << session.getAttribute(SessionKeys::SessionId);
                     continue;
                 }

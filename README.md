@@ -204,6 +204,7 @@ cmake --build build
 | `FLYSIGHT_BUILD_SOLVER_DEPS` | `ON` | With `FLYSIGHT_BUILD_THIRD_PARTY`: also download and build oneTBB and GTSAM. `OFF` reuses the installs in `GTSAM_INSTALL_DIR` / `ONETBB_INSTALL_DIR` |
 | `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | With tests enabled: build the GTSAM-linked tests (`tst_solver_smoke` and the `tst_fusion_*` tests) and `solver_deploy_probe`. With `OFF` no test target references GTSAM |
 | `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | With tests enabled: build `tst_plot_row_delegate`, the one test that links Qt Widgets (it runs an offscreen `QTreeView`). With `OFF` no test target links Widgets |
+| `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | With the fusion tests: run the golden parity tests a second time in bit-exact mode (`tst_fusion_*_exact`, `ctest -L exact`). `AUTO` registers them only when the compiler is the one the goldens were captured with (64-bit MSVC 19.44, read from `tests/data/fusion/capture.json`) and otherwise says so at configure time; `ON` forces them, `OFF` removes them |
 
 **Path Variables:**
 
