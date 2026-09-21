@@ -49,29 +49,6 @@ namespace {
 
 const char kNoLongerNeeded[] = "No longer needed";
 
-/// "Nothing started": no jobQueued signal and no new row in the job model.
-class Quiet {
-public:
-    explicit Quiet(JobQueue &queue)
-        : m_queue(queue), m_spy(&queue, &JobQueue::jobQueued), m_rows(queue.model()->rowCount())
-    {
-    }
-    bool holds() const { return m_spy.isEmpty() && m_queue.model()->rowCount() == m_rows; }
-
-private:
-    JobQueue &m_queue;
-    QSignalSpy m_spy;
-    int m_rows;
-};
-
-QStringList sessionIdsOf(const QList<PlotTrackState> &tracks)
-{
-    QStringList ids;
-    for (const PlotTrackState &track : tracks)
-        ids.append(track.sessionId);
-    return ids;
-}
-
 } // namespace
 
 class PlotRequestsTest : public QObject {
@@ -133,10 +110,18 @@ private:
     Gate &gate() { return m_world->gate(); }
 
     void show(const QStringList &ids, bool visible = true) { PlotFixture::show(*m_model, ids, visible); }
-    void giveInput(const QStringList &ids, const char *key, double value)
+    /// The application's edit path, for each session. False as soon as the
+    /// model refuses one (the rest is then left alone); a test function checks
+    /// it with QVERIFY, so that a failure ends the function.
+    [[nodiscard]] bool giveInput(const QStringList &ids, const char *key, double value)
     {
-        for (const QString &id : ids)
-            QVERIFY2(PlotFixture::giveInput(*m_model, id, QString::fromLatin1(key), value), qPrintable(id));
+        for (const QString &id : ids) {
+            if (!PlotFixture::giveInput(*m_model, id, QString::fromLatin1(key), value)) {
+                qWarning().noquote() << "giveInput: the model refused" << key << "for session" << id;
+                return false;
+            }
+        }
+        return true;
     }
     /// A programmatic check: never a gesture.
     void check(const char *measurement, bool enabled = true)
@@ -183,12 +168,7 @@ private:
     JobState stateOf(JobId id) const { return m_queue->job(id).state; }
     /// Two turns of the event loop and a flush: whatever was going to start by
     /// itself has started.
-    void spin()
-    {
-        QTest::qWait(0);
-        QTest::qWait(0);
-        m_requests->flush();
-    }
+    void spin() { PlotFixture::spin(m_requests.get()); }
     int totalRuns()
     {
         int runs = 0;
@@ -212,10 +192,7 @@ void PlotRequestsTest::initTestCase()
 
     // One logbook column that reads stored data only (see tst_jobqueue)
     PreferencesManager::instance().registerPreference(PreferenceKeys::LogbookColumnsVersion, 0);
-    LogbookColumn description;
-    description.type = ColumnType::SessionAttribute;
-    description.attributeKey = QString::fromLatin1(SessionKeys::Description);
-    LogbookColumnStore::instance().setColumns({description});
+    LogbookColumnStore::instance().setColumns({descriptionColumn()});
 }
 
 // Four loaded, hidden sessions "s1".."s4" named "Jump 1".."Jump 4". None has an
@@ -244,13 +221,19 @@ void PlotRequestsTest::init()
     m_requests = std::make_unique<PlotRequests>(m_model.get(), m_plots.get(), m_queue.get());
 }
 
+// Note what is to be checked, tear everything down, and only then check: a
+// failing check returns from cleanup(), and whatever were still alive then
+// would be alive under the next init() (see tst_jobqueue).
 void PlotRequestsTest::cleanup()
 {
     if (m_queue)
         m_queue->shutdown();        // let nothing linger inside a compute function
+    QStringList stillPinned;
     if (m_model) {
-        for (const char *id : {"s1", "s2", "s3", "s4"})
-            QVERIFY2(!m_model->isSessionPinned(id), id);
+        for (const char *id : {"s1", "s2", "s3", "s4"}) {
+            if (m_model->isSessionPinned(id))
+                stillPinned.append(QString::fromLatin1(id));
+        }
     }
 
     m_requests.reset();
@@ -265,9 +248,12 @@ void PlotRequestsTest::cleanup()
         return ids;
     }();
     m_fixture.reset();
-    // The fixture removed exactly what it added
-    QCOMPARE(CalculationRegistry::instance().registeredIds(), withoutFixture);
+    const QStringList afterFixture = CalculationRegistry::instance().registeredIds();
     m_world.reset();
+
+    QCOMPARE(stillPinned, QStringList());
+    // The fixture removed exactly what it added
+    QCOMPARE(afterFixture, withoutFixture);
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
     QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
 }
@@ -302,8 +288,8 @@ void PlotRequestsTest::plotIdMatchesPlotModelRole()
 // a gesture on it requests nothing.
 void PlotRequestsTest::ordinaryPlotsAreNeverInspected()
 {
-    giveInput({"s1", "s2", "s3"}, "P_IN", 3);
-    giveInput({"s1", "s2", "s3"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2", "s3"}, "P_IN", 3));
+    QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 4));
     show({"s1", "s2", "s3"});
 
     QSignalSpy changedSpy(m_requests.get(), &PlotRequests::rowStateChanged);
@@ -341,7 +327,7 @@ void PlotRequestsTest::ordinaryPlotsAreNeverInspected()
 // G_OUT published, inspecting Syn/g would run the plotG bridge.
 void PlotRequestsTest::uncheckedPlotsAreNeverInspected()
 {
-    giveInput({"s1"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
     show({"s1", "s2"});
     gate().open(1);
     QCOMPARE(m_queue->request("s1", QStringLiteral("gated")).kind, Kind::Created);
@@ -370,7 +356,7 @@ void PlotRequestsTest::uncheckedPlotsAreNeverInspected()
 // not tracks, and a pass never loads a session.
 void PlotRequestsTest::hiddenAndStubRowsAreNotTracks()
 {
-    giveInput({"s1", "s2", "s3"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 4));
     QVERIFY(waitForIdle(*m_model));     // clean rows: eviction has nothing to save
     show({"s3", "s4"});
     session("s1");
@@ -393,9 +379,9 @@ void PlotRequestsTest::hiddenAndStubRowsAreNotTracks()
 
     // More passes (an input edit of a visible row does not touch the LRU)
     const int passes = m_requests->passCount();
-    giveInput({"s3"}, "G_IN", 6);
+    QVERIFY(giveInput({"s3"}, "G_IN", 6));
     state = row("Syn/g");
-    giveInput({"s3"}, "G_IN", 8);
+    QVERIFY(giveInput({"s3"}, "G_IN", 8));
     state = row("Syn/g");
     QCOMPARE(m_requests->passCount(), passes + 2);
     QCOMPARE(state.missingCount, 1);
@@ -410,7 +396,7 @@ void PlotRequestsTest::hiddenAndStubRowsAreNotTracks()
 // in no count, and a gesture requests nothing for it.
 void PlotRequestsTest::failedLoadPlaceholderIsNotATrack()
 {
-    giveInput({"s1", "s2"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
     QVERIFY(waitForIdle(*m_model));     // clean rows: eviction has nothing to save
     session("s1");
     session("s2");                      // s1 is the least recently used hidden row
@@ -462,7 +448,7 @@ void PlotRequestsTest::failedLoadPlaceholderIsNotATrack()
 void PlotRequestsTest::rowScript()
 {
     const QString plot = QStringLiteral("Syn/g");
-    giveInput({"s1", "s2", "s3", "s4"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2", "s3", "s4"}, "G_IN", 4));
 
     // 1. Checked, three visible fusable tracks: nothing starts by itself
     show({"s1", "s2", "s3"});
@@ -615,8 +601,8 @@ void PlotRequestsTest::rowScript()
 void PlotRequestsTest::chainedBlockersContinue()
 {
     const QString plot = QStringLiteral("Syn/db");
-    giveInput({"s1"}, "EA_IN", 4);
-    giveInput({"s1"}, "EB_IN", 10);
+    QVERIFY(giveInput({"s1"}, "EA_IN", 4));
+    QVERIFY(giveInput({"s1"}, "EB_IN", 10));
     show({"s1"});
     check("db");
     PlotRowState state = row("Syn/db");
@@ -626,7 +612,8 @@ void PlotRequestsTest::chainedBlockersContinue()
     QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
     // Every announced state between the gesture and the end is "pending"
     QList<PlotRowState> announced;
-    connect(m_requests.get(), &PlotRequests::rowStateChanged, this, [&](const QString &id) {
+    QObject scope;      // owns the connection: it cannot outlive `announced`
+    connect(m_requests.get(), &PlotRequests::rowStateChanged, &scope, [&](const QString &id) {
         if (id == plot)
             announced.append(m_requests->rowState(id));
     });
@@ -661,7 +648,7 @@ void PlotRequestsTest::chainedBlockersContinue()
 void PlotRequestsTest::heldChainContinues()
 {
     const QString plot = QStringLiteral("Syn/h");
-    giveInput({"s1"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
     show({"s1"});
     QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
 
@@ -701,7 +688,7 @@ void PlotRequestsTest::chainStopsWhenFirstJobDoesNotSucceed()
     QFETCH(double, finalValue);
     const QString plot = QStringLiteral("Syn/h");
 
-    giveInput({"s1"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
     show({"s1"});
     QCOMPARE(checkByUser("h"), 1);
     QVERIFY(gate().waitEntered());
@@ -712,7 +699,7 @@ void PlotRequestsTest::chainStopsWhenFirstJobDoesNotSucceed()
     } else if (action == QLatin1String("queueCancel")) {
         QVERIFY(m_queue->cancel(first));
     } else {
-        giveInput({"s1"}, "G_IN", 7);
+        QVERIFY(giveInput({"s1"}, "G_IN", 7));
         // Still running, but the engine has marked the ticket and the queue
         // has asked the job to stop: not live any more
         QCOMPARE(stateOf(first), JobState::Running);
@@ -755,7 +742,7 @@ void PlotRequestsTest::chainNotContinuedForHiddenTrackOrUncheckedPlot()
 {
     QFETCH(bool, hide);
 
-    giveInput({"s1"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
     show({"s1"});
     QCOMPARE(checkByUser("h"), 1);
     QVERIFY(gate().waitEntered());
@@ -792,7 +779,7 @@ void PlotRequestsTest::chainNotContinuedForHiddenTrackOrUncheckedPlot()
 
 void PlotRequestsTest::programmaticCheckStartsNothing()
 {
-    giveInput({"s1", "s2", "s3"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 4));
     show({"s1", "s2", "s3"});
     const Quiet quiet(*m_queue);
 
@@ -830,9 +817,9 @@ void PlotRequestsTest::programmaticCheckStartsNothing()
 // The loop of applyProfile(): setPlotEnabled over all plots.
 void PlotRequestsTest::profileStyleApplyStartsNothing()
 {
-    giveInput({"s1", "s2"}, "G_IN", 4);
-    giveInput({"s1", "s2"}, "EA_IN", 4);
-    giveInput({"s1", "s2"}, "EB_IN", 10);
+    QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
+    QVERIFY(giveInput({"s1", "s2"}, "EA_IN", 4));
+    QVERIFY(giveInput({"s1", "s2"}, "EB_IN", 10));
     show({"s1", "s2"});
     const Quiet quiet(*m_queue);
 
@@ -855,13 +842,18 @@ void PlotRequestsTest::profileStyleApplyStartsNothing()
 // Plots restored as checked from the settings come up through modelReset.
 void PlotRequestsTest::startupRestoreStartsNothing()
 {
-    giveInput({"s1", "s2", "s3"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 4));
     show({"s1", "s2", "s3"});
     const Quiet quiet(*m_queue);
 
     const QString path = TestEnvironment::instance().newTempDir(QStringLiteral("plots")) + QStringLiteral("/plots.ini");
     QSettings settings(path, QSettings::IniFormat);
     settings.setValue(QStringLiteral("state/plots/Syn/g"), true);
+    // Whichever way this function is left, no PlotModel keeps pointing at `settings`
+    const auto detachSettings = qScopeGuard([this] {
+        if (m_plots)
+            m_plots->setSettings(nullptr);
+    });
 
     // As the application starts: the component exists before the plots do
     m_requests.reset();
@@ -894,7 +886,7 @@ void PlotRequestsTest::startupRestoreStartsNothing()
 
 void PlotRequestsTest::showingTrackStartsNothing()
 {
-    giveInput({"s1", "s2"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
     check("g");
     const Quiet quiet(*m_queue);
 
@@ -912,7 +904,7 @@ void PlotRequestsTest::showingTrackStartsNothing()
 // A visible stub becomes a track when the model loads it.
 void PlotRequestsTest::loadingSessionStartsNothing()
 {
-    giveInput({"s1", "s2"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
     QVERIFY(waitForIdle(*m_model));     // saved: the stub reloads with its input
     show({"s2"});
     session("s1");
@@ -944,7 +936,7 @@ void PlotRequestsTest::loadingSessionStartsNothing()
 
 void PlotRequestsTest::mergeStartsNothing()
 {
-    giveInput({"s1"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
     show({"s1"});
     check("g");
     QCOMPARE(row("Syn/g").missingCount, 1);
@@ -962,7 +954,7 @@ void PlotRequestsTest::mergeStartsNothing()
     // A new session
     const QList<MergeResult> created = m_model->mergeSessions(JobWorld::sessions({"s5"}));
     QCOMPARE(created.at(0).outcome, MergeResult::Outcome::Created);
-    giveInput({"s5"}, "G_IN", 4);
+    QVERIFY(giveInput({"s5"}, "G_IN", 4));
     show({"s5"});
     spin();
     QCOMPARE(sessionIdsOf(row("Syn/g").missing), QStringList({"s1", "s5"}));
@@ -976,7 +968,7 @@ void PlotRequestsTest::mergeStartsNothing()
 // A published result invalidated by an input change is simply missing again.
 void PlotRequestsTest::inputInvalidationStartsNothing()
 {
-    giveInput({"s1"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
     show({"s1"});
     gate().open(1);
     QCOMPARE(checkByUser("g"), 1);
@@ -986,7 +978,7 @@ void PlotRequestsTest::inputInvalidationStartsNothing()
     QCOMPARE(values("s1", "g"), QVector<double>({5.0}));
 
     const Quiet quiet(*m_queue);
-    giveInput({"s1"}, "G_IN", 7);
+    QVERIFY(giveInput({"s1"}, "G_IN", 7));
     QVERIFY(m_requests->hasPendingUpdate());
     spin();
     const PlotRowState state = row("Syn/g");
@@ -1000,13 +992,13 @@ void PlotRequestsTest::inputInvalidationStartsNothing()
 
 void PlotRequestsTest::supersededJobStartsNothing()
 {
-    giveInput({"s1"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
     show({"s1"});
     QCOMPARE(checkByUser("g"), 1);
     QVERIFY(gate().waitEntered());
     const JobId job = jobOf("s1", "gated").id;
 
-    giveInput({"s1"}, "G_IN", 7);
+    QVERIFY(giveInput({"s1"}, "G_IN", 7));
     gate().open(1);
     QVERIFY(waitIdle(*m_queue));
     QCOMPARE(stateOf(job), JobState::Superseded);
@@ -1026,7 +1018,7 @@ void PlotRequestsTest::supersededJobStartsNothing()
 void PlotRequestsTest::staleRunningJobShowsRefreshAtOnce()
 {
     const QString plot = QStringLiteral("Syn/g");
-    giveInput({"s1"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
     show({"s1"});
     check("g2");                            // a second row waiting on the same job
     QCOMPARE(checkByUser("g"), 1);
@@ -1035,7 +1027,7 @@ void PlotRequestsTest::staleRunningJobShowsRefreshAtOnce()
     QCOMPARE(row("Syn/g").pendingCount, 1);
     QCOMPARE(row("Syn/g").control(), Control::Cancel);
 
-    giveInput({"s1"}, "G_IN", 7);
+    QVERIFY(giveInput({"s1"}, "G_IN", 7));
 
     // Before the worker has returned; the gate is never opened for this job
     QCOMPARE(stateOf(stale), JobState::Running);
@@ -1076,7 +1068,7 @@ void PlotRequestsTest::staleRunningJobShowsRefreshAtOnce()
 void PlotRequestsTest::sessionWithoutInputIsNeverListed()
 {
     const QString plot = QStringLiteral("Syn/g");
-    giveInput({"s1", "s2"}, "G_IN", 4);      // s3 has no input: nothing to compute
+    QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));      // s3 has no input: nothing to compute
     show({"s1", "s2", "s3"});
     check("g");
     check("g2");
@@ -1124,8 +1116,8 @@ void PlotRequestsTest::sessionWithoutInputIsNeverListed()
 // for exactly the requestable tracks: every request creates a job.
 void PlotRequestsTest::gestureNeverRequestsTheUnrequestable()
 {
-    giveInput({"s1", "s3"}, "EA_IN", 4);    // s1: requestable; s3: computed below
-    giveInput({"s4"}, "EA_IN", -1);         // rejected below; s2 has no input
+    QVERIFY(giveInput({"s1", "s3"}, "EA_IN", 4));    // s1: requestable; s3: computed below
+    QVERIFY(giveInput({"s4"}, "EA_IN", -1));         // rejected below; s2 has no input
     QCOMPARE(m_queue->request("s3", QStringLiteral("expA")).kind, Kind::Created);
     QCOMPARE(m_queue->request("s4", QStringLiteral("expA")).kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue));
@@ -1156,7 +1148,7 @@ void PlotRequestsTest::gestureNeverRequestsTheUnrequestable()
 void PlotRequestsTest::failedBadgeAndReason()
 {
     const QString plot = QStringLiteral("Syn/ea");
-    giveInput({"s1"}, "EA_IN", -1);
+    QVERIFY(giveInput({"s1"}, "EA_IN", -1));
     show({"s1"});
     QCOMPARE(checkByUser("ea"), 1);
     QVERIFY(waitIdle(*m_queue));
@@ -1183,7 +1175,7 @@ void PlotRequestsTest::failedBadgeAndReason()
     }
 
     // Its inputs change: missing, and therefore refreshable
-    giveInput({"s1"}, "EA_IN", 4);
+    QVERIFY(giveInput({"s1"}, "EA_IN", 4));
     state = row("Syn/ea");
     QCOMPARE(state.failedCount, 0);
     QVERIFY(!state.showsWarning());
@@ -1195,7 +1187,7 @@ void PlotRequestsTest::failedBadgeAndReason()
     QCOMPARE(values("s1", "ea"), QVector<double>({5.0}));
 
     // An exception is a cached failed result
-    giveInput({"s2"}, "T_IN", 1);
+    QVERIFY(giveInput({"s2"}, "T_IN", 1));
     show({"s2"});
     QCOMPARE(checkByUser("t"), 1);
     QVERIFY(waitIdle(*m_queue));
@@ -1210,8 +1202,8 @@ void PlotRequestsTest::failedBadgeAndReason()
 // s1 failed, s2 waits behind a held job of another row: badge and cancel together.
 void PlotRequestsTest::failedAndPendingTogether()
 {
-    giveInput({"s1"}, "EA_IN", -1);
-    giveInput({"s3"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1"}, "EA_IN", -1));
+    QVERIFY(giveInput({"s3"}, "G_IN", 4));
     show({"s1", "s2", "s3"});
     QCOMPARE(checkByUser("ea"), 1);
     QVERIFY(waitIdle(*m_queue));
@@ -1219,7 +1211,7 @@ void PlotRequestsTest::failedAndPendingTogether()
 
     QCOMPARE(checkByUser("g"), 1);          // holds the worker
     QVERIFY(gate().waitEntered());
-    giveInput({"s2"}, "EA_IN", 4);
+    QVERIFY(giveInput({"s2"}, "EA_IN", 4));
     QCOMPARE(row("Syn/ea").missingCount, 1);
     QCOMPARE(m_requests->refreshPressed(QStringLiteral("Syn/ea")), 1);
 
@@ -1251,7 +1243,7 @@ void PlotRequestsTest::failedAndPendingTogether()
 
 void PlotRequestsTest::sharedJobSameProgress()
 {
-    giveInput({"s1", "s2"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
     show({"s1", "s2"});
     QCOMPARE(checkByUser("g"), 2);
     QCOMPARE(checkByUser("g2"), 0);         // the jobs exist: one per session
@@ -1301,7 +1293,7 @@ void PlotRequestsTest::sharedJobSameProgress()
 // continues nothing.
 void PlotRequestsTest::rowCheckedProgrammaticallyDuringJobShowsPending()
 {
-    giveInput({"s1"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
     show({"s1"});
     QCOMPARE(checkByUser("g"), 1);
     QVERIFY(gate().waitEntered());
@@ -1325,7 +1317,7 @@ void PlotRequestsTest::rowCheckedProgrammaticallyDuringJobShowsPending()
     QCOMPARE(state.missing.at(0).calculationTitles, QStringList({"After G"}));
 
     // The user's own check of that row, made while the job runs, continues
-    giveInput({"s2"}, "G_IN", 4);
+    QVERIFY(giveInput({"s2"}, "G_IN", 4));
     show({"s2"});
     QCOMPARE(m_requests->refreshPressed(QStringLiteral("Syn/g")), 1);
     QVERIFY(gate().waitEntered());
@@ -1345,7 +1337,7 @@ void PlotRequestsTest::rowCheckedProgrammaticallyDuringJobShowsPending()
 void PlotRequestsTest::cancelThenRefreshWhileWindingDown()
 {
     const QString plot = QStringLiteral("Syn/g");
-    giveInput({"s1", "s2", "s3"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 4));
     show({"s1", "s2", "s3"});
     check("g2");                            // a second row waiting on the same jobs
     QCOMPARE(checkByUser("g"), 3);
@@ -1393,7 +1385,7 @@ void PlotRequestsTest::cancelThenRefreshWhileWindingDown()
 
 void PlotRequestsTest::uncheckPrunesQueuedKeepsRunning()
 {
-    giveInput({"s1", "s2", "s3"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 4));
     show({"s1", "s2", "s3"});
     QCOMPARE(checkByUser("g"), 3);
     QVERIFY(gate().waitEntered());
@@ -1418,7 +1410,7 @@ void PlotRequestsTest::uncheckPrunesQueuedKeepsRunning()
 
 void PlotRequestsTest::hidePrunesOnlyThatTrack()
 {
-    giveInput({"s1", "s2", "s3"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 4));
     show({"s1", "s2", "s3"});
     QCOMPARE(checkByUser("g"), 3);
     QVERIFY(gate().waitEntered());
@@ -1454,7 +1446,7 @@ void PlotRequestsTest::hidePrunesOnlyThatTrack()
 
 void PlotRequestsTest::queuedJobNeededByOtherPlotSurvives()
 {
-    giveInput({"s1", "s2", "s3"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 4));
     show({"s1", "s2", "s3"});
     QCOMPARE(checkByUser("g"), 3);
     check("g2");                            // needs the same jobs, asked for none
@@ -1481,16 +1473,16 @@ void PlotRequestsTest::tooltipText()
 {
     // Three sections from a live row: s1 failed, s2 queued behind a held job
     // of another row, s3 not asked for
-    giveInput({"s1"}, "EA_IN", -1);
-    giveInput({"s4"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1"}, "EA_IN", -1));
+    QVERIFY(giveInput({"s4"}, "G_IN", 4));
     show({"s1", "s2", "s3", "s4"});
     QCOMPARE(checkByUser("ea"), 1);
     QVERIFY(waitIdle(*m_queue));
     QCOMPARE(checkByUser("g"), 1);
     QVERIFY(gate().waitEntered());
-    giveInput({"s2"}, "EA_IN", 4);
+    QVERIFY(giveInput({"s2"}, "EA_IN", 4));
     QCOMPARE(m_requests->refreshPressed(QStringLiteral("Syn/ea")), 1);
-    giveInput({"s3"}, "EA_IN", 4);
+    QVERIFY(giveInput({"s3"}, "EA_IN", 4));
 
     QCOMPARE(row("Syn/ea").toolTip, QStringLiteral("Computing (0 of 1 done):\n"
                                                    "  Jump 2 - Explicit A: queued\n"
@@ -1525,8 +1517,8 @@ void PlotRequestsTest::tooltipText()
 
 void PlotRequestsTest::changeSignalsAreMinimal()
 {
-    giveInput({"s1"}, "G_IN", 4);
-    giveInput({"s1"}, "P_IN", 3);
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
+    QVERIFY(giveInput({"s1"}, "P_IN", 3));
     show({"s1"});
     m_requests->flush();
 
@@ -1543,7 +1535,7 @@ void PlotRequestsTest::changeSignalsAreMinimal()
     QCOMPARE(anySpy.count(), 1);
 
     // A pass that changes nothing announces nothing
-    giveInput({"s1"}, "G_IN", 6);
+    QVERIFY(giveInput({"s1"}, "G_IN", 6));
     QVERIFY(m_requests->hasPendingUpdate());
     m_requests->flush();
     QCOMPARE(changedSpy.count(), 2);
@@ -1574,7 +1566,7 @@ void PlotRequestsTest::changeSignalsAreMinimal()
 
 void PlotRequestsTest::dependencyBurstIsCoalesced()
 {
-    giveInput({"s1", "s2", "s3"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 4));
     show({"s1", "s2", "s3"});
     check("g");
     m_requests->flush();
@@ -1582,14 +1574,14 @@ void PlotRequestsTest::dependencyBurstIsCoalesced()
 
     // An irrelevant name schedules nothing
     int passes = m_requests->passCount();
-    giveInput({"s1"}, "UNRELATED_KEY", 1);
+    QVERIFY(giveInput({"s1"}, "UNRELATED_KEY", 1));
     QVERIFY(!m_requests->hasPendingUpdate());
     QVERIFY(m_model->updateAttribute("s1", QString::fromLatin1(SessionKeys::Description), QStringLiteral("Renamed")));
     QVERIFY(!m_requests->hasPendingUpdate());
 
     // Many relevant ones in one event-loop pass cause exactly one pass
-    giveInput({"s1", "s2", "s3"}, "G_IN", 6);
-    giveInput({"s1", "s2", "s3"}, "G_IN", 8);
+    QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 6));
+    QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 8));
     QVERIFY(m_requests->hasPendingUpdate());
     QCOMPARE(m_requests->passCount(), passes);
     QTRY_VERIFY(!m_requests->hasPendingUpdate());
@@ -1601,7 +1593,7 @@ void PlotRequestsTest::dependencyBurstIsCoalesced()
 
 void PlotRequestsTest::progressUpdatesWithoutInspection()
 {
-    giveInput({"s1", "s2"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
     show({"s1", "s2"});
     QCOMPARE(checkByUser("g"), 2);
     check("g2");
@@ -1643,7 +1635,7 @@ void PlotRequestsTest::progressUpdatesWithoutInspection()
 
 void PlotRequestsTest::removedSessionLeavesNoTrace()
 {
-    giveInput({"s1", "s2", "s3"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 4));
     show({"s1", "s2", "s3"});
     QCOMPARE(checkByUser("g"), 3);
     QVERIFY(gate().waitEntered());
@@ -1720,7 +1712,7 @@ void PlotRequestsTest::registryChangeReclassifies()
     QVERIFY(row("Syn/rx").explicitBacked);
     QVERIFY(row("Syn/rx").isPlain());
 
-    giveInput({"s1"}, "RX_IN", 1);
+    QVERIFY(giveInput({"s1"}, "RX_IN", 1));
     show({"s1"});
     QCOMPARE(row("Syn/rx").missingCount, 1);
     QCOMPARE(row("Syn/rx").missing.at(0).calculationTitles, QStringList({"Reg X"}));
@@ -1741,7 +1733,7 @@ void PlotRequestsTest::registryChangeReclassifies()
 
 void PlotRequestsTest::survivesQueueShutdown()
 {
-    giveInput({"s1", "s2"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
     show({"s1", "s2"});
     QCOMPARE(checkByUser("g"), 2);
     QVERIFY(gate().waitEntered());
@@ -1773,10 +1765,12 @@ void PlotRequestsTest::survivesQueueShutdown()
 
 void PlotRequestsTest::nullCollaborators()
 {
-    giveInput({"s1"}, "G_IN", 4);
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
     show({"s1"});
     check("g");
 
+    // A QVERIFY in here returns from the lambda only: each call is followed by
+    // a check of QTest::currentTestFailed()
     const auto verifyInert = [](PlotRequests &requests) {
         requests.flush();
         QVERIFY(!requests.hasPendingUpdate());
@@ -1790,18 +1784,26 @@ void PlotRequestsTest::nullCollaborators()
     {
         PlotRequests requests(nullptr, m_plots.get(), m_queue.get());
         verifyInert(requests);
+        if (QTest::currentTestFailed())
+            return;
     }
     {
         PlotRequests requests(m_model.get(), nullptr, m_queue.get());
         verifyInert(requests);
+        if (QTest::currentTestFailed())
+            return;
     }
     {
         PlotRequests requests(m_model.get(), m_plots.get(), nullptr);
         verifyInert(requests);
+        if (QTest::currentTestFailed())
+            return;
     }
     {
         PlotRequests requests(nullptr, nullptr, nullptr);
         verifyInert(requests);
+        if (QTest::currentTestFailed())
+            return;
     }
     QVERIFY(quiet.holds());
 

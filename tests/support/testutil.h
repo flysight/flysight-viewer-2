@@ -6,6 +6,7 @@
 
 #include <QString>
 #include <QStringList>
+#include <QVector>
 #include <QtGlobal>
 
 namespace FlySightTest {
@@ -21,6 +22,18 @@ inline bool isNear(double a, double b)
 inline bool sameBits(double a, double b)
 {
     return std::memcmp(&a, &b, sizeof(double)) == 0;
+}
+
+/// Two sample vectors of the same length whose elements all have the same bits.
+inline bool sameBitsEverywhere(const QVector<double> &a, const QVector<double> &b)
+{
+    if (a.size() != b.size())
+        return false;
+    for (qsizetype i = 0; i < a.size(); ++i) {
+        if (!sameBits(a[i], b[i]))
+            return false;
+    }
+    return true;
 }
 
 /// Captures warning and critical messages for as long as it lives, INSTEAD of

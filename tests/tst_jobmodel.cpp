@@ -21,6 +21,7 @@
 #include "jobmodel.h"
 #include "jobqueue.h"
 #include "logbookcolumn.h"
+#include "logbookprobe.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
@@ -180,9 +181,11 @@ private slots:
     void nothingIsPersisted();
 
 private:
-    void setInput(const QString &sessionId, const char *key, int value)
+    /// The application's edit path. False when the model refused; a test
+    /// function checks it with QVERIFY, so that a failure ends the function.
+    [[nodiscard]] bool setInput(const QString &sessionId, const char *key, int value)
     {
-        QVERIFY(m_sessions->updateAttribute(sessionId, QString::fromLatin1(key), value));
+        return m_sessions->updateAttribute(sessionId, QString::fromLatin1(key), value);
     }
     JobId request(const QString &sessionId, const char *calculationId)
     {
@@ -212,10 +215,7 @@ void JobModelTest::initTestCase()
     TestEnvironment::instance().registerBuiltIns();
 
     PreferencesManager::instance().registerPreference(PreferenceKeys::LogbookColumnsVersion, 0);
-    LogbookColumn description;
-    description.type = ColumnType::SessionAttribute;
-    description.attributeKey = QString::fromLatin1(SessionKeys::Description);
-    LogbookColumnStore::instance().setColumns({description});
+    LogbookColumnStore::instance().setColumns({descriptionColumn()});
 }
 
 void JobModelTest::init()
@@ -238,15 +238,24 @@ void JobModelTest::init()
     m_resetSpy = std::make_unique<QSignalSpy>(model(), &QAbstractItemModel::modelReset);
 }
 
+// Note what is to be checked, tear everything down, and only then check: a
+// failing check returns from cleanup(), and whatever were still alive then
+// would be alive under the next init() (see tst_jobqueue).
 void JobModelTest::cleanup()
 {
+    const bool hadQueue = m_queue != nullptr;
+    int resetSignals = 0;
+    int viewResets = 0;
+    int maxRunningRows = 0;
+    int viewRows = 0;
+    int modelRows = 0;
     if (m_queue) {
         m_queue->shutdown();
-        // No modelReset at any time after construction
-        QCOMPARE(m_resetSpy->count(), 0);
-        QCOMPARE(m_view->resets(), 0);
-        QVERIFY(m_view->maxRunningRows() <= 1);
-        QCOMPARE(m_view->rowCount(), model()->rowCount());
+        resetSignals = int(m_resetSpy->count());
+        viewResets = m_view->resets();
+        maxRunningRows = m_view->maxRunningRows();
+        viewRows = m_view->rowCount();
+        modelRows = model()->rowCount();
     }
     m_resetSpy.reset();
     m_view.reset();
@@ -254,6 +263,14 @@ void JobModelTest::cleanup()
     m_queue.reset();
     m_sessions.reset();
     m_world.reset();
+
+    if (hadQueue) {
+        // No modelReset at any time after construction
+        QCOMPARE(resetSignals, 0);
+        QCOMPARE(viewResets, 0);
+        QVERIFY(maxRunningRows <= 1);
+        QCOMPARE(viewRows, modelRows);
+    }
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
     QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
 }
@@ -299,7 +316,7 @@ void JobModelTest::rolesAndColumns()
 
     // A queued job: every role on every column
     QVERIFY(m_sessions->updateAttribute("s1", "_DESCRIPTION", QStringLiteral("First jump")));
-    setInput("s1", "EA_IN", -1);
+    QVERIFY(setInput("s1", "EA_IN", -1));
     const JobId id = request("s1", "expA");
     QCOMPARE(id, JobId(1));
     QCOMPARE(model()->rowCount(), 1);
@@ -364,14 +381,14 @@ void JobModelTest::rolesAndColumns()
 // view that knows the model only.
 void JobModelTest::historyFromSignalsAlone()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s1", "T_IN", 4);
-    setInput("s1", "X_IN", 4);
-    setInput("s1", "EA_IN", 4);
-    setInput("s2", "EA_IN", -1);
-    setInput("s2", "G_IN", 6);
-    setInput("s3", "G_IN", 3);
-    setInput("s3", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s1", "T_IN", 4));
+    QVERIFY(setInput("s1", "X_IN", 4));
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", -1));
+    QVERIFY(setInput("s2", "G_IN", 6));
+    QVERIFY(setInput("s3", "G_IN", 3));
+    QVERIFY(setInput("s3", "EA_IN", 4));
 
     // 1. success, with two progress texts
     const JobId success = request("s1", "gated");
@@ -396,7 +413,7 @@ void JobModelTest::historyFromSignalsAlone()
     QVERIFY(gate().waitEntered());
     const JobId cancelQueued = request("s3", "expA");
     QVERIFY(m_queue->cancel(cancelQueued));
-    setInput("s3", "G_IN", 5);
+    QVERIFY(setInput("s3", "G_IN", 5));
     gate().open(1);
     QVERIFY(waitIdle(*m_queue));
 
@@ -481,9 +498,9 @@ void JobModelTest::historyFromSignalsAlone()
 
 void JobModelTest::neverMoreThanOneRunningRow()
 {
-    setInput("s1", "G_IN", 1);
-    setInput("s2", "G_IN", 2);
-    setInput("s3", "G_IN", 3);
+    QVERIFY(setInput("s1", "G_IN", 1));
+    QVERIFY(setInput("s2", "G_IN", 2));
+    QVERIFY(setInput("s3", "G_IN", 3));
     request("s1", "gated");
     request("s2", "gated");
     request("s3", "gated");
@@ -500,9 +517,9 @@ void JobModelTest::neverMoreThanOneRunningRow()
 
 void JobModelTest::timestampsAreOrdered()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
-    setInput("s3", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
+    QVERIFY(setInput("s3", "EA_IN", 4));
     const JobId first = request("s1", "gated");
     const JobId second = request("s2", "expA");
     const JobId neverRan = cancelledJob("s3", "expA");
@@ -529,7 +546,7 @@ void JobModelTest::timestampsAreOrdered()
 
 void JobModelTest::progressIsItsOwnSignal()
 {
-    setInput("s1", "G_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
     QSignalSpy dataSpy(model(), &QAbstractItemModel::dataChanged);
     QSignalSpy progressSpy(m_queue.get(), &JobQueue::jobProgress);
     const JobId id = request("s1", "gated");
@@ -564,7 +581,7 @@ void JobModelTest::progressIsItsOwnSignal()
 
 void JobModelTest::cancelRequestedIsVisible()
 {
-    setInput("s1", "G_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
     const JobId id = request("s1", "gated");
     QVERIFY(gate().waitEntered());
 
@@ -591,9 +608,9 @@ void JobModelTest::cancelRequestedIsVisible()
 
 void JobModelTest::removeFinishedAndClear()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
-    setInput("s3", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
+    QVERIFY(setInput("s3", "EA_IN", 4));
     const JobId a = cancelledJob("s2", "expA");
     const JobId active = request("s1", "gated");
     const JobId b = cancelledJob("s2", "expA");
@@ -643,9 +660,9 @@ void JobModelTest::removeFinishedAndClear()
 // removeRows() is what a view's standard deletion calls.
 void JobModelTest::removeRowsRefusesActive()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
-    setInput("s3", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
+    QVERIFY(setInput("s3", "EA_IN", 4));
     const JobId a = cancelledJob("s2", "expA");
     const JobId b = cancelledJob("s2", "expA");
     const JobId active = request("s1", "gated");
@@ -681,8 +698,8 @@ void JobModelTest::retentionBound()
     model()->setFinishedLimit(3);
     QCOMPARE(model()->finishedLimit(), 3);
 
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
     const JobId active = request("s1", "gated");        // older than every finished job
     QVERIFY(gate().waitEntered());
     const JobId f1 = cancelledJob("s2", "expA");
@@ -693,12 +710,13 @@ void JobModelTest::retentionBound()
     // The fourth finished job: its end transition is signalled first, then
     // the oldest FINISHED row goes, and only that one.
     QStringList order;
-    const auto c1 = connect(model(), &QAbstractItemModel::dataChanged, this,
+    QObject scope;      // owns the connections: they cannot outlive `order`
+    const auto c1 = connect(model(), &QAbstractItemModel::dataChanged, &scope,
                             [&order](const QModelIndex &topLeft, const QModelIndex &, const QList<int> &roles) {
         if (roles.contains(JobModel::IsFinishedRole))
             order.append(QStringLiteral("finished %1").arg(topLeft.data(JobModel::JobIdRole).toULongLong()));
     });
-    const auto c2 = connect(model(), &QAbstractItemModel::rowsRemoved, this,
+    const auto c2 = connect(model(), &QAbstractItemModel::rowsRemoved, &scope,
                             [&order](const QModelIndex &, int first, int last) {
         order.append(QStringLiteral("removed %1-%2").arg(first).arg(last));
     });
@@ -736,10 +754,10 @@ void JobModelTest::retentionBound()
 void JobModelTest::nothingIsPersisted()
 {
     TestEnvironment &env = TestEnvironment::instance();
-    setInput("s1", "G_IN", 4);
-    setInput("s1", "X_IN", 4);
-    setInput("s2", "EA_IN", -1);
-    setInput("s3", "G_IN", 3);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s1", "X_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", -1));
+    QVERIFY(setInput("s3", "G_IN", 3));
     QVERIFY(waitForIdle(*m_sessions));
     m_sessions->flushDirtySessions();
     QSettings().sync();

@@ -79,6 +79,18 @@ PublishOutcome runAsync(CalculationEngine &engine, const CalculationId &id, Comp
 struct Gate {
     QSemaphore entered;
     QSemaphore proceed;
+
+    /// True once a worker is inside compute(). Bounded, so that a defect that
+    /// keeps compute() from being entered fails the test instead of hanging it
+    /// until CTest's timeout. When it gives up it opens the gate for good, so
+    /// that a worker arriving late can still be joined.
+    bool waitEntered(int timeoutMs = 30000)
+    {
+        if (entered.tryAcquire(1, timeoutMs))
+            return true;
+        proceed.release(1000);
+        return false;
+    }
 };
 
 // gated: Explicit; input EA_IN; output G1 = EA_IN + 1. With a gate, signals
@@ -468,7 +480,7 @@ void CalcEngineAsyncTest::inputChangeWhileRunningRefuses()
     ComputedCalculation computed;
     if (threaded) {
         ComputeRun run(ComputeMode(mode), *prepared.ticket);
-        gate->entered.acquire();                // the worker is inside compute()
+        QVERIFY(gate->waitEntered());           // the worker is inside compute()
         changed = w.state.setAttribute(w.engine, "EA_IN", 7);
         gate->proceed.release();
         computed = run.finish();
@@ -871,7 +883,7 @@ void CalcEngineAsyncTest::cancelPublishesNothing()
     ComputedCalculation computed;
     if (threaded) {
         ComputeRun run(ComputeMode(mode), *prepared.ticket, &progress);
-        gate->entered.acquire();                // cancelled while compute() is running
+        QVERIFY(gate->waitEntered());           // cancelled while compute() is running
         progress.cancel();
         gate->proceed.release();
         computed = run.finish();

@@ -15,6 +15,7 @@
 #include "builtinfixture.h"
 #include "engine/calculationregistry.h"
 #include "logbookcolumn.h"
+#include "logbookprobe.h"
 #include "momentmodel.h"
 #include "plotrangemodel.h"
 #include "preferences/preferencekeys.h"
@@ -79,10 +80,7 @@ void MapModelsTest::initTestCase()
     // valid indexes to report without the merge warming any calculation.
     PreferencesManager &prefs = PreferencesManager::instance();
     prefs.registerPreference(PreferenceKeys::LogbookColumnsVersion, 0);
-    LogbookColumn description;
-    description.type = ColumnType::SessionAttribute;
-    description.attributeKey = QString::fromLatin1(SessionKeys::Description);
-    LogbookColumnStore::instance().setColumns({description});
+    LogbookColumnStore::instance().setColumns({descriptionColumn()});
 
     // What the map models read in their constructors (the main window's
     // defaults). They are not core preferences.

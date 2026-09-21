@@ -47,25 +47,9 @@ const QString kAccH = QStringLiteral("builtin.fusion.accH");
 const QString kSystemTime = QStringLiteral("builtin.fusion.systemTime");
 const QString kDiagnostics = QStringLiteral("_FUSION_DIAGNOSTICS");
 
-constexpr double kEpochUtc = 1700000000.0;
-constexpr double kExitTime = kEpochUtc + 1.0;      // inside every success fixture's fit
-
-DependencyKey fusionKey(const QString &name)
-{
-    return DependencyKey::measurement(QStringLiteral("Fusion"), name);
-}
-
 QVector<double> fusion(const SessionData &session, const QString &name)
 {
     return session.getMeasurement(QStringLiteral("Fusion"), name);
-}
-
-/// A fixture session with a stored exit marker inside the fit.
-SessionData fixtureSession(const QString &fixtureName, const QString &sessionId = QStringLiteral("f1"))
-{
-    SessionData session = sessionFromFixture(fusionFixture(fixtureName), sessionId);
-    session.setAttribute(SessionKeys::ExitTime, kExitTime);
-    return session;
 }
 
 bool isAvailable(const SessionData &session, const DependencyKey &name)
@@ -106,29 +90,6 @@ QList<DependencyKey> plotNames()
     }
     names.append(fusionKey(QStringLiteral("accH")));
     return names;
-}
-
-bool sameBitsEverywhere(const QVector<double> &a, const QVector<double> &b)
-{
-    if (a.size() != b.size())
-        return false;
-    for (qsizetype i = 0; i < a.size(); ++i) {
-        if (!sameBits(a[i], b[i]))
-            return false;
-    }
-    return true;
-}
-
-/// Empty when the seventeen published channels match the golden, else the
-/// first channel's difference.
-QString goldenDifference(const SessionData &session, const FusionGolden &golden)
-{
-    for (const QString &name : fusionChannelNames()) {
-        const QString difference = compareSamples(name, fusion(session, name), golden.channels.value(name));
-        if (!difference.isEmpty())
-            return difference;
-    }
-    return QString();
 }
 
 QJsonObject diagnosticsOf(const SessionData &session)
@@ -525,7 +486,7 @@ void FusionSessionTest::changeAfterPublicationDropsEverything()
 
     // Markers and ground elevation do not move the fit
     for (const char *marker : {"_EXIT_TIME", "_ANALYSIS_START_TIME", "_GROUND_ELEV"}) {
-        const QSet<DependencyKey> dropped = session.setAttribute(marker, kExitTime + .25);
+        const QSet<DependencyKey> dropped = session.setAttribute(marker, kFixtureExitTime + .25);
         for (const DependencyKey &name : dropped)
             QVERIFY2(name.type != DependencyKey::Type::Measurement || name.measurementKey.first != QStringLiteral("Fusion"),
                      marker);
@@ -768,7 +729,7 @@ void FusionSessionTest::blockersReportFusion()
 void FusionSessionTest::naturalSessionEndToEnd()
 {
     SessionData session = naturalSession(QStringLiteral("n1"));
-    session.setAttribute(SessionKeys::ExitTime, kEpochUtc + 10.0);
+    session.setAttribute(SessionKeys::ExitTime, kFixtureEpochUtc + 10.0);
     CalculationEngine &engine = session.calculationEngine();
 
     QVERIFY(engine.blockers(fusionKey(QStringLiteral("roll"))).state == BlockerState::Blocked);

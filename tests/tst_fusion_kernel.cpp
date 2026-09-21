@@ -445,6 +445,13 @@ void FusionKernelTest::stationaryScanPollsSilently()
     QCOMPARE(given.score, derived.score);
     QVERIFY(given.forceMean == derived.forceMean);
     QVERIFY(given.gyroMean == derived.gyroMean);
+
+    // The three-argument form derives the limit from the IMU time axis, so too
+    // few or invalid IMU timestamps are the validation error, not a verdict
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, assessStationaryWindow(Samples{}, 5, 35));
+    Samples unordered = quiet;
+    unordered.imuTime[1] = unordered.imuTime[0];
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, assessStationaryWindow(unordered, 5, 35));
 }
 
 void FusionKernelTest::shortInputUsesCoarseInitializer()

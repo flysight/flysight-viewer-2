@@ -2,14 +2,18 @@
 #define FLYSIGHTTEST_JOBFIXTURE_H
 
 #include <atomic>
+#include <functional>
 #include <memory>
 
 #include <QList>
 #include <QMutex>
 #include <QSemaphore>
+#include <QSignalSpy>
 #include <QString>
 #include <QStringList>
 
+#include "jobmodel.h"
+#include "jobqueue.h"
 #include "sessiondata.h"
 
 // Controllable explicit calculations on real sessions, for tests of the job
@@ -19,10 +23,6 @@
 //
 // The synchronization in this file (semaphores, a mutex, atomics) belongs to
 // the tests. The "no locks" rule is about the library.
-
-namespace FlySight {
-class JobQueue;
-}
 
 namespace FlySightTest {
 
@@ -103,6 +103,33 @@ private:
 /// Spins the event loop until the queue has nothing queued and nothing
 /// running. False if that does not happen within timeoutMs.
 bool waitIdle(FlySight::JobQueue &queue, int timeoutMs = 5000);
+
+/// "Nothing started" since this object was created: no jobQueued signal and no
+/// new row in the job model.
+class Quiet {
+public:
+    explicit Quiet(FlySight::JobQueue &queue)
+        : m_queue(queue), m_spy(&queue, &FlySight::JobQueue::jobQueued), m_rows(queue.model()->rowCount())
+    {
+    }
+    bool holds() const { return m_spy.isEmpty() && m_queue.model()->rowCount() == m_rows; }
+
+private:
+    FlySight::JobQueue &m_queue;
+    QSignalSpy m_spy;
+    int m_rows;
+};
+
+/// Runs `action` once, on the main thread, when the first progress text of
+/// `job` is delivered. The queue delivers progress in order and before the end
+/// of the same job, so the job is still Running then - the way to act "during"
+/// a computation that no gate can hold (a real fit).
+///
+/// `context` owns the connection: pass a QObject that lives in the scope of
+/// whatever `action` captures by reference (a function-local `QObject scope;`),
+/// so that a test that leaves early cannot be called back into dead locals.
+void onFirstProgress(FlySight::JobQueue &queue, QObject *context, FlySight::JobId job,
+                     std::function<void()> action);
 
 } // namespace FlySightTest
 

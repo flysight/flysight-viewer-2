@@ -59,21 +59,6 @@ const QString kRoll = QStringLiteral("Fusion/roll");
 
 constexpr int kFitTimeoutMs = 120000;
 
-/// "Nothing started": no jobQueued signal and no new row in the job model.
-class Quiet {
-public:
-    explicit Quiet(JobQueue &queue)
-        : m_queue(queue), m_spy(&queue, &JobQueue::jobQueued), m_rows(queue.model()->rowCount())
-    {
-    }
-    bool holds() const { return m_spy.isEmpty() && m_queue.model()->rowCount() == m_rows; }
-
-private:
-    JobQueue &m_queue;
-    QSignalSpy m_spy;
-    int m_rows;
-};
-
 /// The six "GNSS (Local frame)" plots: ordinary, on demand, never a job.
 QVector<PlotValue> localFramePlots()
 {
@@ -87,14 +72,6 @@ QVector<PlotValue> localFramePlots()
         plots.append(plot);
     }
     return plots;
-}
-
-QStringList sessionIdsOf(const QList<PlotTrackState> &tracks)
-{
-    QStringList ids;
-    for (const PlotTrackState &track : tracks)
-        ids.append(track.sessionId);
-    return ids;
 }
 
 } // namespace
@@ -116,7 +93,12 @@ private slots:
     void editsAndVisibilityDuringFit();
 
 private:
-    void addSessions(const QList<SessionData> &sessions);
+    /// Into the (empty) model, as the application adds them; empty when that
+    /// worked (fusionsessions.h). Check it with QCOMPARE in the test function.
+    [[nodiscard]] QString addSessions(const QList<SessionData> &sessions)
+    {
+        return FlySightTest::addSessions(*m_model, sessions);
+    }
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
     CalculationEngine &engine(const QString &id) { return session(id).calculationEngine(); }
     QVector<double> fusion(const QString &id, const QString &name)
@@ -153,9 +135,6 @@ private:
     }
     /// Empty when Fusion/<every channel> of the session matches the golden.
     QString goldenDifference(const QString &id, const QString &goldenName);
-    /// Runs `action` once, on the main thread, when the first progress text of
-    /// `job` is delivered: the job is Running then (see the file comment).
-    void onFirstProgress(JobId job, std::function<void()> action);
     /// Empty when the session `absent` is in no list of any fusion row and no
     /// row counts more than one track; else the first offence.
     QString offenceInRows(const QString &absent);
@@ -196,14 +175,19 @@ void FusionRowsTest::init()
     m_requests = std::make_unique<PlotRequests>(m_model.get(), m_plots.get(), m_queue.get());
 }
 
+// Note what is to be checked, tear everything down, and only then check: a
+// failing check returns from cleanup(), and whatever were still alive then
+// would be alive under the next init() (see tst_jobqueue).
 void FusionRowsTest::cleanup()
 {
     if (m_queue)
         m_queue->shutdown();
+    QStringList stillPinned;
     if (m_model) {
         for (int r = 0; r < m_model->rowCount(); ++r) {
             const QString id = std::as_const(*m_model).rowAt(r).sessionId;
-            QVERIFY2(!m_model->isSessionPinned(id), qPrintable(id));
+            if (m_model->isSessionPinned(id))
+                stillPinned.append(id);
         }
     }
 
@@ -212,42 +196,15 @@ void FusionRowsTest::cleanup()
     m_plots.reset();
     m_queue.reset();
     m_model.reset();
+
+    QCOMPARE(stillPinned, QStringList());
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
     QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
 }
 
-// Sessions enter as they do in the application (loaded, hidden); the saver
-// and the column worker have finished when this returns.
-void FusionRowsTest::addSessions(const QList<SessionData> &sessions)
-{
-    m_model->mergeSessions(sessions);
-    QCOMPARE(m_model->rowCount(), int(sessions.size()));
-    QVERIFY(waitForIdle(*m_model));
-    for (int r = 0; r < m_model->rowCount(); ++r)
-        QVERIFY(std::as_const(*m_model).rowAt(r).isLoaded());
-}
-
 QString FusionRowsTest::goldenDifference(const QString &id, const QString &goldenName)
 {
-    const FusionGolden golden = loadFusionGolden(goldenName);
-    for (const QString &name : fusionChannelNames()) {
-        const QString difference = compareSamples(name, fusion(id, name), golden.channels.value(name));
-        if (!difference.isEmpty())
-            return difference;
-    }
-    return QString();
-}
-
-void FusionRowsTest::onFirstProgress(JobId job, std::function<void()> action)
-{
-    auto connection = std::make_shared<QMetaObject::Connection>();
-    *connection = connect(m_queue.get(), &JobQueue::jobProgress, this,
-                          [connection, job, action](JobId id, const QString &) {
-        if (id != job)
-            return;
-        disconnect(*connection);
-        action();
-    });
+    return FlySightTest::goldenDifference(session(id), loadFusionGolden(goldenName));
 }
 
 QString FusionRowsTest::offenceInRows(const QString &absent)
@@ -273,7 +230,8 @@ QString FusionRowsTest::offenceInRows(const QString &absent)
 void FusionRowsTest::allSeventeenFusionPlotsAreExplicitBacked()
 {
     QCOMPARE(fusionPlots().size(), 17);
-    addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2"))});
+    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2"))}),
+             QString());
     show({"s2"});
 
     const Quiet quiet(*m_queue);
@@ -307,10 +265,11 @@ void FusionRowsTest::allSeventeenFusionPlotsAreExplicitBacked()
 // Acceptance 15, on the real names with real fits.
 void FusionRowsTest::realRowScript()
 {
-    addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_maneuver")), QStringLiteral("s1")),
-                 sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2")),
-                 sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s3")),
-                 sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s4"))});
+    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_maneuver")), QStringLiteral("s1")),
+                          sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2")),
+                          sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s3")),
+                          sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s4"))}),
+             QString());
 
     // 1. Three visible fusable tracks, the plot checked programmatically:
     //    nothing starts by itself
@@ -329,7 +288,8 @@ void FusionRowsTest::realRowScript()
     // Records, on every job end, what the row shows at that moment
     struct Seen { JobId job; int pendingCount; QString progressLabel; };
     QList<Seen> seen;
-    connect(m_queue.get(), &JobQueue::jobFinished, this, [this, &seen](JobId id, JobState) {
+    QObject seenScope;      // owns the connection: it cannot outlive `seen`
+    connect(m_queue.get(), &JobQueue::jobFinished, &seenScope, [this, &seen](JobId id, JobState) {
         m_requests->flush();
         const PlotRowState state = m_requests->rowState(kRoll);
         seen.append({id, state.pendingCount, state.progressLabel});
@@ -359,7 +319,8 @@ void FusionRowsTest::realRowScript()
     JobState job3AfterUncheck = JobState::Queued;
     QString job3Reason;
     bool job2CancelRequested = true;
-    onFirstProgress(job2, [&] {
+    QObject job2Scope;      // owns the connection: it cannot outlive what the slot captures
+    onFirstProgress(*m_queue, &job2Scope, job2, [&] {
         uncheckedWhileRunning = m_queue->job(job2).state == JobState::Running;
         check(QStringLiteral("roll"), false);
         job3AfterUncheck = m_queue->job(job3).state;
@@ -401,7 +362,8 @@ void FusionRowsTest::realRowScript()
     int cancelled = -1;
     bool checkedAfterCancel = false;
     PlotRowState afterCancel;
-    onFirstProgress(job4, [&] {
+    QObject job4Scope;      // owns the connection: it cannot outlive what the slot captures
+    onFirstProgress(*m_queue, &job4Scope, job4, [&] {
         cancelled = m_requests->cancelPressed(kRoll);
         checkedAfterCancel = m_plots->isPlotEnabled(QStringLiteral("Fusion"), QStringLiteral("roll"));
         afterCancel = m_requests->rowState(kRoll);      // at once
@@ -438,9 +400,7 @@ void FusionRowsTest::realRowScript()
         QCOMPARE(state.control(), Control::Refresh);
         QCOMPARE(state.missing.at(0).sessionId, QStringLiteral("s4"));
         QCOMPARE(state.missing.at(0).calculationTitles, QStringList({kTitle}));
-        QTest::qWait(0);
-        QTest::qWait(0);
-        m_requests->flush();
+        PlotFixture::spin(m_requests.get());
         QVERIFY(quiet.holds());
         QVERIFY(m_queue->isIdle());
         QCOMPARE(row(kRoll).missingCount, 1);
@@ -466,7 +426,8 @@ void FusionRowsTest::realRowScript()
 // same progress.
 void FusionRowsTest::rollPitchYawShareOneJob()
 {
-    addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2"))});
+    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2"))}),
+             QString());
     show({"s2"});
     const QStringList rows = {kRoll, QStringLiteral("Fusion/pitch"), QStringLiteral("Fusion/yaw")};
     check(QStringLiteral("roll"));
@@ -481,7 +442,8 @@ void FusionRowsTest::rollPitchYawShareOneJob()
     QVERIFY(job != 0);
 
     QList<PlotRowState> during;
-    onFirstProgress(job, [&] {
+    QObject scope;      // owns the connection: it cannot outlive what the slot captures
+    onFirstProgress(*m_queue, &scope, job, [&] {
         m_requests->flush();
         for (const QString &id : rows)
             during.append(m_requests->rowState(id));
@@ -507,7 +469,8 @@ void FusionRowsTest::rollPitchYawShareOneJob()
 // Fusion/accH is on demand; the row sees through it and asks for the fit.
 void FusionRowsTest::accHRowIsBlockedByFusion()
 {
-    addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2"))});
+    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2"))}),
+             QString());
     show({"s2"});
     const QString accH = QStringLiteral("Fusion/accH");
     check(QStringLiteral("accH"));
@@ -538,8 +501,9 @@ void FusionRowsTest::accHRowIsBlockedByFusion()
 // never missing, pending or failed, and cannot have a job.
 void FusionRowsTest::noImuSessionIsNeverCounted()
 {
-    addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2")),
-                 sessionWithoutImu(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("n1"))});
+    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2")),
+                          sessionWithoutImu(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("n1"))}),
+             QString());
     show({"s2", "n1"});
     checkAllFusionPlots();
 
@@ -558,7 +522,8 @@ void FusionRowsTest::noImuSessionIsNeverCounted()
     // During
     QString offenceDuring = QStringLiteral("the job reported no progress");
     int pendingDuring = -1;
-    onFirstProgress(job, [&] {
+    QObject scope;      // owns the connection: it cannot outlive what the slot captures
+    onFirstProgress(*m_queue, &scope, job, [&] {
         offenceDuring = offenceInRows(QStringLiteral("n1"));
         pendingDuring = m_requests->rowState(QStringLiteral("Fusion/qw")).pendingCount;
     });
@@ -582,7 +547,8 @@ void FusionRowsTest::noImuSessionIsNeverCounted()
 // its inputs change.
 void FusionRowsTest::rejectedTrackShowsBadge()
 {
-    addSessions({sessionFromFixture(fusionFixture(QStringLiteral("reject_origin")), QStringLiteral("r1"))});
+    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("reject_origin")), QStringLiteral("r1"))}),
+             QString());
     show({"r1"});
     check(QStringLiteral("roll"));
     QCOMPARE(m_requests->plotCheckedByUser(kRoll), 1);
@@ -626,9 +592,10 @@ void FusionRowsTest::rejectedTrackShowsBadge()
 // all from the main thread; the fit is not disturbed.
 void FusionRowsTest::editsAndVisibilityDuringFit()
 {
-    addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_maneuver")), QStringLiteral("s1")),
-                 sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2")),
-                 sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s3"))});
+    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_maneuver")), QStringLiteral("s1")),
+                          sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2")),
+                          sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s3"))}),
+             QString());
     show({"s1"});
     check(QStringLiteral("roll"));
     QCOMPARE(m_requests->plotCheckedByUser(kRoll), 1);
@@ -647,7 +614,8 @@ void FusionRowsTest::editsAndVisibilityDuringFit()
     bool running = false, edited = false, hidden = false, shownAgain = false;
     qsizetype northSamples = 0;
     int missingWhileHidden = -1;
-    onFirstProgress(job, [&] {
+    QObject scope;      // owns the connection: it cannot outlive what the slot captures
+    onFirstProgress(*m_queue, &scope, job, [&] {
         running = m_queue->job(job).state == JobState::Running;
         edited = m_model->updateAttribute("s2", QString::fromLatin1(SessionKeys::Description),
                                           QStringLiteral("edited"));

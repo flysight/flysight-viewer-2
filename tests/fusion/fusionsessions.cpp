@@ -4,6 +4,8 @@
 #include <cstring>
 
 #include "fusion/fusionregistration.h"
+#include "sessionmodel.h"
+#include "testenvironment.h"
 
 using namespace FlySight;
 
@@ -119,6 +121,13 @@ SessionData sessionWithoutImu(const FusionFixture &fixture, const QString &sessi
     return session;
 }
 
+SessionData fixtureSession(const QString &fixtureName, const QString &sessionId)
+{
+    SessionData session = sessionFromFixture(fusionFixture(fixtureName), sessionId);
+    session.setAttribute(SessionKeys::ExitTime, kFixtureExitTime);
+    return session;
+}
+
 SessionData naturalSession(const QString &sessionId)
 {
     constexpr double epoch = 1700000000.0;
@@ -228,6 +237,36 @@ QList<DependencyKey> fusionNames()
     names.append(DependencyKey::attribute(QStringLiteral("_FUSION_DIAGNOSTICS")));
     names.append(DependencyKey::attribute(fusionRollAtExit()));
     return names;
+}
+
+DependencyKey fusionKey(const QString &name)
+{
+    return DependencyKey::measurement(QStringLiteral("Fusion"), name);
+}
+
+QString goldenDifference(const SessionData &session, const FusionGolden &golden)
+{
+    for (const QString &name : fusionChannelNames()) {
+        const QString difference = compareSamples(name, session.getMeasurement(QStringLiteral("Fusion"), name),
+                                                  golden.channels.value(name));
+        if (!difference.isEmpty())
+            return difference;
+    }
+    return QString();
+}
+
+QString addSessions(SessionModel &model, const QList<SessionData> &sessions)
+{
+    model.mergeSessions(sessions);
+    if (model.rowCount() != int(sessions.size()))
+        return QStringLiteral("the model has %1 rows for %2 sessions").arg(model.rowCount()).arg(sessions.size());
+    if (!waitForIdle(model))
+        return QStringLiteral("the model did not become idle");
+    for (int row = 0; row < model.rowCount(); ++row) {
+        if (!std::as_const(model).rowAt(row).isLoaded())
+            return QStringLiteral("row %1 is not loaded").arg(row);
+    }
+    return QString();
 }
 
 } // namespace FlySightTest

@@ -465,7 +465,7 @@ missing invalidation in the code under test.
 
   `flysight_add_test(<name> SOURCES ... [LIBS ...] [ENVIRONMENT VAR=value ...])`
   creates the executable, links `flysight_test_support` (and through it
-  `flysight_core` and Qt Test), registers the CTest test with
+  `flysight_core`, Qt Test and the platform's thread library), registers the CTest test with
   `QT_QPA_PLATFORM=offscreen` and `QT_FORCE_STDERR_LOGGING=1`, a 120 s timeout and the `core` label, and sets
   up DLL lookup on Windows.
 - End the file with `FLYSIGHT_TEST_MAIN(YourTestClass)` (from `testmain.h`) and
@@ -476,7 +476,8 @@ missing invalidation in the code under test.
   (`tst_plot_row_delegate` is the only one) writes its own `main()` instead:
   the same order - deterministic hash seed, application object,
   `TestEnvironment`, test object - with a `QApplication` and the application's
-  Fusion style.
+  Fusion style. The macro is not given a Widgets form: `testmain.h` is included
+  by every test and must not come to need Qt Widgets.
 - Get the environment with `FlySightTest::TestEnvironment::instance()`. Typical
   fixtures: `registerBuiltIns()` in `initTestCase()` (registers built-in
   attributes and calculations once per process; the UI-owned plots and markers
@@ -485,8 +486,8 @@ missing invalidation in the code under test.
   output files, and `waitForIdle(model)` to let a `SessionModel` finish its
   deferred saves and column fills.
 - Shared helpers live in the support library; use them instead of a local
-  copy. `testutil.h`: `isNear` (absolute 1e-9), `sameBits`, and
-  `WarningCapture`, which collects warnings while it lives (`count()`,
+  copy. `testutil.h`: `isNear` (absolute 1e-9), `sameBits`,
+  `sameBitsEverywhere` (two sample vectors), and `WarningCapture`, which collects warnings while it lives (`count()`,
   `messages()`, `matching(fragment)`, `count(fragment)`). `logbookprobe.h`:
   what is on disk in the test logbook (`readIndex`, `writeIndex`,
   `indexValue`, `sessionFilePath`, which is empty for an unknown session,
@@ -497,17 +498,46 @@ missing invalidation in the code under test.
   shorthand for public names. `asyncdriver.h` drives
   `PreparedCalculation::compute()` inline, on a joined `std::thread`, or on a
   `QThread` (`computeOn`, `ComputeRun`, `addComputeModeRows`) and provides
-  `RecordingProgress`; a test that includes it links `Threads::Threads`.
-  `jobfixture.h` (`JobWorld`, `Gate`, `waitIdle`) registers controllable
+  `RecordingProgress`; it uses `std::thread`, which is why
+  `flysight_test_support` carries `Threads::Threads` as a usage requirement
+  (stated once there; no test names it).
+  `jobfixture.h` (`JobWorld`, `Gate`, `waitIdle`, `Quiet`, `onFirstProgress`) registers controllable
   explicit calculations on the global registry for tests of the job queue and
   whatever sits on top of it: a test holds the queue's worker inside a compute
   function (`Gate::waitEntered`), then releases (`Gate::open`) or cancels it,
   without sleeps; construct the `JobWorld` before the `SessionModel` and
-  destroy it after the `JobQueue` and the model.
+  destroy it after the `JobQueue` and the model. `Quiet` is "nothing started
+  since" (no `jobQueued`, no new job row); `onFirstProgress` acts on the main
+  thread while a job that no gate can hold (a real fit) is still running.
   `plotfixture.h` (`PlotFixture`) adds synthetic plots (`Syn/...`) over those
   calculations through on-demand bridge calculations, plus `show()` and
-  `giveInput()` for the application's visibility and edit paths; construct it
-  after the `JobWorld` and destroy it before it.
+  `giveInput()` for the application's visibility and edit paths, `spin()`
+  (two turns of the event loop and a flush of the `PlotRequests`) and
+  `sessionIdsOf()` for a row's track lists; construct it
+  after the `JobWorld` and destroy it before it. Helpers that need GTSAM or
+  the fusion library live in `tests/fusion/` instead (section 11, "Fusion
+  sessions"), which only the `fusion` tests link: the support library stays
+  free of GTSAM, `flysight_fusion` and Qt Widgets.
+- `QVERIFY` / `QCOMPARE` return from the function they are written in, so in
+  a helper they would let the calling test carry on after a failure. A helper
+  that can fail returns `bool` (`[[nodiscard]]`), or a `QString` that is empty
+  on success and says what went wrong otherwise, and the test function checks
+  it: `QVERIFY(setInput("s1", "G_IN", 4));`,
+  `QCOMPARE(addSessions({...}), QString());`.
+- `cleanup()` notes what it is going to check, tears everything down in order,
+  and only then asserts. A failing check returns from `cleanup()`; whatever is
+  still alive at that point is alive under the next `init()` (a second
+  `JobWorld` registering the same ids on top of the first), and every later
+  test fails for a reason that has nothing to do with it.
+- A slot that captures locals of a test function by reference is connected with
+  a function-local `QObject scope;` as its context, declared after what it
+  captures - not with `this`, which outlives the function: a test that leaves
+  early would otherwise be called back into dead stack variables by
+  `cleanup()`'s `shutdown()`. Likewise a `PlotModel` given a stack `QSettings`
+  is detached from it by a `qScopeGuard`.
+- A wait on a worker thread is bounded (`tryAcquire` with a generous timeout
+  under a `QVERIFY`, `Gate::waitEntered`), so that a defect fails the test
+  instead of hanging it until CTest's timeout.
 - `FLYSIGHT_TEST_MAIN` fixes the global `QHash` seed, so `QSet` / `QHash`
   iteration order is the same in every run, by hand or under CTest.
 - If a test exercises core code that reads a preference not yet registered,
@@ -1265,8 +1295,8 @@ int main(int argc, char **argv)
 
 ### Fusion sessions
 
-`tst_fusion_session` and `tst_fusion_jobs` test sensor fusion as a registered
-calculation, on real sessions. `tests/fusion/fusionsessions.h`
+`tst_fusion_session`, `tst_fusion_jobs` and `tst_fusion_rows` test sensor fusion
+as a registered calculation, on real sessions. `tests/fusion/fusionsessions.h`
 (`flysight_fusion_session_support`) turns a fixture into a `SessionData` whose
 twenty-one effective inputs are bit-identical to the fixture, so that
 session-level results are held to the same goldens as the kernel. It relies on
@@ -1282,7 +1312,12 @@ asserts the premise. Only fixtures with equal-length columns per sensor can go
 into a `SessionModel` (the saver refuses a ragged sensor): not `reject_length`.
 `naturalSession()` is the opposite: a recording as the importer leaves it
 (GNSS, IMU, TIME; nothing under `Local`, no stored origin, no stored fit), for
-the real input chain; its expectations are structural, not golden.
+the real input chain; its expectations are structural, not golden. The header
+also holds what those tests share: `fixtureSession()` (a fixture session with
+an exit marker inside the fit, `kFixtureExitTime`), `fusionKey()`,
+`goldenDifference()` (a session's published channels against a golden) and
+`addSessions()` (sessions into an empty `SessionModel` as the application adds
+them, waited for until idle; empty text on success).
 `registerFusionOnce()` registers the fusion calculations on the global registry
 after `TestEnvironment::registerBuiltIns()`, as the application does;
 `TestEnvironment` itself stays GTSAM-free. The real fit is never run on

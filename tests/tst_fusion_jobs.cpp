@@ -59,15 +59,8 @@ namespace {
 const QString kFit = QStringLiteral("builtin.fusion.fit");
 const QString kDiagnostics = QStringLiteral("_FUSION_DIAGNOSTICS");
 
-constexpr double kEpochUtc = 1700000000.0;
-constexpr double kExitTime = kEpochUtc + 1.0;      // inside every success fixture's fit
 constexpr int kRollColumn = 1;
 constexpr int kFitTimeoutMs = 60000;
-
-DependencyKey fusionKey(const QString &name)
-{
-    return DependencyKey::measurement(QStringLiteral("Fusion"), name);
-}
 
 /// Fusion/roll at the exit marker.
 LogbookColumn rollColumn()
@@ -79,24 +72,6 @@ LogbookColumn rollColumn()
     column.measurementType = QStringLiteral("angle");
     column.markerAttributeKey = QString::fromLatin1(SessionKeys::ExitTime);
     return column;
-}
-
-SessionData fixtureSession(const QString &fixtureName, const QString &sessionId)
-{
-    SessionData session = sessionFromFixture(fusionFixture(fixtureName), sessionId);
-    session.setAttribute(SessionKeys::ExitTime, kExitTime);
-    return session;
-}
-
-bool sameBitsEverywhere(const QVector<double> &a, const QVector<double> &b)
-{
-    if (a.size() != b.size())
-        return false;
-    for (qsizetype i = 0; i < a.size(); ++i) {
-        if (!sameBits(a[i], b[i]))
-            return false;
-    }
-    return true;
 }
 
 } // namespace
@@ -121,7 +96,12 @@ private slots:
     void realRecordingCheck();
 
 private:
-    void addSessions(const QList<SessionData> &sessions);
+    /// Into the (empty) model, as the application adds them; empty when that
+    /// worked (fusionsessions.h). Check it with QCOMPARE in the test function.
+    [[nodiscard]] QString addSessions(const QList<SessionData> &sessions)
+    {
+        return FlySightTest::addSessions(*m_model, sessions);
+    }
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
     CalculationEngine &engine(const QString &id) { return session(id).calculationEngine(); }
     QVector<double> fusion(const QString &id, const QString &name)
@@ -144,9 +124,6 @@ private:
     }
     /// Empty when nothing of the fit was published in the session; else what was found.
     QString publishedTrace(const QSignalSpy &dependencySpy, const QString &id);
-    /// Runs `action` once, on the main thread, when the first progress text of
-    /// `job` is delivered: the job is Running then (see the file comment).
-    void onFirstProgress(JobId job, std::function<void()> action);
 
     std::unique_ptr<SessionModel> m_model;
     std::unique_ptr<JobQueue> m_queue;
@@ -161,10 +138,7 @@ void FusionJobsTest::initTestCase()
     registerFusionOnce();
 
     PreferencesManager::instance().registerPreference(PreferenceKeys::LogbookColumnsVersion, 0);
-    LogbookColumn description;
-    description.type = ColumnType::SessionAttribute;
-    description.attributeKey = QString::fromLatin1(SessionKeys::Description);
-    LogbookColumnStore::instance().setColumns({description, rollColumn()});
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), rollColumn()});
 
     qRegisterMetaType<DependencyKey>();
 }
@@ -181,33 +155,29 @@ void FusionJobsTest::init()
     m_queue = std::make_unique<JobQueue>(m_model.get());
 }
 
+// Note what is to be checked, tear everything down, and only then check: a
+// failing check returns from cleanup(), and whatever were still alive then
+// would be alive under the next init() (see tst_jobqueue).
 void FusionJobsTest::cleanup()
 {
     if (m_queue)
         m_queue->shutdown();
+    QStringList stillPinned;
     if (m_model) {
         for (int row = 0; row < m_model->rowCount(); ++row) {
             const QString id = std::as_const(*m_model).rowAt(row).sessionId;
-            QVERIFY2(!m_model->isSessionPinned(id), qPrintable(id));
+            if (m_model->isSessionPinned(id))
+                stillPinned.append(id);
         }
     }
 
     // Queue, then model
     m_queue.reset();
     m_model.reset();
+
+    QCOMPARE(stillPinned, QStringList());
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
     QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
-}
-
-// Sessions enter as they do in the application; the saver and the column
-// worker have finished when this returns.
-void FusionJobsTest::addSessions(const QList<SessionData> &sessions)
-{
-    m_model->mergeSessions(sessions);
-    QCOMPARE(m_model->rowCount(), int(sessions.size()));
-    QVERIFY(waitForIdle(*m_model));
-    for (int row = 0; row < m_model->rowCount(); ++row)
-        QVERIFY(std::as_const(*m_model).rowAt(row).isLoaded());
 }
 
 QString FusionJobsTest::availableIn(const QString &id)
@@ -223,13 +193,7 @@ QString FusionJobsTest::availableIn(const QString &id)
 
 QString FusionJobsTest::goldenDifference(const QString &id, const QString &goldenName)
 {
-    const FusionGolden golden = loadFusionGolden(goldenName);
-    for (const QString &name : fusionChannelNames()) {
-        const QString difference = compareSamples(name, fusion(id, name), golden.channels.value(name));
-        if (!difference.isEmpty())
-            return difference;
-    }
-    return QString();
+    return FlySightTest::goldenDifference(session(id), loadFusionGolden(goldenName));
 }
 
 QString FusionJobsTest::publishedTrace(const QSignalSpy &dependencySpy, const QString &id)
@@ -248,24 +212,12 @@ QString FusionJobsTest::publishedTrace(const QSignalSpy &dependencySpy, const QS
     return QString();
 }
 
-void FusionJobsTest::onFirstProgress(JobId job, std::function<void()> action)
-{
-    auto connection = std::make_shared<QMetaObject::Connection>();
-    *connection = connect(m_queue.get(), &JobQueue::jobProgress, this,
-                          [this, job, connection, action](JobId id, const QString &) {
-        if (id != job)
-            return;
-        disconnect(*connection);
-        action();
-    });
-}
-
 // Acceptance 6: one job, all outputs together, the derived values with them,
 // and nothing to do afterwards.
 void FusionJobsTest::jobPublishesAllOutputsTogether()
 {
-    addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a")),
-                 fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("b"))});
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a")),
+                          fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("b"))}), QString());
     QVERIFY2(availableIn("a").isEmpty(), qPrintable(availableIn("a")));    // read while unrequested
     QVERIFY2(availableIn("b").isEmpty(), qPrintable(availableIn("b")));
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
@@ -324,8 +276,8 @@ void FusionJobsTest::jobPublishesAllOutputsTogether()
 // thread give the same bits.
 void FusionJobsTest::queueMatchesSynchronousRequest()
 {
-    addSessions({fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("a")),
-                 fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("b"))});
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("a")),
+                          fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("b"))}), QString());
 
     const JobQueue::RequestResult result = m_queue->request("a", kFit);
     QCOMPARE(result.kind, Kind::Created);
@@ -349,14 +301,15 @@ void FusionJobsTest::queueMatchesSynchronousRequest()
 // job ends Superseded, nothing is published, and the fit can be asked again.
 void FusionJobsTest::inputChangeDuringFitSupersedes()
 {
-    addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a"))});
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a"))}), QString());
     QVERIFY2(availableIn("a").isEmpty(), qPrintable(availableIn("a")));
 
     const JobQueue::RequestResult result = m_queue->request("a", kFit);
     QCOMPARE(result.kind, Kind::Created);
     bool edited = false;
     bool askedToStop = false;
-    onFirstProgress(result.job, [this, &edited, &askedToStop, job = result.job] {
+    QObject scope;      // owns the connection: it cannot outlive what the slot captures
+    onFirstProgress(*m_queue, &scope, result.job, [this, &edited, &askedToStop, job = result.job] {
         // The origin moves from fix 3 to fix 4 (both under 10 m)
         edited = m_queue->job(job).state == JobState::Running
             && m_model->updateAttribute("a", "_LOCAL_ORIGIN_INDEX", QVariant::fromValue(qlonglong(4)));
@@ -398,7 +351,7 @@ void FusionJobsTest::inputChangeDuringFitSupersedes()
 // the reason; asking again does nothing; new inputs give a fresh run.
 void FusionJobsTest::rejectedRecordingIsSucceededJob()
 {
-    addSessions({fixtureSession(QStringLiteral("reject_origin"), QStringLiteral("a"))});
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("reject_origin"), QStringLiteral("a"))}), QString());
     const QString failure = QStringLiteral("Local origin index outside GNSS samples");
     QCOMPARE(loadFusionGolden(QStringLiteral("reject_origin")).diagnostics.value(QStringLiteral("failure")).toString(),
              failure);
@@ -440,8 +393,8 @@ void FusionJobsTest::rejectedRecordingIsSucceededJob()
 // requestable, and lets the next job start.
 void FusionJobsTest::cancelDuringFitThenNextJobStarts()
 {
-    addSessions({fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("s1")),
-                 fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s2"))});
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("s1")),
+                          fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s2"))}), QString());
     QVERIFY2(availableIn("s1").isEmpty(), qPrintable(availableIn("s1")));
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
 
@@ -452,11 +405,12 @@ void FusionJobsTest::cancelDuringFitThenNextJobStarts()
     QElapsedTimer sinceCancel;
     qint64 cancelToEndMs = -1;
     bool cancelled = false;
-    onFirstProgress(job1, [&] {
+    QObject scope;      // owns the connection: it cannot outlive what the slot captures
+    onFirstProgress(*m_queue, &scope, job1, [&] {
         sinceCancel.start();
         cancelled = m_queue->cancel(job1);
     });
-    connect(m_queue.get(), &JobQueue::jobFinished, this, [&](JobId id, JobState) {
+    connect(m_queue.get(), &JobQueue::jobFinished, &scope, [&](JobId id, JobState) {
         if (id == job1 && sinceCancel.isValid())
             cancelToEndMs = sinceCancel.elapsed();
     });
@@ -496,7 +450,8 @@ void FusionJobsTest::cancelDuringFitThenNextJobStarts()
 // Acceptance 11: no IMU data, no job - and nothing to show for any fusion plot.
 void FusionJobsTest::noImuSessionCannotHaveAJob()
 {
-    addSessions({sessionWithoutImu(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("a"))});
+    QCOMPARE(addSessions({sessionWithoutImu(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("a"))}),
+             QString());
 
     const JobQueue::RequestResult result = m_queue->request("a", kFit);
     QCOMPARE(result.kind, Kind::MissingInput);
@@ -522,9 +477,9 @@ void FusionJobsTest::noImuSessionCannotHaveAJob()
 void FusionJobsTest::readersNeverStartAFit()
 {
     QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
-    addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a")),
-                 fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("b")),
-                 naturalSession(QStringLiteral("c"))});
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a")),
+                          fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("b")),
+                          naturalSession(QStringLiteral("c"))}), QString());
 
     // The view's reads, repeatedly
     for (int round = 0; round < 3; ++round) {
@@ -554,7 +509,7 @@ void FusionJobsTest::readersNeverStartAFit()
 void FusionJobsTest::columnOnFusionOutputIsNotCached()
 {
     const LogbookColumn column = rollColumn();
-    addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))});
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
     const int row = m_model->getSessionRow("a");
     const auto cachedRoll = [this, row] { return std::as_const(*m_model).rowAt(row).cachedValues; };
 
@@ -574,7 +529,7 @@ void FusionJobsTest::columnOnFusionOutputIsNotCached()
 
     // A marker edit makes the column worker compute the column again, with
     // the fit published (markers are not inputs of the fit)
-    QVERIFY(m_model->updateAttribute("a", "_EXIT_TIME", kExitTime + .25));
+    QVERIFY(m_model->updateAttribute("a", "_EXIT_TIME", kFixtureExitTime + .25));
     QVERIFY(!cachedRoll().contains(kRollColumn));
     QVERIFY(waitForIdle(*m_model));
     QCOMPARE(engine("a").runCount(kFit), 1);
@@ -594,8 +549,8 @@ void FusionJobsTest::columnOnFusionOutputIsNotCached()
 // crashes when the queue and then the model go away.
 void FusionJobsTest::shutdownDuringFit()
 {
-    addSessions({fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("s1")),
-                 fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s2"))});
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("s1")),
+                          fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s2"))}), QString());
     QVERIFY2(availableIn("s1").isEmpty(), qPrintable(availableIn("s1")));
     QVERIFY2(availableIn("s2").isEmpty(), qPrintable(availableIn("s2")));
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
@@ -608,7 +563,8 @@ void FusionJobsTest::shutdownDuringFit()
     bool wasRunning = false;
     QElapsedTimer timer;
     qint64 shutdownMs = -1;
-    onFirstProgress(running, [&] {
+    QObject scope;      // owns the connection: it cannot outlive what the slot captures
+    onFirstProgress(*m_queue, &scope, running, [&] {
         wasRunning = m_queue->job(running).state == JobState::Running;
         timer.start();
         m_queue->shutdown();

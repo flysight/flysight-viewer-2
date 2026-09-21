@@ -1,6 +1,7 @@
 #include "plotfixture.h"
 
 #include <QMap>
+#include <QtTest>
 
 #include "engine/calculationdescriptor.h"
 #include "engine/calculationregistry.h"
@@ -111,6 +112,22 @@ void PlotFixture::show(SessionModel &model, const QStringList &ids, bool visible
 bool PlotFixture::giveInput(SessionModel &model, const QString &id, const QString &key, double value)
 {
     return model.updateAttribute(id, key, value);
+}
+
+void PlotFixture::spin(PlotRequests *requests)
+{
+    QTest::qWait(0);
+    QTest::qWait(0);
+    if (requests)
+        requests->flush();
+}
+
+QStringList sessionIdsOf(const QList<PlotTrackState> &tracks)
+{
+    QStringList ids;
+    for (const PlotTrackState &track : tracks)
+        ids.append(track.sessionId);
+    return ids;
 }
 
 } // namespace FlySightTest

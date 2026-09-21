@@ -350,6 +350,8 @@ void LocalCoordinatesTest::invalidSamplesAreNaNAtTheirIndexOnly()
 
 void LocalCoordinatesTest::noQualifyingFixMakesEverythingUnavailable()
 {
+    // A QVERIFY in here returns from the lambda only: each call is followed by
+    // a check of QTest::currentTestFailed()
     const auto verifyNothingAvailable = [](CalculationEngine &engine) {
         for (const DependencyKey &name : originAttributes)
             QVERIFY2(!engine.attribute(name.attributeKey).isValid(), qPrintable(name.attributeKey));
@@ -367,12 +369,16 @@ void LocalCoordinatesTest::noQualifyingFixMakesEverythingUnavailable()
         CalculationEngine &engine = *world.engine;
 
         verifyNothingAvailable(engine);
+        if (QTest::currentTestFailed())
+            return;
         QVERIFY(engine.resultStatus("builtin.local.coordinates") == ResultStatus::Ok);
         QCOMPARE(engine.runCount("builtin.local.coordinates"), 1);
         for (const DependencyKey &name : originAttributes + localChannels)
             QVERIFY(engine.cachedState(name) == CalculationEngine::CachedState::Unavailable);
 
         verifyNothingAvailable(engine);
+        if (QTest::currentTestFailed())
+            return;
         QCOMPARE(engine.runCount("builtin.local.coordinates"), 1);
         QCOMPARE(engine.undeclaredReadCount(), 0);
     }
@@ -385,6 +391,8 @@ void LocalCoordinatesTest::noQualifyingFixMakesEverythingUnavailable()
         CalculationEngine &engine = *world.engine;
 
         verifyNothingAvailable(engine);
+        if (QTest::currentTestFailed())
+            return;
         QVERIFY(engine.resultStatus("builtin.local.coordinates") == ResultStatus::MissingInput);
         QCOMPARE(engine.runCount("builtin.local.coordinates"), 0);
         QCOMPARE(engine.undeclaredReadCount(), 0);
@@ -398,6 +406,8 @@ void LocalCoordinatesTest::noQualifyingFixMakesEverythingUnavailable()
         CalculationEngine &engine = *world.engine;
 
         verifyNothingAvailable(engine);
+        if (QTest::currentTestFailed())
+            return;
         QVERIFY(engine.resultStatus("builtin.local.coordinates") == ResultStatus::Ok);
         QCOMPARE(engine.runCount("builtin.local.coordinates"), 1);
         QCOMPARE(engine.undeclaredReadCount(), 0);

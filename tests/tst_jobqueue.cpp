@@ -108,9 +108,11 @@ private:
         const int row = m_model->getSessionRow(id);
         return row >= 0 && std::as_const(*m_model).rowAt(row).isLoaded();
     }
-    void setInput(const QString &sessionId, const char *key, int value)
+    /// The application's edit path. False when the model refused; a test
+    /// function checks it with QVERIFY, so that a failure ends the function.
+    [[nodiscard]] bool setInput(const QString &sessionId, const char *key, int value)
     {
-        QVERIFY(m_model->updateAttribute(sessionId, QString::fromLatin1(key), value));
+        return m_model->updateAttribute(sessionId, QString::fromLatin1(key), value);
     }
     JobState stateOf(JobId id) const { return m_queue->job(id).state; }
     Gate &gate() { return m_world->gate(); }
@@ -135,7 +137,9 @@ private:
     }
 
     void watchEndTransitions(JobModel *model);
-    void verifyEndTransitions(JobModel *model);
+    /// Empty when each job of the model has had exactly one end transition if
+    /// it is finished and none otherwise; else the jobs for which that is not so.
+    QString endTransitionErrors(JobModel *model) const;
 
     std::unique_ptr<JobWorld> m_world;
     std::unique_ptr<SessionModel> m_model;
@@ -151,10 +155,7 @@ void JobQueueTest::initTestCase()
     // One logbook column that reads stored data only, so that the model has
     // valid indexes to report without warming any calculation.
     PreferencesManager::instance().registerPreference(PreferenceKeys::LogbookColumnsVersion, 0);
-    LogbookColumn description;
-    description.type = ColumnType::SessionAttribute;
-    description.attributeKey = QString::fromLatin1(SessionKeys::Description);
-    LogbookColumnStore::instance().setColumns({description});
+    LogbookColumnStore::instance().setColumns({descriptionColumn()});
 
     qRegisterMetaType<DependencyKey>();
 }
@@ -179,16 +180,24 @@ void JobQueueTest::init()
     watchEndTransitions(m_queue->model());
 }
 
+// Note what is to be checked, tear everything down, and only then check: a
+// failing check returns from cleanup(), and whatever were still alive then
+// would be alive under the next init() (a second JobWorld registering the same
+// ids on top of the first, and every later test failing for that reason).
 void JobQueueTest::cleanup()
 {
+    QString endTransitions;
+    QStringList stillPinned;
     if (m_queue) {
         // Let nothing linger inside a compute function
         m_queue->shutdown();
-        verifyEndTransitions(m_queue->model());
+        endTransitions = endTransitionErrors(m_queue->model());
     }
     if (m_model) {
-        for (const char *id : {"s1", "s2", "s3"})
-            QVERIFY2(!m_model->isSessionPinned(id), id);
+        for (const char *id : {"s1", "s2", "s3"}) {
+            if (m_model->isSessionPinned(id))
+                stillPinned.append(QString::fromLatin1(id));
+        }
     }
 
     // Queue, then model, then the registrations (a live model reacts to
@@ -196,6 +205,9 @@ void JobQueueTest::cleanup()
     m_queue.reset();
     m_model.reset();
     m_world.reset();
+
+    QCOMPARE(endTransitions, QString());
+    QCOMPARE(stillPinned, QStringList());
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
     QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
 }
@@ -210,22 +222,28 @@ void JobQueueTest::watchEndTransitions(JobModel *model)
     });
 }
 
-void JobQueueTest::verifyEndTransitions(JobModel *model)
+QString JobQueueTest::endTransitionErrors(JobModel *model) const
 {
+    QStringList errors;
     for (int row = 0; row < model->rowCount(); ++row) {
         const JobRecord job = model->record(row);
-        QCOMPARE(m_endTransitions.value(job.id), job.isFinished() ? 1 : 0);
+        const int expected = job.isFinished() ? 1 : 0;
+        if (m_endTransitions.value(job.id) != expected) {
+            errors.append(QStringLiteral("job %1: %2 end transitions, expected %3")
+                              .arg(job.id).arg(m_endTransitions.value(job.id)).arg(expected));
+        }
     }
+    return errors.join(QStringLiteral("; "));
 }
 
 // ---- Running and publishing ---------------------------------------------------------
 
 void JobQueueTest::runsAndPublishes()
 {
-    setInput("s1", "EA_IN", 4);
+    QVERIFY(setInput("s1", "EA_IN", 4));
     QVERIFY(m_model->updateAttribute("s1", "_DESCRIPTION", QStringLiteral("First jump")));
     m_model->removeAttribute("s2", "_DESCRIPTION");
-    setInput("s2", "EA_IN", 4);
+    QVERIFY(setInput("s2", "EA_IN", 4));
 
     QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
     QSignalSpy startedSpy(m_queue.get(), &JobQueue::jobStarted);
@@ -291,7 +309,7 @@ void JobQueueTest::runsAndPublishes()
 // jobFinished.
 void JobQueueTest::publishesInvalidationsThroughSessionModel()
 {
-    setInput("s1", "EA_IN", 4);
+    QVERIFY(setInput("s1", "EA_IN", 4));
     QVERIFY(!session("s1").getAttribute("DA").isValid());       // read while unrequested
     QVERIFY(!session("s1").getAttribute("EA1").isValid());
 
@@ -301,7 +319,8 @@ void JobQueueTest::publishesInvalidationsThroughSessionModel()
 
     QList<JobState> stateWhenAnnounced;
     QList<int> finishedSignalsWhenAnnounced;
-    connect(m_model.get(), &SessionModel::dependencyChanged, this,
+    QObject scope;      // owns the connection: it ends with this function, as what the slot captures does
+    connect(m_model.get(), &SessionModel::dependencyChanged, &scope,
             [&](const QString &, const DependencyKey &) {
         stateWhenAnnounced.append(m_queue->job(1).state);
         finishedSignalsWhenAnnounced.append(int(finishedSpy.count()));
@@ -346,7 +365,7 @@ void JobQueueTest::workerIsNotMainThreadAndHasLargeStack()
 
     g_probeThread.store(0);
     g_probeStackSize.store(0);
-    setInput("s1", "P_IN", 4);
+    QVERIFY(setInput("s1", "P_IN", 4));
     QCOMPARE(m_queue->request("s1", QStringLiteral("threadprobe")).kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue));
     QCOMPARE(stateOf(1), JobState::Succeeded);
@@ -358,7 +377,7 @@ void JobQueueTest::workerIsNotMainThreadAndHasLargeStack()
     QCOMPARE(JobQueue::kWorkerStackSize, qsizetype(67108864));
 
     // 16 MiB of locals would overflow a default thread stack
-    setInput("s1", "D_IN", 4);
+    QVERIFY(setInput("s1", "D_IN", 4));
     QCOMPARE(m_queue->request("s1", QStringLiteral("deepstack")).kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue));
     QCOMPARE(stateOf(2), JobState::Succeeded);
@@ -369,9 +388,9 @@ void JobQueueTest::workerIsNotMainThreadAndHasLargeStack()
 // Acceptance 14
 void JobQueueTest::duplicateRequestsCreateNoDuplicates()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "G_IN", 6);
-    setInput("s1", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "G_IN", 6));
+    QVERIFY(setInput("s1", "EA_IN", 4));
 
     const JobQueue::RequestResult first = m_queue->request("s1", QStringLiteral("gated"));
     QCOMPARE(first.kind, Kind::Created);
@@ -411,11 +430,11 @@ void JobQueueTest::duplicateRequestsCreateNoDuplicates()
 // first served.
 void JobQueueTest::oneAtATimeInRequestOrder()
 {
-    setInput("s1", "G_IN", 1);
-    setInput("s2", "G_IN", 2);
-    setInput("s3", "G_IN", 3);
-    setInput("s1", "S_IN", 4);
-    setInput("s2", "S_IN", 5);
+    QVERIFY(setInput("s1", "G_IN", 1));
+    QVERIFY(setInput("s2", "G_IN", 2));
+    QVERIFY(setInput("s3", "G_IN", 3));
+    QVERIFY(setInput("s1", "S_IN", 4));
+    QVERIFY(setInput("s2", "S_IN", 5));
 
     QList<JobId> ids;
     ids.append(m_queue->request("s1", QStringLiteral("gated")).job);
@@ -467,7 +486,7 @@ void JobQueueTest::refusesMissingInput()
     QCOMPARE(engine("s1").totalRunCount(), 0);
 
     // Control: with the input the same request is accepted
-    setInput("s1", "EA_IN", 4);
+    QVERIFY(setInput("s1", "EA_IN", 4));
     QCOMPARE(m_queue->request("s1", QStringLiteral("expA")).kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue));
 }
@@ -478,7 +497,7 @@ void JobQueueTest::refusesUnloadedAndUnknownSession()
     QCOMPARE(m_queue->request(QString(), QStringLiteral("expA")).kind, Kind::SessionNotLoaded);
 
     // s1 becomes a stub: room for one, and s3 was used last
-    setInput("s1", "EA_IN", 4);
+    QVERIFY(setInput("s1", "EA_IN", 4));
     QVERIFY(waitForIdle(*m_model));
     session("s3");
     const auto restoreCapacity = qScopeGuard([] {
@@ -498,9 +517,9 @@ void JobQueueTest::refusesUnloadedAndUnknownSession()
 
 void JobQueueTest::refusesBlockedAndDone()
 {
-    setInput("s1", "EA_IN", 4);
-    setInput("s1", "EB_IN", 10);
-    setInput("s2", "EA_IN", -1);
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QVERIFY(setInput("s1", "EB_IN", 10));
+    QVERIFY(setInput("s2", "EA_IN", -1));
 
     QCOMPARE(m_queue->request("s1", QStringLiteral("no-such-calculation")).kind, Kind::UnknownCalculation);
 
@@ -534,9 +553,9 @@ void JobQueueTest::refusesBlockedAndDone()
 
 void JobQueueTest::neverLoadsASession()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
-    setInput("s3", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
+    QVERIFY(setInput("s3", "EA_IN", 4));
     QVERIFY(waitForIdle(*m_model));
 
     // s3 is a stub with everything a job would need
@@ -573,7 +592,7 @@ void JobQueueTest::neverLoadsASession()
 // Acceptance 8 (queue half)
 void JobQueueTest::inputChangeWhileRunningSupersedes()
 {
-    setInput("s1", "G_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
     QVERIFY(!session("s1").getAttribute("G_OUT").isValid());    // read while unrequested
 
     const JobId first = m_queue->request("s1", QStringLiteral("gated")).job;
@@ -582,7 +601,7 @@ void JobQueueTest::inputChangeWhileRunningSupersedes()
     // A declared input changes under the running job. (The edit itself
     // announces G_OUT, whose cached "unavailable" depended on G_IN; what must
     // not happen is an announcement when the job ends.)
-    setInput("s1", "G_IN", 7);
+    QVERIFY(setInput("s1", "G_IN", 7));
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
     QVERIFY(!session("s1").getAttribute("G_OUT").isValid());
 
@@ -611,10 +630,10 @@ void JobQueueTest::inputChangeWhileRunningSupersedes()
 // was queued ends without a worker, and the queue moves on.
 void JobQueueTest::inputChangeWhileQueuedSupersedesAtStart()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
-    setInput("s3", "EA_IN", 4);
-    setInput("s3", "EB_IN", 10);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
+    QVERIFY(setInput("s3", "EA_IN", 4));
+    QVERIFY(setInput("s3", "EB_IN", 10));
 
     // Preparation: A is published in s3, so that B is ready there
     QCOMPARE(m_queue->request("s3", QStringLiteral("expA")).kind, Kind::Created);
@@ -628,9 +647,9 @@ void JobQueueTest::inputChangeWhileQueuedSupersedesAtStart()
     const JobId blocked = m_queue->request("s3", QStringLiteral("expB")).job;
     const JobId valid = m_queue->request("s2", QStringLiteral("expA")).job;     // same job: deduplicated
     QCOMPARE(valid, missing);
-    setInput("s1", "EA_IN", 4);
+    QVERIFY(setInput("s1", "EA_IN", 4));
     const JobId alreadyValid = m_queue->request("s1", QStringLiteral("expA")).job;
-    setInput("s1", "T_IN", 4);
+    QVERIFY(setInput("s1", "T_IN", 4));
     QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("synthetic failure")));
     const JobId last = m_queue->request("s1", QStringLiteral("thrower")).job;
     QVERIFY(missing != 0 && blocked != 0 && alreadyValid != 0 && last != 0);
@@ -638,7 +657,7 @@ void JobQueueTest::inputChangeWhileQueuedSupersedesAtStart()
     // While they wait: s2 loses the input; s3's A result is dropped by an
     // input change, which blocks B; s1's A is computed synchronously.
     QVERIFY(m_model->removeAttribute("s2", "EA_IN"));
-    setInput("s3", "EA_IN", 5);
+    QVERIFY(setInput("s3", "EA_IN", 5));
     QCOMPARE(engine("s1").request("expA").status, ResultStatus::Ok);
 
     gate().open(1);
@@ -668,9 +687,9 @@ void JobQueueTest::inputChangeWhileQueuedSupersedesAtStart()
 void JobQueueTest::registrationRemovedSupersedes()
 {
     CalculationRegistry &registry = CalculationRegistry::instance();
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "T_IN", 4);
-    setInput("s3", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "T_IN", 4));
+    QVERIFY(setInput("s3", "EA_IN", 4));
     QVERIFY(!session("s1").getAttribute("G_OUT").isValid());
 
     const JobId running = m_queue->request("s1", QStringLiteral("gated")).job;
@@ -711,8 +730,8 @@ void JobQueueTest::registrationRemovedSupersedes()
 // then. The gate is never opened, so the run cannot have reached its end.
 void JobQueueTest::staleRunningJobIsStoppedAtOnce()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
     QVERIFY(!session("s1").getAttribute("G_OUT").isValid());
     QSignalSpy cancelSpy(m_queue.get(), &JobQueue::jobCancelRequested);
     QSignalSpy progressSpy(m_queue.get(), &JobQueue::jobProgress);
@@ -724,12 +743,12 @@ void JobQueueTest::staleRunningJobIsStoppedAtOnce()
 
     // An edit of another session, or of a name the job does not depend on,
     // stops nothing
-    setInput("s2", "G_IN", 1);
-    setInput("s1", "S_IN", 1);
+    QVERIFY(setInput("s2", "G_IN", 1));
+    QVERIFY(setInput("s1", "S_IN", 1));
     QVERIFY(!m_queue->job(first).cancelRequested);
     QCOMPARE(cancelSpy.count(), 0);
 
-    setInput("s1", "G_IN", 7);
+    QVERIFY(setInput("s1", "G_IN", 7));
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
 
     // Synchronously with the edit: asked to stop, still running, no longer
@@ -743,7 +762,7 @@ void JobQueueTest::staleRunningJobIsStoppedAtOnce()
     QCOMPARE(stateOf(next), JobState::Queued);
 
     // A second change asks nothing twice
-    setInput("s1", "G_IN", 8);
+    QVERIFY(setInput("s1", "G_IN", 8));
     QCOMPARE(cancelSpy.count(), 1);
 
     QTRY_COMPARE(stateOf(first), JobState::Superseded);
@@ -768,12 +787,12 @@ void JobQueueTest::staleRunningJobIsStoppedAtOnce()
 // which runs after the old worker has returned, with the new inputs.
 void JobQueueTest::requestWhileStaleJobWindsDown()
 {
-    setInput("s1", "G_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
     const JobId first = m_queue->request("s1", QStringLiteral("gated")).job;
     QVERIFY(gate().waitEntered());
     QCOMPARE(m_queue->request("s1", QStringLiteral("gated")).kind, Kind::AlreadyActive);
 
-    setInput("s1", "G_IN", 7);
+    QVERIFY(setInput("s1", "G_IN", 7));
     QCOMPARE(stateOf(first), JobState::Running);        // still winding down
 
     const JobQueue::RequestResult second = m_queue->request("s1", QStringLiteral("gated"));
@@ -800,12 +819,12 @@ void JobQueueTest::requestWhileStaleJobWindsDown()
 // nothing: the job is superseded, and the result goes nowhere.
 void JobQueueTest::staleJobThatReturnsAResultIsStillSuperseded()
 {
-    setInput("s1", "S_IN", 4);
+    QVERIFY(setInput("s1", "S_IN", 4));
     QVERIFY(!session("s1").getAttribute("S_OUT").isValid());
 
     const JobId id = m_queue->request("s1", QStringLiteral("stubborn")).job;
     QVERIFY(gate().waitEntered());
-    setInput("s1", "S_IN", 7);
+    QVERIFY(setInput("s1", "S_IN", 7));
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
     QVERIFY(m_queue->job(id).cancelRequested);
     QVERIFY(waitIdle(*m_queue));
@@ -820,7 +839,7 @@ void JobQueueTest::staleJobThatReturnsAResultIsStillSuperseded()
 void JobQueueTest::registrationRemovedStopsRunningJobAtOnce()
 {
     CalculationRegistry &registry = CalculationRegistry::instance();
-    setInput("s1", "G_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
     const JobId running = m_queue->request("s1", QStringLiteral("gated")).job;
     QVERIFY(gate().waitEntered());
 
@@ -848,7 +867,7 @@ void JobQueueTest::registrationRemovedStopsRunningJobAtOnce()
 
 void JobQueueTest::modelDestroyedStopsRunningJobAtOnce()
 {
-    setInput("s1", "G_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
     const JobId running = m_queue->request("s1", QStringLiteral("gated")).job;
     QVERIFY(gate().waitEntered());
 
@@ -859,20 +878,20 @@ void JobQueueTest::modelDestroyedStopsRunningJobAtOnce()
     QCOMPARE(m_queue->job(running).reason, QString::fromLatin1(kRemoved));
     QVERIFY(waitIdle(*m_queue));
 
-    verifyEndTransitions(m_queue->model());
+    QCOMPARE(endTransitionErrors(m_queue->model()), QString());
     m_queue.reset();
 }
 
 // The pending end is decided once: the first writer wins.
 void JobQueueTest::userCancelThenStaleEndsCancelled()
 {
-    setInput("s1", "G_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
     QSignalSpy cancelSpy(m_queue.get(), &JobQueue::jobCancelRequested);
     const JobId id = m_queue->request("s1", QStringLiteral("gated")).job;
     QVERIFY(gate().waitEntered());
 
     QVERIFY(m_queue->cancel(id));
-    setInput("s1", "G_IN", 7);
+    QVERIFY(setInput("s1", "G_IN", 7));
     QCOMPARE(cancelSpy.count(), 1);
 
     QVERIFY(waitIdle(*m_queue));
@@ -883,12 +902,12 @@ void JobQueueTest::userCancelThenStaleEndsCancelled()
 
 void JobQueueTest::staleThenUserCancelEndsSuperseded()
 {
-    setInput("s1", "G_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
     QSignalSpy cancelSpy(m_queue.get(), &JobQueue::jobCancelRequested);
     const JobId id = m_queue->request("s1", QStringLiteral("gated")).job;
     QVERIFY(gate().waitEntered());
 
-    setInput("s1", "G_IN", 7);
+    QVERIFY(setInput("s1", "G_IN", 7));
     QVERIFY(m_queue->cancel(id));           // accepted: the job is still active
     QCOMPARE(m_queue->cancelAll(), 0);      // but it had been asked to stop before
     QCOMPARE(cancelSpy.count(), 1);
@@ -903,7 +922,7 @@ void JobQueueTest::staleThenUserCancelEndsSuperseded()
 
 void JobQueueTest::rejectionSucceedsWithReason()
 {
-    setInput("s1", "EA_IN", -1);
+    QVERIFY(setInput("s1", "EA_IN", -1));
     const JobId id = m_queue->request("s1", QStringLiteral("expA")).job;
     QVERIFY(waitIdle(*m_queue));
 
@@ -920,7 +939,7 @@ void JobQueueTest::rejectionSucceedsWithReason()
 
 void JobQueueTest::exceptionSucceedsAsFailedResult()
 {
-    setInput("s1", "T_IN", 4);
+    QVERIFY(setInput("s1", "T_IN", 4));
     QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("synthetic failure")));
     const JobId id = m_queue->request("s1", QStringLiteral("thrower")).job;
     QVERIFY(waitIdle(*m_queue));
@@ -939,7 +958,7 @@ void JobQueueTest::exceptionSucceedsAsFailedResult()
 
 void JobQueueTest::resourceExhaustionFails()
 {
-    setInput("s1", "X_IN", 4);
+    QVERIFY(setInput("s1", "X_IN", 4));
     QVERIFY(!session("s1").getAttribute("X_OUT").isValid());
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
 
@@ -962,8 +981,8 @@ void JobQueueTest::resourceExhaustionFails()
 
 void JobQueueTest::workerStartFailureFails()
 {
-    setInput("s1", "EA_IN", 4);
-    setInput("s2", "EA_IN", 4);
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
     QVERIFY(!session("s1").getAttribute("EA1").isValid());
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
 
@@ -992,8 +1011,8 @@ void JobQueueTest::workerStartFailureFails()
 // Acceptance 10
 void JobQueueTest::cancelRunningThenNextStarts()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "G_IN", 6);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "G_IN", 6));
     QVERIFY(!session("s1").getAttribute("G_OUT").isValid());
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
     QSignalSpy cancelSpy(m_queue.get(), &JobQueue::jobCancelRequested);
@@ -1036,7 +1055,7 @@ void JobQueueTest::cancelRunningThenNextStarts()
 // finishes one more step, and returns a complete result. Nothing is published.
 void JobQueueTest::cancelIgnoredForOneStepStillCancelled()
 {
-    setInput("s1", "S_IN", 4);
+    QVERIFY(setInput("s1", "S_IN", 4));
     QVERIFY(!session("s1").getAttribute("S_OUT").isValid());
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
 
@@ -1055,7 +1074,7 @@ void JobQueueTest::cancelIgnoredForOneStepStillCancelled()
 // A refresh pressed right after a cancel must not be lost.
 void JobQueueTest::requestWhileCancellingCreatesNewJob()
 {
-    setInput("s1", "G_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
     const JobId first = m_queue->request("s1", QStringLiteral("gated")).job;
     QVERIFY(gate().waitEntered());
     QVERIFY(m_queue->cancel(first));
@@ -1082,8 +1101,8 @@ void JobQueueTest::requestWhileCancellingCreatesNewJob()
 
 void JobQueueTest::cancelQueued()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
     QSignalSpy startedSpy(m_queue.get(), &JobQueue::jobStarted);
     QSignalSpy finishedSpy(m_queue.get(), &JobQueue::jobFinished);
 
@@ -1117,7 +1136,7 @@ void JobQueueTest::cancelQueued()
 // pin: no "session is not pinned" warning and no pin left behind.
 void JobQueueTest::cancelFromRowsInsertedLeavesNoPin()
 {
-    setInput("s1", "EA_IN", 4);
+    QVERIFY(setInput("s1", "EA_IN", 4));
     QTest::failOnWarning(QRegularExpression(QStringLiteral("unpinSession")));
     QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
     QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
@@ -1126,8 +1145,9 @@ void JobQueueTest::cancelFromRowsInsertedLeavesNoPin()
     JobModel *jobs = m_queue->model();
     bool pinnedWhenAnnounced = false;
     bool cancelled = false;
+    QObject scope;      // owns the connection: it cannot outlive what the slot captures
     const QMetaObject::Connection connection = connect(
-        jobs, &QAbstractItemModel::rowsInserted, this, [&](const QModelIndex &, int first, int) {
+        jobs, &QAbstractItemModel::rowsInserted, &scope, [&](const QModelIndex &, int first, int) {
             pinnedWhenAnnounced = m_model->isSessionPinned("s1");
             cancelled = m_queue->cancel(jobs->record(first).id);
         });
@@ -1158,10 +1178,10 @@ void JobQueueTest::cancelFromRowsInsertedLeavesNoPin()
 
 void JobQueueTest::cancelSessionAndCancelAll()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s1", "EA_IN", 4);
-    setInput("s2", "EA_IN", 4);
-    setInput("s3", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
+    QVERIFY(setInput("s3", "EA_IN", 4));
 
     const JobId running = m_queue->request("s1", QStringLiteral("gated")).job;
     const JobId queuedSame = m_queue->request("s1", QStringLiteral("expA")).job;
@@ -1188,10 +1208,10 @@ void JobQueueTest::cancelSessionAndCancelAll()
 // Spec 9.5 (queue side): queued jobs nobody wants go; the running job stays.
 void JobQueueTest::cancelUnwantedQueuedSparesRunning()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "G_IN", 6);
-    setInput("s2", "EA_IN", 4);
-    setInput("s3", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "G_IN", 6));
+    QVERIFY(setInput("s2", "EA_IN", 4));
+    QVERIFY(setInput("s3", "EA_IN", 4));
 
     const JobId running = m_queue->request("s1", QStringLiteral("gated")).job;
     const JobId unwantedA = m_queue->request("s2", QStringLiteral("expA")).job;
@@ -1226,8 +1246,8 @@ void JobQueueTest::cancelUnwantedQueuedSparesRunning()
 
 void JobQueueTest::removeSessionWithQueuedJob()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
     const JobId held = m_queue->request("s1", QStringLiteral("gated")).job;
     const JobId queued = m_queue->request("s2", QStringLiteral("expA")).job;
     QVERIFY(gate().waitEntered());
@@ -1247,8 +1267,8 @@ void JobQueueTest::removeSessionWithQueuedJob()
 
 void JobQueueTest::removeSessionWithRunningJob()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
     QVERIFY(!session("s1").getAttribute("G_OUT").isValid());
     const JobId running = m_queue->request("s1", QStringLiteral("gated")).job;
     const JobId next = m_queue->request("s2", QStringLiteral("expA")).job;
@@ -1276,8 +1296,8 @@ void JobQueueTest::removeSessionWithRunningJob()
 // Deferral: a hidden session with an active job is not unloaded by the LRU.
 void JobQueueTest::evictionDeferredWhileJobActive()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
     QVERIFY(waitForIdle(*m_model));     // clean rows: eviction has nothing to save
     session("s1");
     session("s2");
@@ -1312,8 +1332,8 @@ void JobQueueTest::evictionDeferredWhileJobActive()
 
 void JobQueueTest::repopulateWithJobs()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
     const JobId running = m_queue->request("s1", QStringLiteral("gated")).job;
     const JobId queued = m_queue->request("s2", QStringLiteral("expA")).job;
     QVERIFY(gate().waitEntered());
@@ -1329,7 +1349,6 @@ void JobQueueTest::repopulateWithJobs()
     QCOMPARE(m_model->rowCount(), 2);
 }
 
-// A merge that changes a declared input is an input change like any other.
 // The row stays loaded but its SessionData becomes another object: the old
 // engine dies with its ticket (SessionGone), and the reason says what happened
 // instead of "removed or unloaded". The application's merge never does this to
@@ -1338,7 +1357,7 @@ void JobQueueTest::repopulateWithJobs()
 void JobQueueTest::sessionDataReplacedWithRunningJobSupersedes()
 {
     // Refused at publish: nothing announces the replacement
-    setInput("s1", "G_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
     const JobId first = m_queue->request("s1", QStringLiteral("gated")).job;
     QVERIFY(first != 0);
     QVERIFY(gate().waitEntered());
@@ -1361,7 +1380,7 @@ void JobQueueTest::sessionDataReplacedWithRunningJobSupersedes()
 
     // Seen coming: the next model signal (an edit of another session) finds
     // the ticket marked, and the job is stopped with the same reason
-    setInput("s1", "G_IN", 6);
+    QVERIFY(setInput("s1", "G_IN", 6));
     const JobId second = m_queue->request("s1", QStringLiteral("gated")).job;
     QVERIFY(second != 0);
     QVERIFY(gate().waitEntered());
@@ -1371,7 +1390,7 @@ void JobQueueTest::sessionDataReplacedWithRunningJobSupersedes()
         SessionData replacement = JobWorld::sessions({"s1"}).first();
         session("s1") = std::move(replacement);
     }
-    setInput("s2", "EA_IN", 1);
+    QVERIFY(setInput("s2", "EA_IN", 1));
     QVERIFY(m_queue->job(second).cancelRequested);
 
     QTRY_COMPARE(stateOf(second), JobState::Superseded);        // the gate is never opened
@@ -1379,9 +1398,10 @@ void JobQueueTest::sessionDataReplacedWithRunningJobSupersedes()
     QVERIFY(waitIdle(*m_queue));
     QVERIFY(!m_model->isSessionPinned("s1"));
 
-    verifyEndTransitions(m_queue->model());
+    QCOMPARE(endTransitionErrors(m_queue->model()), QString());
 }
 
+// A merge that changes a declared input is an input change like any other.
 void JobQueueTest::mergeIntoSessionWithRunningJobSupersedes()
 {
     // MP_OUT = the first effective sample of IMU/wx, held at the fixture's gate
@@ -1439,8 +1459,8 @@ void JobQueueTest::mergeIntoSessionWithRunningJobSupersedes()
 // Rows move; a job knows its session by id and the ticket travels with the engine.
 void JobQueueTest::sortWhileRunningStillPublishes()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s3", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s3", "EA_IN", 4));
     const JobId running = m_queue->request("s1", QStringLiteral("gated")).job;
     const JobId queued = m_queue->request("s3", QStringLiteral("expA")).job;
     QVERIFY(gate().waitEntered());
@@ -1463,9 +1483,9 @@ void JobQueueTest::sortWhileRunningStillPublishes()
 
 void JobQueueTest::shutdownWithQueuedAndRunning()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
-    setInput("s3", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
+    QVERIFY(setInput("s3", "EA_IN", 4));
     QVERIFY(!session("s1").getAttribute("G_OUT").isValid());
     QVERIFY(!session("s2").getAttribute("EA1").isValid());
     QVERIFY(!session("s3").getAttribute("EA1").isValid());
@@ -1507,7 +1527,7 @@ void JobQueueTest::shutdownWithQueuedAndRunning()
 
 void JobQueueTest::shutdownIsIdempotentAndRefusesRequests()
 {
-    setInput("s1", "EA_IN", 4);
+    QVERIFY(setInput("s1", "EA_IN", 4));
     QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
 
     QVERIFY(!m_queue->isShutDown());
@@ -1526,9 +1546,9 @@ void JobQueueTest::shutdownIsIdempotentAndRefusesRequests()
 // Slots connected to the queue's own signals may shut it down.
 void JobQueueTest::shutdownFromSlots()
 {
-    setInput("s1", "EA_IN", 4);
-    setInput("s2", "EA_IN", 4);
-    setInput("s3", "EA_IN", 4);
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
+    QVERIFY(setInput("s3", "EA_IN", 4));
     QVERIFY(!session("s3").getAttribute("EA1").isValid());
 
     // From jobFinished: the first job succeeded, the second never runs
@@ -1564,8 +1584,8 @@ void JobQueueTest::shutdownFromSlots()
 // Quitting with jobs queued and running: the queue goes first (the intended order).
 void JobQueueTest::queueDestroyedBeforeModel()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
     QVERIFY(!session("s1").getAttribute("G_OUT").isValid());
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
 
@@ -1573,7 +1593,7 @@ void JobQueueTest::queueDestroyedBeforeModel()
     QVERIFY(m_queue->request("s2", QStringLiteral("expA")).created());
     QVERIFY(gate().waitEntered());
 
-    verifyEndTransitions(m_queue->model());
+    QCOMPARE(endTransitionErrors(m_queue->model()), QString());
     m_queue.reset();                    // shutdown() inside; the gate is never opened
     QCOMPARE(gate().running.load(), 0);
     QVERIFY(!m_model->isSessionPinned("s1"));
@@ -1589,9 +1609,9 @@ void JobQueueTest::queueDestroyedBeforeModel()
 // tickets, and the queue holds the model weakly.
 void JobQueueTest::modelDestroyedBeforeQueue()
 {
-    setInput("s1", "G_IN", 4);
-    setInput("s2", "EA_IN", 4);
-    setInput("s3", "S_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
+    QVERIFY(setInput("s3", "S_IN", 4));
     const JobId running = m_queue->request("s1", QStringLiteral("gated")).job;
     const JobId queued = m_queue->request("s2", QStringLiteral("expA")).job;
     QVERIFY(gate().waitEntered());
@@ -1608,7 +1628,7 @@ void JobQueueTest::modelDestroyedBeforeQueue()
     QCOMPARE(m_queue->job(queued).reason, QString::fromLatin1(kRemoved));
     QCOMPARE(m_queue->request("s3", QStringLiteral("stubborn")).kind, Kind::SessionNotLoaded);
 
-    verifyEndTransitions(m_queue->model());
+    QCOMPARE(endTransitionErrors(m_queue->model()), QString());
     m_queue.reset();
 }
 
@@ -1616,7 +1636,7 @@ void JobQueueTest::modelDestroyedBeforeQueue()
 // An edit made while a job is held inside compute is saved by the idle saver.
 void JobQueueTest::idleSchedulerKeepsWorking()
 {
-    setInput("s1", "G_IN", 4);
+    QVERIFY(setInput("s1", "G_IN", 4));
     QVERIFY(waitForIdle(*m_model));
     const JobId running = m_queue->request("s1", QStringLiteral("gated")).job;
     QVERIFY(gate().waitEntered());

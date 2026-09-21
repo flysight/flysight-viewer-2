@@ -21,7 +21,7 @@
 
 using namespace FlySightTest;
 
-class TstSolverSmoke : public QObject {
+class SolverSmokeTest : public QObject {
     Q_OBJECT
 
 private slots:
@@ -30,7 +30,7 @@ private slots:
     void mainThreadHasSolverStack();
 };
 
-void TstSolverSmoke::gtsamIsTheRightBuild()
+void SolverSmokeTest::gtsamIsTheRightBuild()
 {
     QCOMPARE(QString::fromLatin1(GTSAM_VERSION_STRING), QStringLiteral("4.3a0"));
 
@@ -50,13 +50,13 @@ void TstSolverSmoke::gtsamIsTheRightBuild()
     QCOMPARE(EIGEN_MAJOR_VERSION, 4);
 }
 
-void TstSolverSmoke::smallGraphOptimizes()
+void SolverSmokeTest::smallGraphOptimizes()
 {
     const SolverProbeResult result = runSolverProbe();
     QVERIFY2(result.ok, result.detail.c_str());
 }
 
-void TstSolverSmoke::mainThreadHasSolverStack()
+void SolverSmokeTest::mainThreadHasSolverStack()
 {
     // Default main-thread stacks are 1 MiB (Windows) or 8 MiB (macOS, Linux).
     // Without flysight_solver_stack() this call overflows the stack and the
@@ -65,5 +65,5 @@ void TstSolverSmoke::mainThreadHasSolverStack()
     QVERIFY(consumeStack(kBytes) >= kBytes);
 }
 
-FLYSIGHT_TEST_MAIN(TstSolverSmoke)
+FLYSIGHT_TEST_MAIN(SolverSmokeTest)
 #include "tst_solver_smoke.moc"

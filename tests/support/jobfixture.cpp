@@ -206,4 +206,16 @@ bool waitIdle(JobQueue &queue, int timeoutMs)
     return QTest::qWaitFor([&queue] { return queue.isIdle(); }, timeoutMs);
 }
 
+void onFirstProgress(JobQueue &queue, QObject *context, JobId job, std::function<void()> action)
+{
+    auto connection = std::make_shared<QMetaObject::Connection>();
+    *connection = QObject::connect(&queue, &JobQueue::jobProgress, context,
+                                   [connection, job, action](JobId id, const QString &) {
+        if (id != job)
+            return;
+        QObject::disconnect(*connection);
+        action();
+    });
+}
+
 } // namespace FlySightTest

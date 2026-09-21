@@ -6,16 +6,17 @@
 # FLYSIGHT_BUILD_TESTS=ON, so every target of the application project
 # (flysight_core, flysight_model, pybind11::embed, flysight_cpp_bridge, ...) is
 # in scope. Tests link flysight_core through flysight_test_support rather than
-# compiling application sources. The one exception is tst_python_bridge, which
-# compiles pluginhost.cpp and pluginadapters.cpp directly: they belong to the
-# application executable, not to flysight_core, because they need the embedded
-# interpreter. The second is tst_map_models, which compiles the two map models
-# and their two helpers directly: they are application sources that need Qt
-# Core and Gui only, so the test needs no Widgets, WebEngine or Quick. The third
-# is tst_plot_row_delegate, which compiles the plot list's row delegate and is
-# the only test that links Qt Widgets (FLYSIGHT_BUILD_WIDGET_TESTS). The
-# FLYSIGHT_BUILD_FUSION_TESTS block near the end of this file is the only place
-# a test may link GTSAM.
+# compiling application sources, with three exceptions, each of which compiles
+# sources that belong to the application executable and not to flysight_core:
+#   - tst_python_bridge: pluginhost.cpp and pluginadapters.cpp, which need the
+#     embedded interpreter. The only test that links Python
+#     (FLYSIGHT_BUILD_PYTHON_TESTS).
+#   - tst_map_models: the two map models and their two helpers, which need Qt
+#     Core and Gui only, so the test needs no Widgets, WebEngine or Quick.
+#   - tst_plot_row_delegate: the plot list's row delegate. The only test that
+#     links Qt Widgets (FLYSIGHT_BUILD_WIDGET_TESTS).
+# The FLYSIGHT_BUILD_FUSION_TESTS block near the end of this file is the only
+# place a test may link GTSAM.
 #
 # Conventions:
 #   - one QObject test class per executable
@@ -31,8 +32,8 @@ if(NOT TARGET flysight_core)
 endif()
 
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Test)
-# The engine library creates no thread; tests that drive
-# PreparedCalculation::compute() on a worker (support/asyncdriver.h) do.
+# The engine library creates no thread; support/asyncdriver.h, which drives
+# PreparedCalculation::compute() on a std::thread, does.
 find_package(Threads REQUIRED)
 
 # Application source directory, for the test that must compile application
@@ -53,8 +54,12 @@ add_library(flysight_test_support STATIC
   support/plotfixture.cpp     support/plotfixture.h
 )
 target_include_directories(flysight_test_support PUBLIC "${CMAKE_CURRENT_LIST_DIR}/support")
+# Threads::Threads is a usage requirement only: asyncdriver.h is header-only, so
+# it is the including test that needs the thread library, not this archive.
+# Stated once here, no test names it.
 target_link_libraries(flysight_test_support
-  PUBLIC flysight_core Qt${QT_VERSION_MAJOR}::Test)
+  PUBLIC flysight_core Qt${QT_VERSION_MAJOR}::Test
+  INTERFACE Threads::Threads)
 
 # ─────────────────────────────── helper
 # flysight_add_test(<name> SOURCES <files...> [LIBS <targets...>] [ENVIRONMENT <VAR=value...>])
@@ -118,8 +123,8 @@ flysight_add_test(tst_calcregistry      SOURCES tst_calcregistry.cpp)
 flysight_add_test(tst_calcengine        SOURCES tst_calcengine.cpp)
 flysight_add_test(tst_calcengine_safety SOURCES tst_calcengine_safety.cpp)
 flysight_add_test(tst_calcengine_oracle SOURCES tst_calcengine_oracle.cpp)
-flysight_add_test(tst_calcengine_async    SOURCES tst_calcengine_async.cpp    LIBS Threads::Threads)
-flysight_add_test(tst_calcengine_blockers SOURCES tst_calcengine_blockers.cpp LIBS Threads::Threads)
+flysight_add_test(tst_calcengine_async  SOURCES tst_calcengine_async.cpp)
+flysight_add_test(tst_calcengine_blockers SOURCES tst_calcengine_blockers.cpp)
 
 # Built-in calculations (golden values on the generated descent fixture)
 flysight_add_test(tst_builtins_golden SOURCES tst_builtins_golden.cpp)
@@ -131,15 +136,15 @@ flysight_add_test(tst_local_coordinates SOURCES tst_local_coordinates.cpp)
 flysight_add_test(tst_simplified_track SOURCES tst_simplified_track.cpp)
 
 # SessionData / SessionModel on the engine (real built-ins, global registry)
-flysight_add_test(tst_session_engine       SOURCES tst_session_engine.cpp LIBS Threads::Threads)
+flysight_add_test(tst_session_engine       SOURCES tst_session_engine.cpp)
 flysight_add_test(tst_session_model_engine SOURCES tst_session_model_engine.cpp)
 
 # Job queue and job model (synthetic explicit calculations; no GTSAM)
-flysight_add_test(tst_jobqueue SOURCES tst_jobqueue.cpp LIBS Threads::Threads)
-flysight_add_test(tst_jobmodel SOURCES tst_jobmodel.cpp LIBS Threads::Threads)
+flysight_add_test(tst_jobqueue SOURCES tst_jobqueue.cpp)
+flysight_add_test(tst_jobmodel SOURCES tst_jobmodel.cpp)
 
 # Plot request logic (row state, gestures, continuation, cancel, pruning; no widgets)
-flysight_add_test(tst_plot_requests SOURCES tst_plot_requests.cpp LIBS Threads::Threads)
+flysight_add_test(tst_plot_requests SOURCES tst_plot_requests.cpp)
 
 # Plot-list rows: pure geometry (no widgets) ...
 flysight_add_test(tst_plot_row_layout SOURCES tst_plot_row_layout.cpp)
@@ -154,7 +159,7 @@ if(FLYSIGHT_BUILD_WIDGET_TESTS)
     SOURCES tst_plot_row_delegate.cpp
             "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowDelegate.cpp"
             "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowDelegate.h"
-    LIBS Qt${QT_VERSION_MAJOR}::Widgets Threads::Threads)
+    LIBS Qt${QT_VERSION_MAJOR}::Widgets)
   set_tests_properties(tst_plot_row_delegate PROPERTIES LABELS "core;widgets")
 endif()
 
@@ -319,13 +324,13 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
   target_link_libraries(flysight_fusion_session_support
     PUBLIC flysight_fusion_test_support flysight_test_support)
   flysight_add_fusion_test(tst_fusion_session SOURCES tst_fusion_session.cpp
-    LIBS flysight_fusion_session_support Threads::Threads)
+    LIBS flysight_fusion_session_support)
   flysight_add_fusion_test(tst_fusion_jobs SOURCES tst_fusion_jobs.cpp
-    LIBS flysight_fusion_session_support Threads::Threads)
+    LIBS flysight_fusion_session_support)
 
   # The plot-row script with the real fusion plots (acceptance 15, end to end)
   flysight_add_fusion_test(tst_fusion_rows SOURCES tst_fusion_rows.cpp
-    LIBS flysight_fusion_session_support Threads::Threads)
+    LIBS flysight_fusion_session_support)
 
   # Not a test and not installed: copied into an installed application tree
   # and run there to prove the deployed solver runtime is complete (see

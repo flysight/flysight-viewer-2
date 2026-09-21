@@ -8,11 +8,13 @@
 
 #include "dependencykey.h"
 #include "fusionfixtures.h"
+#include "fusiongolden.h"
 #include "plotregistry.h"
 #include "sessiondata.h"
 
 // The fusion fixtures as real sessions, for tests of sensor fusion as a
-// registered calculation (tst_fusion_session, tst_fusion_jobs).
+// registered calculation (tst_fusion_session, tst_fusion_jobs, tst_fusion_rows),
+// and the helpers those tests share.
 //
 // "Stored data always wins": a measurement with source data is served by the
 // conversion layer, not by a registered calculation. A fixture session stores
@@ -20,6 +22,10 @@
 // attributes, ...) with units the conversion layer passes through unchanged,
 // so the twenty-one effective inputs are bit-identical to the fixture and the
 // session-level results can be held to the goldens of the kernel.
+
+namespace FlySight {
+class SessionModel;
+}
 
 namespace FlySightTest {
 
@@ -42,6 +48,15 @@ void registerFusionOnce();
 /// Only fixtures whose columns have equal lengths per sensor may go into a
 /// SessionModel (the saver refuses a ragged sensor): not reject_length.
 FlySight::SessionData sessionFromFixture(const FusionFixture &fixture, const QString &sessionId);
+
+/// The epoch of every fixture's GNSS time axis, and an exit marker inside
+/// every success fixture's fit.
+constexpr double kFixtureEpochUtc = 1700000000.0;
+constexpr double kFixtureExitTime = kFixtureEpochUtc + 1.0;
+
+/// sessionFromFixture(fusionFixture(fixtureName), sessionId) with a stored
+/// exit marker at kFixtureExitTime.
+FlySight::SessionData fixtureSession(const QString &fixtureName, const QString &sessionId = QStringLiteral("f1"));
 
 /// The same without any IMU column (spec acceptance 11).
 FlySight::SessionData sessionWithoutImu(const FusionFixture &fixture, const QString &sessionId);
@@ -69,6 +84,19 @@ QVector<FlySight::PlotValue> fusionPlots();
 QList<FlySight::DependencyKey> fusionNames();
 /// The attribute name of Fusion/roll interpolated at _EXIT_TIME.
 QString fusionRollAtExit();
+/// Fusion/<name> as a dependency key.
+FlySight::DependencyKey fusionKey(const QString &name);
+
+/// Empty when the seventeen published channels of the session match the
+/// golden (in the mode chosen by FLYSIGHT_FUSION_EXACT), else the first
+/// channel's difference.
+QString goldenDifference(const FlySight::SessionData &session, const FusionGolden &golden);
+
+/// Sessions enter the model as they do in the application (mergeSessions:
+/// loaded, hidden); the saver and the column worker have finished when this
+/// returns. Empty when the model then holds exactly these sessions, all
+/// loaded; else what went wrong. For a model that was empty before.
+[[nodiscard]] QString addSessions(FlySight::SessionModel &model, const QList<FlySight::SessionData> &sessions);
 
 } // namespace FlySightTest
 

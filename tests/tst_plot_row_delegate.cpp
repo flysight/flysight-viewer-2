@@ -35,6 +35,7 @@
 #include "jobmodel.h"
 #include "jobqueue.h"
 #include "logbookcolumn.h"
+#include "logbookprobe.h"
 #include "plotfixture.h"
 #include "plotmodel.h"
 #include "plotrequests.h"
@@ -52,21 +53,6 @@ using namespace FlySightTest;
 using Control = PlotRowState::Control;
 
 namespace {
-
-/// "Nothing started": no jobQueued signal and no new row in the job model.
-class Quiet {
-public:
-    explicit Quiet(JobQueue &queue)
-        : m_queue(queue), m_spy(&queue, &JobQueue::jobQueued), m_rows(queue.model()->rowCount())
-    {
-    }
-    bool holds() const { return m_spy.isEmpty() && m_queue.model()->rowCount() == m_rows; }
-
-private:
-    JobQueue &m_queue;
-    QSignalSpy m_spy;
-    int m_rows;
-};
 
 /// Counts the paint events of a widget.
 class PaintCounter : public QObject {
@@ -126,8 +112,9 @@ private:
 
     /// PlotModel, PlotRequests, the view and the delegate, as the application
     /// builds them: the component before the view. `plots` go into the model
-    /// at once unless `plotsLater`.
-    void buildUi(const QVector<PlotValue> &plots, QSettings *settings = nullptr, bool plotsLater = false);
+    /// at once unless `plotsLater`. False when the view was never exposed (the
+    /// rest is then not built); check it with QVERIFY in the test function.
+    [[nodiscard]] bool buildUi(const QVector<PlotValue> &plots, QSettings *settings = nullptr, bool plotsLater = false);
     void destroyUi();
 
     /// A programmatic check: never a gesture.
@@ -146,10 +133,7 @@ private:
     /// itself has started, and whatever was going to be painted is painted.
     void spin()
     {
-        QTest::qWait(0);
-        QTest::qWait(0);
-        if (m_requests)
-            m_requests->flush();
+        PlotFixture::spin(m_requests.get());
         QApplication::processEvents();
     }
 
@@ -245,10 +229,7 @@ void PlotRowDelegateTest::initTestCase()
 
     // One logbook column that reads stored data only (see tst_jobqueue)
     PreferencesManager::instance().registerPreference(PreferenceKeys::LogbookColumnsVersion, 0);
-    LogbookColumn description;
-    description.type = ColumnType::SessionAttribute;
-    description.attributeKey = QString::fromLatin1(SessionKeys::Description);
-    LogbookColumnStore::instance().setColumns({description});
+    LogbookColumnStore::instance().setColumns({descriptionColumn()});
 }
 
 // Three loaded sessions "s1".."s3" named "Jump 1".."Jump 3", each with
@@ -274,10 +255,10 @@ void PlotRowDelegateTest::init()
     PlotFixture::show(*m_model, {"s1", "s2"});
 
     m_queue = std::make_unique<JobQueue>(m_model.get());
-    buildUi(PlotFixture::plots());
+    QVERIFY(buildUi(PlotFixture::plots()));
 }
 
-void PlotRowDelegateTest::buildUi(const QVector<PlotValue> &plots, QSettings *settings, bool plotsLater)
+bool PlotRowDelegateTest::buildUi(const QVector<PlotValue> &plots, QSettings *settings, bool plotsLater)
 {
     m_plots = std::make_unique<PlotModel>();
     m_plots->setSettings(settings);
@@ -295,13 +276,15 @@ void PlotRowDelegateTest::buildUi(const QVector<PlotValue> &plots, QSettings *se
     m_view->setItemDelegate(m_delegate);
     m_view->expandAll();
     m_view->show();
-    QVERIFY(QTest::qWaitForWindowExposed(m_view.get()));
+    if (!QTest::qWaitForWindowExposed(m_view.get()))
+        return false;
 
     if (plotsLater) {
         m_plots->setPlots(plots);
         m_view->expandAll();
     }
     spin();
+    return true;
 }
 
 void PlotRowDelegateTest::destroyUi()
@@ -313,19 +296,26 @@ void PlotRowDelegateTest::destroyUi()
     m_plots.reset();
 }
 
+// Note what is to be checked, tear everything down, and only then check: a
+// failing check returns from cleanup(), and whatever were still alive then
+// would be alive under the next init() (see tst_jobqueue).
 void PlotRowDelegateTest::cleanup()
 {
     // Release whatever a test left in the gate, then let nothing linger
     // inside a compute function
     if (m_world)
         gate().open(8);
+    bool becameIdle = true;
     if (m_queue) {
-        QVERIFY(waitIdle(*m_queue));
+        becameIdle = waitIdle(*m_queue);
         m_queue->shutdown();
     }
+    QStringList stillPinned;
     if (m_model) {
-        for (const char *id : {"s1", "s2", "s3"})
-            QVERIFY2(!m_model->isSessionPinned(id), id);
+        for (const char *id : {"s1", "s2", "s3"}) {
+            if (m_model->isSessionPinned(id))
+                stillPinned.append(QString::fromLatin1(id));
+        }
     }
 
     destroyUi();
@@ -339,9 +329,13 @@ void PlotRowDelegateTest::cleanup()
         return ids;
     }();
     m_fixture.reset();
-    // The fixture removed exactly what it added
-    QCOMPARE(CalculationRegistry::instance().registeredIds(), withoutFixture);
+    const QStringList afterFixture = CalculationRegistry::instance().registeredIds();
     m_world.reset();
+
+    QVERIFY(becameIdle);
+    QCOMPARE(stillPinned, QStringList());
+    // The fixture removed exactly what it added
+    QCOMPARE(afterFixture, withoutFixture);
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
     QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
 }
@@ -419,7 +413,7 @@ void PlotRowDelegateTest::longNameIsElidedNotTheCluster()
     QVector<PlotValue> plots = PlotFixture::plots();
     plots[0].plotName = QStringLiteral("A plot with a name that certainly does not fit in this narrow view");
     destroyUi();
-    buildUi(plots);
+    QVERIFY(buildUi(plots));
     m_view->resize(120, 300);
     spin();
 
@@ -568,9 +562,14 @@ void PlotRowDelegateTest::startupStyleRestoreStartsNothingWithViewAttached()
     const QString path = TestEnvironment::instance().newTempDir(QStringLiteral("plots")) + QStringLiteral("/plots.ini");
     QSettings settings(path, QSettings::IniFormat);
     settings.setValue(QStringLiteral("state/plots/Syn/g"), true);
+    // Whichever way this function is left, no PlotModel keeps pointing at `settings`
+    const auto detachSettings = qScopeGuard([this] {
+        if (m_plots)
+            m_plots->setSettings(nullptr);
+    });
 
     destroyUi();
-    buildUi(PlotFixture::plots(), &settings, /*plotsLater=*/true);
+    QVERIFY(buildUi(PlotFixture::plots(), &settings, /*plotsLater=*/true));
 
     const QModelIndex index = indexOf("Syn/g");
     QVERIFY(index.isValid());
@@ -928,6 +927,8 @@ void PlotRowDelegateTest::survivesRequestsDestroyedFirst()
 }
 
 // FLYSIGHT_TEST_MAIN with a QApplication: a Widgets test writes its own main().
+// The macro builds a QCoreApplication, and testmain.h, which every test
+// includes, must not come to need Qt Widgets for the sake of this one.
 // The order is the same - deterministic hash seed, application object,
 // TestEnvironment, test object - and the style is the application's
 // (src/main.cpp), so that what is measured here is what the user sees.

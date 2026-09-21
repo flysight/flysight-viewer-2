@@ -40,17 +40,6 @@ Fusion::Result runFixture(const QString &name)
     return Fusion::run(toChannels(fusionFixture(name)));
 }
 
-bool sameBitsEverywhere(const QVector<double> &a, const QVector<double> &b)
-{
-    if (a.size() != b.size())
-        return false;
-    for (qsizetype i = 0; i < a.size(); ++i) {
-        if (!sameBits(a[i], b[i]))
-            return false;
-    }
-    return true;
-}
-
 /// Empty when `a` and `b` are the same result bit for bit, else what differs.
 QString differenceBetween(const Fusion::Result &a, const Fusion::Result &b)
 {

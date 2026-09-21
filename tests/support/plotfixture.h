@@ -6,6 +6,7 @@
 #include <QVector>
 
 #include "plotregistry.h"
+#include "plotrequests.h"
 
 // Synthetic plots over the explicit calculations of jobfixture.h, for tests of
 // the plot request logic. Plots need measurement names; JobWorld's calculations
@@ -61,10 +62,16 @@ public:
     /// Stores an input attribute through SessionModel::updateAttribute(), the
     /// application's edit path. False when the model refused.
     static bool giveInput(FlySight::SessionModel &model, const QString &id, const QString &key, double value);
+    /// Two turns of the event loop and a flush of `requests` (which may be
+    /// null): whatever was going to start by itself has started.
+    static void spin(FlySight::PlotRequests *requests);
 
 private:
     QStringList m_ids;
 };
+
+/// The session ids of a row's track list, in list order.
+QStringList sessionIdsOf(const QList<FlySight::PlotTrackState> &tracks);
 
 } // namespace FlySightTest
 
