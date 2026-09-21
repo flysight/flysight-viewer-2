@@ -284,6 +284,10 @@ add_library(flysight_core STATIC
   logbookcolumn.cpp          logbookcolumn.h
   sessionmodel.cpp           sessionmodel.h
   idlescheduler.cpp          idlescheduler.h
+  # Background jobs: the one-at-a-time queue of explicit calculations (owns the
+  # application's only worker thread) and the item model of its records
+  jobmodel.cpp               jobmodel.h
+  jobqueue.cpp               jobqueue.h
   attributeregistry.cpp      attributeregistry.h
   markerregistry.cpp         markerregistry.h
   plotregistry.cpp           plotregistry.h

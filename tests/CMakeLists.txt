@@ -46,6 +46,7 @@ add_library(flysight_test_support STATIC
   support/logbookprobe.cpp     support/logbookprobe.h
   support/testmain.h           support/testutil.h
   support/asyncdriver.h
+  support/jobfixture.cpp      support/jobfixture.h
 )
 target_include_directories(flysight_test_support PUBLIC "${CMAKE_CURRENT_LIST_DIR}/support")
 target_link_libraries(flysight_test_support
@@ -128,6 +129,10 @@ flysight_add_test(tst_simplified_track SOURCES tst_simplified_track.cpp)
 # SessionData / SessionModel on the engine (real built-ins, global registry)
 flysight_add_test(tst_session_engine       SOURCES tst_session_engine.cpp LIBS Threads::Threads)
 flysight_add_test(tst_session_model_engine SOURCES tst_session_model_engine.cpp)
+
+# Job queue and job model (synthetic explicit calculations; no GTSAM)
+flysight_add_test(tst_jobqueue SOURCES tst_jobqueue.cpp LIBS Threads::Threads)
+flysight_add_test(tst_jobmodel SOURCES tst_jobmodel.cpp LIBS Threads::Threads)
 
 # Source layer and conversion layer: the schema and unit tables, the conversion
 # families on a private registry, the importer, and the session-level suite

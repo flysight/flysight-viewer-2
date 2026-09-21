@@ -216,3 +216,14 @@
 # SFJ 8  tst_calcengine_async changeAfterPublicationDropsDependents
 # SFJ 12 tst_calcengine_blockers derivedNameReportsExplicitBlocker
 # SFJ 13 tst_calcengine_blockers chainedBlockers
+# SFJ 8  tst_jobqueue inputChangeWhileRunningSupersedes
+# SFJ 10 tst_jobqueue cancelRunningThenNextStarts
+# SFJ 11 tst_jobqueue refusesMissingInput
+# SFJ 14 tst_jobqueue oneAtATimeInRequestOrder
+# SFJ 14 tst_jobqueue duplicateRequestsCreateNoDuplicates
+# SFJ 17 tst_jobqueue removeSessionWithRunningJob
+# SFJ 17 tst_jobqueue removeSessionWithQueuedJob
+# SFJ 17 tst_jobqueue evictionDeferredWhileJobActive
+# SFJ 17 tst_jobqueue shutdownWithQueuedAndRunning
+# SFJ 18 tst_jobmodel historyFromSignalsAlone
+# SFJ 18 tst_jobmodel retentionBound

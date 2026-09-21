@@ -1059,7 +1059,7 @@ SessionData &SessionModel::sessionRef(int row)
         // LRU tracking: only track non-visible, non-focused sessions
         if (!sr.visible && sr.sessionId != m_focusedSessionId) {
             lruTouch(sr.sessionId);
-            evictIfNeeded();
+            evictIfNeeded(sr.sessionId);    // never the session about to be returned
         }
     } else {
         // Already loaded: bump recency for non-visible, non-focused sessions
@@ -1435,6 +1435,60 @@ void SessionModel::publishInvalidation(int row, const QSet<DependencyKey> &keys)
         emit dependencyChanged(sessionId, key);
 }
 
+void SessionModel::publishCalculationInvalidation(const QString &sessionId, const QSet<DependencyKey> &keys)
+{
+    assertRowsMutable("SessionModel::publishCalculationInvalidation");   // it emits
+
+    if (keys.isEmpty())
+        return;
+    const int row = getSessionRow(sessionId);
+    if (row < 0 || !m_rows[row].isLoaded())
+        return;     // removed or evicted: nobody displays these values
+
+    // The values are already invalid in the engine; this tells consumers to
+    // read again. Publishing a calculation result is not a persistent change:
+    // no column is invalidated, nothing is marked dirty, no save is scheduled.
+    // A loaded row is displayed live, so the logbook repaints from dataChanged.
+    publishInvalidation(row, keys);
+    emit modelChanged();
+}
+
+// ---- Pinned sessions ----------------------------------------------------
+
+void SessionModel::pinSession(const QString &sessionId)
+{
+    if (sessionId.isEmpty())
+        return;
+    ++m_pinnedSessions[sessionId];
+}
+
+void SessionModel::unpinSession(const QString &sessionId)
+{
+    const auto it = m_pinnedSessions.find(sessionId);
+    if (it == m_pinnedSessions.end()) {
+        qWarning() << "SessionModel::unpinSession: session is not pinned:" << sessionId;
+        return;
+    }
+    if (--it.value() > 0)
+        return;
+    m_pinnedSessions.erase(it);
+
+    // The cache may be over capacity by the rows that were pinned. Never evict
+    // from here: the caller may be inside a signal emission or hold references.
+    if (!m_evictionPassQueued) {
+        m_evictionPassQueued = true;
+        QMetaObject::invokeMethod(this, [this] {
+            m_evictionPassQueued = false;
+            evictIfNeeded();
+        }, Qt::QueuedConnection);
+    }
+}
+
+bool SessionModel::isSessionPinned(const QString &sessionId) const
+{
+    return m_pinnedSessions.value(sessionId) > 0;
+}
+
 // ---- Deferred logbook persistence ------------------------------------
 
 void SessionModel::scheduleSave(const QString &sessionId)
@@ -1616,13 +1670,21 @@ void SessionModel::lruInsert(const QString &sessionId)
     m_lruList.prepend(sessionId);
 }
 
-void SessionModel::evictIfNeeded()
+void SessionModel::evictIfNeeded(const QString &keep)
 {
     // Least recently used first. A row that cannot be evicted (its save
-    // failed) keeps its place in the list and is passed over, so the cache may
-    // exceed its capacity by the number of such rows.
+    // failed, or it is pinned: see PINNED SESSIONS) keeps its place in the list
+    // and is passed over, so the cache may exceed its capacity by the number of
+    // such rows.
+    //
+    // `keep` is the session sessionRef() has just loaded and is about to return
+    // a reference to. It is the most recently used entry, so it is reached only
+    // when every other entry had to stay loaded; evicting it then would
+    // invalidate that reference.
     for (qsizetype i = m_lruList.size() - 1; i >= 0 && m_lruList.size() > m_cacheCapacity; --i) {
         const QString sessionId = m_lruList.at(i);
+        if (!keep.isEmpty() && sessionId == keep)
+            continue;
         evictSession(sessionId);    // on success removes entry i; i - 1 is next either way
     }
 }
@@ -1645,6 +1707,12 @@ bool SessionModel::evictSession(const QString &sessionId)
         lruRemove(sessionId);
         return true;
     }
+
+    // Pinned: a job is queued or running for it; it stays loaded and in the
+    // LRU list. Nothing is saved or filled for it in this pass; unpinSession()
+    // schedules the pass that evicts it.
+    if (m_pinnedSessions.value(sessionId) > 0)
+        return false;
 
     // The in-memory session is the only copy of a change that could not be
     // saved: it stays loaded (and in the LRU list). No retry here, so a

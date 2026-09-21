@@ -85,6 +85,8 @@ private slots:
     void forEachLoadedSessionVisitsInIdOrder();
     void forEachLoadedSessionIsAPlainRead();
     void loadedSessionIsAGuardedPlainLookup();
+    void pinnedSessionIsNotEvicted();
+    void calculationInvalidationIsPublished();
 
 private:
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
@@ -629,6 +631,117 @@ void SessionModelEngineTest::loadedSessionIsAGuardedPlainLookup()
     QVERIFY(m_model->rowAt(row2).isLoaded());
     QCOMPARE(loadedSpy.count(), 0);
     QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+}
+
+// A pinned row is passed over by eviction (the job queue pins the session of
+// every active job); pins are counted, and they prevent nothing but eviction.
+void SessionModelEngineTest::pinnedSessionIsNotEvicted()
+{
+    QVERIFY(waitForIdle(*m_model));     // both rows clean
+    session("s1");
+    session("s2");                      // s1 is now the least recently used
+
+    QVERIFY(!m_model->isSessionPinned("s1"));
+    m_model->pinSession("s1");
+    m_model->pinSession("s1");
+    m_model->pinSession(QString());     // ignored
+    QVERIFY(m_model->isSessionPinned("s1"));
+    QVERIFY(!m_model->isSessionPinned("s2"));
+    QVERIFY(!m_model->isSessionPinned(QString()));
+
+    const auto restoreCapacity = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    });
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 1);
+    const int row1 = m_model->getSessionRow("s1");
+    const int row2 = m_model->getSessionRow("s2");
+
+    // Room for one: the least recently used row is pinned and passed over, so
+    // the pass goes on to s2.
+    QVERIFY(m_model->rowAt(row1).isLoaded());
+    QVERIFY(!m_model->rowAt(row2).isLoaded());
+
+    // Loading s2 again leaves the cache over its capacity by the pinned row,
+    // and never evicts the session that is being returned.
+    QCOMPARE(session("s2").storedAttribute(SessionKeys::SessionId).toString(), QStringLiteral("s2"));
+    QVERIFY(m_model->rowAt(row1).isLoaded());
+    QVERIFY(m_model->rowAt(row2).isLoaded());
+
+    // Counted: the first unpin changes nothing, not even after an event-loop pass
+    m_model->unpinSession("s1");
+    QVERIFY(m_model->isSessionPinned("s1"));
+    QCoreApplication::processEvents();
+    QVERIFY(m_model->rowAt(row1).isLoaded());
+
+    // The last unpin evicts nothing by itself; the pass it schedules does
+    m_model->unpinSession("s1");
+    QVERIFY(!m_model->isSessionPinned("s1"));
+    QVERIFY(m_model->rowAt(row1).isLoaded());
+    QTRY_VERIFY(!m_model->rowAt(row1).isLoaded());
+    QVERIFY(m_model->rowAt(row2).isLoaded());
+
+    // Unpinning something that is not pinned warns and changes nothing
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("session is not pinned")));
+    m_model->unpinSession("s1");
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("session is not pinned")));
+    m_model->unpinSession("no-such-session");
+    QVERIFY(!m_model->isSessionPinned("no-such-session"));
+
+    // A pin prevents eviction and nothing else: removal goes ahead. The pin
+    // outlives the row and is balanced by its owner.
+    m_model->pinSession("s2");
+    QVERIFY(m_model->removeSessions({QStringLiteral("s2")}));
+    QCOMPARE(m_model->getSessionRow("s2"), -1);
+    QVERIFY(m_model->isSessionPinned("s2"));
+    m_model->unpinSession("s2");
+    QVERIFY(!m_model->isSessionPinned("s2"));
+    QCoreApplication::processEvents();  // the scheduled pass finds no such row
+    QCOMPARE(m_model->rowCount(), 1);
+}
+
+// What the job queue passes on after a publication: consumers are told to
+// re-read, at once, and nothing about the row becomes persistent work.
+void SessionModelEngineTest::calculationInvalidationIsPublished()
+{
+    QVERIFY(waitForIdle(*m_model));
+    const int row1 = m_model->getSessionRow("s1");
+    QVERIFY(!m_model->rowAt(row1).dirty);
+    const qsizetype cachedBefore = m_model->rowAt(row1).cachedValues.size();
+
+    QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
+    QSignalSpy dataSpy(m_model.get(), &SessionModel::dataChanged);
+    QSignalSpy modelSpy(m_model.get(), &SessionModel::modelChanged);
+    QSignalSpy workSpy(&m_model->scheduler(), &IdleScheduler::progressChanged);
+    const DependencyKey x = DependencyKey::attribute(QStringLiteral("X"));
+
+    m_model->publishCalculationInvalidation("s1", {x});
+    QCOMPARE(dependencySpy.count(), 1);
+    QCOMPARE(spyCountFor(dependencySpy, "s1", "X"), 1);
+    QCOMPARE(dataSpy.count(), 1);
+    QCOMPARE(publicationCount(dataSpy, row1), 1);
+    QCOMPARE(modelSpy.count(), 1);
+
+    // Not a persistent change: nothing dirty, no cached column dropped, and no
+    // work for the idle saver or the column worker
+    QVERIFY(!m_model->rowAt(row1).dirty);
+    QCOMPARE(m_model->rowAt(row1).cachedValues.size(), cachedBefore);
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(workSpy.count(), 0);
+
+    // Nothing at all for an empty set, an unknown id, or a row that is not loaded
+    m_model->publishCalculationInvalidation("s1", {});
+    m_model->publishCalculationInvalidation("no-such-session", {x});
+    session("s1");
+    session("s2");                      // s1 is now the least recently used
+    const auto restoreCapacity = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    });
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 1);
+    QVERIFY(!m_model->rowAt(row1).isLoaded());
+    m_model->publishCalculationInvalidation("s1", {x});
+    QCOMPARE(dependencySpy.count(), 1);
+    QCOMPARE(dataSpy.count(), 1);
+    QCOMPARE(modelSpy.count(), 1);
 }
 
 FLYSIGHT_TEST_MAIN(SessionModelEngineTest)

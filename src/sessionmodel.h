@@ -103,6 +103,16 @@ struct MergeResult {
 /// the event loop. forEachLoadedSession() is the guarded way to read several
 /// sessions by id; loadedSession() looks one up for a reader that already
 /// holds a guard.
+///
+/// PINNED SESSIONS. Hidden, unfocused loaded rows live in an LRU list and are
+/// evicted (saved, turned back into stubs) beyond the cache capacity. The job
+/// queue pins the session of every queued or running job (pinSession(), counted
+/// per session id); a pinned loaded row is passed over by eviction exactly like
+/// a row whose save failed, so the cache may exceed its capacity by the number
+/// of pinned rows until unpinSession() schedules the pass that brings it back.
+/// A pin prevents eviction and NOTHING else: removeSessions(), a merge, and a
+/// repopulation of the model still remove or change a pinned session. The model
+/// knows pinned ids only; it knows nothing about jobs.
 class SessionModel : public QAbstractTableModel
 {
     Q_OBJECT
@@ -244,6 +254,25 @@ public:
     /// it directly.
     void flushPendingInvalidations();
 
+    /// See PINNED SESSIONS in the class comment. Counted: every pinSession()
+    /// needs one unpinSession(). An empty id is ignored; unpinning an id that
+    /// is not pinned warns and changes nothing. When the last pin of an id is
+    /// released one eviction pass is scheduled for the next event-loop pass;
+    /// unpinSession() itself never evicts, so it is safe to call from a slot.
+    void pinSession(const QString &sessionId);
+    void unpinSession(const QString &sessionId);
+    bool isSessionPinned(const QString &sessionId) const;
+
+    /// Publishes, now, names that a session's engine reported as invalidated
+    /// outside a model edit: the `invalidated` set of an asynchronous
+    /// prepare() / publish() (the job queue). Emits one publishing dataChanged
+    /// for the row, dependencyChanged per key, and modelChanged. Nothing is
+    /// emitted for an empty set, an id without a row, or a row that is not
+    /// loaded. A published calculation result is not a persistent change: no
+    /// cached column is invalidated, nothing is marked dirty, nothing is saved.
+    /// Must not be called while a RowStabilityGuard is held (it emits).
+    void publishCalculationInvalidation(const QString &sessionId, const QSet<DependencyKey> &keys);
+
 signals:
     void modelChanged();
     void sessionLoaded(const QString &sessionId);
@@ -281,8 +310,10 @@ private:
     void lruTouch(const QString &sessionId);
     void lruRemove(const QString &sessionId);
     void lruInsert(const QString &sessionId);
-    void evictIfNeeded();
-    bool evictSession(const QString &sessionId);   // false: the row must stay loaded (its save failed)
+    void evictIfNeeded(const QString &keep = QString());   // keep: never evicted by this pass
+    bool evictSession(const QString &sessionId);   // false: the row must stay loaded (its save failed, or it is pinned)
+    QHash<QString, int> m_pinnedSessions;           // session id -> pin count (> 0); see PINNED SESSIONS
+    bool m_evictionPassQueued = false;              // unpinSession() queued an evictIfNeeded()
     bool saveLoadedRow(SessionRow &sr);             // the one place a loaded row is saved; see the .cpp
 
     // Invalidation. Edits made through the model return their invalidated

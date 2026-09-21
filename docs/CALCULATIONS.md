@@ -379,3 +379,237 @@ and no atomic. The single exception is narrow and must stay narrow:
 - A `ComputedCalculation` is handed over, not shared: the worker returns it,
   the main thread publishes it.
 - Do not add locks to make shared access safe; remove the sharing.
+
+## 15. Background jobs
+
+Sections 12-14 describe the engine's half of running an explicit calculation
+in the background. The other half is `JobQueue` (`src/jobqueue.h`) and its
+`JobModel` (`src/jobmodel.h`), in `flysight_core` next to `SessionModel`: Qt
+Core and Gui only, no widgets, no GTSAM. There is one queue per application. It
+owns the application's only worker thread.
+
+**Reads never start jobs.** A job is created by `JobQueue::request()` and by
+nothing else; the queue never re-requests on its own. A result that was
+cancelled, superseded, or failed is simply missing, and whoever still wants it
+asks again.
+
+### 15.1 What a job is
+
+A job is one explicit calculation for one session: `(sessionId, instanceId)`,
+where the instance id already contains the registration id (`"<family>#<key>"`
+for a family instance). A job stores the session **id** only - never a row, a
+`SessionData *`, or an engine pointer. Each time the queue needs the session it
+looks it up with `SessionModel::loadedSession()` under a `RowStabilityGuard` and
+releases the guard before it emits anything.
+
+**The queue never loads a session.** It never calls `sessionRef()`. A request
+for a session that has no row or is not loaded is refused
+(`SessionNotLoaded`), and a queued job whose session stops being loaded ends
+Superseded at once rather than waiting for something nobody promised.
+
+### 15.2 Lifecycle
+
+```
+request() --> Queued --> Running --> Succeeded | Cancelled | Superseded | Failed
+                 |
+                 +--> Cancelled | Superseded          (ended before it ever ran)
+```
+
+Every job ends in exactly one end state, enforced in one place
+(`JobModel::markFinished`).
+
+`request()` checks, in this order: shut down (`ShuttingDown`); an equal active
+job (`AlreadyActive`, with its id); session not loaded (`SessionNotLoaded`);
+then `CalculationEngine::readiness()`: `Unknown` -> `UnknownCalculation`,
+`MissingInput` -> `MissingInput` (no job can be created for a session without
+the inputs), `Blocked` -> `Blocked` (request the blockers instead: chaining is
+the caller's), `Done` -> `NothingToDo` (already computed, a cached rejection or
+failure included, or not an explicit calculation), `Ready` -> a new Queued job
+(`Created`). It never prepares and never starts anything synchronously.
+
+**Deduplication.** A request whose `(sessionId, instanceId)` equals that of a
+queued or running job creates nothing. The exception: a *running job that has
+been asked to cancel* does not count. It is winding down, and a new request
+creates a new queued job, which cannot start before the old one has ended.
+Without this a refresh pressed right after a cancel would be lost.
+`activeJob()` applies the same rule.
+
+**Inputs are captured when a job starts**, not when it is requested: a job
+queued behind a five-minute fit sees the session as it is five minutes later.
+Jobs start one at a time, oldest first, always from the event loop. The running
+slot is freed only after the worker thread has been joined, which is what
+guarantees that the next job cannot start before the running one has ended.
+
+At start (`prepare()`); no compute ran and `startedAt` stays invalid:
+
+| `PrepareOutcome::Kind` | End state | Reason |
+|---|---|---|
+| `NotFound` | Superseded | "Calculation is no longer registered" |
+| `NotExplicit` | Superseded | "Calculation is no longer requested explicitly" |
+| `AlreadyValid` | Superseded | "Result is already available" |
+| `NothingToRun` | Superseded | "Inputs changed: nothing to compute" (`invalidated` is published) |
+| `Blocked` | Superseded | "Inputs changed: waiting for %1", the blockers' titles (`invalidated` is published) |
+| `Ready` | runs | |
+
+When the worker has returned, in this order:
+
+| Condition | End state | Reason / extras |
+|---|---|---|
+| an end was decided while it ran (cancel, abandonment, shutdown, failed start) | that state | that reason; the ticket is destroyed **without** `publish()` |
+| `Published`, status `Ok` | Succeeded | `PublishOutcome::detail` (a rejection's reason; empty for a plain success); `resultStatus` = `Ok` |
+| `Published`, any other status | Succeeded | "Calculation failed: %1"; `resultStatus` = that status. The failure is a function of the inputs: published, cached, not requestable again |
+| `RefusedStale / InputsChanged` | Superseded | "Inputs changed" |
+| `RefusedStale / AlreadyPublished` | Superseded | "Result is already available" |
+| `RefusedGone / SessionGone` | Superseded | "Session removed or unloaded" |
+| `RefusedGone / RegistrationRemoved` | Superseded | "Calculation is no longer registered" |
+| `Discarded / ResourceExhausted` | Failed | "Out of memory"; nothing cached, requestable again |
+| `Discarded / Cancelled` | Cancelled | "Cancelled by the calculation" (it threw `CalculationCancelled` unasked) |
+
+`publish()` is always called when no end is pending, so the engine's staleness
+verdict wins over a discarded run. A worker thread that cannot be started ends
+the job Failed ("The worker thread could not be started") with nothing cached.
+"Succeeded" means *this job published a result*; `AlreadyValid` and
+`AlreadyPublished` are therefore Superseded.
+
+**Order of a job's end**, whatever the path: (1) the model's end transition;
+(2) for a publication, `SessionModel::publishCalculationInvalidation()` with
+the engine's `invalidated` set, so a `dependencyChanged` listener that looks at
+the job model already sees the job finished; (3) `jobFinished`, `jobsChanged`;
+(4) the session is unpinned; (5) the model trims its finished rows; (6)
+`idle()`, or the next start is scheduled. Slots connected to the queue's
+signals may call `request()`, `cancel*()` and `shutdown()`.
+
+### 15.3 Cancellation, abandonment, shutdown
+
+- `cancel(id)` on a queued job ends it Cancelled ("Cancelled") at once; its
+  record stays as a finished entry. On the running job it requests
+  cancellation; the job stays Running (`cancelRequested`) until the compute
+  function returns, and the next job does not start before then.
+- **Cancel wins over a late result.** Once cancellation was requested the job
+  ends Cancelled and publishes nothing, even if the compute function returned a
+  complete result. The outcome does not depend on a race the user cannot see.
+- `cancelUnwantedQueued(isWanted)` ends the *queued* jobs the predicate rejects
+  ("No longer needed"). The running job is never offered to the predicate: its
+  result is valid and worth keeping.
+- When the session model removes rows or resets, queued jobs whose session is
+  no longer loaded end Superseded ("Session removed or unloaded"), and the
+  running job of such a session is abandoned: cancellation is requested so that
+  a long fit for a deleted session does not hold the queue, and the job ends
+  Superseded, which is what happened.
+- `shutdown()` refuses later requests, ends queued jobs Cancelled ("Application
+  closing"), requests cancellation of the running job, and **waits for the
+  worker without a timeout**. The specification asks both for no hang and for
+  no crash; abandoning a live thread inside a solver and letting teardown
+  proceed is a crash. The bound "one solver step" is delivered by the compute
+  function's cancellation boundaries; the queue adds nothing on top: the wait
+  ends as soon as `compute()` returns, whatever it returns. Idempotent; called
+  by the destructor. The application calls it before tearing anything else down.
+- Teardown order is not load-bearing for memory safety: the queue holds the
+  session model weakly, and an engine that dies nulls its tickets (section 12).
+
+### 15.4 Pinned sessions
+
+A session with an active job should not be unloaded from under it. Every job
+pins its session from creation to its end (`SessionModel::pinSession()` /
+`unpinSession()`, counted per session id). A pinned loaded row is passed over
+by LRU eviction exactly like a row whose save failed, so the cache may exceed
+its capacity by the number of pinned rows; releasing the last pin schedules one
+eviction pass for the next event-loop pass. A pin prevents eviction and nothing
+else: `removeSessions()`, a merge, and a repopulation go ahead, the engine
+refuses the ticket, and the job ends Superseded. `SessionModel` knows pinned
+ids and nothing about jobs.
+
+`SessionModel::publishCalculationInvalidation(sessionId, keys)` is how
+engine-returned invalidations reach consumers: one publishing `dataChanged` for
+the row, `dependencyChanged` per key, `modelChanged` - immediately, and only
+for a loaded row. A published result is not a persistent change: no cached
+logbook column is invalidated, nothing is marked dirty, nothing is saved.
+
+### 15.5 The worker and what crosses threads
+
+One private `QThread` exists per running job, created when the job starts, with
+a 64 MiB stack (`JobQueue::kWorkerStackSize`; large GTSAM elimination trees
+overflow default stacks; the space is reserved, committed lazily, and exists
+only while a job runs), joined and deleted on the main thread when the job
+ends. At most one exists at a time. Its `run()` is one statement:
+`result = ticket->compute(&progress)`. The ticket, the facility and the result
+slot are handed over before `start()` and read back only after `wait()`; those
+two calls are the happens-before edges, so there is no lock.
+
+Exactly two things cross threads while a job runs:
+
+- **Progress text.** `CalculationProgress::report()` posts a queued invocation
+  to the queue with the text copied by value (Qt's thread-safe event queue, not
+  shared state). Posts that arrive for a job that has ended are ignored; posts
+  pending when the queue dies are dropped by Qt.
+- **The cancel request.** One `std::atomic<bool>` inside the facility, written
+  by the main thread, read by `isCancelled()` on the worker. It is the
+  progress-and-cancel facility itself, not a lock, and it is the only atomic in
+  the queue.
+
+The queue never pauses, wakes, or registers with `IdleScheduler`: saves, loads
+and column work continue during a job.
+
+### 15.6 The model
+
+`JobModel` is the store of the `JobRecord`s, not a copy: the queue keeps no job
+list of its own, so the model is the single source of truth about work in
+progress and a jobs dock can be a pure view of it.
+
+- One row per job in request order (ascending `JobId`; ids start at 1 and are
+  never reused). Rows are appended; a row index changes only when earlier rows
+  are removed. Remember jobs by `JobIdRole`.
+- Columns (`Qt::DisplayRole`): `SessionColumn` (name), `CalculationColumn`
+  (title), `StateColumn` (`stateText()`), `ProgressColumn`, `QueuedColumn`,
+  `StartedColumn`, `FinishedColumn` (local short-format text, empty when
+  invalid), `ReasonColumn`.
+- Roles, answered on every column: `JobIdRole`, `SessionIdRole`,
+  `SessionNameRole` (a snapshot at request: `_DESCRIPTION`, else the id),
+  `CalculationIdRole`, `InstanceIdRole`, `CalculationTitleRole`, `StateRole`
+  (`int(JobState)`), `CancelRequestedRole`, `ProgressTextRole` (kept after the
+  end), `QueuedTimeRole` / `StartedTimeRole` / `FinishedTimeRole` (`QDateTime`,
+  UTC; started is invalid for a job that never ran), `ReasonRole`,
+  `ResultStatusRole` (`int(ResultStatus)` for Succeeded, else invalid),
+  `IsFinishedRole`. `roleNames()` exposes them in camelCase.
+- Every transition is its own signal, never coalesced: `rowsInserted` (Queued);
+  `dataChanged` over the whole row for Queued -> Running, for cancel-requested,
+  and for the end; `dataChanged` on `ProgressColumn` with
+  `{Qt::DisplayRole, ProgressTextRole}` for progress; `rowsRemoved` for removal
+  and trimming. No `modelReset` after construction.
+- `removeFinished(id)`, `clearFinished()` and `removeRows()` remove finished
+  rows only; `removeRows()` over a range containing an active job removes
+  nothing and returns false.
+- Finished rows are kept for the life of the application up to
+  `finishedLimit()` (default 200, `setFinishedLimit()`); the oldest finished
+  rows are trimmed after a job's end transition has been signalled; active rows
+  never. Nothing is persisted.
+
+### 15.7 API and threading rules
+
+Everything below is **main thread only**, signals included. `request()`,
+`cancel()`, `cancelSession()`, `cancelAll()`, `cancelUnwantedQueued()` and
+`shutdown()` must additionally not be called from inside a calculation or an
+engine callback (they inspect or publish to engines).
+
+| Member | Meaning |
+|---|---|
+| `JobQueue(SessionModel *, QObject *parent)` / `~JobQueue()` | holds the session model weakly; the destructor calls `shutdown()` |
+| `JobQueue::kWorkerStackSize` | 64 MiB |
+| `model()` | the `JobModel` (a child of the queue) |
+| `request(sessionId, CalculationBlocker)` / `request(sessionId, plainCalculationId)` -> `RequestResult {kind, job, created()}` | 15.2; `job` is non-zero for `Created` and `AlreadyActive` |
+| `activeJob(sessionId, instanceId)` | the job a request would be deduplicated against, 0 if none |
+| `activeJobs()` | queued and running ids in request order; the running job first |
+| `runningJob()`, `job(id)`, `isIdle()`, `isShutDown()` | queries; `job()` returns a default record (id 0) for an unknown or removed job |
+| `cancel(id)` | false: unknown or already finished |
+| `cancelSession(sessionId)`, `cancelAll()` | number of jobs newly cancelled or asked to stop |
+| `cancelUnwantedQueued(isWanted)` | number cancelled; never the running job |
+| `shutdown()` | 15.3 |
+| `failNextWorkerStarts(n)` | test seam: thread-creation failure cannot be provoked portably |
+| signals `jobQueued(id)`, `jobStarted(id)`, `jobProgress(id, text)`, `jobCancelRequested(id)`, `jobFinished(id, state)`, `jobsChanged()` (after each of the others except `jobProgress`), `idle()` (the last active job ended) | |
+| `JobModel(QObject *parent)`; `rowCount`, `columnCount`, `data`, `headerData`, `flags`, `roleNames`, `removeRows`; `rowOf(id)`, `record(row)`, `record(id)`, `stateText(state)`, `removeFinished(id)`, `clearFinished()`, `finishedLimit()`, `setFinishedLimit(n)`, `kDefaultFinishedLimit` | 15.6. Only `JobQueue` (a friend) appends rows and changes job state |
+| `JobId`, `JobState`, `JobRecord` (`isFinished()`, `isActive()`) | the vocabulary, `src/jobmodel.h` |
+| `SessionModel::pinSession(id)`, `unpinSession(id)`, `isSessionPinned(id)` | 15.4. `unpinSession()` never evicts synchronously, so it is safe in a slot |
+| `SessionModel::publishCalculationInvalidation(id, keys)` | 15.4. Not while a `RowStabilityGuard` is held (it emits) |
+
+Tests: `tests/tst_jobqueue.cpp`, `tests/tst_jobmodel.cpp`, and the controllable
+calculations of `tests/support/jobfixture.h`.
