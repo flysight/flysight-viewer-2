@@ -48,7 +48,9 @@ endif()
 #     stems on macOS and Linux). "tbb12" carries oneTBB's binary version.
 #   - README.md: the versions under "Solver dependencies (GTSAM, oneTBB)" and
 #     the runtime file names in the deployment table
-#   - tests/README.md, "Solver configuration of the goldens", and
+#   - tests/README.md (several places: the tst_solver_smoke row of the test
+#     table, "Solver configuration of the goldens", and the
+#     find_package(GTSAM 4.3 ...) of the capture harness) and
 #     tests/data/fusion/capture.json ("solver"): the revision and versions the
 #     fusion goldens were captured against
 #   - the comments in this file that say 4.3a0 / 2022.1.0

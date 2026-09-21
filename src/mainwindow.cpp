@@ -355,9 +355,13 @@ void MainWindow::closeEvent(QCloseEvent *event)
 {
     // First of all: cancel every background job and wait for the worker to
     // stop, before anything it could touch is saved or torn down. The wait
-    // lasts at most one solver step. Nothing below can veto the close; a
-    // future veto must be decided BEFORE this call, because a queue that has
-    // been shut down refuses every later request.
+    // lasts until the running fit reaches its next cancellation boundary: one
+    // solver step (an optimizer iteration, or 256 states of graph
+    // construction), or during preparation one candidate window of the
+    // initialization scan; the rest of preparation is a few linear passes
+    // over the recording. Nothing below can veto the close; a future veto
+    // must be decided BEFORE this call, because a queue that has been shut
+    // down refuses every later request.
     if (m_jobQueue) {
         const bool busy = !m_jobQueue->isIdle();
         if (busy)

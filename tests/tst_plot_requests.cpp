@@ -1201,7 +1201,6 @@ void PlotRequestsTest::failedBadgeAndReason()
     QCOMPARE(m_requests->refreshPressed(QStringLiteral("Syn/t")), 0);
 }
 
-// s1 failed, s2 waits behind a held job of another row: badge and cancel together.
 // PlotRequests::isMerelyUncomputed() decides whether the plot widget keeps
 // quiet about a track it could not draw ("No data available for plot"): yes
 // for a value that waits on an explicit calculation or was rejected by one,
@@ -1297,6 +1296,7 @@ void PlotRequestsTest::merelyUncomputedIsNotWorthAWarning()
     }
 }
 
+// s1 failed, s2 waits behind a held job of another row: badge and cancel together.
 void PlotRequestsTest::failedAndPendingTogether()
 {
     QVERIFY(giveInput({"s1"}, "EA_IN", -1));

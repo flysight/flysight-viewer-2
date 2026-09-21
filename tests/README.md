@@ -35,8 +35,8 @@ packages are the same whether or not the option is set.
 
 There are 41 test executables plus the audit. `ctest -N` lists 42 entries, or
 47 where the bit-exact runs of the five fusion golden tests are registered
-(`tst_fusion_*_exact`: the same executables a second time, label `exact`;
-sections 3 and 11). `solver_deploy_probe` is also built, but is not a test (see
+(`tst_fusion_*_exact`: the same executables a second time, label `exact`,
+Release only; sections 3 and 11). `solver_deploy_probe` is also built, but is not a test (see
 below).
 
 **Harness**
@@ -233,7 +233,7 @@ where they run. CMake 3.22 or newer is needed for the automatic DLL and
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | Only with the first: also build `tst_python_bridge`. `OFF` removes the target. If NumPy is missing from the build-time Python the test is still built but listed as **Disabled**, not omitted (section 5) |
 | `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | Only with the first: also build `tst_plot_row_delegate`, the one test that links Qt Widgets (it runs an offscreen `QTreeView`). `OFF` removes the target, and then no test target links Widgets. Forwarded by the root `CMakeLists.txt` like the others |
 | `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | Only with the first: also build the GTSAM-linked tests (`tst_solver_smoke`, `tst_fusion_parity`, `tst_fusion_kernel`, `tst_fusion_session`, `tst_fusion_jobs`, `tst_fusion_rows`) and `solver_deploy_probe`, all defined in one block of `tests/CMakeLists.txt` through `flysight_add_fusion_test()`. `OFF` removes the targets, and then no test target references GTSAM. Forwarded by the root `CMakeLists.txt` like the other two |
-| `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | Only with the fusion tests: register the bit-exact runs `tst_fusion_*_exact` (label `exact`; no new executable). `AUTO` registers them when the compiler is 64-bit MSVC of the same major.minor as `cl_version` in `tests/data/fusion/capture.json` (19.44), and otherwise prints "Fusion exact tests not registered: ..." at configure time; `ON` registers them whatever the compiler is; `OFF` never does. Forwarded by the root `CMakeLists.txt` like the others (section 11, "Tolerance policy") |
+| `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | Only with the fusion tests: register the bit-exact runs `tst_fusion_*_exact` (label `exact`; no new executable). `AUTO` registers them when the compiler is 64-bit MSVC of the same major.minor as `cl_version` in `tests/data/fusion/capture.json` (19.44), and otherwise prints "Fusion exact tests not registered: ..." at configure time; `ON` registers them whatever the compiler is; `OFF` never does. In every mode they exist for the Release configuration only. Forwarded by the root `CMakeLists.txt` like the others (section 11, "Tolerance policy") |
 
 All four sub-options are forwarded by the root (superbuild) `CMakeLists.txt` to
 the application project, unconditionally, so switching one back reaches the
@@ -899,8 +899,8 @@ About 650 KB in total.
   `tst_fusion_parity_exact`, `tst_fusion_kernel_exact`,
   `tst_fusion_session_exact`, `tst_fusion_jobs_exact` and
   `tst_fusion_rows_exact` (label `exact`) are the ordinary fusion executables
-  run again with `FLYSIGHT_FUSION_EXACT=1`, so on the capture configuration a
-  plain `ctest` fails on the first bit that differs. With
+  run again with `FLYSIGHT_FUSION_EXACT=1`, so on the capture configuration an
+  ordinary `ctest -C Release` fails on the first bit that differs. With
   `FLYSIGHT_FUSION_EXACT_TESTS=AUTO` (the default) `tests/CMakeLists.txt`
   registers them only when the compiler is 64-bit MSVC with the major.minor
   of `compiler.cl_version` in `capture.json` (19.44; the file is read at
@@ -914,12 +914,20 @@ About 650 KB in total.
   comparison still runs, and the remedy is to look: configure with
   `-DFLYSIGHT_FUSION_EXACT_TESTS=ON`, and either the new compiler is still
   bit-identical (re-capture, which records it) or `fitTraceMatchesGolden` says
-  where it stopped being so. The gate cannot see the two other conditions of
-  the capture configuration, Release and a solver built by that same compiler
-  from the pinned revision; the superbuild and CI give both. If the exact
-  tests ever fail on a machine whose solver was built differently, that is
-  what to check first, and `OFF` is the switch for such a machine - never a
-  change to the goldens.
+  where it stopped being so. The exact tests are also Release-only, in every
+  mode, because the goldens promise nothing about a Debug build: with a
+  multi-config generator (Visual Studio) they are registered with
+  `CONFIGURATIONS Release`, so `ctest -C Release` runs them and
+  `ctest -C Debug` does not list them; with a single-config generator (Ninja,
+  Makefiles) they are registered only when `CMAKE_BUILD_TYPE` is `Release`,
+  and then unrestricted, so that `ctest` finds them with or without `-C`
+  (otherwise the configure log says `Fusion exact tests not registered: the
+  goldens were captured from a Release build`). What the gate cannot see is
+  the third condition of the capture configuration: a solver built by that
+  same compiler, in Release, from the pinned revision; the superbuild and CI
+  give it. If the exact tests ever fail on a machine whose solver was built
+  differently, that is what to check first, and `OFF` is the switch for such a
+  machine - never a change to the goldens.
 - **Portable mode** (default; CI on every platform, other compilers): exact
   for the output length, `_time` (one IEEE addition of the epoch), counts
   (`gnss_states`, `imu_outputs`, `iterations`, the input audit, residual

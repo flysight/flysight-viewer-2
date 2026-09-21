@@ -78,12 +78,12 @@ not look for a `RAW.UBX` file.
 coordinates and adds it back for the output. There is no clock model or clock
 compensation of its own.
 
-That shared time fit once lost precision at realistic device uptimes because
-its least-squares sums were not centered: tens of milliseconds on an exact
-synthetic clock, and up to about 10 ms on a real recording. The sums are
-centered now, inside the existing `_TIME_FIT_A` / `_TIME_FIT_B` calculation
-that every sensor uses; `tst_time_fit` holds the conversion of an exact
-synthetic clock at high uptime to the microsecond level.
+The shared time base is the `_TIME_FIT_A` / `_TIME_FIT_B` calculation that
+every sensor uses. Its least-squares sums are centered on the mean device time
+and the mean UTC time, so the fit keeps its precision at realistic device
+uptimes, where uncentered sums would lose tens of milliseconds;
+`tst_time_fit` holds the conversion of an exact synthetic clock at high uptime
+to the microsecond level.
 
 ## 4. Model and output contract
 
@@ -274,12 +274,12 @@ The goldens live in `tests/data/fusion/`. In exact mode
 must equal the golden bit for bit; the portable mode used everywhere else
 allows `1e-9 + 1e-7 * |golden|`. Exact mode is not opt-in on the capture
 configuration: where the compiler matches `tests/data/fusion/capture.json`
-(64-bit MSVC 19.44), CTest runs each of these five tests a second time as
-`tst_fusion_*_exact` (label `exact`; CMake option
+(64-bit MSVC 19.44) and the configuration is Release, CTest runs each of these
+five tests a second time as `tst_fusion_*_exact` (label `exact`; CMake option
 `FLYSIGHT_FUSION_EXACT_TESTS`, `AUTO` by default). With any other compiler the
 configure log says that they were not registered, and only the portable mode
-runs. The fixtures, the two modes and the capture
-procedure are described in [tests/README.md](../tests/README.md), section 11.
+runs. The fixtures, the two modes and the capture procedure are described in
+[tests/README.md](../tests/README.md), section 11.
 
 **Optional check against a real recording.** Real recordings are not in the
 repository, so this is a local check and not a CI test. Set
@@ -294,6 +294,7 @@ $env:FLYSIGHT_FUSION_RECORDING = "D:\recordings\17-26-24"
 Reference numbers from the branch for recording 17-26-24: objective
 65602.22485051976, 9247 GNSS states, 24411 outputs. The counts should match as
 they are. The objective matches only with a copy of `SENSOR.CSV` that carries
-`$VAR,SCHEMA_VER,2`: the reference predates the legacy gyroscope correction,
-so it read the gyro channels of an unmarked file literally. With the unmodified
-file a different objective is expected and correct.
+`$VAR,SCHEMA_VER,2`: the reference reads the gyro channels of every file
+literally, while this implementation applies the legacy gyroscope correction
+to a file without `SCHEMA_VER` ([DATA_SCHEMA.md](DATA_SCHEMA.md), section 4).
+With the unmodified file a different objective is expected and correct.

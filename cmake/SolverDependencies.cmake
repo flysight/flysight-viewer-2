@@ -145,8 +145,10 @@ message(STATUS "GTSAM found: ${GTSAM_VERSION} (${GTSAM_DIR})")
 # Only SHARED_LIBRARY targets are recorded. The package configs of GTSAM and
 # oneTBB declare every library as SHARED IMPORTED (or INTERFACE / STATIC), and
 # GTSAM finds TBB through TBBConfig.cmake, not through a find module, so no
-# UNKNOWN_LIBRARY target can appear here. The list of required targets below
-# fails the configure if a future pin changes that.
+# UNKNOWN_LIBRARY target appears here. A pin that changes that fails the
+# configure: the walk refuses an UNKNOWN_LIBRARY target (it may be a shared
+# library, and the runtime deployment cannot derive a file name for it), and
+# the list of required targets below refuses a missing one.
 #
 
 function(_flysight_collect_solver_runtime target)
@@ -173,6 +175,16 @@ function(_flysight_collect_solver_runtime target)
     get_target_property(_type "${target}" TYPE)
     if(_type STREQUAL "SHARED_LIBRARY")
         set_property(GLOBAL APPEND PROPERTY FLYSIGHT_SOLVER_RUNTIME "${target}")
+    elseif(_type STREQUAL "UNKNOWN_LIBRARY")
+        # Skipping it would silently drop a runtime library from the
+        # deployment.
+        message(FATAL_ERROR
+            "Solver dependency \"${target}\" is an imported target of type UNKNOWN_LIBRARY "
+            "in the link interface of \"gtsam\". It may be a shared library, but the runtime "
+            "deployment cannot derive a file name for it (its IMPORTED_LOCATION may be an "
+            "import library or a static library).\n"
+            "FlySight requires solver packages that declare their libraries as SHARED "
+            "IMPORTED targets (cmake/SolverSuperbuild.cmake).")
     endif()
 
     get_target_property(_links "${target}" INTERFACE_LINK_LIBRARIES)

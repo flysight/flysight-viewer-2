@@ -340,7 +340,9 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
   # tests/data/fusion/capture.json records: MSVC, x64, and the same compiler
   # major.minor (code generation is what decides the last bit; a Visual Studio
   # update may legitimately change it, and that is a reason to look and
-  # re-validate, not a defect of the port).
+  # re-validate, not a defect of the port) - and the Release configuration:
+  # the goldens promise nothing about a Debug or RelWithDebInfo build, so the
+  # exact tests exist for Release only (flysight_add_fusion_exact_test below).
   #
   #   AUTO  register the exact tests when the compiler matches capture.json,
   #         otherwise say why not in a STATUS line (never a red test for a
@@ -381,11 +383,29 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
     set(_fs_exact ON)
   endif()
 
+  # Release only, whatever the mode. With a multi-config generator (Visual
+  # Studio) the configuration is chosen when ctest runs, so the tests are
+  # restricted with CONFIGURATIONS: `ctest -C Release` runs them, `ctest -C
+  # Debug` does not list them. With a single-config generator (Ninja,
+  # Makefiles) CONFIGURATIONS is the wrong tool - it hides a test from a plain
+  # `ctest` without -C, which is how a single-config tree is normally run - and
+  # the configuration is known now: the tests are registered unrestricted when
+  # CMAKE_BUILD_TYPE is Release, and not at all otherwise.
+  get_property(_fs_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+  set(_fs_exact_configurations "")
+  if(_fs_exact AND _fs_multi_config)
+    set(_fs_exact_configurations CONFIGURATIONS Release)
+  elseif(_fs_exact AND NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+    message(STATUS "Fusion exact tests not registered: the goldens were captured from a Release build; "
+                   "CMAKE_BUILD_TYPE is '${CMAKE_BUILD_TYPE}'. Portable-tolerance parity still runs")
+    set(_fs_exact OFF)
+  endif()
+
   # flysight_add_fusion_exact_test(<test>): CTest test <test>_exact, the
   # executable and whole environment of <test> plus FLYSIGHT_FUSION_EXACT=1.
   # (The 64 MiB stack is a link property of the executable.)
   function(flysight_add_fusion_exact_test name)
-    add_test(NAME ${name}_exact COMMAND ${name})
+    add_test(NAME ${name}_exact COMMAND ${name} ${_fs_exact_configurations})
     get_test_property(${name} ENVIRONMENT _env)
     get_test_property(${name} ENVIRONMENT_MODIFICATION _modification)
     get_test_property(${name} TIMEOUT _timeout)
@@ -400,8 +420,8 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
   endfunction()
 
   if(_fs_exact)
-    message(STATUS "Fusion exact tests registered (FLYSIGHT_FUSION_EXACT_TESTS=${FLYSIGHT_FUSION_EXACT_TESTS}, "
-                   "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}): ctest -L exact")
+    message(STATUS "Fusion exact tests registered for Release (FLYSIGHT_FUSION_EXACT_TESTS=${FLYSIGHT_FUSION_EXACT_TESTS}, "
+                   "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}): ctest -C Release -L exact")
     # The two that decide parity ...
     flysight_add_fusion_exact_test(tst_fusion_parity)
     flysight_add_fusion_exact_test(tst_fusion_kernel)

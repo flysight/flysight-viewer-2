@@ -90,7 +90,7 @@ user stores an attribute that is also an output (a marker dragged by hand), the
 stored value overrides that one output while the others stay available.
 `builtin.local.coordinates` is the example of one calculation with attribute
 and measurement outputs together; see
-[LOCAL_COORDINATES.md](LOCAL_COORDINATES.md).
+[LOCAL_COORDINATES.md](LOCAL_COORDINATES.md), section 4.
 
 ## 5. Candidates and order
 
@@ -578,8 +578,8 @@ signals may call `request()`, `cancel*()` and `shutdown()`.
   Superseded, which is what happened.
 - `shutdown()` refuses later requests, ends queued jobs Cancelled ("Application
   closing"), requests cancellation of the running job, and **waits for the
-  worker without a timeout**. The specification asks both for no hang and for
-  no crash; abandoning a live thread inside a solver and letting teardown
+  worker without a timeout**. Quitting must neither hang nor crash, and
+  abandoning a live thread inside a solver and letting teardown
   proceed is a crash. The bound "one solver step" is delivered by the compute
   function's cancellation boundaries; the queue adds nothing on top: the wait
   ends as soon as `compute()` returns, whatever it returns. Idempotent; called
@@ -1016,7 +1016,7 @@ calculation outcome.
 
 **The "no data" warning.** One reader warns when a checked plot has no data for
 a visible track: `PlotWidget::updatePlot()`. For the value it just read as
-empty it now asks `PlotRequests::isMerelyUncomputed(session, sensor,
+empty it asks `PlotRequests::isMerelyUncomputed(session, sensor,
 measurement)`, a static predicate of the widget-free core (`src/plotrequests.h`)
 over `blockers(y name).state`, and stays silent when that is true: `Blocked`
 (not computed yet) and `NotProduced` (ran and rejected its inputs, or failed);
@@ -1140,8 +1140,13 @@ same query as 16.3 - is cached as *unavailable* (`SessionModel::computeColumnVal
 whatever is published in memory: explicit results are never saved, and a cached
 value is the column's value for the session as it is on disk. Loaded rows
 display the live value; publication does not touch the cache; a stub shows
-nothing, which is what a reload would show. This changes no value an existing
-session yields, so `CalculationCompatibilityVersion` was not bumped (section 9).
+nothing, which is what a reload would show. `CalculationCompatibilityVersion`
+changes only with a code change that can alter a value an existing session
+yields for a column (section 9). This rule is not such a change - a session as
+it is on disk has no explicit result, so its columns over one are unavailable
+with or without the rule. The marker's current value, 2, identifies the
+centered time fit (`_TIME_FIT_A` / `_TIME_FIT_B`, and with them every non-GNSS
+`_time`); the constant's comment lists what each value stands for.
 
 Tests (label `fusion`, behind `FLYSIGHT_BUILD_FUSION_TESTS`):
 `tests/tst_fusion_session.cpp` (real `SessionData` engines, the fit on the

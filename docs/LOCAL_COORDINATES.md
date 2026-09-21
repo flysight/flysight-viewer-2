@@ -1,10 +1,23 @@
 # Shared local GNSS coordinates
 
+1. [Summary](#1-summary)
+2. [Channels and attributes](#2-channels-and-attributes)
+3. [The origin](#3-the-origin)
+4. [One calculation](#4-one-calculation)
+5. [Invalid samples](#5-invalid-samples)
+6. [Time axes](#6-time-axes)
+7. [The transform and its approximation](#7-the-transform-and-its-approximation)
+8. [Validation](#8-validation)
+9. [Simplified map track](#9-simplified-map-track)
+10. [Consumers](#10-consumers)
+
+## 1. Summary
+
 Every recording has one recording-wide north/east/down (NED) frame. The
 **GNSS (Local frame)** plots show it, and other calculations that need metric
 coordinates build on it instead of projecting the track themselves.
 
-## Channels and attributes
+## 2. Channels and attributes
 
 `Local/north`, `east`, and `down` are metres in that frame. `Local/velN`,
 `velE`, and `velD` are the recorded per-fix GNSS velocity vectors rotated into
@@ -18,7 +31,7 @@ The calculated attributes `_LOCAL_ORIGIN_LAT`, `_LOCAL_ORIGIN_LON`, and
 `_LOCAL_ORIGIN_INDEX` the GNSS sample they were taken from. The three
 coordinates are that sample's recorded values, unrounded.
 
-## The origin
+## 3. The origin
 
 The origin is the first fix with latitude in [-90, 90], longitude in
 [-180, 180], finite hMSL, and finite horizontal accuracy `0 <= hAcc < 10 m`.
@@ -32,7 +45,7 @@ The following do **not** affect the frame: markers (exit, analysis range,
 ground elevation, ...), zoom, display preferences, and speed and speed
 accuracy. Only a change to the GNSS source data moves it.
 
-## One calculation
+## 4. One calculation
 
 One on-demand registered calculation, `builtin.local.coordinates`, produces
 the four attributes and the six channels together, in one atomic result, so the
@@ -45,7 +58,7 @@ Its declared inputs are `GNSS/lat`, `GNSS/lon`, `GNSS/hMSL`, `GNSS/hAcc`,
 the same length. A change to any of them invalidates all ten outputs; the next
 read computes the frame again.
 
-## Invalid samples
+## 5. Invalid samples
 
 Each channel has exactly one entry per GNSS sample, so the channels stay
 aligned with the GNSS time axes and with each other:
@@ -58,7 +71,7 @@ aligned with the GNSS time axes and with each other:
 
 An invalid sample never shortens or shifts the arrays.
 
-## Time axes
+## 6. Time axes
 
 `Local/_time` and `Local/_system_time` are the GNSS axes themselves
 (`GNSS/_time` and `GNSS/_system_time`): shared, not refitted. They come from two
@@ -66,7 +79,7 @@ small calculations of their own, `builtin.local.time` and
 `builtin.local.systemTime`, so that a recording without a TIME sensor, which
 has no system-time axis, still has its positions and its UTC axis.
 
-## The transform and its approximation
+## 7. The transform and its approximation
 
 GeographicLib (`LocalCartesian`) performs the transform on the WGS84
 ellipsoid, and its rotation matrix at each fix rotates the velocity. CSV hMSL is
@@ -77,14 +90,14 @@ recording the geoid separation is practically constant, so the effect on
 displacements is small; the absolute height of the frame is off by the local
 geoid separation.
 
-## Validation
+## 8. Validation
 
 `tst_local_coordinates` covers the origin gates, analytically known
 displacements and velocity rotation, NaN placement, the no-origin case, the
 time axes, and invalidation. The golden rows for the descent fixture are in
 `tests/support/builtinfixture.cpp`.
 
-## Simplified map track
+## 9. Simplified map track
 
 The map draws `Simplified/lat`, `lon`, `hMSL` and `_time`: the recorded
 geographic samples and their UTC time. `Simplified/north`, `east` and `down`
@@ -122,9 +135,9 @@ samples, the single projection, and the no-origin case with recovery.
 `tst_map_models` covers the two map models on a real session model. The golden
 rows for the descent fixture are in `tests/support/builtinfixture.cpp`.
 
-## Consumers
+## 10. Consumers
 
-The simplified map track (above) and sensor fusion read this frame and no
+The simplified map track (section 9) and sensor fusion read this frame and no
 other: the fusion outputs `Fusion/north`, `east`, `down` and the fused
 velocities use this same frame and origin, so they can be compared with
 `Local/...` directly. See [SENSOR_FUSION.md](SENSOR_FUSION.md).

@@ -531,8 +531,10 @@ void PlotWidget::updatePlot()
                 yData = session.getMeasurement(sensorID, measurementID);
                 if (yData.isEmpty()) {
                     // Silently absent when it is merely uncomputed: waiting on
-                    // an explicit calculation, or rejected by one (the plot
-                    // list's row says so; sensor-fusion-jobs spec 9.6)
+                    // an explicit calculation, or rejected by one. The plot
+                    // list's row reports both (refresh control, warning
+                    // badge), so a log line would only repeat it; a recording
+                    // that lacks the sensor still gets the warning.
                     if (!PlotRequests::isMerelyUncomputed(session, sensorID, measurementID))
                         qWarning() << "No data available for plot:" << plotName << "in session:" << session.getAttribute(SessionKeys::SessionId);
                     continue;

@@ -9,9 +9,9 @@ namespace FlySight {
 
 /// Registers every built-in calculation with the calculation engine, in a
 /// fixed order: the conversion layer (source -> effective values), attributes,
-/// GNSS, IMU, MAG, time, local coordinates, simplified track, WS-P, SP, and last the
-/// synthesized-interpolation family. Registration order is the
-/// order in which competing candidates for one output are tried.
+/// GNSS, IMU, MAG, time, local coordinates, simplified track, WS-P, SP, and
+/// last the synthesized-interpolation family. Registration order is the order
+/// in which competing candidates for one output are tried.
 ///
 /// Engine registrations only: safe to call on any number of private registries.
 void registerBuiltInCalculations(CalculationRegistry &registry = CalculationRegistry::instance());

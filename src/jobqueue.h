@@ -177,6 +177,10 @@ public:
     void failNextWorkerStarts(int count) { m_failWorkerStarts = count; }
 
 signals:
+    /// After the model's rowsInserted for the new job. A job that a slot
+    /// connected to rowsInserted has already ended (cancel, shutdown) or
+    /// removed is not announced as queued: jobFinished was its only signal.
+    /// request() still returns Created for it.
     void jobQueued(FlySight::JobId id);
     void jobStarted(FlySight::JobId id);
     void jobProgress(FlySight::JobId id, const QString &text);
