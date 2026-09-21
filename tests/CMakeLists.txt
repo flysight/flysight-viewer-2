@@ -11,7 +11,9 @@
 # application executable, not to flysight_core, because they need the embedded
 # interpreter. The second is tst_map_models, which compiles the two map models
 # and their two helpers directly: they are application sources that need Qt
-# Core and Gui only, so the test needs no Widgets, WebEngine or Quick. The FLYSIGHT_BUILD_FUSION_TESTS block near the end of this file
+# Core and Gui only, so the test needs no Widgets, WebEngine or Quick. The third
+# is tst_plot_row_delegate, which compiles the plot list's row delegate and is
+# the only test that links Qt Widgets (FLYSIGHT_BUILD_WIDGET_TESTS). The FLYSIGHT_BUILD_FUSION_TESTS block near the end of this file
 # is the only place a test may link GTSAM.
 #
 # Conventions:
@@ -137,6 +139,23 @@ flysight_add_test(tst_jobmodel SOURCES tst_jobmodel.cpp LIBS Threads::Threads)
 
 # Plot request logic (row state, gestures, continuation, cancel, pruning; no widgets)
 flysight_add_test(tst_plot_requests SOURCES tst_plot_requests.cpp LIBS Threads::Threads)
+
+# Plot-list rows: pure geometry (no widgets) ...
+flysight_add_test(tst_plot_row_layout SOURCES tst_plot_row_layout.cpp)
+
+# ... and the delegate in an offscreen QTreeView. The only test that links
+# Qt Widgets; it compiles the delegate from the application sources
+# (pattern: tst_python_bridge). QT_QPA_PLATFORM=offscreen is already set by
+# flysight_add_test().
+option(FLYSIGHT_BUILD_WIDGET_TESTS "Build and run the tests that need Qt Widgets" ON)
+if(FLYSIGHT_BUILD_WIDGET_TESTS)
+  flysight_add_test(tst_plot_row_delegate
+    SOURCES tst_plot_row_delegate.cpp
+            "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowDelegate.cpp"
+            "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowDelegate.h"
+    LIBS Qt${QT_VERSION_MAJOR}::Widgets Threads::Threads)
+  set_tests_properties(tst_plot_row_delegate PROPERTIES LABELS "core;widgets")
+endif()
 
 # Source layer and conversion layer: the schema and unit tables, the conversion
 # families on a private registry, the importer, and the session-level suite

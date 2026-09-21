@@ -859,3 +859,85 @@ states, gestures return 0).
 
 Tests: `tests/tst_plot_requests.cpp`, with the synthetic plots of
 `tests/support/plotfixture.h` over the calculations of `jobfixture.h`.
+
+### 16.9 The plot list view and application wiring
+
+**The view paints and forwards; it decides nothing.** `PlotRowDelegate`
+(`src/ui/docks/plotselection/PlotRowDelegate.h`), installed on the plot list by
+`PlotSelectionDockFeature`, paints `PlotRowState` right-aligned in the row: the
+refresh control with `controlCount()`, or `progressLabel` ("k of n") with the
+cancel control, and independently the warning badge with `failedCount`. Refresh
+and cancel share the right-most slot. The plot's name is elided to make room,
+never the cluster; the row height never changes. A row whose state `isPlain()`
+- every ordinary plot, every unchecked row, every category - is painted and
+handled by the unmodified `QStyledItemDelegate`, pixel for pixel. The glyphs
+are drawn with `QPainter` in the row's text colour (no bundled images). The row
+tooltip is `PlotRowState::toolTip`, shown over the whole row; the job's
+progress text appears there only. The delegate contains no text of its own.
+The geometry and the control's hit rectangle are one pure function,
+`layoutPlotRow()` (`PlotRowLayout.h`), tested without widgets.
+
+**What counts as the check gesture.** `editorEvent()` compares the model's
+check state before and after the base class handled the event. The base class
+writes `Qt::CheckStateRole` only for a left click on the check box and for
+Space / Select on the current row, synchronously, so "became Checked inside
+this call" is exactly "checked by direct interaction with the row" - and the
+model already holds Checked when `plotCheckedByUser()` is called. The three
+programmatic paths never reach the delegate and are therefore never gestures:
+the Plots menu and its shortcuts (`MainWindow::togglePlot`), applying a profile
+(`applyProfile()` in `src/profilestatebridge.cpp`), and the restore of checked
+plots from the settings (`PlotModel::setPlots()`). The delegate never connects
+to `dataChanged` and never infers a gesture from a model change. Unchecking is
+not a gesture.
+
+**The control.** A left-button press and release, both inside the control's
+hit rectangle (the icon's column over the full row height, out to the row's
+edge), on the same row, with the same control showing at both moments, calls
+`refreshPressed()` or `cancelPressed()`. The press is consumed, so the row is
+neither selected nor toggled. A double click forgets the press: it requests
+once and can never land on the cancel control that replaced the refresh
+control. The label and the badge are inert. **There is no keyboard, menu, or
+context-menu surface for refresh and cancel** (exactly two gestures start work;
+when in doubt, it is not a gesture): a keyboard user unchecks and checks the
+row with Space.
+
+**Repaint.** `rowStateChanged(plotId)` updates that row of the view. There is no
+animation and no timer.
+
+**Ownership and order.** `MainWindow` creates the `JobQueue` and then the
+`PlotRequests` in its constructor, after the session model is populated and the
+calculations are registered and before any dock exists, and hands both to the
+docks through `AppContext` (`jobQueue`, `plotRequests`). Restored plots and a
+first-launch profile reach `PlotRequests` as ordinary model changes, so
+start-up starts no job. `closeEvent()` calls `JobQueue::shutdown()` **first**,
+before sessions are flushed and the layout is saved (with a wait cursor when
+the queue is busy; the wait is at most one solver step). A future veto of the
+close must be decided before that call: a queue that was shut down refuses
+every later request. `~MainWindow()` deletes the `PlotRequests`, then the
+`JobQueue`, explicitly and before everything else: `QObject` deletes children
+in creation order, which would destroy the session model under the queue. The
+delegate holds the component weakly and is the base delegate without it. No
+signal of the queue or the component is connected to anything that shows a
+dialog; no message box, status message, or progress dialog reports a
+calculation outcome.
+
+**The "no data" warning.** One reader warns when a checked plot has no data for
+a visible track: `PlotWidget::updatePlot()`. It now asks
+`blockers(y name).state` for the value it just read as empty and stays silent
+for `Blocked` (not computed yet) and `NotProduced` (ran and rejected its
+inputs); both are shown by the plot list instead. It asks the engine, not
+`rowState()`, which may be one event-loop pass behind. A recording that simply
+lacks the sensor (`NotApplicable`) still logs the warning.
+
+**Results appear through ordinary invalidation only.** Publishing a job's
+result emits `dependencyChanged` per name, `dataChanged` for the row, and
+`modelChanged` (`SessionModel::publishCalculationInvalidation()`, 15.4). The
+plot widget and the legend rebuild on `modelChanged`, the logbook repaints from
+`dataChanged`, the measure tool reads at interaction time. Nothing connects the
+queue or the component to the plot, the legend, or the logbook.
+
+Tests: `tests/tst_plot_row_layout.cpp` (geometry, no widgets) and
+`tests/tst_plot_row_delegate.cpp` (the delegate in an offscreen `QTreeView`;
+the only test that links Qt Widgets, behind `FLYSIGHT_BUILD_WIDGET_TESTS`). The
+real `MainWindow` paths - start-up, profiles, quit with jobs running, and
+interactivity during a fit - are the manual script in `tests/README.md`.

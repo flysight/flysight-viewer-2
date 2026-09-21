@@ -372,6 +372,8 @@ set(PROJECT_SOURCES
   ui/docks/DockFeature.h
   ui/docks/DockRegistry.h    ui/docks/DockRegistry.cpp
   ui/docks/plotselection/PlotSelectionDockFeature.h    ui/docks/plotselection/PlotSelectionDockFeature.cpp
+  ui/docks/plotselection/PlotRowLayout.h
+  ui/docks/plotselection/PlotRowDelegate.h    ui/docks/plotselection/PlotRowDelegate.cpp
   ui/docks/markerselection/MarkerSelectionDockFeature.h    ui/docks/markerselection/MarkerSelectionDockFeature.cpp
   ui/docks/logbook/LogbookDockFeature.h    ui/docks/logbook/LogbookDockFeature.cpp
   ui/docks/logbook/LogbookView.h    ui/docks/logbook/LogbookView.cpp

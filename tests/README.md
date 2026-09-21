@@ -10,6 +10,7 @@
 8. [Writing a test](#8-writing-a-test)
 9. [Acceptance traceability](#9-acceptance-traceability)
 10. [Cleanup audit](#10-cleanup-audit)
+11. [Manual verification: plot-driven jobs](#11-manual-verification-plot-driven-jobs)
 
 [Appendix A. The acceptance items](#appendix-a-the-acceptance-items)
 
@@ -27,7 +28,7 @@ The tests are not a standalone project. `tests/` is added by
 test is registered with CTest. Test executables have no install rules, so
 packages are the same whether or not the option is set.
 
-There are 34 executables plus the audit.
+There are 36 executables plus the audit.
 
 **Harness**
 
@@ -61,6 +62,8 @@ There are 34 executables plus the audit.
 | `tst_jobqueue` | The application-wide `JobQueue` on a real `SessionModel`, real session engines and the global registry, with the synthetic explicit calculations of `jobfixture.h` (no GTSAM): publication through the session model, the 64 MiB worker thread, deduplication, one job at a time in request order, refusals (missing input, unloaded or unknown session, blocked, done, unknown), never loading a session, every superseded / succeeded / failed / cancelled path with its reason text, cancel wins over a completed compute, pruning of unwanted queued jobs, session removal, deferred eviction, repopulation, merge, sort, shutdown in every order, and the idle scheduler working during a job (sensor-fusion-jobs acceptance 8, 10, 11, 14, 17) |
 | `tst_jobmodel` | The `JobModel` contract under `QAbstractItemModelTester`: every role on every column, a test view that renders the whole job history from model signals alone, never more than one running row, ordered UTC timestamps, progress and cancel-requested as their own signals, removal of finished rows only, the retention bound, and nothing persisted (sensor-fusion-jobs acceptance 18) |
 | `tst_plot_requests` | `PlotRequests`, the widget-free logic behind the plot list's rows, on a real `PlotModel`, `JobQueue`, `SessionModel`, real session engines and the global registry, with the synthetic plots of `plotfixture.h` (no widgets, no GTSAM): track conditions and row aggregation (counts, progress label, tooltip text, change signals, coalesced passes, text-only progress updates), ordinary and unchecked plots never inspected, the two gestures as one-shot requests, chained continuation and everything that stops it, everything that is not a gesture (programmatic checks, profile apply, startup restore, showing, loading, merging, input invalidation, a superseded job), sessions without input never listed, the failed badge and its reason, rows sharing a job, cancel, cancel then refresh while the job winds down, pruning of queued jobs on uncheck and hide, session removal, registry changes, queue shutdown, and null collaborators (sensor-fusion-jobs acceptance 11, 13, 15, 16) |
+| `tst_plot_row_layout` | `layoutPlotRow()` (`src/ui/docks/plotselection/PlotRowLayout.h`), the pure geometry of a plot-list row's control cluster, without widgets or a font: control only, control and warning, warning only, nothing shown, an empty label, right-to-left as the exact mirror image, and the control's hit rectangle (the icon's column over the full row height, out to the row's edge; label and badge outside it) |
+| `tst_plot_row_delegate` | `PlotRowDelegate` in an offscreen `QTreeView` on a real `PlotRequests`, `PlotModel`, `JobQueue` and `SessionModel`, driven by synthesized mouse and key events; the **only test that links Qt Widgets** (`FLYSIGHT_BUILD_WIDGET_TESTS`, label `widgets`). What the view owns: plain rows are pixel-identical to the base delegate, the control is painted and the name elided rather than the cluster, a click on the check box and Space are the check gesture while unchecking, `setPlotEnabled()`, `togglePlot()`, `setData()` and a start-up style restore with the view attached start nothing, refresh and cancel clicks (no toggle, no selection change), press/release pairs that must do nothing, the inert label and badge, right clicks, a double click on refresh, the tooltip from `PlotRowState`, repaint on `rowStateChanged`, and survival of a destroyed `PlotRequests` (sensor-fusion-jobs acceptance 16, wiring half). The offscreen platform has no fonts, so text is drawn as boxes; the assertions are about geometry, identity and events, not about letter shapes |
 | `tst_session_oracle` | The session-level idempotency oracle (section 7): randomized, seeded sequences of reads, edits, merges, preference and registry changes on real `SessionData` objects (part A) and on the real `SessionModel` / `LogbookManager` through the application's import path, with restarts, simulated crashes and a persisted-state check (part B), compared against a fresh evaluation |
 
 **Source layer, conversion layer, importer**
@@ -208,6 +211,7 @@ where they run. CMake 3.22 or newer is needed for the automatic DLL and
 |--------|---------|--------|
 | `FLYSIGHT_BUILD_TESTS` | `OFF` | Adds `tests/` to the application build. No install rules: packaging is unaffected |
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | Only with the first: also build `tst_python_bridge`. `OFF` removes the target. If NumPy is missing from the build-time Python the test is still built but listed as **Disabled**, not omitted (section 5) |
+| `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | Only with the first: also build `tst_plot_row_delegate`, the one test that links Qt Widgets (it runs an offscreen `QTreeView`). `OFF` removes the target, and then no test target links Widgets. Forwarded by the root `CMakeLists.txt` like the others |
 | `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | Only with the first: also build the GTSAM-linked tests (`tst_solver_smoke`) and `solver_deploy_probe`, all defined in one block of `tests/CMakeLists.txt` through `flysight_add_fusion_test()`. `OFF` removes the targets, and then no test target references GTSAM. Forwarded by the root `CMakeLists.txt` like the other two |
 
 Both are forwarded by the root (superbuild) `CMakeLists.txt` to the application
@@ -215,7 +219,8 @@ project, unconditionally, so switching one back reaches the inner cache too.
 
 CTest labels: every executable has `core`; `tst_python_bridge` also `python`;
 `tst_session_oracle` also `oracle`; `audit_cleanup` has `audit`. GTSAM-linked
-tests also have `fusion`, so `ctest -LE fusion` is the GTSAM-free run.
+tests also have `fusion`, so `ctest -LE fusion` is the GTSAM-free run. The
+Widgets test also has `widgets` (`ctest -LE widgets` runs everything else).
 
 ```bash
 ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -L core
@@ -443,7 +448,11 @@ missing invalidation in the code under test.
   `#include "tst_<area>.moc"`. Never use `QTEST_MAIN` / `QTEST_GUILESS_MAIN`:
   they give no hook to isolate settings before the first singleton is touched.
   For the same reason, do not touch application singletons from global or
-  static initializers in a test file.
+  static initializers in a test file. A test that needs Qt Widgets
+  (`tst_plot_row_delegate` is the only one) writes its own `main()` instead:
+  the same order - deterministic hash seed, application object,
+  `TestEnvironment`, test object - with a `QApplication` and the application's
+  Fusion style.
 - Get the environment with `FlySightTest::TestEnvironment::instance()`. Typical
   fixtures: `registerBuiltIns()` in `initTestCase()` (registers built-in
   attributes and calculations once per process; the UI-owned plots and markers
@@ -614,6 +623,35 @@ comment in the script saying what to edit: add a `:!path` exclusion to an
 `expect_none` rule, add the file to the allowed-file regex of an `expect_only`
 rule, and change an `expect_count` number only when the fact really has gained
 a second authority.
+
+## 11. Manual verification: plot-driven jobs
+
+What no automated test can reach: the real `MainWindow` start-up and profile
+paths (sensor-fusion-jobs acceptance 16), quitting with jobs queued and running
+(17), and interactivity during a fit (19). The script needs the fusion plots
+(the "Sensor fusion" category). Use at least three recordings with IMU data, one
+without, and one the model rejects if available.
+
+1. *Startup (16).* Check "Sensor fusion > Roll" with three fusable tracks visible, let it compute, quit, restart. After restart the row is checked and shows the refresh control with the count 3; no job ever starts (no progress appears, CPU idle). The debug output contains no "No data available" line for the fusion plot.
+2. *Profile and menu (16).* Uncheck Roll. Apply a profile that checks fusion plots; toggle a fusion plot through the Plots menu and its shortcut: rows show refresh with counts; nothing starts.
+3. *Refresh (15).* Press Roll's refresh control: the row shows "0 of 3" and the cancel control; Pitch and Yaw, if checked, show the same progress. The tooltip lists the computing track with the solver's progress text and the queued tracks. As each fit publishes, its graph appears without any further action, the label advances ("1 of 3", "2 of 3"), and finally the row is plain. The legend and any fusion logbook column fill in at the same moments.
+4. *Check gesture (15).* On a fresh set of tracks, uncheck and re-check a fusion plot by clicking its check box: jobs start. Do the same with Space.
+5. *Interactive during a fit (19).* While a fit runs: pan and zoom the plot, switch tools, hide and show other tracks, edit a session's description, set a marker, open Preferences. Nothing blocks; no dialog appears.
+6. *Cancel (15).* Press cancel on a row with one running and two queued jobs: at once the row shows refresh with 3, the plot stays checked, other fusion rows change identically; within one solver step the CPU goes idle. Press refresh again: it recomputes.
+7. *Fourth track and failure (15).* Show a fourth fusable track afterwards: the row shows refresh with 1 and nothing starts; refresh computes it. Show the recording without IMU data: it never appears in any count or tooltip. For a rejected recording the row shows the warning badge with 1, the tooltip gives the reason, no refresh is offered for it, and no message box appears.
+8. *Remove and unload (17).* With one fit running and one queued, delete the queued track's session, then the running one's: no crash, no hang, nothing published for them; the remaining rows' counts fall.
+9. *Quit (17).* With one fit running and two queued, close the window: a wait cursor for at most one solver step, then the application exits; no crash dialog, the process is gone from the task manager, and on restart the logbook is intact. Repeat with File > Exit.
+
+Possible without the fusion plots, after any change to the plot list or to
+`MainWindow`'s close path:
+
+- Every existing plot row looks exactly as before (compare with a `master` build side by side, light and dark theme, 100% and 150% scaling): no glyph, no count, no tooltip, same row height, same elision.
+- Checking and unchecking plots by mouse, by Space, through the Plots menu, by shortcut, and by applying a profile behaves as before.
+- With a visible recording that lacks a sensor (for example no IMU) and an IMU plot checked, the "No data available for plot" warning still appears in the debug output.
+- Quit through File > Exit and through the close button, in Debug and Release: no crash, no hang, no debugger output about destroyed objects or running threads.
+
+There is no keyboard, menu, or context-menu surface for refresh and cancel (a
+known limitation): a keyboard user unchecks and checks the row with Space.
 
 ## Appendix A. The acceptance items
 

@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 #include "./ui_mainwindow.h"
 
+#include <QApplication>
 #include <QTreeView>
 #include <QFileDialog>
 #include <QProgressDialog>
@@ -44,6 +45,8 @@
 #include "momentmodel.h"
 #include "plotrangemodel.h"
 #include "measuremodel.h"
+#include "jobqueue.h"
+#include "plotrequests.h"
 #include "units/unitconverter.h"
 #include "calculations/builtincalculations.h"
 #include "preferences/enginepreferenceprovider.h"
@@ -195,6 +198,16 @@ MainWindow::MainWindow(QWidget *parent)
     // Create measure model for measure tool data
     m_measureModel = new MeasureModel(this);
 
+    // The job queue for background (explicit) calculations, then the component
+    // that turns plot-list gestures into jobs - in that order, and here: the
+    // session model is populated and every calculation is registered, and no
+    // dock exists yet. Nothing at start-up is a gesture: the checked plots
+    // restored by setPlots() below and a first-launch applyProfile() reach
+    // PlotRequests as ordinary model changes, so starting the application
+    // starts no job.
+    m_jobQueue = new JobQueue(model, this);
+    m_plotRequests = new PlotRequests(model, m_plotModel, m_jobQueue, this);
+
     // Create all docks via registry
     AppContext ctx;
     ctx.sessionModel = model;
@@ -204,6 +217,8 @@ MainWindow::MainWindow(QWidget *parent)
     ctx.rangeModel = m_rangeModel;
     ctx.plotViewSettings = m_plotViewSettingsModel;
     ctx.measureModel = m_measureModel;
+    ctx.jobQueue = m_jobQueue;
+    ctx.plotRequests = m_plotRequests;
     ctx.settings = m_settings;
 
     m_features = DockRegistry::createAll(ctx, this);
@@ -320,11 +335,34 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    // QObject deletes children in creation order, which would destroy the
+    // session model (created first) under a queue that may still hold a worker.
+    // So: the request component, then the queue (its destructor shuts it down
+    // and joins the worker), then everything else - also when closeEvent() never ran.
+    delete m_plotRequests;
+    m_plotRequests = nullptr;
+    delete m_jobQueue;
+    m_jobQueue = nullptr;
+
     delete ui;
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // First of all: cancel every background job and wait for the worker to
+    // stop, before anything it could touch is saved or torn down. The wait
+    // lasts at most one solver step. Nothing below can veto the close; a
+    // future veto must be decided BEFORE this call, because a queue that has
+    // been shut down refuses every later request.
+    if (m_jobQueue) {
+        const bool busy = !m_jobQueue->isIdle();
+        if (busy)
+            QApplication::setOverrideCursor(Qt::WaitCursor);
+        m_jobQueue->shutdown();
+        if (busy)
+            QApplication::restoreOverrideCursor();
+    }
+
     model->flushDirtySessions();
     saveDockLayout();
     KDDockWidgets::QtWidgets::MainWindow::closeEvent(event);

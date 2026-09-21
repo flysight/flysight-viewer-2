@@ -80,6 +80,10 @@ endif()
 #   - Forwarded to the application project; tests/CMakeLists.txt owns the option
 #   - With it OFF no test target references GTSAM (ctest -LE fusion is the equivalent at run time)
 #
+# FLYSIGHT_BUILD_WIDGET_TESTS: With FLYSIGHT_BUILD_TESTS, also build the tests that need Qt Widgets (default ON)
+#   - Forwarded to the application project; tests/CMakeLists.txt owns the option
+#   - With it OFF no test target links Qt Widgets (ctest -LE widgets is the equivalent at run time)
+#
 
 option(FLYSIGHT_BUILD_THIRD_PARTY "Build third-party dependencies" ON)
 option(FLYSIGHT_BUILD_APP "Build the main FlySight Viewer application" ON)
@@ -87,6 +91,7 @@ option(FLYSIGHT_THIRD_PARTY_ONLY "Build only third-party dependencies (skip appl
 option(FLYSIGHT_BUILD_TESTS "Build the FlySight Viewer test suite" OFF)
 option(FLYSIGHT_BUILD_PYTHON_TESTS "With FLYSIGHT_BUILD_TESTS: also build the embedded-Python plugin bridge test" ON)
 option(FLYSIGHT_BUILD_FUSION_TESTS "With FLYSIGHT_BUILD_TESTS: also build the GTSAM-linked tests" ON)
+option(FLYSIGHT_BUILD_WIDGET_TESTS "With FLYSIGHT_BUILD_TESTS: also build the tests that need Qt Widgets" ON)
 
 # Handle option interaction: THIRD_PARTY_ONLY implies no app build
 if(FLYSIGHT_THIRD_PARTY_ONLY)
@@ -188,6 +193,7 @@ if(FLYSIGHT_BUILD_APP)
         -DFLYSIGHT_BUILD_TESTS=${FLYSIGHT_BUILD_TESTS}
         -DFLYSIGHT_BUILD_PYTHON_TESTS=${FLYSIGHT_BUILD_PYTHON_TESTS}
         -DFLYSIGHT_BUILD_FUSION_TESTS=${FLYSIGHT_BUILD_FUSION_TESTS}
+        -DFLYSIGHT_BUILD_WIDGET_TESTS=${FLYSIGHT_BUILD_WIDGET_TESTS}
     )
     if(CMAKE_PREFIX_PATH)
         list(APPEND _APP_CMAKE_ARGS "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}")
@@ -265,6 +271,7 @@ if(DEFINED FLYSIGHT_BUILD_SOLVER_DEPS)
     message(STATUS "  FLYSIGHT_BUILD_SOLVER_DEPS: ${FLYSIGHT_BUILD_SOLVER_DEPS}")
 endif()
 message(STATUS "  FLYSIGHT_BUILD_FUSION_TESTS: ${FLYSIGHT_BUILD_FUSION_TESTS}")
+message(STATUS "  FLYSIGHT_BUILD_WIDGET_TESTS: ${FLYSIGHT_BUILD_WIDGET_TESTS}")
 message(STATUS "")
 message(STATUS "Path Variables:")
 message(STATUS "  THIRD_PARTY_DIR:       ${THIRD_PARTY_DIR}")

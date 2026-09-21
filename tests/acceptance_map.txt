@@ -233,3 +233,9 @@
 # SFJ 16 tst_plot_requests startupRestoreStartsNothing
 # SFJ 16 tst_plot_requests profileStyleApplyStartsNothing
 # SFJ 16 tst_plot_requests programmaticCheckStartsNothing
+# SFJ 16 tst_plot_row_delegate programmaticCheckStartsNothingWithViewAttached
+# SFJ 16 tst_plot_row_delegate startupStyleRestoreStartsNothingWithViewAttached
+# SFJ 16 tst_plot_row_delegate checkBoxClickIsGesture
+# SFJ 16 manual  tests/README.md "Manual verification: plot-driven jobs" steps 1-2
+# SFJ 17 manual  tests/README.md "Manual verification: plot-driven jobs" steps 8-9
+# SFJ 19 manual  tests/README.md "Manual verification: plot-driven jobs" step 5

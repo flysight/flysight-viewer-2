@@ -28,6 +28,8 @@ class MarkerModel;
 class MomentModel;
 class PlotRangeModel;
 class MeasureModel;
+class JobQueue;
+class PlotRequests;
 
 class MainWindow : public KDDockWidgets::QtWidgets::MainWindow
 {
@@ -130,6 +132,8 @@ private:
     // Models
     PlotModel *m_plotModel;
     MarkerModel *m_markerModel = nullptr;
+    JobQueue *m_jobQueue = nullptr;             // background calculation jobs
+    PlotRequests *m_plotRequests = nullptr;     // plot-list row state and gestures; destroyed before the queue
 
     // Pointer to QActionGroup for tools
     QActionGroup *toolActionGroup;
