@@ -142,6 +142,12 @@ message(STATUS "GTSAM found: ${GTSAM_VERSION} (${GTSAM_DIR})")
 # library. Interface and static targets (gtsam_eigen3, metis-gtsam-if, ...) are
 # walked through but not recorded.
 #
+# Only SHARED_LIBRARY targets are recorded. The package configs of GTSAM and
+# oneTBB declare every library as SHARED IMPORTED (or INTERFACE / STATIC), and
+# GTSAM finds TBB through TBBConfig.cmake, not through a find module, so no
+# UNKNOWN_LIBRARY target can appear here. The list of required targets below
+# fails the configure if a future pin changes that.
+#
 
 function(_flysight_collect_solver_runtime target)
     # Entries of INTERFACE_LINK_LIBRARIES that are not targets (plain library
@@ -167,26 +173,6 @@ function(_flysight_collect_solver_runtime target)
     get_target_property(_type "${target}" TYPE)
     if(_type STREQUAL "SHARED_LIBRARY")
         set_property(GLOBAL APPEND PROPERTY FLYSIGHT_SOLVER_RUNTIME "${target}")
-    elseif(_type STREQUAL "UNKNOWN_LIBRARY")
-        # Find modules export UNKNOWN_LIBRARY targets that may still be shared
-        # libraries. Not expected with the pinned libraries (every runtime
-        # target is a SHARED_LIBRARY); kept so that such a dependency is
-        # deployed rather than silently missed.
-        get_target_property(_configs "${target}" IMPORTED_CONFIGURATIONS)
-        set(_location_properties IMPORTED_LOCATION)
-        if(_configs)
-            foreach(_config IN LISTS _configs)
-                string(TOUPPER "${_config}" _config)
-                list(APPEND _location_properties "IMPORTED_LOCATION_${_config}")
-            endforeach()
-        endif()
-        foreach(_property IN LISTS _location_properties)
-            get_target_property(_location "${target}" "${_property}")
-            if(_location MATCHES "\\.(so(\\.[0-9.]+)?|dylib|dll)$")
-                set_property(GLOBAL APPEND PROPERTY FLYSIGHT_SOLVER_RUNTIME "${target}")
-                break()
-            endif()
-        endforeach()
     endif()
 
     get_target_property(_links "${target}" INTERFACE_LINK_LIBRARIES)
@@ -226,6 +212,41 @@ foreach(_required gtsam metis-gtsam cephes-gtsam TBB::tbb TBB::tbbmalloc)
             "(cmake/SolverSuperbuild.cmake).")
     endif()
 endforeach()
+
+# An exported target only carries the configurations that were built (the
+# superbuild makes one, normally Release). For any other configuration CMake
+# silently links, and _flysight_solver_imported_file() deploys, the first
+# imported configuration instead. With MSVC that mixes the debug and release
+# C++ runtimes across the GTSAM interface, so say so. Only a configuration
+# chosen at configure time (CMAKE_BUILD_TYPE) can be checked here; with a
+# multi-config generator the configuration is chosen at build time. A project
+# that maps the configuration itself (CMAKE_MAP_IMPORTED_CONFIG_<CONFIG>) has
+# made its own choice and is not second-guessed.
+string(TOUPPER "${CMAKE_BUILD_TYPE}" _solver_build_type)
+if(CMAKE_BUILD_TYPE AND NOT DEFINED CMAKE_MAP_IMPORTED_CONFIG_${_solver_build_type})
+    set(_solver_unmatched "")
+    foreach(_runtime IN LISTS FLYSIGHT_SOLVER_RUNTIME_TARGETS)
+        get_target_property(_configs "${_runtime}" IMPORTED_CONFIGURATIONS)
+        if(_configs)
+            string(TOUPPER "${_configs}" _configs)
+            if(NOT "${_solver_build_type}" IN_LIST _configs)
+                list(GET _configs 0 _fallback)
+                list(JOIN _configs ", " _configs)
+                string(APPEND _solver_unmatched "\n  ${_runtime}: has ${_configs}; using ${_fallback}")
+            endif()
+        endif()
+    endforeach()
+    if(_solver_unmatched)
+        message(WARNING
+            "The solver install has no ${CMAKE_BUILD_TYPE} build of these libraries; another "
+            "configuration is linked and deployed instead:${_solver_unmatched}\n"
+            "  GTSAM_ROOT  = ${GTSAM_ROOT}\n"
+            "  ONETBB_ROOT = ${ONETBB_ROOT}\n"
+            "With MSVC, a Debug application must not exchange C++ objects with a Release GTSAM. "
+            "Build the application in a configuration the install provides, or build the solver "
+            "dependencies with the same CMAKE_BUILD_TYPE (cmake/SolverSuperbuild.cmake).")
+    endif()
+endif()
 
 # =============================================================================
 # flysight_solver_stack(<target>)
@@ -337,80 +358,87 @@ function(flysight_install_solver_runtime destination)
     message(STATUS "----------------------------------------")
     message(STATUS "  Destination: ${destination}")
 
-    if(WIN32)
-        foreach(_runtime IN LISTS FLYSIGHT_SOLVER_RUNTIME_TARGETS)
+    set(_installed_names "")
+    foreach(_runtime IN LISTS FLYSIGHT_SOLVER_RUNTIME_TARGETS)
+        if(WIN32)
             install(FILES "$<TARGET_FILE:${_runtime}>" DESTINATION "${destination}")
             _flysight_solver_imported_file(${_runtime} _location _soname)
             message(STATUS "  ${_runtime}: ${_location}")
-        endforeach()
-        message(STATUS "----------------------------------------")
-        message(STATUS "")
-        return()
-    endif()
-
-    set(_installed_names "")
-    foreach(_runtime IN LISTS FLYSIGHT_SOLVER_RUNTIME_TARGETS)
-        _flysight_solver_imported_file(${_runtime} _location _soname)
-        if(NOT _location)
-            message(FATAL_ERROR "Solver runtime target ${_runtime} has no imported location")
-        endif()
-
-        # The source is always the fully resolved file, so that a symlink
-        # chain (libgtsam.so -> libgtsam.so.4 -> libgtsam.so.4.3a0) becomes
-        # one regular file in the destination.
-        get_filename_component(_real_file "${_location}" REALPATH)
-
-        # The loader asks for the soname. It may carry a directory or an
-        # @rpath/ prefix (macOS install names); only the file name matters.
-        # An UNKNOWN_LIBRARY target has no soname property: its resolved file
-        # name is the best available answer.
-        if(_soname)
-            get_filename_component(_installed_name "${_soname}" NAME)
         else()
-            get_filename_component(_installed_name "${_real_file}" NAME)
+            _flysight_install_solver_library(${_runtime} "${destination}" _installed_name)
+            list(APPEND _installed_names "${_installed_name}")
         endif()
-
-        install(FILES "${_real_file}"
-            DESTINATION "${destination}"
-            RENAME "${_installed_name}"
-            PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
-                        GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-        )
-        list(APPEND _installed_names "${_installed_name}")
-        message(STATUS "  ${_runtime}: ${_real_file} -> ${_installed_name}")
     endforeach()
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        # Only the files installed above are touched; other libraries in the
-        # destination belong to other deployment modules. patchelf is already
-        # a hard requirement of DeployThirdPartyLinux.cmake.
-        if(IS_ABSOLUTE "${destination}")
-            set(_install_dir "${destination}")
-        else()
-            set(_install_dir "\${CMAKE_INSTALL_PREFIX}/${destination}")
-        endif()
-        install(CODE "
-            message(STATUS \"Setting RPATH on solver runtime libraries...\")
-            find_program(PATCHELF_EXE patchelf)
-            if(NOT PATCHELF_EXE)
-                message(FATAL_ERROR \"patchelf not found! Install with: apt-get install patchelf\")
-            endif()
-            foreach(_name ${_installed_names})
-                execute_process(
-                    COMMAND \"\${PATCHELF_EXE}\" --set-rpath \"\\\$ORIGIN\" \"${_install_dir}/\${_name}\"
-                    RESULT_VARIABLE _patchelf_result
-                    ERROR_VARIABLE _patchelf_error
-                )
-                if(NOT _patchelf_result EQUAL 0)
-                    message(FATAL_ERROR \"patchelf failed on \${_name}: \${_patchelf_error}\")
-                endif()
-                message(STATUS \"  Set RPATH on \${_name}: \\\$ORIGIN\")
-            endforeach()
-        ")
+        _flysight_install_solver_rpath("${destination}" "${_installed_names}")
     endif()
 
     message(STATUS "----------------------------------------")
     message(STATUS "")
+endfunction()
+
+# Unix half of flysight_install_solver_runtime: installs the one real file of
+# <target> under the name the loader asks for, and returns that name.
+function(_flysight_install_solver_library target destination installed_name_var)
+    _flysight_solver_imported_file(${target} _location _soname)
+    if(NOT _location)
+        message(FATAL_ERROR "Solver runtime target ${target} has no imported location")
+    endif()
+
+    # The source is always the fully resolved file, so that a symlink chain
+    # (libgtsam.so -> libgtsam.so.4 -> libgtsam.so.4.3a0) becomes one regular
+    # file in the destination.
+    get_filename_component(_real_file "${_location}" REALPATH)
+
+    # The loader asks for the soname. It may carry a directory or an @rpath/
+    # prefix (macOS install names); only the file name matters. A target whose
+    # export carries no IMPORTED_SONAME is installed under its resolved file
+    # name, the best available answer.
+    if(_soname)
+        get_filename_component(_installed_name "${_soname}" NAME)
+    else()
+        get_filename_component(_installed_name "${_real_file}" NAME)
+    endif()
+
+    install(FILES "${_real_file}"
+        DESTINATION "${destination}"
+        RENAME "${_installed_name}"
+        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                    GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+    )
+    message(STATUS "  ${target}: ${_real_file} -> ${_installed_name}")
+    set(${installed_name_var} "${_installed_name}" PARENT_SCOPE)
+endfunction()
+
+# Linux half of flysight_install_solver_runtime: RPATH $ORIGIN on the files
+# named in <installed_names>. Only those files are touched; other libraries in
+# the destination belong to other deployment modules. patchelf is already a
+# hard requirement of DeployThirdPartyLinux.cmake.
+function(_flysight_install_solver_rpath destination installed_names)
+    if(IS_ABSOLUTE "${destination}")
+        set(_install_dir "${destination}")
+    else()
+        set(_install_dir "\${CMAKE_INSTALL_PREFIX}/${destination}")
+    endif()
+    install(CODE "
+        message(STATUS \"Setting RPATH on solver runtime libraries...\")
+        find_program(PATCHELF_EXE patchelf)
+        if(NOT PATCHELF_EXE)
+            message(FATAL_ERROR \"patchelf not found! Install with: apt-get install patchelf\")
+        endif()
+        foreach(_name ${installed_names})
+            execute_process(
+                COMMAND \"\${PATCHELF_EXE}\" --set-rpath \"\\\$ORIGIN\" \"${_install_dir}/\${_name}\"
+                RESULT_VARIABLE _patchelf_result
+                ERROR_VARIABLE _patchelf_error
+            )
+            if(NOT _patchelf_result EQUAL 0)
+                message(FATAL_ERROR \"patchelf failed on \${_name}: \${_patchelf_error}\")
+            endif()
+            message(STATUS \"  Set RPATH on \${_name}: \\\$ORIGIN\")
+        endforeach()
+    ")
 endfunction()
 
 # Reads the imported file and soname of a runtime target for the configuration

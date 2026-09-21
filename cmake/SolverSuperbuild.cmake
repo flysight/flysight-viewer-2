@@ -33,8 +33,31 @@ endif()
 # Pinned Revisions
 # =============================================================================
 #
-# One adjacent repository/revision pair per library: a pin is changed here and
-# nowhere else. The CI cache key hashes this file, so it follows a new pin.
+# One adjacent repository/revision pair per library. What gets built is decided
+# here only, and the CI cache key hashes this file, so it follows a new pin.
+#
+# Other places state the version, or names that depend on it. Keep them in
+# sync when a pin moves:
+#   - cmake/SolverDependencies.cmake: the minimum version in
+#     find_package(GTSAM 4.3 ...), and the list of required runtime targets
+#     (gtsam, metis-gtsam, cephes-gtsam, TBB::tbb, TBB::tbbmalloc)
+#   - tests/tst_solver_smoke.cpp: compares GTSAM_VERSION_STRING with "4.3a0"
+#   - .github/workflows/build.yml: the deployment checks name the runtime files
+#     (gtsam.dll, metis-gtsam.dll, cephes-gtsam.dll, tbb12.dll, tbbmalloc.dll;
+#     the libgtsam / libmetis-gtsam / libcephes-gtsam / libtbb / libtbbmalloc
+#     stems on macOS and Linux). "tbb12" carries oneTBB's binary version.
+#   - README.md: the versions under "Solver dependencies (GTSAM, oneTBB)" and
+#     the runtime file names in the deployment table
+#   - tests/README.md, "Solver configuration of the goldens", and
+#     tests/data/fusion/capture.json ("solver"): the revision and versions the
+#     fusion goldens were captured against
+#   - the comments in this file that say 4.3a0 / 2022.1.0
+#
+# Moving the GTSAM pin changes the solver the fusion goldens were captured
+# against. They must be re-validated before the new pin is accepted, by the
+# procedure in tests/README.md, "Fusion golden parity": never edited to match.
+# A oneTBB pin changes the threading runtime only, but the parity tests are
+# the check that it did not change the results either.
 #
 # GTSAM: the fusion work was developed against commit
 # 8938b9f158fa2f88ccfe3c31069a1452456b7eca of the fork
@@ -54,24 +77,24 @@ set(ONETBB_REVISION   d3ad09cd7f69d3f50a3972bee9eb7fc8ee089b6e)  # uxlfoundation
 # Path Variables
 # =============================================================================
 #
-# The install directories are normally defined by the including project (root
-# CMakeLists.txt or third-party/CMakeLists.txt); the defaults here only apply
-# when it did not.
+# The install directories are defined by the including project, which both
+# entry points (root CMakeLists.txt, third-party/CMakeLists.txt) do before they
+# include ThirdPartySuperbuild.cmake. There is no default here: the clean
+# targets below remove these directories, so an empty value must never get
+# this far.
 #
 # <X>_SOURCE_DIR is for offline development: point it at an existing source
 # tree and that tree is built in place of the pinned download. It is never
 # modified and never removed by a clean target.
 #
 
-if(NOT DEFINED GTSAM_INSTALL_DIR)
-    set(GTSAM_INSTALL_DIR "${THIRD_PARTY_DIR}/GTSAM-install"
-        CACHE PATH "GTSAM installation directory")
-endif()
-
-if(NOT DEFINED ONETBB_INSTALL_DIR)
-    set(ONETBB_INSTALL_DIR "${THIRD_PARTY_DIR}/oneTBB-install"
-        CACHE PATH "oneTBB installation directory")
-endif()
+foreach(_var GTSAM_INSTALL_DIR ONETBB_INSTALL_DIR)
+    if("${${_var}}" STREQUAL "")
+        message(FATAL_ERROR
+            "${_var} is not set. Define it before including SolverSuperbuild.cmake, "
+            "as the root CMakeLists.txt and third-party/CMakeLists.txt do.")
+    endif()
+endforeach()
 
 if(NOT DEFINED GTSAM_SOURCE_DIR)
     set(GTSAM_SOURCE_DIR ""

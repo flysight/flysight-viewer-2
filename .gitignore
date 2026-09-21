@@ -47,6 +47,8 @@ third-party/GeographicLib-build/
 third-party/GeographicLib-install/
 third-party/KDDockWidgets-build/
 third-party/KDDockWidgets-install/
+third-party/GTSAM-install/
+third-party/oneTBB-install/
 
 # Claude Code files
 .claude/
