@@ -95,7 +95,7 @@ jobs:
         run: |
           # Create hash from CMake files and submodule definitions
           # Use openssl which is available on all platforms (Linux, macOS, Windows Git Bash)
-          HASH=$(cat cmake/ThirdPartySuperbuild.cmake .gitmodules | openssl dgst -sha256 | awk '{print $NF}')
+          HASH=$(cat cmake/ThirdPartySuperbuild.cmake cmake/SolverSuperbuild.cmake .gitmodules | openssl dgst -sha256 | awk '{print $NF}')
           echo "hash=${HASH:0:16}" >> $GITHUB_OUTPUT
 
       - name: Cache third-party dependencies
@@ -105,6 +105,8 @@ jobs:
           path: |
             third-party/GeographicLib-install
             third-party/KDDockWidgets-install
+            third-party/GTSAM-install
+            third-party/oneTBB-install
           key: third-party-${{ matrix.os }}-${{ steps.cache-key.outputs.hash }}
           restore-keys: |
             third-party-${{ matrix.os }}-
@@ -443,6 +445,56 @@ jobs:
             exit 1
           fi
 
+          # ------------------------------------------------------------------
+          # Check GTSAM and oneTBB (solver dependencies)
+          # ------------------------------------------------------------------
+          echo ""
+          echo "--- GTSAM / oneTBB ---"
+          GTSAM_ROOT="${GITHUB_WORKSPACE}/third-party/GTSAM-install"
+          ONETBB_ROOT="${GITHUB_WORKSPACE}/third-party/oneTBB-install"
+          for root in "$GTSAM_ROOT" "$ONETBB_ROOT"; do
+            ls -la "$root/lib/" 2>/dev/null || echo "lib directory not found under $root"
+            if [ "${{ runner.os }}" == "Windows" ]; then
+              ls -la "$root/bin/" 2>/dev/null || echo "bin directory not found under $root"
+            fi
+          done
+
+          SOLVER_BAD=0
+          if [ -f "$GTSAM_ROOT/CMake/GTSAMConfig.cmake" ] || [ -f "$GTSAM_ROOT/lib/cmake/GTSAM/GTSAMConfig.cmake" ]; then
+            echo "GTSAMConfig.cmake found"
+          else
+            echo "ERROR: GTSAMConfig.cmake not found under $GTSAM_ROOT"
+            SOLVER_BAD=1
+          fi
+          if [ -f "$ONETBB_ROOT/lib/cmake/TBB/TBBConfig.cmake" ]; then
+            echo "TBBConfig.cmake found"
+          else
+            echo "ERROR: TBBConfig.cmake not found under $ONETBB_ROOT/lib/cmake/TBB"
+            SOLVER_BAD=1
+          fi
+
+          # FlySight ships GTSAM built without Boost. This also rejects a cache
+          # restored from a Boost-enabled build.
+          GTSAM_CONFIG_H="$GTSAM_ROOT/include/gtsam/config.h"
+          for macro in GTSAM_ENABLE_BOOST_SERIALIZATION GTSAM_USE_BOOST_FEATURES; do
+            if grep -Eq "^#define ${macro} 0[[:space:]]*$" "$GTSAM_CONFIG_H" 2>/dev/null; then
+              echo "OK: ${macro} is 0"
+            else
+              echo "ERROR: $GTSAM_CONFIG_H does not contain '#define ${macro} 0'"
+              SOLVER_BAD=1
+            fi
+          done
+          BOOST_EXPORTS=$(grep -ril "Boost::" "$GTSAM_ROOT/CMake" "$GTSAM_ROOT/lib/cmake/GTSAM" 2>/dev/null | grep "GTSAM-exports" || true)
+          if [ -n "$BOOST_EXPORTS" ]; then
+            echo "ERROR: the exported gtsam target links Boost:"
+            echo "$BOOST_EXPORTS"
+            SOLVER_BAD=1
+          fi
+          if [ $SOLVER_BAD -ne 0 ]; then
+            echo "FATAL: GTSAM / oneTBB installation is missing or is not the Boost-free build"
+            exit 1
+          fi
+
           echo ""
           echo "=== Third-Party Verification Complete ==="
 
@@ -497,6 +549,8 @@ jobs:
             -DTHIRD_PARTY_DIR="${GITHUB_WORKSPACE}/third-party" \
             -DGEOGRAPHIC_ROOT="${GITHUB_WORKSPACE}/third-party/GeographicLib-install" \
             -DKDDW_ROOT="${GITHUB_WORKSPACE}/third-party/KDDockWidgets-install" \
+            -DGTSAM_ROOT="${GITHUB_WORKSPACE}/third-party/GTSAM-install" \
+            -DONETBB_ROOT="${GITHUB_WORKSPACE}/third-party/oneTBB-install" \
             ${PYTHON_ROOT_DIR:+-DPython_ROOT_DIR="$PYTHON_ROOT_DIR"} \
             ${QT6_INSTALL_PREFIX:+-DQT6_INSTALL_PREFIX="$QT6_INSTALL_PREFIX"} \
             ${BOOST_ROOT:+-DBOOST_ROOT="$BOOST_ROOT"} \
@@ -582,7 +636,7 @@ jobs:
           echo ""
           echo "=== Checking critical DLLs ==="
           MISSING=0
-          for dll in vcruntime140.dll msvcp140.dll; do
+          for dll in vcruntime140.dll msvcp140.dll gtsam.dll metis-gtsam.dll cephes-gtsam.dll tbb12.dll tbbmalloc.dll; do
             if [ -f "build/install/$dll" ]; then
               echo "OK: $dll"
             else
@@ -613,6 +667,27 @@ jobs:
             echo "FATAL: Missing critical files in install directory"
             ls -la build/install/
             exit 1
+          fi
+
+          # Solver runtime: run the GTSAM probe from inside the installed tree
+          # with a minimal PATH. It starts only if every solver DLL it needs was
+          # deployed. The probe exists only when the tests are built.
+          if [[ "${{ github.ref }}" != refs/tags/v* ]]; then
+            echo ""
+            echo "=== Running solver_deploy_probe inside the install tree ==="
+            PROBE=$(find build -name "solver_deploy_probe.exe" -not -path "build/install/*" 2>/dev/null | head -1)
+            if [ -z "$PROBE" ]; then
+              echo "ERROR: solver_deploy_probe.exe not found in the build tree"
+              exit 1
+            fi
+            cp "$PROBE" build/install/solver_deploy_probe.exe
+            PROBE_RC=0
+            (cd build/install && PATH=/c/Windows/System32 ./solver_deploy_probe.exe) || PROBE_RC=$?
+            rm -f build/install/solver_deploy_probe.exe
+            if [ $PROBE_RC -ne 0 ]; then
+              echo "FATAL: solver_deploy_probe failed inside the install tree (exit $PROBE_RC)"
+              exit 1
+            fi
           fi
 
       # =========================================================================
@@ -666,8 +741,15 @@ jobs:
 
           echo ""
           echo "--- Checking Third-Party Libraries ---"
-          for lib in libGeographic; do
-            found=$(find "$FRAMEWORKS_DIR" -name "${lib}*.dylib" ! -type l 2>/dev/null | head -1)
+          SOLVER_BAD=0
+          for lib in libGeographic libgtsam libmetis-gtsam libcephes-gtsam libtbb libtbbmalloc; do
+            # Solver libraries are matched up to the dot so that libtbb does not
+            # match libtbbmalloc; for them a problem is an error, not a warning.
+            case "$lib" in
+              libGeographic) pattern="${lib}*.dylib"; solver=0 ;;
+              *)             pattern="${lib}.*dylib"; solver=1 ;;
+            esac
+            found=$(find "$FRAMEWORKS_DIR" -name "$pattern" ! -type l 2>/dev/null | head -1)
             if [ -n "$found" ]; then
               echo "Found: $(basename "$found")"
               # Check for problematic dependencies
@@ -675,11 +757,34 @@ jobs:
               if [ -n "$bad_deps" ]; then
                 echo "  WARNING: Has absolute paths:"
                 echo "$bad_deps" | sed 's/^/    /'
+                if [ $solver -eq 1 ]; then
+                  echo "  ERROR: a solver library must not keep an absolute non-system dependency"
+                  SOLVER_BAD=1
+                fi
+              fi
+              # GTSAM is built without Boost: no solver library may reference Boost or ICU
+              if [ $solver -eq 1 ] && otool -L "$found" | grep -Ei "libboost|libicu"; then
+                echo "  ERROR: $(basename "$found") references Boost or ICU"
+                SOLVER_BAD=1
               fi
             else
-              echo "MISSING: ${lib}*.dylib"
+              echo "MISSING: ${pattern}"
+              if [ $solver -eq 1 ]; then
+                SOLVER_BAD=1
+              fi
             fi
           done
+          # Nothing of Boost is deployed, and Frameworks has never contained ICU
+          STRAY=$(find "$BUNDLE" -name 'libboost*' 2>/dev/null; find "$FRAMEWORKS_DIR" -maxdepth 1 -name 'libicu*' 2>/dev/null)
+          if [ -n "$STRAY" ]; then
+            echo "ERROR: unexpected Boost / ICU libraries in the bundle:"
+            echo "$STRAY"
+            SOLVER_BAD=1
+          fi
+          if [ $SOLVER_BAD -ne 0 ]; then
+            echo "FATAL: solver runtime deployment is incomplete or not self-contained"
+            exit 1
+          fi
 
           echo ""
           echo "--- Checking libpython ---"
@@ -784,14 +889,64 @@ jobs:
 
           echo ""
           echo "--- Third-Party Libraries ---"
-          for lib in libGeographic libkddockwidgets; do
-            found=$(find "$APPDIR/usr/lib" -name "${lib}*.so*" 2>/dev/null | head -1)
+          SOLVER_BAD=0
+          for lib in libGeographic libkddockwidgets libgtsam libmetis-gtsam libcephes-gtsam libtbb libtbbmalloc; do
+            # Solver libraries are matched up to the dot so that libtbb does not
+            # match libtbbmalloc; for them a problem is an error.
+            case "$lib" in
+              libGeographic|libkddockwidgets) pattern="${lib}*.so*"; solver=0 ;;
+              *)                              pattern="${lib}.so*";  solver=1 ;;
+            esac
+            found=$(find "$APPDIR/usr/lib" -name "$pattern" 2>/dev/null | head -1)
             if [ -n "$found" ]; then
               echo "  $lib: $(basename $found)"
+              # GTSAM is built without Boost: no solver library may reference Boost or ICU
+              if [ $solver -eq 1 ] && (unset LD_LIBRARY_PATH; ldd "$found") | grep -Ei "libboost|libicu"; then
+                echo "  ERROR: $(basename $found) references Boost or ICU"
+                SOLVER_BAD=1
+              fi
             else
               echo "  $lib: NOT FOUND"
+              if [ $solver -eq 1 ]; then
+                SOLVER_BAD=1
+              fi
             fi
           done
+
+          echo ""
+          echo "--- Solver Runtime Closure (ldd on libgtsam, LD_LIBRARY_PATH unset) ---"
+          # Absolute path, so that $ORIGIN-relative dependencies print as absolute paths
+          APPDIR_ABS=$(cd "$APPDIR" && pwd)
+          GTSAM_SO=$(find "$APPDIR_ABS/usr/lib" -name "libgtsam.so*" 2>/dev/null | head -1)
+          if [ -n "$GTSAM_SO" ]; then
+            LDD_OUT=$(unset LD_LIBRARY_PATH; ldd "$GTSAM_SO")
+            echo "$LDD_OUT"
+            if echo "$LDD_OUT" | grep -q "not found"; then
+              echo "  ERROR: libgtsam has unresolved dependencies"
+              SOLVER_BAD=1
+            fi
+            for dep in libtbb libmetis-gtsam libcephes-gtsam; do
+              if echo "$LDD_OUT" | grep -E "^[[:space:]]*${dep}\.so" | grep -vq "$APPDIR_ABS/"; then
+                echo "  ERROR: ${dep} resolves outside the AppDir"
+                SOLVER_BAD=1
+              fi
+            done
+            if echo "$LDD_OUT" | grep -Eiq "libboost|libicu"; then
+              echo "  ERROR: libgtsam depends on Boost or ICU"
+              SOLVER_BAD=1
+            fi
+          fi
+          # Nothing of Boost is deployed (ICU is Qt's and legitimately present)
+          STRAY=$(find "$APPDIR" -name 'libboost*' 2>/dev/null)
+          if [ -n "$STRAY" ]; then
+            echo "  ERROR: unexpected Boost libraries in the AppDir:"
+            echo "$STRAY"
+            SOLVER_BAD=1
+          fi
+          if [ $SOLVER_BAD -ne 0 ]; then
+            echo "FATAL: solver runtime deployment is incomplete or not self-contained"
+            exit 1
+          fi
 
           echo ""
           echo "--- Qt Components ---"
