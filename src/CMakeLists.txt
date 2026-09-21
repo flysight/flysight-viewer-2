@@ -257,6 +257,9 @@ add_library(flysight_model STATIC
   engine/evaluationcontext.cpp     engine/evaluationcontext.h
   engine/calculationregistry.cpp   engine/calculationregistry.h
   engine/calculationengine.cpp     engine/calculationengine.h
+  engine/calculationprogress.cpp   engine/calculationprogress.h
+  engine/preparedcalculation.cpp   engine/preparedcalculation.h
+  engine/blockerreport.h
 )
 target_include_directories(flysight_model PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(flysight_model PUBLIC Qt${QT_VERSION_MAJOR}::Core)

@@ -100,6 +100,7 @@ private slots:
     void unregisterFamilyDropsInstances();
     void hasCandidateFor();
     void instanceLookup();
+    void titleLookup();
     void sourceConversionsAreSeparate();
     void localRegistryIsIsolated();
     void enrolment();
@@ -464,6 +465,36 @@ void CalcRegistryTest::instanceLookup()
     QVERIFY(negA.has_value());
     QCOMPARE(negA->instanceId, QStringLiteral("neg#neg:A"));
     QCOMPARE(negA->registrationId, QStringLiteral("neg"));
+}
+
+// Interface text for a registration; opaque to the engine.
+void CalcRegistryTest::titleLookup()
+{
+    CalculationRegistry registry;
+    CalculationDescriptor titled = Synthetic::sum();
+    titled.title = QStringLiteral("Sum of A and B");
+    QVERIFY(registry.registerCalculation(titled));
+    QVERIFY(registry.registerCalculation(Synthetic::constX()));     // no title
+    QVERIFY(registry.registerFamily(Synthetic::neg()));
+
+    QCOMPARE(registry.title("sum"), QStringLiteral("Sum of A and B"));
+    QCOMPARE(registry.title("constX"), QStringLiteral("constX"));   // empty title: the id
+    QCOMPARE(registry.title("neg"), QStringLiteral("neg"));         // a family: the id
+    QCOMPARE(registry.title("no such id"), QString());
+    QCOMPARE(registry.title("neg#neg:A"), QString());               // instance ids are not registrations
+
+    // The title travels with the instance, and it is never validated.
+    const std::optional<CalculationInstance> instance = registry.instance("sum");
+    QVERIFY(instance.has_value());
+    QCOMPARE(instance->descriptor->title, QStringLiteral("Sum of A and B"));
+    CalculationDescriptor odd = Synthetic::wAlt();
+    odd.title = QStringLiteral("# is fine in a title");
+    QVERIFY(registry.registerCalculation(odd));
+    QCOMPARE(registry.title("wAlt"), QStringLiteral("# is fine in a title"));
+
+    // A value type of the same vocabulary: the reason of a result.
+    QCOMPARE(CalculationResult().reason(), QString());
+    QCOMPARE(CalculationResult().setReason("x").reason(), QStringLiteral("x"));
 }
 
 void CalcRegistryTest::sourceConversionsAreSeparate()

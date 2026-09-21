@@ -93,6 +93,10 @@ public:
     bool unregister(const CalculationId &id);   ///< calculation, family, or conversion family
 
     bool contains(const CalculationId &id) const;
+    /// Interface text for a registration: the descriptor's title for a plain
+    /// calculation; the id when that title is empty or when `id` is a family
+    /// (an instance carries its own title); an empty string for an unknown id.
+    QString title(const CalculationId &id) const;
     /// Every registration (plain calculations, families, and conversion
     /// families) in sequence order.
     QList<CalculationId> registeredIds() const;

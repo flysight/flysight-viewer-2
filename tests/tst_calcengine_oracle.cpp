@@ -7,6 +7,12 @@
 // libraries). This is the one place where a computed value is the expectation,
 // because the rule under test IS "equal to a fresh evaluation"; every sequence
 // also starts with literal checkpoints.
+//
+// randomizedExplicitSequences adds explicit calculations to the mix: blocker
+// inspection, synchronous requests, asynchronous requests (compute inline; the
+// threads are tst_calcengine_async's business), and asynchronous requests whose
+// input changes before publish. None of it may disturb the invariant, and an
+// explicit calculation may run only in a request or publish step.
 
 #include <cstdio>
 #include <limits>
@@ -73,6 +79,8 @@ private slots:
     void randomizedSequences();
     void randomizedTopologies_data();
     void randomizedTopologies();
+    void randomizedExplicitSequences_data();
+    void randomizedExplicitSequences();
 };
 
 void CalcEngineOracleTest::sameValueSemantics()
@@ -385,6 +393,155 @@ void CalcEngineOracleTest::randomizedTopologies()
         const QString k = names.at(i).attributeKey;
         QVERIFY2(other.attribute(k) == engine.attribute(k), (QByteArray::number(seed) + ' ' + k.toLatin1()).constData());
     }
+}
+
+void CalcEngineOracleTest::randomizedExplicitSequences_data()
+{
+    QTest::addColumn<int>("seed");
+    for (int seed = 1; seed <= 25; ++seed)
+        QTest::addRow("seed %d", seed) << seed;
+}
+
+// Idempotency with explicit calculations in play (engine spec 7.4: an explicit
+// output is a function of state once requested and unavailable before).
+// Inspection never changes what a read returns, a refused or abandoned
+// asynchronous request leaves no trace, and a published one is
+// indistinguishable from a synchronous request.
+void CalcEngineOracleTest::randomizedExplicitSequences()
+{
+    QFETCH(int, seed);
+    std::mt19937 rng(static_cast<std::mt19937::result_type>(seed));
+    const auto pick = [&rng](int n) { return int(rng() % static_cast<unsigned>(n)); };
+    using Prepare = CalculationEngine::PrepareOutcome;
+
+    CalculationRegistry registry;
+    FakePreferenceProvider prefs;
+    registry.setPreferenceProvider(&prefs);
+    Synthetic::registerSharedWorld(registry);
+    Synthetic::registerExplicitWorld(registry);
+    prefs.set("p", 5);
+
+    Session s(registry);
+    s.state.setAttribute("EA_IN", 4);
+    s.state.setAttribute("EB_IN", 10);
+
+    QList<DependencyKey> names = Synthetic::explicitNames();
+    names << attr("X") << attr("Y") << attr("neg:EA1") << attr("neg:DB") << attr("EA_IN");
+    const QStringList explicitIds = {"expA", "expB"};
+    const QStringList inspectedIds = {"expA", "expB", "derivA", "derivA2", "derivB", "sum", "triple"};
+    const QStringList editable = {"EA_IN", "EB_IN", "A"};
+    const auto explicitRuns = [&s]() { return s.engine.runCount("expA") + s.engine.runCount("expB"); };
+    const auto edit = [&s, &pick](const QString &key) {
+        if (pick(4) == 0)
+            s.state.removeAttribute(s.engine, key);
+        else
+            s.state.setAttribute(s.engine, key, pick(9) - 2);   // negative EA_IN: expA rejects its input
+    };
+
+    // Literal checkpoint before anything random happens.
+    QVERIFY(!s.engine.attribute("DDA").isValid());
+    QCOMPARE(s.engine.blockers(attr("DB")).blockers.size(), 1);
+    QCOMPARE(s.engine.blockers(attr("DB")).blockers.first().instanceId, QStringLiteral("expA"));
+    QCOMPARE(explicitRuns(), 0);
+    QCOMPARE(s.engine.request("expA").status, ResultStatus::Ok);
+    QCOMPARE(s.engine.attribute("DDA"), QVariant(1105));
+    QCOMPARE(s.engine.blockers(attr("DB")).blockers.first().instanceId, QStringLiteral("expB"));
+    QCOMPARE(explicitRuns(), 1);
+    QVERIFY(s.engine.verifyAgainstFresh(names).isEmpty());
+
+    for (int step = 0; step < 300; ++step) {
+        const int op = pick(100);
+        const QByteArray where = QByteArray("seed ") + QByteArray::number(seed)
+                               + " step " + QByteArray::number(step);
+        const int runsBefore = explicitRuns();
+        int runsAllowed = 0;
+
+        if (op < 30) {
+            const DependencyKey name = names.at(pick(int(names.size())));
+            QVERIFY2(s.engine.verifyAgainstFresh({name}).isEmpty(),
+                     (where + " read of " + describe(name).toUtf8()).constData());
+        } else if (op < 50) {
+            edit(editable.at(pick(int(editable.size()))));
+        } else if (op < 72) {
+            // Inspection, in any order and any number of times.
+            for (int k = 0; k <= pick(3); ++k) {
+                if (pick(2) == 0) {
+                    const DependencyKey name = names.at(pick(int(names.size())));
+                    const BlockerReport report = s.engine.blockers(name);
+                    const bool available = s.engine.isAvailable(name);
+                    QVERIFY2((report.state == BlockerReport::State::Available) == available,
+                             (where + " blockers of " + describe(name).toUtf8()).constData());
+                    QVERIFY2((report.state == BlockerReport::State::Blocked) == !report.blockers.isEmpty(),
+                             where.constData());
+                } else {
+                    s.engine.readiness(inspectedIds.at(pick(int(inspectedIds.size()))));
+                }
+            }
+        } else if (op < 80) {
+            const CalculationEngine::RequestOutcome outcome =
+                s.engine.request(explicitIds.at(pick(int(explicitIds.size()))));
+            QVERIFY2(outcome.found, where.constData());
+            runsAllowed = 1;
+        } else if (op < 92) {
+            // Asynchronous request, compute inline.
+            const QString id = explicitIds.at(pick(int(explicitIds.size())));
+            const CalculationReadiness before = s.engine.readiness(id);
+            Prepare prepared = s.engine.prepare(id);
+            QVERIFY2((prepared.kind == Prepare::Kind::Ready) == (before.state == CalculationReadiness::State::Ready),
+                     where.constData());
+            // (Not the converse: once "missing input" is cached for a blocked
+            // calculation, prepare() reports that valid result instead.)
+            QVERIFY2(prepared.kind != Prepare::Kind::Blocked || before.state == CalculationReadiness::State::Blocked,
+                     where.constData());
+            if (prepared.kind == Prepare::Kind::Ready) {
+                // Still "not requested" while the ticket is outstanding.
+                const DependencyKey name = names.at(pick(int(names.size())));
+                QVERIFY2(s.engine.verifyAgainstFresh({name}).isEmpty(), where.constData());
+                QVERIFY2(explicitRuns() == runsBefore, where.constData());
+                if (pick(5) == 0) {
+                    prepared.ticket.reset();    // abandoned
+                } else {
+                    const PublishOutcome outcome = prepared.ticket->publish(prepared.ticket->compute());
+                    QVERIFY2(outcome.kind == PublishOutcome::Kind::Published, where.constData());
+                    QVERIFY2(explicitRuns() == runsBefore + 1, where.constData());
+                    runsAllowed = 1;
+                }
+            }
+        } else {
+            // Prepare, edit a declared input, publish: refused.
+            const bool a = pick(2) == 0;
+            Prepare prepared = s.engine.prepare(a ? "expA" : "expB");
+            if (prepared.kind == Prepare::Kind::Ready) {
+                ComputedCalculation computed = prepared.ticket->compute();
+                edit(a ? QStringLiteral("EA_IN") : (pick(2) == 0 ? QStringLiteral("EA_IN") : QStringLiteral("EB_IN")));
+                const PublishOutcome outcome = prepared.ticket->publish(std::move(computed));
+                QVERIFY2(outcome.kind == PublishOutcome::Kind::RefusedStale, where.constData());
+                QVERIFY2(outcome.reason == PublishOutcome::Reason::InputsChanged, where.constData());
+                QVERIFY2(outcome.invalidated.isEmpty(), where.constData());
+            }
+        }
+
+        // Explicit calculations run only in request / publish steps.
+        const int ran = explicitRuns() - runsBefore;
+        QVERIFY2(ran >= 0 && ran <= runsAllowed, where.constData());
+        QVERIFY2(s.engine.scopeDepth() == 0, where.constData());
+        QVERIFY2(s.engine.preparedCount() == 0, where.constData());
+
+        for (int k = 0; k < 3; ++k) {
+            const DependencyKey name = names.at(pick(int(names.size())));
+            QVERIFY2(s.engine.verifyAgainstFresh({name}).isEmpty(),
+                     (where + " read after step of " + describe(name).toUtf8()).constData());
+        }
+        QVERIFY2(explicitRuns() - runsBefore == ran, where.constData());
+    }
+
+    const QList<DependencyKey> mismatch = s.engine.verifyAgainstFresh(names);
+    QVERIFY2(mismatch.isEmpty(),
+             qPrintable(QStringLiteral("seed %1: %2 names differ from a fresh evaluation, first %3")
+                            .arg(seed).arg(mismatch.size())
+                            .arg(mismatch.isEmpty() ? QString() : describe(mismatch.first()))));
+    QCOMPARE(s.engine.undeclaredReadCount(), 0);
+    QCOMPARE(s.engine.cycleCount(), 0);
 }
 
 FLYSIGHT_TEST_MAIN(CalcEngineOracleTest)

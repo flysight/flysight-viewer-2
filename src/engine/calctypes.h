@@ -27,7 +27,7 @@ using CalculationId = QString;
 
 enum class EvaluationPolicy {
     OnDemand,   ///< runs when one of its outputs is first read
-    Explicit    ///< runs only through CalculationEngine::request()
+    Explicit    ///< runs only through CalculationEngine::request() or prepare()
 };
 
 /// One declared input of a calculation. All declared inputs are required.
@@ -101,11 +101,17 @@ inline size_t qHash(const CalcInput &in, size_t seed = 0)
 /// Preference. Cached nodes: Resolution (the candidate choice behind a public
 /// name; for a measurement this is the effective measurement) and Result (one
 /// calculation instance's whole result bundle).
+///
+/// Prepared is neither: it is the identity of one outstanding asynchronous
+/// request (a PreparedCalculation). It carries the edges the published result
+/// would have had, so that ordinary invalidation reaches it, and it is never a
+/// cached node, never has dependents, and never appears in a reported name set.
 struct GraphNode {
-    enum class Kind { StoredAttribute, SourceMeasurement, SourceUnit, Preference, Resolution, Result };
+    enum class Kind { StoredAttribute, SourceMeasurement, SourceUnit, Preference, Resolution, Result,
+                      Prepared };
 
     Kind kind = Kind::StoredAttribute;
-    QString a, b;                   ///< key | sensor,name | instance id
+    QString a, b;                   ///< key | sensor,name | instance id | instance id,serial
     bool measurementName = false;   ///< Resolution only: the public name is a measurement
 
     static GraphNode storedAttribute(const QString &key)
@@ -156,6 +162,16 @@ struct GraphNode {
         GraphNode n;
         n.kind = Kind::Result;
         n.a = instanceId;
+        return n;
+    }
+    /// `serial` comes from a per-engine counter: two requests for the same
+    /// instance are different nodes.
+    static GraphNode prepared(const QString &instanceId, quint64 serial)
+    {
+        GraphNode n;
+        n.kind = Kind::Prepared;
+        n.a = instanceId;
+        n.b = QString::number(serial);
         return n;
     }
 
@@ -232,6 +248,7 @@ inline QString describe(const GraphNode &n)
         return n.measurementName ? QStringLiteral("resolution(%1/%2)").arg(n.a, n.b)
                                  : QStringLiteral("resolution(%1)").arg(n.a);
     case GraphNode::Kind::Result:            return QStringLiteral("result(%1)").arg(n.a);
+    case GraphNode::Kind::Prepared:          return QStringLiteral("prepared(%1#%2)").arg(n.a, n.b);
     }
     return QString();
 }

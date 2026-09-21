@@ -72,4 +72,9 @@ bool EvaluationContext::isDeclared(const CalcInput &input) const
     return m_inputs.contains(input);
 }
 
+CalculationProgress &EvaluationContext::progress() const
+{
+    return m_progress ? *m_progress : CalculationProgress::none();
+}
+
 } // namespace FlySight

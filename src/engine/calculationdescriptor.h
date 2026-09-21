@@ -22,6 +22,11 @@ using ComputeFunction = std::function<CalculationResult(const EvaluationContext 
 /// state; the same descriptor serves every session.
 struct CalculationDescriptor {
     CalculationId        id;
+    /// Human-readable name for the interface ("Sensor fusion"). Interface text
+    /// only: opaque to the engine, it never affects evaluation, identity, or
+    /// the environment fingerprint. Registrars pass translated text; empty
+    /// means none (the id is shown instead).
+    QString              title;
     /// All required: the calculation runs only when every input is available.
     /// Order is the order of the availability check, which stops at the first
     /// unavailable input. "Works with or without input I" is expressed as two

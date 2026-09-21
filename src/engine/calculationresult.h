@@ -40,6 +40,14 @@ public:
     /// Every output that was set, in the order it was first set.
     QList<DependencyKey> setOutputs() const { return m_order; }
 
+    /// Optional human-readable text saying why outputs are unavailable ("IMU
+    /// gap of 2.3 s at 14:02:11"). A function of the inputs like every other
+    /// part of the bundle, and cached with it; the engine reports it through
+    /// CalculationEngine::resultDetail() and blocker inspection, and never
+    /// interprets it. Empty means none.
+    CalculationResult &setReason(const QString &text);
+    QString reason() const { return m_reason; }
+
 private:
     struct Output {
         bool available = false;
@@ -52,6 +60,7 @@ private:
 
     QHash<DependencyKey, Output> m_outputs;
     QList<DependencyKey> m_order;
+    QString m_reason;
 };
 
 } // namespace FlySight

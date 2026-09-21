@@ -138,6 +138,31 @@ FlySight::CalculationDescriptor tangle(const QString &id);      ///< one of tang
 QList<FlySight::DependencyKey> tangleNames();
 void registerTangleWorld(FlySight::CalculationRegistry &registry);
 
+/// Explicit calculations, separate from the other worlds: two explicit
+/// calculations in a chain (expB consumes an output of expA), each with
+/// on-demand values derived from its outputs. Attribute values are int
+/// QVariants, except EA_DIAG (text).
+///
+/// | Id                         | Policy   | Inputs                | Outputs                                                     |
+/// |----------------------------|----------|-----------------------|-------------------------------------------------------------|
+/// | expA (title "Explicit A")  | Explicit | attr EA_IN            | EA1 = EA_IN + 1, EA2 = EA_IN * 2, EA_DIAG = "ok"; when EA_IN < 0: EA1, EA2 unavailable, EA_DIAG = "rejected", reason "negative input" |
+/// | derivA                     | OnDemand | attr EA1              | DA = EA1 + 100                                              |
+/// | derivA2                    | OnDemand | attr DA               | DDA = DA + 1000                                             |
+/// | expB (title "Explicit B")  | Explicit | attr EA2, attr EB_IN  | EB1 = EA2 + EB_IN                                           |
+/// | derivB                     | OnDemand | attr EB1              | DB = EB1 + 1                                                |
+///
+/// Literals for EA_IN = 4, EB_IN = 10: EA1 5, EA2 8, DA 105, DDA 1105, EB1 18,
+/// DB 19. The compute functions are re-entrant (no captured mutable state), as
+/// the threading rule requires of explicit calculations.
+FlySight::CalculationDescriptor expA();
+FlySight::CalculationDescriptor derivA();
+FlySight::CalculationDescriptor derivA2();
+FlySight::CalculationDescriptor expB();
+FlySight::CalculationDescriptor derivB();
+QList<FlySight::DependencyKey> explicitNames();     ///< every output above, in table order
+/// Registers, in this order: expA, derivA, derivA2, expB, derivB.
+void registerExplicitWorld(FlySight::CalculationRegistry &registry);
+
 // Shorthand for public names
 inline FlySight::DependencyKey attr(const char *key)
 {

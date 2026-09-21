@@ -42,6 +42,12 @@ CalculationResult &CalculationResult::setUnavailable(const DependencyKey &output
     return *this;
 }
 
+CalculationResult &CalculationResult::setReason(const QString &text)
+{
+    m_reason = text;
+    return *this;
+}
+
 bool CalculationResult::contains(const DependencyKey &output) const
 {
     return m_outputs.contains(output);

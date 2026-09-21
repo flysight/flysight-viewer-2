@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <exception>
+#include <new>
 
 #include <QDebug>
 #include <QStringList>
@@ -96,6 +97,15 @@ CalculationEngine::CalculationEngine(const ISessionState *state, CalculationRegi
 
 CalculationEngine::~CalculationEngine()
 {
+    // A ticket may outlive the engine: it must neither call back into it nor
+    // publish. Both destructors run on the main thread, so nulling the plain
+    // back-pointer is all it takes.
+    for (PreparedCalculation *ticket : std::as_const(m_prepared)) {
+        ticket->m_engine = nullptr;
+        ticket->markGone(PublishOutcome::Reason::SessionGone);
+    }
+    m_prepared.clear();
+
     if (m_enrolled && m_registry)
         m_registry->withdraw(this);
 }
@@ -115,6 +125,12 @@ void CalculationEngine::registryDestroyed()
 
 void CalculationEngine::clearCaches()
 {
+    // Everything an outstanding ticket depended on is dropped, so every ticket
+    // is stale. Marked BEFORE the edge maps are wiped: afterwards no
+    // invalidation could reach them any more.
+    for (PreparedCalculation *ticket : std::as_const(m_prepared))
+        ticket->markStale();
+
     m_resolutions.clear();
     m_results.clear();
     m_dependsOn.clear();
@@ -466,13 +482,44 @@ CalculationEngine::ResultEntry CalculationEngine::computeResult(const Calculatio
         return entry;
     }
 
-    // ---- availability pass: declared order, stop at the first unavailable input.
-    // Stopping early is sound: while that input stays unavailable the answer
-    // cannot change, and the input has been recorded.
     EvaluationContext ctx(instance.instanceId, m_quiet);
-    ResultStatus status = ResultStatus::Ok;
+    const ResultStatus status = gatherInputs(instance, ctx);
 
-    for (const CalcInput &input : d.inputs) {
+    if (status == ResultStatus::Ok) {
+        ComputedCalculation computed = PreparedCalculation::run(d, ctx, nullptr);
+
+        // The synchronous path has no cancel facility and nowhere to "not
+        // cache": an on-demand read that did not cache would re-run on every
+        // read. So here both are calculation failures, as they always were -
+        // CalculationCancelled is a non-standard exception, std::bad_alloc a
+        // standard one. Only the asynchronous path tells them apart.
+        if (computed.kind == ComputedCalculation::Kind::Cancelled) {
+            computed.kind = ComputedCalculation::Kind::Failed;
+            computed.nonStandardException = true;
+            computed.failureText = QStringLiteral("non-standard exception");
+        } else if (computed.kind == ComputedCalculation::Kind::ResourceExhausted) {
+            computed.kind = ComputedCalculation::Kind::Failed;
+            computed.failureText = QString::fromUtf8(std::bad_alloc().what());
+        }
+
+        // The context logged undeclared reads itself, as they happened.
+        entry = acceptRun(instance, std::move(computed), fromRequest, /*logUndeclaredReads=*/false);
+    } else {
+        entry.status = status;
+    }
+
+    closed = guard.finish();
+    entry.sawCycle = closed.sawCycle;
+    return entry;
+}
+
+ResultStatus CalculationEngine::gatherInputs(const CalculationInstance &instance, EvaluationContext &ctx)
+{
+    // The availability pass: declared order, stop at the first unavailable
+    // input. Stopping early is sound: while that input stays unavailable the
+    // answer cannot change, and the input has been recorded. The caller has
+    // pushed the Result scope; everything looked at here lands in it.
+    for (const CalcInput &input : instance.descriptor->inputs) {
         EvaluationContext::InputValue value;
         bool available = false;
 
@@ -517,68 +564,84 @@ CalculationEngine::ResultEntry CalculationEngine::computeResult(const Calculatio
         }
         }
 
-        if (m_scopes.back().cycle) {
-            status = ResultStatus::Cycle;
-            break;
-        }
-        if (!available) {
-            status = ResultStatus::MissingInput;
-            break;
-        }
+        if (m_scopes.back().cycle)
+            return ResultStatus::Cycle;
+        if (!available)
+            return ResultStatus::MissingInput;
         ctx.provide(input, value);
     }
+    return ResultStatus::Ok;
+}
 
-    // ---- run
-    if (status == ResultStatus::Ok) {
-        // Counted before the call, so a throwing calculation counts as a run.
-        ++m_totalRuns;
-        ++m_runsByInstance[instance.instanceId];
-        ++m_runsByRegistration[instance.registrationId];
+CalculationEngine::ResultEntry CalculationEngine::acceptRun(const CalculationInstance &instance,
+                                                            ComputedCalculation &&computed,
+                                                            bool requested, bool logUndeclaredReads)
+{
+    Q_ASSERT(computed.kind == ComputedCalculation::Kind::Completed
+             || computed.kind == ComputedCalculation::Kind::Failed);
+    const CalculationDescriptor &d = *instance.descriptor;
 
-        CalculationResult bundle;
-        try {
-            bundle = d.compute(ctx);
-        } catch (const std::exception &ex) {
-            status = ResultStatus::Failed;
-            if (!m_quiet)
-                qWarning().noquote() << "Calculation" << instance.instanceId << "failed:" << ex.what();
-        } catch (...) {
-            status = ResultStatus::Failed;
-            if (!m_quiet)
+    ResultEntry entry;
+    entry.instance = instance;
+    entry.requested = requested;
+
+    // A throwing calculation counts as a run. Only runs that are accepted are
+    // counted: a refused or discarded asynchronous run never gets here.
+    ++m_totalRuns;
+    ++m_runsByInstance[instance.instanceId];
+    ++m_runsByRegistration[instance.registrationId];
+
+    ResultStatus status = ResultStatus::Ok;
+    if (computed.kind != ComputedCalculation::Kind::Completed) {
+        status = ResultStatus::Failed;
+        entry.detail = computed.failureText;
+        if (!m_quiet) {
+            if (computed.nonStandardException)
                 qWarning().noquote() << "Calculation" << instance.instanceId
                                      << "failed with a non-standard exception";
+            else
+                qWarning().noquote() << "Calculation" << instance.instanceId << "failed:"
+                                     << computed.failureText;
         }
+    }
 
-        if (!ctx.m_undeclaredReads.isEmpty()) {
-            m_undeclaredReadCount += int(ctx.m_undeclaredReads.size());
-            m_lastUndeclaredRead = std::make_pair(instance.instanceId, ctx.m_undeclaredReads.last());
-            if (status == ResultStatus::Ok)
-                status = ResultStatus::UndeclaredRead;
+    if (!computed.undeclaredReads.isEmpty()) {
+        m_undeclaredReadCount += int(computed.undeclaredReads.size());
+        m_lastUndeclaredRead = std::make_pair(instance.instanceId, computed.undeclaredReads.last());
+        if (logUndeclaredReads && !m_quiet) {
+            // An asynchronous run: its context was quiet, because nothing is
+            // logged off the main thread. Same text as EvaluationContext's.
+            for (const CalcInput &input : std::as_const(computed.undeclaredReads))
+                qWarning().noquote() << "Calculation" << instance.instanceId
+                                     << "read an undeclared input:" << describe(input)
+                                     << "- its result is discarded";
         }
+        if (status == ResultStatus::Ok)
+            status = ResultStatus::UndeclaredRead;
+    }
 
-        if (status == ResultStatus::Ok) {
-            // A key of the wrong type (setMeasurement on an attribute output or
-            // vice versa) is simply not among the declared outputs.
-            for (const DependencyKey &out : bundle.setOutputs()) {
-                if (!d.outputs.contains(out)) {
-                    status = ResultStatus::InvalidOutput;
-                    if (!m_quiet)
-                        qWarning().noquote() << "Calculation" << instance.instanceId
-                                             << "set an output it did not declare:" << describe(out)
-                                             << "- its result is discarded";
-                    break;
-                }
+    if (status == ResultStatus::Ok) {
+        // A key of the wrong type (setMeasurement on an attribute output or
+        // vice versa) is simply not among the declared outputs.
+        for (const DependencyKey &out : computed.bundle.setOutputs()) {
+            if (!d.outputs.contains(out)) {
+                status = ResultStatus::InvalidOutput;
+                if (!m_quiet)
+                    qWarning().noquote() << "Calculation" << instance.instanceId
+                                         << "set an output it did not declare:" << describe(out)
+                                         << "- its result is discarded";
+                break;
             }
         }
+    }
 
-        // Only a clean run publishes a bundle: never a partial result of a failure.
-        if (status == ResultStatus::Ok)
-            entry.bundle = std::make_shared<const CalculationResult>(std::move(bundle));
+    // Only a clean run publishes a bundle: never a partial result of a failure.
+    if (status == ResultStatus::Ok) {
+        entry.detail = computed.bundle.reason();
+        entry.bundle = std::make_shared<const CalculationResult>(std::move(computed.bundle));
     }
 
     entry.status = status;
-    closed = guard.finish();
-    entry.sawCycle = closed.sawCycle;
     return entry;
 }
 
@@ -725,6 +788,14 @@ QSet<DependencyKey> CalculationEngine::invalidate(const QList<GraphNode> &seeds)
                 names.insert(n.publicName());
         } else if (n.kind == GraphNode::Kind::Result) {
             m_results.remove(n);
+        } else if (n.kind == GraphNode::Kind::Prepared) {
+            // Something an outstanding asynchronous request depended on
+            // changed: its result must not be installed. The ticket stays
+            // registered until it is published (refused) or destroyed; its
+            // edges go with dropForwardEdges() below. Never a reported name.
+            const auto ticket = m_prepared.constFind(n);
+            if (ticket != m_prepared.constEnd())
+                ticket.value()->markStale();
         }
         dropProvisionalOwnedBy(n);
 
@@ -836,6 +907,17 @@ void CalculationEngine::onRegistryChanged(const RegistryChange &change)
     QList<GraphNode> seeds;
 
     if (!change.added) {
+        // Neither may a result that is still being computed be installed for a
+        // registration that was removed - not even if the same id has been
+        // registered again by then. Marked here, whether or not any seed
+        // reaches the ticket and whether or not the broadcast is deferred.
+        for (PreparedCalculation *ticket : std::as_const(m_prepared)) {
+            if (ticket->m_instance.registrationId == change.registrationId)
+                ticket->markGone(PublishOutcome::Reason::RegistrationRemoved);
+        }
+    }
+
+    if (!change.added) {
         // No cache entry may outlive its registration, and neither may an
         // answer that absorbed a provisional result of it. An instance id is
         // the registration id, or "<registration id>#<instance key>".
@@ -912,6 +994,25 @@ CalculationEngine::RequestOutcome CalculationEngine::request(const CalculationId
     return outcome;
 }
 
+QSet<DependencyKey> CalculationEngine::dropNotRequested(const GraphNode &C)
+{
+    // Forget the cached "not requested" answer BEFORE evaluating. While it is
+    // in the cache a nested lookup of this calculation (an input that
+    // transitively reads one of its outputs) would be served from the cache
+    // ahead of the stack check in ensureResult(): no cycle would be reported,
+    // and the input would resolve as though the calculation were still not
+    // requested. Everything that cached an answer derived from "not requested"
+    // goes with it, so no input of this evaluation is served from that stale
+    // state either. A "not requested" entry looked at nothing, so it has no
+    // forward edges of its own; dropForwardEdges is for symmetry.
+    //
+    // Used by request(), prepare(), and publish(): the caller has established
+    // that whatever is cached for C is "not requested".
+    if (m_results.remove(C))
+        dropForwardEdges(C);
+    return invalidate(m_dependents.value(C).values());
+}
+
 CalculationEngine::RequestOutcome CalculationEngine::requestInstance(const CalculationInstance &instance,
                                                                      bool *evaluated)
 {
@@ -927,20 +1028,7 @@ CalculationEngine::RequestOutcome CalculationEngine::requestInstance(const Calcu
         return outcome;
     }
 
-    // Forget the cached "not requested" answer BEFORE evaluating. While it is
-    // in the cache a nested lookup of this calculation (an input that
-    // transitively reads one of its outputs) would be served from the cache
-    // ahead of the stack check in ensureResult(): no cycle would be reported,
-    // and the input would resolve as though the calculation were still not
-    // requested. Everything that cached an answer derived from "not requested"
-    // goes with it, so no input of this evaluation is served from that stale
-    // state either. A "not requested" entry looked at nothing, so it has no
-    // forward edges of its own; dropForwardEdges is for symmetry.
-    if (cached != m_results.constEnd()) {
-        m_results.remove(C);
-        dropForwardEdges(C);
-    }
-    outcome.invalidated = invalidate(m_dependents.value(C).values());
+    outcome.invalidated = dropNotRequested(C);
 
     Scope scope;
     const ResultEntry entry = computeResult(instance, /*fromRequest=*/true, scope);
@@ -956,6 +1044,211 @@ CalculationEngine::RequestOutcome CalculationEngine::requestInstance(const Calcu
     m_results.insert(C, entry);
     publishEdges(C, scope);
     outcome.status = entry.status;
+    return outcome;
+}
+
+// =============================================================================
+// Asynchronous request
+// =============================================================================
+//
+// prepare() is the first half of request() and publishPrepared() the second;
+// PreparedCalculation::compute() in between touches nothing of the engine. The
+// statements are shared (dropNotRequested, gatherInputs, PreparedCalculation::
+// run, acceptRun, publishEdges), so the two paths cannot drift apart.
+//
+// Staleness is decided from the dependency graph. A Ready ticket is a node
+// with the forward edges its result would have had. Whatever would have
+// invalidated the published result reaches that node in invalidate() and marks
+// the ticket; nothing depends on the node, so it never propagates further and
+// never disturbs a cached answer. The edges are not installed under
+// Result(instance): a read between prepare and publish re-caches "not
+// requested" for that node, and publishing those edges would wipe the ticket's.
+
+CalculationEngine::PrepareOutcome CalculationEngine::prepare(const CalculationId &id,
+                                                             const DependencyKey &instanceOutput)
+{
+    PrepareOutcome outcome;
+    if (!m_scopes.empty()) {
+        Q_ASSERT_X(false, "CalculationEngine", "prepare() from inside an evaluation");
+        return outcome;
+    }
+    flushPending();
+    if (!m_registry)
+        return outcome;
+
+    const std::optional<CalculationInstance> instance = m_registry->instance(id, instanceOutput);
+    if (!instance)
+        return outcome;     // NotFound: nothing changes
+
+    if (instance->descriptor->policy != EvaluationPolicy::Explicit) {
+        // On-demand (and therefore every plugin) compute function stays on the
+        // main thread by construction. request() still accepts any policy.
+        outcome.kind = PrepareOutcome::Kind::NotExplicit;
+        return outcome;
+    }
+
+    const GraphNode C = GraphNode::result(instance->instanceId);
+    const auto cached = m_results.constFind(C);
+    if (cached != m_results.constEnd() && cached->status != ResultStatus::NotRequested) {
+        outcome.kind = PrepareOutcome::Kind::AlreadyValid;
+        outcome.status = cached->status;    // a valid result is never recomputed
+        return outcome;
+    }
+
+    outcome.invalidated = dropNotRequested(C);
+
+    // The availability pass, under the scope request() would evaluate in, so a
+    // ring through the calculation's own output is met the same way. The
+    // context is quiet whatever the engine is: compute() must not log.
+    std::unique_ptr<EvaluationContext> context(new EvaluationContext(instance->instanceId, /*quiet=*/true));
+    Scope scope;
+    ResultStatus status = ResultStatus::Ok;
+    {
+        // An exception from the state propagates from here with the scope
+        // popped and nothing registered, as it does from request().
+        ScopeGuard guard(this, C);
+        status = gatherInputs(*instance, *context);
+        scope = guard.finish();
+    }
+    // The root of an evaluation: context-free by construction.
+    Q_ASSERT(isContextFree(scope));
+
+    if (status != ResultStatus::Ok) {
+        // Nothing to run. MissingInput and Cycle are functions of state: cached
+        // and published exactly as request() does.
+        ResultEntry entry;
+        entry.instance = *instance;
+        entry.requested = true;
+        entry.status = status;
+        entry.sawCycle = scope.sawCycle;
+        m_results.insert(C, entry);
+        publishEdges(C, scope);
+        flushPending();
+
+        outcome.kind = PrepareOutcome::Kind::NothingToRun;
+        outcome.status = status;
+        if (status == ResultStatus::MissingInput) {
+            // Is the input missing only because an explicit calculation has not
+            // been requested yet? Then that one is what to ask for.
+            QSet<DependencyKey> walking;
+            const InstanceInspection inspection = inspectInstance(*instance, walking);
+            if (inspection.readiness.state == CalculationReadiness::State::Blocked) {
+                outcome.kind = PrepareOutcome::Kind::Blocked;
+                outcome.blockers = inspection.readiness.blockers;
+            }
+        }
+        return outcome;
+    }
+
+    // Ready. Nothing is cached for the calculation: until the ticket is
+    // published it stays "not requested" for every reader.
+    const GraphNode node = GraphNode::prepared(instance->instanceId, ++m_preparedSerial);
+    std::unique_ptr<PreparedCalculation> ticket(
+        new PreparedCalculation(this, *instance, std::move(context), node));
+    ticket->m_looked = scope.looked;
+    ticket->m_looked.remove(C);     // as publishEdges() does: an edge to itself says nothing
+    ticket->m_provisional = scope.provisional;
+    ticket->m_sawCycle = scope.sawCycle;
+    ticket->m_droppedAtPrepare = outcome.invalidated;
+
+    m_prepared.insert(node, ticket.get());
+    setEdges(node, ticket->m_looked);
+    flushPending();
+
+    outcome.kind = PrepareOutcome::Kind::Ready;
+    outcome.ticket = std::move(ticket);
+    return outcome;
+}
+
+void CalculationEngine::withdraw(PreparedCalculation &ticket)
+{
+    dropForwardEdges(ticket.m_node);
+    m_prepared.remove(ticket.m_node);
+    ticket.m_engine = nullptr;
+}
+
+void CalculationEngine::forget(PreparedCalculation *ticket)
+{
+    // An abandoned request leaves nothing behind: "as if it had never been
+    // asked". Only cache and edge maps are touched, so this is safe at any time.
+    withdraw(*ticket);
+}
+
+PublishOutcome CalculationEngine::publishPrepared(PreparedCalculation &ticket, ComputedCalculation &&computed)
+{
+    PublishOutcome outcome;
+    outcome.reason = PublishOutcome::Reason::None;
+
+    const bool evaluating = !m_scopes.empty();
+    Q_ASSERT_X(!evaluating, "CalculationEngine", "publish() from inside an evaluation");
+    if (!evaluating)
+        flushPending();     // a deferred invalidation may be what makes the ticket stale
+
+    // Spent whatever happens next. Withdrawn FIRST: the invalidation below
+    // must not find the ticket's own node among the dependents it walks.
+    withdraw(ticket);
+
+    if (ticket.m_refused) {
+        outcome.kind = ticket.m_refusalKind;
+        outcome.reason = ticket.m_refusalReason;
+        return outcome;
+    }
+    if (evaluating) {
+        // Release behavior of the assertion above: nothing may be installed in
+        // the middle of an evaluation, so the result is refused.
+        outcome.kind = PublishOutcome::Kind::RefusedStale;
+        outcome.reason = PublishOutcome::Reason::InputsChanged;
+        return outcome;
+    }
+
+    // After staleness, so that a superseded run is reported as superseded.
+    if (computed.kind == ComputedCalculation::Kind::Cancelled) {
+        outcome.kind = PublishOutcome::Kind::Discarded;
+        outcome.reason = PublishOutcome::Reason::Cancelled;
+        return outcome;
+    }
+    if (computed.kind == ComputedCalculation::Kind::ResourceExhausted) {
+        outcome.kind = PublishOutcome::Kind::Discarded;
+        outcome.reason = PublishOutcome::Reason::ResourceExhausted;
+        return outcome;
+    }
+
+    const CalculationInstance &instance = ticket.m_instance;
+    const GraphNode C = GraphNode::result(instance.instanceId);
+    const auto cached = m_results.constFind(C);
+    if (cached != m_results.constEnd() && cached->status != ResultStatus::NotRequested) {
+        // A synchronous request() ran in between (its inputs are unchanged, or
+        // the ticket would be stale). By purity that result is identical.
+        outcome.kind = PublishOutcome::Kind::RefusedStale;
+        outcome.reason = PublishOutcome::Reason::AlreadyPublished;
+        return outcome;
+    }
+
+    // From here on: exactly what requestInstance() does around its evaluation.
+    // The names read while "not requested" come from two places. Those read
+    // before prepare() were dropped there and are not in the cache any more, so
+    // the ticket remembers them; those read since are dropped now.
+    outcome.invalidated = ticket.m_droppedAtPrepare;
+    outcome.invalidated.unite(dropNotRequested(C));
+
+    ResultEntry entry = acceptRun(instance, std::move(computed), /*requested=*/true,
+                                  /*logUndeclaredReads=*/true);
+    entry.sawCycle = ticket.m_sawCycle;
+
+    Scope scope;
+    scope.node = C;
+    scope.looked = ticket.m_looked;
+    scope.provisional = ticket.m_provisional;
+    scope.sawCycle = ticket.m_sawCycle;
+
+    // One immutable bundle: every output appears at once.
+    m_results.insert(C, entry);
+    publishEdges(C, scope);
+    flushPending();
+
+    outcome.kind = PublishOutcome::Kind::Published;
+    outcome.status = entry.status;
+    outcome.detail = entry.detail;
     return outcome;
 }
 
@@ -992,6 +1285,20 @@ std::optional<ResultStatus> CalculationEngine::resultStatus(const CalculationId 
     if (provisional != m_provisional.constEnd())
         return provisional->status;
     return std::nullopt;
+}
+
+QString CalculationEngine::resultDetail(const CalculationId &id, const DependencyKey &instanceOutput) const
+{
+    QString instanceId = id;
+    if (!isEmptyName(instanceOutput)) {
+        const std::optional<CalculationInstance> instance =
+            m_registry ? m_registry->instance(id, instanceOutput) : std::nullopt;
+        if (!instance)
+            return QString();
+        instanceId = instance->instanceId;
+    }
+    const auto it = m_results.constFind(GraphNode::result(instanceId));
+    return it != m_results.constEnd() ? it->detail : QString();
 }
 
 int CalculationEngine::runCount(const CalculationId &registrationId) const
@@ -1032,9 +1339,256 @@ int CalculationEngine::cachedNodeCount() const
     return int(m_resolutions.size() + m_results.size());
 }
 
+int CalculationEngine::preparedCount() const
+{
+    return int(m_prepared.size());
+}
+
 QSet<GraphNode> CalculationEngine::dependenciesOf(const GraphNode &n) const
 {
     return m_dependsOn.value(n);
+}
+
+// =============================================================================
+// Blocker inspection
+// =============================================================================
+//
+// Which explicit calculations stand between a name and its availability. The
+// walk follows the candidates the resolution rule would consider, and decides
+// every availability question with an ordinary top-level read - never from
+// what happens to be cached (the only thing taken from the cache is "has this
+// explicit calculation a valid result", which is exactly the piece of state a
+// read cannot derive). There is no path from here to
+// computeResult(..., fromRequest = true), so no explicit calculation can run,
+// and ordinary reads cannot change what a later read returns.
+
+namespace {
+
+void appendUnique(QList<CalculationBlocker> &list, const QList<CalculationBlocker> &more)
+{
+    for (const CalculationBlocker &candidate : more) {
+        const bool known = std::any_of(list.cbegin(), list.cend(), [&candidate](const CalculationBlocker &b) {
+            return b.instanceId == candidate.instanceId;
+        });
+        if (!known)
+            list.append(candidate);
+    }
+}
+
+void appendUnique(QList<UnproducedNote> &list, const QList<UnproducedNote> &more)
+{
+    for (const UnproducedNote &candidate : more) {
+        const bool known = std::any_of(list.cbegin(), list.cend(), [&candidate](const UnproducedNote &n) {
+            return n.calculation.instanceId == candidate.calculation.instanceId;
+        });
+        if (!known)
+            list.append(candidate);
+    }
+}
+
+} // namespace
+
+CalculationBlocker CalculationEngine::makeBlocker(const CalculationInstance &instance,
+                                                  const DependencyKey &selectedBy)
+{
+    CalculationBlocker blocker;
+    blocker.registrationId = instance.registrationId;
+    // A family instance is selected by (any) one of its output names; a plain
+    // calculation by its id alone.
+    if (instance.instanceId != instance.registrationId)
+        blocker.instanceOutput = selectedBy;
+    blocker.instanceId = instance.instanceId;
+    blocker.title = instance.descriptor->title.isEmpty() ? instance.instanceId : instance.descriptor->title;
+    return blocker;
+}
+
+CalculationEngine::InstanceInspection CalculationEngine::inspectInstance(const CalculationInstance &instance,
+                                                                         QSet<DependencyKey> &walking)
+{
+    InstanceInspection inspection;
+    CalculationReadiness &readiness = inspection.readiness;
+
+    // Availability of the inputs comes before policy, and ALL of them are
+    // examined: with one input blocked and another genuinely missing, a request
+    // for the blocker could never help, so there is no blocker to report.
+    bool anyUnavailable = false;
+    bool anyNotProduced = false;
+    QList<CalculationBlocker> inputBlockers;
+
+    for (const CalcInput &input : instance.descriptor->inputs) {
+        switch (input.kind) {
+        case CalcInput::Kind::Attribute:
+        case CalcInput::Kind::Measurement: {
+            const DependencyKey name = input.kind == CalcInput::Kind::Attribute
+                ? DependencyKey::attribute(input.key)
+                : DependencyKey::measurement(input.sensor, input.name);
+            const BlockerReport report = inspectName(name, walking);
+            if (report.state == BlockerReport::State::Available)
+                break;
+            anyUnavailable = true;
+            appendUnique(inspection.notProduced, report.notProduced);
+            if (report.state == BlockerReport::State::Blocked)
+                appendUnique(inputBlockers, report.blockers);
+            else if (report.state == BlockerReport::State::NotProduced)
+                anyNotProduced = true;
+            else
+                inspection.notApplicable = true;
+            break;
+        }
+        case CalcInput::Kind::Preference: {
+            const IPreferenceProvider *provider = m_registry ? m_registry->preferenceProvider() : nullptr;
+            if (!provider || !provider->preferenceValue(input.key).isValid()) {
+                anyUnavailable = true;
+                inspection.notApplicable = true;
+            }
+            break;
+        }
+        case CalcInput::Kind::SourceMeasurement:
+            if (!m_state || !m_state->hasSourceMeasurement(input.sensor, input.name)
+                || m_state->sourceMeasurement(input.sensor, input.name).isEmpty()) {
+                anyUnavailable = true;
+                inspection.notApplicable = true;
+            }
+            break;
+        case CalcInput::Kind::SourceUnit:
+            if (!m_state || !m_state->hasSourceMeasurement(input.sensor, input.name)) {
+                anyUnavailable = true;
+                inspection.notApplicable = true;
+            }
+            break;
+        }
+    }
+
+    if (anyUnavailable) {
+        if (inspection.notApplicable || anyNotProduced) {
+            readiness.state = CalculationReadiness::State::MissingInput;
+        } else {
+            readiness.state = CalculationReadiness::State::Blocked;
+            readiness.blockers = inputBlockers;
+        }
+        return inspection;
+    }
+
+    // Every input is available. What remains is whether there is anything to
+    // request: not for an on-demand calculation, and not for an explicit one
+    // that has a valid result.
+    const auto cached = m_results.constFind(GraphNode::result(instance.instanceId));
+    const bool valid = cached != m_results.constEnd() && cached->status != ResultStatus::NotRequested;
+    if (valid) {
+        readiness.state = CalculationReadiness::State::Done;
+        readiness.status = cached->status;
+    } else if (instance.descriptor->policy == EvaluationPolicy::OnDemand) {
+        readiness.state = CalculationReadiness::State::Done;
+    } else {
+        readiness.state = CalculationReadiness::State::Ready;
+    }
+    return inspection;
+}
+
+BlockerReport CalculationEngine::inspectName(const DependencyKey &name, QSet<DependencyKey> &walking)
+{
+    BlockerReport report;
+
+    // A name that is being walked further up ends a ring: it contributes
+    // nothing here (and is reported where the walk first met it).
+    if (walking.contains(name))
+        return report;
+
+    if (readTopLevel(name).available) {
+        report.state = BlockerReport::State::Available;
+        return report;
+    }
+
+    // The candidates the resolution rule would consider (see resolve()).
+    QList<CalculationInstance> candidates;
+    if (name.type == DependencyKey::Type::Attribute) {
+        // A stored attribute wins even when its value is invalid: no candidate.
+        if (m_registry && !(m_state && m_state->hasStoredAttribute(name.attributeKey)))
+            candidates = m_registry->candidatesFor(name);
+    } else {
+        const QString &sensor = name.measurementKey.first;
+        const QString &meas = name.measurementKey.second;
+        if (m_state && m_state->hasSourceMeasurement(sensor, meas)) {
+            // Source data never falls through to derived candidates.
+            if (m_registry && m_registry->hasSourceConversions())
+                candidates = m_registry->sourceConversionsFor(sensor, meas);
+        } else if (m_registry) {
+            candidates = m_registry->candidatesFor(name);
+        }
+    }
+
+    walking.insert(name);
+    for (const CalculationInstance &candidate : std::as_const(candidates)) {
+        const InstanceInspection inspection = inspectInstance(candidate, walking);
+        const bool isExplicit = candidate.descriptor->policy == EvaluationPolicy::Explicit;
+
+        switch (inspection.readiness.state) {
+        case CalculationReadiness::State::Blocked:
+            appendUnique(report.blockers, inspection.readiness.blockers);
+            appendUnique(report.notProduced, inspection.notProduced);
+            break;
+        case CalculationReadiness::State::Ready:
+            // Explicit, runnable, never run: this is the one to request.
+            appendUnique(report.blockers, {makeBlocker(candidate, name)});
+            break;
+        case CalculationReadiness::State::Done:
+            // The name is unavailable although this candidate has nothing left
+            // to run. For an explicit calculation that is "ran and did not
+            // produce"; for an on-demand one it is ordinary unavailability.
+            if (isExplicit && inspection.readiness.status) {
+                UnproducedNote note;
+                note.calculation = makeBlocker(candidate, name);
+                note.status = *inspection.readiness.status;
+                const auto cached = m_results.constFind(GraphNode::result(candidate.instanceId));
+                if (cached != m_results.constEnd())
+                    note.detail = cached->detail;
+                appendUnique(report.notProduced, {note});
+            }
+            break;
+        case CalculationReadiness::State::MissingInput:
+            // Missing only because something upstream ran and did not produce:
+            // then this name was not produced either (a failed fit makes every
+            // value derived from it "not produced", not "not applicable").
+            if (!inspection.notApplicable)
+                appendUnique(report.notProduced, inspection.notProduced);
+            break;
+        case CalculationReadiness::State::Unknown:
+            break;
+        }
+    }
+    walking.remove(name);
+
+    if (!report.blockers.isEmpty())
+        report.state = BlockerReport::State::Blocked;
+    else if (!report.notProduced.isEmpty())
+        report.state = BlockerReport::State::NotProduced;
+    else
+        report.state = BlockerReport::State::NotApplicable;
+    return report;
+}
+
+BlockerReport CalculationEngine::blockers(const DependencyKey &name)
+{
+    if (!m_scopes.empty()) {
+        Q_ASSERT_X(false, "CalculationEngine", "blockers() from inside an evaluation");
+        return BlockerReport();
+    }
+    QSet<DependencyKey> walking;
+    return inspectName(name, walking);
+}
+
+CalculationReadiness CalculationEngine::readiness(const CalculationId &id, const DependencyKey &instanceOutput)
+{
+    if (!m_scopes.empty()) {
+        Q_ASSERT_X(false, "CalculationEngine", "readiness() from inside an evaluation");
+        return CalculationReadiness();
+    }
+    const std::optional<CalculationInstance> instance =
+        m_registry ? m_registry->instance(id, instanceOutput) : std::nullopt;
+    if (!instance)
+        return CalculationReadiness();  // Unknown
+    QSet<DependencyKey> walking;
+    return inspectInstance(*instance, walking).readiness;
 }
 
 // =============================================================================

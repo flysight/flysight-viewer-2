@@ -28,6 +28,9 @@ if(NOT TARGET flysight_core)
 endif()
 
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Test)
+# The engine library creates no thread; tests that drive
+# PreparedCalculation::compute() on a worker (support/asyncdriver.h) do.
+find_package(Threads REQUIRED)
 
 # Application source directory, for the test that must compile application
 # sources directly (tst_python_bridge: pluginhost.cpp, pluginadapters.cpp).
@@ -42,6 +45,7 @@ add_library(flysight_test_support STATIC
   support/oraclecatalogue.cpp  support/oraclecatalogue.h
   support/logbookprobe.cpp     support/logbookprobe.h
   support/testmain.h           support/testutil.h
+  support/asyncdriver.h
 )
 target_include_directories(flysight_test_support PUBLIC "${CMAKE_CURRENT_LIST_DIR}/support")
 target_link_libraries(flysight_test_support
@@ -109,6 +113,8 @@ flysight_add_test(tst_calcregistry      SOURCES tst_calcregistry.cpp)
 flysight_add_test(tst_calcengine        SOURCES tst_calcengine.cpp)
 flysight_add_test(tst_calcengine_safety SOURCES tst_calcengine_safety.cpp)
 flysight_add_test(tst_calcengine_oracle SOURCES tst_calcengine_oracle.cpp)
+flysight_add_test(tst_calcengine_async    SOURCES tst_calcengine_async.cpp    LIBS Threads::Threads)
+flysight_add_test(tst_calcengine_blockers SOURCES tst_calcengine_blockers.cpp LIBS Threads::Threads)
 
 # Built-in calculations (golden values on the generated descent fixture)
 flysight_add_test(tst_builtins_golden SOURCES tst_builtins_golden.cpp)
@@ -120,7 +126,7 @@ flysight_add_test(tst_local_coordinates SOURCES tst_local_coordinates.cpp)
 flysight_add_test(tst_simplified_track SOURCES tst_simplified_track.cpp)
 
 # SessionData / SessionModel on the engine (real built-ins, global registry)
-flysight_add_test(tst_session_engine       SOURCES tst_session_engine.cpp)
+flysight_add_test(tst_session_engine       SOURCES tst_session_engine.cpp LIBS Threads::Threads)
 flysight_add_test(tst_session_model_engine SOURCES tst_session_model_engine.cpp)
 
 # Source layer and conversion layer: the schema and unit tables, the conversion

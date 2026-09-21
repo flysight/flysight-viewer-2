@@ -3,11 +3,13 @@
 // preference input. Every expectation is a literal; the only computed
 // comparison is the engine's fresh-evaluation oracle.
 
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
 #include <QtTest>
 
+#include "asyncdriver.h"
 #include "builtinfixture.h"
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
@@ -91,6 +93,7 @@ private slots:
 
     // Acceptance clauses on a real session with temporary global registrations
     void explicitPolicyOnSession();
+    void asyncRequestOnSession();
     void safetyOnRealSession();
 
 private:
@@ -589,6 +592,138 @@ void SessionEngineTest::explicitPolicyOnSession()
     QCOMPARE(session.getAttribute("_T_EXPL_B").toDouble(), 1704110422.0);
     QCOMPARE(engine.runCount(id), 2);
     QVERIFY(engine.verifyAgainstFresh(both).isEmpty());
+}
+
+// The asynchronous request against real SessionData ownership: the engine is
+// held by pointer, so moving a session keeps the ticket valid; destroying the
+// session (or move-assigning over it) destroys the engine, and copy-assigning
+// over it clears the engine. In every case the engine, not the caller, decides
+// whether the computed result may be installed.
+void SessionEngineTest::asyncRequestOnSession()
+{
+    using Prepare = CalculationEngine::PrepareOutcome;
+    const QString id = QStringLiteral("test.async.pair");
+    CalculationDescriptor d;
+    d.id = id;
+    d.title = QStringLiteral("Async pair");
+    d.policy = EvaluationPolicy::Explicit;
+    d.inputs = {CalcInput::attribute("_EXIT_TIME")};
+    d.outputs = {attr("_T_ASYNC_A"), attr("_T_ASYNC_B")};
+    d.compute = [](const EvaluationContext &ctx) {
+        const double exit = ctx.attribute("_EXIT_TIME").toDouble();
+        CalculationResult r;
+        r.setAttribute("_T_ASYNC_A", exit + 1.0);
+        r.setAttribute("_T_ASYNC_B", exit + 2.0);
+        return r;
+    };
+    QVERIFY(registerTemporary(d));
+    const QList<DependencyKey> both = {attr("_T_ASYNC_A"), attr("_T_ASYNC_B")};
+
+    {
+        // Published, on a worker thread; blocker inspection before and after.
+        SessionData session = DescentFixture::load();
+        CalculationEngine &engine = session.calculationEngine();
+        for (const DependencyKey &name : both) {
+            const BlockerReport report = engine.blockers(name);
+            QVERIFY(report.state == BlockerReport::State::Blocked);
+            QCOMPARE(report.blockers.size(), 1);
+            QCOMPARE(report.blockers.first().registrationId, id);
+            QCOMPARE(report.blockers.first().title, QStringLiteral("Async pair"));
+        }
+        QVERIFY(!session.getAttribute("_T_ASYNC_A").isValid());
+        QCOMPARE(engine.runCount(id), 0);
+
+        Prepare prepared = engine.prepare(id);
+        QVERIFY(prepared.kind == Prepare::Kind::Ready);
+        ComputedCalculation computed = computeOn(ComputeMode::StdThread, *prepared.ticket);
+        QVERIFY(!session.getAttribute("_T_ASYNC_B").isValid());     // computed, not published
+        const PublishOutcome outcome = prepared.ticket->publish(std::move(computed));
+        QVERIFY(outcome.kind == PublishOutcome::Kind::Published);
+        QVERIFY(outcome.status == ResultStatus::Ok);
+        QVERIFY(outcome.invalidated.contains(attr("_T_ASYNC_A")));
+        QVERIFY(outcome.invalidated.contains(attr("_T_ASYNC_B")));
+        QCOMPARE(session.getAttribute("_T_ASYNC_A").toDouble(), 1704110410.0);
+        QCOMPARE(session.getAttribute("_T_ASYNC_B").toDouble(), 1704110411.0);
+        QCOMPARE(engine.runCount(id), 1);
+        for (const DependencyKey &name : both)
+            QVERIFY(engine.blockers(name).state == BlockerReport::State::Available);
+        QVERIFY(engine.verifyAgainstFresh(both).isEmpty());
+    }
+    {
+        // The session is moved between prepare and publish: same engine, still valid.
+        SessionData session = DescentFixture::load();
+        Prepare prepared = session.calculationEngine().prepare(id);
+        QVERIFY(prepared.kind == Prepare::Kind::Ready);
+        ComputedCalculation computed = computeOn(ComputeMode::QtThread, *prepared.ticket);
+
+        SessionData moved = std::move(session);
+        const PublishOutcome outcome = prepared.ticket->publish(std::move(computed));
+        QVERIFY(outcome.kind == PublishOutcome::Kind::Published);
+        QCOMPARE(moved.getAttribute("_T_ASYNC_A").toDouble(), 1704110410.0);
+        QCOMPARE(moved.calculationEngine().runCount(id), 1);
+        QVERIFY(moved.calculationEngine().verifyAgainstFresh(both).isEmpty());
+    }
+    {
+        // The session is destroyed: the ticket outlives the engine.
+        auto session = std::make_unique<SessionData>(DescentFixture::load());
+        Prepare prepared = session->calculationEngine().prepare(id);
+        QVERIFY(prepared.kind == Prepare::Kind::Ready);
+        ComputedCalculation computed = computeOn(ComputeMode::StdThread, *prepared.ticket);
+        session.reset();
+        const PublishOutcome outcome = prepared.ticket->publish(std::move(computed));
+        QVERIFY(outcome.kind == PublishOutcome::Kind::RefusedGone);
+        QVERIFY(outcome.reason == PublishOutcome::Reason::SessionGone);
+    }
+    {
+        // Move-assigned over: the old engine is destroyed with the old state.
+        SessionData session = DescentFixture::load();
+        Prepare prepared = session.calculationEngine().prepare(id);
+        QVERIFY(prepared.kind == Prepare::Kind::Ready);
+        ComputedCalculation computed = computeOn(ComputeMode::StdThread, *prepared.ticket);
+        session = DescentFixture::load();
+        const PublishOutcome outcome = prepared.ticket->publish(std::move(computed));
+        QVERIFY(outcome.kind == PublishOutcome::Kind::RefusedGone);
+        QVERIFY(outcome.reason == PublishOutcome::Reason::SessionGone);
+        QVERIFY(!session.getAttribute("_T_ASYNC_A").isValid());
+    }
+    {
+        // Copy-assigned over: the engine stays and is cleared, so the inputs are stale.
+        SessionData session = DescentFixture::load();
+        const SessionData other = DescentFixture::load();
+        Prepare prepared = session.calculationEngine().prepare(id);
+        QVERIFY(prepared.kind == Prepare::Kind::Ready);
+        ComputedCalculation computed = computeOn(ComputeMode::StdThread, *prepared.ticket);
+        session = other;
+        const PublishOutcome outcome = prepared.ticket->publish(std::move(computed));
+        QVERIFY(outcome.kind == PublishOutcome::Kind::RefusedStale);
+        QVERIFY(outcome.reason == PublishOutcome::Reason::InputsChanged);
+        QVERIFY(!session.getAttribute("_T_ASYNC_A").isValid());
+        QCOMPARE(session.calculationEngine().runCount(id), 0);
+    }
+    {
+        // An edit of the declared input while the calculation runs.
+        SessionData session = DescentFixture::load();
+        CalculationEngine &engine = session.calculationEngine();
+        Prepare prepared = engine.prepare(id);
+        QVERIFY(prepared.kind == Prepare::Kind::Ready);
+        ComputedCalculation computed = computeOn(ComputeMode::StdThread, *prepared.ticket);
+        session.setAttribute("_EXIT_TIME", T0 + 20.0);
+        const PublishOutcome outcome = prepared.ticket->publish(std::move(computed));
+        QVERIFY(outcome.kind == PublishOutcome::Kind::RefusedStale);
+        QVERIFY(outcome.reason == PublishOutcome::Reason::InputsChanged);
+        QVERIFY(!session.getAttribute("_T_ASYNC_A").isValid());
+        QCOMPARE(engine.runCount(id), 0);
+
+        // Still requestable, and an unrelated edit does not refuse.
+        Prepare again = engine.prepare(id);
+        QVERIFY(again.kind == Prepare::Kind::Ready);
+        ComputedCalculation recomputed = computeOn(ComputeMode::StdThread, *again.ticket);
+        session.setAttribute("_T_UNRELATED", 1);
+        QVERIFY(again.ticket->publish(std::move(recomputed)).kind == PublishOutcome::Kind::Published);
+        QCOMPARE(session.getAttribute("_T_ASYNC_A").toDouble(), 1704110421.0);
+        QCOMPARE(session.getAttribute("_T_ASYNC_B").toDouble(), 1704110422.0);
+        QVERIFY(engine.verifyAgainstFresh(both).isEmpty());
+    }
 }
 
 // Acceptance 12, on a real session next to the real built-ins: a thrown

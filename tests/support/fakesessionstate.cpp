@@ -384,6 +384,88 @@ void registerTangleWorld(CalculationRegistry &registry)
         registry.registerCalculation(tangle(id));
 }
 
+// ---- explicit calculations
+
+namespace {
+
+// output = input + add, on demand
+CalculationDescriptor derived(const char *id, const char *input, const char *output, int add)
+{
+    const QString in = QString::fromLatin1(input);
+    const QString out = QString::fromLatin1(output);
+    CalculationDescriptor d;
+    d.id = QString::fromLatin1(id);
+    d.inputs = {CalcInput::attribute(in)};
+    d.outputs = {DependencyKey::attribute(out)};
+    d.compute = [in, out, add](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(out, ctx.attribute(in).toInt() + add);
+    };
+    return d;
+}
+
+} // namespace
+
+CalculationDescriptor expA()
+{
+    CalculationDescriptor d;
+    d.id = QStringLiteral("expA");
+    d.title = QStringLiteral("Explicit A");
+    d.policy = EvaluationPolicy::Explicit;
+    d.inputs = {CalcInput::attribute(QStringLiteral("EA_IN"))};
+    d.outputs = {attr("EA1"), attr("EA2"), attr("EA_DIAG")};
+    d.compute = [](const EvaluationContext &ctx) {
+        const int in = ctx.attribute(QStringLiteral("EA_IN")).toInt();
+        CalculationResult r;
+        if (in < 0) {
+            // A rejection is a result: the measurements-to-be are unavailable,
+            // the diagnostics output and the reason say why.
+            r.setAttribute(QStringLiteral("EA_DIAG"), QStringLiteral("rejected"));
+            r.setReason(QStringLiteral("negative input"));
+            return r;
+        }
+        r.setAttribute(QStringLiteral("EA1"), in + 1);
+        r.setAttribute(QStringLiteral("EA2"), in * 2);
+        r.setAttribute(QStringLiteral("EA_DIAG"), QStringLiteral("ok"));
+        return r;
+    };
+    return d;
+}
+
+CalculationDescriptor derivA() { return derived("derivA", "EA1", "DA", 100); }
+CalculationDescriptor derivA2() { return derived("derivA2", "DA", "DDA", 1000); }
+
+CalculationDescriptor expB()
+{
+    CalculationDescriptor d;
+    d.id = QStringLiteral("expB");
+    d.title = QStringLiteral("Explicit B");
+    d.policy = EvaluationPolicy::Explicit;
+    d.inputs = {CalcInput::attribute(QStringLiteral("EA2")), CalcInput::attribute(QStringLiteral("EB_IN"))};
+    d.outputs = {attr("EB1")};
+    d.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(QStringLiteral("EB1"),
+                                                ctx.attribute(QStringLiteral("EA2")).toInt()
+                                                    + ctx.attribute(QStringLiteral("EB_IN")).toInt());
+    };
+    return d;
+}
+
+CalculationDescriptor derivB() { return derived("derivB", "EB1", "DB", 1); }
+
+QList<DependencyKey> explicitNames()
+{
+    return {attr("EA1"), attr("EA2"), attr("EA_DIAG"), attr("DA"), attr("DDA"), attr("EB1"), attr("DB")};
+}
+
+void registerExplicitWorld(CalculationRegistry &registry)
+{
+    registry.registerCalculation(expA());
+    registry.registerCalculation(derivA());
+    registry.registerCalculation(derivA2());
+    registry.registerCalculation(expB());
+    registry.registerCalculation(derivB());
+}
+
 } // namespace Synthetic
 
 } // namespace FlySightTest

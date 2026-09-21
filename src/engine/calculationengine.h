@@ -14,8 +14,10 @@
 #include <QVariant>
 #include <QVector>
 
+#include "blockerreport.h"
 #include "calctypes.h"
 #include "calculationregistry.h"
+#include "preparedcalculation.h"
 #include "sessionstate.h"
 
 namespace FlySight {
@@ -56,7 +58,13 @@ namespace FlySight {
 ///    would meet the ring again, from a different side.
 /// Graphs without cycles never take either path, so they cost what they did.
 ///
-/// Inspection and invalidation never compute. Single-threaded.
+/// Inspection and invalidation never compute.
+///
+/// Single-threaded: the engine, its registry, and its session are used from the
+/// main thread only, and the engine creates no thread and holds no lock. The one
+/// thing that may run elsewhere is PreparedCalculation::compute(), which sees
+/// the inputs captured by prepare() and nothing of the engine; the rule is
+/// spelled out in preparedcalculation.h.
 class CalculationEngine {
 public:
     explicit CalculationEngine(const ISessionState *state,
@@ -110,6 +118,35 @@ public:
     RequestOutcome request(const CalculationId &id,
                            const DependencyKey &instanceOutput = DependencyKey::attribute(QString()));
 
+    // ---- asynchronous request (see preparedcalculation.h) --------------------
+    // prepare() here, PreparedCalculation::compute() on any thread, then
+    // PreparedCalculation::publish() here. Both paths give identical results.
+    struct PrepareOutcome {
+        enum class Kind {
+            NotFound,       ///< unknown id / name not of this family: nothing changed
+            NotExplicit,    ///< only explicit calculations may be prepared: nothing changed
+            AlreadyValid,   ///< a valid result is cached (`status`); it is never recomputed
+            NothingToRun,   ///< an input is unavailable or on a cycle: cached as request() would (`status`)
+            Blocked,        ///< NothingToRun, and requesting `blockers` first can change that
+            Ready           ///< inputs captured; `ticket` is set and nothing was cached
+        };
+        Kind kind = Kind::NotFound;
+        ResultStatus status = ResultStatus::NotRequested;   ///< AlreadyValid / NothingToRun / Blocked
+        QList<CalculationBlocker> blockers;                 ///< Blocked only
+        std::unique_ptr<PreparedCalculation> ticket;        ///< Ready only
+        /// The cached names dropped because they had been read while the
+        /// calculation was "not requested". NothingToRun / Blocked: the caller
+        /// passes them on, like RequestOutcome::invalidated. Ready: informational
+        /// (no value changed); publish() reports these names again.
+        QSet<DependencyKey> invalidated;
+    };
+    /// Step 1 of the asynchronous request. Resolves and captures every declared
+    /// input, computing on-demand inputs as needed; never runs an explicit
+    /// calculation, this one included. Until the ticket is published the
+    /// calculation stays "not requested" for every reader.
+    PrepareOutcome prepare(const CalculationId &id,
+                           const DependencyKey &instanceOutput = DependencyKey::attribute(QString()));
+
     // ---- inspection: const, never resolves, never computes, never touches state
     enum class CachedState { NotCached, Available, Unavailable };
     CachedState cachedState(const DependencyKey &name) const;
@@ -128,6 +165,24 @@ public:
     /// answer holding its verdict was invalidated.
     std::optional<ResultStatus> resultStatus(const CalculationId &id,
                                              const DependencyKey &instanceOutput = DependencyKey::attribute(QString())) const;
+    /// The text that goes with a cached result: the bundle's reason
+    /// (CalculationResult::setReason) for a clean run, the exception text for
+    /// Failed. Empty when there is none or when no result is cached.
+    QString resultDetail(const CalculationId &id,
+                         const DependencyKey &instanceOutput = DependencyKey::attribute(QString())) const;
+
+    // ---- blocker inspection: may compute on-demand values; never runs an
+    // explicit calculation; never changes what a read returns ----------------
+    // Performs ordinary reads and const lookups only, so by the idempotency
+    // invariant it cannot change any later answer. Must not be called from
+    // inside a compute function. An outstanding ticket does not change a report.
+    /// Which explicit calculations currently stand between `name` and its
+    /// availability, seen through any number of on-demand intermediates.
+    BlockerReport blockers(const DependencyKey &name);
+    /// Where one calculation instance stands; input availability is decided
+    /// before policy. "Can this be requested for this session" is state Ready.
+    CalculationReadiness readiness(const CalculationId &id,
+                                   const DependencyKey &instanceOutput = DependencyKey::attribute(QString()));
 
     // ---- instrumentation (per engine) --------------------------------------
     int  runCount(const CalculationId &registrationId) const;   ///< family: sum over instances
@@ -139,8 +194,11 @@ public:
     int  undeclaredReadCount() const;
     std::pair<QString, CalcInput> lastUndeclaredRead() const;   ///< instance id, input
     int  scopeDepth() const;        ///< 0 outside evaluation
-    int  edgeCount() const;         ///< total forward edges
-    int  cachedNodeCount() const;
+    int  edgeCount() const;         ///< total forward edges, those of outstanding tickets included
+    int  cachedNodeCount() const;   ///< resolutions and results; outstanding tickets are not counted
+    /// Tickets handed out by prepare() that were neither published nor
+    /// destroyed yet (a ticket whose inputs went stale is still counted).
+    int  preparedCount() const;
     QSet<GraphNode> dependenciesOf(const GraphNode &n) const;
 
     // ---- oracle ------------------------------------------------------------
@@ -162,6 +220,7 @@ public:
 
 private:
     friend class CalculationRegistry;
+    friend class PreparedCalculation;   // forget(), publishPrepared()
 
     enum class Provider { None, Stored, Source, Calculation };
 
@@ -181,6 +240,7 @@ private:
         bool requested = false;
         CalculationInstance instance;
         bool sawCycle = false;      // see Scope::sawCycle
+        QString detail;             // resultDetail(): the bundle's reason, or the failure text
     };
 
     /// One evaluation in progress. Everything read while it is the top of the
@@ -222,10 +282,32 @@ private:
     ResultEntry ensureResult(const CalculationInstance &instance);
     ResultEntry computeResult(const CalculationInstance &instance, bool fromRequest,
                               Scope &closed);
+    // The three steps of an evaluation, shared by request() / ordinary reads
+    // and by prepare() / publish(), so the two paths cannot diverge. (The
+    // middle one is PreparedCalculation::run().)
+    ResultStatus gatherInputs(const CalculationInstance &instance, EvaluationContext &ctx);
+    ResultEntry acceptRun(const CalculationInstance &instance, ComputedCalculation &&computed,
+                          bool requested, bool logUndeclaredReads);
     bool cachedAnswerUsable(const GraphNode &node, bool sawCycle);
     bool isContextFree(const Scope &closed) const;
     void handUp(const Scope &closed);
     RequestOutcome requestInstance(const CalculationInstance &instance, bool *evaluated = nullptr);
+    QSet<DependencyKey> dropNotRequested(const GraphNode &result);
+
+    // Asynchronous request
+    void forget(PreparedCalculation *ticket);       // called by the ticket's destructor
+    void withdraw(PreparedCalculation &ticket);
+    PublishOutcome publishPrepared(PreparedCalculation &ticket, ComputedCalculation &&computed);
+
+    // Blocker inspection
+    struct InstanceInspection {
+        CalculationReadiness readiness;
+        QList<UnproducedNote> notProduced;  // from unavailable inputs that "ran and did not produce"
+        bool notApplicable = false;         // an unavailable input no request could provide
+    };
+    InstanceInspection inspectInstance(const CalculationInstance &instance, QSet<DependencyKey> &walking);
+    BlockerReport inspectName(const DependencyKey &name, QSet<DependencyKey> &walking);
+    static CalculationBlocker makeBlocker(const CalculationInstance &instance, const DependencyKey &selectedBy);
 
     void note(const GraphNode &node);
     int stackIndexOf(const GraphNode &node) const;
@@ -264,6 +346,11 @@ private:
     };
     QHash<GraphNode, ProvisionalStatus> m_provisional;          // Result node -> status
     QHash<GraphNode, QSet<GraphNode>> m_provisionalOwned;       // owner -> Result nodes
+
+    // Outstanding asynchronous requests by their graph node. A ticket's node
+    // has the forward edges its result would have, and nothing depends on it.
+    QHash<GraphNode, PreparedCalculation *> m_prepared;
+    quint64 m_preparedSerial = 0;
 
     std::vector<Scope> m_scopes;
 

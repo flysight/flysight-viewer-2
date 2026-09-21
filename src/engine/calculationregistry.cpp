@@ -200,6 +200,18 @@ bool CalculationRegistry::contains(const CalculationId &id) const
                        [&id](const Entry &e) { return e.id == id; });
 }
 
+QString CalculationRegistry::title(const CalculationId &id) const
+{
+    for (const Entry &entry : m_entries) {
+        if (entry.id != id)
+            continue;
+        if (entry.kind == EntryKind::Calculation && !entry.descriptor->title.isEmpty())
+            return entry.descriptor->title;
+        return entry.id;
+    }
+    return QString();
+}
+
 QList<CalculationId> CalculationRegistry::registeredIds() const
 {
     QList<CalculationId> ids;

@@ -208,3 +208,11 @@
 103 tst_map_models noOriginRemovesTrackAndDot
 103 tst_map_models boundsClearedWhenNoTrack
 103 tst_map_models recoversAfterSourceCorrection
+
+# 107, 108, 112, 113 - engine half, with synthetic explicit calculations.
+# Comment lines in this phase; Phase 10 converts them into audited 100 + n lines.
+# SFJ 7  tst_calcengine_async asyncMatchesSync
+# SFJ 8  tst_calcengine_async inputChangeWhileRunningRefuses
+# SFJ 8  tst_calcengine_async changeAfterPublicationDropsDependents
+# SFJ 12 tst_calcengine_blockers derivedNameReportsExplicitBlocker
+# SFJ 13 tst_calcengine_blockers chainedBlockers
