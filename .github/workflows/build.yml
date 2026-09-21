@@ -670,8 +670,9 @@ jobs:
             found=$(find "$FRAMEWORKS_DIR" -name "$pattern" ! -type l 2>/dev/null | head -1)
             if [ -n "$found" ]; then
               echo "Found: $(basename "$found")"
-              # Check for problematic dependencies
-              bad_deps=$(otool -L "$found" | grep -v "@" | grep -v "/usr/lib" | grep -v "/System" | grep "dylib" || true)
+              # Check for problematic dependencies. The first line of otool -L
+              # is the inspected file's own path, not a dependency: skip it.
+              bad_deps=$(otool -L "$found" | tail -n +2 | grep -v "@" | grep -v "/usr/lib" | grep -v "/System" | grep "dylib" || true)
               if [ -n "$bad_deps" ]; then
                 echo "  WARNING: Has absolute paths:"
                 echo "$bad_deps" | sed 's/^/    /'
