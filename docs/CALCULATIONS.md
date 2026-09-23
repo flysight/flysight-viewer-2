@@ -1056,28 +1056,29 @@ Three calculations are registered, in this order:
 
 | Id | Policy | Inputs | Outputs |
 | --- | --- | --- | --- |
-| `builtin.fusion.fit` (title "Sensor fusion") | Explicit | the 21 below | the 18 below |
+| `builtin.fusion.fit` (title "Sensor fusion") | Explicit | the 22 below | the 18 below |
 | `builtin.fusion.accH` | OnDemand | `Fusion/accN`, `Fusion/accE` | `Fusion/accH` |
 | `builtin.fusion.systemTime` | OnDemand | `Fusion/_time`, `_TIME_FIT_A`, `_TIME_FIT_B` | `Fusion/_system_time` |
 
-**Inputs of the fit** (all required; exactly the members of `Fusion::Channels`,
-in member order):
+**Inputs of the fit** (all required; exactly the vector members of
+`Fusion::Channels`, in member order, then the four origin attributes):
 
 ```
 GNSS/_time
 Local/north  Local/east  Local/down  Local/velN  Local/velE  Local/velD
 GNSS/hAcc    GNSS/vAcc   GNSS/sAcc
 IMU/_time
-IMU/ax  IMU/ay  IMU/az  IMU/wx  IMU/wy  IMU/wz
+IMU/ax  IMU/ay  IMU/az  IMU/wx  IMU/wy  IMU/wz  IMU/temperature
 _LOCAL_ORIGIN_INDEX  _LOCAL_ORIGIN_LAT  _LOCAL_ORIGIN_LON  _LOCAL_ORIGIN_HMSL
 ```
 
 Effective values only: accelerations in m/s^2, rates in deg/s (the kernel
-converts to radians), times in shared UTC. Everything behind them - `GNSS/lat`,
-the `TIME` sensor, the time fit, `SCHEMA_VER` - is transitive and tracked by
-the engine. Markers and preferences are not inputs: dragging the exit marker
-does not drop a fit. A recording without IMU data, without a local origin (no
-fix under 10 m), or without a time fit has a **missing input**: there is
+converts to radians), temperatures in degC, times in shared UTC. Everything
+behind them - `GNSS/lat`, the `TIME` sensor, the time fit, `SCHEMA_VER` - is
+transitive and tracked by the engine. Markers and preferences are not inputs:
+dragging the exit marker does not drop a fit. A recording without IMU data,
+without `IMU/temperature`, without a local origin (no fix under 10 m), or
+without a time fit has a **missing input**: there is
 nothing to compute, no job can be created, and blocker inspection reports
 `NotApplicable`, never "not requested".
 
@@ -1092,9 +1093,9 @@ attribute).
 input vectors field by field; the only logic is that a stored
 `_LOCAL_ORIGIN_INDEX` that is not a number becomes -1 (the kernel's "outside
 the GNSS samples") instead of silently meaning fix 0. Every validation rule,
-unit conversion, and message is the kernel's and is held to the reference by
-the golden tests, so the session-level outputs are bit-identical to the
-kernel's goldens.
+unit conversion, and message is the kernel's and is held to the kernel's
+goldens by the golden tests (`tests/README.md` section 11), so the
+session-level outputs are bit-identical to the kernel's goldens.
 
 **Outcome mapping.**
 
@@ -1108,9 +1109,10 @@ kernel's goldens.
 **Progress and cancellation.** The compute function hands the kernel two
 callbacks over `ctx.progress()`: one forwards each progress text to
 `report()`, the other returns `isCancelled()`. The kernel calls them, in that
-order, at its boundaries only (before the fit, between graph-construction
-blocks, before each optimizer iteration); a linear solve in progress finishes
-first. `CalculationCancelled` is thrown by the compute function itself after
+order, at its boundaries only: before the fit, every 256 states of every
+graph build, and before each optimizer iteration of every fit, the
+initializer's prefix and segment fits included (`SENSOR_FUSION.md` section
+7); a linear solve in progress finishes first. `CalculationCancelled` is thrown by the compute function itself after
 `run()` has returned `Cancelled`, never from a callback. On the synchronous
 path the facility is `CalculationProgress::none()`, so `request()` and the
 three-step path run the same fit on the same values. The compute function
@@ -1151,7 +1153,9 @@ centered time fit (`_TIME_FIT_A` / `_TIME_FIT_B`, and with them every non-GNSS
 Tests (label `fusion`, behind `FLYSIGHT_BUILD_FUSION_TESTS`):
 `tests/tst_fusion_session.cpp` (real `SessionData` engines, the fit on the
 test's main thread), `tests/tst_fusion_jobs.cpp` (the job queue's worker on a
-real `SessionModel`) and `tests/tst_fusion_rows.cpp` (the plot rows of section
-16 with the seventeen real plots and real fits); the column rule without GTSAM
-in `tst_column_cache::explicitBackedColumnIsNeverCached`. The model, its
+real `SessionModel`), `tests/tst_fusion_rows.cpp` (the plot rows of section
+16 with the seventeen real plots and real fits) and
+`tests/tst_fusion_runner.cpp` (the command-line runner against the
+application's import path); the column rule without GTSAM in
+`tst_column_cache::explicitBackedColumnIsNeverCached`. The model, its
 limitations and what is rejected are in [SENSOR_FUSION.md](SENSOR_FUSION.md).

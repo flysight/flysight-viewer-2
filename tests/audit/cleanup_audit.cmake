@@ -12,7 +12,10 @@
 #     absent (acceptance 120), and the structure that replaced them stays in
 #     place: one worker thread and no locks, GTSAM confined to the fusion
 #     kernel, gestures only from the plot list's row delegate, a widget-free
-#     core.
+#     core; the stationary-window initializer, its silent poll and the
+#     constant-bias algorithm strings retired by the sensor fusion improvements
+#     stay absent, and the fusion tools stay isolated (items 212, 218, 231,
+#     233, 234, 247).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -393,13 +396,106 @@ expect_none("the logic components see no widget"
   "src/jobqueue.*" "src/jobmodel.*" "src/plotrequests.*" "src/plotmodel.*"
   src/ui/docks/plotselection/PlotRowLayout.h)
 
+# =============================================================================
+# Sensor fusion improvements (acceptance items 201-247): the segmented
+# initializer replaced the stationary-window detector and the single-anchor
+# initial attitude, the stopping rule and the temperature model retired the
+# constant-bias algorithm strings, and two tools (fusion_golden_capture,
+# fusion_runner) joined the fusion-tests block. The rules below keep the retired
+# mechanisms out of the tree, the kernel's boundaries and its one
+# integrateMeasurement call in place, the fusion document current, and the
+# tools isolated and uninstalled.
+# =============================================================================
+
+# ─────────────────────────────── fusion-model (items 212, 218, 234, 247)
+audit_group(fusion-model)
+# Allow: tests/README.md is excluded because its section 10 spells these
+# patterns. `kWindowLength\b` and not `kWindowLength`: the kernel's
+# kWindowLengthsMessage (fusionsamples.cpp) is a rejection reason, not a gate.
+expect_none("the stationary-window detector is gone"
+  "stationarywindow|StationaryWindow|assessStationaryWindow|bestStationaryWindow|kMaxMeanRate|imuGapLimit|kWindowLength\\b|kWindowGrid"
+  src tests cmake docs README.md CMakeLists.txt ":!tests/README.md")
+# Allow: none expected. Preparation neither reports nor asks; the first
+# boundary of a run is "Starting fit" (fusionprogress.h).
+expect_none("the silent poll is gone" "pollCancel" src tests)
+expect_none("the anchor-attitude initializer is gone"
+  "InitialAttitude|initialAttitude\\(|kInitialHeadingDeg|attitudeFromStationaryWindow" src tests)
+# Allow: none expected. The goldens say batch-temperature-bias-v3; a hit under
+# tests/data/fusion means a stale capture (re-capture, tests/README.md section 11).
+expect_none("the retired algorithm strings are gone" "batch-shared-bias-v[12]"
+  src tests docs README.md ":!tests/README.md")
+# Allow: the branch the kernel was ported from is history: the historical
+# sentence of tests/README.md section 11, its section 1 audit row, appendix B,
+# and the provenance comment at the head of tst_fusion_kernel.cpp (the literal
+# expectations of the reference's self-test). A new historical note is added
+# to the allowed-file regex; a new mechanism never is. The count in
+# tests/README.md rises only with a new historical note there.
+expect_only("the branch is history only" "sensor-fusion-clean-port"
+  "^tests/README\\.md$|^tests/tst_fusion_kernel\\.cpp$"
+  src tests docs cmake CMakeLists.txt README.md)
+expect_count("the branch is history only" "sensor-fusion-clean-port" 4 tests/README.md)
+# Allow: these count LINES, comments included. Exactly three checkpoint( call
+# sites: "Starting fit" (fusion.cpp), the pass iteration and "Integrating IMU
+# factors" (factorgraphfit.cpp), the three kinds of boundary. A new boundary
+# kind is added to the run() comment of fusion.h, to docs/SENSOR_FUSION.md
+# section 7 and to this count together; a comment that spells `checkpoint(`
+# is reworded instead. The per-step covariance is written into the shared
+# preintegration parameters before the one `.integrateMeasurement(` call of
+# imuintegration.cpp (the member-call form, so the comment above the call
+# that names the function does not count).
+expect_count("three kinds of boundary" "checkpoint\\(" 3 src/fusion)
+expect_count("one integrateMeasurement, per-step covariance" "[.>]integrateMeasurement\\(" 1
+  src/fusion/imuintegration.cpp)
+# Allow: none expected. The fusion document describes the model as it is:
+# no stationary or candidate window, no coarse-only initializer, no frozen
+# algorithm, no bias-shift settled test, no branch, twenty-two inputs. Say
+# "the previous initializer", "a resting window", "the coarse attitude at the
+# anchor" when the history must be mentioned.
+expect_none("the fusion document describes the current model"
+  "stationary window|candidate window|coarse initializer|frozen|bias shifts below|zero bias shift|sensor-fusion-clean-port|twenty-one"
+  docs/SENSOR_FUSION.md)
+
+# ─────────────────────────────── fusion-tooling (items 231, 233)
+audit_group(fusion-tooling)
+# Allow: none expected. The runner imports model-free (DataImporter::parseFile,
+# SessionMerge, the engine on a bare SessionData) and never names the
+# preferences singleton, the logbook manager, the engine's preference
+# provider, the session model, the application's import driver, the
+# import-time defaults or the job queue. QSettings is not in the pattern: the
+# runner's defensive redirect block names it on purpose.
+expect_none("the runner never touches the logbook or settings"
+  "PreferencesManager|LogbookManager|EnginePreferenceProvider|SessionModel|SessionImport|applyCreationDefaults|JobQueue"
+  tests/fusion_runner.cpp)
+# Allow: none expected. Numbers become text through CsvFormat only
+# (formatDouble, formatAttributeValue), so a --csv file reloads bit for bit
+# and the goldens are locale-proof.
+expect_none("one number formatter in the tools"
+  "QString::number\\(|FloatingPointShortest|std::to_chars|QLocale|'g', 17"
+  tests/fusion_runner.cpp tests/fusion_golden_capture.cpp)
+# Allow: none expected. The three executables of the fusion-tests block are
+# built with the tests and never shipped.
+expect_none("the fusion tools are not installed"
+  "install\\(.*(fusion_runner|fusion_golden_capture|solver_deploy_probe)"
+  src tests cmake CMakeLists.txt)
+# Allow: a new internal header under src/fusion is added to the pattern; a
+# new test that needs the kernel's seams is added to the allowed-file regex
+# (and to the GTSAM regex of solver-confinement). The runner includes
+# fusion/fusion.h and fusion/fusionregistration.h only; the capture tool and
+# tests/fusion/fusiontrace.h include fusion/fusionpipeline.h, the trace seam,
+# which is not in the pattern.
+expect_only("the tools see the public header or the trace seam only"
+  "#include \"fusion/(factorgraphfit|initializer|imuintegration|inputadapter|fusionsamples|fusionoutput|fusionprogress|trajectoryreconstruction|temperatureimufactor|samplestatistics)\\.h\""
+  "^src/fusion/|^tests/tst_fusion_kernel\\.cpp$"
+  src tests)
+
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 
 # ─────────────────────────────── acceptance traceability
-# tests/acceptance_map.txt: items 1-19 (the schema / engine specification) and
-# 101-120 (sensor fusion and plot-driven jobs, item = 100 + acceptance number).
-# Four line forms; see the head of the map.
+# tests/acceptance_map.txt: items 1-19 (the schema / engine specification),
+# 101-120 (sensor fusion and plot-driven jobs, item = 100 + acceptance number)
+# and 201-247 (the sensor fusion improvements, item = 200 + requirement
+# number). Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -468,8 +564,9 @@ else()
     endif()
 
     list(APPEND items_seen "${item}")
-    if(NOT ((item GREATER_EQUAL 1 AND item LESS_EQUAL 19) OR (item GREATER_EQUAL 101 AND item LESS_EQUAL 120)))
-      _violation("[traceability] item ${item} is outside 1-19 and 101-120: ${line}")
+    if(NOT ((item GREATER_EQUAL 1 AND item LESS_EQUAL 19) OR (item GREATER_EQUAL 101 AND item LESS_EQUAL 120)
+            OR (item GREATER_EQUAL 201 AND item LESS_EQUAL 247)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120 and 201-247: ${line}")
     endif()
   endforeach()
 
@@ -481,6 +578,12 @@ else()
   endforeach()
   # Manual and ci lines never stand alone
   foreach(item RANGE 101 120)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 201 247)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

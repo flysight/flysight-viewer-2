@@ -1,5 +1,5 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Two specifications, two item ranges:
+# (tests/audit/cleanup_audit.cmake). Three specifications, three item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
@@ -7,6 +7,10 @@
 #   101-120   sensor fusion as an explicit calculation with plot-driven
 #             background jobs: item = 100 + acceptance number. Stated in full
 #             in tests/README.md, appendix B.
+#   201-247   sensor fusion improvements (segmented initializer, stopping rule,
+#             per-step IMU noise, temperature-dependent gyro bias, the
+#             command-line runner): item = 200 + requirement number. Stated in
+#             full in tests/README.md, appendix C.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -16,10 +20,10 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the two ranges; every item 1-19 needs a line;
-# every item 101-120 needs at least one test or audit line (manual and ci lines
-# never stand alone). The human-readable matrices are tests/README.md sections
-# 9.1 and 9.2; keep them in sync with this file.
+# Every item must lie in one of the three ranges; every item 1-19 needs a line;
+# every item 101-120 or 201-247 needs at least one test or audit line (manual
+# and ci lines never stand alone). The human-readable matrices are
+# tests/README.md sections 9.1, 9.2 and 9.3; keep them in sync with this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -344,3 +348,238 @@
 120 audit branch-mechanisms
 120 audit naming
 120 audit one-worker
+
+# ---- Sensor fusion improvements (PLANS/fusion-improvements.md): item = 200 + requirement number ----
+
+# 201 - segments of 600 s from the first fix; a final piece shorter than 120 s joins the one before; a window shorter than one segment is one segment
+201 tst_fusion_kernel segmentsAreCutOnFixes
+201 tst_fusion_kernel shortWindowIsOneSegment
+201 tst_fusion_kernel driftingBiasSegmentsConverge
+201 tst_fusion_kernel initializerDiagnosticsShape
+
+# 202 - the anchor is the smallest-sAcc fix, the earliest on a tie; the coarse attitude there
+202 tst_fusion_kernel smallestSaccFixIsTheAnchor
+202 tst_fusion_kernel shortWindowIsOneSegment
+202 tst_fusion_kernel allPrefixFitsFailFallsBack
+
+# 203 - the 60 s prefix centred on the anchor, clipped; its carried-back start; four heading starts with the production graph and tuning
+203 tst_fusion_kernel smallestSaccFixIsTheAnchor
+203 tst_fusion_kernel initializerProgressTexts
+203 tst_fusion_kernel initializerDiagnosticsShape
+
+# 204 - the marginal yaw sigma of the window's first pose about the navigation vertical, from the best start's graph rebuilt at the fitted bias
+204 tst_fusion_kernel yawSigmaIsMarginalAboutTheVertical
+204 tst_fusion_kernel startsInMotionGrowsToTheManoeuvre
+
+# 205 - the window doubles while the sigma exceeds 20 degrees, the window does not cover, and the last doubling gained 20 %; otherwise growth stops
+205 tst_fusion_kernel startsInMotionGrowsToTheManoeuvre
+205 tst_fusion_kernel atRestPrefixStopsGrowing
+205 tst_fusion_kernel startsOnTheLimitAreStillUsed
+205 tst_fusion_golden successFixturesMatchGolden
+
+# 206 - the segment is fitted once from the best prefix fit's attitude carried backwards and forwards with its gyro bias; attitudes and bias kept
+206 tst_fusion_kernel smallestSaccFixIsTheAnchor
+206 tst_fusion_kernel driftingBiasSegmentsConverge
+206 tst_fusion_kernel initializerProgressTexts
+
+# 207 - initial values: per-pose attitude from its segment's fit, GNSS positions and velocities, the first segment's gyro bias, zero accelerometer bias
+207 tst_fusion_kernel shortWindowIsOneSegment
+207 tst_fusion_kernel validationRejectsEachDefect
+207 tst_fusion_kernel fitTraceMatchesGolden
+
+# 208 - the full fit runs from the stitched state and converges; a resting segment's yaw is arbitrary and accepted; corpus and reference recordings
+208 tst_fusion_kernel startsInMotionGrowsToTheManoeuvre
+208 tst_fusion_kernel atRestPrefixStopsGrowing
+208 tst_fusion_kernel driftingBiasSegmentsConverge
+208 manual M11
+208 manual M12
+208 manual M13
+208 manual M14
+208 manual M15
+
+# 209 - segment fits are cancellable and report progress; each iteration is a boundary; the text names the segment and, for a prefix, its length
+209 tst_fusion_golden cancelAtEachKindOfBoundary
+209 tst_fusion_golden progressMatchesGoldenBoundaries
+209 tst_fusion_kernel initializerProgressTexts
+
+# 210 - a failed prefix or segment fit is a start with infinite objective; all four failing grows the prefix; all failing at full length falls back and the diagnostics say so;
+#       budgets: a prefix fit is one pass of at most 50 iterations, a segment fit uses the production limits, the stopping rule applies to both, a fit on the limit is still the start and reported
+210 tst_fusion_kernel allPrefixFitsFailFallsBack
+210 tst_fusion_kernel startsOnTheLimitAreStillUsed
+210 tst_fusion_kernel atRestPrefixStopsGrowing
+210 tst_fusion_kernel validationRejectsEachDefect
+
+# 211 - a segment satisfies the fitted window's validity rules (fixes inside IMU coverage, no IMU gap, at least three fixes)
+211 tst_fusion_kernel segmentsAreCutOnFixes
+211 tst_fusion_kernel validationRejectsEachDefect
+
+# 212 - no stationary-window detector takes part; it decides nothing
+212 audit fusion-model
+212 tst_fusion_golden cancelDuringPreparation
+
+# 213 - the bias-settled test is the re-preintegration cost test at 1e-6 relative; at most five passes and the 1e-8 settle tolerance unchanged
+213 tst_fusion_kernel biasSettledByCostTest
+213 tst_fusion_kernel biasNeverSettlesIsSolverFailure
+213 tst_fusion_kernel exactConstantVelocityFit
+213 tst_fusion_kernel nonConvergenceIsSolverFailure
+213 tst_fusion_golden successFixturesMatchGolden
+
+# 214 - a final pass at the limit is accepted when the last 20 iterations' mean relative decrease is below 1e-4 and both nRMS are below 2; otherwise a solver failure
+214 tst_fusion_kernel slowTailAtTheIterationLimit
+214 tst_fusion_kernel nonConvergenceIsSolverFailure
+
+# 215 - the per-step term formula and its covariance; zero change gives the density covariance exactly
+215 tst_fusion_kernel perStepTermMatchesSpecifiedCovariance
+215 tst_fusion_kernel perStepTermIsZeroWithoutSignalChange
+215 tst_fusion_golden successFixturesMatchGolden
+
+# 216 - slopes 0.026 (gyro) and 0.40 (accelerometer); densities, step boundaries and midpoint sampling unchanged
+216 tst_fusion_kernel diagnosticsReportPerStepConstants
+216 tst_fusion_kernel preintegrationHonoursExactBoundaries
+
+# 217 - the dt factor keeps the constants valid at higher rates
+217 tst_fusion_kernel perStepTermScalesWithStep
+
+# 218 - the per-step covariance is applied by setting the shared parameters before each integrateMeasurement call
+218 audit fusion-model
+218 tst_fusion_kernel perStepTermMatchesSpecifiedCovariance
+
+# 219 - b(t) = b0 + b1 (T(t) - T_ref), T_ref the mean IMU temperature over the fitted window, the accelerometer bias constant; each interval at its own bias in the fit and the reconstruction
+219 tst_fusion_kernel temperatureGraphShape
+219 tst_fusion_kernel temperatureFactorJacobians
+219 tst_fusion_kernel reconstructionUsesIntervalBias
+219 tst_fusion_kernel driftingBiasSegmentsConverge
+
+# 220 - b0 under today's prior (0.03 rad/s); b1 zero-mean with sigma 0.010 deg/s per degC
+220 tst_fusion_kernel temperatureGraphShape
+220 tst_fusion_kernel validationRejectsEachDefect
+220 tst_fusion_kernel driftingBiasSegmentsConverge
+
+# 221 - IMU/temperature is the twenty-second input, required; a recording handed no temperature is rejected by name; a session without the column is blocked like any missing input
+221 tst_fusion_kernel validationRejectsEachDefect
+221 tst_fusion_session registrationShape
+221 tst_fusion_session missingInputsAreNotApplicable
+221 tst_fusion_session temperatureReachesTheKernel
+221 tst_fusion_session inputsAreBitIdenticalToFixture
+
+# 222 - a recording whose temperature does not change leaves b1 at its prior
+222 tst_fusion_kernel constantTemperatureKeepsSlopeAtPrior
+
+# 223 - segment and prefix fits use a constant bias; the full fit starts b1 at zero
+223 tst_fusion_kernel driftingBiasSegmentsConverge
+223 tst_fusion_kernel temperatureGraphShape
+223 tst_fusion_golden successFixturesMatchGolden
+
+# 224 - the diagnostics report the segments (start, end, prefix length, yaw sigma, iterations) and any fallback
+224 tst_fusion_kernel initializerDiagnosticsShape
+224 tst_fusion_kernel allPrefixFitsFailFallsBack
+224 tst_fusion_golden successFixturesMatchGolden
+
+# 225 - the diagnostics report which rule ended the fit, the last pass's mean relative decrease, the re-preintegration cost difference
+225 tst_fusion_kernel biasSettledByCostTest
+225 tst_fusion_kernel slowTailAtTheIterationLimit
+225 tst_fusion_kernel failureDiagnosticsShape
+225 tst_fusion_kernel nonConvergenceIsSolverFailure
+
+# 226 - the diagnostics report the normalized RMS of the IMU, position and velocity factors, and the objective per state
+226 tst_fusion_kernel biasSettledByCostTest
+226 tst_fusion_kernel exactConstantVelocityFit
+
+# 227 - the diagnostics report the per-step constants and the fitted b0, b1 with T_ref, always numbers
+227 tst_fusion_kernel diagnosticsReportPerStepConstants
+227 tst_fusion_kernel driftingBiasSegmentsConverge
+227 tst_fusion_kernel constantTemperatureKeepsSlopeAtPrior
+
+# 228 - the tooltip keeps showing the reason; the diagnostics are an account, not an input
+228 tst_fusion_rows rejectedTrackShowsBadge
+228 tst_fusion_session registrationShape
+
+# 229 - the runner takes a folder or two paths, imports as the application imports, and feeds the kernel the job queue's channels
+229 tst_fusion_runner matchesTheApplicationImportPath
+229 tst_fusion_runner successMatchesDirectRun
+229 tst_fusion_runner legacySchemaScalesTheGyro
+229 tst_fusion_runner outputTableMatchesGolden
+
+# 230 - diagnostics JSON on stdout; --csv writes the seventeen channels; exit 0 for Succeeded, non-zero otherwise with the outcome and reason on stderr
+230 tst_fusion_runner successMatchesDirectRun
+230 tst_fusion_runner rejectionExitsOne
+230 tst_fusion_runner usageAndImportFailures
+
+# 231 - no GUI, logbook or preferences: the runner reads and writes no user logbook or settings
+231 tst_fusion_runner noPreferenceOnTheFitPath
+231 audit fusion-tooling
+
+# 232 - progress texts on stderr; cancellation not required
+232 tst_fusion_runner successMatchesDirectRun
+
+# 233 - a test/tooling target, built with the tests, never shipped
+233 audit fusion-tooling
+233 manual M10
+
+# 234 - purity, threading and cancellation unchanged: a function of the channels, every solver iteration a boundary, cancellation at boundaries only
+234 tst_fusion_golden resultIsIndependentOfCallerState
+234 tst_fusion_golden workerThreadMatchesMainThread
+234 tst_fusion_golden twoRunsAreBitIdentical
+234 tst_fusion_golden cancelAtEachKindOfBoundary
+234 tst_fusion_golden cancelDuringPreparation
+234 tst_fusion_golden cancelNeverRequestedChangesNothing
+234 tst_fusion_session cancelStopsAtNextBoundary
+234 audit solver-confinement
+234 audit fusion-model
+
+# 235 - the result contract (channels, outcomes) unchanged; a slow-tail acceptance is Succeeded
+235 tst_fusion_kernel slowTailAtTheIterationLimit
+235 tst_fusion_session registrationShape
+235 tst_fusion_runner outputTableMatchesGolden
+
+# 236 - nothing outside the fusion library links GTSAM
+236 audit solver-confinement
+
+# 237 - the parity tests are retired; goldens are captured from the changed kernel with the same harness and compared against; fixtures are deterministic
+237 tst_fusion_golden successFixturesMatchGolden
+237 tst_fusion_golden rejectionFixturesMatchGolden
+237 tst_fusion_golden progressMatchesGoldenBoundaries
+237 tst_fusion_golden channelsWriterIsTheInverseOfTheLoader
+237 tst_fusion_golden fixturesAreDeterministic
+237 tst_fusion_golden comparatorHoldsItsBounds
+237 tst_fusion_kernel fitTraceMatchesGolden
+237 tst_fusion_kernel initializerFixturesAreDeterministic
+
+# 238 - test 1: starts in motion; prefixes grow until the sigma is below 20 degrees exactly at the first length containing the manoeuvre; the full fit within 2 degrees
+238 tst_fusion_kernel startsInMotionGrowsToTheManoeuvre
+
+# 239 - test 2: at rest throughout, longer than two doublings; growth stops at 120 s (no_gain); the full fit converges; roll and pitch within 0.5 degrees;
+#       test 2b: prefix fits run one pass of at most 50 iterations; a prefix and a segment fit forced onto the limit are still the start and the diagnostics say so
+239 tst_fusion_kernel atRestPrefixStopsGrowing
+239 tst_fusion_kernel startsOnTheLimitAreStillUsed
+239 tst_fusion_kernel startsInMotionGrowsToTheManoeuvre
+239 tst_fusion_kernel smallestSaccFixIsTheAnchor
+239 tst_fusion_kernel driftingBiasSegmentsConverge
+
+# 240 - test 3: sAcc 2 m/s except 0.3 m/s at 200 s; that fix is the anchor, the first prefix is 170-230 s, the segment's start attitude is the prefix fit's carried back
+240 tst_fusion_kernel smallestSaccFixIsTheAnchor
+
+# 241 - test 4: longer than two segments with a 1 deg/s linear drift; every segment fit converges; the full fit recovers b1 within 20 % in at most 30 iterations
+241 tst_fusion_kernel driftingBiasSegmentsConverge
+
+# 242 - test 5: a segment whose prefix fits all fail falls back, the diagnostics say so, the full fit still runs
+242 tst_fusion_kernel allPrefixFitsFailFallsBack
+
+# 243 - test 6: bias-settled test; a fit whose cost stops changing converges within two passes
+243 tst_fusion_kernel biasSettledByCostTest
+
+# 244 - test 7: slow tail; a forced final pass at the limit is accepted when both conditions hold and fails when either fails
+244 tst_fusion_kernel slowTailAtTheIterationLimit
+
+# 245 - test 8: per-step term; zero change gives the density covariance exactly, a known change the specified covariance, the term scales with dt
+245 tst_fusion_kernel perStepTermIsZeroWithoutSignalChange
+245 tst_fusion_kernel perStepTermMatchesSpecifiedCovariance
+245 tst_fusion_kernel perStepTermScalesWithStep
+
+# 246 - test 9: a recording without IMU/temperature is rejected by the kernel by name and blocked in a session; constant temperature leaves b1 at its prior
+246 tst_fusion_kernel validationRejectsEachDefect
+246 tst_fusion_kernel constantTemperatureKeepsSlopeAtPrior
+246 tst_fusion_session missingInputsAreNotApplicable
+
+# 247 - docs/ describes the segmented initializer, the stopping rule with its slow tail, the per-step term and its meaning at other rates, and the temperature-dependent bias (docs/SENSOR_FUSION.md sections 4 and 5)
+247 audit fusion-model

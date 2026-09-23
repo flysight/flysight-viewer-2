@@ -202,7 +202,7 @@ cmake --build build
 | `FLYSIGHT_BUILD_TESTS` | `OFF` | Build the Qt Test suite under `tests/`; run with CTest |
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | With tests enabled: build the embedded-Python plugin bridge test (needs NumPy in the build interpreter) |
 | `FLYSIGHT_BUILD_SOLVER_DEPS` | `ON` | With `FLYSIGHT_BUILD_THIRD_PARTY`: also download and build oneTBB and GTSAM. `OFF` reuses the installs in `GTSAM_INSTALL_DIR` / `ONETBB_INSTALL_DIR` |
-| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | With tests enabled: build the GTSAM-linked tests (`tst_solver_smoke` and the `tst_fusion_*` tests), `solver_deploy_probe` and the golden capture tool `fusion_golden_capture`. With `OFF` no test target references GTSAM |
+| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | With tests enabled: build the GTSAM-linked tests (`tst_solver_smoke` and the `tst_fusion_*` tests) and the three non-test executables `solver_deploy_probe`, `fusion_golden_capture` (the golden capture tool) and `fusion_runner` (the command-line fit). With `OFF` no test target references GTSAM |
 | `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | With tests enabled: build `tst_plot_row_delegate`, the one test that links Qt Widgets (it runs an offscreen `QTreeView`). With `OFF` no test target links Widgets |
 | `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | With the fusion tests: run the golden regression tests a second time in bit-exact mode (`tst_fusion_*_exact`, `ctest -C Release -L exact`; Release configuration only). `AUTO` registers them only when the compiler is the one the goldens were captured with (64-bit MSVC 19.44, read from `tests/data/fusion/capture.json`) and otherwise says so at configure time; `ON` forces them, `OFF` removes them |
 
@@ -389,7 +389,8 @@ flysight-viewer-2/
 │   ├── support/                           # Shared test support: isolation, fixture builders, shared helpers
 │   ├── fusion/                            # Fusion test support: synthetic fixtures, golden loader,
 │   │                                      #   fixture sessions (GTSAM-linked tests only)
-│   ├── data/fusion/                       # Golden outputs captured from the reference implementation
+│   ├── data/fusion/                       # Golden outputs captured from the fusion kernel by
+│   │                                      #   fusion_golden_capture (tests/README.md section 11)
 │   ├── python_plugins/                    # Plugins loaded by tst_python_bridge
 │   ├── audit/                             # cleanup_audit.cmake (the audit_cleanup test)
 │   └── tst_*.cpp                          # One Qt Test class per executable, linked to flysight_core
