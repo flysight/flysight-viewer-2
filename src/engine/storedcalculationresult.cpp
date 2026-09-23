@@ -71,6 +71,33 @@ bool sameSamples(const QVector<double> &a, const QVector<double> &b)
             || std::memcmp(a.constData(), b.constData(), size_t(a.size()) * sizeof(double)) == 0);
 }
 
+template <typename T>
+bool sameBits(const QVariant &a, const QVariant &b)
+{
+    const T x = a.value<T>();
+    const T y = b.value<T>();
+    return std::memcmp(&x, &y, sizeof x) == 0;
+}
+
+bool sameAttribute(const QVariant &a, const QVariant &b)
+{
+    // Same metatype first: QVariant == would call 1 and 1.0 equal.
+    if (a.isValid() != b.isValid())
+        return false;
+    if (!a.isValid())
+        return true;
+    if (a.metaType() != b.metaType())
+        return false;
+    switch (a.metaType().id()) {
+    case QMetaType::Double:
+        return sameBits<double>(a, b);   // NaN == same NaN bits, -0 != +0
+    case QMetaType::Float:
+        return sameBits<float>(a, b);
+    default:
+        return a == b;
+    }
+}
+
 } // namespace
 
 bool isStoredLeafKind(GraphNode::Kind kind)
@@ -213,7 +240,7 @@ bool sameContent(const StoredCalculationResult &a, const StoredCalculationResult
         if (!available)
             continue;
         if (out.type == DependencyKey::Type::Attribute) {
-            if (a.bundle.attributeValue(out.attributeKey) != b.bundle.attributeValue(out.attributeKey))
+            if (!sameAttribute(a.bundle.attributeValue(out.attributeKey), b.bundle.attributeValue(out.attributeKey)))
                 return false;
         } else {
             const QString &sensor = out.measurementKey.first;

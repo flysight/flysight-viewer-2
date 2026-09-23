@@ -10,6 +10,7 @@
 
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -278,6 +279,7 @@ private slots:
     void restoreBeatsOutstandingTicket();
     void restoredResultInvalidatesLikePublished();
     void restoreNaNPayloadAndSignedZero();
+    void sameContentBitExactAttributes();
     void installedOnSyncAndAsync_data() { addComputeModeRows(); }
     void installedOnSyncAndAsync();
     void installedForEveryStatus();
@@ -912,6 +914,43 @@ void CalcEngineRestoreTest::restoreNaNPayloadAndSignedZero()
     QCOMPARE(stale.kind, Restore::Kind::Stale);
     QCOMPARE(stale.staleCheck, StaleCheck::Fingerprint);
     QVERIFY(!otherZero.engine.isAvailable(attr("MS")));
+}
+
+// sameContent() compares attribute values bit-exactly, as it does samples:
+// NaN equals a NaN with the same bits, -0.0 differs from +0.0, and a value
+// differs from the same number held in another metatype.
+void CalcEngineRestoreTest::sameContentBitExactAttributes()
+{
+    const auto snapshot = [](const QVariant &value) {
+        StoredCalculationResult s;
+        s.calculationId = QStringLiteral("calc");
+        s.bundle.setAttribute("A", value);
+        s.bundle.setMeasurement("S", "m", {1.0, qQNaN(), -0.0}, "u");
+        return s;
+    };
+    const auto same = [&](const QVariant &a, const QVariant &b) {
+        return sameContent(snapshot(a), snapshot(b));
+    };
+    const double nan = fromBits(Q_UINT64_C(0x7FF8000000000000));
+
+    QVERIFY(same(QVariant(nan), QVariant(nan)));                // QVariant == says unequal
+    QVERIFY(same(QVariant(-0.0), QVariant(-0.0)));
+    QVERIFY(same(QVariant(1.5), QVariant(1.5)));
+    QVERIFY(same(QVariant(QStringLiteral("x")), QVariant(QStringLiteral("x"))));
+
+    QVERIFY(!same(QVariant(+0.0), QVariant(-0.0)));             // QVariant == says equal
+    QVERIFY(!same(QVariant(-0.0), QVariant(+0.0)));
+    // Quiet NaNs differing in payload and in sign; copies preserve the bits.
+    QVERIFY(!same(QVariant(nan), QVariant(fromBits(Q_UINT64_C(0x7FF8000000000123)))));
+    QVERIFY(!same(QVariant(nan), QVariant(fromBits(Q_UINT64_C(0xFFF8000000000000)))));
+    QVERIFY(!same(QVariant(1), QVariant(1.0)));                 // metatype differs
+    QVERIFY(!same(QVariant(1.5f), QVariant(1.5)));
+    QVERIFY(!same(QVariant(QStringLiteral("x")), QVariant(QStringLiteral("X"))));
+
+    // A float compares by its own bits.
+    QVERIFY(same(QVariant(std::numeric_limits<float>::quiet_NaN()),
+                 QVariant(std::numeric_limits<float>::quiet_NaN())));
+    QVERIFY(!same(QVariant(0.0f), QVariant(-0.0f)));
 }
 
 void CalcEngineRestoreTest::installedOnSyncAndAsync()

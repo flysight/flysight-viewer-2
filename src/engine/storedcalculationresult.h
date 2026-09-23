@@ -113,10 +113,14 @@ QByteArray inputFingerprintEncoding(const QList<GraphNode> &leaves, const ISessi
 QByteArray inputFingerprint(const QList<GraphNode> &leaves, const ISessionState &state,
                             const IPreferenceProvider *preferences);
 
-/// Every member equal: id, version, detail, leaves, fingerprint bytes; the
-/// bundle's setOutputs() order and reason; per output availability, attribute
-/// (QVariant ==), samples by bit pattern (NaN == NaN, -0 != +0) and unit. The
-/// rule of CalculationEngine::sameValue(), applied to every output.
+/// A bit-exact content comparison. Every member equal: id, version, detail,
+/// leaves, fingerprint bytes; the bundle's setOutputs() order and reason; per
+/// output availability, attribute, samples and unit. Samples compare by bit
+/// pattern (NaN == NaN with the same bits, -0 != +0). An attribute compares
+/// by metatype first (so int 1 != double 1.0), then a double or float by its
+/// IEEE bit pattern the same way, and any other type with QVariant == (a
+/// QString code unit for code unit). Stricter than CalculationEngine::
+/// sameValue(), which compares attributes with QVariant ==.
 bool sameContent(const StoredCalculationResult &a, const StoredCalculationResult &b);
 
 } // namespace FlySight
