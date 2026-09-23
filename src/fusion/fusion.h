@@ -87,6 +87,13 @@ using CancelFn = std::function<bool()>;
 Result run(const Channels &channels, const ProgressFn &progress = {},
            const CancelFn &cancelRequested = {});
 
+/// Names the model and arithmetic of run(). It is written as "algorithm" in
+/// every diagnostics object and declared as the result version of the fit
+/// registration (CalculationDescriptor::resultVersion), so changing it drops
+/// every stored fit. Change it whenever a change can alter what run() returns
+/// for the same channels.
+inline constexpr char Algorithm[] = "batch-temperature-bias-v3";
+
 } // namespace FlySight::Fusion
 
 #endif // FLYSIGHT_FUSION_FUSION_H

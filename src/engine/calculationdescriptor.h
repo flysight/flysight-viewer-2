@@ -35,6 +35,15 @@ struct CalculationDescriptor {
     QList<DependencyKey> outputs;       ///< at least one; attributes and/or measurements
     EvaluationPolicy     policy = EvaluationPolicy::OnDemand;
     ComputeFunction      compute;
+    /// Optional: identifies the arithmetic of the calculation's results, for
+    /// results stored beside the session. A stored result is used only while
+    /// the version it was stored with equals this one, so change it whenever a
+    /// code change can alter what the calculation produces from the same
+    /// inputs. Empty means none is declared. Opaque text to the engine: it
+    /// never affects evaluation, identity, candidate order, or the environment
+    /// fingerprint. A family's `instantiate` may set it on the descriptors it
+    /// returns; the registry keeps what it is given.
+    QString              resultVersion;
 };
 
 /// One registration that stands for a whole set of calculations, instantiated

@@ -15,7 +15,6 @@ namespace FlySight::Fusion::Detail {
 
 namespace {
 
-const char kAlgorithm[] = "batch-temperature-bias-v3";
 // The legacy `initialization` key names the method; the keys that described
 // the stationary window and the selected heading are null and stay present.
 const char kInitializationMethod[] = "segmented initialization; heading from segment fits";
@@ -178,7 +177,7 @@ QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerA
                                const DenseTrajectory &dense, const Tuning &tuning)
 {
     return QJsonObject{
-        {"algorithm", kAlgorithm},
+        {"algorithm", Algorithm},
         {"model", modelSummary(tuning, fit)},
         {"input", prepared.audit},
         {"seeds", seedSummary(fit)},
@@ -207,7 +206,7 @@ QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerA
 
 QJsonObject failureDiagnostics(const QString &reason, const Stopping *stopping, const Quality *quality)
 {
-    QJsonObject diagnostics{{"algorithm", kAlgorithm}, {"failure", reason}};
+    QJsonObject diagnostics{{"algorithm", Algorithm}, {"failure", reason}};
     if (stopping)
         diagnostics.insert("stopping", stoppingObject(*stopping));
     if (quality)

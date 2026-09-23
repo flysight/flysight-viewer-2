@@ -795,7 +795,7 @@ QSet<GraphNode> CalculationEngine::knownNodes(GraphNode::Kind kind) const
     return nodes;
 }
 
-QSet<DependencyKey> CalculationEngine::invalidate(const QList<GraphNode> &seeds)
+QSet<DependencyKey> CalculationEngine::invalidate(const QList<GraphNode> &seeds, ExplicitDrops report)
 {
     // Breadth-first over reverse edges. Touches only the cache and the edge
     // maps: never resolve / ensureResult / compute, never the state, never the
@@ -815,6 +815,13 @@ QSet<DependencyKey> CalculationEngine::invalidate(const QList<GraphNode> &seeds)
             if (m_resolutions.remove(n))
                 names.insert(n.publicName());
         } else if (n.kind == GraphNode::Kind::Result) {
+            // Recorded before the entry goes: afterwards its status is gone.
+            if (report == ExplicitDrops::Report && m_explicitListener) {
+                const auto dropped = m_results.constFind(n);
+                if (dropped != m_results.constEnd() && isReportedExplicit(dropped.value()))
+                    m_explicitEvents.append(ExplicitResultEvent{
+                        ExplicitResultEvent::Kind::DroppedByInputChange, n.a, dropped->status});
+            }
             m_results.remove(n);
         } else if (n.kind == GraphNode::Kind::Prepared) {
             // Something an outstanding asynchronous request depended on
@@ -852,7 +859,8 @@ QSet<DependencyKey> CalculationEngine::notifyLeafChanged(const GraphNode &leaf,
         m_pendingSeeds.append(leaf);
         return names;
     }
-    names.unite(invalidate({leaf}));
+    names.unite(invalidate({leaf}, ExplicitDrops::Report));
+    deliverExplicitEvents();
     return names;
 }
 
@@ -892,42 +900,78 @@ void CalculationEngine::setInvalidationListener(InvalidationListener l)
     m_listener = std::move(l);
 }
 
-void CalculationEngine::deliverBroadcast(const QList<GraphNode> &seeds)
+void CalculationEngine::setExplicitResultListener(ExplicitResultListener l)
+{
+    m_explicitListener = std::move(l);
+}
+
+bool CalculationEngine::isReportedExplicit(const ResultEntry &entry)
+{
+    // For an explicit calculation `requested` is true exactly when the status
+    // is not NotRequested (computeResult()).
+    return entry.requested && entry.instance.descriptor
+        && entry.instance.descriptor->policy == EvaluationPolicy::Explicit;
+}
+
+void CalculationEngine::deliverExplicitEvents()
+{
+    if (!m_scopes.empty() || m_explicitEvents.isEmpty())
+        return;
+    // Taken first, so the listener may re-enter a read, which delivers
+    // whatever it queues itself.
+    const QList<ExplicitResultEvent> events = std::exchange(m_explicitEvents, {});
+    if (!m_explicitListener)
+        return;
+    for (const ExplicitResultEvent &event : events)
+        m_explicitListener(event);
+}
+
+void CalculationEngine::deliverBroadcast(const QList<GraphNode> &seeds, ExplicitDrops report)
 {
     if (seeds.isEmpty())
         return;
     if (!m_scopes.empty()) {
         Q_ASSERT_X(false, "CalculationEngine", "broadcast invalidation during an evaluation");
-        m_pendingSeeds.append(seeds);
+        // Causes are never mixed: only input changes report explicit drops.
+        if (report == ExplicitDrops::Report)
+            m_pendingSeeds.append(seeds);
+        else
+            m_pendingRegistrySeeds.append(seeds);
         return;
     }
-    const QSet<DependencyKey> names = invalidate(seeds);
+    const QSet<DependencyKey> names = invalidate(seeds, report);
     if (!names.isEmpty() && m_listener)
         m_listener(names);
+    deliverExplicitEvents();
 }
 
 void CalculationEngine::flushPending()
 {
-    if (!m_scopes.empty() || (!m_pendingClear && m_pendingSeeds.isEmpty()))
+    if (!m_scopes.empty())
         return;
 
-    QSet<DependencyKey> names;
-    if (m_pendingClear) {
-        m_pendingClear = false;
-        names = clear();
+    if (m_pendingClear || !m_pendingSeeds.isEmpty() || !m_pendingRegistrySeeds.isEmpty()) {
+        QSet<DependencyKey> names;
+        if (m_pendingClear) {
+            m_pendingClear = false;
+            names = clear();
+        }
+        const QList<GraphNode> seeds = std::exchange(m_pendingSeeds, {});
+        const QList<GraphNode> registrySeeds = std::exchange(m_pendingRegistrySeeds, {});
+        names.unite(invalidate(seeds, ExplicitDrops::Report));
+        names.unite(invalidate(registrySeeds, ExplicitDrops::Suppress));
+        if (!names.isEmpty() && m_listener)
+            m_listener(names);
     }
-    const QList<GraphNode> seeds = m_pendingSeeds;
-    m_pendingSeeds.clear();
-    names.unite(invalidate(seeds));
-    if (!names.isEmpty() && m_listener)
-        m_listener(names);
+    // Last: every read and every public entry point that flushes also delivers.
+    deliverExplicitEvents();
 }
 
 void CalculationEngine::onPreferenceChanged(const QString &key)
 {
     // A preference no calculation declared has no dependents: nothing is
     // invalidated and the listener is not called.
-    deliverBroadcast({GraphNode::preference(key)});
+    deliverBroadcast({GraphNode::preference(key)}, ExplicitDrops::Report);
 }
 
 void CalculationEngine::onRegistryChanged(const RegistryChange &change)
@@ -994,7 +1038,9 @@ void CalculationEngine::onRegistryChanged(const RegistryChange &change)
     }
     }
 
-    deliverBroadcast(seeds);
+    // A registry change is not an input change: whoever stores results finds
+    // them stale by the environment fingerprint instead.
+    deliverBroadcast(seeds, ExplicitDrops::Suppress);
 }
 
 // =============================================================================
@@ -1034,11 +1080,13 @@ QSet<DependencyKey> CalculationEngine::dropNotRequested(const GraphNode &C)
     // state either. A "not requested" entry looked at nothing, so it has no
     // forward edges of its own; dropForwardEdges is for symmetry.
     //
-    // Used by request(), prepare(), and publish(): the caller has established
-    // that whatever is cached for C is "not requested".
+    // Used by request(), prepare(), publish() and restoreResult(): the caller
+    // has established that whatever is cached for C is "not requested". A
+    // requested explicit result that used the "not requested" answer has had
+    // an input change, so its drop is reported.
     if (m_results.remove(C))
         dropForwardEdges(C);
-    return invalidate(m_dependents.value(C).values());
+    return invalidate(m_dependents.value(C).values(), ExplicitDrops::Report);
 }
 
 CalculationEngine::RequestOutcome CalculationEngine::requestInstance(const CalculationInstance &instance,
@@ -1069,10 +1117,39 @@ CalculationEngine::RequestOutcome CalculationEngine::requestInstance(const Calcu
     // the root of the evaluation, so its own result - Cycle included - is
     // context-free by construction and is published.
     Q_ASSERT(isContextFree(scope));
-    m_results.insert(C, entry);
-    publishEdges(C, scope);
+    installRequested(C, entry, scope, InstallOrigin::Request);
     outcome.status = entry.status;
     return outcome;
+}
+
+ResultStatus CalculationEngine::gatherAsRoot(const CalculationInstance &instance, EvaluationContext &context,
+                                             Scope &closed)
+{
+    // The availability pass, under the scope request() would evaluate in, so a
+    // ring through the calculation's own output is met the same way.
+    ResultStatus status = ResultStatus::Ok;
+    {
+        // An exception from the state propagates from here with the scope
+        // popped and nothing registered, as it does from request().
+        ScopeGuard guard(this, GraphNode::result(instance.instanceId));
+        status = gatherInputs(instance, context);
+        closed = guard.finish();
+    }
+    // The root of an evaluation: context-free by construction.
+    Q_ASSERT(isContextFree(closed));
+    return status;
+}
+
+void CalculationEngine::installRequested(const GraphNode &C, const ResultEntry &entry, const Scope &scope,
+                                         InstallOrigin origin)
+{
+    m_results.insert(C, entry);
+    publishEdges(C, scope);
+    // A restore is not reported: it installs what was stored, and reporting it
+    // would make the owner store it again.
+    if (origin == InstallOrigin::Request && m_explicitListener && isReportedExplicit(entry))
+        m_explicitEvents.append(ExplicitResultEvent{
+            ExplicitResultEvent::Kind::Installed, entry.instance.instanceId, entry.status});
 }
 
 // =============================================================================
@@ -1081,8 +1158,9 @@ CalculationEngine::RequestOutcome CalculationEngine::requestInstance(const Calcu
 //
 // prepare() is the first half of request() and publishPrepared() the second;
 // PreparedCalculation::compute() in between touches nothing of the engine. The
-// statements are shared (dropNotRequested, gatherInputs, PreparedCalculation::
-// run, acceptRun, publishEdges), so the two paths cannot drift apart.
+// statements are shared (dropNotRequested, gatherInputs / gatherAsRoot,
+// PreparedCalculation::run, acceptRun, installRequested), so the two paths
+// cannot drift apart.
 //
 // Staleness is decided from the dependency graph. A Ready ticket is a node
 // with the forward edges its result would have had. Whatever would have
@@ -1125,21 +1203,11 @@ CalculationEngine::PrepareOutcome CalculationEngine::prepare(const CalculationId
 
     outcome.invalidated = dropNotRequested(C);
 
-    // The availability pass, under the scope request() would evaluate in, so a
-    // ring through the calculation's own output is met the same way. The
-    // context is quiet whatever the engine is: compute() must not log.
+    // The availability pass (gatherAsRoot). The context is quiet whatever the
+    // engine is: compute() must not log.
     std::unique_ptr<EvaluationContext> context(new EvaluationContext(instance->instanceId, /*quiet=*/true));
     Scope scope;
-    ResultStatus status = ResultStatus::Ok;
-    {
-        // An exception from the state propagates from here with the scope
-        // popped and nothing registered, as it does from request().
-        ScopeGuard guard(this, C);
-        status = gatherInputs(*instance, *context);
-        scope = guard.finish();
-    }
-    // The root of an evaluation: context-free by construction.
-    Q_ASSERT(isContextFree(scope));
+    const ResultStatus status = gatherAsRoot(*instance, *context, scope);
 
     if (status != ResultStatus::Ok) {
         // Nothing to run. MissingInput and Cycle are functions of state: cached
@@ -1149,8 +1217,7 @@ CalculationEngine::PrepareOutcome CalculationEngine::prepare(const CalculationId
         entry.requested = true;
         entry.status = status;
         entry.sawCycle = scope.sawCycle;
-        m_results.insert(C, entry);
-        publishEdges(C, scope);
+        installRequested(C, entry, scope, InstallOrigin::Request);
         flushPending();
 
         outcome.kind = PrepareOutcome::Kind::NothingToRun;
@@ -1270,13 +1337,182 @@ PublishOutcome CalculationEngine::publishPrepared(PreparedCalculation &ticket, C
     scope.sawCycle = ticket.m_sawCycle;
 
     // One immutable bundle: every output appears at once.
-    m_results.insert(C, entry);
-    publishEdges(C, scope);
+    installRequested(C, entry, scope, InstallOrigin::Request);
     flushPending();
 
     outcome.kind = PublishOutcome::Kind::Published;
     outcome.status = entry.status;
     outcome.detail = entry.detail;
+    return outcome;
+}
+
+// =============================================================================
+// Stored results
+// =============================================================================
+//
+// exportResult() is an inspection that also reads the state and the
+// preferences, for the fingerprint. restoreResult() is prepare() and the
+// install step of publishPrepared() with the run left out: the same
+// gathering (so the edges are those a fresh publish records), then the
+// stored bundle where acceptRun()'s would be. Nothing is counted as a run and
+// no ticket exists at any point.
+//
+// The leaves of a result are what its recorded edges reach. Absent leaves need
+// no special handling: resolve() and gatherInputs() note a leaf before they
+// look at it, so an absent one is an edge target like any other. A provisional
+// intermediate handed what it looked at to the nearest cached ancestor
+// (handUp), so its leaves are direct edges of that ancestor. While a result is
+// installed, everything cached below it keeps the edges it had at publish:
+// invalidating any of it would have dropped the result through the reverse
+// edges. So the closure at export is the closure at publish.
+
+QList<GraphNode> CalculationEngine::leafClosure(const QSet<GraphNode> &direct) const
+{
+    QSet<GraphNode> leaves;
+    QSet<GraphNode> visited;
+    QList<GraphNode> queue = direct.values();
+    while (!queue.isEmpty()) {
+        const GraphNode n = queue.takeFirst();
+        if (visited.contains(n))
+            continue;
+        visited.insert(n);
+        if (isStoredLeafKind(n.kind)) {
+            leaves.insert(n);
+            continue;
+        }
+        if (n.kind != GraphNode::Kind::Resolution && n.kind != GraphNode::Kind::Result)
+            continue;   // Prepared: a ticket's node, never a dependency of a result
+        // A noted but uncached node has no entry; its leaves were handed up.
+        const auto edges = m_dependsOn.constFind(n);
+        if (edges == m_dependsOn.constEnd())
+            continue;
+        for (const GraphNode &target : edges.value()) {
+            if (!visited.contains(target))
+                queue.append(target);
+        }
+    }
+    QList<GraphNode> sorted = leaves.values();
+    std::sort(sorted.begin(), sorted.end(), storedLeafLess);
+    return sorted;
+}
+
+std::optional<StoredCalculationResult> CalculationEngine::exportResult(const CalculationId &id) const
+{
+    if (!m_registry)
+        return std::nullopt;
+    const std::optional<CalculationInstance> instance = m_registry->instance(id);
+    if (!instance || instance->descriptor->policy != EvaluationPolicy::Explicit)
+        return std::nullopt;    // unknown, a family, or on demand
+
+    const GraphNode C = GraphNode::result(instance->instanceId);
+    const auto cached = m_results.constFind(C);
+    if (cached == m_results.constEnd() || !cached->requested || cached->status != ResultStatus::Ok
+        || !cached->bundle)
+        return std::nullopt;
+
+    StoredCalculationResult snapshot;
+    snapshot.calculationId = instance->instanceId;
+    // The descriptor the result was published under. A registry change would
+    // have dropped the result, so it is also the current one.
+    snapshot.resultVersion = cached->instance.descriptor->resultVersion;
+    snapshot.detail = cached->detail;
+    snapshot.bundle = *cached->bundle;
+    snapshot.leaves = leafClosure(m_dependsOn.value(C));
+    snapshot.inputFingerprint = inputFingerprint(snapshot.leaves, *m_state, m_registry->preferenceProvider());
+    return snapshot;
+}
+
+CalculationEngine::RestoreOutcome CalculationEngine::restoreResult(const StoredCalculationResult &snapshot)
+{
+    using Kind = RestoreOutcome::Kind;
+    using StaleCheck = RestoreOutcome::StaleCheck;
+
+    RestoreOutcome outcome;
+    if (!m_scopes.empty()) {
+        Q_ASSERT_X(false, "CalculationEngine", "restoreResult() from inside an evaluation");
+        return outcome;
+    }
+    flushPending();
+    if (!m_registry)
+        return outcome;
+
+    const std::optional<CalculationInstance> instance = m_registry->instance(snapshot.calculationId);
+    if (!instance)
+        return outcome;     // NotFound: unknown id, or a family
+    const CalculationDescriptor &d = *instance->descriptor;
+    if (d.policy != EvaluationPolicy::Explicit) {
+        outcome.kind = Kind::NotExplicit;
+        return outcome;
+    }
+
+    // Never replaces a result: the same test as prepare() and publishPrepared().
+    const GraphNode C = GraphNode::result(instance->instanceId);
+    const auto cached = m_results.constFind(C);
+    if (cached != m_results.constEnd() && cached->status != ResultStatus::NotRequested) {
+        outcome.kind = Kind::AlreadyInstalled;
+        outcome.status = cached->status;
+        return outcome;
+    }
+
+    // Checks that touch nothing come first.
+    const auto stale = [&outcome](StaleCheck check) {
+        outcome.kind = Kind::Stale;
+        outcome.staleCheck = check;
+        return outcome;
+    };
+    if (snapshot.resultVersion != d.resultVersion)
+        return stale(StaleCheck::ResultVersion);
+    // A bundle no current descriptor could have produced (acceptRun() would
+    // have refused an undeclared output), or a detail that is not its reason.
+    for (const DependencyKey &out : snapshot.bundle.setOutputs()) {
+        if (!d.outputs.contains(out))
+            return stale(StaleCheck::Bundle);
+    }
+    if (snapshot.detail != snapshot.bundle.reason())
+        return stale(StaleCheck::Bundle);
+
+    // From here on exactly what prepare() does: a nested lookup must not be
+    // served "not requested" (see dropNotRequested()).
+    outcome.invalidated = dropNotRequested(C);
+
+    EvaluationContext context(instance->instanceId, /*quiet=*/true);
+    Scope scope;
+    const ResultStatus status = gatherAsRoot(*instance, context, scope);
+    if (status != ResultStatus::Ok) {
+        // Unlike prepare(), nothing is cached for C: a stale restore leaves the
+        // calculation "not requested". What gathering cached stays cached, as
+        // after any read.
+        flushPending();
+        outcome.status = status;
+        return stale(StaleCheck::InputsUnavailable);
+    }
+
+    // As publishEdges() does: an edge to itself says nothing.
+    QSet<GraphNode> looked = scope.looked;
+    looked.remove(C);
+    const QList<GraphNode> leaves = leafClosure(looked);
+    if (leaves != snapshot.leaves) {
+        flushPending();
+        return stale(StaleCheck::Leaves);
+    }
+    if (inputFingerprint(leaves, *m_state, m_registry->preferenceProvider()) != snapshot.inputFingerprint) {
+        flushPending();
+        return stale(StaleCheck::Fingerprint);
+    }
+
+    // What a publish of the same bundle installs, without acceptRun(): no run.
+    ResultEntry entry;
+    entry.instance = *instance;
+    entry.requested = true;
+    entry.status = ResultStatus::Ok;
+    entry.bundle = std::make_shared<const CalculationResult>(snapshot.bundle);
+    entry.detail = snapshot.detail;
+    entry.sawCycle = scope.sawCycle;
+    installRequested(C, entry, scope, InstallOrigin::Restore);
+    flushPending();     // delivers the drops dropNotRequested() queued; never an Installed
+
+    outcome.kind = Kind::Restored;
+    outcome.status = ResultStatus::Ok;
     return outcome;
 }
 

@@ -19,6 +19,7 @@
 #include "calculationregistry.h"
 #include "preparedcalculation.h"
 #include "sessionstate.h"
+#include "storedcalculationresult.h"
 
 namespace FlySight {
 
@@ -60,6 +61,18 @@ namespace FlySight {
 ///
 /// Inspection and invalidation never compute.
 ///
+/// Stored results. The installed Ok result of a plain explicit calculation can
+/// be exported as a StoredCalculationResult (exportResult) and restored into an
+/// engine over the same inputs (restoreResult). Export is an inspection that
+/// reads the state and the preferences for the input fingerprint. Restore is a
+/// publication without a run: it gathers the inputs as prepare() does and, if
+/// the snapshot is still valid, installs it through the install step of a
+/// publish, so readers, blockers, resultStatus(), dependenciesOf() and later
+/// invalidation cannot tell it from a fresh one. Both are main-thread only.
+/// Run counters count runs, and a restore is not one. An explicit-result
+/// listener hears of every requested install and of every drop by an input
+/// change, so that its owner can keep stored results in step.
+///
 /// Single-threaded: the engine, its registry, and its session are used from the
 /// main thread only, and the engine creates no thread and holds no lock. The one
 /// thing that may run elsewhere is PreparedCalculation::compute(), which sees
@@ -98,6 +111,38 @@ public:
     /// non-empty. The direct notifications above do NOT call it.
     using InvalidationListener = std::function<void(const QSet<DependencyKey> &)>;
     void setInvalidationListener(InvalidationListener l);
+
+    /// What happened to an explicit calculation's cached result.
+    struct ExplicitResultEvent {
+        enum class Kind {
+            Installed,              ///< request(), prepare() (NothingToRun / Blocked) or publish() cached a requested result
+            DroppedByInputChange    ///< an invalidation that started at an input dropped a requested result
+        };
+        Kind kind = Kind::Installed;
+        QString instanceId;                                 ///< == the calculation id for a plain calculation
+        ResultStatus status = ResultStatus::NotRequested;   ///< the status installed / dropped
+    };
+    using ExplicitResultListener = std::function<void(const ExplicitResultEvent &)>;
+    /// Called once per event, in the order the events happened, at the end of
+    /// the engine call that caused them and never inside an evaluation.
+    /// Installed is reported for every status a request or publish installs;
+    /// on-demand results are never reported. An input change counts when it
+    /// is a leaf notification (attributeChanged, sourceMeasurementChanged,
+    /// sourceUnitChanged), a preference change, or a calculation being
+    /// requested, published or restored whose "not requested" answer a
+    /// requested result had used.
+    ///
+    /// The listener may call exportResult() and any const inspection; it must
+    /// not mutate the session. An Installed event can be followed in the same
+    /// call by a DroppedByInputChange for the same result (a deferred
+    /// invalidation flushed right after the install): at the Installed event
+    /// exportResult() then already returns nullopt.
+    ///
+    /// Never called for restoreResult()'s own install, clear(), a registry
+    /// change, the registry's destruction or the engine's destruction. Travels
+    /// with the engine (a moved SessionData keeps it), like the invalidation
+    /// listener. Nothing is queued while no listener is set.
+    void setExplicitResultListener(ExplicitResultListener l);
 
     // ---- explicit evaluation -----------------------------------------------
     struct RequestOutcome {
@@ -146,6 +191,57 @@ public:
     /// calculation stays "not requested" for every reader.
     PrepareOutcome prepare(const CalculationId &id,
                            const DependencyKey &instanceOutput = DependencyKey::attribute(QString()));
+
+    // ---- stored results (see storedcalculationresult.h) ---------------------
+    /// The installed result of the plain explicit calculation `id` as a
+    /// snapshot, or nullopt when there is none to store: unknown id, a family
+    /// (or family instance) id, an on-demand calculation, no registry, nothing
+    /// cached, or a cached status other than Ok (NotRequested, MissingInput,
+    /// Cycle, Failed, UndeclaredRead, InvalidOutput). Const: never resolves,
+    /// never computes, never changes the cache; reads the session state and the
+    /// preference provider for the fingerprint. May be called from an
+    /// explicit-result listener; not from inside a compute function.
+    std::optional<StoredCalculationResult> exportResult(const CalculationId &id) const;
+
+    struct RestoreOutcome {
+        enum class Kind {
+            NotFound,           ///< no registry, unknown id, or a family: nothing changed
+            NotExplicit,        ///< an on-demand calculation: nothing changed
+            AlreadyInstalled,   ///< a result is cached (`status`; any but NotRequested): nothing changed
+            Stale,              ///< `staleCheck` failed: nothing installed
+            Restored            ///< installed with status Ok
+        };
+        enum class StaleCheck {
+            None,
+            ResultVersion,      ///< snapshot.resultVersion != the descriptor's
+            Bundle,             ///< an output the descriptor does not declare, or detail != bundle.reason()
+            InputsUnavailable,  ///< gathering ended MissingInput or Cycle (`status`)
+            Leaves,             ///< the current leaf list differs from snapshot.leaves
+            Fingerprint         ///< same leaves, different input fingerprint
+        };
+        Kind kind = Kind::NotFound;
+        StaleCheck staleCheck = StaleCheck::None;
+        /// AlreadyInstalled: the cached status. Restored: Ok. Stale with
+        /// InputsUnavailable: the gathering status. Otherwise NotRequested.
+        ResultStatus status = ResultStatus::NotRequested;
+        /// Cached names dropped because they had been read while the
+        /// calculation was "not requested", exactly like
+        /// PublishOutcome::invalidated. Non-empty only when gathering ran
+        /// (Stale with InputsUnavailable / Leaves / Fingerprint, or Restored).
+        /// The caller passes them on so consumers re-read.
+        QSet<DependencyKey> invalidated;
+    };
+    /// Installs `snapshot` as the published result of its calculation, provided
+    /// it is still valid here. Not a request: it runs no compute function
+    /// (on-demand inputs are evaluated as for a fresh request, as prepare()
+    /// does), counts no run, creates no ticket, and queues no Installed event.
+    /// On success the edges, status, detail and bundle are those a fresh
+    /// publish would install. An outstanding ticket for the same calculation
+    /// then publishes as RefusedStale / AlreadyPublished. A stale snapshot
+    /// caches nothing for the calculation: it reads "not requested" again.
+    /// Main thread, between evaluations; from inside an evaluation it asserts
+    /// and returns NotFound.
+    RestoreOutcome restoreResult(const StoredCalculationResult &snapshot);
 
     // ---- inspection: const, never resolves, never computes, never touches state
     enum class CachedState { NotCached, Available, Unavailable };
@@ -299,6 +395,28 @@ private:
     void handUp(const Scope &closed);
     RequestOutcome requestInstance(const CalculationInstance &instance, bool *evaluated = nullptr);
     QSet<DependencyKey> dropNotRequested(const GraphNode &result);
+    /// The availability pass of an explicit request, as the root of an
+    /// evaluation: pushes the Result scope of `instance`, gathers its inputs
+    /// into `context`, pops, and hands back the closed scope. Shared by
+    /// prepare() and restoreResult().
+    ResultStatus gatherAsRoot(const CalculationInstance &instance, EvaluationContext &context, Scope &closed);
+
+    enum class InstallOrigin { Request, Restore };
+    /// The one install step of a requested result: caches `entry` under C and
+    /// publishes the edges and provisional verdicts of `scope` (publishEdges).
+    /// Request: queues an Installed event when the calculation is explicit.
+    /// Restore: queues nothing. Used by requestInstance(), prepare()'s
+    /// NothingToRun path, publishPrepared() and restoreResult().
+    void installRequested(const GraphNode &C, const ResultEntry &entry, const Scope &scope, InstallOrigin origin);
+
+    // Stored results
+    /// Every leaf reached from `direct` through the recorded edges:
+    /// breadth-first over m_dependsOn, following Resolution and Result nodes
+    /// (explicit results included) and collecting StoredAttribute /
+    /// SourceMeasurement / SourceUnit / Preference nodes; Prepared nodes are
+    /// ignored. Sorted by storedLeafLess, unique. Const; touches the edge maps
+    /// only.
+    QList<GraphNode> leafClosure(const QSet<GraphNode> &direct) const;
 
     // Asynchronous request
     void forget(PreparedCalculation *ticket);       // called by the ticket's destructor
@@ -326,10 +444,20 @@ private:
     void clearCaches();
     QSet<GraphNode> knownNodes(GraphNode::Kind kind) const;
     void dropForwardEdges(const GraphNode &node);
-    QSet<DependencyKey> invalidate(const QList<GraphNode> &seeds);
+    /// Whether an invalidation reports the requested explicit results it
+    /// drops to the explicit-result listener: Report for input changes,
+    /// Suppress for registry changes.
+    enum class ExplicitDrops { Report, Suppress };
+    QSet<DependencyKey> invalidate(const QList<GraphNode> &seeds, ExplicitDrops report);
     QSet<DependencyKey> notifyLeafChanged(const GraphNode &leaf, const DependencyKey &changedName);
-    void deliverBroadcast(const QList<GraphNode> &seeds);
+    void deliverBroadcast(const QList<GraphNode> &seeds, ExplicitDrops report);
     void flushPending();
+    /// Hands the queued explicit-result events to the listener; nothing while
+    /// an evaluation is in progress.
+    void deliverExplicitEvents();
+    /// A requested result of an explicit calculation: what the explicit-result
+    /// listener hears about.
+    static bool isReportedExplicit(const ResultEntry &entry);
 
     static Value toValue(const ResolutionEntry &entry);
 
@@ -362,10 +490,15 @@ private:
 
     // Notifications that (wrongly) arrived during an evaluation; applied once
     // the evaluation has unwound.
+    // Input-change seeds and registry-change seeds are kept apart: only the
+    // first report dropped explicit results.
     QList<GraphNode> m_pendingSeeds;
+    QList<GraphNode> m_pendingRegistrySeeds;
     bool m_pendingClear = false;
 
     InvalidationListener m_listener;
+    ExplicitResultListener m_explicitListener;
+    QList<ExplicitResultEvent> m_explicitEvents;    // queued; see deliverExplicitEvents()
 
     QHash<QString, int> m_runsByInstance;
     QHash<CalculationId, int> m_runsByRegistration;

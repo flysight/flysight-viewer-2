@@ -125,6 +125,7 @@ flysight_add_test(tst_calcengine_safety SOURCES tst_calcengine_safety.cpp)
 flysight_add_test(tst_calcengine_oracle SOURCES tst_calcengine_oracle.cpp)
 flysight_add_test(tst_calcengine_async  SOURCES tst_calcengine_async.cpp)
 flysight_add_test(tst_calcengine_blockers SOURCES tst_calcengine_blockers.cpp)
+flysight_add_test(tst_calcengine_restore SOURCES tst_calcengine_restore.cpp)
 
 # Built-in calculations (golden values on the generated descent fixture)
 flysight_add_test(tst_builtins_golden SOURCES tst_builtins_golden.cpp)

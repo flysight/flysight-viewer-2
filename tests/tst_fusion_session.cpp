@@ -13,8 +13,10 @@
 // The fit is never run on asyncdriver.h's thread modes: those threads have
 // default stacks. ComputeMode::Inline runs it here.
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
+#include <optional>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -25,6 +27,7 @@
 #include "dataexporter.h"
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
+#include "engine/storedcalculationresult.h"
 #include "fusion/fusionregistration.h"
 #include "fusionfixtures.h"
 #include "fusiongolden.h"
@@ -40,6 +43,8 @@ using namespace FlySightTest;
 using BlockerState = BlockerReport::State;
 using ReadyState = CalculationReadiness::State;
 using PrepareKind = CalculationEngine::PrepareOutcome::Kind;
+using Restore = CalculationEngine::RestoreOutcome;
+using ExplicitEvent = CalculationEngine::ExplicitResultEvent;
 
 namespace {
 
@@ -121,6 +126,32 @@ SessionData withoutSensor(const SessionData &session, const QString &sensor)
     return copy;
 }
 
+/// Everything a blocker report says: state, blocker instance ids, and each
+/// note's instance id, status and detail.
+QString reportText(const BlockerReport &report)
+{
+    QStringList text;
+    text.append(QString::number(int(report.state)));
+    for (const CalculationBlocker &blocker : report.blockers)
+        text.append(QStringLiteral("blocker ") + blocker.instanceId);
+    for (const UnproducedNote &note : report.notProduced)
+        text.append(QStringLiteral("note %1 %2 %3")
+                        .arg(note.calculation.instanceId, QString::number(int(note.status)), note.detail));
+    return text.join(QStringLiteral("; "));
+}
+
+/// "Installed 0" (the status as its number), "DroppedByInputChange 0"
+QStringList eventTexts(const QList<ExplicitEvent> &events)
+{
+    QStringList text;
+    for (const ExplicitEvent &event : events) {
+        text.append((event.kind == ExplicitEvent::Kind::Installed ? QStringLiteral("Installed ")
+                                                                  : QStringLiteral("DroppedByInputChange "))
+                    + event.instanceId + QLatin1Char(' ') + QString::number(int(event.status)));
+    }
+    return text;
+}
+
 /// Cancels from its n-th isCancelled() call on, and records the texts.
 class CancelAtCall : public CalculationProgress {
 public:
@@ -163,6 +194,8 @@ private slots:
     void blockersReportFusion();
     void naturalSessionEndToEnd();
     void twoSessionsAreIndependent();
+    void restoredFitIsIndistinguishable_data();
+    void restoredFitIsIndistinguishable();
 
 private:
     QStringList m_registryBefore;
@@ -243,6 +276,11 @@ void FusionSessionTest::registrationShape()
             == QList<CalcInput>({CalcInput::measurement("Fusion", "_time"), CalcInput::attribute("_TIME_FIT_A"),
                                  CalcInput::attribute("_TIME_FIT_B")}));
     QVERIFY(systemTime->descriptor->outputs == QList<DependencyKey>({fusionKey("_system_time")}));
+
+    // Only the fit declares a result version: its kernel's algorithm string
+    QCOMPARE(fit->descriptor->resultVersion, QStringLiteral("batch-temperature-bias-v3"));
+    QVERIFY(accH->descriptor->resultVersion.isEmpty());
+    QVERIFY(systemTime->descriptor->resultVersion.isEmpty());
 
     // One candidate per name: nothing else produces a fusion value
     const QList<CalculationInstance> accHCandidates = registry.candidatesFor(fusionKey("accH"));
@@ -870,6 +908,124 @@ void FusionSessionTest::twoSessionsAreIndependent()
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
     QCOMPARE(linear.calculationEngine().runCount(kFit), 1);
     QCOMPARE(maneuver.calculationEngine().runCount(kFit), 1);
+}
+
+void FusionSessionTest::restoredFitIsIndistinguishable_data()
+{
+    QTest::addColumn<QString>("fixture");
+    QTest::addColumn<bool>("expectSuccess");
+    QTest::newRow("coarse_linear") << QStringLiteral("coarse_linear") << true;
+    QTest::newRow("reject_sigma") << QStringLiteral("reject_sigma") << false;
+}
+
+// Export -> restore into a second session over the same recording: the same
+// bits, the same graph, the same blockers, the same invalidation, and no run.
+// Symmetric in A (published) and B (restored). Never verifyAgainstFresh here:
+// the oracle would run the fit again.
+void FusionSessionTest::restoredFitIsIndistinguishable()
+{
+    QFETCH(QString, fixture);
+    QFETCH(bool, expectSuccess);
+    const FusionGolden golden = loadFusionGolden(fixture);
+    const QList<DependencyKey> names = fusionNames();
+
+    QList<ExplicitEvent> eventsA, eventsB;
+    SessionData a = fixtureSession(fixture, QStringLiteral("f1"));
+    SessionData b = fixtureSession(fixture, QStringLiteral("f1"));
+    CalculationEngine &engineA = a.calculationEngine();
+    CalculationEngine &engineB = b.calculationEngine();
+    engineA.setExplicitResultListener([&eventsA](const ExplicitEvent &e) { eventsA.append(e); });
+    engineB.setExplicitResultListener([&eventsB](const ExplicitEvent &e) { eventsB.append(e); });
+
+    // 1. The same reads in both, while the fit is not requested
+    for (SessionData *session : {&a, &b}) {
+        const QString available = availableAmong(*session, names);
+        QVERIFY2(available.isEmpty(), qPrintable(available));
+    }
+
+    // 2. A publishes; its snapshot
+    const CalculationEngine::RequestOutcome requested = engineA.request(kFit);
+    QCOMPARE(requested.status, ResultStatus::Ok);
+    const std::optional<StoredCalculationResult> snapshot = engineA.exportResult(kFit);
+    QVERIFY(snapshot.has_value());
+    QCOMPARE(snapshot->calculationId, kFit);
+    QCOMPARE(snapshot->resultVersion, QStringLiteral("batch-temperature-bias-v3"));
+    const QJsonObject diagnostics = QJsonDocument::fromJson(
+        snapshot->bundle.attributeValue(kDiagnostics).toString().toUtf8()).object();
+    QCOMPARE(diagnostics.value(QStringLiteral("algorithm")).toString(), snapshot->resultVersion);
+    for (qsizetype i = 1; i < snapshot->leaves.size(); ++i)
+        QVERIFY(storedLeafLess(snapshot->leaves.at(i - 1), snapshot->leaves.at(i)));    // sorted, unique
+    QVERIFY(snapshot->leaves.contains(GraphNode::sourceMeasurement("IMU", "az")));
+    QVERIFY(snapshot->leaves.contains(GraphNode::storedAttribute("_LOCAL_ORIGIN_LAT")));
+    QCOMPARE(snapshot->inputFingerprint.size(), InputFingerprintSize);
+
+    // 3. B restores it
+    const Restore restored = engineB.restoreResult(*snapshot);
+    QVERIFY(restored.kind == Restore::Kind::Restored);
+    QCOMPARE(restored.status, ResultStatus::Ok);
+    QCOMPARE(restored.invalidated, requested.invalidated);
+    QCOMPARE(engineB.runCount(kFit), 0);
+
+    // 4. The same reads again, then everything compared
+    for (SessionData *session : {&a, &b}) {
+        availableAmong(*session, names);
+        QCOMPARE(isAvailable(*session, fusionKey(QStringLiteral("roll"))), expectSuccess);
+        QVERIFY(isAvailable(*session, DependencyKey::attribute(kDiagnostics)));
+    }
+    for (const DependencyKey &name : valueNames()) {
+        if (name.type == DependencyKey::Type::Attribute) {
+            QCOMPARE(b.getAttribute(name.attributeKey), a.getAttribute(name.attributeKey));
+            continue;
+        }
+        const QString &sensor = name.measurementKey.first;
+        const QString &measurement = name.measurementKey.second;
+        QVERIFY2(sameBitsEverywhere(b.getMeasurement(sensor, measurement), a.getMeasurement(sensor, measurement)),
+                 qPrintable(measurement));
+    }
+    QCOMPARE(b.getAttribute(kDiagnostics).toString().toUtf8(), a.getAttribute(kDiagnostics).toString().toUtf8());
+    QVERIFY(engineB.resultStatus(kFit) == engineA.resultStatus(kFit));
+    QCOMPARE(engineB.resultDetail(kFit), engineA.resultDetail(kFit));
+    QCOMPARE(engineB.dependenciesOf(GraphNode::result(kFit)), engineA.dependenciesOf(GraphNode::result(kFit)));
+    QCOMPARE(engineB.edgeCount(), engineA.edgeCount());
+    QCOMPARE(engineB.cachedNodeCount(), engineA.cachedNodeCount());
+    for (const DependencyKey &name : {fusionKey(QStringLiteral("roll")), fusionKey(QStringLiteral("accH")),
+                                      DependencyKey::attribute(kDiagnostics),
+                                      DependencyKey::attribute(fusionRollAtExit())}) {
+        QCOMPARE(reportText(engineB.blockers(name)), reportText(engineA.blockers(name)));
+    }
+    if (expectSuccess) {
+        const QString difference = goldenDifference(b, golden);
+        QVERIFY2(difference.isEmpty(), qPrintable(difference));
+    } else {
+        const BlockerReport report = engineB.blockers(fusionKey(QStringLiteral("roll")));
+        QVERIFY(report.state == BlockerState::NotProduced);
+        QCOMPARE(report.notProduced.size(), 1);
+        QCOMPARE(report.notProduced.first().detail, failureOf(golden));
+    }
+    const std::optional<StoredCalculationResult> again = engineB.exportResult(kFit);
+    QVERIFY(again.has_value());
+    QVERIFY(sameContent(*again, *snapshot));
+
+    // 5. One sample of one declared input changes in both: the same drop
+    QVector<double> az = a.getMeasurement("IMU", "az");
+    az[50] += .5;
+    const QSet<DependencyKey> droppedA = a.setMeasurement("IMU", "az", az);
+    const QSet<DependencyKey> droppedB = b.setMeasurement("IMU", "az", az);
+    QCOMPARE(droppedB, droppedA);
+    for (const DependencyKey &name : names)
+        QVERIFY(droppedB.contains(name));
+
+    const QString ok = QString::number(int(ResultStatus::Ok));
+    QCOMPARE(eventTexts(eventsA), QStringList({QStringLiteral("Installed ") + kFit + QLatin1Char(' ') + ok,
+                                               QStringLiteral("DroppedByInputChange ") + kFit + QLatin1Char(' ') + ok}));
+    QCOMPARE(eventTexts(eventsB), QStringList({QStringLiteral("DroppedByInputChange ") + kFit + QLatin1Char(' ') + ok}));
+    QVERIFY(!engineA.exportResult(kFit).has_value());
+    QVERIFY(!engineB.exportResult(kFit).has_value());
+
+    const Restore stale = engineB.restoreResult(*snapshot);
+    QVERIFY(stale.kind == Restore::Kind::Stale);
+    QVERIFY(stale.staleCheck == Restore::StaleCheck::Fingerprint);
+    QCOMPARE(engineB.runCount(kFit), 0);
 }
 
 FLYSIGHT_TEST_MAIN(FusionSessionTest)

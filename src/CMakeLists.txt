@@ -250,6 +250,15 @@ add_library(flysight_model STATIC
   engine/calculationprogress.cpp   engine/calculationprogress.h
   engine/preparedcalculation.cpp   engine/preparedcalculation.h
   engine/blockerreport.h
+  # Snapshot of an installed explicit result and its input fingerprint
+  engine/storedcalculationresult.cpp engine/storedcalculationresult.h
+
+  # The session file's number and attribute text. Here rather than in
+  # flysight_core because the engine's input fingerprint uses the same text
+  # (the engine cannot call into flysight_core, which links this library); it
+  # needs Qt Core only, so neither this library nor the Python bridge gains a
+  # dependency.
+  csvformat.cpp              csvformat.h
 )
 target_include_directories(flysight_model PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(flysight_model PUBLIC Qt${QT_VERSION_MAJOR}::Core)
@@ -269,7 +278,6 @@ add_library(flysight_core STATIC
   sessionmerge.cpp           sessionmerge.h
   sessionimport.cpp          sessionimport.h
   dataexporter.cpp           dataexporter.h
-  csvformat.cpp              csvformat.h
   logbookmanager.cpp        logbookmanager.h
   logbookcolumn.cpp          logbookcolumn.h
   sessionmodel.cpp           sessionmodel.h

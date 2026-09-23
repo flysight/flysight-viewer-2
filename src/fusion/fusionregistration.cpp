@@ -201,6 +201,8 @@ void registerFit(CalculationRegistry &registry)
     d.outputs = fitOutputs();
     d.policy = EvaluationPolicy::Explicit;
     d.compute = computeFit;
+    // A stored fit is used only while the kernel's arithmetic is the same.
+    d.resultVersion = QString::fromLatin1(Fusion::Algorithm);
     Calculations::addCalculation(registry, d);
 }
 
