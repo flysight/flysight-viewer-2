@@ -37,6 +37,14 @@ struct Samples {
 struct Tuning {
     double accDensity = .015, gyroDensity = .001;   ///< IMU noise densities
     double accBiasSigma = .3, gyroBiasSigma = .03;  ///< prior on the shared biases
+    // Per integration step of length dt (s), a white-noise term is added in
+    // quadrature to the density: sigma_w = gyroStepSlope x dt x |delta omega|
+    // (radians; |delta omega| the norm of the change of the interpolated rate
+    // across the step, rad/s) and sigma_a = accStepSlope x dt x |delta f| (m/s;
+    // |delta f| the change of the specific force, m/s^2). The step's covariance
+    // is (density^2 + sigma^2 x dt) I. Zero disables the term and gives exactly
+    // the density covariance.
+    double accStepSlope = .40, gyroStepSlope = .026; ///< per-step noise slopes, s
     double maxGap = .025;                           ///< longest IMU interval the fit integrates across, s
     double relativeTolerance = 1e-8;                ///< cost decrease at which a pass has settled
     int maxIterations = 100;                        ///< per bias pass

@@ -35,6 +35,22 @@ Vectors gyroIncrements(const Samples &samples, const std::vector<double> &edges,
     return increments;
 }
 
+/// The per-step white-noise sigma of one sensor: `slope` times the step
+/// length times the norm of the change of the interpolated signal across it.
+double stepSigma(double slope, double dt, const gtsam::Vector3 &change)
+{
+    return slope*dt*change.norm();
+}
+
+/// The step's measurement covariance: the density and the per-step term in
+/// quadrature, so that the per-step variance (covariance over dt) is
+/// density^2/dt + sigma^2. With sigma exactly zero this is exactly the
+/// density-only covariance of preintegrationParams().
+gtsam::Matrix3 stepCovariance(double density, double sigma, double dt)
+{
+    return gtsam::I_3x3*(density*density + sigma*sigma*dt);
+}
+
 } // namespace
 
 std::vector<double> integrationEdges(const Samples &samples, double start, double end,
@@ -93,13 +109,32 @@ gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, doub
                                                     const gtsam::imuBias::ConstantBias &bias,
                                                     const Tuning &tuning)
 {
-    gtsam::PreintegratedImuMeasurements pim(preintegrationParams(tuning), bias);
+    // The params are shared with `pim`, and integrateMeasurement() reads the
+    // two sensor covariances on every call, so writing them before each call
+    // gives every step its own covariance.
+    std::shared_ptr<gtsam::PreintegrationParams> params = preintegrationParams(tuning);
+    gtsam::PreintegratedImuMeasurements pim(params, bias);
     const std::vector<double> e = integrationEdges(samples, start, end);
+    // The signal at the start of the step: the end of the previous one.
+    gtsam::Vector3 forceStart = interpolateAt(samples.imuTime, samples.force, e[0]);
+    gtsam::Vector3 gyroStart = interpolateAt(samples.imuTime, samples.gyro, e[0]);
     for (size_t i = 1; i < e.size(); ++i) {
-        const double mid = (e[i]+e[i-1])/2;
+        const double dt = e[i]-e[i-1], mid = (e[i]+e[i-1])/2;
+        const gtsam::Vector3 forceEnd = interpolateAt(samples.imuTime, samples.force, e[i]);
+        const gtsam::Vector3 gyroEnd = interpolateAt(samples.imuTime, samples.gyro, e[i]);
+        // The per-step term uses the change from the step's start to its end;
+        // what is integrated is still the midpoint value.
+        params->gyroscopeCovariance = stepCovariance(
+            tuning.gyroDensity, stepSigma(tuning.gyroStepSlope, dt, gyroEnd-gyroStart), dt);
+        params->accelerometerCovariance = stepCovariance(
+            tuning.accDensity, stepSigma(tuning.accStepSlope, dt, forceEnd-forceStart), dt);
         pim.integrateMeasurement(interpolateAt(samples.imuTime, samples.force, mid),
-                                 interpolateAt(samples.imuTime, samples.gyro, mid), e[i]-e[i-1]);
+                                 interpolateAt(samples.imuTime, samples.gyro, mid), dt);
+        forceStart = forceEnd;
+        gyroStart = gyroEnd;
     }
+    // The params now hold the last step's covariance; nothing reads them (the
+    // factor's noise model comes from preintMeasCov()), so they are not restored.
     // The steps must add up to the interval, or the factor would relate the
     // two states over the wrong duration.
     if (std::abs(pim.deltaTij()-(end-start)) > kDurationTolerance)

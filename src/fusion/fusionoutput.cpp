@@ -70,6 +70,16 @@ QJsonArray seedSummary(const FitResult &fit)
         {"velocity_residual_rms_m_s", fit.velocityRms}}};
 }
 
+/// The model constants of this fit that are not fitted quantities; Phase 6
+/// adds the fitted gyro bias model beside `per_step`.
+QJsonObject modelSummary(const Tuning &tuning)
+{
+    return QJsonObject{
+        {"per_step", QJsonObject{
+            {"gyro_slope_s", tuning.gyroStepSlope},
+            {"acc_slope_s", tuning.accStepSlope}}}};
+}
+
 QJsonArray residualArray(const FitResult &fit)
 {
     QJsonArray residuals;
@@ -115,10 +125,11 @@ void fillOutputChannels(const DenseTrajectory &dense, double epoch, Result &resu
 
 QJsonObject successDiagnostics(const PreparedInput &prepared, const InitialAttitude &attitude,
                                const FitResult &fit, const Samples &window,
-                               const DenseTrajectory &dense)
+                               const DenseTrajectory &dense, const Tuning &tuning)
 {
     return QJsonObject{
         {"algorithm", kAlgorithm},
+        {"model", modelSummary(tuning)},
         {"input", prepared.audit},
         {"seeds", seedSummary(fit)},
         {"initialization", QString::fromStdString(attitude.method)},

@@ -25,6 +25,12 @@
         "max_endpoint_correction_deg": 3.976314124209462e-12,
         "max_seed_vs_selected_acceleration_m_s2": null,
         "max_seed_vs_selected_angle_deg": null,
+        "model": {
+            "per_step": {
+                "acc_slope_s": 0.4,
+                "gyro_slope_s": 0.026
+            }
+        },
         "objective": 2.899361808753532e-12,
         "orientation": "body to fixed NED; quaternion xyzw; RPY degrees",
         "quality": {

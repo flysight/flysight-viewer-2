@@ -21,10 +21,11 @@ namespace FlySight::Fusion::Detail {
 void fillOutputChannels(const DenseTrajectory &dense, double epoch, Result &result);
 
 /// The diagnostics of a converged fit: input audit, initializer, objective,
-/// biases, per-factor residuals, and the statements of what the outputs mean.
+/// biases, per-factor residuals, the model constants of `tuning`, and the
+/// statements of what the outputs mean.
 QJsonObject successDiagnostics(const PreparedInput &prepared, const InitialAttitude &attitude,
                                const FitResult &fit, const Samples &window,
-                               const DenseTrajectory &dense);
+                               const DenseTrajectory &dense, const Tuning &tuning);
 
 /// The diagnostics of a rejected recording or a failed fit: the algorithm and
 /// the reason, plus the stopping account when the fit ran a pass (`stopping`

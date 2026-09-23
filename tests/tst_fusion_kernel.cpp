@@ -70,6 +70,65 @@ Samples boundarySamples(const Vector3 &acceleration)
     return d;
 }
 
+/// 1 s of IMU at 8 Hz whose rate and force ramp by exactly .03125 rad/s and
+/// .125 m/s^2 per step of exactly .125 s: every time and value is a small
+/// integer times a power of two, so every step's change is the same bit for
+/// bit. No GNSS: preintegrateImu() reads none.
+Samples rampSamples()
+{
+    Samples d;
+    for (int i = 0; i <= 8; ++i) {
+        d.imuTime.push_back(i*.125);
+        d.gyro.emplace_back(0, 0, i*.03125);
+        d.force.emplace_back(i*.125, 0, -9.80665);
+    }
+    return d;
+}
+
+/// One integration step of length `dt` with a change of .5 rad/s and 1 m/s^2
+/// whatever `dt` is.
+Samples singleStepSamples(double dt)
+{
+    Samples d;
+    d.imuTime = {0, dt};
+    d.gyro = {Vector3(0, 0, 0), Vector3(0, 0, .5)};
+    d.force = {Vector3(0, 0, -9.80665), Vector3(1, 0, -9.80665)};
+    return d;
+}
+
+/// The production tuning with the two per-step slopes replaced.
+Tuning withSlopes(double gyro, double acc)
+{
+    Tuning t;
+    t.gyroStepSlope = gyro;
+    t.accStepSlope = acc;
+    return t;
+}
+
+/// `t` with the per-step term folded into the densities and the slopes zero.
+/// On a recording whose every step has length `dt` and the given changes, a
+/// preintegration with this tuning is the expected value of one with `t`:
+/// the same covariance on every step, so the same arithmetic, without
+/// restating how the covariance propagates.
+Tuning densityFor(const Tuning &t, double dt, double deltaGyro, double deltaForce)
+{
+    const double sigmaW = t.gyroStepSlope*dt*deltaGyro, sigmaA = t.accStepSlope*dt*deltaForce;
+    Tuning folded = t;
+    folded.gyroDensity = std::sqrt(t.gyroDensity*t.gyroDensity + sigmaW*sigmaW*dt);
+    folded.accDensity = std::sqrt(t.accDensity*t.accDensity + sigmaA*sigmaA*dt);
+    folded.gyroStepSlope = 0;
+    folded.accStepSlope = 0;
+    return folded;
+}
+
+/// The tolerance exists only because sqrt(x)^2 is not x in floating point; a
+/// missing term, a missing dt factor or midpoint differences instead of end
+/// minus start move a covariance by 1e-3 to 1e0 relative in the tests below.
+bool sameCovariance(const gtsam::Matrix &got, const gtsam::Matrix &expected)
+{
+    return (got-expected).cwiseAbs().maxCoeff() <= 1e-9*expected.cwiseAbs().maxCoeff();
+}
+
 /// 40 s at rest with a tilted sensor and a gyro bias; GNSS at 5 Hz.
 Samples quietSamples(const Vector3 &gyroBias)
 {
@@ -156,6 +215,10 @@ private slots:
     void solverUsesTbb();
     void unwrapRule();
     void preintegrationHonoursExactBoundaries();
+    void perStepTermIsZeroWithoutSignalChange();
+    void perStepTermMatchesSpecifiedCovariance();
+    void perStepTermScalesWithStep();
+    void diagnosticsReportPerStepConstants();
     void validationRejectsEachDefect();
     void backwardPropagationUndoesForward();
     void headingIsUnconstrained();
@@ -213,6 +276,100 @@ void FusionKernelTest::preintegrationHonoursExactBoundaries()
     QVERIFY((predicted.position()-.5*acceleration*duration*duration).norm() < 1e-10);
 }
 
+void FusionKernelTest::perStepTermIsZeroWithoutSignalChange()
+{
+    // Spec section 10: a step with zero signal change has the density
+    // covariance exactly. Constant force and zero rate, so every step's change
+    // is exactly zero and the term is exactly 0.0 whatever the slope, even
+    // 1e3: the comparison is bitwise (Eigen's == is element-wise equality),
+    // with no tolerance.
+    const Samples d = boundarySamples(Vector3(1, -2, .5));
+    const gtsam::imuBias::ConstantBias bias;
+    const auto without = preintegrateImu(d, .037, .863, bias, withSlopes(0, 0));
+    for (const Tuning &tuning : { Tuning{}, withSlopes(1e3, 1e3) }) {
+        const auto with = preintegrateImu(d, .037, .863, bias, tuning);
+        QVERIFY(with.preintMeasCov() == without.preintMeasCov());
+        QVERIFY(with.deltaPij() == without.deltaPij());
+        QVERIFY(with.deltaVij() == without.deltaVij());
+        QVERIFY(with.deltaRij().matrix() == without.deltaRij().matrix());
+    }
+}
+
+void FusionKernelTest::perStepTermMatchesSpecifiedCovariance()
+{
+    // Spec section 10: a step with a known change has the specified
+    // covariance. Eight steps of .125 s, each with a change of .03125 rad/s
+    // and .125 m/s^2, so every step's term is the same and the expectation is
+    // a second, density-only preintegration with sqrt(density^2 + sigma^2 dt)
+    // as the density. With slopes 8 and 4 the term dominates (sigma_w = .03125
+    // rad, sigma_w^2 dt = 1.22e-4 against 1e-6; sigma_a = .0625 m/s, sigma_a^2
+    // dt = 4.9e-4 against 2.25e-4); with the production slopes it is 1.3e-3 of
+    // the gyro covariance and 2.2 % of the accelerometer's, both far above the
+    // tolerance, as the negative check against the density-only value proves.
+    const Samples d = rampSamples();
+    const gtsam::imuBias::ConstantBias bias;
+    const auto densityOnly = preintegrateImu(d, 0, 1, bias, withSlopes(0, 0));
+    for (const Tuning &tuning : { withSlopes(8, 4), Tuning{} }) {
+        const auto got = preintegrateImu(d, 0, 1, bias, tuning);
+        const auto expected = preintegrateImu(d, 0, 1, bias, densityFor(tuning, .125, .03125, .125));
+        QVERIFY(sameCovariance(got.preintMeasCov(), expected.preintMeasCov()));
+        QVERIFY(!sameCovariance(got.preintMeasCov(), densityOnly.preintMeasCov()));
+    }
+}
+
+void FusionKernelTest::perStepTermScalesWithStep()
+{
+    // Spec section 10: the term scales with dt. The same change (.5 rad/s,
+    // 1 m/s^2) over one step of .125 s and one of .25 s: the sigma doubles
+    // with the step (.5 then 1.0 rad; .5 then 1.0 m/s) and each preintegration
+    // matches its own expectation. The cross check pins the dt factor in the
+    // sigma: the longer step is not within tolerance of the shorter step's
+    // sigma, the added variance differing by more than a factor four.
+    const Tuning tuning = withSlopes(8, 4);
+    const gtsam::imuBias::ConstantBias bias;
+    const Samples shortStep = singleStepSamples(.125), longStep = singleStepSamples(.25);
+
+    const auto gotShort = preintegrateImu(shortStep, 0, .125, bias, tuning);
+    const auto expectedShort = preintegrateImu(shortStep, 0, .125, bias, densityFor(tuning, .125, .5, 1));
+    QVERIFY(sameCovariance(gotShort.preintMeasCov(), expectedShort.preintMeasCov()));
+
+    const auto gotLong = preintegrateImu(longStep, 0, .25, bias, tuning);
+    const auto expectedLong = preintegrateImu(longStep, 0, .25, bias, densityFor(tuning, .25, .5, 1));
+    QVERIFY(sameCovariance(gotLong.preintMeasCov(), expectedLong.preintMeasCov()));
+
+    const auto shorterSigma = preintegrateImu(longStep, 0, .25, bias, densityFor(tuning, .125, .5, 1));
+    QVERIFY(!sameCovariance(gotLong.preintMeasCov(), shorterSigma.preintMeasCov()));
+    QVERIFY((gotLong.preintMeasCov()-shorterSigma.preintMeasCov()).cwiseAbs().maxCoeff()
+            > 1e-3*shorterSigma.preintMeasCov().cwiseAbs().maxCoeff());
+}
+
+void FusionKernelTest::diagnosticsReportPerStepConstants()
+{
+    QCOMPARE(Tuning{}.gyroStepSlope, .026);
+    QCOMPARE(Tuning{}.accStepSlope, .40);
+
+    // The constants reported are the ones the fit ran with, not the defaults.
+    // coarse_linear has zero signal change, so both fits are the same fit and
+    // their objectives are identical.
+    const Fusion::Channels channels = toChannels(fusionFixture(QStringLiteral("coarse_linear")));
+    QJsonObject first;
+    for (const Tuning &tuning : { Tuning{}, withSlopes(.5, .7) }) {
+        const Fusion::Result result = runPipeline(channels, tuning, Checkpoint());
+        QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
+        const QJsonObject diagnostics = diagnosticsOf(result);
+        const QJsonObject model = diagnostics.value("model").toObject();
+        QCOMPARE(model.keys(), QStringList{QStringLiteral("per_step")});
+        const QJsonObject perStep = model.value("per_step").toObject();
+        QCOMPARE(perStep.keys(), QStringList({QStringLiteral("acc_slope_s"), QStringLiteral("gyro_slope_s")}));
+        QCOMPARE(perStep.value("gyro_slope_s").toDouble(), tuning.gyroStepSlope);
+        QCOMPARE(perStep.value("acc_slope_s").toDouble(), tuning.accStepSlope);
+        if (first.isEmpty())
+            first = diagnostics;
+        else
+            QVERIFY(first.value("objective").toDouble() == diagnostics.value("objective").toDouble());
+    }
+}
+
 void FusionKernelTest::validationRejectsEachDefect()
 {
     const Samples d = boundarySamples(Vector3(1, -2, .5));
@@ -259,6 +416,16 @@ void FusionKernelTest::validationRejectsEachDefect()
     t = Tuning{};
     t.biasSettledTolerance = -1;
     validateSamples(d, t);
+
+    // The per-step slopes: zero is the term switched off; negative or
+    // non-finite is invalid.
+    t = Tuning{};
+    t.gyroStepSlope = -1e-3;
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+    t = Tuning{};
+    t.accStepSlope = std::numeric_limits<double>::quiet_NaN();
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+    validateSamples(d, withSlopes(0, 0));
 
     // The whole pipeline: a malformed recording is a Rejected result, never
     // an exception and never a crash.

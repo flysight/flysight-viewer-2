@@ -56,6 +56,12 @@ void requireValidTuning(const Tuning &tuning)
         if (!std::isfinite(value) || value <= 0)
             throw std::invalid_argument("Invalid fusion configuration");
     }
+    // The per-step slopes may be zero (the term is then exactly absent) but
+    // not negative or non-finite.
+    for (double value : { tuning.accStepSlope, tuning.gyroStepSlope }) {
+        if (!std::isfinite(value) || value < 0)
+            throw std::invalid_argument("Invalid fusion configuration");
+    }
     // The tolerances and bounds need only be finite: a negative value is a
     // legal "never" forcing for a test (the settle test, the cost test and the
     // slow-tail bounds are then never satisfied), and it is the only way to

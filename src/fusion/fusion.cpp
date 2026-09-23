@@ -95,7 +95,7 @@ Result fitAndAssemble(const FitPlan &plan, const Checkpoint &checkpoint, Pipelin
     result.outcome = Outcome::Succeeded;
     fillOutputChannels(dense, plan.prepared.epoch, result);
     result.diagnosticsJson = toCompactJson(
-        successDiagnostics(plan.prepared, plan.attitude, fit, plan.window, dense));
+        successDiagnostics(plan.prepared, plan.attitude, fit, plan.window, dense, plan.tuning));
     return result;
 }
 

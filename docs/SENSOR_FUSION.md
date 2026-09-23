@@ -108,7 +108,12 @@ normalized RMS (root mean squared whitened residual per scalar component) are
 both below 2; the diagnostics then say `slow tail accepted`. Reported factors
 are reintegrated at the final bias. Modeling noise densities are
 0.015 m/s^2/sqrt(Hz) and 0.001 rad/s/sqrt(Hz), with integration covariance
-I x 1e-8. These are modeling weights, not sensor specifications.
+I x 1e-8. Each integration step adds a white-noise term in quadrature,
+`sigma = slope x dt x |change of the interpolated signal across the step|`
+with slopes 0.026 (gyro, giving radians) and 0.40 (accelerometer, m/s), so
+the step's covariance is `(density^2 + sigma^2 x dt) I`; the slopes are
+reported under `model.per_step`. These are modeling weights, not sensor
+specifications.
 
 Dense orientation follows bias-corrected gyro increments with a distributed
 correction in the fixed NED frame to reach the next optimized attitude.
@@ -152,7 +157,9 @@ the re-preintegration cost difference; the thresholds in force), `quality`
 factor kind's whitened residuals, and `objective_per_state`),
 `seed_comparison_performed`,
 `max_seed_vs_selected_angle_deg`, `max_seed_vs_selected_acceleration_m_s2`,
-`max_endpoint_correction_deg`, `display_position_velocity` and `limitations`.
+`max_endpoint_correction_deg`, `model` (`per_step`: the per-step noise
+constants `gyro_slope_s` and `acc_slope_s`), `display_position_velocity` and
+`limitations`.
 When the recording was rejected it is `{"algorithm", "failure"}` with the
 reason; when the solver failed it is the same, plus `stopping` and `quality`
 when the fit completed a pass (`iteration limit`, `bias not settled`), or
