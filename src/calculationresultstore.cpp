@@ -44,6 +44,12 @@ void CalculationResultStore::onExplicitResultEvent(const QString &sessionId, con
 {
     using Kind = CalculationEngine::ExplicitResultEvent::Kind;
 
+    // An explicit family instance ("<familyId>#<instanceKey>"; a plain id
+    // never contains '#', calctypes.h): exportResult() refuses it, so there is
+    // never a record to write or to delete. Nothing is looked up on disk.
+    if (event.instanceId.contains(QLatin1Char('#')))
+        return;
+
     if (event.kind == Kind::Installed) {
         // Only an Ok result is stored. Any other install writes nothing and
         // deletes nothing: a record on disk describes an Ok result of the
@@ -73,10 +79,9 @@ void CalculationResultStore::onExplicitResultEvent(const QString &sessionId, con
     }
 
     // DroppedByInputChange, whatever its status: a record, if any, describes
-    // older inputs. The listing (names only) keeps the counter meaningful.
-    const bool existed = LogbookManager::instance().calculationRecordIds(sessionId).contains(event.instanceId);
-    deleteRecord(sessionId, event.instanceId, "an input changed");
-    if (existed)
+    // older inputs. No listing: the removal looks at the one path, and tells
+    // whether a file was there.
+    if (deleteRecord(sessionId, event.instanceId, "an input changed"))
         ++m_stats.droppedRecordsDeleted;
 }
 
@@ -87,9 +92,22 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
     ScopedNanoseconds timing(m_stats.restoreNanoseconds);
     LogbookManager &logbook = LogbookManager::instance();
 
-    // 1. The listing is the source of record ids (not the registry), so that
-    //    a record of a calculation no longer registered is found and deleted.
+    // 1. A session the manager knows no record of has none to restore, and
+    //    the directory is not listed. The known set holds every record file
+    //    the application can have produced: initialize() adopts the name of
+    //    every record whose stem is a session file of the index (after its
+    //    stray pass), the manager's own writes and removals keep it current,
+    //    and remapSessionId() moves it with the id. A stem reserved at import
+    //    is a fresh uuid, so its files are all the manager's own writes. Only
+    //    a file put there behind the application's back is missing from it,
+    //    until the next initialize() (the same rule as the record stamps).
+    //    When the manager knows some record, the listing (names only) is the
+    //    source of ids (not the registry, nor the known set), so that a record
+    //    of a calculation no longer registered is found and deleted.
     ++m_stats.restoreCalls;
+    if (logbook.knownCalculationRecords(sessionId).isEmpty())
+        return summary;
+    ++m_stats.recordListings;
     const QStringList ids = logbook.calculationRecordIds(sessionId);
     if (ids.isEmpty())
         return summary;
@@ -166,7 +184,7 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
         pending = std::move(next);
     }
 
-    // 4.
+    // 4. The counters
     m_stats.recordsRestored += summary.restored;
     m_stats.recordsKept += summary.kept;
     m_stats.staleRecordsDeleted += summary.deleted;
@@ -175,11 +193,16 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
 
 bool CalculationResultStore::deleteRecord(const QString &sessionId, const QString &calculationId, const char *why)
 {
-    // A stale record or a dropped result is an expected state: qDebug only.
-    // A removal failure has already been warned about by the manager.
-    qDebug("CalculationResultStore: stored %s of %s dropped: %s",
-           qPrintable(calculationId), qPrintable(sessionId), why);
-    return LogbookManager::instance().removeCalculationRecord(sessionId, calculationId);
+    // A stale record or a dropped result is an expected state: qDebug only,
+    // and only when a file went. A removal failure has already been warned
+    // about by the manager.
+    bool removed = false;
+    LogbookManager::instance().removeCalculationRecord(sessionId, calculationId, &removed);
+    if (removed) {
+        qDebug("CalculationResultStore: stored %s of %s dropped: %s",
+               qPrintable(calculationId), qPrintable(sessionId), why);
+    }
+    return removed;
 }
 
 } // namespace FlySight

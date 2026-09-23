@@ -177,6 +177,7 @@ private slots:
     void cleanup();
 
     void registrationShape();
+    void explicitOutputsHaveOneCandidate();
     void inputsAreBitIdenticalToFixture();
     void readsNeverRunTheFit();
     void requestRunsOnceAndPublishesTogether_data();
@@ -288,6 +289,36 @@ void FusionSessionTest::registrationShape()
     QCOMPARE(accHCandidates.first().instanceId, kAccH);
     QCOMPARE(registry.candidatesFor(fusionKey("roll")).size(), 1);
     QCOMPARE(registry.candidatesFor(DependencyKey::attribute(kDiagnostics)).size(), 1);
+}
+
+// docs/CALCULATIONS.md section 8: no output of an Explicit calculation has
+// another candidate, so while the calculation is not requested its outputs
+// read as unavailable. SessionModel::settleExplicitColumns relies on it ("no
+// record, so unavailable"); nothing enforces it at registration. Every
+// registered plain calculation is checked (family instances are not
+// enumerable; no built-in family is explicit).
+void FusionSessionTest::explicitOutputsHaveOneCandidate()
+{
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+    QStringList explicitIds;
+    for (const QString &id : registry.registeredIds()) {
+        if (registry.isFamily(id))
+            continue;
+        const std::optional<CalculationInstance> instance = registry.instance(id);
+        QVERIFY2(instance.has_value(), qPrintable(id));
+        if (instance->descriptor->policy != EvaluationPolicy::Explicit)
+            continue;
+        explicitIds.append(id);
+        for (const DependencyKey &output : instance->descriptor->outputs) {
+            const QString name = output.type == DependencyKey::Type::Attribute
+                ? output.attributeKey
+                : output.measurementKey.first + QLatin1Char('/') + output.measurementKey.second;
+            const QList<CalculationInstance> candidates = registry.candidatesFor(output);
+            QVERIFY2(candidates.size() == 1, qPrintable(id + QStringLiteral(": ") + name));
+            QCOMPARE(candidates.first().instanceId, id);
+        }
+    }
+    QCOMPARE(explicitIds, QStringList({kFit}));     // the fit is the only explicit built-in today
 }
 
 // The premise of every golden comparison below.
@@ -957,6 +988,9 @@ void FusionSessionTest::restoredFitIsIndistinguishable()
         QVERIFY(storedLeafLess(snapshot->leaves.at(i - 1), snapshot->leaves.at(i)));    // sorted, unique
     QVERIFY(snapshot->leaves.contains(GraphNode::sourceMeasurement("IMU", "az")));
     QVERIFY(snapshot->leaves.contains(GraphNode::storedAttribute("_LOCAL_ORIGIN_LAT")));
+    // SCHEMA_VER is reached through the schema conversion of the gyro inputs
+    // (never declared by the fit): an edit of it makes the record stale
+    QVERIFY(snapshot->leaves.contains(GraphNode::storedAttribute("SCHEMA_VER")));
     QCOMPARE(snapshot->inputFingerprint.size(), InputFingerprintSize);
 
     // 3. B restores it

@@ -121,6 +121,7 @@ private slots:
     void restoredRejectionShowsBadge();
     void restoredSolverFailureShowsBadge();
     void unrelatedEditKeepsRecord();
+    void dependencyEditDropsRecord_data();
     void dependencyEditDropsRecord();
     void mergeIntoLoadedSessionDropsRecord();
     void mergeIntoUnloadedSession_data();
@@ -653,10 +654,27 @@ void FusionStoreTest::unrelatedEditKeepsRecord()
     QVERIFY(quiet.holds());
 }
 
-// Spec 8: changing a dependency drops the record at once; the calculation
-// reads not requested and the row is refreshable exactly as today.
+void FusionStoreTest::dependencyEditDropsRecord_data()
+{
+    QTest::addColumn<QString>("key");
+    QTest::addColumn<QVariant>("value");
+
+    // A declared input of the fit
+    QTest::newRow("local origin index") << QStringLiteral("_LOCAL_ORIGIN_INDEX")
+                                        << QVariant::fromValue(qlonglong(4));
+    // Reached only through the schema conversion of the gyro (the fixture
+    // records "2"; "1" is the other supported schema)
+    QTest::newRow("SCHEMA_VER") << QStringLiteral("SCHEMA_VER") << QVariant(QStringLiteral("1"));
+}
+
+// Spec 8: changing a dependency (a declared input, or SCHEMA_VER, which the
+// fit reaches through the gyro's schema conversion) drops the record at once;
+// the calculation reads not requested and the row is refreshable exactly as
+// today.
 void FusionStoreTest::dependencyEditDropsRecord()
 {
+    QFETCH(QString, key);
+    QFETCH(QVariant, value);
     const auto restoreCapacity = qScopeGuard([] {
         PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
     });
@@ -670,7 +688,8 @@ void FusionStoreTest::dependencyEditDropsRecord()
     QVERIFY(QFileInfo(path).isFile());
     m_model->resetStoredResultStats();
 
-    QVERIFY(m_model->updateAttribute("a", QStringLiteral("_LOCAL_ORIGIN_INDEX"), QVariant::fromValue(qlonglong(4))));
+    QVERIFY(session("a").getAttribute(key) != value);
+    QVERIFY(m_model->updateAttribute("a", key, value));
     // No event-loop pass in between
     QVERIFY(!QFileInfo::exists(path));
     QCOMPARE(stats().droppedRecordsDeleted, 1);

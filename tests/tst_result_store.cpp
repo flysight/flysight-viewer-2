@@ -11,9 +11,12 @@
 //    record intact;
 //  - an input change deletes the record; eviction, a registry change and a
 //    restart do not;
+//  - an explicit family instance is not stored (its install writes nothing,
+//    its drop removes nothing);
 //  - every load path that installs a session into a row restores its valid
 //    records before the row is published, in passes (explicit-on-explicit
-//    chains), and deletes the stale ones; a result already installed wins;
+//    chains), and deletes the stale ones; a result already installed wins; a
+//    session the logbook knows no record of is not listed;
 //  - the column worker's and the bulk edit's temporary loads never read one;
 //  - deleting a session removes its records, and a stray is removed at the
 //    next start.
@@ -71,6 +74,7 @@ const QString kListy = QStringLiteral("test.store.listy");
 const QString kShadow = QStringLiteral("test.store.shadow");
 const QString kExtra = QStringLiteral("test.store.extra");
 const QString kGone = QStringLiteral("test.store.gone");
+const QString kFamily = QStringLiteral("test.store.fam");
 
 DependencyKey attrKey(const char *key)
 {
@@ -207,6 +211,7 @@ private slots:
     void writeFailureKeepsPreviousRecord();
     void inputChangeDeletesRecord();
     void noDeleteWithoutInputChange();
+    void explicitFamilyIsNotStored();
     void restoreOnEveryLoadPath_data();
     void restoreOnEveryLoadPath();
     void bulkEditPromotionRestores();
@@ -735,6 +740,71 @@ void ResultStoreTest::noDeleteWithoutInputChange()
     QCOMPARE(bytesOf(path), bytes);
 }
 
+// An explicit family instance ("test.store.fam#EA_IN") is not stored: the
+// store ignores its events, so its Ok install writes nothing and warns
+// nothing, and its drop by an input change removes nothing.
+void ResultStoreTest::explicitFamilyIsNotStored()
+{
+    CalculationFamily family;
+    family.id = kFamily;
+    family.policy = EvaluationPolicy::Explicit;
+    family.instantiate = [](const DependencyKey &name) -> std::optional<CalculationDescriptor> {
+        const QString prefix = QStringLiteral("FAM:");
+        if (name.type != DependencyKey::Type::Attribute || !name.attributeKey.startsWith(prefix))
+            return std::nullopt;
+        const QString output = name.attributeKey;
+        const QString source = output.mid(prefix.size());
+        if (source.isEmpty())
+            return std::nullopt;
+        CalculationDescriptor d;
+        d.id = source;      // instance key
+        d.inputs = {CalcInput::attribute(source)};
+        d.outputs = {DependencyKey::attribute(output)};
+        d.compute = [output, source](const EvaluationContext &ctx) {
+            return CalculationResult().setAttribute(output, -ctx.attribute(source).toInt());
+        };
+        return d;
+    };
+    bool registered = false;
+    const auto unregisterFamily = qScopeGuard([&registered] {
+        if (registered)
+            CalculationRegistry::instance().unregister(kFamily);
+    });
+    registered = CalculationRegistry::instance().registerFamily(family);
+    QVERIFY(registered);
+    m_model->flushPendingInvalidations();
+
+    const DependencyKey name = attrKey("FAM:EA_IN");
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QVERIFY(waitForIdle(*m_model));
+    const QStringList recordsBefore = calculationRecordFiles();
+    m_model->resetStoredResultStats();
+
+    {
+        WarningCapture warnings;
+        QCOMPARE(engine("s1").request(kFamily, name).status, ResultStatus::Ok);
+        QCOMPARE(warnings.messages(), QStringList());
+    }
+    QCOMPARE(session("s1").getAttribute(QStringLiteral("FAM:EA_IN")), QVariant(-4));
+    QVERIFY(!engine("s1").exportResult(kFamily + QStringLiteral("#EA_IN")).has_value());
+    QCOMPARE(calculationRecordFiles(), recordsBefore);
+    QCOMPARE(stats().recordsWritten, 0);
+    QCOMPARE(stats().writeFailures, 0);
+
+    // Its drop by an input change
+    QVERIFY(setInput("s1", "EA_IN", 5));
+    QVERIFY(engine("s1").resultStatus(kFamily, name) != std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(stats().droppedRecordsDeleted, 0);
+    QCOMPARE(calculationRecordFiles(), recordsBefore);
+
+    // Nothing to restore: after an eviction it reads not requested again
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(evict({"s1"}), QString());
+    QVERIFY(engine("s1").resultStatus(kFamily, name) != std::optional<ResultStatus>(ResultStatus::Ok));
+    QVERIFY(!session("s1").getAttribute(QStringLiteral("FAM:EA_IN")).isValid());
+    QCOMPARE(stats().recordsRestored, 0);
+}
+
 // ---- Restoring -----------------------------------------------------------------------
 
 void ResultStoreTest::restoreOnEveryLoadPath_data()
@@ -800,6 +870,11 @@ void ResultStoreTest::restoreOnEveryLoadPath()
     QCOMPARE(stats().recordsWritten, 0);
     QCOMPARE(bytesOf(recordFile), bytes);
     QVERIFY(quiet.holds());
+
+    // Only the session with a record was listed; s2..s4 (no record) were not
+    QCOMPARE(stats().recordListings, 1);
+    if (path == QLatin1String("background"))
+        QCOMPARE(stats().restoreCalls, 4);
 }
 
 // The bulk edit's temporary session becomes the row when its save fails: that

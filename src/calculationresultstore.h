@@ -23,12 +23,15 @@ namespace FlySight {
 ///  - A result dropped by an input change deletes its record.
 ///  - restoreSession() installs a session's valid records into its engine
 ///    and deletes the stale ones. It is not a request: it starts nothing.
+///  - Explicit family instances ("<familyId>#<key>") are not stored: their
+///    events are ignored (CalculationEngine::exportResult() refuses them).
 class CalculationResultStore {
 public:
     struct Stats {
         int recordsWritten = 0;         ///< Ok installs whose record was committed
         int writeFailures = 0;          ///< Ok installs whose record could not be encoded or written
-        int restoreCalls = 0;           ///< restoreSession() calls that listed a session's records
+        int restoreCalls = 0;           ///< restoreSession() calls
+        int recordListings = 0;         ///< ... that listed the session's record files (the manager knew some)
         int recordsRead = 0;            ///< record files read by restoreSession()
         int recordsRestored = 0;        ///< ... installed into the engine
         int recordsKept = 0;            ///< ... not installed because a result was already installed (AlreadyInstalled)
@@ -61,7 +64,9 @@ public:
     void resetStats() { m_stats = Stats(); }
 
 private:
-    bool deleteRecord(const QString &sessionId, const QString &calculationId, const char *why);   // counts nothing
+    /// Removes the record through the manager; true when a record file was
+    /// removed (false when there was none or its removal failed). Counts nothing.
+    bool deleteRecord(const QString &sessionId, const QString &calculationId, const char *why);
     Stats m_stats;
 };
 
