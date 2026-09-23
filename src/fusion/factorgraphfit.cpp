@@ -15,10 +15,12 @@
 #include <gtsam/slam/PriorFactor.h>
 
 #include "fusion/imuintegration.h"
+#include "fusion/temperatureimufactor.h"
 
 namespace FlySight::Fusion::Detail {
 
 using gtsam::symbol_shorthand::B;
+using gtsam::symbol_shorthand::T;
 using gtsam::symbol_shorthand::V;
 using gtsam::symbol_shorthand::X;
 
@@ -47,6 +49,19 @@ void addImuFactor(gtsam::NonlinearFactorGraph &graph, const Samples &d, size_t k
     graph.emplace_shared<gtsam::ImuFactor>(X(k-1), V(k-1), X(k), V(k), B(0), preintegrateImu(d, d.gnssTime[k-1], d.gnssTime[k], bias, c));
 }
 
+/// The IMU between fixes k-1 and k under the temperature model: the interval
+/// takes the temperature of its first fix, k-1 (ImuFactor's convention that
+/// the factor's bias is the bias at state i), and is preintegrated at that
+/// interval's bias of the linearization point `at`.
+void addTemperatureImuFactor(gtsam::NonlinearFactorGraph &graph, const Samples &d, size_t k,
+                             const BiasLinearization &at, const GyroBiasModel &model, const Tuning &c)
+{
+    const double dT = temperatureAtFix(d, k-1)-model.tRef;
+    const gtsam::imuBias::ConstantBias bias = intervalBias(d, k-1, at.bias, at.slope, model);
+    graph.emplace_shared<TemperatureImuFactor>(X(k-1), V(k-1), X(k), V(k), B(0), T(0),
+                                               preintegrateImu(d, d.gnssTime[k-1], d.gnssTime[k], bias, c), dT);
+}
+
 /// A weak zero-mean prior on the shared bias: sensor biases are small, and
 /// without it a short or gentle recording leaves them unobservable.
 void addBiasPrior(gtsam::NonlinearFactorGraph &graph, const Tuning &c)
@@ -54,6 +69,22 @@ void addBiasPrior(gtsam::NonlinearFactorGraph &graph, const Tuning &c)
     gtsam::Vector6 sig;
     sig << c.accBiasSigma, c.accBiasSigma, c.accBiasSigma, c.gyroBiasSigma, c.gyroBiasSigma, c.gyroBiasSigma;
     graph.emplace_shared<gtsam::PriorFactor<gtsam::imuBias::ConstantBias>>(B(0), gtsam::imuBias::ConstantBias(), gtsam::noiseModel::Diagonal::Sigmas(sig));
+}
+
+/// A zero-mean prior on the slope T(0) at the datasheet's typical drift per
+/// degC: a recording whose temperature does not change leaves the slope here.
+void addSlopePrior(gtsam::NonlinearFactorGraph &graph, const Tuning &c)
+{
+    graph.emplace_shared<gtsam::PriorFactor<gtsam::Vector3>>(T(0), gtsam::Vector3::Zero(),
+        gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector3::Constant(c.gyroBiasSlopeSigma)));
+}
+
+/// The linearization point of a graph: B(0) and, under the temperature
+/// model, T(0). The constant model reads no key and has a zero slope.
+BiasLinearization linearizationOf(const gtsam::Values &values, const GyroBiasModel &model)
+{
+    return {values.at<gtsam::imuBias::ConstantBias>(B(0)),
+            model.temperatureLinear ? values.at<gtsam::Vector3>(T(0)) : gtsam::Vector3::Zero()};
 }
 
 /// The stopping account with only the thresholds filled, copied from the
@@ -132,8 +163,9 @@ bool runOptimizerPass(const gtsam::NonlinearFactorGraph &graph, gtsam::Values &v
 /// Per-factor residuals, the RMS misfit to the GNSS measurements, and the
 /// quality metrics: the normalized RMS of each factor kind and the objective
 /// per state (result.objective is set before this is called). The factor
-/// index walks the insertion order of buildFactorGraph(); the bias prior
-/// contributes to no normalized RMS.
+/// index walks the insertion order of buildFactorGraph(); neither prior
+/// contributes to a normalized RMS, and the temperature factor's kind is
+/// `imu` like the stock one's (the same dimension, 9).
 void collectResiduals(const Samples &d, const gtsam::NonlinearFactorGraph &graph, FitResult &result)
 {
     const gtsam::Values &values = result.values;
@@ -152,7 +184,9 @@ void collectResiduals(const Samples &d, const gtsam::NonlinearFactorGraph &graph
         result.positionRms += (values.at<gtsam::Pose3>(X(k)).translation()-d.position[k]).squaredNorm();
         result.velocityRms += (values.at<gtsam::Vector3>(V(k))-d.velocity[k]).squaredNorm();
     }
-    result.residuals.push_back({"bias_prior", 0, d.gnssTime[0], 2*graph.at(factor)->error(values)});
+    result.residuals.push_back({"bias_prior", 0, d.gnssTime[0], 2*graph.at(factor++)->error(values)});
+    if (result.biasModel.temperatureLinear)
+        result.residuals.push_back({"slope_prior", 0, d.gnssTime[0], 2*graph.at(factor)->error(values)});
     result.positionRms = std::sqrt(result.positionRms/n);
     result.velocityRms = std::sqrt(result.velocityRms/n);
 
@@ -166,8 +200,41 @@ void collectResiduals(const Samples &d, const gtsam::NonlinearFactorGraph &graph
 
 } // namespace
 
+GyroBiasModel gyroBiasModelFor(const Samples &window)
+{
+    if (window.temperature.empty())
+        throw std::invalid_argument("Temperature model without a temperature series");
+    // A plain sum in index order: the same value on every IEEE platform, and
+    // exactly the value itself for a constant series.
+    double sum = 0;
+    for (double t : window.temperature)
+        sum += t;
+    GyroBiasModel model;
+    model.temperatureLinear = true;
+    model.tRef = sum/double(window.temperature.size());
+    return model;
+}
+
+gtsam::imuBias::ConstantBias intervalBias(const Samples &d, size_t k, const gtsam::imuBias::ConstantBias &bias,
+                                          const gtsam::Vector3 &slope, const GyroBiasModel &model)
+{
+    // The constant branch performs no arithmetic: the stock path is bit for
+    // bit what it was.
+    if (!model.temperatureLinear)
+        return bias;
+    return gtsam::imuBias::ConstantBias(bias.accelerometer(),
+                                        bias.gyroscope() + slope*(temperatureAtFix(d, k)-model.tRef));
+}
+
 gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &d, const gtsam::imuBias::ConstantBias &bias,
                                              const Tuning &c, const Checkpoint &checkpoint)
+{
+    return buildFactorGraph(d, BiasLinearization{bias}, GyroBiasModel{}, c, checkpoint);
+}
+
+gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &d, const BiasLinearization &at,
+                                             const GyroBiasModel &model, const Tuning &c,
+                                             const Checkpoint &checkpoint)
 {
     gtsam::NonlinearFactorGraph graph;
     for (size_t k = 0; k < d.gnssTime.size(); ++k) {
@@ -175,30 +242,46 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &d, const gtsam::imuB
         if (k%kStatesPerCheckpoint == 0)
             checkpoint(QStringLiteral("Integrating IMU factors"));
         addGnssFactors(graph, d, k);
-        if (k)
-            addImuFactor(graph, d, k, bias, c);
+        if (k) {
+            if (model.temperatureLinear)
+                addTemperatureImuFactor(graph, d, k, at, model, c);
+            else
+                addImuFactor(graph, d, k, at.bias, c);
+        }
     }
     addBiasPrior(graph, c);
+    if (model.temperatureLinear)
+        addSlopePrior(graph, c);
     return graph;
 }
 
 FitResult fitFactorGraph(const Samples &d, const InitialState &initial, const Tuning &c,
-                         const QString &passFormat, const Checkpoint &checkpoint)
+                         const QString &passFormat, const Checkpoint &checkpoint, const GyroBiasModel &model)
 {
     // Validated by the caller already; kept because this is where the arrays
     // are indexed, and it costs nothing next to the fit.
     validateSamples(d, c);
+    // A programming error, unreachable through planFit(); stated so that the
+    // contract is checkable.
+    if (model.temperatureLinear && d.temperature.empty())
+        throw std::invalid_argument("Temperature model without a temperature series");
 
     FitResult result;
     result.stopping = thresholdsOf(c);
     Stopping &stopping = result.stopping;
     gtsam::Values values = initialValues(d, initial);
+    // The full fit starts b1 at zero (b0 is the initializer's). Under the
+    // constant model T(0) is never inserted: no factor would touch it and the
+    // linear system would be indeterminate.
+    if (model.temperatureLinear)
+        values.insert(T(0), gtsam::Vector3(gtsam::Vector3::Zero()));
 
     // The graph after a pass is rebuilt once, at the pass's fitted bias, and
     // serves three purposes: the cost test, the next pass's graph, and (after
     // the last pass) the reported graph. So there are passes + 1 builds, each
-    // reporting "Integrating IMU factors".
-    gtsam::NonlinearFactorGraph graph = buildFactorGraph(d, values.at<gtsam::imuBias::ConstantBias>(B(0)), c, checkpoint);
+    // reporting "Integrating IMU factors". Every build preintegrates each
+    // interval at that interval's bias of the current linearization point.
+    gtsam::NonlinearFactorGraph graph = buildFactorGraph(d, linearizationOf(values, model), model, c, checkpoint);
     gtsam::NonlinearFactorGraph rebuilt;
     double costRebuilt = 0;
     bool lastSettled = false;
@@ -210,7 +293,7 @@ FitResult fitFactorGraph(const Samples &d, const InitialState &initial, const Tu
 
         // The cost test: re-preintegrated at the pass's fitted bias, the cost
         // at the pass's values must be what the pass ended at.
-        rebuilt = buildFactorGraph(d, values.at<gtsam::imuBias::ConstantBias>(B(0)), c, checkpoint);
+        rebuilt = buildFactorGraph(d, linearizationOf(values, model), model, c, checkpoint);
         costRebuilt = rebuilt.error(values);
         const double passFinal = result.history.back().after;
         stopping.repreintegrationCostDifference = std::abs(costRebuilt-passFinal)/std::max(1., passFinal);
@@ -231,6 +314,8 @@ FitResult fitFactorGraph(const Samples &d, const InitialState &initial, const Tu
     // also the reported graph.
     result.values = values;
     result.objective = costRebuilt;
+    result.biasModel = model;
+    result.gyroBiasSlope = model.temperatureLinear ? values.at<gtsam::Vector3>(T(0)) : gtsam::Vector3::Zero();
     collectResiduals(d, rebuilt, result);
     result.graph = std::move(rebuilt);
     stopping.lastPassMeanRelativeDecrease = meanRelativeDecrease(result.history, lastOuter, c.slowTailWindow);

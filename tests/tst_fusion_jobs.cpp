@@ -566,13 +566,13 @@ void FusionJobsTest::columnShowsValueStraightAfterPublication()
 
     // The expectation comes from the golden, not from the session: the exit
     // marker is exactly on an output sample, so the interpolated value is that
-    // sample of the golden roll channel (0.2740983439788299 deg as of the
-    // Phase 5 capture; one decimal is what the logbook shows for an angle).
+    // sample of the golden roll channel (0.27409834397858546 deg as of the
+    // Phase 6 capture; one decimal is what the logbook shows for an angle).
     const FusionGolden golden = loadFusionGolden(QStringLiteral("coarse_maneuver"));
     const qsizetype sample = golden.channels.value(QStringLiteral("_time")).indexOf(kFixtureExitTime);
     QVERIFY(sample >= 0);
     const double expectedRoll = golden.channels.value(QStringLiteral("roll")).at(sample);
-    QVERIFY(qAbs(expectedRoll - 0.2740983439788299) < 1e-15);
+    QVERIFY(qAbs(expectedRoll - 0.27409834397858546) < 1e-15);
 
     // What a view does first: it reads the cell, which is empty and starts nothing
     QCOMPARE(cell(row), QString());

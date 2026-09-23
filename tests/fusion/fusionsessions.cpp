@@ -54,6 +54,11 @@ void addImuSide(SessionData &session, const FusionFixture &f)
     session.setSourceMeasurement("IMU", "wx", f.wx, "deg/s");
     session.setSourceMeasurement("IMU", "wy", f.wy, "deg/s");
     session.setSourceMeasurement("IMU", "wz", f.wz, "deg/s");
+    // The device's unit text; the conversion layer serves it unchanged with
+    // label degC. Conditional so that a test can build a session lacking the
+    // column from a fixture copy with the array cleared.
+    if (!f.imuTemperature.isEmpty())
+        session.setSourceMeasurement("IMU", "temperature", f.imuTemperature, "deg C");
 }
 
 bool sameSamples(const QVector<double> &a, const QVector<double> &b)
@@ -88,7 +93,8 @@ bool inputsMatchFixture(const SessionData &session, const FusionFixture &f, bool
             && sameSamples(probe.getMeasurement("IMU", "az"), f.az)
             && sameSamples(probe.getMeasurement("IMU", "wx"), f.wx)
             && sameSamples(probe.getMeasurement("IMU", "wy"), f.wy)
-            && sameSamples(probe.getMeasurement("IMU", "wz"), f.wz);
+            && sameSamples(probe.getMeasurement("IMU", "wz"), f.wz)
+            && sameSamples(probe.getMeasurement("IMU", "temperature"), f.imuTemperature);
     }
     return same;
 }
@@ -162,6 +168,7 @@ SessionData naturalSession(const QString &sessionId)
     session.setSourceMeasurement("IMU", "wx", zeros, "deg/s");
     session.setSourceMeasurement("IMU", "wy", zeros, "deg/s");
     session.setSourceMeasurement("IMU", "wz", zeros, "deg/s");
+    session.setSourceMeasurement("IMU", "temperature", QVector<double>(imuTime.size(), 25.0), "deg C");
 
     // GPS week and time of week of the epoch; device time 100 s is the epoch
     const double week = std::floor((epoch - 315964800) / 604800);

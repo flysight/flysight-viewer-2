@@ -15,7 +15,7 @@
 // boundary that falls between two samples is honoured exactly. Each step's
 // measurement covariance is the density plus a white-noise term proportional
 // to the change of the signal across the step (Tuning::gyroStepSlope,
-// accStepSlope).
+// accStepSlope); and the temperature at a fix, for the gyro bias model.
 
 namespace FlySight::Fusion::Detail {
 
@@ -29,6 +29,13 @@ std::vector<double> integrationEdges(const Samples &samples, double start, doubl
 /// `values` (sampled at `times`) linearly interpolated at `t`. Throws when `t`
 /// lies outside `times`.
 gtsam::Vector3 interpolateAt(const std::vector<double> &times, const Vectors &values, double t);
+
+/// The scalar series `values` (sampled at `times`) linearly interpolated at `t`; the same rule as the vector form.
+double interpolateAt(const std::vector<double> &times, const std::vector<double> &values, double t);
+
+/// The IMU temperature interpolated at fix `k` of `samples`, degC. Requires
+/// a non-empty temperature series.
+double temperatureAtFix(const Samples &samples, size_t k);
 
 /// The rotation increment (rotation vector, rad) of the step `from` -> `to`:
 /// the bias-corrected rate at the midpoint of the step times its length.

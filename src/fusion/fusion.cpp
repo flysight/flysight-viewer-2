@@ -27,6 +27,7 @@ struct FitPlan {
     PreparedInput prepared;
     Tuning tuning;
     Samples window;             ///< what the graph covers
+    GyroBiasModel biasModel;    ///< the full fit's gyro bias model: temperature-linear about the window's mean temperature
 };
 
 /// Stage 1: is this a recording the model can use, and what does the fit
@@ -45,6 +46,9 @@ FitPlan planFit(const Channels &channels, const Tuning &baseTuning)
     plan.window = fittedWindow(full, plan.prepared.usableStart, full.gnssTime.back());
     validateSamples(plan.window, plan.tuning);
     requireNoGnssOutage(plan.window, std::max(kGnssOutageSeconds, kGnssOutageMedians*medianInterval(full.gnssTime)));
+    // T_ref is a property of the fitted window (the mean of its IMU samples'
+    // temperature), decided before the fit starts.
+    plan.biasModel = gyroBiasModelFor(plan.window);
     return plan;
 }
 
@@ -72,9 +76,11 @@ Result fitAndAssemble(const FitPlan &plan, const Checkpoint &checkpoint, Pipelin
     // Before the full fit: a cancelled or failed full fit keeps the account.
     if (trace)
         trace->initializer = init.account;
-    // The fit still refreshes preintegration as the fitted biases change.
+    // The fit still refreshes preintegration as the fitted biases change. The
+    // full fit alone runs the temperature model; the initializer's fits above
+    // took the constant one by default.
     const FitResult fit = fitFactorGraph(plan.window, init.state, plan.tuning,
-                                         QString::fromLatin1(kFullFitPassFormat), checkpoint);
+                                         QString::fromLatin1(kFullFitPassFormat), checkpoint, plan.biasModel);
     if (trace) {
         trace->history = fit.history;
         trace->converged = fit.converged;

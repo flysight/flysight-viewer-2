@@ -11,7 +11,8 @@
 //   - noise comes from SplitMix64, mapped to [-1, 1), drawn in one documented
 //     order: all GNSS samples first, in time order, each drawing north, east,
 //     down, velN, velE, velD; then all IMU samples in time order, each drawing
-//     ax, ay, az, wx, wy, wz. Accuracies and times carry no noise.
+//     ax, ay, az, wx, wy, wz. Accuracies, times and the temperature carry
+//     no noise.
 // All times are UTC seconds: kEpochUtc + t.
 
 namespace FlySightTest {
@@ -62,11 +63,13 @@ void appendGnss(FusionFixture &f, double t,
 
 void appendImu(FusionFixture &f, double t,
                double ax, double ay, double az,
-               double wx, double wy, double wz)
+               double wx, double wy, double wz,
+               double temperature)
 {
     f.imuTime.append(kEpochUtc + t);
     f.ax.append(ax);  f.ay.append(ay);  f.az.append(az);
     f.wx.append(wx);  f.wy.append(wy);  f.wz.append(wz);
+    f.imuTemperature.append(temperature);
 }
 
 // ---------------------------------------------------------------------------
@@ -78,7 +81,8 @@ void appendImu(FusionFixture &f, double t,
 /// IMU 100 Hz, i = 0..200; GNSS t = .037 + i * .2, i = 0..8; hAcc = vAcc = 1,
 /// sAcc = .1; origin index 0. Shorter than one segment (the 60 s prefix
 /// covers it), with an exactly unobservable yaw (the four prefix starts tie
-/// and the first wins), and its objective is nearly zero.
+/// and the first wins), and its objective is nearly zero. IMU temperature
+/// 25 degC throughout.
 FusionFixture coarseLinear()
 {
     FusionFixture f;
@@ -88,7 +92,7 @@ FusionFixture coarseLinear()
         appendGnss(f, t, 7 + t * 12, 8 + t * -4, 9 + t * 2, 12, -4, 2, 1, 1, .1);
     }
     for (int i = 0; i <= 200; ++i)
-        appendImu(f, i * .01, 0, 0, -kStandardGravity, 0, 0, 0);
+        appendImu(f, i * .01, 0, 0, -kStandardGravity, 0, 0, 0, kFixtureTemperatureDegC);
     f.originIndex = 0;
     return f;
 }
@@ -103,7 +107,7 @@ FusionFixture coarseLinear()
 /// and two after IMU coverage (trimmed, not rejected). Origin index 3; hAcc is
 /// 12 m before the origin and 1.5 m from it on; vAcc = 2.5, sAcc = .3.
 /// Uniform noise: force .02, gyro .05 deg/s, position .3, velocity .1;
-/// seed 0x8F050002.
+/// seed 0x8F050002. IMU temperature 25 degC throughout.
 FusionFixture coarseManeuver()
 {
     FusionFixture f;
@@ -135,7 +139,8 @@ FusionFixture coarseManeuver()
         const double n3 = source.next(), n4 = source.next(), n5 = source.next();
         appendImu(f, t,
                   ax + noise.force * n0, ay + noise.force * n1, az + noise.force * n2,
-                  .2 + noise.gyro * n3, -.15 + noise.gyro * n4, .3 + noise.gyro * n5);
+                  .2 + noise.gyro * n3, -.15 + noise.gyro * n4, .3 + noise.gyro * n5,
+                  kFixtureTemperatureDegC);
     }
     f.originIndex = 3;
     return f;
@@ -151,7 +156,7 @@ FusionFixture coarseManeuver()
 /// force .005, gyro .02 deg/s, position .2, velocity .03; seed 0x8F050003.
 /// One segment at rest whose prefix grows from 60 s to 120 s to cover it
 /// (yaw unobservable and arbitrary; the anchor is the first fix, every sAcc
-/// being equal).
+/// being equal). IMU temperature 25 degC throughout.
 FusionFixture stationarySpin()
 {
     FusionFixture f;
@@ -176,7 +181,8 @@ FusionFixture stationarySpin()
         appendImu(f, t,
                   .03 + noise.force * n0, -.02 + noise.force * n1,
                   (-kStandardGravity + .05) + noise.force * n2,
-                  .2 + noise.gyro * n3, -.1 + noise.gyro * n4, (.15 + spin) + noise.gyro * n5);
+                  .2 + noise.gyro * n3, -.1 + noise.gyro * n4, (.15 + spin) + noise.gyro * n5,
+                  kFixtureTemperatureDegC);
     }
     f.originIndex = 0;
     return f;
@@ -230,7 +236,8 @@ FusionFixture motionStart()
         appendImu(f, t,
                   (.8 * aE + .05) + noise.force * n0, (.6 * aE - .03) + noise.force * n1,
                   (-kStandardGravity + .08) + noise.force * n2,
-                  .2 + noise.gyro * n3, -.15 + noise.gyro * n4, .3 + noise.gyro * n5);
+                  .2 + noise.gyro * n3, -.15 + noise.gyro * n4, .3 + noise.gyro * n5,
+                  kFixtureTemperatureDegC);
     }
     f.originIndex = 0;
     return f;
@@ -270,7 +277,8 @@ FusionFixture restThroughout()
         appendImu(f, t,
                   (.28 * kStandardGravity + .03) + noise.force * n0, -.02 + noise.force * n1,
                   (-.96 * kStandardGravity + .05) + noise.force * n2,
-                  .2 + noise.gyro * n3, -.1 + noise.gyro * n4, .15 + noise.gyro * n5);
+                  .2 + noise.gyro * n3, -.1 + noise.gyro * n4, .15 + noise.gyro * n5,
+                  kFixtureTemperatureDegC);
     }
     f.originIndex = 0;
     return f;
@@ -313,7 +321,8 @@ FusionFixture saccAnchor()
         appendImu(f, t,
                   .05 + noise.force * n0, (aE - .03) + noise.force * n1,
                   (-kStandardGravity + .08) + noise.force * n2,
-                  .2 + noise.gyro * n3, -.15 + noise.gyro * n4, .3 + noise.gyro * n5);
+                  .2 + noise.gyro * n3, -.15 + noise.gyro * n4, .3 + noise.gyro * n5,
+                  kFixtureTemperatureDegC);
     }
     f.originIndex = 0;
     return f;
@@ -335,6 +344,14 @@ FusionFixture saccAnchor()
 /// (continuous: 25 at s = 15, 50 at s = 20). Body force (.05, aE - .03,
 /// -9.80665 + .08); gyro (.2, -.15, .3 + t / 200) deg/s. hAcc = 1.5,
 /// vAcc = 2.5, sAcc = .3. Noise .005, .02, .2, .03; seed 0x8F050007. 201 states.
+///
+/// The IMU temperature ramps linearly, 25 + t / 10 degC (25 at t = 0 to 45
+/// at t = 200), so the z bias .3 + t / 200 deg/s is .3 + (T - 25) / 20 deg/s:
+/// exactly 0.05 deg/s per degC. Under the temperature model this is
+/// b1 = (0, 0, 0.05 deg/s/degC), T_ref = 35 (the mean of 25 + i * .1 / 10 over
+/// i = 0..2000) and b0 = (.2, -.15, .8) deg/s, the bias at T_ref. The 20 degC
+/// excursion is what makes the data dominate the slope's prior (the model's
+/// information on b1 grows with the square of the excursion).
 FusionFixture driftingBias()
 {
     FusionFixture f;
@@ -368,7 +385,8 @@ FusionFixture driftingBias()
         appendImu(f, t,
                   .05 + noise.force * n0, (aE - .03) + noise.force * n1,
                   (-kStandardGravity + .08) + noise.force * n2,
-                  .2 + noise.gyro * n3, -.15 + noise.gyro * n4, (.3 + t / 200) + noise.gyro * n5);
+                  .2 + noise.gyro * n3, -.15 + noise.gyro * n4, (.3 + t / 200) + noise.gyro * n5,
+                  25 + t / 10);
     }
     f.originIndex = 0;
     return f;
@@ -395,7 +413,7 @@ QList<QVector<double> *> gnssChannels(FusionFixture &f)
 /// Every per-sample IMU channel of `f`.
 QList<QVector<double> *> imuChannels(FusionFixture &f)
 {
-    return { &f.imuTime, &f.ax, &f.ay, &f.az, &f.wx, &f.wy, &f.wz };
+    return { &f.imuTime, &f.ax, &f.ay, &f.az, &f.wx, &f.wy, &f.wz, &f.imuTemperature };
 }
 
 void removeSamples(const QList<QVector<double> *> &channels, qsizetype first, qsizetype count)

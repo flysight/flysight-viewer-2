@@ -51,7 +51,7 @@ constexpr FitOutput kFitOutputs[] = {
     { "qw",    &Fusion::Result::qw }
 };
 
-// The seventeen measurement inputs of the fit and the member of the kernel's
+// The eighteen measurement inputs of the fit and the member of the kernel's
 // Channels each one fills: exactly its vector members, in member order. One
 // table serves the declaration and the hand-over, like kFitOutputs.
 struct FitInput {
@@ -77,7 +77,8 @@ constexpr FitInput kFitInputs[] = {
     { "IMU",   "az",    &Fusion::Channels::az },
     { "IMU",   "wx",    &Fusion::Channels::wx },
     { "IMU",   "wy",    &Fusion::Channels::wy },
-    { "IMU",   "wz",    &Fusion::Channels::wz }
+    { "IMU",   "wz",    &Fusion::Channels::wz },
+    { "IMU",   "temperature", &Fusion::Channels::imuTemperature }
 };
 
 } // namespace

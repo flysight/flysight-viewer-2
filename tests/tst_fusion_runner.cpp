@@ -394,11 +394,14 @@ void FusionRunnerTest::successMatchesDirectRun()
     QVERIFY2(firstColumnNotBitIdentical(columns, direct).isEmpty(),
              qPrintable(QStringLiteral("column %1 differs from the direct run").arg(firstColumnNotBitIdentical(columns, direct))));
 
-    // --dump-inputs: the table of fitInputs(), holding the fixture bit for bit
+    // --dump-inputs: the table of fitInputs() (the twenty-two labels are
+    // derived from it), holding the fixture bit for bit. The temperature
+    // column proves the CSV round trip: DataExporter writes it from its IMU
+    // column table, and the importer reads it back.
     QList<QPair<QString, QStringList>> dump;
     QVERIFY2(readDump(dumpPath, dump), qPrintable(dumpPath));
     QCOMPARE(dumpLabels(dump), inputLabels());
-    QCOMPARE(dump.size(), 21);
+    QCOMPARE(dump.size(), 22);
     QVector<double> samples;
     QVERIFY(dumpSamples(dump, QStringLiteral("GNSS/_time"), samples));
     QVERIFY(sameBitsEverywhere(samples, fixture.gnssTime));
@@ -406,6 +409,8 @@ void FusionRunnerTest::successMatchesDirectRun()
     QVERIFY(sameBitsEverywhere(samples, fixture.north));
     QVERIFY(dumpSamples(dump, QStringLiteral("IMU/wx"), samples));
     QVERIFY(sameBitsEverywhere(samples, fixture.wx));
+    QVERIFY(dumpSamples(dump, QStringLiteral("IMU/temperature"), samples));
+    QVERIFY(sameBitsEverywhere(samples, fixture.imuTemperature));
     QVERIFY(dumpSamples(dump, QStringLiteral("_LOCAL_ORIGIN_INDEX"), samples));
     QCOMPARE(samples, QVector<double>{double(fixture.originIndex)});
     QVERIFY(dumpSamples(dump, QStringLiteral("_LOCAL_ORIGIN_LAT"), samples));
@@ -524,6 +529,9 @@ void FusionRunnerTest::legacySchemaScalesTheGyro()
     QVERIFY(!sameBitsEverywhere(samples, fixture.wz));   // the scale is not the identity here
     QVERIFY(dumpSamples(dump, QStringLiteral("IMU/ax"), samples));
     QVERIFY(sameBitsEverywhere(samples, fixture.ax));
+    // The temperature is not schema-dependent
+    QVERIFY(dumpSamples(dump, QStringLiteral("IMU/temperature"), samples));
+    QVERIFY(sameBitsEverywhere(samples, fixture.imuTemperature));
     QVERIFY(dumpSamples(dump, QStringLiteral("GNSS/_time"), samples));
     QVERIFY(sameBitsEverywhere(samples, fixture.gnssTime));
 

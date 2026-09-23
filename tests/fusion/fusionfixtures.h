@@ -8,7 +8,7 @@
 namespace FlySightTest {
 
 /// One synthetic recording for the fusion kernel: the effective values of the
-/// twenty-one inputs the fit consumes, as plain arrays.
+/// twenty-two inputs the fit consumes, as plain arrays.
 ///
 /// This header and its source use Qt Core and the C++ standard library only
 /// and include nothing from src/. They are compiled once, into
@@ -22,10 +22,15 @@ struct FusionFixture {
     QString name;                                  ///< also the golden file stem
     QVector<double> gnssTime, north, east, down, velN, velE, velD, hAcc, vAcc, sAcc;
     QVector<double> imuTime, ax, ay, az, wx, wy, wz;   ///< times UTC s; ax..az m/s^2; wx..wz deg/s
+    QVector<double> imuTemperature;                ///< IMU/temperature, degC, per imuTime sample
     qint64 originIndex = 0;
     double originLat = 45.0, originLon = -75.0, originHMSL = 100.0;
     bool expectSuccess = true;                     ///< false: the recording must be rejected
 };
+
+/// The constant IMU temperature of every fixture that is not about the
+/// temperature (exactly representable; no noise).
+constexpr double kFixtureTemperatureDegC = 25;
 
 /// All twelve fixtures: coarse_linear, coarse_maneuver, stationary_spin, then
 /// the nine rejections, each a single mutation of one of the first two.

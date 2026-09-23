@@ -258,11 +258,11 @@ void FusionGoldenTest::fixturesAreDeterministic()
         QCOMPARE(a.originIndex, b.originIndex);
         const QVector<double> *as[] = {&a.gnssTime, &a.north, &a.east, &a.down, &a.velN, &a.velE, &a.velD,
                                        &a.hAcc, &a.vAcc, &a.sAcc, &a.imuTime, &a.ax, &a.ay, &a.az,
-                                       &a.wx, &a.wy, &a.wz};
+                                       &a.wx, &a.wy, &a.wz, &a.imuTemperature};
         const QVector<double> *bs[] = {&b.gnssTime, &b.north, &b.east, &b.down, &b.velN, &b.velE, &b.velD,
                                        &b.hAcc, &b.vAcc, &b.sAcc, &b.imuTime, &b.ax, &b.ay, &b.az,
-                                       &b.wx, &b.wy, &b.wz};
-        for (int c = 0; c < 17; ++c)
+                                       &b.wx, &b.wy, &b.wz, &b.imuTemperature};
+        for (int c = 0; c < 18; ++c)
             QVERIFY2(sameBitsEverywhere(*as[c], *bs[c]), qPrintable(a.name));
     }
     // Every fixture has a golden, and the golden agrees on what it is.

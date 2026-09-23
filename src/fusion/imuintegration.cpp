@@ -89,6 +89,25 @@ gtsam::Vector3 interpolateAt(const std::vector<double> &times, const Vectors &va
     return values[j-1] + f*(values[j]-values[j-1]);
 }
 
+// The same statements as the vector form, so that a scalar series and the
+// same series stored as (v, 0, 0) interpolate to the same bits.
+double interpolateAt(const std::vector<double> &times, const std::vector<double> &values, double t)
+{
+    if (t < times.front() || t > times.back())
+        throw std::invalid_argument("Interpolation outside coverage");
+    const auto it = std::lower_bound(times.begin(), times.end(), t);
+    const size_t j = size_t(it-times.begin());
+    if (!j || *it == t)
+        return values[j];
+    const double f = (t-times[j-1])/(times[j]-times[j-1]);
+    return values[j-1] + f*(values[j]-values[j-1]);
+}
+
+double temperatureAtFix(const Samples &samples, size_t k)
+{
+    return interpolateAt(samples.imuTime, samples.temperature, samples.gnssTime[k]);
+}
+
 gtsam::Vector3 gyroIncrement(const Samples &samples, double from, double to,
                              const gtsam::Vector3 &gyroBias)
 {

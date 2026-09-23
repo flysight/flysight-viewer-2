@@ -1,6 +1,6 @@
 {
     "diagnostics": {
-        "algorithm": "batch-shared-bias-v2",
+        "algorithm": "batch-temperature-bias-v3",
         "failure": "GNSS measurement sigmas must be positive"
     },
     "fixture": "reject_sigma",

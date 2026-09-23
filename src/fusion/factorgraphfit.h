@@ -20,7 +20,9 @@
 
 // Internal to the fusion library: the batch fit. One state (pose X(k),
 // velocity V(k)) per GNSS fix, one accelerometer-and-gyro bias B(0) shared by
-// the whole recording. Each fix contributes a position and a velocity factor;
+// the whole recording and, in the full fit, one slope T(0) that makes the gyro
+// bias linear in the IMU temperature (temperatureimufactor.h); the
+// initializer's fits keep the constant bias. Each fix contributes a position and a velocity factor;
 // successive states are tied by the preintegrated IMU between them; a weak
 // prior keeps the bias near zero. Heading is not constrained by any factor of
 // its own: it is observable only through motion.
@@ -69,17 +71,44 @@ struct Stopping {
 /// (IMU); objectivePerState is the objective divided by the number of states.
 struct Quality { double imuNrms = 0, positionNrms = 0, velocityNrms = 0, objectivePerState = 0; };
 
+/// How a fit models the gyro bias. The full fit uses the temperature model
+/// (the public boundary always supplies a temperature); the initializer's
+/// prefix and segment fits use the constant model.
+struct GyroBiasModel {
+    bool temperatureLinear = false;   ///< true: b(t) = b0 + b1 (T(t) - tRef) through TemperatureImuFactor and T(0); false: constant bias, stock ImuFactor, no T(0)
+    double tRef = 0;                  ///< degC; the mean IMU temperature of the fitted window; meaningful only when temperatureLinear
+};
+
+/// The temperature model for `window`, tRef its plain mean temperature (index
+/// order). Throws std::invalid_argument("Temperature model without a temperature series") on an empty series.
+GyroBiasModel gyroBiasModelFor(const Samples &window);
+
+/// Where a graph is linearized: the constant bias and, with the temperature
+/// model, the slope (zero under the constant model).
+struct BiasLinearization {
+    gtsam::imuBias::ConstantBias bias;
+    gtsam::Vector3 slope = gtsam::Vector3::Zero();
+};
+
+/// The bias the model assigns to the interval that starts at fix `k`: `bias`
+/// unchanged under the constant model; with the temperature model its gyro
+/// part shifted by slope * (T_k - tRef), T_k the temperature at fix k.
+gtsam::imuBias::ConstantBias intervalBias(const Samples &d, size_t k, const gtsam::imuBias::ConstantBias &bias,
+                                          const gtsam::Vector3 &slope, const GyroBiasModel &model);
+
 struct FitResult {
     gtsam::Values values;
     bool converged = false;                      ///< true for `settled` and `slow tail accepted`
     double objective = 0;                        ///< graph error at `values`, preintegrated at the fitted bias
     double positionRms = 0, velocityRms = 0;     ///< fitted state vs GNSS measurement, vector RMS
     std::vector<FitIteration> history;
-    std::vector<FactorResidual> residuals;       ///< in factor order; the bias prior last
+    std::vector<FactorResidual> residuals;       ///< in factor order; the bias prior, then (temperature model) the slope prior, last
     Stopping stopping;
     Quality quality;
     gtsam::NonlinearFactorGraph graph;           ///< the graph the objective, residuals and quality were evaluated on:
                                                  ///< rebuilt at the fitted bias; the initializer takes the marginal yaw sigma from it
+    gtsam::Vector3 gyroBiasSlope = gtsam::Vector3::Zero();   ///< the fitted b1, rad/s per degC; zero under the constant model
+    GyroBiasModel biasModel;                     ///< the model this fit used (tRef for the diagnostics and the reconstruction)
 };
 
 /// The full fit's iteration text; the initializer's fits pass the segment texts.
@@ -97,15 +126,22 @@ public:
     Stopping stopping;
 };
 
-/// The factor graph of `samples`, with the IMU preintegrated at `bias`.
+/// The stock factor graph of `samples` (constant bias), with the IMU
+/// preintegrated at `bias`: the six-argument form under the constant model.
 /// Reports "Integrating IMU factors" through `checkpoint` every 256 states.
-///
-/// Factor order is part of the numerical behavior (it fixes the elimination
-/// ordering): per state the position factor, the velocity factor, then for
-/// every state but the first the IMU factor; the bias prior last.
 gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples,
                                              const gtsam::imuBias::ConstantBias &bias,
                                              const Tuning &tuning,
+                                             const Checkpoint &checkpoint = Checkpoint());
+
+/// The factor graph of `samples` under `model`, every IMU factor preintegrated
+/// at its interval's bias (intervalBias of `at`). Factor order is part of the
+/// numerical behavior (it fixes the elimination ordering): per state the
+/// position factor, the velocity factor, then for every state but the first
+/// the IMU factor; the bias prior; and, with the temperature model, the slope
+/// prior last.
+gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples, const BiasLinearization &at,
+                                             const GyroBiasModel &model, const Tuning &tuning,
                                              const Checkpoint &checkpoint = Checkpoint());
 
 /// Fits `samples` from `initial`. Preintegration is linearized at a fixed
@@ -126,9 +162,16 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples,
 /// the one-based pass, the other with the one-based iteration (QString::arg
 /// fills the lowest-numbered placeholder left, so a caller formats the fixed
 /// parts of its text first). The default reproduces the full fit's texts.
+///
+/// Under the temperature model (`model.temperatureLinear`) the graph carries
+/// T(0), started at zero; every interval is preintegrated and evaluated at
+/// its own bias in every build, and the fitted slope is returned in
+/// `gyroBiasSlope`. The default is the constant model: the initializer's
+/// prefix and segment fits are stock.
 FitResult fitFactorGraph(const Samples &samples, const InitialState &initial, const Tuning &tuning,
                          const QString &passFormat = QString::fromLatin1(kFullFitPassFormat),
-                         const Checkpoint &checkpoint = Checkpoint());
+                         const Checkpoint &checkpoint = Checkpoint(),
+                         const GyroBiasModel &model = GyroBiasModel());
 
 /// The marginal standard deviation, in degrees, of the rotation of pose `key`
 /// about the navigation vertical, from `graph` linearized at `values`

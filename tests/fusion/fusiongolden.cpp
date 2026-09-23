@@ -357,6 +357,7 @@ FlySight::Fusion::Channels toChannels(const FusionFixture &f)
     c.imuTime = f.imuTime;
     c.ax = f.ax;  c.ay = f.ay;  c.az = f.az;
     c.wx = f.wx;  c.wy = f.wy;  c.wz = f.wz;
+    c.imuTemperature = f.imuTemperature;
     c.originIndex = f.originIndex;
     c.originLat = f.originLat;
     c.originLon = f.originLon;

@@ -22,6 +22,10 @@ struct Samples {
     std::vector<double> imuTime, gnssTime;
     Vectors force;            ///< specific force, m/s^2, per IMU sample
     Vectors gyro;             ///< angular rate, rad/s, per IMU sample
+    /// IMU temperature, degC, per IMU sample. The public boundary always
+    /// supplies it; hand-built samples of the stock path (tests) may leave it
+    /// empty.
+    std::vector<double> temperature;
     Vectors position;         ///< m, per GNSS fix
     Vectors velocity;         ///< m/s, per GNSS fix
     Vectors positionSigma;    ///< m (hAcc, hAcc, vAcc), per GNSS fix
@@ -35,9 +39,14 @@ struct Samples {
 /// impossible to satisfy ("never settles", "never accepted"); production
 /// never does. The initializer's prefix fits run with maxIterations and
 /// maxPasses replaced by their own budget (initializer.cpp).
+constexpr double kPi = 3.14159265358979323846;
+
 struct Tuning {
     double accDensity = .015, gyroDensity = .001;   ///< IMU noise densities
     double accBiasSigma = .3, gyroBiasSigma = .03;  ///< prior on the shared biases
+    // The gyro bias of the full fit is b(t) = b0 + b1 (T(t) - T_ref), T the
+    // IMU temperature; b0's prior is gyroBiasSigma and b1's is this.
+    double gyroBiasSlopeSigma = .010 * kPi / 180;  ///< prior on b1, the gyro bias change per degC of IMU temperature, rad/s/degC (spec: 0.010 deg/s/degC)
     // Per integration step of length dt (s), a white-noise term is added in
     // quadrature to the density: sigma_w = gyroStepSlope x dt x |delta omega|
     // (radians; |delta omega| the norm of the change of the interpolated rate
@@ -61,8 +70,6 @@ struct Tuning {
     double minFinalSegment = 120;                   ///< a final piece shorter than this is merged into the segment before it, s
     int maxPasses = 5;                              ///< re-preintegration passes of one fit: the full fit's and a segment fit's five; a prefix fit's one
 };
-
-constexpr double kPi = 3.14159265358979323846;
 
 /// Gravity in the NED frame, m/s^2.
 extern const gtsam::Vector3 kGravity;

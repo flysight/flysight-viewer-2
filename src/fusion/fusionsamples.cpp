@@ -38,6 +38,21 @@ void requireFiniteArrays(size_t count, std::initializer_list<const Vectors *> fi
     }
 }
 
+/// A scalar series is either absent (empty: the stock path's hand-built
+/// samples carry no temperature) or has `count` finite entries.
+void requireFiniteScalars(size_t count, const std::vector<double> &values,
+                          const char *lengthMessage, const char *finiteMessage)
+{
+    if (values.empty())
+        return;
+    if (values.size() != count)
+        throw std::invalid_argument(lengthMessage);
+    for (double value : values) {
+        if (!std::isfinite(value))
+            throw std::invalid_argument(finiteMessage);
+    }
+}
+
 /// A GNSS sigma weights a factor by its inverse: zero or negative is meaningless.
 void requirePositiveSigmas(const Samples &samples)
 {
@@ -52,8 +67,8 @@ void requirePositiveSigmas(const Samples &samples)
 void requireValidTuning(const Tuning &tuning)
 {
     for (double value : { tuning.accDensity, tuning.gyroDensity, tuning.accBiasSigma,
-                          tuning.gyroBiasSigma, tuning.maxGap, tuning.segmentLength,
-                          tuning.minFinalSegment }) {
+                          tuning.gyroBiasSigma, tuning.gyroBiasSlopeSigma, tuning.maxGap,
+                          tuning.segmentLength, tuning.minFinalSegment }) {
         if (!std::isfinite(value) || value <= 0)
             throw std::invalid_argument("Invalid fusion configuration");
     }
@@ -166,6 +181,8 @@ void validateSamples(const Samples &samples, const Tuning &tuning)
     requireIncreasingFiniteTimes(samples.gnssTime);
     requireFiniteArrays(samples.imuTime.size(), { &samples.force, &samples.gyro },
                         kWindowLengthsMessage, kWindowNonfiniteMessage);
+    requireFiniteScalars(samples.imuTime.size(), samples.temperature,
+                         kWindowLengthsMessage, kWindowNonfiniteMessage);
     requireFiniteArrays(samples.gnssTime.size(),
                         { &samples.position, &samples.velocity,
                           &samples.positionSigma, &samples.velocitySigma },
@@ -187,6 +204,10 @@ Samples fittedWindow(const Samples &recording, double start, double end)
     window.imuTime.assign(recording.imuTime.begin() + lo, recording.imuTime.begin() + hi);
     window.force.assign(recording.force.begin() + lo, recording.force.begin() + hi);
     window.gyro.assign(recording.gyro.begin() + lo, recording.gyro.begin() + hi);
+    // The same [lo, hi) range: a window's temperature is exactly that of its
+    // IMU samples. An absent series stays absent.
+    if (!recording.temperature.empty())
+        window.temperature.assign(recording.temperature.begin() + lo, recording.temperature.begin() + hi);
     return window;
 }
 
@@ -202,6 +223,8 @@ void requireUsableRecording(const Samples &recording, double epoch, double usabl
         throw std::invalid_argument("Nonfinite fusion epoch or usable start");
     requireFiniteArrays(recording.imuTime.size(), { &recording.force, &recording.gyro },
                         kRecordingLengthsMessage, kRecordingNonfiniteMessage);
+    requireFiniteScalars(recording.imuTime.size(), recording.temperature,
+                         kRecordingLengthsMessage, kRecordingNonfiniteMessage);
     requireFiniteArrays(recording.gnssTime.size(),
                         { &recording.position, &recording.velocity,
                           &recording.positionSigma, &recording.velocitySigma },

@@ -36,13 +36,16 @@ std::vector<gtsam::Rot3> propagateThroughInterval(const Samples &d, const std::v
 DenseTrajectory reconstructTrajectory(const Samples &d, const FitResult &fit)
 {
     DenseTrajectory dense;
+    // B(0): the constant accelerometer bias and b0; the gyro bias of each
+    // interval is the model's at the interval's first fix.
     const auto bias = fit.values.at<gtsam::imuBias::ConstantBias>(B(0));
     for (size_t k = 0; k+1 < d.gnssTime.size(); ++k) {
         const double start = d.gnssTime[k], end = d.gnssTime[k+1];
         const std::vector<double> edges = integrationEdges(d, start, end);
         const auto startPose = fit.values.at<gtsam::Pose3>(X(k)), endPose = fit.values.at<gtsam::Pose3>(X(k+1));
         const auto startVelocity = fit.values.at<gtsam::Vector3>(V(k)), endVelocity = fit.values.at<gtsam::Vector3>(V(k+1));
-        const std::vector<gtsam::Rot3> rotations = propagateThroughInterval(d, edges, startPose.rotation(), bias.gyroscope());
+        const std::vector<gtsam::Rot3> rotations = propagateThroughInterval(
+            d, edges, startPose.rotation(), intervalBias(d, k, bias, fit.gyroBiasSlope, fit.biasModel).gyroscope());
 
         // What the gyro integration misses of the next state's fitted
         // attitude, as a rotation vector applied on the left (NED side).

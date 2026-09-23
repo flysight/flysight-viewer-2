@@ -26,9 +26,10 @@ struct DenseTrajectory {
 /// first state, which does not land exactly on the second state's fitted
 /// attitude. The mismatch (endpointCorrection, a small angle) is distributed
 /// linearly in time over the interval, so the dense attitude is continuous and
-/// agrees with the fit at every fix. Acceleration is the bias-corrected force
-/// rotated by that attitude, plus gravity. Samples at or after the last fix
-/// are not produced.
+/// agrees with the fit at every fix. The gyro bias of an interval is the
+/// model's bias at that interval's first fix (the bias its IMU factor was
+/// evaluated at). Acceleration is the bias-corrected force rotated by that
+/// attitude, plus gravity. Samples at or after the last fix are not produced.
 DenseTrajectory reconstructTrajectory(const Samples &samples, const FitResult &fit);
 
 } // namespace FlySight::Fusion::Detail

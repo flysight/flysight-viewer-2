@@ -16,6 +16,7 @@
 #include <cmath>
 #include <memory>
 
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QtTest>
@@ -158,6 +159,7 @@ private slots:
     void cancelStopsAtNextBoundary();
     void missingInputsAreNotApplicable_data();
     void missingInputsAreNotApplicable();
+    void temperatureReachesTheKernel();
     void blockersReportFusion();
     void naturalSessionEndToEnd();
     void twoSessionsAreIndependent();
@@ -211,9 +213,10 @@ void FusionSessionTest::registrationShape()
         CalcInput::measurement("IMU", "ax"), CalcInput::measurement("IMU", "ay"),
         CalcInput::measurement("IMU", "az"), CalcInput::measurement("IMU", "wx"),
         CalcInput::measurement("IMU", "wy"), CalcInput::measurement("IMU", "wz"),
+        CalcInput::measurement("IMU", "temperature"),
         CalcInput::attribute("_LOCAL_ORIGIN_INDEX"), CalcInput::attribute("_LOCAL_ORIGIN_LAT"),
         CalcInput::attribute("_LOCAL_ORIGIN_LON"), CalcInput::attribute("_LOCAL_ORIGIN_HMSL")};
-    QCOMPARE(inputs.size(), 21);
+    QCOMPARE(inputs.size(), 22);
     QVERIFY(fit->descriptor->inputs == inputs);
 
     QList<DependencyKey> outputs;
@@ -262,8 +265,9 @@ void FusionSessionTest::inputsAreBitIdenticalToFixture()
         {"GNSS", "hAcc", &f.hAcc}, {"GNSS", "vAcc", &f.vAcc}, {"GNSS", "sAcc", &f.sAcc},
         {"IMU", "_time", &f.imuTime},
         {"IMU", "ax", &f.ax}, {"IMU", "ay", &f.ay}, {"IMU", "az", &f.az},
-        {"IMU", "wx", &f.wx}, {"IMU", "wy", &f.wy}, {"IMU", "wz", &f.wz}};
-    QCOMPARE(int(std::size(inputs)), 17);
+        {"IMU", "wx", &f.wx}, {"IMU", "wy", &f.wy}, {"IMU", "wz", &f.wz},
+        {"IMU", "temperature", &f.imuTemperature}};
+    QCOMPARE(int(std::size(inputs)), 18);   // the 22 declared inputs less the four origin attributes
     for (const auto &input : inputs) {
         QVERIFY2(sameBitsEverywhere(session.getMeasurement(input.sensor, input.name), *input.expected),
                  input.name);
@@ -642,6 +646,7 @@ void FusionSessionTest::missingInputsAreNotApplicable_data()
     QTest::newRow("no IMU data") << QStringLiteral("no-imu");
     QTest::newRow("no local origin") << QStringLiteral("no-origin");
     QTest::newRow("no shared UTC time for the IMU") << QStringLiteral("no-time");
+    QTest::newRow("no IMU temperature") << QStringLiteral("no-temperature");
 }
 
 // Acceptance 11: a session that lacks an input has nothing to compute. It is
@@ -656,6 +661,15 @@ void FusionSessionTest::missingInputsAreNotApplicable()
         // No fix ever reaches 10 m horizontal accuracy
         session = naturalSession(QStringLiteral("m1"));
         session.setMeasurement("GNSS", "hAcc", QVector<double>(200, 10.0));
+    } else if (kind == QStringLiteral("no-temperature")) {
+        // Spec section 10's "a recording without a temperature channel", on
+        // the engine side: a declared input the session lacks, like any other.
+        FusionFixture f = fusionFixture(QStringLiteral("coarse_linear"));
+        f.imuTemperature.clear();
+        session = sessionFromFixture(f, QStringLiteral("m1"));
+        QVERIFY(session.hasSensor("IMU"));
+        QVERIFY(session.hasMeasurement("IMU", "wz"));
+        QVERIFY(!session.hasMeasurement("IMU", "temperature"));
     } else {
         session = withoutSensor(naturalSession(QStringLiteral("m1")), QStringLiteral("TIME"));
         QVERIFY(session.hasSensor("IMU"));
@@ -688,6 +702,39 @@ void FusionSessionTest::missingInputsAreNotApplicable()
     for (const DependencyKey &name : plotNames())
         QVERIFY(engine.blockers(name).state == BlockerState::NotApplicable);
     QCOMPARE(engine.runCount(kFit), 0);
+}
+
+// The temperature column reaches the kernel as recorded: a stored
+// IMU/temperature in "deg C" is served as degC bit for bit, and the engine
+// path's diagnostics equal the direct kernel call's (temperature included).
+// drifting_bias carries a temperature ramp, so the model's slope is exercised
+// and not merely carried; with the default Tuning this is one 201-state fit
+// in a single 600 s segment.
+void FusionSessionTest::temperatureReachesTheKernel()
+{
+    const FusionFixture fixture = initializerFixture(QStringLiteral("drifting_bias"));
+    QVERIFY(!fixture.imuTemperature.isEmpty());
+    SessionData session = sessionFromFixture(fixture, QStringLiteral("d1"));
+    QVERIFY(sameBitsEverywhere(session.getMeasurement("IMU", "temperature"), fixture.imuTemperature));
+    QCOMPARE(session.effectiveUnit("IMU", "temperature"), QStringLiteral("degC"));
+
+    CalculationEngine &engine = session.calculationEngine();
+    QVERIFY(engine.readiness(kFit).state == ReadyState::Ready);
+    QCOMPARE(engine.request(kFit).status, ResultStatus::Ok);
+
+    const Fusion::Result direct = Fusion::run(toChannels(fixture));
+    QVERIFY2(direct.outcome == Fusion::Outcome::Succeeded, qPrintable(direct.reason));
+    const QJsonObject diagnostics = diagnosticsOf(session);
+    const QString difference = compareJson(QStringLiteral("diagnostics"), diagnostics,
+                                           QJsonDocument::fromJson(direct.diagnosticsJson.toUtf8()).object());
+    QVERIFY2(difference.isEmpty(), qPrintable(difference));
+
+    // T_ref from the fixture's construction: the mean of 25 + i * .1 / 10
+    // over i = 0..2000 is 35.
+    const QJsonObject gyroBias = diagnostics.value(QStringLiteral("model")).toObject()
+                                     .value(QStringLiteral("gyro_bias")).toObject();
+    QVERIFY(qAbs(gyroBias.value(QStringLiteral("t_ref_degc")).toDouble(-1) - 35.0) < 1e-9);
+    QCOMPARE(gyroBias.value(QStringLiteral("b1_rad_s_per_degc")).toArray().size(), 3);
 }
 
 // Acceptance 12: blocker inspection reports fusion through on-demand

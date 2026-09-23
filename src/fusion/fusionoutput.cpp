@@ -15,7 +15,7 @@ namespace FlySight::Fusion::Detail {
 
 namespace {
 
-const char kAlgorithm[] = "batch-shared-bias-v2";
+const char kAlgorithm[] = "batch-temperature-bias-v3";
 // The legacy `initialization` key names the method; the keys that described
 // the stationary window and the selected heading are null and stay present.
 const char kInitializationMethod[] = "segmented initialization; heading from segment fits";
@@ -89,7 +89,8 @@ QJsonObject initializerObject(const InitializerAccount &a)
 
 /// The one fit that was run, in the shape of a list of candidate fits: the
 /// diagnostics format allows several starting headings although nothing
-/// selects one any more (`heading_deg` is null).
+/// selects one any more (`heading_deg` is null). `gyro_bias_rad_s` is `b0`,
+/// the bias at the reference temperature; the slope is under `model.gyro_bias`.
 QJsonArray seedSummary(const FitResult &fit)
 {
     const auto bias = fit.values.at<gtsam::imuBias::ConstantBias>(gtsam::symbol_shorthand::B(0));
@@ -104,14 +105,28 @@ QJsonArray seedSummary(const FitResult &fit)
         {"velocity_residual_rms_m_s", fit.velocityRms}}};
 }
 
-/// The model constants of this fit that are not fitted quantities; Phase 6
-/// adds the fitted gyro bias model beside `per_step`.
-QJsonObject modelSummary(const Tuning &tuning)
+/// The fitted gyro bias model: b0 is B(0)'s gyro part (also seeds[0].gyro_bias_rad_s),
+/// b1 the slope per degC, t_ref the reference temperature of the fitted window.
+/// The full fit always runs the temperature model, so the two numbers are
+/// never null and there is no flag.
+QJsonObject gyroBiasObject(const FitResult &fit)
+{
+    const auto bias = fit.values.at<gtsam::imuBias::ConstantBias>(gtsam::symbol_shorthand::B(0));
+    return QJsonObject{
+        {"b0_rad_s", toJsonArray(bias.gyroscope())},
+        {"b1_rad_s_per_degc", toJsonArray(fit.gyroBiasSlope)},
+        {"t_ref_degc", fit.biasModel.tRef}};
+}
+
+/// The model of this fit: the per-step constants of the tuning, which are
+/// not fitted, and the fitted gyro bias model.
+QJsonObject modelSummary(const Tuning &tuning, const FitResult &fit)
 {
     return QJsonObject{
         {"per_step", QJsonObject{
             {"gyro_slope_s", tuning.gyroStepSlope},
-            {"acc_slope_s", tuning.accStepSlope}}}};
+            {"acc_slope_s", tuning.accStepSlope}}},
+        {"gyro_bias", gyroBiasObject(fit)}};
 }
 
 QJsonArray residualArray(const FitResult &fit)
@@ -163,7 +178,7 @@ QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerA
 {
     return QJsonObject{
         {"algorithm", kAlgorithm},
-        {"model", modelSummary(tuning)},
+        {"model", modelSummary(tuning, fit)},
         {"input", prepared.audit},
         {"seeds", seedSummary(fit)},
         {"initialization", kInitializationMethod},

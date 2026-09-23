@@ -21,7 +21,8 @@ struct Channels {
     QVector<double> imuTime;             ///< IMU/_time, UTC s
     QVector<double> ax, ay, az;          ///< IMU/ax|ay|az, specific force, m/s^2
     QVector<double> wx, wy, wz;          ///< IMU/wx|wy|wz, deg/s
-    qint64 originIndex = -1;             ///< _LOCAL_ORIGIN_INDEX: the fit starts at this fix
+    QVector<double> imuTemperature;      ///< IMU/temperature, degC: the IMU's own temperature, one value per imuTime sample
+    qint64 originIndex = -1;            ///< _LOCAL_ORIGIN_INDEX: the fit starts at this fix
     /// _LOCAL_ORIGIN_LAT|LON|HMSL. Recorded in the diagnostics only; the
     /// numbers do not depend on them.
     double originLat = 0, originLon = 0, originHMSL = 0;
@@ -43,8 +44,9 @@ struct Result {
     /// diagnostics' "failure". Empty otherwise.
     QString reason;
     /// Compact JSON. On success: input audit, initializer, objective, biases,
-    /// residuals. On Rejected / SolverFailed: the algorithm name and the
-    /// failure. Empty only when Cancelled.
+    /// the gyro bias model (`model.gyro_bias`: `b0`, `b1`, the reference
+    /// temperature), residuals. On Rejected / SolverFailed: the algorithm
+    /// name and the failure. Empty only when Cancelled.
     QString diagnosticsJson;
     /// Succeeded only; otherwise all empty. All the same length and aligned
     /// with `time` (UTC s): the original IMU samples inside the fitted

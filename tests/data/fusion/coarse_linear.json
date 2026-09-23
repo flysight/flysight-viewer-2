@@ -1,7 +1,7 @@
 {
     "channels_file": "coarse_linear.channels.txt",
     "diagnostics": {
-        "algorithm": "batch-shared-bias-v2",
+        "algorithm": "batch-temperature-bias-v3",
         "anchor_time_s": null,
         "display_position_velocity": "linear interpolation of optimized GNSS states at original IMU times",
         "end_s": 1.6000001430511475,
@@ -46,20 +46,33 @@
             "time_method": "SessionData shared UTC conversion; common epoch subtraction only"
         },
         "limitations": "Local batch convergence; heading may be ambiguous. Dense output is not an IMU-rate smoothing posterior.",
-        "max_endpoint_correction_deg": 3.976313500845377e-12,
+        "max_endpoint_correction_deg": 3.976313502008755e-12,
         "max_seed_vs_selected_acceleration_m_s2": null,
         "max_seed_vs_selected_angle_deg": null,
         "model": {
+            "gyro_bias": {
+                "b0_rad_s": [
+                    -8.673128310037391e-12,
+                    -2.601910088559043e-11,
+                    -1.2324192066030844e-24
+                ],
+                "b1_rad_s_per_degc": [
+                    0,
+                    0,
+                    0
+                ],
+                "t_ref_degc": 25
+            },
             "per_step": {
                 "acc_slope_s": 0.4,
                 "gyro_slope_s": 0.026
             }
         },
-        "objective": 2.8993618089032484e-12,
+        "objective": 2.8993618084930976e-12,
         "orientation": "body to fixed NED; quaternion xyzw; RPY degrees",
         "quality": {
-            "imu_nrms": 2.464071451063046e-10,
-            "objective_per_state": 3.2215131210036094e-13,
+            "imu_nrms": 2.4638402565106106e-10,
+            "objective_per_state": 3.221513120547886e-13,
             "position_nrms": 4.633571734833897e-07,
             "velocity_nrms": 8.214122042252957e-09
         },
@@ -91,7 +104,7 @@
             {
                 "kind": "imu",
                 "node": 1,
-                "squared_whitened_error": 8.347798435852769e-20,
+                "squared_whitened_error": 8.305102204985508e-20,
                 "time_s": 0.20000004768371582
             },
             {
@@ -109,7 +122,7 @@
             {
                 "kind": "imu",
                 "node": 2,
-                "squared_whitened_error": 3.922697873158036e-19,
+                "squared_whitened_error": 3.922697873159139e-19,
                 "time_s": 0.40000009536743164
             },
             {
@@ -127,7 +140,7 @@
             {
                 "kind": "imu",
                 "node": 3,
-                "squared_whitened_error": 5.515419298095991e-19,
+                "squared_whitened_error": 5.515419298025487e-19,
                 "time_s": 0.6000001430511475
             },
             {
@@ -145,7 +158,7 @@
             {
                 "kind": "imu",
                 "node": 4,
-                "squared_whitened_error": 1.5166268659165375e-19,
+                "squared_whitened_error": 1.5166268660355274e-19,
                 "time_s": 0.7999999523162842
             },
             {
@@ -163,7 +176,7 @@
             {
                 "kind": "imu",
                 "node": 5,
-                "squared_whitened_error": 1.3332205419309816e-18,
+                "squared_whitened_error": 1.3332205419303645e-18,
                 "time_s": 1
             },
             {
@@ -181,7 +194,7 @@
             {
                 "kind": "imu",
                 "node": 6,
-                "squared_whitened_error": 8.290067741697232e-19,
+                "squared_whitened_error": 8.286134359098159e-19,
                 "time_s": 1.2000000476837158
             },
             {
@@ -199,7 +212,7 @@
             {
                 "kind": "imu",
                 "node": 7,
-                "squared_whitened_error": 4.0753691227060414e-19,
+                "squared_whitened_error": 4.0753691226883594e-19,
                 "time_s": 1.4000000953674316
             },
             {
@@ -217,13 +230,19 @@
             {
                 "kind": "imu",
                 "node": 8,
-                "squared_whitened_error": 6.228700270327472e-19,
+                "squared_whitened_error": 6.228700270327479e-19,
                 "time_s": 1.6000001430511475
             },
             {
                 "kind": "bias_prior",
                 "node": 0,
-                "squared_whitened_error": 1.011694943736602e-18,
+                "squared_whitened_error": 1.011694943740374e-18,
+                "time_s": 0
+            },
+            {
+                "kind": "slope_prior",
+                "node": 0,
+                "squared_whitened_error": 0,
                 "time_s": 0
             }
         ],
@@ -231,19 +250,19 @@
         "seeds": [
             {
                 "acc_bias_m_s2": [
-                    7.338928257683347e-22,
-                    -1.0612574493170889e-21,
-                    1.258207788044748e-10
+                    1.6617034534788306e-21,
+                    -3.7633021595288554e-22,
+                    1.2582077880438973e-10
                 ],
                 "converged": true,
                 "gyro_bias_rad_s": [
-                    -8.673128309964523e-12,
-                    -2.601910088554537e-11,
-                    2.987038341852895e-25
+                    -8.673128310037391e-12,
+                    -2.601910088559043e-11,
+                    -1.2324192066030844e-24
                 ],
                 "heading_deg": null,
                 "iterations": 2,
-                "objective": 2.8993618089032484e-12,
+                "objective": 2.8993618084930976e-12,
                 "position_residual_rms_m": 8.025581665247375e-07,
                 "velocity_residual_rms_m_s": 1.422727671675355e-09
             }
@@ -301,13 +320,13 @@
                 0,
                 0,
                 2.8271955496192046e-05,
-                2.8993618088072122e-12
+                2.8993618083970615e-12
             ],
             [
                 0,
                 1,
-                2.8993618088072122e-12,
-                2.8993618088072122e-12
+                2.8993618083970615e-12,
+                2.8993618083970615e-12
             ]
         ],
         "initializer": {

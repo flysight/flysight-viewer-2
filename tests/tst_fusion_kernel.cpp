@@ -5,8 +5,9 @@
 // growth on the marginal yaw sigma, the fallback when every start fails, its
 // progress texts and the synthetic recordings of the specification; exact
 // integration boundaries, heading freedom, the two stopping rules forced
-// through the tuning, the per-step covariance, the solver-failure path and its
-// diagnostics shapes), with the literal expectations of the reference's own
+// through the tuning, the per-step covariance, the temperature-dependent gyro
+// bias (the custom factor's Jacobians, the section 6 cases), the
+// solver-failure path and its diagnostics shapes), with the literal expectations of the reference's own
 // self-test (sensor-fusion-clean-port, tests/fusion_regression.cpp), and the
 // fit trace that localizes a golden failure to a stage: the segment account
 // first, then each optimizer iteration.
@@ -15,6 +16,7 @@
 // the few targets that names gtsam itself.
 
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <set>
 #include <string>
@@ -26,9 +28,13 @@
 #include <QtTest>
 
 #include <gtsam/config.h>
+#include <gtsam/base/numericalDerivative.h>
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/inference/Symbol.h>
+#include <gtsam/navigation/GPSFactor.h>
+#include <gtsam/navigation/ImuFactor.h>
 #include <gtsam/navigation/NavState.h>
+#include <gtsam/slam/PriorFactor.h>
 
 #include "calculations/anglehelper.h"
 #include "fusion/factorgraphfit.h"
@@ -38,6 +44,7 @@
 #include "fusion/imuintegration.h"
 #include "fusion/initializer.h"
 #include "fusion/inputadapter.h"
+#include "fusion/temperatureimufactor.h"
 #include "fusion/trajectoryreconstruction.h"
 #include "fusionfixtures.h"
 #include "fusiongolden.h"
@@ -51,6 +58,7 @@ using namespace FlySightTest;
 using gtsam::Rot3;
 using gtsam::Vector3;
 using gtsam::symbol_shorthand::B;
+using gtsam::symbol_shorthand::T;
 using gtsam::symbol_shorthand::V;
 using gtsam::symbol_shorthand::X;
 
@@ -314,6 +322,10 @@ private slots:
     void allPrefixFitsFailFallsBack_data();
     void allPrefixFitsFailFallsBack();
     void startsOnTheLimitAreStillUsed();
+    void temperatureFactorJacobians();
+    void temperatureGraphShape();
+    void reconstructionUsesIntervalBias();
+    void constantTemperatureKeepsSlopeAtPrior();
 };
 
 void FusionKernelTest::solverUsesTbb()
@@ -437,7 +449,9 @@ void FusionKernelTest::diagnosticsReportPerStepConstants()
         QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
         const QJsonObject diagnostics = diagnosticsOf(result);
         const QJsonObject model = diagnostics.value("model").toObject();
-        QCOMPARE(model.keys(), QStringList{QStringLiteral("per_step")});
+        QCOMPARE(model.keys(), QStringList({QStringLiteral("gyro_bias"), QStringLiteral("per_step")}));
+        // A constant 25 degC series (kFixtureTemperatureDegC) has exactly that mean.
+        QCOMPARE(model.value("gyro_bias").toObject().value("t_ref_degc").toDouble(), kFixtureTemperatureDegC);
         const QJsonObject perStep = model.value("per_step").toObject();
         QCOMPARE(perStep.keys(), QStringList({QStringLiteral("acc_slope_s"), QStringLiteral("gyro_slope_s")}));
         QCOMPARE(perStep.value("gyro_slope_s").toDouble(), tuning.gyroStepSlope);
@@ -506,6 +520,25 @@ void FusionKernelTest::validationRejectsEachDefect()
     QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
     validateSamples(d, withSlopes(0, 0));
 
+    // The b1 prior sigma must be strictly positive.
+    t = Tuning{};
+    t.gyroBiasSlopeSigma = 0;
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+    t = Tuning{};
+    t.gyroBiasSlopeSigma = -1;
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+
+    // The temperature series: absent (the stock path) or one finite value
+    // per IMU sample.
+    bad = d;
+    bad.temperature = std::vector<double>(bad.imuTime.size()-1, 20.);
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(bad, tuning));
+    bad.temperature = std::vector<double>(bad.imuTime.size(), 20.);
+    bad.temperature[3] = std::numeric_limits<double>::quiet_NaN();
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(bad, tuning));
+    bad.temperature.assign(bad.imuTime.size(), 20.);
+    validateSamples(bad, tuning);
+
     // The initializer's lengths must be positive.
     t = Tuning{};
     t.segmentLength = 0;
@@ -548,6 +581,32 @@ void FusionKernelTest::validationRejectsEachDefect()
     c = good;
     c.sAcc[0] = 0;
     QVERIFY(rejectedBy(c).outcome == Fusion::Outcome::Rejected);
+
+    // Spec section 10's "a recording without a temperature channel", kernel
+    // side: rejected by name, and after every other channel's defect.
+    const Fusion::Channels maneuver = toChannels(fusionFixture(QStringLiteral("coarse_maneuver")));
+    QVERIFY(rejectedBy(maneuver).outcome == Fusion::Outcome::Succeeded);
+    c = maneuver;
+    c.imuTemperature.clear();
+    Fusion::Result rejected = rejectedBy(c);
+    QVERIFY(rejected.outcome == Fusion::Outcome::Rejected);
+    QCOMPARE(rejected.reason, QStringLiteral("Missing or mismatched IMU/temperature"));
+    c = maneuver;
+    c.imuTemperature.removeLast();
+    rejected = rejectedBy(c);
+    QVERIFY(rejected.outcome == Fusion::Outcome::Rejected);
+    QCOMPARE(rejected.reason, QStringLiteral("Missing or mismatched IMU/temperature"));
+    c = maneuver;
+    c.imuTemperature[5] = std::numeric_limits<double>::quiet_NaN();
+    rejected = rejectedBy(c);
+    QVERIFY(rejected.outcome == Fusion::Outcome::Rejected);
+    QCOMPARE(rejected.reason, QStringLiteral("Nonfinite IMU/temperature"));
+    c = maneuver;
+    c.imuTemperature.clear();
+    c.wz[0] = std::numeric_limits<double>::infinity();
+    rejected = rejectedBy(c);
+    QVERIFY(rejected.outcome == Fusion::Outcome::Rejected);
+    QCOMPARE(rejected.reason, QStringLiteral("Nonfinite IMU/wz"));
 }
 
 void FusionKernelTest::backwardPropagationUndoesForward()
@@ -923,12 +982,27 @@ void FusionKernelTest::initializerFixturesAreDeterministic()
         QVERIFY(a.expectSuccess);
         const QVector<double> *as[] = {&a.gnssTime, &a.north, &a.east, &a.down, &a.velN, &a.velE, &a.velD,
                                        &a.hAcc, &a.vAcc, &a.sAcc, &a.imuTime, &a.ax, &a.ay, &a.az,
-                                       &a.wx, &a.wy, &a.wz};
+                                       &a.wx, &a.wy, &a.wz, &a.imuTemperature};
         const QVector<double> *bs[] = {&b.gnssTime, &b.north, &b.east, &b.down, &b.velN, &b.velE, &b.velD,
                                        &b.hAcc, &b.vAcc, &b.sAcc, &b.imuTime, &b.ax, &b.ay, &b.az,
-                                       &b.wx, &b.wy, &b.wz};
-        for (int c = 0; c < 17; ++c)
+                                       &b.wx, &b.wy, &b.wz, &b.imuTemperature};
+        for (int c = 0; c < 18; ++c)
             QVERIFY2(sameBitsEverywhere(*as[c], *bs[c]), name);
+        // Every recording carries one temperature per IMU sample: constant 25
+        // except drifting_bias, whose ramp runs from 25 to 45 degC.
+        QCOMPARE(a.imuTemperature.size(), a.imuTime.size());
+        if (a.name == QStringLiteral("drifting_bias")) {
+            QCOMPARE(a.imuTemperature.first(), 25.);
+            QCOMPARE(a.imuTemperature.last(), 45.);
+        } else {
+            QCOMPARE(a.imuTemperature.first(), kFixtureTemperatureDegC);
+            QCOMPARE(a.imuTemperature.last(), kFixtureTemperatureDegC);
+        }
+    }
+    for (const FusionFixture &golden : fusionFixtures()) {
+        QCOMPARE(golden.imuTemperature.size(), golden.imuTime.size());
+        for (double temperature : golden.imuTemperature)
+            QCOMPARE(temperature, kFixtureTemperatureDegC);
     }
     // Any other name is nothing, and the golden fixtures are untouched.
     QVERIFY(initializerFixture(QStringLiteral("coarse_linear")).name.isEmpty());
@@ -1005,7 +1079,7 @@ void FusionKernelTest::biasSettledByCostTest()
     const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
     QCOMPARE(seed.value("converged").toBool(false), true);
     QCOMPARE(seed.value("iterations").toInt(), int(trace.history.size()));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-shared-bias-v2"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v3"));
 
     // The quality metrics recomputed from the residuals array: 28 states, so
     // 28 position and velocity factors of dimension 3 and 27 IMU factors of
@@ -1183,7 +1257,7 @@ void FusionKernelTest::failureDiagnosticsShape()
     const QJsonObject diagnostics = failureDiagnostics(QStringLiteral("Nonfinite or increasing optimizer cost"), &s);
     QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure"),
                                               QStringLiteral("stopping")}));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-shared-bias-v2"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v3"));
     QCOMPARE(diagnostics.value("failure").toString(), QStringLiteral("Nonfinite or increasing optimizer cost"));
     const QJsonObject stopping = diagnostics.value("stopping").toObject();
     QCOMPARE(stopping.value("rule").toString(), QStringLiteral("cost increased"));
@@ -1363,8 +1437,9 @@ void FusionKernelTest::driftingBiasSegmentsConverge()
         QVERIFY(s.prefixIterations <= 50);
     }
 
-    // The full fit started from the stitched state and ran; the spec's
-    // section 6 evidence says a constant-bias fit against this drift converges.
+    // The full fit started from the stitched state and ran with the
+    // temperature model; the drift is exactly linear in the fixture's
+    // temperature ramp, so the model represents it.
     QVERIFY(!run.trace.history.empty());
     QVERIFY(std::isfinite(run.trace.history.front().before));
     qInfo() << "drifting_bias: full fit" << run.trace.history.size() << "iterations, rule"
@@ -1386,11 +1461,60 @@ void FusionKernelTest::driftingBiasSegmentsConverge()
         verifyPrefixBudget(segment, run.trace.initializer.segments[size_t(i)]);
     }
     QVERIFY(initializer.value("fallback_segments").toArray().isEmpty());
-    const QJsonArray bias = run.diagnostics.value("seeds").toArray().first().toObject()
-                                .value("gyro_bias_rad_s").toArray();
+    const QJsonObject seed = run.diagnostics.value("seeds").toArray().first().toObject();
+    const QJsonArray bias = seed.value("gyro_bias_rad_s").toArray();
     QCOMPARE(bias.size(), 3);
     for (const QJsonValue &component : bias)
         QVERIFY(std::isfinite(component.toDouble(std::numeric_limits<double>::quiet_NaN())));
+
+    // Spec section 10, the drifting-bias recording under the temperature
+    // model: b1 within 20 % of the truth in at most 30 iterations (the sum
+    // over the full fit's passes). From the fixture's construction: the z
+    // bias .3 + t / 200 deg/s over the ramp 25 + t / 10 degC is 0.05 deg/s
+    // per degC (b1z), T_ref = 35, and b0z = .8 deg/s, the bias at T_ref.
+    QVERIFY(run.trace.converged);
+    QCOMPARE(seed.value("iterations").toInt(999), int(run.trace.history.size()));
+    QVERIFY(seed.value("iterations").toInt(999) <= 30);
+    const QJsonObject gyroBias = run.diagnostics.value("model").toObject().value("gyro_bias").toObject();
+    const QJsonArray b1 = gyroBias.value("b1_rad_s_per_degc").toArray();
+    QCOMPARE(b1.size(), 3);
+    const double b1z = .05*kPi/180;
+    qInfo() << "drifting_bias: b1" << b1.at(0).toDouble()*180/kPi << b1.at(1).toDouble()*180/kPi
+            << b1.at(2).toDouble()*180/kPi << "deg/s/degC (truth 0, 0, .05); b0"
+            << bias.at(0).toDouble()*180/kPi << bias.at(1).toDouble()*180/kPi << bias.at(2).toDouble()*180/kPi
+            << "deg/s (truth .2, -.15, .8); t_ref" << gyroBias.value("t_ref_degc").toDouble()
+            << "degC; full fit" << run.trace.history.size() << "iterations";
+    QVERIFY(std::abs(b1.at(2).toDouble()-b1z) <= .2*b1z);
+    QVERIFY(std::abs(b1.at(0).toDouble()) <= .2*b1z);
+    QVERIFY(std::abs(b1.at(1).toDouble()) <= .2*b1z);
+    QVERIFY(std::abs(gyroBias.value("t_ref_degc").toDouble(-1)-35) < 1e-9);
+    const QJsonArray b0 = gyroBias.value("b0_rad_s").toArray();
+    QCOMPARE(b0.size(), 3);
+    for (int i = 0; i < 3; ++i)
+        QVERIFY(b0.at(i).toDouble() == bias.at(i).toDouble());
+    QVERIFY(std::abs(b0.at(2).toDouble()-.8*kPi/180) < .1*kPi/180);
+
+    // The residuals: the two priors last, in order, and one IMU factor per
+    // interval (201 states).
+    const QJsonArray residuals = run.diagnostics.value("residuals").toArray();
+    QVERIFY(residuals.size() >= 2);
+    QCOMPARE(residuals.last().toObject().value("kind").toString(), QStringLiteral("slope_prior"));
+    QCOMPARE(residuals.at(residuals.size()-2).toObject().value("kind").toString(), QStringLiteral("bias_prior"));
+    int imuResiduals = 0;
+    for (const QJsonValue &entry : residuals) {
+        if (entry.toObject().value("kind").toString() == QStringLiteral("imu"))
+            ++imuResiduals;
+    }
+    QCOMPARE(imuResiduals, 200);
+
+    // The attitude never rotates in the fixture: every output sample within
+    // 2 degrees of level and of the first sample's yaw.
+    QVERIFY(!run.result.roll.isEmpty());
+    for (qsizetype i = 0; i < run.result.roll.size(); ++i) {
+        QVERIFY2(std::abs(angleDifference(run.result.roll[i], 0)) < 2, qPrintable(QString::number(i)));
+        QVERIFY2(std::abs(angleDifference(run.result.pitch[i], 0)) < 2, qPrintable(QString::number(i)));
+        QVERIFY2(std::abs(angleDifference(run.result.yaw[i], run.result.yaw[0])) < 2, qPrintable(QString::number(i)));
+    }
 }
 
 void FusionKernelTest::allPrefixFitsFailFallsBack_data()
@@ -1528,6 +1652,301 @@ void FusionKernelTest::startsOnTheLimitAreStillUsed()
                                    .value("segments").toArray().first().toObject();
     QCOMPARE(segment.value("prefix_iterations").toInt(-1), golden.value("prefix_iterations").toInt(-2));
     QCOMPARE(segment.value("prefix_on_limit").toBool(true), golden.value("prefix_on_limit").toBool(true));
+}
+
+void FusionKernelTest::temperatureFactorJacobians()
+{
+    // The overview's risk note: the custom factor's six Jacobians against
+    // finite differences before any fit uses it. Every value differs from the
+    // linearization point so no block is trivial; dT and the slope are
+    // non-zero so H6 is not.
+    using gtsam::imuBias::ConstantBias;
+    using gtsam::Pose3;
+    Samples d = boundarySamples(Vector3(1, -2, .5));
+    for (Vector3 &rate : d.gyro)
+        rate = Vector3(.1, -.05, .2);
+    validateSamples(d, Tuning{});
+    const ConstantBias linearizedAt(Vector3(.05, -.03, .08), Vector3(.003, -.002, .004));
+    const auto pim = preintegrateImu(d, .037, .863, linearizedAt, Tuning{});
+    const double dT = 4.5;
+    const TemperatureImuFactor factor(X(0), V(0), X(1), V(1), B(0), T(0), pim, dT);
+    QCOMPARE(factor.temperatureDelta(), dT);
+
+    const Pose3 pose_i(Rot3::RzRyRx(.3, -.2, .1), Vector3(1, 2, 3));
+    const Vector3 vel_i(2, -1, .5);
+    const Pose3 pose_j(Rot3::RzRyRx(.35, -.15, .12), Vector3(2.5, 1.2, 3.4));
+    const Vector3 vel_j(2.6, -2.4, .9);
+    const ConstantBias bias(Vector3(.04, -.02, .07), Vector3(.002, -.001, .005));
+    const Vector3 slope(2e-4, -1e-4, 3e-4);
+
+    gtsam::Matrix H1, H2, H3, H4, H5, H6;
+    const gtsam::Vector error = factor.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, slope,
+                                                     &H1, &H2, &H3, &H4, &H5, &H6);
+    QCOMPARE(error.size(), Eigen::Index(9));
+
+    // The perturbations are the manifolds' own retracts, the tangents the
+    // analytical Jacobians are taken in (GTSAM's testImuFactor checks
+    // ImuFactor the same way). Entries are of order 1 to 10.
+    const std::function<gtsam::Vector9(const Pose3 &, const Vector3 &, const Pose3 &, const Vector3 &,
+                                       const ConstantBias &, const Vector3 &)> h =
+        [&factor](const Pose3 &pi, const Vector3 &vi, const Pose3 &pj, const Vector3 &vj,
+                  const ConstantBias &b, const Vector3 &s) -> gtsam::Vector9 {
+            return factor.evaluateError(pi, vi, pj, vj, b, s);
+        };
+    const gtsam::Matrix N1 = gtsam::numericalDerivative61<gtsam::Vector9, Pose3, Vector3, Pose3, Vector3, ConstantBias, Vector3>(h, pose_i, vel_i, pose_j, vel_j, bias, slope);
+    const gtsam::Matrix N2 = gtsam::numericalDerivative62<gtsam::Vector9, Pose3, Vector3, Pose3, Vector3, ConstantBias, Vector3>(h, pose_i, vel_i, pose_j, vel_j, bias, slope);
+    const gtsam::Matrix N3 = gtsam::numericalDerivative63<gtsam::Vector9, Pose3, Vector3, Pose3, Vector3, ConstantBias, Vector3>(h, pose_i, vel_i, pose_j, vel_j, bias, slope);
+    const gtsam::Matrix N4 = gtsam::numericalDerivative64<gtsam::Vector9, Pose3, Vector3, Pose3, Vector3, ConstantBias, Vector3>(h, pose_i, vel_i, pose_j, vel_j, bias, slope);
+    const gtsam::Matrix N5 = gtsam::numericalDerivative65<gtsam::Vector9, Pose3, Vector3, Pose3, Vector3, ConstantBias, Vector3>(h, pose_i, vel_i, pose_j, vel_j, bias, slope);
+    const gtsam::Matrix N6 = gtsam::numericalDerivative66<gtsam::Vector9, Pose3, Vector3, Pose3, Vector3, ConstantBias, Vector3>(h, pose_i, vel_i, pose_j, vel_j, bias, slope);
+    const struct { const char *name; const gtsam::Matrix *analytic, *numeric; } blocks[] = {
+        {"H1", &H1, &N1}, {"H2", &H2, &N2}, {"H3", &H3, &N3}, {"H4", &H4, &N4}, {"H5", &H5, &N5}, {"H6", &H6, &N6}};
+    for (const auto &block : blocks) {
+        QCOMPARE(block.analytic->rows(), block.numeric->rows());
+        QCOMPARE(block.analytic->cols(), block.numeric->cols());
+        const double worst = (*block.analytic-*block.numeric).cwiseAbs().maxCoeff();
+        qInfo() << block.name << "max |analytic - numeric|" << worst;
+        QVERIFY2(worst < 1e-6, block.name);
+    }
+    QCOMPARE(H6.rows(), Eigen::Index(9));
+    QCOMPARE(H6.cols(), Eigen::Index(3));
+    QVERIFY(H6.cwiseAbs().maxCoeff() > 1e-3);   // not vacuous: dT and the rotation Jacobian are non-zero
+
+    // At zero slope the factor is ImuFactor on the same pim, bit for bit
+    // (Eigen's == is element-wise equality): the error and H1..H5. H6, the
+    // derivative with respect to the slope, does not depend on the slope: it
+    // is ImuFactor's gyro-bias columns times dT, the same arithmetic.
+    const gtsam::ImuFactor stock(X(0), V(0), X(1), V(1), B(0), pim);
+    gtsam::Matrix G1, G2, G3, G4, G5;
+    const gtsam::Vector stockError = stock.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, &G1, &G2, &G3, &G4, &G5);
+    gtsam::Matrix Z1, Z2, Z3, Z4, Z5, Z6;
+    const gtsam::Vector zeroSlopeError = factor.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, Vector3::Zero(),
+                                                              &Z1, &Z2, &Z3, &Z4, &Z5, &Z6);
+    QVERIFY(zeroSlopeError == stockError);
+    QVERIFY(Z1 == G1 && Z2 == G2 && Z3 == G3 && Z4 == G4 && Z5 == G5);
+    QVERIFY(Z6 == gtsam::Matrix(G5.rightCols<3>()*dT));
+    QVERIFY(!Z6.isZero(0));
+    QVERIFY(!(error == stockError));   // and with the slope and dT it is not
+
+    // The same at dT = 0 with the non-zero slope (a second factor); there
+    // the slope has no effect at all, so H6 is the zero matrix.
+    const TemperatureImuFactor atReference(X(0), V(0), X(1), V(1), B(0), T(0), pim, 0.);
+    gtsam::Matrix R1, R2, R3, R4, R5, R6;
+    const gtsam::Vector referenceError = atReference.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, slope,
+                                                                   &R1, &R2, &R3, &R4, &R5, &R6);
+    QVERIFY(referenceError == stockError);
+    QVERIFY(R1 == G1 && R2 == G2 && R3 == G3 && R4 == G4 && R5 == G5);
+    QVERIFY(R6.isZero(0));
+
+    // Through Values: the whitened errors agree (the same covariance), the
+    // clone evaluates like the original.
+    gtsam::Values values;
+    values.insert(X(0), pose_i);
+    values.insert(V(0), vel_i);
+    values.insert(X(1), pose_j);
+    values.insert(V(1), vel_j);
+    values.insert(B(0), bias);
+    values.insert(T(0), slope);
+    QVERIFY(atReference.whitenedError(values) == stock.whitenedError(values));
+    gtsam::Values zeroSlope = values;
+    zeroSlope.update(T(0), Vector3(Vector3::Zero()));
+    QVERIFY(factor.whitenedError(zeroSlope) == stock.whitenedError(zeroSlope));
+    const gtsam::NonlinearFactor::shared_ptr clone = factor.clone();
+    QVERIFY(clone != nullptr);
+    QVERIFY(clone.get() != &factor);
+    QVERIFY(clone->error(values) == factor.error(values));
+    QVERIFY(factor.error(values) > 0);
+}
+
+void FusionKernelTest::temperatureGraphShape()
+{
+    using gtsam::imuBias::ConstantBias;
+    Samples d = boundarySamples(Vector3(1, -2, .5));
+    for (size_t i = 0; i < d.imuTime.size(); ++i)
+        d.temperature.push_back(40+.01*double(i));
+    QCOMPARE(d.temperature.size(), size_t(101));
+    validateSamples(d, Tuning{});
+
+    // The model: the plain index-order mean.
+    const GyroBiasModel model = gyroBiasModelFor(d);
+    QVERIFY(model.temperatureLinear);
+    double sum = 0;
+    for (double t : d.temperature)
+        sum += t;
+    QVERIFY(std::abs(model.tRef-sum/101) < 1e-12);
+
+    // The temperature graph: per state the position and velocity factors,
+    // the temperature factor between them, the bias prior, the slope prior last.
+    const auto graph = buildFactorGraph(d, BiasLinearization{ConstantBias(), Vector3::Zero()}, model, Tuning{});
+    QCOMPARE(graph.size(), size_t(7));
+    QVERIFY(dynamic_cast<const gtsam::GPSFactor *>(graph.at(0).get()));
+    QVERIFY(dynamic_cast<const gtsam::PriorFactor<Vector3> *>(graph.at(1).get()));
+    QVERIFY(dynamic_cast<const gtsam::GPSFactor *>(graph.at(2).get()));
+    QVERIFY(dynamic_cast<const gtsam::PriorFactor<Vector3> *>(graph.at(3).get()));
+    const auto *imu = dynamic_cast<const TemperatureImuFactor *>(graph.at(4).get());
+    QVERIFY(imu);
+    QVERIFY(imu->temperatureDelta() == temperatureAtFix(d, 0)-model.tRef);
+    QVERIFY(imu->keys() == gtsam::KeyVector({X(0), V(0), X(1), V(1), B(0), T(0)}));
+    QVERIFY(dynamic_cast<const gtsam::PriorFactor<ConstantBias> *>(graph.at(5).get()));
+    const auto *slopePrior = dynamic_cast<const gtsam::PriorFactor<Vector3> *>(graph.at(6).get());
+    QVERIFY(slopePrior);
+    QVERIFY(slopePrior->keys() == gtsam::KeyVector({T(0)}));
+    QVERIFY(slopePrior->prior().isZero(0));
+    const auto sigmas = std::dynamic_pointer_cast<gtsam::noiseModel::Diagonal>(slopePrior->noiseModel());
+    QVERIFY(sigmas != nullptr);
+    QVERIFY(sigmas->sigmas() == gtsam::Vector(Vector3::Constant(Tuning{}.gyroBiasSlopeSigma)));
+
+    // The stock four-argument builder is unchanged: six factors, ImuFactor at 4.
+    const auto stock = buildFactorGraph(d, ConstantBias(), Tuning{});
+    QCOMPARE(stock.size(), size_t(6));
+    QVERIFY(dynamic_cast<const gtsam::ImuFactor *>(stock.at(4).get()));
+    QVERIFY(dynamic_cast<const gtsam::PriorFactor<ConstantBias> *>(stock.at(5).get()));
+
+    // The interval bias: the argument itself under the constant model; the
+    // gyro part shifted by slope (T_k - tRef) under the temperature model.
+    const ConstantBias bias(Vector3(.05, -.03, .08), Vector3(.003, -.002, .004));
+    const Vector3 slope(1e-3, 0, 0);
+    QVERIFY(intervalBias(d, 0, bias, slope, GyroBiasModel{}).vector() == bias.vector());
+    const ConstantBias shifted = intervalBias(d, 0, bias, slope, model);
+    QVERIFY(shifted.accelerometer() == bias.accelerometer());
+    QCOMPARE(shifted.gyroscope().x(), bias.gyroscope().x()+1e-3*(temperatureAtFix(d, 0)-model.tRef));
+    QCOMPARE(shifted.gyroscope().y(), bias.gyroscope().y());
+    QCOMPARE(shifted.gyroscope().z(), bias.gyroscope().z());
+
+    // The temperature at a fix is the scalar interpolation, which agrees with
+    // the vector overload on (v, 0, 0) bit for bit; on a sample it is the sample.
+    QVERIFY(temperatureAtFix(d, 0) == interpolateAt(d.imuTime, d.temperature, .037));
+    Vectors asVectors;
+    for (double t : d.temperature)
+        asVectors.emplace_back(t, 0, 0);
+    QVERIFY(temperatureAtFix(d, 0) == interpolateAt(d.imuTime, asVectors, .037).x());
+    QVERIFY(temperatureAtFix(d, 1) == interpolateAt(d.imuTime, asVectors, .863).x());
+    QVERIFY(interpolateAt(d.imuTime, d.temperature, .5) == d.temperature[50]);
+    QVERIFY(interpolateAt(d.imuTime, d.temperature, 0) == d.temperature[0]);
+    QVERIFY(interpolateAt(d.imuTime, d.temperature, .037) != d.temperature[3]);
+
+    // A window's temperature is exactly that of its IMU samples (a window
+    // needs three fixes, so the nine-fix linear recording); without a series
+    // there is no temperature model.
+    Samples linear = linearSamples(Vector3(12, -4, 2), Vector3(7, 8, 9));
+    for (size_t i = 0; i < linear.imuTime.size(); ++i)
+        linear.temperature.push_back(40+.01*double(i));
+    const Samples window = fittedWindow(linear, .437, 1.237);   // fixes 2..6, IMU samples 43..124
+    QCOMPARE(window.gnssTime.size(), size_t(5));
+    QCOMPARE(window.temperature.size(), window.imuTime.size());
+    QVERIFY(window.temperature.front() == linear.temperature[43]);
+    QVERIFY(window.temperature.back() == linear.temperature[124]);
+    QVERIFY(window.imuTime.front() == linear.imuTime[43]);
+    Samples without = linear;
+    without.temperature.clear();
+    QVERIFY(fittedWindow(without, .437, 1.237).temperature.empty());
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, gyroBiasModelFor(without));
+
+    // A constant series has exactly that mean.
+    Samples constant = d;
+    constant.temperature.assign(101, 25.);
+    QCOMPARE(gyroBiasModelFor(constant).tRef, 25.);
+}
+
+void FusionKernelTest::reconstructionUsesIntervalBias()
+{
+    // The proof of the reconstruction's per-interval bias: X(1) is X(0)
+    // propagated with the interval's temperature-dependent bias, so the
+    // reconstruction lands on it exactly under the temperature model, and
+    // misses it by |slope dT| x .826 s = .0165 rad = .95 degrees under the
+    // constant model (the .5 degree bound is the margin).
+    using gtsam::imuBias::ConstantBias;
+    Samples d = boundarySamples(Vector3::Zero());
+    const Vector3 g0(.01, -.02, .03);   // the bias the gyro reads
+    for (Vector3 &rate : d.gyro)
+        rate = g0;
+    d.temperature.assign(d.imuTime.size(), 45.0);
+    validateSamples(d, Tuning{});
+    GyroBiasModel model;
+    model.temperatureLinear = true;
+    model.tRef = 35.0;                   // dT = 10 at fix 0
+    const Vector3 slope(0, 0, 2e-3);
+    const ConstantBias b0(Vector3::Zero(), g0);
+    const Vector3 intervalGyroBias = intervalBias(d, 0, b0, slope, model).gyroscope();
+    QVERIFY((intervalGyroBias-Vector3(.01, -.02, .05)).norm() < 1e-15);
+
+    FitResult fit;
+    fit.values.insert(B(0), b0);
+    fit.values.insert(T(0), slope);
+    fit.values.insert(X(0), gtsam::Pose3());
+    fit.values.insert(X(1), gtsam::Pose3(propagateAttitude(d, Rot3(), .037, .863, intervalGyroBias), Vector3::Zero()));
+    fit.values.insert(V(0), Vector3(0, 0, 0));
+    fit.values.insert(V(1), Vector3(0, 0, 0));
+    fit.gyroBiasSlope = slope;
+    fit.biasModel = model;
+
+    const DenseTrajectory dense = reconstructTrajectory(d, fit);
+    QCOMPARE(dense.endpointCorrection.size(), size_t(1));
+    qInfo() << "endpoint correction: temperature model" << dense.endpointCorrection[0] << "deg";
+    QVERIFY(dense.endpointCorrection[0] < 1e-9);
+
+    fit.biasModel = GyroBiasModel{};
+    fit.gyroBiasSlope = Vector3::Zero();
+    const DenseTrajectory constant = reconstructTrajectory(d, fit);
+    qInfo() << "endpoint correction: constant model" << constant.endpointCorrection[0] << "deg";
+    QVERIFY(constant.endpointCorrection[0] > .5);
+}
+
+void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
+{
+    // The spec's "constant temperature" case: with T_k - T_ref exactly zero
+    // at every fix the factor's H6 is zero, the slope's normal equation is
+    // its prior's alone with a zero right-hand side, and every LM step
+    // leaves it at 0.0. The bound is 1 % of the prior sigma, the margin
+    // against a solver that visits a rounding-size value and steps back.
+    Tuning t;
+    t.segmentLength = 60;
+    t.minFinalSegment = 12;
+    FusionFixture f = initializerFixture(QStringLiteral("drifting_bias"));
+    QCOMPARE(f.imuTemperature.size(), 2001);
+    f.imuTemperature = QVector<double>(2001, 35.0);
+    PipelineTrace trace;
+    const Fusion::Result result = runPipeline(toChannels(f), t, Checkpoint(), &trace);
+    QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
+    const QJsonObject diagnostics = diagnosticsOf(result);
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v3"));
+    const QJsonObject gyroBias = diagnostics.value("model").toObject().value("gyro_bias").toObject();
+    const QJsonArray b1 = gyroBias.value("b1_rad_s_per_degc").toArray();
+    QCOMPARE(b1.size(), 3);
+    for (const QJsonValue &component : b1)
+        QVERIFY(std::abs(component.toDouble(1)) < .01*Tuning{}.gyroBiasSlopeSigma);
+    // 2001 copies of 35: the sum 70035 and the quotient are exact.
+    QCOMPARE(gyroBias.value("t_ref_degc").toDouble(), 35.);
+    const QJsonArray residuals = diagnostics.value("residuals").toArray();
+    const QJsonObject last = residuals.last().toObject();
+    QCOMPARE(last.value("kind").toString(), QStringLiteral("slope_prior"));
+    QVERIFY(last.value("squared_whitened_error").toDouble(1) < 1e-10);
+    const QJsonArray b0 = gyroBias.value("b0_rad_s").toArray();
+    const QJsonArray seedBias = diagnostics.value("seeds").toArray().first().toObject().value("gyro_bias_rad_s").toArray();
+    QCOMPARE(b0.size(), 3);
+    for (int i = 0; i < 3; ++i)
+        QVERIFY(b0.at(i).toDouble() == seedBias.at(i).toDouble());
+
+    // The consistency check with the stock path through the internal seams:
+    // the same window, the same initializer, the constant-bias fit (the
+    // default model) is the same model at b1 = 0, so both converge to the
+    // same objective under the settle tolerance (1e-6 relative is the margin
+    // for a different elimination ordering).
+    const PreparedInput prepared = prepareInput(toChannels(f));
+    Tuning derived = t;
+    derived.maxGap = kImuGapMedians*medianInterval(prepared.recording.imuTime);
+    const Samples window = fittedWindow(prepared.recording, prepared.usableStart, prepared.recording.gnssTime.back());
+    validateSamples(window, derived);
+    const Initialization init = initialize(window, derived);
+    const FitResult stock = fitFactorGraph(window, init.state, derived);
+    QVERIFY(stock.converged);
+    QVERIFY(!stock.biasModel.temperatureLinear);
+    QVERIFY(stock.gyroBiasSlope.isZero(0));
+    QCOMPARE(stock.residuals.back().kind, std::string("bias_prior"));
+    const double objective = diagnostics.value("objective").toDouble();
+    qInfo() << "constant temperature: objective" << objective << ", stock fit" << stock.objective
+            << ", full fit" << trace.history.size() << "iterations";
+    QVERIFY(std::abs(stock.objective-objective) <= 1e-6*std::max(1., objective));
 }
 
 FLYSIGHT_TEST_MAIN(FusionKernelTest)

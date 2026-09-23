@@ -20,7 +20,7 @@
 // conversion layer, not by a registered calculation. A fixture session stores
 // the fit's inputs under their own names (Local/north, IMU/_time, the origin
 // attributes, ...) with units the conversion layer passes through unchanged,
-// so the twenty-one effective inputs are bit-identical to the fixture and the
+// so the twenty-two effective inputs are bit-identical to the fixture and the
 // session-level results can be held to the goldens of the kernel.
 
 namespace FlySight {
@@ -36,12 +36,13 @@ constexpr double kFixtureTimeFitB = 1699999900.0;
 /// (after TestEnvironment::registerBuiltIns(), as the application does).
 void registerFusionOnce();
 
-/// Stored source data such that the 21 declared inputs read back bit-identical
+/// Stored source data such that the 22 declared inputs read back bit-identical
 /// to the fixture:
 ///   GNSS/time (unit "s")            -> GNSS/_time through builtin.time.utc.GNSS
 ///   GNSS/hAcc, vAcc ("m"), sAcc ("m/s")
 ///   Local/north|east|down ("m"), Local/velN|velE|velD ("m/s")
-///   IMU/_time ("s"), IMU/ax|ay|az ("m/s^2"), IMU/wx|wy|wz ("deg/s")
+///   IMU/_time ("s"), IMU/ax|ay|az ("m/s^2"), IMU/wx|wy|wz ("deg/s"),
+///   IMU/temperature ("deg C": the device's unit text, served as degC unchanged)
 ///   stored attributes _LOCAL_ORIGIN_INDEX (qlonglong), _LOCAL_ORIGIN_LAT|LON|HMSL (double),
 ///   _TIME_FIT_A = "1", _TIME_FIT_B = "1699999900", SCHEMA_VER = 2 (the gyro
 ///   channels are read literally), SESSION_ID = sessionId, DEVICE_ID = "fusion-test"
@@ -62,11 +63,11 @@ FlySight::SessionData fixtureSession(const QString &fixtureName, const QString &
 FlySight::SessionData sessionWithoutImu(const FusionFixture &fixture, const QString &sessionId);
 
 /// A recording as the importer would leave it: GNSS lat/lon/hMSL/velN/velE/velD/
-/// hAcc/vAcc/sAcc/time, IMU time/ax../wz, TIME time/tow/week; nothing under Local,
+/// hAcc/vAcc/sAcc/time, IMU time/ax../wz/temperature, TIME time/tow/week; nothing under Local,
 /// no stored origin, no stored fit. Retyped from the reference's synthetic
 /// session: epoch 1700000000, 200 fixes at .1 + i*.2 s with lat = lon = 0,
 /// hMSL = 100, zero velocity, hAcc = vAcc = 1, sAcc = .1; IMU system time
-/// 100 + i*.01, i = 0..4000, az = -9.80665 m/s^2, the rest 0; TIME pulses
+/// 100 + i*.01, i = 0..4000, az = -9.80665 m/s^2, temperature 25 degC, the rest 0; TIME pulses
 /// {100, 120, 140} with tow / tow+20 / tow+40. SCHEMA_VER = 2.
 FlySight::SessionData naturalSession(const QString &sessionId);
 

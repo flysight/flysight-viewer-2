@@ -44,14 +44,14 @@ document describes what is computed, from what, and how far to trust it.
 
 ## 3. Inputs
 
-The fit declares twenty-one inputs, all required, and reads nothing else:
+The fit declares twenty-two inputs, all required, and reads nothing else:
 
 ```
 GNSS/_time
 Local/north  Local/east  Local/down  Local/velN  Local/velE  Local/velD
 GNSS/hAcc    GNSS/vAcc   GNSS/sAcc
 IMU/_time
-IMU/ax  IMU/ay  IMU/az  IMU/wx  IMU/wy  IMU/wz
+IMU/ax  IMU/ay  IMU/az  IMU/wx  IMU/wy  IMU/wz  IMU/temperature
 _LOCAL_ORIGIN_INDEX  _LOCAL_ORIGIN_LAT  _LOCAL_ORIGIN_LON  _LOCAL_ORIGIN_HMSL
 ```
 
@@ -62,6 +62,11 @@ without `SCHEMA_VER` carry the legacy correction
 ([DATA_SCHEMA.md](DATA_SCHEMA.md), section 4). Rates are degrees per second at
 the boundary of the fit and are converted to radians per second once, inside
 it.
+
+**Temperature.** `IMU/temperature` is the IMU's own temperature in degrees
+Celsius, as recorded; it is a column of every FlySight 2 `SENSOR.CSV`. A file
+without it lacks a declared input, and the fit does not run, like any other
+missing input.
 
 **Shared frame.** Position and velocity come from the recording-wide local
 frame, `Local/...`, and its origin attributes
@@ -88,12 +93,15 @@ to the microsecond level.
 ## 4. Model and output contract
 
 The GTSAM graph has a body-to-fixed-NED pose and a velocity at each GNSS fix,
-one shared accelerometer bias, and one shared gyroscope bias. Every fix has
-position and velocity factors. Adjacent states are connected by standard
-`ImuFactor` preintegration. There are no attitude, stationary, zero-velocity or
-magnetic measurement factors. The zero-centered bias prior has sigmas
-0.3 m/s^2 and 0.03 rad/s; the initializer only chooses where the solver
-starts.
+one shared accelerometer bias, and a gyroscope bias `b0 + b1 (T - T_ref)` of
+the IMU temperature `T`, with `T_ref` the mean temperature over the fitted
+window. Every fix has position and velocity factors. Adjacent states are
+connected by `ImuFactor` preintegration in the form that takes `b0` and `b1`,
+each interval evaluated at the bias of its first fix. There are no attitude,
+stationary, zero-velocity or magnetic measurement factors. The zero-centered
+bias priors have sigmas 0.3 m/s^2, 0.03 rad/s and, for `b1`, 0.010 deg/s per
+degC; the initializer only chooses where the solver starts (its own segment
+fits hold the gyro bias constant).
 
 IMU integration splits at exact GNSS boundaries and original IMU timestamps,
 using linearly interpolated midpoint inputs. Batch Levenberg-Marquardt uses QR,
@@ -163,7 +171,8 @@ factor kind's whitened residuals, and `objective_per_state`),
 `seed_comparison_performed`,
 `max_seed_vs_selected_angle_deg`, `max_seed_vs_selected_acceleration_m_s2`,
 `max_endpoint_correction_deg`, `model` (`per_step`: the per-step noise
-constants `gyro_slope_s` and `acc_slope_s`), `display_position_velocity` and
+constants `gyro_slope_s` and `acc_slope_s`; `gyro_bias`: `b0_rad_s`,
+`b1_rad_s_per_degc`, `t_ref_degc`), `display_position_velocity` and
 `limitations`.
 When the recording was rejected it is `{"algorithm", "failure"}` with the
 reason; when the solver failed it is the same, plus `stopping` and `quality`

@@ -42,6 +42,8 @@ void requireAllChannels(const Channels &c)
     requireChannel("IMU/wx", c.wx, ni);
     requireChannel("IMU/wy", c.wy, ni);
     requireChannel("IMU/wz", c.wz, ni);
+    // Last, so that a defect in any other channel is still the reported reason.
+    requireChannel("IMU/temperature", c.imuTemperature, ni);
 }
 
 /// GNSS fixes relative to `epoch`. Horizontal accuracy is the sigma of both
@@ -62,7 +64,8 @@ void appendGnssSamples(Samples &d, const Channels &c, double epoch)
 }
 
 /// IMU samples relative to `epoch`. Effective acceleration is already m/s^2;
-/// effective rate is deg/s and the model works in rad/s.
+/// effective rate is deg/s and the model works in rad/s; the temperature is
+/// carried as recorded (degC).
 void appendImuSamples(Samples &d, const Channels &c, double epoch)
 {
     constexpr double radians = kPi / 180;
@@ -72,6 +75,7 @@ void appendImuSamples(Samples &d, const Channels &c, double epoch)
         d.imuTime.push_back(c.imuTime[k] - epoch);
         d.force.emplace_back(c.ax[k], c.ay[k], c.az[k]);
         d.gyro.emplace_back(c.wx[k] * radians, c.wy[k] * radians, c.wz[k] * radians);
+        d.temperature.push_back(c.imuTemperature[k]);
     }
 }
 

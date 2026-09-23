@@ -338,6 +338,7 @@ add_library(flysight_fusion STATIC
   fusion/imuintegration.cpp            fusion/imuintegration.h
   fusion/initializer.cpp               fusion/initializer.h
   fusion/factorgraphfit.cpp            fusion/factorgraphfit.h
+  fusion/temperatureimufactor.cpp      fusion/temperatureimufactor.h
   fusion/trajectoryreconstruction.cpp  fusion/trajectoryreconstruction.h
   fusion/fusionoutput.cpp              fusion/fusionoutput.h
 )
