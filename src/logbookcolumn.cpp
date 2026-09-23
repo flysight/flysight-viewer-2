@@ -4,6 +4,7 @@
 #include <QSettings>
 
 #include "attributeregistry.h"
+#include "engine/calculationregistry.h"
 #include "markerregistry.h"
 #include "plotregistry.h"
 #include "sessiondata.h"
@@ -139,6 +140,36 @@ QVector<LogbookColumn> FlySight::uniqueLogbookColumns(const QVector<LogbookColum
         }
     }
     return result;
+}
+
+QList<DependencyKey> FlySight::logbookColumnNames(const LogbookColumn &col)
+{
+    // The same keys SessionModel::computeColumnValues reads
+    switch (col.type) {
+    case ColumnType::SessionAttribute:
+        return {DependencyKey::attribute(col.attributeKey)};
+    case ColumnType::MeasurementAtMarker:
+        return {DependencyKey::attribute(SessionData::interpolationKey(
+            col.markerAttributeKey, col.sensorID, SessionKeys::Time, col.measurementID))};
+    case ColumnType::Delta:
+        return {DependencyKey::attribute(SessionData::interpolationKey(
+                    col.markerAttributeKey, col.sensorID, SessionKeys::Time, col.measurementID)),
+                DependencyKey::attribute(SessionData::interpolationKey(
+                    col.marker2AttributeKey, col.sensorID, SessionKeys::Time, col.measurementID))};
+    }
+    return {};
+}
+
+QStringList FlySight::logbookColumnExplicitCalculations(const LogbookColumn &col,
+                                                        const CalculationRegistry &registry)
+{
+    QStringList ids;
+    const QList<DependencyKey> names = logbookColumnNames(col);
+    for (const DependencyKey &name : names)
+        ids += registry.explicitDependencies(name);
+    ids.sort();
+    ids.removeDuplicates();
+    return ids;
 }
 
 // ============================================================================

@@ -109,6 +109,7 @@ private slots:
     // Registration-derived queries for the logbook column cache
     void staticDependenciesClosure();
     void dependsOnExplicit();
+    void explicitDependencies();
     void declaredPreferenceKeys();
     void observersFire();
 
@@ -683,6 +684,41 @@ void CalcRegistryTest::dependsOnExplicit()
     QVERIFY(!registry.dependsOnExplicit(attr("DDA")));
     QVERIFY(!registry.dependsOnExplicit(attr("EA_DIAG")));
     QVERIFY(registry.dependsOnExplicit(attr("DB")));
+
+    // Nothing ran and nothing was read
+    QCOMPARE(engine.totalRunCount(), 0);
+    QCOMPARE(state.readCount(), 0);
+}
+
+// Which explicit calculations a name depends on: the logbook column cache's
+// question (the record stamps). dependsOnExplicit() is its non-emptiness.
+void CalcRegistryTest::explicitDependencies()
+{
+    CalculationRegistry registry;
+    Synthetic::registerExplicitWorld(registry);
+
+    FakeSessionState state;
+    CalculationEngine engine(&state, &registry);
+
+    const auto expA = QStringLiteral("expA");
+    const auto expB = QStringLiteral("expB");
+    const QList<DependencyKey> names = {attr("DDA"), attr("EA_DIAG"), attr("DB"), attr("EA_IN"),
+                                        attr("NO_SUCH_NAME")};
+
+    QCOMPARE(registry.explicitDependencies(attr("DDA")), QStringList({expA}));
+    QCOMPARE(registry.explicitDependencies(attr("EA_DIAG")), QStringList({expA}));
+    QCOMPARE(registry.explicitDependencies(attr("DB")), QStringList({expA, expB}));
+    QCOMPARE(registry.explicitDependencies(attr("EA_IN")), QStringList());
+    QCOMPARE(registry.explicitDependencies(attr("NO_SUCH_NAME")), QStringList());
+    for (const DependencyKey &name : names)
+        QCOMPARE(registry.dependsOnExplicit(name), !registry.explicitDependencies(name).isEmpty());
+
+    // A registry change drops the memo
+    QVERIFY(registry.unregister(expA));
+    QCOMPARE(registry.explicitDependencies(attr("DDA")), QStringList());
+    QCOMPARE(registry.explicitDependencies(attr("DB")), QStringList({expB}));
+    for (const DependencyKey &name : names)
+        QCOMPARE(registry.dependsOnExplicit(name), !registry.explicitDependencies(name).isEmpty());
 
     // Nothing ran and nothing was read
     QCOMPARE(engine.totalRunCount(), 0);

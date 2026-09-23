@@ -454,17 +454,13 @@ StaticDependencies CalculationRegistry::staticDependencies(const DependencyKey &
     return result;
 }
 
-bool CalculationRegistry::dependsOnExplicit(const DependencyKey &name) const
+QStringList CalculationRegistry::explicitDependencies(const DependencyKey &name) const
 {
-    const auto memoized = m_dependsOnExplicitMemo.constFind(name);
-    if (memoized != m_dependsOnExplicitMemo.constEnd())
+    const auto memoized = m_explicitDependencyMemo.constFind(name);
+    if (memoized != m_explicitDependencyMemo.constEnd())
         return *memoized;
 
-    const auto isExplicit = [](const CalculationInstance &candidate) {
-        return candidate.descriptor && candidate.descriptor->policy == EvaluationPolicy::Explicit;
-    };
-
-    bool result = false;
+    QSet<QString> ids;
     const QSet<DependencyKey> closure = staticDependencies(name).names;
     for (const DependencyKey &reached : closure) {
         // Every candidate, as in staticDependencies(): which one wins depends on
@@ -474,14 +470,21 @@ bool CalculationRegistry::dependsOnExplicit(const DependencyKey &name) const
             candidates += sourceConversionsFor(reached.measurementKey.first,
                                                reached.measurementKey.second);
         }
-        if (std::any_of(candidates.cbegin(), candidates.cend(), isExplicit)) {
-            result = true;
-            break;
+        for (const CalculationInstance &candidate : std::as_const(candidates)) {
+            if (candidate.descriptor && candidate.descriptor->policy == EvaluationPolicy::Explicit)
+                ids.insert(candidate.instanceId);
         }
     }
 
-    m_dependsOnExplicitMemo.insert(name, result);
+    QStringList result(ids.cbegin(), ids.cend());
+    result.sort();
+    m_explicitDependencyMemo.insert(name, result);
     return result;
+}
+
+bool CalculationRegistry::dependsOnExplicit(const DependencyKey &name) const
+{
+    return !explicitDependencies(name).isEmpty();
 }
 
 QStringList CalculationRegistry::declaredPreferenceKeys() const
@@ -555,7 +558,7 @@ void CalculationRegistry::removeObserver(int token)
 void CalculationRegistry::registrationsChanged()
 {
     m_staticDependencyMemo.clear();
-    m_dependsOnExplicitMemo.clear();
+    m_explicitDependencyMemo.clear();
 
     // A copy: an observer may remove itself (or another observer).
     const auto observers = m_observers;

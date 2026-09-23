@@ -1,11 +1,17 @@
 #ifndef LOGBOOKCOLUMN_H
 #define LOGBOOKCOLUMN_H
 
+#include <QList>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
+#include "dependencykey.h"
+
 namespace FlySight {
+
+class CalculationRegistry;
 
 // ============================================================================
 // Column Type Enum
@@ -82,6 +88,17 @@ QString logbookColumnDefinitionKey(const LogbookColumn &col);
 /// the collapsed ones was, so a visible column never disappears. Columns with
 /// distinct definitions are returned untouched and in order.
 QVector<LogbookColumn> uniqueLogbookColumns(const QVector<LogbookColumn> &columns);
+
+/// The names a column's value is read from (SessionModel::computeColumnValues
+/// reads exactly these): the attribute, or the interpolation key(s) of the
+/// measurement at the marker(s).
+QList<DependencyKey> logbookColumnNames(const LogbookColumn &col);
+
+/// The explicit calculations the column's value depends on: the union of
+/// CalculationRegistry::explicitDependencies() over logbookColumnNames(col),
+/// sorted and unique. Empty for a column that is not explicit-backed.
+QStringList logbookColumnExplicitCalculations(const LogbookColumn &col,
+                                              const CalculationRegistry &registry);
 
 // ============================================================================
 // LogbookColumnStore — QObject singleton for persistence

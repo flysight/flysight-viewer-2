@@ -3,12 +3,14 @@
 
 #include <optional>
 
+#include <QJsonObject>
 #include <QJsonValue>
 #include <QList>
 #include <QMap>
 #include <QObject>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 #include "calculationrecord.h"
@@ -33,8 +35,8 @@ struct CalculationRecordRead {
 /// <stem>.<encoded calculation id>.fvresult files (calculationrecord.h), at
 /// most one per (session, requested calculation): the stored result of an
 /// explicit calculation. They are keyed by the session's file stem (which
-/// never changes), are never referenced from index.json, and are never listed
-/// as sessions (they do not end in .csv). They are written only through
+/// never changes), are referenced only by the per-session record stamp (see
+/// RECORD STAMPS), and are never listed as sessions (they do not end in .csv). They are written only through
 /// writeCalculationRecord() (QSaveFile, like a session file), and removed with
 /// their session (removeSession), by the stray pass of initialize() when their
 /// session file does not exist, and by explicit removal. A session
@@ -46,13 +48,35 @@ struct CalculationRecordRead {
 /// index.json root: "calculationCompatibility" (integer marker,
 /// FlySight::CalculationCompatibilityVersion), "calculationEnvironment"
 /// (calculationEnvironmentFingerprint() the cached values were computed under),
-/// "columns", "sessions" (per id: "uuid", "lastAccessed", "values").
+/// "columns", "sessions" (per id: "uuid", "lastAccessed", "values", and
+/// "records", the record stamp: calculation id -> current result version of
+/// each known and confirmed record of the session, "" when the descriptor
+/// declares none; always written, {} when there is none).
 ///
 /// CACHE VALIDITY is decided here and nowhere else. initialize() keeps the
 /// cached "values" only when both the marker and the environment recorded in
 /// the index equal the current ones; otherwise every cached value is dropped
 /// (uuid and lastAccessed are kept, session files are never touched or even
-/// opened) and the model's idle column worker recomputes them lazily.
+/// opened) and the model's idle column worker recomputes them lazily. A kept
+/// value of a column over explicit calculations E
+/// (logbookColumnExplicitCalculations()) must also agree with the record
+/// files: with a "records" stamp, every e in E is in the stamp exactly when
+/// the session has a record of e, with the stamp's version equal to e's
+/// current result version; without one (an entry written by an older build,
+/// which cached such values as unavailable), the session has no record of any
+/// e in E. A value that fails is dropped.
+///
+/// RECORD STAMPS. The manager knows which calculations have a record file per
+/// session (knownCalculationRecords(): one names-only listing at initialize(),
+/// then its own writes and removals; no record is opened). Ids whose record
+/// may disagree with the loaded session's engine (a failed write or removal,
+/// an environment change while loaded) are UNCONFIRMED: flushIndex() leaves
+/// them out of the stamp and omits the values over them. Writing or removing
+/// a record drops the session's cached values over that calculation and emits
+/// calculationRecordsChanged(). Ordering rule: a write whose calculation
+/// index.json on disk lists as present under a value flushes the index first;
+/// a removal never needs to (the start-up check sees the present -> absent
+/// flip). See the crash table above writeCalculationRecord() in the .cpp.
 ///
 /// SAVE ORDERING. index.json and a session file are separate atomic writes.
 /// The invariant kept by construction is: index.json on disk never holds a
@@ -110,9 +134,12 @@ public:
 
     // Writes sessions/<stem>.<encoded id>.fvresult atomically (QSaveFile),
     // replacing any previous record for (session, record.result's calculation id).
-    // On failure *error is set, nothing on disk has changed, and the previous
-    // record (if any) is intact. The record is encoded before any file is
-    // opened, so a record the format refuses never touches the disk.
+    // On failure *error is set and the previous record (if any) is intact. The
+    // record is encoded before any file is opened, so a record the format
+    // refuses never touches the disk. Drops the session's cached values over
+    // the calculation, flushes index.json first when the ordering rule asks
+    // for it (RECORD STAMPS; if that flush fails the record is not written),
+    // and emits calculationRecordsChanged() unless the session is unknown.
     bool writeCalculationRecord(const QString &sessionId, const CalculationRecord &record,
                                 QString *error = nullptr);
 
@@ -128,13 +155,36 @@ public:
 
     // Deletes one record / every record of the session. True when no such file
     // remains (absent counts as success); false for an unknown session or when a
-    // file could not be removed (warned).
+    // file could not be removed (warned). Drops the session's cached values
+    // over the calculation and emits calculationRecordsChanged(), except for an
+    // unknown session and for an absent record that was neither known nor
+    // unconfirmed (nothing changed). Never flushes index.json.
     bool removeCalculationRecord(const QString &sessionId, const QString &calculationId);
     bool removeCalculationRecords(const QString &sessionId);
 
+    // --- Record stamps of cached column values (see RECORD STAMPS) ---
+
+    // Calculation ids with a record file for the session, as known from the
+    // names-only listing at initialize() and this manager's own writes and
+    // removals. No record is opened. Files changed behind the application's
+    // back are seen at the next initialize().
+    QSet<QString> knownCalculationRecords(const QString &sessionId) const;
+    // Ids whose record may disagree with the loaded session's engine. Values
+    // that depend on them are never written to index.json.
+    QSet<QString> unconfirmedCalculationRecords(const QString &sessionId) const;
+    // Marks every known record of the session unconfirmed. SessionModel calls
+    // it for each loaded row on a calculation-environment change, because a
+    // registry change drops explicit results from memory and keeps their records.
+    void markCalculationRecordsUnconfirmed(const QString &sessionId);
+    // The session's in-memory results are being discarded (eviction): drops
+    // the cached values that depend on its unconfirmed records, forgets the
+    // marks, and returns the ids. From now on the records on disk are the truth.
+    QStringList discardUnconfirmedCalculationRecords(const QString &sessionId);
+
     // Writes index.json (atomically): the marker, cacheEnvironment(), the column
-    // definitions, and per session uuid / lastAccessed / cached values except
-    // those of unsaved columns. Returns true when the file was committed.
+    // definitions, and per session uuid / lastAccessed / cached values (except
+    // those of unsaved columns and those over unconfirmed records) / the
+    // record stamp. Returns true when the file was committed.
     bool flushIndex();
 
     // True when the in-memory index differs from what flushIndex() last wrote
@@ -254,6 +304,15 @@ public:
     // Converts a QJsonValue to QVariant (double, string, or invalid for null)
     static QVariant jsonToVariant(const QJsonValue &jv);
 
+signals:
+    // A record of (sessionId, calculationId) was written, removed, or a write or
+    // removal of it failed. The cached values of the session that depend on the
+    // calculation have already been dropped here. Emitted synchronously, from
+    // inside the record method (so possibly from an engine listener): a receiver
+    // must only drop state and defer work. Not emitted by removeSession(), the
+    // stray pass, or initialize().
+    void calculationRecordsChanged(const QString &sessionId, const QString &calculationId);
+
 private:
     LogbookManager();
     Q_DISABLE_COPY(LogbookManager)
@@ -293,6 +352,26 @@ private:
     // files removed.
     int removeStrayCalculationRecords();
 
+    // --- Record stamps ---
+
+    // Fills m_knownRecords from the names of the record files: every (stem, id)
+    // whose stem is the file of a session of m_sessionIdToUuid. Names only.
+    void adoptCalculationRecordSet();
+    // Applies the start-up validity rule (class comment, CACHE VALIDITY) to the
+    // cached values of explicit-backed columns and sets m_recordBackedOnDisk.
+    // `columnsByDefKey`: the index's columns; `stamps`: per session, the
+    // "records" object of the entries that have one.
+    void validateRecordStamps(const QMap<QString, LogbookColumn> &columnsByDefKey,
+                              const QMap<QString, QJsonObject> &stamps);
+    // Removes from the session's cached values every value whose column depends
+    // on one of `calculationIds`, and every value of a column that is not
+    // enabled. True (and m_indexNeedsFlush set) when something was removed.
+    // Marks nothing unsaved: this is cache validity, not save ordering.
+    bool dropRecordDependentValues(const QString &sessionId, const QStringList &calculationIds);
+    // removeCalculationRecord() for a resolved stem.
+    bool removeCalculationRecordOfStem(const QString &sessionId, const QString &stem,
+                                       const QString &calculationId);
+
     // Maps SESSION_ID strings to UUID filename stems (without extension).
     // Means "has a session file": flushIndex() lists every entry.
     QMap<QString, QString> m_sessionIdToUuid;
@@ -321,6 +400,13 @@ private:
     QSet<QString> m_needsFlushBeforeSave;           // the on-disk index may hold a marked value
 
     QString m_lastSaveError;
+
+    // Record stamps (see RECORD STAMPS), keyed by SESSION_ID like
+    // m_cachedValues (a reserved session by its id as well)
+    QMap<QString, QSet<QString>> m_knownRecords;        // SESSION_ID -> calculation ids with a record file
+    QMap<QString, QSet<QString>> m_unconfirmedRecords;  // SESSION_ID -> ids whose record may disagree with the loaded engine
+    QMap<QString, QSet<QString>> m_recordBackedOnDisk;  // SESSION_ID -> ids index.json on disk lists as present
+                                                        //   AND on which some value it holds for the session depends
 };
 
 } // namespace FlySight

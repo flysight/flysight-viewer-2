@@ -1,7 +1,8 @@
 // The real fit through the job queue, on a real SessionModel, with the fit on
 // the queue's 64 MiB worker. Sensor-fusion-jobs acceptance 5 (model level),
-// 6, 7, 8 (first half), 9, 10 and 11; the rule that a logbook column over a
-// fusion output is never cached; and the optional real-recording check.
+// 6, 7, 8 (first half), 9, 10 and 11; a logbook column over a fusion output
+// is cached from the stored result and follows its record; and the optional
+// real-recording check.
 //
 // DETERMINISM WITHOUT A GATE. The real compute function cannot be held by a
 // semaphore. The tests use the queue's ordering guarantee instead: progress
@@ -91,7 +92,7 @@ private slots:
     void cancelDuringFitThenNextJobStarts();
     void noImuSessionCannotHaveAJob();
     void readersNeverStartAFit();
-    void columnOnFusionOutputIsNotCached();
+    void columnOnFusionOutputIsCachedFromRecord();
     void columnShowsValueStraightAfterPublication();
     void shutdownDuringFit();
     void realRecordingCheck();
@@ -125,6 +126,10 @@ private:
     }
     /// Empty when nothing of the fit was published in the session; else what was found.
     QString publishedTrace(const QSignalSpy &dependencySpy, const QString &id);
+    /// A simulated application restart: queue and model go (in that order), the
+    /// logbook is reopened and initialized, and a new model of stubs and a new
+    /// queue come up.
+    void restart();
 
     std::unique_ptr<SessionModel> m_model;
     std::unique_ptr<JobQueue> m_queue;
@@ -179,6 +184,23 @@ void FusionJobsTest::cleanup()
     QCOMPARE(stillPinned, QStringList());
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
     QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
+}
+
+void FusionJobsTest::restart()
+{
+    if (m_queue)
+        m_queue->shutdown();
+    m_queue.reset();
+    m_model.reset();
+
+    LogbookManager &logbook = LogbookManager::instance();
+    TestEnvironment::instance().reopenLogbook();
+    logbook.initialize();
+
+    m_model = std::make_unique<SessionModel>();
+    m_model->populateFromIndex(logbook.cachedColumnValues(LogbookColumnStore::instance().enabledColumns()),
+                               logbook.lastAccessedMap());
+    m_queue = std::make_unique<JobQueue>(m_model.get());
 }
 
 QString FusionJobsTest::availableIn(const QString &id)
@@ -504,51 +526,91 @@ void FusionJobsTest::readersNeverStartAFit()
     }
 }
 
-// An explicit result is never saved, so the column's cached value - its value
-// for the session as it is on disk - is "unavailable" before and after a
-// published fit. The loaded row shows the live number.
-void FusionJobsTest::columnOnFusionOutputIsNotCached()
+// Spec 8, the logbook column over Fusion/roll: cached from the stored result
+// the session has (published, or restored at load) with the record stamp in
+// index.json, "unavailable" without one, and dropped with the record. After a
+// restart the stub shows the cached number without any load.
+void FusionJobsTest::columnOnFusionOutputIsCachedFromRecord()
 {
     const LogbookColumn column = rollColumn();
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
-    const int row = m_model->getSessionRow("a");
-    const auto cachedRoll = [this, row] { return std::as_const(*m_model).rowAt(row).cachedValues; };
+    int row = m_model->getSessionRow("a");
+    const auto cachedRoll = [this, &row] { return std::as_const(*m_model).rowAt(row).cachedValues; };
+    const auto showsNumber = [this, &row] {
+        bool isNumber = false;
+        m_model->data(m_model->index(row, kRollColumn), Qt::DisplayRole).toString().toDouble(&isNumber);
+        return isNumber;
+    };
 
+    // 1. No fit: unavailable, and no record in the stamp
     QVERIFY(cachedRoll().contains(kRollColumn));
     QVERIFY(!cachedRoll().value(kRollColumn).isValid());
-    QVERIFY(!indexValue("a", column).isDouble());
+    QVERIFY(indexValue("a", column).isNull());
+    QCOMPARE(indexRecordStamp("a"), QJsonValue(QJsonObject()));
 
+    // 2. One fit: the published number is cached and stamped
     const JobQueue::RequestResult result = m_queue->request("a", kFit);
     QCOMPARE(result.kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QCOMPARE(m_queue->job(result.job).state, JobState::Succeeded);
     QVERIFY(waitForIdle(*m_model));
 
-    // Publication leaves the cached value alone
-    QVERIFY(cachedRoll().contains(kRollColumn));
-    QVERIFY(!cachedRoll().value(kRollColumn).isValid());
-    // ... while the loaded row already shows the live number (the literal is in
-    // columnShowsValueStraightAfterPublication; here roll is 1.6e-9 degrees)
-    bool showsNumber = false;
-    m_model->data(m_model->index(row, kRollColumn), Qt::DisplayRole).toString().toDouble(&showsNumber);
-    QVERIFY(showsNumber);
+    const double liveRoll = session("a").getAttribute(fusionRollAtExit()).toDouble();
+    QCOMPARE(cachedRoll().value(kRollColumn).typeId(), int(QMetaType::Double));
+    QVERIFY(isNear(cachedRoll().value(kRollColumn).toDouble(), liveRoll));
+    QVERIFY(indexValue("a", column).isDouble());
+    QVERIFY(isNear(indexValue("a", column).toDouble(), liveRoll));
+    const QJsonObject stamp{{QStringLiteral("builtin.fusion.fit"), QStringLiteral("batch-temperature-bias-v3")}};
+    QCOMPARE(indexRecordStamp("a"), QJsonValue(stamp));
+    QVERIFY(showsNumber());
 
-    // A marker edit makes the column worker compute the column again, with
-    // the fit published (markers are not inputs of the fit)
+    // 3. A marker edit (not a fit input) drops the column at once (static
+    //    dependency); it is computed again with the fit still published
     QVERIFY(m_model->updateAttribute("a", "_EXIT_TIME", kFixtureExitTime + .25));
     QVERIFY(!cachedRoll().contains(kRollColumn));
     QVERIFY(waitForIdle(*m_model));
     QCOMPARE(engine("a").runCount(kFit), 1);
-    QVERIFY(session("a").getAttribute(fusionRollAtExit()).isValid());
+    const QVariant movedRoll = session("a").getAttribute(fusionRollAtExit());
+    QVERIFY(movedRoll.isValid());
+    QCOMPARE(cachedRoll().value(kRollColumn).typeId(), int(QMetaType::Double));
+    QVERIFY(isNear(cachedRoll().value(kRollColumn).toDouble(), movedRoll.toDouble()));
+    QVERIFY(!LogbookManager::instance().hasUnsavedColumns("a"));
+    QVERIFY(indexValue("a", column).isDouble());
+    QVERIFY(isNear(indexValue("a", column).toDouble(), movedRoll.toDouble()));
+    QCOMPARE(indexRecordStamp("a"), QJsonValue(stamp));
 
-    bool isNumber = false;
-    m_model->data(m_model->index(row, kRollColumn), Qt::DisplayRole).toString().toDouble(&isNumber);
-    QVERIFY(isNumber);
+    // 4. After a restart the stub shows the cached number; nothing loads
+    const double cached = cachedRoll().value(kRollColumn).toDouble();
+    restart();
+    row = m_model->getSessionRow("a");
+    QVERIFY(row >= 0);
+    QVERIFY(!std::as_const(*m_model).rowAt(row).isLoaded());
+    QCOMPARE(cachedRoll().value(kRollColumn).typeId(), int(QMetaType::Double));
+    QVERIFY(isNear(cachedRoll().value(kRollColumn).toDouble(), cached));
+    QVERIFY(showsNumber());
+    m_model->resetColumnWorkStats();
+    m_model->resetStoredResultStats();
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+    QCOMPARE(m_model->storedResultStats().restoreCalls, 0);
+    QVERIFY(!std::as_const(*m_model).rowAt(row).isLoaded());
+
+    // 5. Loading restores the fit (no run); a fit input changes: the record
+    //    goes and the column with it, and it comes back unavailable
+    QCOMPARE(engine("a").resultStatus(kFit), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(engine("a").runCount(kFit), 0);
+    const QString recordPath = TestEnvironment::instance().sessionsDir() + QLatin1Char('/')
+        + sessionFileStem("a") + QStringLiteral(".builtin%2Efusion%2Efit.fvresult");
+    QVERIFY(QFileInfo::exists(recordPath));
+    QVERIFY(m_model->updateAttribute("a", QStringLiteral("_LOCAL_ORIGIN_INDEX"), QVariant::fromValue(qlonglong(4))));
+    QVERIFY(!QFileInfo::exists(recordPath));
+    QVERIFY(!cachedRoll().contains(kRollColumn));
+    QVERIFY(waitForIdle(*m_model));
     QVERIFY(cachedRoll().contains(kRollColumn));
     QVERIFY(!cachedRoll().value(kRollColumn).isValid());
-    QVERIFY(!LogbookManager::instance().hasUnsavedColumns("a"));
     QVERIFY(!indexValue("a", column).isDouble());
-    QVERIFY(!indexValue("a", column).isString());
+    QCOMPARE(indexRecordStamp("a"), QJsonValue(QJsonObject()));
 }
 
 // The logbook cell over a fusion output shows the number as soon as the job

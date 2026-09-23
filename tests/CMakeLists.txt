@@ -140,6 +140,7 @@ flysight_add_test(tst_simplified_track SOURCES tst_simplified_track.cpp)
 flysight_add_test(tst_session_engine       SOURCES tst_session_engine.cpp)
 flysight_add_test(tst_session_model_engine SOURCES tst_session_model_engine.cpp)
 flysight_add_test(tst_result_store SOURCES tst_result_store.cpp)
+flysight_add_test(tst_result_columns SOURCES tst_result_columns.cpp)
 
 # Job queue and job model (synthetic explicit calculations; no GTSAM)
 flysight_add_test(tst_jobqueue SOURCES tst_jobqueue.cpp)

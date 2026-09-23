@@ -32,6 +32,11 @@ QJsonValue indexValue(const QJsonObject &root, const QString &sessionId, const F
 /// The same, reading index.json from disk.
 QJsonValue indexValue(const QString &sessionId, const FlySight::LogbookColumn &col);
 
+/// The "records" stamp index.json holds for a session: an object, or
+/// Undefined when the entry has none (older index) or there is no entry.
+QJsonValue indexRecordStamp(const QJsonObject &root, const QString &sessionId);
+QJsonValue indexRecordStamp(const QString &sessionId);   // reads index.json from disk
+
 // ---- session files --------------------------------------------------------
 
 /// Path of the file of a session according to index.json on disk; empty when

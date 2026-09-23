@@ -10,8 +10,11 @@
 #include <QUuid>
 #include <QDateTime>
 
+#include <algorithm>
+
 #include "calculations/builtincalculations.h"
 #include "dataimporter.h"
+#include "engine/calculationregistry.h"
 #include "dataexporter.h"
 #include "logbookcolumn.h"
 #include "preferences/preferencesmanager.h"
@@ -100,6 +103,32 @@ QJsonValue variantToJson(const QVariant &val)
     return QJsonValue(val.toString());
 }
 
+// Definition key -> the explicit calculations the column depends on (E),
+// for every column given (an empty list for a column that is not explicit-backed).
+QHash<QString, QStringList> explicitCalculationsByDefKey(const QVector<LogbookColumn> &columns)
+{
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+    QHash<QString, QStringList> result;
+    for (const LogbookColumn &col : columns)
+        result.insert(columnDefinitionKey(col), logbookColumnExplicitCalculations(col, registry));
+    return result;
+}
+
+// The result version the stamp records for a calculation: the descriptor's,
+// "" when it declares none or the id is not a plain registration.
+QString currentResultVersion(const QString &calculationId)
+{
+    const std::optional<CalculationInstance> instance = CalculationRegistry::instance().instance(calculationId);
+    if (!instance || !instance->descriptor)
+        return QString();
+    return instance->descriptor->resultVersion;
+}
+
+bool intersects(const QStringList &ids, const QSet<QString> &set)
+{
+    return std::any_of(ids.cbegin(), ids.cend(), [&set](const QString &id) { return set.contains(id); });
+}
+
 } // anonymous namespace
 
 // ============================================================================
@@ -178,14 +207,19 @@ void LogbookManager::initialize()
                     m_indexNeedsFlush = true;
                 }
 
-                // Build ephemeral UUID → definition key mapping
+                // Build ephemeral UUID → definition key mapping, and the
+                // columns themselves (the record-stamp check needs their E)
                 QMap<QString, QString> uuidToDefKey;
+                QMap<QString, LogbookColumn> columnsByDefKey;
                 for (auto it = columnsObj.constBegin(); it != columnsObj.constEnd(); ++it) {
                     const LogbookColumn col = columnFromJson(it.value().toObject());
-                    uuidToDefKey[it.key()] = columnDefinitionKey(col);
+                    const QString defKey = columnDefinitionKey(col);
+                    uuidToDefKey[it.key()] = defKey;
+                    columnsByDefKey.insert(defKey, col);
                 }
 
                 // Parse sessions
+                QMap<QString, QJsonObject> stamps;      // entries that have "records"
                 for (auto it = sessionsObj.constBegin(); it != sessionsObj.constEnd(); ++it) {
                     const QString sessionId = it.key();
                     const QJsonObject entry = it.value().toObject();
@@ -193,6 +227,10 @@ void LogbookManager::initialize()
                     if (!uuid.isEmpty()) {
                         m_sessionIdToUuid[sessionId] = uuid;
                     }
+
+                    // An entry without it was written by an older build
+                    if (entry.contains(QStringLiteral("records")))
+                        stamps.insert(sessionId, entry[QStringLiteral("records")].toObject());
 
                     // lastAccessed
                     if (entry.contains(QStringLiteral("lastAccessed"))) {
@@ -229,6 +267,10 @@ void LogbookManager::initialize()
                     m_indexNeedsFlush = true;
                 }
 
+                adoptCalculationRecordSet();
+                if (valid)
+                    validateRecordStamps(columnsByDefKey, stamps);
+
                 m_cacheEnvironment = currentEnvironment;
                 m_hasIndexData = true;
                 return;
@@ -242,6 +284,7 @@ void LogbookManager::initialize()
                         m_sessionIdToUuid[sessionId] = uuid;
                     }
                 }
+                adoptCalculationRecordSet();
                 m_cacheEnvironment = calculationEnvironmentFingerprint();
                 return;
             }
@@ -252,6 +295,7 @@ void LogbookManager::initialize()
     // The column worker will parse each CSV in the background and rebuild the index.
     m_scannedUuids = scanSessionFilenames();
     m_deferredScan = true;
+    adoptCalculationRecordSet();
     m_cacheEnvironment = calculationEnvironmentFingerprint();
 }
 
@@ -276,6 +320,9 @@ void LogbookManager::reset()
     m_unsavedAll.clear();
     m_needsFlushBeforeSave.clear();
     m_lastSaveError.clear();
+    m_knownRecords.clear();
+    m_unconfirmedRecords.clear();
+    m_recordBackedOnDisk.clear();
 }
 
 // ============================================================================
@@ -739,6 +786,12 @@ bool LogbookManager::remapSessionId(const QString &oldId, const QString &newId)
     if (m_needsFlushBeforeSave.remove(oldId)) {
         m_needsFlushBeforeSave.insert(newId);
     }
+
+    // So do the record stamps (the records themselves keep their stem)
+    for (QMap<QString, QSet<QString>> *records : {&m_knownRecords, &m_unconfirmedRecords, &m_recordBackedOnDisk}) {
+        if (records->contains(oldId))
+            (*records)[newId] = records->take(oldId);
+    }
     m_indexNeedsFlush = true;
 
     return true;
@@ -761,6 +814,16 @@ bool LogbookManager::removeSession(const QString& sessionId)
             qWarning("LogbookManager: calculation records of %s not all removed; "
                      "the next start removes them", qPrintable(sessionId));
         }
+        // Everything else kept for the id goes as in the normal path; the
+        // index has no entry to rewrite.
+        m_lastAccessed.remove(sessionId);
+        m_cachedValues.remove(sessionId);
+        m_unsavedColumns.remove(sessionId);
+        m_unsavedAll.remove(sessionId);
+        m_needsFlushBeforeSave.remove(sessionId);
+        m_knownRecords.remove(sessionId);
+        m_unconfirmedRecords.remove(sessionId);
+        m_recordBackedOnDisk.remove(sessionId);
         return true;
     }
 
@@ -789,6 +852,9 @@ bool LogbookManager::removeSession(const QString& sessionId)
     m_unsavedColumns.remove(sessionId);
     m_unsavedAll.remove(sessionId);
     m_needsFlushBeforeSave.remove(sessionId);
+    m_knownRecords.remove(sessionId);
+    m_unconfirmedRecords.remove(sessionId);
+    m_recordBackedOnDisk.remove(sessionId);
     m_indexNeedsFlush = true;
     return true;
 }
@@ -876,6 +942,31 @@ int LogbookManager::removeStrayCalculationRecords()
     return removed;
 }
 
+// Record stamps (see RECORD STAMPS in the header). S = a session, e = one of
+// its explicit calculations, V = a cached value of a column over e. What the
+// start-up check (validateRecordStamps) finds after a crash:
+//
+//   crash after                          index.json on disk     record e   next start
+//                                        (V / stamp for e)      on disk
+//   a write, the stamp on disk listing   V computed without e   present    stamp != disk: V dropped,
+//     e absent (first fit)                 / absent                          pending until loaded
+//   a delete (input change, stale on     V / present            absent     stamp != disk: V dropped,
+//     load)                                                                  the worker caches unavailable
+//   delete, then write again before      no V, e absent         present    V missing: pending until loaded
+//     any flush                            (step d flushed first)
+//   step d's flush failed                V / present            absent     stamp != disk: V dropped
+//                                                               (deleted before)
+//   a failed write (encode or I/O)       V never flushed since  previous   missing or older values only;
+//                                          the failure            or none    the check applies
+//                                          (unconfirmed)
+//   the model's refresh flush            V1 / present, current  present    valid: the stub shows V1
+//   a result-version bump (upgrade)      V / present, old       present    version != current: V dropped,
+//                                          version              (stale)    pending; the load deletes the record
+//
+// The only sequence the stamp cannot see (present -> deleted -> written again
+// with no flush in between) is the one step d flushes before. A removal needs
+// no flush first: a value that depended on the removed record is listed as
+// present in a stamp, and the record is now absent.
 bool LogbookManager::writeCalculationRecord(const QString &sessionId, const CalculationRecord &record,
                                             QString *error)
 {
@@ -883,47 +974,86 @@ bool LogbookManager::writeCalculationRecord(const QString &sessionId, const Calc
         error->clear();
 
     const QString &calculationId = record.result.calculationId;
-    const auto fail = [&](const QString &text) {
+    const auto warn = [&](const QString &text) {
         qWarning("LogbookManager: calculation record %s of %s not written: %s",
                  qPrintable(calculationId), qPrintable(sessionId), qPrintable(text));
         if (error)
             *error = text;
+    };
+    // A failure after the stem is known: the in-memory result and the disk may
+    // now disagree, so the pair is unconfirmed (its values stay out of
+    // index.json) until it is written or removed, or the row is evicted.
+    const auto fail = [&](const QString &text) {
+        warn(text);
+        m_unconfirmedRecords[sessionId].insert(calculationId);
+        dropRecordDependentValues(sessionId, {calculationId});
+        emit calculationRecordsChanged(sessionId, calculationId);
         return false;
     };
 
+    // a. An unknown session fails with no signal.
     const QString stem = recordStem(sessionId);
-    if (stem.isEmpty())
-        return fail(QStringLiteral("not in the logbook index"));
+    if (stem.isEmpty()) {
+        warn(QStringLiteral("not in the logbook index"));
+        return false;
+    }
 
-    // Encode first: a record the format refuses never opens a file, so the
-    // previous record is untouched.
+    // b. Encode first: a record the format refuses never opens a file (the
+    //    previous record is untouched) and never flushes the index.
     QString encodeError;
     const std::optional<QByteArray> bytes = encodeCalculationRecord(record, &encodeError);
     if (!bytes)
         return fail(encodeError);
 
-    // As DataExporter's session write: a temporary file renamed over the
-    // record at commit (no direct-write fallback), so a failure at any step
-    // leaves the previous record intact. Records are not referenced from
-    // index.json, so no index flush is involved. Nothing is retried.
+    // c. The in-memory result is new: every value over it is gone.
+    m_unconfirmedRecords[sessionId].insert(calculationId);
+    dropRecordDependentValues(sessionId, {calculationId});
+
+    // d. Ordering rule: index.json on disk holds a value of the session that
+    //    depends on this calculation while listing its record as present.
+    //    Flush first; the mark of c keeps the calculation out of the stamp and
+    //    its values out of the file. As saveSession step b: if that fails,
+    //    the record is not written.
+    if (m_recordBackedOnDisk.value(sessionId).contains(calculationId)) {
+        if (!flushIndex()) {
+            warn(QStringLiteral("index.json could not be written"));
+            emit calculationRecordsChanged(sessionId, calculationId);
+            return false;
+        }
+    }
+
+    // e. As DataExporter's session write: a temporary file renamed over the
+    //    record at commit (no direct-write fallback), so a failure at any step
+    //    leaves the previous record intact (the known set is unchanged).
+    //    Nothing is retried.
     const QString path = calculationRecordPath(stem, calculationId);
     const auto writeError = [&path](const QSaveFile &file) {
         return QStringLiteral("Couldn't write file '%1': %2").arg(path, file.errorString());
     };
+    const auto writeFailed = [&](const QString &text) {
+        warn(text);
+        emit calculationRecordsChanged(sessionId, calculationId);
+        return false;
+    };
 
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly))
-        return fail(writeError(file));
+        return writeFailed(writeError(file));
 
     file.write(*bytes);
     if (file.error() != QFileDevice::NoError) {
         const QString text = writeError(file);
         file.cancelWriting();
-        return fail(text);
+        return writeFailed(text);
     }
 
     if (!file.commit())
-        return fail(writeError(file));
+        return writeFailed(writeError(file));
+
+    // f. The disk now holds what the engine holds.
+    m_knownRecords[sessionId].insert(calculationId);
+    m_unconfirmedRecords[sessionId].remove(calculationId);
+    emit calculationRecordsChanged(sessionId, calculationId);
     return true;
 }
 
@@ -982,15 +1112,42 @@ bool LogbookManager::removeCalculationRecord(const QString &sessionId, const QSt
 {
     const QString stem = recordStem(sessionId);
     if (stem.isEmpty())
-        return false;
+        return false;       // unknown session: no signal
+    return removeCalculationRecordOfStem(sessionId, stem, calculationId);
+}
 
+bool LogbookManager::removeCalculationRecordOfStem(const QString &sessionId, const QString &stem,
+                                                   const QString &calculationId)
+{
+    // No index flush comes first (see the crash table above writeCalculationRecord).
     const QString path = calculationRecordPath(stem, calculationId);
-    if (!QFileInfo::exists(path))
+    if (!QFileInfo::exists(path)) {
+        // Nothing changed on disk. If the pair was neither known nor
+        // unconfirmed, nothing changed at all (the common input change with
+        // no record): no signal.
+        const bool known = m_knownRecords.value(sessionId).contains(calculationId);
+        const bool unconfirmed = m_unconfirmedRecords.value(sessionId).contains(calculationId);
+        if (!known && !unconfirmed)
+            return true;
+        dropRecordDependentValues(sessionId, {calculationId});
+        m_knownRecords[sessionId].remove(calculationId);
+        m_unconfirmedRecords[sessionId].remove(calculationId);
+        emit calculationRecordsChanged(sessionId, calculationId);
         return true;
+    }
+
+    dropRecordDependentValues(sessionId, {calculationId});
     if (!QFile::remove(path)) {
         qWarning("LogbookManager: failed to remove calculation record %s", qPrintable(path));
+        // The file is still there (known stays), but the engine no longer
+        // holds what it describes.
+        m_unconfirmedRecords[sessionId].insert(calculationId);
+        emit calculationRecordsChanged(sessionId, calculationId);
         return false;
     }
+    m_knownRecords[sessionId].remove(calculationId);
+    m_unconfirmedRecords[sessionId].remove(calculationId);
+    emit calculationRecordsChanged(sessionId, calculationId);
     return true;
 }
 
@@ -999,7 +1156,154 @@ bool LogbookManager::removeCalculationRecords(const QString &sessionId)
     const QString stem = recordStem(sessionId);
     if (stem.isEmpty())
         return false;
-    return removeCalculationRecordsForStem(stem);
+
+    // The rule of removeCalculationRecord() per id: every id with a file, and
+    // every id known or unconfirmed without one.
+    QSet<QString> ids = m_knownRecords.value(sessionId) + m_unconfirmedRecords.value(sessionId);
+    const QStringList listed = calculationRecordIdsForStem(stem);
+    ids.unite(QSet<QString>(listed.cbegin(), listed.cend()));
+    QStringList sorted(ids.cbegin(), ids.cend());
+    sorted.sort();
+
+    bool allRemoved = true;
+    for (const QString &id : std::as_const(sorted)) {
+        if (!removeCalculationRecordOfStem(sessionId, stem, id))
+            allRemoved = false;
+    }
+    // A file of the stem in another spelling of the name, which the per-id
+    // path does not reach
+    if (!removeCalculationRecordsForStem(stem))
+        allRemoved = false;
+    return allRemoved;
+}
+
+// ============================================================================
+// Record stamps
+// ============================================================================
+
+QSet<QString> LogbookManager::knownCalculationRecords(const QString &sessionId) const
+{
+    return m_knownRecords.value(sessionId);
+}
+
+QSet<QString> LogbookManager::unconfirmedCalculationRecords(const QString &sessionId) const
+{
+    return m_unconfirmedRecords.value(sessionId);
+}
+
+void LogbookManager::markCalculationRecordsUnconfirmed(const QString &sessionId)
+{
+    const QSet<QString> known = m_knownRecords.value(sessionId);
+    if (!known.isEmpty())
+        m_unconfirmedRecords[sessionId].unite(known);
+}
+
+QStringList LogbookManager::discardUnconfirmedCalculationRecords(const QString &sessionId)
+{
+    const QSet<QString> unconfirmed = m_unconfirmedRecords.take(sessionId);
+    QStringList ids(unconfirmed.cbegin(), unconfirmed.cend());
+    ids.sort();
+    if (!ids.isEmpty())
+        dropRecordDependentValues(sessionId, ids);
+    return ids;
+}
+
+void LogbookManager::adoptCalculationRecordSet()
+{
+    QMap<QString, QString> stemToSessionId;
+    for (auto it = m_sessionIdToUuid.constBegin(); it != m_sessionIdToUuid.constEnd(); ++it)
+        stemToSessionId.insert(it.value(), it.key());
+
+    const QStringList names = calculationRecordFileNames();
+    for (const QString &name : names) {
+        const auto parsed = parseRecordFileName(name);
+        if (!parsed)
+            continue;
+        const auto session = stemToSessionId.constFind(parsed->first);
+        if (session != stemToSessionId.constEnd())
+            m_knownRecords[session.value()].insert(parsed->second);
+    }
+}
+
+void LogbookManager::validateRecordStamps(const QMap<QString, LogbookColumn> &columnsByDefKey,
+                                          const QMap<QString, QJsonObject> &stamps)
+{
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+    QHash<QString, QStringList> explicitByDefKey;
+    for (auto it = columnsByDefKey.constBegin(); it != columnsByDefKey.constEnd(); ++it)
+        explicitByDefKey.insert(it.key(), logbookColumnExplicitCalculations(it.value(), registry));
+
+    for (auto sit = m_cachedValues.begin(); sit != m_cachedValues.end(); ++sit) {
+        const QString &sessionId = sit.key();
+        const QSet<QString> known = m_knownRecords.value(sessionId);
+        const auto stampIt = stamps.constFind(sessionId);
+        const bool stamped = stampIt != stamps.constEnd();
+
+        QSet<QString> backed;
+        for (auto vit = sit->begin(); vit != sit->end();) {
+            const QStringList ids = explicitByDefKey.value(vit.key());
+            bool keep = true;
+            for (const QString &id : ids) {
+                if (stamped) {
+                    // Present in the stamp exactly when present on disk, and
+                    // then computed by the current version of the calculation
+                    const bool inStamp = stampIt->contains(id);
+                    if (inStamp != known.contains(id)
+                        || (inStamp && stampIt->value(id).toString() != currentResultVersion(id))) {
+                        keep = false;
+                        break;
+                    }
+                } else if (known.contains(id)) {
+                    // An older build cached it as unavailable, which a record
+                    // on disk contradicts
+                    keep = false;
+                    break;
+                }
+            }
+
+            if (!keep) {
+                vit = sit->erase(vit);
+                m_indexNeedsFlush = true;
+                continue;
+            }
+            if (stamped) {
+                for (const QString &id : ids) {
+                    if (stampIt->contains(id))
+                        backed.insert(id);
+                }
+            }
+            ++vit;
+        }
+        if (!backed.isEmpty())
+            m_recordBackedOnDisk.insert(sessionId, backed);
+    }
+}
+
+bool LogbookManager::dropRecordDependentValues(const QString &sessionId, const QStringList &calculationIds)
+{
+    auto cachedIt = m_cachedValues.find(sessionId);
+    if (cachedIt == m_cachedValues.end() || cachedIt->isEmpty())
+        return false;
+
+    // A value of a column that is not enabled cannot be checked (its E is not
+    // known here), as in dropCachedValuesExcept().
+    const QHash<QString, QStringList> byDefKey =
+        explicitCalculationsByDefKey(LogbookColumnStore::instance().enabledColumns());
+    const QSet<QString> changed(calculationIds.cbegin(), calculationIds.cend());
+
+    bool removed = false;
+    for (auto it = cachedIt->begin(); it != cachedIt->end();) {
+        const auto columnIt = byDefKey.constFind(it.key());
+        if (columnIt == byDefKey.constEnd() || intersects(columnIt.value(), changed)) {
+            it = cachedIt->erase(it);
+            removed = true;
+        } else {
+            ++it;
+        }
+    }
+    if (removed)
+        m_indexNeedsFlush = true;
+    return removed;
 }
 
 // ============================================================================
@@ -1023,9 +1327,13 @@ bool LogbookManager::flushIndex()
     }
 
     // 3. Build "sessions" object
+    const QHash<QString, QStringList> byDefKey = explicitCalculationsByDefKey(enabledCols);
+    QMap<QString, QSet<QString>> backedOnDisk;      // m_recordBackedOnDisk once committed
     QJsonObject sessionsObj;
     for (auto it = m_sessionIdToUuid.constBegin(); it != m_sessionIdToUuid.constEnd(); ++it) {
         const QString &sessionId = it.key();
+        const QSet<QString> unconfirmed = m_unconfirmedRecords.value(sessionId);
+        const QSet<QString> confirmed = m_knownRecords.value(sessionId) - unconfirmed;
 
         QJsonObject entry;
         entry[QStringLiteral("uuid")] = it.value();
@@ -1034,7 +1342,10 @@ bool LogbookManager::flushIndex()
         // Build values: map cached values (keyed by definition key) to ephemeral UUIDs.
         // Unsaved columns are omitted even when memory already holds their new
         // value: that value belongs to a session file that is not on disk yet.
+        // So are the values over an unconfirmed record: the engine they were
+        // computed from may disagree with the record on disk.
         QJsonObject valuesObj;
+        QSet<QString> backed;
         if (m_cachedValues.contains(sessionId) && !m_unsavedAll.contains(sessionId)) {
             const QMap<QString, QJsonValue> &cached = m_cachedValues[sessionId];
             const QSet<QString> unsaved = m_unsavedColumns.value(sessionId);
@@ -1042,13 +1353,28 @@ bool LogbookManager::flushIndex()
                 const QString &defKey = cit.key();
                 if (unsaved.contains(defKey))
                     continue;
-                if (defKeyToEphemeralUuid.contains(defKey)) {
-                    valuesObj[defKeyToEphemeralUuid[defKey]] = cit.value();
+                if (!defKeyToEphemeralUuid.contains(defKey))
+                    continue;
+                const QStringList ids = byDefKey.value(defKey);
+                if (intersects(ids, unconfirmed))
+                    continue;
+                valuesObj[defKeyToEphemeralUuid[defKey]] = cit.value();
+                for (const QString &id : ids) {
+                    if (confirmed.contains(id))
+                        backed.insert(id);
                 }
             }
         }
         entry[QStringLiteral("values")] = valuesObj;
 
+        // The record stamp, even when empty (an entry without one is an older build's)
+        QJsonObject recordsObj;
+        for (const QString &id : confirmed)
+            recordsObj[id] = currentResultVersion(id);
+        entry[QStringLiteral("records")] = recordsObj;
+
+        if (!backed.isEmpty())
+            backedOnDisk.insert(sessionId, backed);
         sessionsObj[sessionId] = entry;
     }
 
@@ -1078,6 +1404,9 @@ bool LogbookManager::flushIndex()
 
     // The on-disk index now holds no value for any unsaved column.
     m_needsFlushBeforeSave.clear();
+    // ... and these record-backed values (describes the file on disk; never
+    // updated by a failed flush).
+    m_recordBackedOnDisk = backedOnDisk;
     m_indexNeedsFlush = false;
     return true;
 }

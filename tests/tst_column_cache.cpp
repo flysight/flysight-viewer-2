@@ -22,6 +22,7 @@
 #include <QtTest>
 
 #include <QDir>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSettings>
@@ -148,7 +149,7 @@ private slots:
     void indexValueReachesEveryColumnOfItsDefinition();
     void duplicateColumnCausesNoWorkAfterRestart();
 
-    void explicitBackedColumnIsNeverCached();
+    void explicitBackedColumnFollowsItsResult();
 
 private:
     // A model whose rows were merged, saved, and indexed.
@@ -1272,10 +1273,11 @@ void ColumnCacheTest::duplicateColumnCausesNoWorkAfterRestart()
     QCOMPARE(readFileBytes(TestEnvironment::instance().indexPath()), indexBefore);
 }
 
-// An explicit result is never persisted, so a column that depends on one is
-// cached as unavailable - for the on-disk state that is its value - whatever
-// is published in memory. The loaded row still displays the live value.
-void ColumnCacheTest::explicitBackedColumnIsNeverCached()
+// A column over an explicit result is cached from the result the session has,
+// restored or published, and follows its record: written -> the value,
+// dropped -> unavailable. After a restart the stub shows the cached value
+// without a load.
+void ColumnCacheTest::explicitBackedColumnFollowsItsResult()
 {
     constexpr int kX = 3;
     const QString id = QStringLiteral("test.explicit");
@@ -1310,37 +1312,61 @@ void ColumnCacheTest::explicitBackedColumnIsNeverCached()
     if (QTest::currentTestFailed())
         return;
     const QModelIndex cell = m_model->index(0, kX);
+    const auto engineRuns = [this, id] { return m_model->sessionRef(0).calculationEngine().runCount(id); };
 
-    // Never requested: computed, and no value
+    // 1. Never requested: computed, no value, and no record in the stamp
     QVERIFY(m_model->rowAt(0).cachedValues.contains(kX));
     QVERIFY(!cached(0, kX).isValid());
-    QCOMPARE(m_model->sessionRef(0).calculationEngine().runCount(id), 0);
+    QVERIFY(indexValue(readIndex(), "g1", explicitColumn).isNull());
+    QCOMPARE(indexRecordStamp("g1"), QJsonValue(QJsonObject()));
+    QCOMPARE(engineRuns(), 0);
     QVERIFY(!m_model->data(cell, Qt::DisplayRole).isValid());
 
-    // Published in memory; then an edit of its input makes the column worker
-    // compute the column again, with a fresh result published
+    // 2. Requested: the record written drops the value at once; the next pass
+    //    computes it from the engine, caches it and stamps it
     QCOMPARE(m_model->sessionRef(0).calculationEngine().request(id).status, ResultStatus::Ok);
-    QCOMPARE(m_model->data(cell, Qt::DisplayRole).toString(), QStringLiteral("computed"));
+    QVERIFY(!m_model->rowAt(0).cachedValues.contains(kX));
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(cached(0, kX).toString(), QStringLiteral("computed"));
+    QCOMPARE(indexValue(readIndex(), "g1", explicitColumn).toString(), QStringLiteral("computed"));
+    QCOMPARE(indexRecordStamp("g1"), QJsonValue(QJsonObject{{id, QString()}}));
+    const QString recordPath = TestEnvironment::instance().sessionsDir() + QLatin1Char('/')
+        + sessionFileStem("g1") + QStringLiteral(".test%2Eexplicit.fvresult");
+    QVERIFY(QFileInfo::exists(recordPath));
+
+    // 3. An edit of its input drops the result, the record and the value
     QVERIFY(m_model->updateAttribute("g1", "_DESCRIPTION", QStringLiteral("second")));
     QVERIFY(!m_model->rowAt(0).cachedValues.contains(kX));
-    QCOMPARE(m_model->sessionRef(0).calculationEngine().request(id).status, ResultStatus::Ok);
+    QVERIFY(!QFileInfo::exists(recordPath));
     QVERIFY(waitForIdle(*m_model));
-
     QVERIFY(m_model->rowAt(0).cachedValues.contains(kX));
     QVERIFY(!cached(0, kX).isValid());
-    const QJsonObject root = readIndex();
-    QVERIFY(indexValue(root, "g1", explicitColumn).toString() != QStringLiteral("computed"));
-    QCOMPARE(indexValue(root, "g1", m_d).toString(), QStringLiteral("second"));
+    {
+        const QJsonObject root = readIndex();
+        QVERIFY(indexValue(root, "g1", explicitColumn).isNull());
+        QCOMPARE(indexRecordStamp(root, "g1"), QJsonValue(QJsonObject()));
+        QCOMPARE(indexValue(root, "g1", m_d).toString(), QStringLiteral("second"));
+    }
 
-    // The loaded row shows the live value all the same
+    // 4. Requested again: the value comes back, cached and in the index
+    QCOMPARE(m_model->sessionRef(0).calculationEngine().request(id).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(cached(0, kX).toString(), QStringLiteral("computed"));
+    QCOMPARE(indexValue(readIndex(), "g1", explicitColumn).toString(), QStringLiteral("computed"));
+    QCOMPARE(engineRuns(), 2);
     QVERIFY(m_model->rowAt(0).isLoaded());
     QCOMPARE(m_model->data(cell, Qt::DisplayRole).toString(), QStringLiteral("computed"));
-    QCOMPARE(m_model->sessionRef(0).calculationEngine().runCount(id), 2);
 
-    // After a restart the stub shows what a reload would: nothing
+    // 5. After a restart the stub shows the cached value; nothing is loaded
     restartAsStubs();
-    QVERIFY(m_model->rowAt(0).cachedValues.contains(kX));
-    QVERIFY(!m_model->data(m_model->index(0, kX), Qt::DisplayRole).isValid());
+    QCOMPARE(cached(0, kX).toString(), QStringLiteral("computed"));
+    QCOMPARE(m_model->data(m_model->index(0, kX), Qt::DisplayRole).toString(), QStringLiteral("computed"));
+    m_model->resetColumnWorkStats();
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+    QCOMPARE(m_model->columnWorkStats().valuesComputed, 0);
+    QVERIFY(!m_model->rowAt(0).isLoaded());
 }
 
 FLYSIGHT_TEST_MAIN(ColumnCacheTest)

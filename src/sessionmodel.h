@@ -35,6 +35,11 @@ struct SessionRow {
     // never attached, never saved, and never merged into; eviction resets the
     // row to a stub so that a later access retries the load.
     bool loadFailed = false;
+    // Explicit-backed columns of a row that is not loaded, left uncached
+    // because the session has a record that only a load may read (see CACHED
+    // COLUMN VALUES). Never holds an index that cachedValues holds. Empty for a
+    // loaded row (except a failed-load placeholder).
+    QSet<int> pendingColumns;
 
     bool isLoaded() const { return session.has_value(); }
 };
@@ -68,11 +73,20 @@ struct MergeResult {
 /// looks for, and every maintenance site computes only missing columns
 /// (fillMissingColumns) - an edit of _DESCRIPTION does not re-run the time
 /// fit for the other columns.
-/// A column that depends on an explicitly requested calculation (sensor
-/// fusion) is cached as present and invalid, i.e. unavailable, whatever is
-/// published in memory: explicit results are never saved, so that is the
-/// column's value for the on-disk state. Loaded rows still display the live
-/// value, and publishing a result does not touch the cache.
+/// A column that depends on an explicitly requested calculation
+/// (logbookColumnExplicitCalculations() is not empty) is computed like any
+/// other for a LOADED row: from the engine, which holds the stored result
+/// restored at load or the one just published, and reads unavailable when
+/// the calculation is not requested. Its value is valid only with the
+/// session's record set. LogbookManager stamps it in index.json and drops
+/// it whenever a record of one of those calculations is written or deleted
+/// (calculationRecordsChanged). The row then loses it at once and gets it
+/// back on the next event-loop pass (refreshRecordColumns, which emits
+/// nothing: loaded cells are live). A row that is NOT loaded has no stored
+/// result in any engine, so its value is never computed from a temporary
+/// load. Without a record it is cached as unavailable. With one it stays
+/// PENDING (SessionRow::pendingColumns: not cached, shown empty) until the
+/// session is loaded. The column worker never reads a record.
 ///
 /// RULE for every code path that mutates a row's PERSISTENT state
 /// (SessionData::setAttribute / removeAttribute / mergeSourceData /
@@ -189,7 +203,7 @@ public:
     /// sessions (and engines) behind stub rows are gone by the time a test
     /// could inspect their run counters.
     struct ColumnWorkStats {
-        int valuesComputed = 0;     ///< column values computed by fillMissingColumns
+        int valuesComputed = 0;     ///< column values computed or settled (unavailable) by column maintenance; pending columns are not counted
         int sessionsLoaded = 0;     ///< stub rows loaded temporarily (column worker, bulk edit)
         int calculationRuns = 0;    ///< calculation runs those computations caused
     };
@@ -294,10 +308,12 @@ public:
     /// prepare() / publish() (the job queue). Emits one publishing dataChanged
     /// for the row, dependencyChanged per key, and modelChanged. Nothing is
     /// emitted for an empty set, an id without a row, or a row that is not
-    /// loaded. A published calculation result is not a persistent change: no
-    /// cached column is invalidated, nothing is marked dirty, nothing is saved
-    /// (the record of a stored result is written by the engine's listener at
-    /// the install itself, see STORED RESULTS).
+    /// loaded. A published calculation result is not a persistent change:
+    /// publishing invalidates no cached column by itself; the record written
+    /// at the install drops the explicit-backed values of the session through
+    /// LogbookManager::calculationRecordsChanged. Nothing is marked dirty,
+    /// nothing is saved (the record of a stored result is written by the
+    /// engine's listener at the install itself, see STORED RESULTS).
     /// Must not be called while a RowStabilityGuard is held (it emits).
     void publishCalculationInvalidation(const QString &sessionId, const QSet<DependencyKey> &keys);
 
@@ -364,12 +380,46 @@ private:
 
     // Cached column values: per-column refresh (see the class comment).
     QVector<StaticDependencies> m_columnDependencies;       // parallel to m_columns
-    void rebuildColumnDependencies();                       // union of staticDependencies() over columnNames(col)
-    static QList<DependencyKey> columnNames(const LogbookColumn &col);  // the names computeColumnValues reads
+    QVector<QStringList> m_columnExplicitCalculations;      // parallel to m_columns: E(c)
+    void rebuildColumnDependencies();                       // union of staticDependencies() over logbookColumnNames(col)
+    bool isExplicitBacked(int column) const;
+    /// True when some column of the row is neither cached nor pending: the one
+    /// "row needs column work" test (a pending column must not make the
+    /// column worker spin).
+    bool needsColumnWork(const SessionRow &row) const;
     void invalidateColumns(int row, const QSet<DependencyKey> &changedKeys);   // persistent change
     void invalidateAllColumns(int row);                                         // new / replaced session
-    void fillMissingColumns(int row, const SessionData &session);               // computes ONLY missing indices
+    enum class ColumnSource {
+        LoadedRow,      ///< the row's own session: its engine holds the restored / published results
+        TemporaryLoad   ///< a session loaded for this computation only: no stored result was restored
+    };
+    /// Computes ONLY the missing indices (neither cached nor pending). For a
+    /// TemporaryLoad, and for a failed-load placeholder, the explicit-backed
+    /// ones are settled first (settleExplicitColumns).
+    void fillMissingColumns(int row, const SessionData &session, ColumnSource source);
+    /// For each missing explicit-backed column of a row whose engine holds no
+    /// stored result (a stub, a temporary load, a failed-load placeholder):
+    /// PENDING when LogbookManager knows a record of the session for any
+    /// calculation the column depends on, else cached as unavailable (row and
+    /// LogbookManager::updateCachedValues). Loads nothing and reads no record:
+    /// the record set comes from knownCalculationRecords().
+    void settleExplicitColumns(int row);
     ColumnWorkStats m_columnWorkStats;
+
+    /// A record of (sessionId, calculationId) changed (LogbookManager has
+    /// dropped its copies). Removes the row's cached and pending values of every
+    /// column over that calculation; a loaded row is recomputed on the next
+    /// event-loop pass (queueRecordColumnRefresh), a stub is settled by the
+    /// column worker. Runs inside record methods, which the result store calls
+    /// from an engine listener and from a load: it only drops state and defers.
+    void onCalculationRecordsChanged(const QString &sessionId, const QString &calculationId);
+    QSet<QString> m_recordColumnRefresh;        // loaded rows whose explicit-backed values are to be recomputed
+    bool m_recordColumnRefreshQueued = false;
+    void queueRecordColumnRefresh(const QString &sessionId);   // coalesced, QueuedConnection
+    /// Recomputes the missing columns of the queued loaded rows from their
+    /// engines, emits nothing (loaded cells are live), and flushes the index
+    /// once when it computed something.
+    void refreshRecordColumns();
 
     // Calculation-environment changes: coalesced with the invalidation flush.
     void queueEnvironmentCheck();

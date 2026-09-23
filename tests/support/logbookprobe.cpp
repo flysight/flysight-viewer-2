@@ -57,6 +57,19 @@ QJsonValue indexValue(const QString &sessionId, const LogbookColumn &col)
     return indexValue(readIndex(), sessionId, col);
 }
 
+QJsonValue indexRecordStamp(const QJsonObject &root, const QString &sessionId)
+{
+    const QJsonObject sessions = root[QStringLiteral("sessions")].toObject();
+    if (!sessions.contains(sessionId))
+        return QJsonValue(QJsonValue::Undefined);
+    return sessions[sessionId].toObject().value(QStringLiteral("records"));
+}
+
+QJsonValue indexRecordStamp(const QString &sessionId)
+{
+    return indexRecordStamp(readIndex(), sessionId);
+}
+
 QString sessionFilePath(const QString &sessionId)
 {
     const QString uuid = readIndex()[QStringLiteral("sessions")].toObject()[sessionId].toObject()
