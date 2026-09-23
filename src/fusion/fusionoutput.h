@@ -20,10 +20,10 @@ namespace FlySight::Fusion::Detail {
 /// fit with the rule the GNSS course uses, quaternion xyzw.
 void fillOutputChannels(const DenseTrajectory &dense, double epoch, Result &result);
 
-/// The diagnostics of a converged fit: input audit, initializer, objective,
-/// biases, per-factor residuals, the model constants of `tuning`, and the
-/// statements of what the outputs mean.
-QJsonObject successDiagnostics(const PreparedInput &prepared, const InitialAttitude &attitude,
+/// The diagnostics of a converged fit: input audit, the initializer's
+/// account, objective, biases, per-factor residuals, the model constants of
+/// `tuning`, and the statements of what the outputs mean.
+QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerAccount &account,
                                const FitResult &fit, const Samples &window,
                                const DenseTrajectory &dense, const Tuning &tuning);
 

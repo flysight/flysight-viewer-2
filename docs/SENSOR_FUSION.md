@@ -92,8 +92,8 @@ one shared accelerometer bias, and one shared gyroscope bias. Every fix has
 position and velocity factors. Adjacent states are connected by standard
 `ImuFactor` preintegration. There are no attitude, stationary, zero-velocity or
 magnetic measurement factors. The zero-centered bias prior has sigmas
-0.3 m/s^2 and 0.03 rad/s; stationary averages only initialize the free
-variables.
+0.3 m/s^2 and 0.03 rad/s; the initializer only chooses where the solver
+starts.
 
 IMU integration splits at exact GNSS boundaries and original IMU timestamps,
 using linearly interpolated midpoint inputs. Batch Levenberg-Marquardt uses QR,
@@ -144,12 +144,17 @@ Two values are derived from the outputs on demand, and appear with them:
 
 The attribute `_FUSION_DIAGNOSTICS` is compact JSON. After a successful fit
 its top-level keys are `algorithm`, `input` (the input audit: counts, epoch,
-origin, height and time method), `initialization`, `stationary_interval_s`,
-`anchor_time_s`, `start_s`, `end_s`, `gnss_states`, `imu_outputs`,
-`objective`, `orientation` (the output convention, as text), `residuals`
-(one entry per position and velocity factor), `selected_heading_deg`, `seeds`
-(per starting heading: biases, convergence, iterations, objective, residual
-RMS), `stopping` (the rule that ended the fit: `settled`, `slow tail
+origin, height and time method), `initialization`, `stationary_interval_s`
+and `anchor_time_s` (both `null`; the keys remain for readers of older
+diagnostics), `initializer` (`segment_length_s`; `segments`, per segment
+`index`, `start_s`, `end_s`, `anchor_s`, `anchor_sacc_m_s`, `prefix_length_s`,
+`yaw_sigma_deg`, `prefix_fits`, `prefix_iterations`, `prefix_passes`,
+`prefix_on_limit`, `segment_on_limit`, `growth_stop`, `iterations`,
+`fallback`; `fallback_segments`), `start_s`, `end_s`, `gnss_states`,
+`imu_outputs`, `objective`, `orientation` (the output convention, as text),
+`residuals` (one entry per position and velocity factor),
+`selected_heading_deg` (`null`), `seeds` (the one fit: biases, convergence,
+iterations, objective, residual RMS; `heading_deg` is `null`), `stopping` (the rule that ended the fit: `settled`, `slow tail
 accepted`, `iteration limit`, `bias not settled` or `cost increased`; the
 number of passes; the last pass's mean relative cost decrease per iteration;
 the re-preintegration cost difference; the thresholds in force), `quality`
@@ -169,30 +174,23 @@ assessment.
 
 ## 5. Initialization and limitations
 
-The initializer scans 30-second windows every 5 seconds throughout the
-recording and ranks accepted windows by force variability, then time. A
-qualifying window can have a nonzero constant velocity vector. Relative to its
-per-axis 10% trimmed mean velocity, the 95th percentile vector deviation must
-be at most 0.3 m/s and the uncertainty-normalized deviation at most 3.5. The
-difference between the two half-window mean velocities must be at most
-0.3 m/s. Velocity uncertainty remains limited to 0.5 m/s (95th percentile).
-Coverage, gyro variability, force variability and drift, and gravity
-plausibility gates also apply. Constant speed through a turn is not constant
-velocity.
+The initializer cuts the fitted window into consecutive 600 s segments (a
+final piece shorter than 120 s joins the segment before it). In each segment
+the fix with the smallest speed accuracy is the anchor; the attitude there is
+the measured force aligned with GNSS acceleration minus gravity, with zero
+gyro bias; a window of 60 s centred on the anchor is fitted from four heading
+offsets (0, 90, 180, 270 degrees), the marginal yaw sigma of its first pose is
+computed from the best fit, and the window doubles until that sigma is below
+20 degrees, the window is the segment, or a doubling cut the sigma by less
+than 20 %; the whole segment is then fitted once from the best prefix fit. The
+full fit starts from every segment's fitted attitudes, the first segment's
+gyro bias and a zero accelerometer bias; a segment in which every prefix start
+fails starts from its coarse attitude propagated by the gyro, and the
+diagnostics say so. A segment without motion has an arbitrary yaw. Heading
+remains free during optimization; the fit does not assume a known mounting
+heading or equate GNSS course with sensor orientation.
 
-The gravity anchor propagates forward or backward to the start of the graph
-using the initial gyro bias. If no window passes, the coarse first-fix
-GNSS/force tilt initializer is used. The fit starts with one 0 degree
-world-vertical heading offset; heading remains free during optimization. It
-does not assume a known mounting heading or equate GNSS course with sensor
-orientation. No preliminary short-fit initializer or heading search is
-implemented.
-
-**Numerical convergence does not establish physical accuracy.** In the
-diagnostic recording `24-09-07/08-35-23` no stationary window passed and the
-coarse initializer produced a poor converged fit, with large residuals
-(position and velocity RMS of 25.9 m and 7.5 m/s) and an accelerometer bias
-near 19 m/s^2. The stopping test can treat a no-update step as settled, and a
+**Numerical convergence does not establish physical accuracy.** The stopping test can treat a no-update step as settled, and a
 slow tail is accepted on numerical grounds alone. Heading ambiguity, local
 minima, the shared constant-bias assumption and sampling limits remain material
 limitations. Inspect the diagnostics and the physical plausibility of a result
@@ -248,12 +246,12 @@ nobody can use). Such a job ends as superseded, nothing is published or
 cached, and the row shows the refresh control again at once; a refresh queues
 a new fit, which starts when the old one has stopped.
 
-**Cancellation** is observed at four kinds of boundary: during preparation,
-before each candidate window of the search for a stationary interval (the one
-part of preparation that grows with the recording beyond a few single passes;
-nothing is reported there, so the progress texts begin with the fit); before
-the fit starts; every 256 states of graph construction; and before each
-optimizer iteration. A linear solve in progress finishes first. A cancelled fit
+**Cancellation** is observed at three kinds of boundary: before the fit starts
+(preparation neither reports nor asks; the progress texts begin with
+`Starting fit`); every 256 states of graph construction, in the initializer's
+prefix and segment fits as in the full fit; and before each optimizer
+iteration of any of those fits (the segment fits' texts name the segment and,
+for a prefix, its length). A linear solve in progress finishes first. A cancelled fit
 publishes nothing and caches nothing.
 
 **Outcomes.** A rejection (section 6) and a solver failure are functions of the

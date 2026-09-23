@@ -100,8 +100,11 @@ QHash<QString, QVector<double>> loadChannels(const QString &fileName, int rows)
 }
 
 /// Numbers under these keys are counts or copies of an input (the tuning
-/// thresholds under `stopping` among them), never the result of solver
-/// arithmetic: they are exact in both modes.
+/// thresholds under `stopping` among them, and the initializer account's
+/// counts, flags, copied lengths and fix times: an epoch-relative fix time is
+/// one exact-rounded subtraction of two fixture doubles, the same bits on
+/// every IEEE platform), never the result of solver arithmetic: they are
+/// exact in both modes.
 bool isExactKey(const QString &key)
 {
     static const QSet<QString> keys{
@@ -110,7 +113,13 @@ bool isExactKey(const QString &key)
         QStringLiteral("origin"), QStringLiteral("epoch_utc_s"), QStringLiteral("node"),
         QStringLiteral("rows"), QStringLiteral("passes"), QStringLiteral("window"),
         QStringLiteral("bias_settled_tolerance"), QStringLiteral("max_mean_relative_decrease"),
-        QStringLiteral("max_nrms")};
+        QStringLiteral("max_nrms"),
+        QStringLiteral("index"), QStringLiteral("prefix_fits"), QStringLiteral("segment_length_s"),
+        QStringLiteral("prefix_length_s"), QStringLiteral("prefix_start_s"), QStringLiteral("prefix_end_s"),
+        QStringLiteral("start_s"), QStringLiteral("end_s"), QStringLiteral("anchor_s"),
+        QStringLiteral("anchor_sacc_m_s"), QStringLiteral("fallback_segments"),
+        QStringLiteral("prefix_iterations"), QStringLiteral("prefix_passes"),
+        QStringLiteral("prefix_on_limit"), QStringLiteral("segment_on_limit"), QStringLiteral("growth_stop")};
     return keys.contains(key);
 }
 

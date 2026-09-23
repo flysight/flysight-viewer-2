@@ -59,9 +59,9 @@ struct Result {
 
 /// Receives a short text describing the stage the fit has reached. Must not throw.
 using ProgressFn = std::function<void(const QString &text)>;
-/// Asked at each boundary whether to abandon the fit; true abandons it at that
-/// boundary. Asked more often than ProgressFn is called: preparation asks
-/// without reporting. Must not throw.
+/// Asked at each boundary whether to abandon the fit, immediately after
+/// ProgressFn has been called for that boundary; true abandons it there. Must
+/// not throw.
 using CancelFn = std::function<bool()>;
 
 /// The batch GNSS/IMU factor-graph fit.
@@ -70,11 +70,12 @@ using CancelFn = std::function<bool()>;
 /// or GUI object and keeps no state between calls, so it may run on any
 /// thread (give that thread a 64 MiB stack: large elimination trees recurse
 /// deeply). The callbacks cannot influence the result except by abandoning it.
-/// Cancellation is observed during preparation before each candidate window
-/// of the initializer's stationary-window scan (nothing is reported there),
-/// then before the fit starts, between graph-construction blocks and before
-/// each optimizer iteration; a linear solve in progress finishes first. The
-/// rest of preparation is a few single passes over the recording.
+/// Preparation is a few single passes over the recording and asks nothing.
+/// Cancellation is observed at every reported boundary: `Starting fit`;
+/// `Integrating IMU factors`, every 256 states of every graph build; and
+/// every iteration of every optimizer pass, in the initializer's prefix and
+/// segment fits (whose texts name the segment) as in the full fit. A linear
+/// solve in progress finishes first.
 ///
 /// Every std::exception raised inside (the checks, the solver) becomes a
 /// Rejected or SolverFailed result. Two things propagate: std::bad_alloc,

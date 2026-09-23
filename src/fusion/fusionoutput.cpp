@@ -16,6 +16,9 @@ namespace FlySight::Fusion::Detail {
 namespace {
 
 const char kAlgorithm[] = "batch-shared-bias-v2";
+// The legacy `initialization` key names the method; the keys that described
+// the stationary window and the selected heading are null and stay present.
+const char kInitializationMethod[] = "segmented initialization; heading from segment fits";
 
 QJsonArray toJsonArray(const gtsam::Vector3 &v)
 {
@@ -53,14 +56,45 @@ QJsonObject qualityObject(const Quality &q)
         {"objective_per_state", q.objectivePerState}};
 }
 
+/// The initializer's account (overview layout): one object per segment, the
+/// segment length and the indices of the segments that fell back.
+QJsonObject initializerObject(const InitializerAccount &a)
+{
+    QJsonArray segments, fallbacks;
+    for (const SegmentAccount &s : a.segments) {
+        segments.append(QJsonObject{
+            {"index", s.index},
+            {"start_s", s.start},
+            {"end_s", s.end},
+            {"anchor_s", s.anchorTime},
+            {"anchor_sacc_m_s", s.anchorSacc},
+            {"prefix_length_s", s.prefixLength},
+            {"yaw_sigma_deg", numberOrNull(s.yawSigmaDeg)},
+            {"prefix_fits", s.prefixFits},
+            {"prefix_iterations", s.prefixIterations},
+            {"prefix_passes", s.prefixPasses},
+            {"prefix_on_limit", s.prefixOnLimit},
+            {"segment_on_limit", s.segmentOnLimit},
+            {"growth_stop", QString::fromStdString(s.growthStop)},
+            {"iterations", s.iterations},
+            {"fallback", s.fallback}});
+        if (s.fallback)
+            fallbacks.append(s.index);
+    }
+    return QJsonObject{
+        {"segment_length_s", a.segmentLength},
+        {"segments", segments},
+        {"fallback_segments", fallbacks}};
+}
+
 /// The one fit that was run, in the shape of a list of candidate fits: the
-/// diagnostics format allows several starting headings although the model
-/// uses one.
+/// diagnostics format allows several starting headings although nothing
+/// selects one any more (`heading_deg` is null).
 QJsonArray seedSummary(const FitResult &fit)
 {
     const auto bias = fit.values.at<gtsam::imuBias::ConstantBias>(gtsam::symbol_shorthand::B(0));
     return QJsonArray{QJsonObject{
-        {"heading_deg", fit.heading},
+        {"heading_deg", QJsonValue::Null},
         {"converged", fit.converged},
         {"objective", fit.objective},
         {"iterations", int(fit.history.size())},
@@ -123,7 +157,7 @@ void fillOutputChannels(const DenseTrajectory &dense, double epoch, Result &resu
     result.yaw = Calculations::unwrapDegrees(result.yaw);
 }
 
-QJsonObject successDiagnostics(const PreparedInput &prepared, const InitialAttitude &attitude,
+QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerAccount &account,
                                const FitResult &fit, const Samples &window,
                                const DenseTrajectory &dense, const Tuning &tuning)
 {
@@ -132,10 +166,11 @@ QJsonObject successDiagnostics(const PreparedInput &prepared, const InitialAttit
         {"model", modelSummary(tuning)},
         {"input", prepared.audit},
         {"seeds", seedSummary(fit)},
-        {"initialization", QString::fromStdString(attitude.method)},
-        {"stationary_interval_s", QJsonArray{attitude.intervalStart, attitude.intervalEnd}},
-        {"anchor_time_s", attitude.anchorTime},
-        {"selected_heading_deg", fit.heading},
+        {"initialization", kInitializationMethod},
+        {"stationary_interval_s", QJsonValue::Null},
+        {"anchor_time_s", QJsonValue::Null},
+        {"selected_heading_deg", QJsonValue::Null},
+        {"initializer", initializerObject(account)},
         {"objective", fit.objective},
         {"start_s", window.gnssTime.front()},
         {"end_s", window.gnssTime.back()},

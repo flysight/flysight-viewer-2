@@ -33,7 +33,8 @@ struct Samples {
 /// anything else. The four stopping fields and relativeTolerance may be set
 /// to a negative value by a test, which makes the corresponding test
 /// impossible to satisfy ("never settles", "never accepted"); production
-/// never does.
+/// never does. The initializer's prefix fits run with maxIterations and
+/// maxPasses replaced by their own budget (initializer.cpp).
 struct Tuning {
     double accDensity = .015, gyroDensity = .001;   ///< IMU noise densities
     double accBiasSigma = .3, gyroBiasSigma = .03;  ///< prior on the shared biases
@@ -52,6 +53,13 @@ struct Tuning {
     int slowTailWindow = 20;                        ///< iterations at the end of a final pass at the limit over which the slow tail is judged
     double slowTailMaxMeanRelativeDecrease = 1e-4;  ///< slow tail: mean (before - after) / max(1, before) over the window must be below this
     double slowTailMaxNrms = 2;                     ///< slow tail: position and velocity normalized RMS must both be below this
+    // The segmented initializer (spec section 3.2, step 1): the fitted window
+    // is cut into segments of segmentLength, and a final piece shorter than
+    // minFinalSegment joins the segment before it. A test may shorten both to
+    // keep a multi-segment recording small.
+    double segmentLength = 600;                     ///< the initializer cuts the fitted window into segments this long, s
+    double minFinalSegment = 120;                   ///< a final piece shorter than this is merged into the segment before it, s
+    int maxPasses = 5;                              ///< re-preintegration passes of one fit: the full fit's and a segment fit's five; a prefix fit's one
 };
 
 constexpr double kPi = 3.14159265358979323846;

@@ -1,12 +1,15 @@
 // Fusion kernel internals.
 //
-// What the golden fixtures of tst_fusion_golden cannot reach (every
-// stationary gate, exact integration boundaries, heading freedom, the two
-// stopping rules forced through the tuning, the solver-failure path and its
+// What the golden fixtures of tst_fusion_golden cannot reach (the segmented
+// initializer: segment cutting on fixes, the smallest-sAcc anchor, prefix
+// growth on the marginal yaw sigma, the fallback when every start fails, its
+// progress texts and the synthetic recordings of the specification; exact
+// integration boundaries, heading freedom, the two stopping rules forced
+// through the tuning, the per-step covariance, the solver-failure path and its
 // diagnostics shapes), with the literal expectations of the reference's own
 // self-test (sensor-fusion-clean-port, tests/fusion_regression.cpp), and the
-// fit trace that localizes a golden failure to a stage: initializer first,
-// then each optimizer iteration.
+// fit trace that localizes a golden failure to a stage: the segment account
+// first, then each optimizer iteration.
 //
 // The only test source that includes internal src/fusion/ headers, and one of
 // the few targets that names gtsam itself.
@@ -14,10 +17,12 @@
 #include <cmath>
 #include <limits>
 #include <set>
+#include <string>
 
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QtTest>
 
 #include <gtsam/config.h>
@@ -32,12 +37,13 @@
 #include "fusion/fusionsamples.h"
 #include "fusion/imuintegration.h"
 #include "fusion/initializer.h"
-#include "fusion/stationarywindow.h"
+#include "fusion/inputadapter.h"
 #include "fusion/trajectoryreconstruction.h"
 #include "fusionfixtures.h"
 #include "fusiongolden.h"
 #include "fusiontrace.h"
 #include "testmain.h"
+#include "testutil.h"
 
 using namespace FlySight;
 using namespace FlySight::Fusion::Detail;
@@ -67,6 +73,33 @@ Samples boundarySamples(const Vector3 &acceleration)
     d.velocity = d.position;
     d.positionSigma = Vectors(2, Vector3::Ones());
     d.velocitySigma = d.positionSigma;
+    return d;
+}
+
+/// 2 s of 100 Hz IMU: the constant acceleration (1, -2, .5) for the first
+/// second, then none, not rotating, with three GNSS fixes between IMU samples
+/// (the last after the manoeuvre). A single interval of constant force leaves
+/// the rotation about that force axis unobservable, and the vertical has a
+/// component along it; the change of force direction between the two
+/// intervals is what makes every rotation, the yaw included, observable.
+Samples manoeuvreSamples()
+{
+    const Vector3 acceleration(1, -2, .5);
+    Samples d;
+    for (int i = 0; i <= 200; ++i) {
+        d.imuTime.push_back(i*.01);
+        d.force.push_back((i < 100 ? acceleration : Vector3(0, 0, 0))-kTestGravity);
+        d.gyro.push_back(Vector3::Zero());
+    }
+    d.gnssTime = {.037, .863, 1.663};
+    for (const double t : d.gnssTime) {
+        // The trajectory of the piecewise force, to within the one ramp step.
+        const double moving = std::min(t, 1.), coasting = std::max(t-1, 0.);
+        d.position.push_back(Vector3(acceleration*(.5*moving*moving+coasting)));
+        d.velocity.push_back(Vector3(acceleration*moving));
+    }
+    d.positionSigma = Vectors(3, Vector3::Ones());
+    d.velocitySigma = Vectors(3, Vector3::Constant(.1));
     return d;
 }
 
@@ -129,36 +162,6 @@ bool sameCovariance(const gtsam::Matrix &got, const gtsam::Matrix &expected)
     return (got-expected).cwiseAbs().maxCoeff() <= 1e-9*expected.cwiseAbs().maxCoeff();
 }
 
-/// 40 s at rest with a tilted sensor and a gyro bias; GNSS at 5 Hz.
-Samples quietSamples(const Vector3 &gyroBias)
-{
-    Samples quiet;
-    for (int i = 0; i <= 4000; ++i) {
-        quiet.imuTime.push_back(i*.01);
-        quiet.force.emplace_back(.1, -7., 6.85);
-        quiet.gyro.push_back(gyroBias);
-    }
-    for (int i = 0; i < 200; ++i) {
-        quiet.gnssTime.push_back(.037+i*.2);
-        quiet.position.push_back(Vector3::Zero());
-        quiet.velocity.push_back(Vector3::Zero());
-        quiet.positionSigma.push_back(Vector3::Ones());
-        quiet.velocitySigma.push_back(Vector3::Constant(.1));
-    }
-    return quiet;
-}
-
-/// `quiet` moving at a constant (40, -15, 8) m/s.
-Samples translatingSamples(const Samples &quiet)
-{
-    Samples translating = quiet;
-    for (size_t i = 0; i < translating.velocity.size(); ++i) {
-        translating.velocity[i] = Vector3(40, -15, 8);
-        translating.position[i] = translating.gnssTime[i]*translating.velocity[i];
-    }
-    return translating;
-}
-
 /// The reference self-test's exact constant-velocity recording, with
 /// epoch-relative (exactly representable) times.
 Samples linearSamples(const Vector3 &speed, const Vector3 &offset)
@@ -178,11 +181,6 @@ Samples linearSamples(const Vector3 &speed, const Vector3 &offset)
         linear.velocitySigma.push_back(Vector3::Constant(.1));
     }
     return linear;
-}
-
-bool hasGate(const StationaryWindow &window, const char *gate)
-{
-    return std::find(window.rejected.begin(), window.rejected.end(), gate) != window.rejected.end();
 }
 
 Fusion::Result rejectedBy(const Fusion::Channels &channels)
@@ -206,6 +204,77 @@ bool allChannelsEmpty(const Fusion::Result &result)
         && result.roll.isEmpty() && result.yaw.isEmpty() && result.qw.isEmpty();
 }
 
+/// A golden fixture or one of the initializer's recordings, by name.
+FusionFixture fixtureNamed(const QString &name)
+{
+    const FusionFixture golden = fusionFixture(name);
+    return golden.name.isEmpty() ? initializerFixture(name) : golden;
+}
+
+/// `tuning` with the IMU gap limit the pipeline derives for a fixture.
+Tuning pipelineTuning(const QString &name, Tuning tuning)
+{
+    tuning.maxGap = kImuGapMedians*medianInterval(prepareInput(toChannels(fixtureNamed(name))).recording.imuTime);
+    return tuning;
+}
+
+/// The fitted window of a fixture exactly as the pipeline cuts it: the
+/// prepared recording from its usable start to its last fix, validated with
+/// the IMU gap limit the pipeline derives.
+Samples windowOf(const QString &name, const Tuning &tuning)
+{
+    const PreparedInput prepared = prepareInput(toChannels(fixtureNamed(name)));
+    const Samples &full = prepared.recording;
+    const Samples window = fittedWindow(full, prepared.usableStart, full.gnssTime.back());
+    validateSamples(window, pipelineTuning(name, tuning));
+    return window;
+}
+
+/// One of the initializer's recordings through the whole pipeline, with the
+/// trace and the parsed diagnostics.
+struct InitializerRun {
+    Fusion::Result result;
+    PipelineTrace trace;
+    QJsonObject diagnostics;
+    QJsonArray segments;        ///< diagnostics["initializer"]["segments"]
+};
+
+InitializerRun runInitializerFixture(const QString &name, const Tuning &tuning,
+                                     const Checkpoint &checkpoint = Checkpoint())
+{
+    InitializerRun run;
+    run.result = runPipeline(toChannels(fixtureNamed(name)), tuning, checkpoint, &run.trace);
+    run.diagnostics = diagnosticsOf(run.result);
+    run.segments = run.diagnostics.value("initializer").toObject().value("segments").toArray();
+    return run;
+}
+
+/// The budget of every prefix fit (spec section 3.3): one pass of at most 50
+/// iterations, in the diagnostics and in the account.
+void verifyPrefixBudget(const QJsonObject &segment, const SegmentAccount &account)
+{
+    QCOMPARE(segment.value("prefix_passes").toInt(-1), 1);
+    QVERIFY(segment.value("prefix_iterations").toInt(999) <= 50);
+    QCOMPARE(account.prefixPasses, 1);
+    QVERIFY(account.prefixIterations <= 50);
+}
+
+/// The difference of two angles in degrees, on the circle.
+double angleDifference(double a, double b)
+{
+    return std::remainder(a-b, 360.);
+}
+
+/// The truth attitude of a fixture built from its exact rotation matrix.
+Rot3 rotationFromMatrix(double r00, double r01, double r02,
+                        double r10, double r11, double r12,
+                        double r20, double r21, double r22)
+{
+    gtsam::Matrix3 m;
+    m << r00, r01, r02, r10, r11, r12, r20, r21, r22;
+    return Rot3(m);
+}
+
 } // namespace
 
 class FusionKernelTest : public QObject {
@@ -223,10 +292,13 @@ private slots:
     void backwardPropagationUndoesForward();
     void headingIsUnconstrained();
     void reconstructionTimingAndEndpointCorrection();
-    void stationaryGates();
-    void stationaryScanPollsSilently();
-    void shortInputUsesCoarseInitializer();
+    void shortWindowIsOneSegment();
+    void segmentsAreCutOnFixes();
+    void yawSigmaIsMarginalAboutTheVertical();
+    void initializerProgressTexts();
+    void initializerDiagnosticsShape();
     void exactConstantVelocityFit();
+    void initializerFixturesAreDeterministic();
     void fitTraceMatchesGolden_data();
     void fitTraceMatchesGolden();
     void biasSettledByCostTest();
@@ -235,6 +307,13 @@ private slots:
     void nonConvergenceIsSolverFailure();
     void biasNeverSettlesIsSolverFailure();
     void failureDiagnosticsShape();
+    void startsInMotionGrowsToTheManoeuvre();
+    void atRestPrefixStopsGrowing();
+    void smallestSaccFixIsTheAnchor();
+    void driftingBiasSegmentsConverge();
+    void allPrefixFitsFailFallsBack_data();
+    void allPrefixFitsFailFallsBack();
+    void startsOnTheLimitAreStillUsed();
 };
 
 void FusionKernelTest::solverUsesTbb()
@@ -427,6 +506,24 @@ void FusionKernelTest::validationRejectsEachDefect()
     QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
     validateSamples(d, withSlopes(0, 0));
 
+    // The initializer's lengths must be positive.
+    t = Tuning{};
+    t.segmentLength = 0;
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+    t = Tuning{};
+    t.minFinalSegment = -1;
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+    t = Tuning{};
+    t.maxPasses = 0;
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+
+    // The initial state: one attitude per fix and a finite bias.
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, initialValues(d, InitialState{}));
+    InitialState nanBias{std::vector<Rot3>(2), Vector3(0, std::numeric_limits<double>::quiet_NaN(), 0)};
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, initialValues(d, nanBias));
+    const gtsam::Values values = initialValues(d, InitialState{std::vector<Rot3>(2), Vector3::Zero()});
+    QCOMPARE(values.size(), size_t(5));
+
     // The whole pipeline: a malformed recording is a Rejected result, never
     // an exception and never a crash.
     const Fusion::Channels good = toChannels(fusionFixture(QStringLiteral("coarse_linear")));
@@ -515,143 +612,268 @@ void FusionKernelTest::reconstructionTimingAndEndpointCorrection()
     }
 }
 
-void FusionKernelTest::stationaryGates()
+void FusionKernelTest::shortWindowIsOneSegment()
 {
-    const Vector3 bg(.004, -.003, .006);
-    const Samples quiet = quietSamples(bg);
-    QVERIFY(assessStationaryWindow(quiet, 5, 35).accepted);
-
-    // Constant translation is as good as rest, and initializes identically
-    const Samples translating = translatingSamples(quiet);
-    QVERIFY(assessStationaryWindow(translating, 5, 35).accepted);
-    const InitialAttitude quietInit = initialAttitude(quiet, quiet.gnssTime.front());
-    const InitialAttitude movingInit = initialAttitude(translating, translating.gnssTime.front());
-    QVERIFY(quietInit.method.find("stationary") != std::string::npos);
-    QVERIFY(Rot3::Logmap(quietInit.rotation.between(movingInit.rotation)).norm() < 1e-12);
-    QVERIFY((quietInit.gyroBias-movingInit.gyroBias).norm() < 1e-12);
-
-    // Sustained drift: caught by the drift gate, not by variability
-    Samples changing = translating;
-    changing.velocitySigma = Vectors(changing.gnssTime.size(), Vector3::Constant(.2));
-    for (size_t i = 0; i < changing.velocity.size(); ++i)
-        changing.velocity[i].x() += .021*changing.gnssTime[i];
-    const StationaryWindow drift = assessStationaryWindow(changing, 5, 35);
-    QVERIFY(!drift.accepted);
-    QVERIFY(hasGate(drift, "velocity_drift"));
-    QVERIFY(!hasGate(drift, "velocity_variability"));
-
-    // Constant-speed turn
-    changing = translating;
-    for (size_t i = 0; i < changing.velocity.size(); ++i) {
-        const double angle = .005*changing.gnssTime[i];
-        changing.velocity[i] = Vector3(40*std::cos(angle), 40*std::sin(angle), 0);
-    }
-    QVERIFY(!assessStationaryWindow(changing, 5, 35).accepted);
-
-    // Uncertain constant velocity
-    changing = translating;
-    changing.velocitySigma = Vectors(changing.gnssTime.size(), Vector3::Constant(2));
-    QVERIFY(!assessStationaryWindow(changing, 5, 35).accepted);
-
-    // Variation that is small in m/s but large in units of its sigma
-    changing = translating;
-    changing.velocitySigma = Vectors(changing.gnssTime.size(), Vector3::Constant(.01));
-    for (size_t i = 0; i < changing.velocity.size(); ++i)
-        changing.velocity[i].x() += .1*std::sin(changing.gnssTime[i]);
-    QVERIFY(!assessStationaryWindow(changing, 5, 35).accepted);
-
-    // Constant rotation
-    Samples moving = quiet;
-    moving.gyro = Vectors(moving.gyro.size(), Vector3(0, 0, .1));
-    QVERIFY(!assessStationaryWindow(moving, 5, 35).accepted);
-
-    // Low-speed handling
-    moving = quiet;
-    for (size_t i = 0; i < moving.gyro.size(); ++i)
-        moving.gyro[i].x() += .04*std::sin(moving.imuTime[i]);
-    QVERIFY(!assessStationaryWindow(moving, 5, 35).accepted);
-
-    // Uncertain GNSS at rest
-    moving = quiet;
-    moving.velocitySigma = Vectors(moving.gnssTime.size(), Vector3::Constant(2));
-    QVERIFY(!assessStationaryWindow(moving, 5, 35).accepted);
-
-    // Too little data ends the assessment early
-    const StationaryWindow outside = assessStationaryWindow(quiet, 100, 130);
-    QVERIFY(!outside.accepted);
-    QCOMPARE(outside.rejected, std::vector<std::string>{"coverage"});
+    // 2 s of exact constant velocity: one segment, whose first prefix window
+    // (60 s centred on the first fix, every sAcc being .1 so the earliest
+    // wins) covers it, so one length is tried with four starts and the
+    // segment fit runs. Exact constant velocity has no yaw information: the
+    // marginal yaw sigma is the cap.
+    const Samples linear = linearSamples(Vector3(12, -4, 2), Vector3(7, 8, 9));
+    const Initialization init = initialize(linear, Tuning{});
+    QCOMPARE(init.account.segmentLength, 600.);
+    QCOMPARE(init.account.segments.size(), size_t(1));
+    const SegmentAccount &s = init.account.segments[0];
+    QCOMPARE(s.index, 0);
+    QCOMPARE(s.firstFix, size_t(0));
+    QCOMPARE(s.lastFix, size_t(8));
+    QCOMPARE(s.start, linear.gnssTime.front());
+    QCOMPARE(s.end, linear.gnssTime.back());
+    QCOMPARE(s.anchorTime, s.start);
+    QCOMPARE(s.anchorSacc, .1);
+    QCOMPARE(s.prefixLength, 60.);
+    QCOMPARE(s.prefixStart, s.start);
+    QCOMPARE(s.prefixEnd, s.end);
+    QCOMPARE(s.prefixFits, 4);
+    QCOMPARE(s.prefixYawSigmaDeg.size(), size_t(1));
+    qInfo() << "linear: yaw sigma" << s.yawSigmaDeg << "deg, growth stop" << s.growthStop.c_str();
+    QCOMPARE(s.yawSigmaDeg, 180.);
+    QCOMPARE(s.prefixYawSigmaDeg[0], s.yawSigmaDeg);
+    QCOMPARE(s.growthStop, std::string("covers"));
+    QCOMPARE(s.prefixPasses, 1);
+    QVERIFY(s.prefixIterations >= 1 && s.prefixIterations <= 50);
+    QVERIFY(!s.fallback);
+    QVERIFY(s.iterations > 0);
+    QVERIFY(s.converged);
+    QCOMPARE(init.state.rotations.size(), size_t(9));
+    QVERIFY(init.state.gyroBias == s.gyroBias);
+    QVERIFY(init.state.gyroBias.allFinite());
 }
 
-void FusionKernelTest::stationaryScanPollsSilently()
+void FusionKernelTest::segmentsAreCutOnFixes()
 {
-    const Samples quiet = quietSamples(Vector3(.004, -.003, .006));
+    using Bounds = std::vector<std::pair<size_t, size_t>>;
+    const auto times = [](double step, int count) {
+        std::vector<double> t;
+        for (int i = 0; i < count; ++i)
+            t.push_back(i*step);
+        return t;
+    };
+    // 1 Hz, 0..200 s, 60 s segments with a 12 s minimum final piece: the
+    // final piece 180..200 is 21 s and stays.
+    QCOMPARE(segmentBounds(times(1, 201), 60, 12), Bounds({{0, 59}, {60, 119}, {120, 179}, {180, 200}}));
+    // 0..190 s: the final piece 180..190 is 10 s, merged into the one before.
+    QCOMPARE(segmentBounds(times(1, 191), 60, 12), Bounds({{0, 59}, {60, 119}, {120, 190}}));
+    // Shorter than one segment: one piece.
+    QCOMPARE(segmentBounds(times(1, 31), 60, 12), Bounds({{0, 30}}));
+    // 0..60 s: the final piece holds one fix (t = 60), merged.
+    QCOMPARE(segmentBounds(times(1, 61), 60, 12), Bounds({{0, 60}}));
+    // The production lengths on 200 s: one piece.
+    QCOMPARE(segmentBounds(times(1, 201), 600, 120), Bounds({{0, 200}}));
+    // 0.2 Hz, 0, 5, ..., 200: the final piece 180..200 is 20 s, five fixes:
+    // kept with a 12 s minimum, merged with a 30 s one.
+    QCOMPARE(segmentBounds(times(5, 41), 60, 12), Bounds({{0, 11}, {12, 23}, {24, 35}, {36, 40}}));
+    QCOMPARE(segmentBounds(times(5, 41), 60, 30), Bounds({{0, 11}, {12, 23}, {24, 40}}));
+    // Every fix is in exactly one piece and the pieces are consecutive.
+    const Bounds pieces = segmentBounds(times(.2, 1234), 60, 12);
+    QCOMPARE(pieces.front().first, size_t(0));
+    QCOMPARE(pieces.back().second, size_t(1233));
+    for (size_t i = 1; i < pieces.size(); ++i)
+        QCOMPARE(pieces[i].first, pieces[i-1].second+1);
+
+    // The coarse attitude at the last fix uses the backward difference and
+    // does not throw; at the first fix it is the forward one.
+    const Samples window = windowOf(QStringLiteral("coarse_maneuver"), Tuning{});
+    const Rot3 atLast = coarseAttitude(window, window.gnssTime.size()-1);
+    QVERIFY(atLast.matrix().allFinite());
+    const size_t n = window.gnssTime.size();
+    const Vector3 backward = (window.velocity[n-1]-window.velocity[n-2])/(window.gnssTime[n-1]-window.gnssTime[n-2]);
+    const Rot3 expectedLast = rotationAligning(interpolateAt(window.imuTime, window.force, window.gnssTime[n-1]),
+                                               backward-kTestGravity);
+    QVERIFY(atLast.matrix() == expectedLast.matrix());
+    const Vector3 forward = (window.velocity[1]-window.velocity[0])/(window.gnssTime[1]-window.gnssTime[0]);
+    const Rot3 expectedFirst = rotationAligning(interpolateAt(window.imuTime, window.force, window.gnssTime[0]),
+                                                forward-kTestGravity);
+    QVERIFY(coarseAttitude(window, 0).matrix() == expectedFirst.matrix());
+}
+
+void FusionKernelTest::yawSigmaIsMarginalAboutTheVertical()
+{
+    const gtsam::imuBias::ConstantBias bias;
+
+    // No horizontal acceleration: the yaw column of the system is zero, so
+    // the system is indeterminate or its covariance is not finite; either
+    // way the cap.
+    Samples still = boundarySamples(Vector3::Zero());
+    still.velocitySigma = Vectors(2, Vector3::Constant(.1));
+    const auto stillGraph = buildFactorGraph(still, bias, Tuning{});
+    gtsam::Values stillValues;
+    stillValues.insert(B(0), bias);
+    for (size_t k = 0; k < 2; ++k) {
+        stillValues.insert(X(k), gtsam::Pose3());
+        stillValues.insert(V(k), Vector3(0, 0, 0));
+    }
+    QCOMPARE(yawSigmaDeg(stillGraph, stillValues, X(0)), 180.);
+
+    // 2.2 m/s^2 of horizontal acceleration over .83 s, then none, against a
+    // velocity sigma of .1 m/s determines the yaw to a few degrees (and the
+    // bias, common to both intervals, cancels out of the difference).
+    const Samples moving = manoeuvreSamples();
+    const auto movingGraph = buildFactorGraph(moving, bias, Tuning{});
+    // The linearization point yawed as a whole (attitudes, positions and
+    // velocities): gravity is invariant under a yaw and the GNSS sigmas are
+    // isotropic, so the graph sees the same body-frame quantities.
+    const auto valuesWithYaw = [&](const Rot3 &yaw) {
+        gtsam::Values values;
+        values.insert(B(0), bias);
+        for (size_t k = 0; k < moving.gnssTime.size(); ++k) {
+            values.insert(X(k), gtsam::Pose3(yaw, Vector3(yaw.rotate(moving.position[k]))));
+            values.insert(V(k), Vector3(yaw.rotate(moving.velocity[k])));
+        }
+        return values;
+    };
+    const double level = yawSigmaDeg(movingGraph, valuesWithYaw(Rot3()), X(0));
+    qInfo() << "moving: yaw sigma" << level << "deg";
+    QVERIFY(std::isfinite(level));
+    QVERIFY(level > 0);
+    QVERIFY(level < 20);
+
+    // A yaw rotation of the linearization point rotates the body-frame block
+    // and the rotation into the navigation frame undoes it.
+    const double yawed = yawSigmaDeg(movingGraph, valuesWithYaw(Rot3::Rz(.8)), X(0));
+    qInfo() << "moving, yawed by .8 rad: yaw sigma" << yawed << "deg";
+    QVERIFY(std::abs(yawed-level) <= 1e-6*level);
+
+    // The single-interval graph of boundarySamples(): the rotation about its
+    // constant force axis is unobservable, so the yaw about the vertical is
+    // undetermined there too, and the cap says so.
+    Samples oneInterval = boundarySamples(Vector3(1, -2, .5));
+    oneInterval.velocitySigma = Vectors(2, Vector3::Constant(.1));
+    gtsam::Values oneValues;
+    oneValues.insert(B(0), bias);
+    for (size_t k = 0; k < 2; ++k) {
+        oneValues.insert(X(k), gtsam::Pose3());
+        oneValues.insert(V(k), Vector3(0, 0, 0));
+    }
+    QCOMPARE(yawSigmaDeg(buildFactorGraph(oneInterval, bias, Tuning{}), oneValues, X(0)), 180.);
+}
+
+void FusionKernelTest::initializerProgressTexts()
+{
+    // coarse_maneuver is 6 s: one segment whose 60 s prefix covers it, so
+    // the four prefix fits at 60 s come first, then the segment fit, each
+    // graph build reporting "Integrating IMU factors".
     QStringList texts;
-    int asked = 0;
-    const auto report = [&texts](const QString &text) { texts.append(text); };
+    const Checkpoint collecting([&texts](const QString &text) { texts.append(text); }, {});
+    initialize(windowOf(QStringLiteral("coarse_maneuver"), Tuning{}),
+               pipelineTuning(QStringLiteral("coarse_maneuver"), Tuning{}), collecting);
+    QVERIFY(!texts.isEmpty());
 
-    // 40 s: two candidate windows, [0, 30) and [5, 35); one question before
-    // each, and nothing reported.
-    const InitialAttitude polled = initialAttitude(quiet, quiet.gnssTime.front(),
-        Checkpoint(report, [&asked] { ++asked; return false; }));
-    QCOMPARE(asked, 2);
-    QVERIFY(texts.isEmpty());
-
-    // Asking changes nothing
-    const InitialAttitude plain = initialAttitude(quiet, quiet.gnssTime.front());
-    QCOMPARE(polled.method, plain.method);
-    QCOMPARE(polled.intervalStart, plain.intervalStart);
-    QCOMPARE(polled.anchorTime, plain.anchorTime);
-    QVERIFY(polled.gyroBias == plain.gyroBias);
-    QVERIFY(polled.rotation.matrix() == plain.rotation.matrix());
-
-    // "Yes" at the second window abandons the scan there
-    asked = 0;
-    bool cancelled = false;
-    try {
-        initialAttitude(quiet, quiet.gnssTime.front(),
-                        Checkpoint(report, [&asked] { return ++asked >= 2; }));
-    } catch (const FusionCancelled &) {
-        cancelled = true;
+    const QRegularExpression pattern(QStringLiteral("^Segment 1 of 1: (prefix 60 s, )?pass [0-9]+, iteration [0-9]+$"));
+    const QString build = QStringLiteral("Integrating IMU factors");
+    const QString firstPrefix = QStringLiteral("Segment 1 of 1: prefix 60 s, pass 1, iteration 1");
+    const QString firstSegment = QStringLiteral("Segment 1 of 1: pass 1, iteration 1");
+    QString firstNonBuild;
+    bool segmentSeen = false;
+    for (const QString &text : texts) {
+        QVERIFY2(text == build || pattern.match(text).hasMatch(), qPrintable(text));
+        QVERIFY(!text.startsWith(QStringLiteral("Pass ")));
+        if (firstNonBuild.isEmpty() && text != build)
+            firstNonBuild = text;
+        if (text == firstSegment)
+            segmentSeen = true;
+        if (segmentSeen)
+            QVERIFY2(!text.contains(QStringLiteral("prefix")), qPrintable(text));
     }
-    QVERIFY(cancelled);
-    QCOMPARE(asked, 2);
-    QVERIFY(texts.isEmpty());
+    QCOMPARE(firstNonBuild, firstPrefix);
+    QVERIFY(segmentSeen);
+    QCOMPARE(texts.count(firstPrefix), 4);
+    QCOMPARE(texts.count(firstSegment), 1);
+    QVERIFY(texts.count(build) >= 5);
 
-    // A recording shorter than a window has no candidate: nobody is asked
-    asked = 0;
-    const Samples linear = linearSamples(Vector3(12, -4, 2), Vector3(7, 8, 9));
-    initialAttitude(linear, linear.gnssTime.front(),
-                    Checkpoint(report, [&asked] { ++asked; return false; }));
-    QCOMPARE(asked, 0);
-
-    // The gap limit belongs to the recording: handing it in is the same
-    // assessment as deriving it per window.
-    const StationaryWindow derived = assessStationaryWindow(quiet, 5, 35);
-    const StationaryWindow given = assessStationaryWindow(quiet, 5, 35, imuGapLimit(quiet));
-    QCOMPARE(given.accepted, derived.accepted);
-    QCOMPARE(given.rejected, derived.rejected);
-    QCOMPARE(given.imuCount, derived.imuCount);
-    QCOMPARE(given.gnssCount, derived.gnssCount);
-    QCOMPARE(given.score, derived.score);
-    QVERIFY(given.forceMean == derived.forceMean);
-    QVERIFY(given.gyroMean == derived.gyroMean);
-
-    // The three-argument form derives the limit from the IMU time axis, so too
-    // few or invalid IMU timestamps are the validation error, not a verdict
-    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, assessStationaryWindow(Samples{}, 5, 35));
-    Samples unordered = quiet;
-    unordered.imuTime[1] = unordered.imuTime[0];
-    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, assessStationaryWindow(unordered, 5, 35));
+    // motion_start grows from 60 s to 120 s and no further.
+    texts.clear();
+    initialize(windowOf(QStringLiteral("motion_start"), Tuning{}),
+               pipelineTuning(QStringLiteral("motion_start"), Tuning{}), collecting);
+    bool sixty = false, hundredTwenty = false;
+    for (const QString &text : texts) {
+        if (!text.contains(QStringLiteral("prefix")))
+            continue;
+        if (text.contains(QStringLiteral("prefix 60 s")))
+            sixty = true;
+        else if (text.contains(QStringLiteral("prefix 120 s")))
+            hundredTwenty = true;
+        else
+            QFAIL(qPrintable(text));
+    }
+    QVERIFY(sixty);
+    QVERIFY(hundredTwenty);
 }
 
-void FusionKernelTest::shortInputUsesCoarseInitializer()
+void FusionKernelTest::initializerDiagnosticsShape()
 {
-    const Samples linear = linearSamples(Vector3(12, -4, 2), Vector3(7, 8, 9));
-    const InitialAttitude init = initialAttitude(linear, linear.gnssTime.front());
-    QVERIFY(init.method.find("coarse") != std::string::npos);
-    QCOMPARE(init.startTime, linear.gnssTime.front());
-    QCOMPARE(init.anchorTime, 0.);
-    QVERIFY(init.gyroBias.isZero(0));
+    PipelineTrace trace;
+    const Fusion::Result result = runPipeline(
+        toChannels(fusionFixture(QStringLiteral("coarse_maneuver"))), Tuning{}, Checkpoint(), &trace);
+    QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
+    const QJsonObject diagnostics = diagnosticsOf(result);
+
+    // The keys of a successful fit after Phase 4, plus `initializer`
+    // (QJsonObject sorts its keys).
+    QCOMPARE(diagnostics.keys(), QStringList({
+        "algorithm", "anchor_time_s", "display_position_velocity", "end_s", "gnss_states", "imu_outputs",
+        "initialization", "initializer", "input", "limitations", "max_endpoint_correction_deg",
+        "max_seed_vs_selected_acceleration_m_s2", "max_seed_vs_selected_angle_deg", "model", "objective",
+        "orientation", "quality", "residuals", "seed_comparison_performed", "seeds", "selected_heading_deg",
+        "start_s", "stationary_interval_s", "stopping"}));
+    QCOMPARE(diagnostics.value("initialization").toString(),
+             QStringLiteral("segmented initialization; heading from segment fits"));
+    QVERIFY(diagnostics.value("stationary_interval_s").isNull());
+    QVERIFY(diagnostics.value("anchor_time_s").isNull());
+    QVERIFY(diagnostics.value("selected_heading_deg").isNull());
+    const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
+    QVERIFY(seed.contains("heading_deg"));
+    QVERIFY(seed.value("heading_deg").isNull());
+
+    const QJsonObject initializer = diagnostics.value("initializer").toObject();
+    QCOMPARE(initializer.keys(), QStringList({"fallback_segments", "segment_length_s", "segments"}));
+    QCOMPARE(initializer.value("segment_length_s").toDouble(), 600.);
+    QVERIFY(initializer.value("fallback_segments").toArray().isEmpty());
+    const QJsonArray segments = initializer.value("segments").toArray();
+    QCOMPARE(segments.size(), 1);
+    const QJsonObject segment = segments.first().toObject();
+    QCOMPARE(segment.keys(), QStringList({
+        "anchor_s", "anchor_sacc_m_s", "end_s", "fallback", "growth_stop", "index", "iterations",
+        "prefix_fits", "prefix_iterations", "prefix_length_s", "prefix_on_limit", "prefix_passes",
+        "segment_on_limit", "start_s", "yaw_sigma_deg"}));
+    QCOMPARE(segment.value("index").toInt(-1), 0);
+    QCOMPARE(segment.value("start_s").toDouble(), diagnostics.value("start_s").toDouble());
+    QCOMPARE(segment.value("end_s").toDouble(), diagnostics.value("end_s").toDouble());
+    QCOMPARE(segment.value("anchor_s").toDouble(), segment.value("start_s").toDouble());
+    QCOMPARE(segment.value("anchor_sacc_m_s").toDouble(), .3);
+    QCOMPARE(segment.value("prefix_length_s").toDouble(), 60.);
+    QCOMPARE(segment.value("prefix_fits").toInt(-1), 4);
+    QCOMPARE(segment.value("fallback").toBool(true), false);
+    // 6 s of changing acceleration: the yaw is observable at the first length.
+    QCOMPARE(segment.value("growth_stop").toString(), QStringLiteral("observable"));
+    QVERIFY(segment.value("yaw_sigma_deg").toDouble(999) <= 20);
+    QCOMPARE(segment.value("iterations").toInt(-1), trace.initializer.segments[0].iterations);
+    QVERIFY(segment.value("iterations").toInt(-1) > 0);
+    QVERIFY(segment.value("yaw_sigma_deg").isDouble());
+    verifyPrefixBudget(segment, trace.initializer.segments[0]);
+
+    // The trace object: the diagnostics' segment object plus the prefix
+    // window, `converged`, the start quaternion and the two biases.
+    const QJsonObject traced = traceJson(trace);
+    QCOMPARE(traced.keys(), QStringList({"converged", "history", "initializer"}));
+    const QJsonObject tracedSegment =
+        traced.value("initializer").toObject().value("segments").toArray().first().toObject();
+    QCOMPARE(tracedSegment.keys(), QStringList({
+        "anchor_s", "anchor_sacc_m_s", "converged", "end_s", "fallback", "growth_stop", "gyro_bias_rad_s",
+        "index", "iterations", "prefix_end_s", "prefix_fits", "prefix_iterations", "prefix_length_s",
+        "prefix_on_limit", "prefix_passes", "prefix_start_s", "segment_on_limit", "start_gyro_bias_rad_s",
+        "start_quaternion_xyzw", "start_s", "yaw_sigma_deg"}));
+    QCOMPARE(tracedSegment.value("converged").toBool(false), true);
 }
 
 void FusionKernelTest::exactConstantVelocityFit()
@@ -660,9 +882,11 @@ void FusionKernelTest::exactConstantVelocityFit()
     // dense outputs against a physical trajectory with nonzero velocity.
     const Vector3 speed(12, -4, 2), offset(7, 8, 9);
     const Samples linear = linearSamples(speed, offset);
-    const InitialAttitude init = initialAttitude(linear, linear.gnssTime.front());
+    const Initialization init = initialize(linear, Tuning{});
 
-    const FitResult fitted = fitFactorGraph(linear, 0, Tuning{}, init);
+    // The yaw is arbitrary and unasserted; the position, velocity and
+    // acceleration checks hold for any yaw.
+    const FitResult fitted = fitFactorGraph(linear, init.state, Tuning{});
     QVERIFY(fitted.converged);
     QVERIFY(fitted.objective < 1e-12);
 
@@ -688,6 +912,29 @@ void FusionKernelTest::exactConstantVelocityFit()
     QVERIFY_THROWS_EXCEPTION(std::invalid_argument, fittedWindow(linear, 0, .3));
 }
 
+void FusionKernelTest::initializerFixturesAreDeterministic()
+{
+    for (const char *name : {"motion_start", "rest_throughout", "sacc_anchor", "drifting_bias"}) {
+        const FusionFixture a = initializerFixture(QLatin1String(name));
+        const FusionFixture b = initializerFixture(QLatin1String(name));
+        QCOMPARE(a.name, QLatin1String(name));
+        QCOMPARE(b.name, a.name);
+        QCOMPARE(a.originIndex, b.originIndex);
+        QVERIFY(a.expectSuccess);
+        const QVector<double> *as[] = {&a.gnssTime, &a.north, &a.east, &a.down, &a.velN, &a.velE, &a.velD,
+                                       &a.hAcc, &a.vAcc, &a.sAcc, &a.imuTime, &a.ax, &a.ay, &a.az,
+                                       &a.wx, &a.wy, &a.wz};
+        const QVector<double> *bs[] = {&b.gnssTime, &b.north, &b.east, &b.down, &b.velN, &b.velE, &b.velD,
+                                       &b.hAcc, &b.vAcc, &b.sAcc, &b.imuTime, &b.ax, &b.ay, &b.az,
+                                       &b.wx, &b.wy, &b.wz};
+        for (int c = 0; c < 17; ++c)
+            QVERIFY2(sameBitsEverywhere(*as[c], *bs[c]), name);
+    }
+    // Any other name is nothing, and the golden fixtures are untouched.
+    QVERIFY(initializerFixture(QStringLiteral("coarse_linear")).name.isEmpty());
+    QCOMPARE(fusionFixtures().size(), 12);
+}
+
 void FusionKernelTest::fitTraceMatchesGolden_data()
 {
     QTest::addColumn<QString>("name");
@@ -707,9 +954,9 @@ void FusionKernelTest::fitTraceMatchesGolden()
         runPipeline(toChannels(fusionFixture(name)), Tuning{}, Checkpoint(), &trace);
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
 
-    // Initializer first, then every optimizer iteration in order: the first
-    // difference reported is the first stage that diverged. traceJson() is
-    // the function the capture tool wrote the golden with (fusiontrace.h).
+    // The segment account first, then every optimizer iteration in order: the
+    // first difference reported is the first stage that diverged. traceJson()
+    // is the function the capture tool wrote the golden with (fusiontrace.h).
     const QJsonObject got = traceJson(trace);
     QCOMPARE(got.value("history").toArray().size(), golden.trace.value("history").toArray().size());
     const QString difference = compareJson(QStringLiteral("trace"), got, golden.trace);
@@ -959,6 +1206,328 @@ void FusionKernelTest::failureDiagnosticsShape()
         QCOMPARE(QString::fromUtf8(e.what()), QStringLiteral("Nonfinite or increasing optimizer cost"));
     }
     QVERIFY(caught);
+}
+
+void FusionKernelTest::startsInMotionGrowsToTheManoeuvre()
+{
+    // Spec section 10, "starts in motion". From the fixture: every sAcc is
+    // .3, so the anchor is the first fix and the 60 s window is [0, 30],
+    // which holds no horizontal acceleration (yaw unobservable: sigma above
+    // 20 or the cap); the 120 s window [0, 60] holds the manoeuvre at
+    // 40-50 s and determines the yaw to a few degrees.
+    const InitializerRun run = runInitializerFixture(QStringLiteral("motion_start"), Tuning{});
+    QVERIFY2(run.result.outcome == Fusion::Outcome::Succeeded, qPrintable(run.result.reason));
+    QVERIFY(run.trace.converged);
+    QCOMPARE(run.segments.size(), 1);
+    const QJsonObject segment = run.segments.first().toObject();
+    const SegmentAccount &s = run.trace.initializer.segments.at(0);
+    QCOMPARE(segment.value("prefix_length_s").toDouble(), 120.);
+    QCOMPARE(segment.value("prefix_fits").toInt(-1), 8);
+    QCOMPARE(s.prefixYawSigmaDeg.size(), size_t(2));
+    qInfo() << "motion_start: yaw sigmas" << s.prefixYawSigmaDeg[0] << s.prefixYawSigmaDeg[1]
+            << "deg, growth stop" << s.growthStop.c_str();
+    QVERIFY(s.prefixYawSigmaDeg[0] > 20);
+    QVERIFY(s.prefixYawSigmaDeg[1] < 20);
+    QVERIFY(segment.value("yaw_sigma_deg").toDouble(999) < 20);
+    QCOMPARE(segment.value("growth_stop").toString(), QStringLiteral("observable"));
+    QCOMPARE(segment.value("fallback").toBool(true), false);
+    QCOMPARE(s.prefixStart, 0.);
+    QCOMPARE(s.prefixEnd, 60.);
+    verifyPrefixBudget(segment, s);
+
+    // The full fit against the truth Rz(psi), cos psi = .6, sin psi = .8:
+    // every output sample within 2 degrees (the unwrapped channels; the
+    // fixture never turns).
+    const Rot3 truth = rotationFromMatrix(.6, -.8, 0, .8, .6, 0, 0, 0, 1);
+    const Vector3 truthRpy = truth.rpy()*180/kPi;
+    QVERIFY(std::abs(truthRpy.z()-53.13) < .01);
+    QVERIFY(!run.result.yaw.isEmpty());
+    for (qsizetype i = 0; i < run.result.yaw.size(); ++i) {
+        QVERIFY2(std::abs(angleDifference(run.result.yaw[i], truthRpy.z())) < 2, qPrintable(QString::number(i)));
+        QVERIFY2(std::abs(angleDifference(run.result.roll[i], 0)) < 2, qPrintable(QString::number(i)));
+        QVERIFY2(std::abs(angleDifference(run.result.pitch[i], 0)) < 2, qPrintable(QString::number(i)));
+    }
+}
+
+void FusionKernelTest::atRestPrefixStopsGrowing()
+{
+    // Spec section 10, "at rest throughout". From the fixture: every sAcc is
+    // .1, so the anchor is the first fix (the fixture's t = .1, which is 0
+    // in the kernel's time, relative to the first fix); the 60 s window is
+    // [0, 30] (clipped at the segment start) and has no yaw information, and
+    // neither has the 120 s window [0, 60]: its sigma is not 20 % below the
+    // first, so growth stops there (no_gain) although the 300 s segment is
+    // far from covered.
+    const InitializerRun run = runInitializerFixture(QStringLiteral("rest_throughout"), Tuning{});
+    QVERIFY2(run.result.outcome == Fusion::Outcome::Succeeded, qPrintable(run.result.reason));
+    QVERIFY(run.trace.converged);
+    QCOMPARE(run.segments.size(), 1);
+    const QJsonObject segment = run.segments.first().toObject();
+    const SegmentAccount &s = run.trace.initializer.segments.at(0);
+    QCOMPARE(segment.value("prefix_length_s").toDouble(), 120.);
+    QCOMPARE(segment.value("prefix_fits").toInt(-1), 8);
+    QCOMPARE(segment.value("growth_stop").toString(), QStringLiteral("no_gain"));
+    QCOMPARE(s.prefixYawSigmaDeg.size(), size_t(2));
+    qInfo() << "rest_throughout: yaw sigmas" << s.prefixYawSigmaDeg[0] << s.prefixYawSigmaDeg[1]
+            << "deg; prefix on limit" << segment.value("prefix_on_limit").toBool()
+            << "after" << segment.value("prefix_iterations").toInt() << "iterations";
+    QVERIFY(s.prefixYawSigmaDeg[0] > 20);
+    QVERIFY(s.prefixYawSigmaDeg[1] > 20);
+    QVERIFY(s.prefixYawSigmaDeg[1] > .8*s.prefixYawSigmaDeg[0]);
+    // The window's fixes: from the segment's first fix to the last fix at
+    // most 60 s after the anchor (the fixes are .2 s apart).
+    QCOMPARE(s.prefixStart, s.start);
+    QCOMPARE(s.anchorTime, 0.);
+    QVERIFY(s.prefixEnd <= 60);
+    QVERIFY(s.prefixEnd > 60-.2-1e-6);
+    QVERIFY(s.end > 299);
+    QCOMPARE(segment.value("fallback").toBool(true), false);
+    verifyPrefixBudget(segment, s);
+
+    // Roll and pitch of every output sample within .5 degrees of the truth
+    // Ry(theta), sin theta = .28 (pitch about 16.26 degrees, roll 0); the yaw
+    // is arbitrary and unasserted.
+    const Rot3 truth = rotationFromMatrix(.96, 0, .28, 0, 1, 0, -.28, 0, .96);
+    const Vector3 truthRpy = truth.rpy()*180/kPi;
+    QVERIFY(std::abs(truthRpy.y()-16.26) < .01);
+    QVERIFY(!run.result.roll.isEmpty());
+    for (qsizetype i = 0; i < run.result.roll.size(); ++i) {
+        QVERIFY2(std::abs(angleDifference(run.result.roll[i], truthRpy.x())) < .5, qPrintable(QString::number(i)));
+        QVERIFY2(std::abs(angleDifference(run.result.pitch[i], truthRpy.y())) < .5, qPrintable(QString::number(i)));
+    }
+}
+
+void FusionKernelTest::smallestSaccFixIsTheAnchor()
+{
+    // Spec section 10, the sAcc anchor. From the fixture: every fix carries
+    // sAcc 2 except the one at 200 s with .3, so that fix is the anchor, the
+    // 60 s window centred on it is 170..230 (unclipped) and contains the
+    // manoeuvre at 190-200 s.
+    const InitializerRun run = runInitializerFixture(QStringLiteral("sacc_anchor"), Tuning{});
+    QVERIFY2(run.result.outcome == Fusion::Outcome::Succeeded, qPrintable(run.result.reason));
+    QCOMPARE(run.segments.size(), 1);
+    const QJsonObject segment = run.segments.first().toObject();
+    const SegmentAccount &s = run.trace.initializer.segments.at(0);
+    QCOMPARE(segment.value("anchor_s").toDouble(), 200.);
+    QCOMPARE(segment.value("anchor_sacc_m_s").toDouble(), .3);
+    QCOMPARE(s.prefixStart, 170.);
+    QCOMPARE(s.prefixEnd, 230.);
+    QCOMPARE(segment.value("prefix_length_s").toDouble(), 60.);
+    QCOMPARE(segment.value("prefix_fits").toInt(-1), 4);
+    qInfo() << "sacc_anchor: yaw sigma" << segment.value("yaw_sigma_deg").toDouble() << "deg";
+    QVERIFY(segment.value("yaw_sigma_deg").toDouble(999) < 20);
+    QCOMPARE(segment.value("fallback").toBool(true), false);
+    verifyPrefixBudget(segment, s);
+
+    // The start attitude at the segment's first fix is the prefix fit's
+    // carried back by the gyro with the prefix fit's bias: the initializer
+    // performs this very call.
+    const Samples window = windowOf(QStringLiteral("sacc_anchor"), Tuning{});
+    const Rot3 expected = propagateAttitude(window, s.prefixRotation, s.prefixStart, s.start, s.prefixGyroBias);
+    QVERIFY(Rot3::Logmap(s.startRotation.between(expected)).norm() < 1e-9);
+    QVERIFY(s.startGyroBias == s.prefixGyroBias);
+}
+
+void FusionKernelTest::driftingBiasSegmentsConverge()
+{
+    // Spec section 10, the drifting bias, under 60 s segments (the spec's
+    // 600:120 ratio). From the fixture: 201 fixes at 1 Hz cut into (0, 59),
+    // (60, 119), (120, 179) and (180, 200) (the last piece is 20 s, above the
+    // 12 s minimum); each anchor is its segment's first fix and the manoeuvre
+    // lies in the first 20 s of every 30 s block, inside the 30 s
+    // half-window, so every prefix is observable at 60 s.
+    Tuning tuning;
+    tuning.segmentLength = 60;
+    tuning.minFinalSegment = 12;
+    const InitializerRun run = runInitializerFixture(QStringLiteral("drifting_bias"), tuning);
+    const QJsonObject initializer = run.diagnostics.value("initializer").toObject();
+    QCOMPARE(run.trace.initializer.segments.size(), size_t(4));
+    QCOMPARE(run.trace.initializer.segmentLength, 60.);
+    const double starts[] = {0, 60, 120, 180}, ends[] = {59, 119, 179, 200};
+    for (size_t i = 0; i < 4; ++i) {
+        const SegmentAccount &s = run.trace.initializer.segments[i];
+        QCOMPARE(s.index, int(i));
+        QCOMPARE(s.start, starts[i]);
+        QCOMPARE(s.end, ends[i]);
+        QCOMPARE(s.anchorTime, starts[i]);
+        qInfo() << "drifting_bias: segment" << i << "yaw sigma" << s.yawSigmaDeg << "deg, segment fit"
+                << s.iterations << "iterations, converged" << s.converged
+                << ", gyro bias z" << s.gyroBias.z()*180/kPi << "deg/s";
+        QVERIFY(s.converged);
+        QVERIFY(!s.fallback);
+        QVERIFY(s.iterations > 0);
+        QCOMPARE(s.prefixLength, 60.);
+        QCOMPARE(s.prefixFits, 4);
+        QVERIFY(s.yawSigmaDeg < 20);
+        QCOMPARE(s.prefixPasses, 1);
+        QVERIFY(s.prefixIterations <= 50);
+    }
+
+    // The full fit started from the stitched state and ran; the spec's
+    // section 6 evidence says a constant-bias fit against this drift converges.
+    QVERIFY(!run.trace.history.empty());
+    QVERIFY(std::isfinite(run.trace.history.front().before));
+    qInfo() << "drifting_bias: full fit" << run.trace.history.size() << "iterations, rule"
+            << run.trace.stopping.rule.c_str() << ", outcome" << int(run.result.outcome)
+            << qPrintable(run.result.reason);
+    QVERIFY2(run.result.outcome == Fusion::Outcome::Succeeded, qPrintable(run.result.reason));
+    QCOMPARE(initializer.value("segment_length_s").toDouble(), 60.);
+    QCOMPARE(run.segments.size(), 4);
+    for (qsizetype i = 0; i < 4; ++i) {
+        const QJsonObject segment = run.segments.at(i).toObject();
+        QCOMPARE(segment.value("index").toInt(-1), int(i));
+        QCOMPARE(segment.value("start_s").toDouble(), starts[i]);
+        QCOMPARE(segment.value("end_s").toDouble(), ends[i]);
+        QCOMPARE(segment.value("fallback").toBool(true), false);
+        QVERIFY(segment.value("iterations").toInt(-1) > 0);
+        QCOMPARE(segment.value("prefix_length_s").toDouble(), 60.);
+        QCOMPARE(segment.value("prefix_fits").toInt(-1), 4);
+        QVERIFY(segment.value("yaw_sigma_deg").toDouble(999) < 20);
+        verifyPrefixBudget(segment, run.trace.initializer.segments[size_t(i)]);
+    }
+    QVERIFY(initializer.value("fallback_segments").toArray().isEmpty());
+    const QJsonArray bias = run.diagnostics.value("seeds").toArray().first().toObject()
+                                .value("gyro_bias_rad_s").toArray();
+    QCOMPARE(bias.size(), 3);
+    for (const QJsonValue &component : bias)
+        QVERIFY(std::isfinite(component.toDouble(std::numeric_limits<double>::quiet_NaN())));
+}
+
+void FusionKernelTest::allPrefixFitsFailFallsBack_data()
+{
+    QTest::addColumn<QString>("name");
+    QTest::newRow("coarse_maneuver") << QStringLiteral("coarse_maneuver");
+    QTest::newRow("motion_start") << QStringLiteral("motion_start");
+}
+
+void FusionKernelTest::allPrefixFitsFailFallsBack()
+{
+    // Spec section 10, "a segment whose prefix fits all fail". The forcing: a
+    // progress function that throws FitFailure at the first iteration
+    // boundary of every prefix fit (the texts containing ": prefix "), so
+    // every start fails at every length; the window grows to the segment,
+    // the segment falls back to the coarse attitude carried with zero bias,
+    // no segment fit runs, and the full fit (whose texts are "Pass ...") is
+    // not affected. The kernel promises nothing about a throwing progress
+    // function, which is why this forcing lives only here.
+    QFETCH(QString, name);
+    const Checkpoint failingPrefixes(
+        [](const QString &text) {
+            if (text.contains(QStringLiteral(": prefix ")))
+                throw FitFailure(std::string("Nonfinite or increasing optimizer cost"), Stopping{});
+        },
+        [] { return false; });
+    const InitializerRun run = runInitializerFixture(name, Tuning{}, failingPrefixes);
+    QCOMPARE(run.trace.initializer.segments.size(), size_t(1));
+    const SegmentAccount &s = run.trace.initializer.segments.at(0);
+    QVERIFY(s.fallback);
+    QCOMPARE(s.iterations, 0);
+    QVERIFY(!s.converged);
+    QCOMPARE(s.growthStop, std::string("all_failed"));
+    QVERIFY(std::isnan(s.yawSigmaDeg));
+    QCOMPARE(s.prefixIterations, 0);
+    QCOMPARE(s.prefixPasses, 0);
+    QVERIFY(s.startGyroBias.isZero(0));
+    QVERIFY(s.gyroBias.isZero(0));
+    QVERIFY(!run.trace.history.empty());
+    QVERIFY(run.trace.stopping.passes >= 1);
+
+    if (name == QStringLiteral("coarse_maneuver")) {
+        // 6 s: the first window covers, so four fits fail and the fallback
+        // start is the coarse attitude at the first fix carried with zero
+        // bias: exactly the start the kernel used before the segmented
+        // initializer, which this fixture's history proves converges.
+        QVERIFY2(run.result.outcome == Fusion::Outcome::Succeeded, qPrintable(run.result.reason));
+        QCOMPARE(run.segments.size(), 1);
+        const QJsonObject segment = run.segments.first().toObject();
+        QCOMPARE(segment.value("fallback").toBool(false), true);
+        QCOMPARE(run.diagnostics.value("initializer").toObject().value("fallback_segments").toArray(),
+                 QJsonArray{0});
+        QCOMPARE(segment.value("prefix_fits").toInt(-1), 4);
+        QCOMPARE(segment.value("prefix_length_s").toDouble(), 60.);
+        QVERIFY(segment.value("yaw_sigma_deg").isNull());
+        QCOMPARE(segment.value("iterations").toInt(-1), 0);
+        QCOMPARE(segment.value("growth_stop").toString(), QStringLiteral("all_failed"));
+        QCOMPARE(s.prefixYawSigmaDeg.size(), size_t(1));
+        // Bitwise: propagateAttitude() with equal times returns its input.
+        const Samples window = windowOf(name, Tuning{});
+        QVERIFY(s.startRotation.matrix() == coarseAttitude(window, 0).matrix());
+        QCOMPARE(run.trace.stopping.rule, std::string(StopRule::kSettled));
+    } else {
+        // 90 s, anchored at the first fix: a window centred there reaches
+        // half its nominal length forward, so [0, 30] and [0, 60] do not
+        // cover and the all-fail rule grows twice; the 240 s window is the
+        // segment, and twelve fits fail. The full fit ran from a zero-yaw
+        // coarse start; its outcome is logged, not asserted.
+        QCOMPARE(s.prefixFits, 12);
+        QCOMPARE(s.prefixLength, 240.);
+        QCOMPARE(s.prefixYawSigmaDeg.size(), size_t(3));
+        for (const double sigma : s.prefixYawSigmaDeg)
+            QVERIFY(std::isnan(sigma));
+        QCOMPARE(s.prefixStart, s.start);
+        QCOMPARE(s.prefixEnd, s.end);
+        qInfo() << "motion_start fallback: full fit outcome" << int(run.result.outcome)
+                << qPrintable(run.result.reason) << ", rule" << run.trace.stopping.rule.c_str()
+                << "after" << run.trace.history.size() << "iterations";
+    }
+}
+
+void FusionKernelTest::startsOnTheLimitAreStillUsed()
+{
+    // Spec section 3.3, Budgets: one iteration per pass and a negative
+    // tolerance (the forcing nonConvergenceIsSolverFailure uses), so every
+    // prefix fit ends after its one iteration on the limit and the segment
+    // fit after its one iteration per pass; nothing throws, and both starts
+    // are used: the account says on-limit, not fallback. The full fit ran
+    // from it and ends SolverFailed on the iteration limit as before.
+    Tuning forced;
+    forced.maxIterations = 1;
+    forced.relativeTolerance = -1;
+    const QString name = QStringLiteral("coarse_maneuver");
+    const InitializerRun limited = runInitializerFixture(name, forced);
+    QVERIFY(limited.result.outcome == Fusion::Outcome::SolverFailed);
+    QCOMPARE(limited.trace.stopping.rule, std::string(StopRule::kIterationLimit));
+    QCOMPARE(limited.trace.initializer.segments.size(), size_t(1));
+    const SegmentAccount &s = limited.trace.initializer.segments.at(0);
+    QVERIFY(s.prefixOnLimit);
+    QCOMPARE(s.prefixIterations, 1);
+    QCOMPARE(s.prefixPasses, 1);
+    QVERIFY(s.segmentOnLimit);
+    QVERIFY(!s.converged);
+    QVERIFY(!s.fallback);
+    QVERIFY(s.iterations >= 1);
+    // 6 s: the first window covers the segment, so one length is tried
+    // (whether its one-iteration linearization already counts as observable
+    // is not the fixture's to say).
+    QVERIFY2(s.growthStop == "observable" || s.growthStop == "covers", s.growthStop.c_str());
+    QCOMPARE(s.prefixLength, 60.);
+    QCOMPARE(s.prefixYawSigmaDeg.size(), size_t(1));
+    QCOMPARE(s.prefixFits, 4);
+    // The start was used, not the fallback: the prefix fit's attitude
+    // carried back to the segment's first fix with the prefix fit's bias.
+    const Samples window = windowOf(name, forced);
+    const Rot3 expected = propagateAttitude(window, s.prefixRotation, s.prefixStart, s.start, s.prefixGyroBias);
+    QVERIFY(Rot3::Logmap(s.startRotation.between(expected)).norm() < 1e-9);
+    QVERIFY(s.startGyroBias == s.prefixGyroBias);
+    // The failure diagnostics keep Phase 3's shape: no initializer object.
+    QCOMPARE(limited.diagnostics.keys(), kCompletedPassFailureKeys);
+    QCOMPARE(limited.diagnostics.value("stopping").toObject().value("rule").toString(),
+             QStringLiteral("iteration limit"));
+
+    // The production tuning on the same fixture: nothing is on the limit,
+    // and the chosen prefix fit's iteration count is the golden's (an exact
+    // key of the re-captured golden).
+    const InitializerRun plain = runInitializerFixture(name, Tuning{});
+    QVERIFY2(plain.result.outcome == Fusion::Outcome::Succeeded, qPrintable(plain.result.reason));
+    QCOMPARE(plain.segments.size(), 1);
+    const QJsonObject segment = plain.segments.first().toObject();
+    QCOMPARE(segment.value("prefix_on_limit").toBool(true), false);
+    QCOMPARE(segment.value("segment_on_limit").toBool(true), false);
+    verifyPrefixBudget(segment, plain.trace.initializer.segments.at(0));
+    const QJsonObject golden = loadFusionGolden(name).diagnostics.value("initializer").toObject()
+                                   .value("segments").toArray().first().toObject();
+    QCOMPARE(segment.value("prefix_iterations").toInt(-1), golden.value("prefix_iterations").toInt(-2));
+    QCOMPARE(segment.value("prefix_on_limit").toBool(true), golden.value("prefix_on_limit").toBool(true));
 }
 
 FLYSIGHT_TEST_MAIN(FusionKernelTest)

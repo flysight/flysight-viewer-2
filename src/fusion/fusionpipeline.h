@@ -16,9 +16,12 @@
 namespace FlySight::Fusion::Detail {
 
 /// What a run went through, beyond what the diagnostics carry. Filled as far
-/// as the run got.
+/// as the run got: `initializer` once the initializer returned, before the
+/// full fit (so a full fit that is cancelled or fails keeps the account);
+/// `history`, `converged` and `stopping` are the full fit's (the segment fits'
+/// histories are not traced; their iteration counts are in the account).
 struct PipelineTrace {
-    InitialAttitude attitude;
+    InitializerAccount initializer;
     std::vector<FitIteration> history;
     bool converged = false;
     Stopping stopping;              ///< filled whenever a pass ran, including for a FitFailure
@@ -27,7 +30,8 @@ struct PipelineTrace {
 /// The whole fit: adapter, checks, window, initializer, fit, reconstruction,
 /// channels and diagnostics, and the only place that catches. Anything thrown
 /// before the fit starts is Outcome::Rejected; anything from the fit onward is
-/// Outcome::SolverFailed; std::bad_alloc propagates.
+/// Outcome::SolverFailed; std::bad_alloc propagates. The initializer's prefix
+/// and segment fits are part of the fit stage: they run after "Starting fit".
 ///
 /// `baseTuning` is Tuning{} in production (maxGap is always replaced by the
 /// value derived from the recording). It is a parameter only so that a test

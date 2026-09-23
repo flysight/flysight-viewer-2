@@ -17,9 +17,6 @@ namespace Detail {
 
 namespace {
 
-// One initial heading offset; heading remains free during optimization.
-constexpr double kInitialHeadingDeg = 0.;
-
 // A GNSS interval above max(this many seconds, this many median intervals) is
 // an outage.
 constexpr double kGnssOutageSeconds = 2.;
@@ -30,15 +27,13 @@ struct FitPlan {
     PreparedInput prepared;
     Tuning tuning;
     Samples window;             ///< what the graph covers
-    InitialAttitude attitude;
 };
 
-/// Stage 1: is this a recording the model can use, and where does the fit
-/// start? Throws the rejection reason. Everything here is a single pass over
-/// the recording except the initializer's scan for a stationary window, which
-/// polls `checkpoint` for cancellation (silently: no stage is reported before
-/// "Starting fit") and throws FusionCancelled.
-FitPlan planFit(const Channels &channels, const Tuning &baseTuning, const Checkpoint &checkpoint)
+/// Stage 1: is this a recording the model can use, and what does the fit
+/// cover? Throws the rejection reason. A few single passes over the
+/// recording; nothing is reported and nothing is asked: the first boundary
+/// of a run is "Starting fit".
+FitPlan planFit(const Channels &channels, const Tuning &baseTuning)
 {
     FitPlan plan;
     plan.prepared = prepareInput(channels);
@@ -50,9 +45,6 @@ FitPlan planFit(const Channels &channels, const Tuning &baseTuning, const Checkp
     plan.window = fittedWindow(full, plan.prepared.usableStart, full.gnssTime.back());
     validateSamples(plan.window, plan.tuning);
     requireNoGnssOutage(plan.window, std::max(kGnssOutageSeconds, kGnssOutageMedians*medianInterval(full.gnssTime)));
-
-    // The initializer looks at the full recording, not only at the window.
-    plan.attitude = initialAttitude(full, plan.window.gnssTime.front(), checkpoint);
     return plan;
 }
 
@@ -69,15 +61,20 @@ Result withoutChannels(Outcome outcome, const QString &reason, const Stopping *s
     return result;
 }
 
-/// Stage 2: the fit and everything after it. A fit that completed its passes
-/// without converging is a SolverFailed result naming the rule that ended it;
-/// anything else that fails throws the failure reason.
+/// Stage 2: the initializer's fits, the full fit and everything after it. A
+/// full fit that completed its passes without converging is a SolverFailed
+/// result naming the rule that ended it; anything else that fails throws the
+/// failure reason.
 Result fitAndAssemble(const FitPlan &plan, const Checkpoint &checkpoint, PipelineTrace *trace)
 {
     checkpoint(QStringLiteral("Starting fit"));
+    const Initialization init = initialize(plan.window, plan.tuning, checkpoint);
+    // Before the full fit: a cancelled or failed full fit keeps the account.
+    if (trace)
+        trace->initializer = init.account;
     // The fit still refreshes preintegration as the fitted biases change.
-    const FitResult fit = fitFactorGraph(plan.window, kInitialHeadingDeg, plan.tuning,
-                                         plan.attitude, checkpoint);
+    const FitResult fit = fitFactorGraph(plan.window, init.state, plan.tuning,
+                                         QString::fromLatin1(kFullFitPassFormat), checkpoint);
     if (trace) {
         trace->history = fit.history;
         trace->converged = fit.converged;
@@ -95,7 +92,7 @@ Result fitAndAssemble(const FitPlan &plan, const Checkpoint &checkpoint, Pipelin
     result.outcome = Outcome::Succeeded;
     fillOutputChannels(dense, plan.prepared.epoch, result);
     result.diagnosticsJson = toCompactJson(
-        successDiagnostics(plan.prepared, plan.attitude, fit, plan.window, dense, plan.tuning));
+        successDiagnostics(plan.prepared, init.account, fit, plan.window, dense, plan.tuning));
     return result;
 }
 
@@ -113,7 +110,7 @@ Result runPipeline(const Channels &channels, const Tuning &baseTuning,
     // recording.
     FitPlan plan;
     try {
-        plan = planFit(channels, baseTuning, checkpoint);
+        plan = planFit(channels, baseTuning);
     } catch (const FusionCancelled &) {
         return Result();
     } catch (const std::bad_alloc &) {
@@ -121,8 +118,6 @@ Result runPipeline(const Channels &channels, const Tuning &baseTuning,
     } catch (const std::exception &e) {
         return withoutChannels(Outcome::Rejected, QString::fromUtf8(e.what()));
     }
-    if (trace)
-        trace->attitude = plan.attitude;
 
     try {
         return fitAndAssemble(plan, checkpoint, trace);

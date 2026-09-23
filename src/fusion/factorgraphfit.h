@@ -7,6 +7,9 @@
 #include <utility>
 #include <vector>
 
+#include <QString>
+
+#include <gtsam/inference/Key.h>
 #include <gtsam/navigation/ImuBias.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
@@ -46,7 +49,7 @@ constexpr char kCostIncreased[] = "cost increased";
 /// diagnostics write it as null.
 struct Stopping {
     std::string rule;                            ///< one of StopRule; empty until a pass has run
-    int passes = 0;                              ///< bias passes run, 1..5; the pass a failure happened in counts
+    int passes = 0;                              ///< bias passes run, 1..maxPasses; the pass a failure happened in counts
     /// Mean of (before - after) / max(1, before) over the last
     /// min(slowTailWindow, n) iterations of the last pass, n its iteration count.
     double lastPassMeanRelativeDecrease = std::numeric_limits<double>::quiet_NaN();
@@ -70,13 +73,17 @@ struct FitResult {
     gtsam::Values values;
     bool converged = false;                      ///< true for `settled` and `slow tail accepted`
     double objective = 0;                        ///< graph error at `values`, preintegrated at the fitted bias
-    double heading = 0;                          ///< the initial heading offset, deg
     double positionRms = 0, velocityRms = 0;     ///< fitted state vs GNSS measurement, vector RMS
     std::vector<FitIteration> history;
     std::vector<FactorResidual> residuals;       ///< in factor order; the bias prior last
     Stopping stopping;
     Quality quality;
+    gtsam::NonlinearFactorGraph graph;           ///< the graph the objective, residuals and quality were evaluated on:
+                                                 ///< rebuilt at the fitted bias; the initializer takes the marginal yaw sigma from it
 };
+
+/// The full fit's iteration text; the initializer's fits pass the segment texts.
+inline constexpr char kFullFitPassFormat[] = "Pass %1, iteration %2";
 
 /// Thrown by fitFactorGraph() when a pass makes the cost non-finite or raises
 /// it, the one failure the fit cannot continue from. A std::runtime_error so
@@ -101,21 +108,34 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples,
                                              const Tuning &tuning,
                                              const Checkpoint &checkpoint = Checkpoint());
 
-/// Fits `samples`. Preintegration is linearized at a fixed bias, so the fit
-/// alternates: optimize, re-preintegrate at the new bias, optimize again, for
-/// at most five passes. A settled pass has converged when the graph rebuilt at
-/// its bias changes the cost by at most `biasSettledTolerance` (relative to
-/// max(1, cost)); a fifth pass that reaches its iteration limit is accepted as
-/// a slow tail when its last `slowTailWindow` iterations lowered the cost by
-/// less than `slowTailMaxMeanRelativeDecrease` per iteration on average and
-/// the position and velocity normalized RMS are both below `slowTailMaxNrms`.
-/// Otherwise the result says which rule ended the fit and `converged` is
-/// false. A non-finite or increasing cost throws FitFailure. The reported
-/// objective, residuals and quality are those of the graph rebuilt at the
-/// fitted bias.
-FitResult fitFactorGraph(const Samples &samples, double headingDeg, const Tuning &tuning,
-                         const InitialAttitude &attitude,
+/// Fits `samples` from `initial`. Preintegration is linearized at a fixed
+/// bias, so the fit alternates: optimize, re-preintegrate at the new bias,
+/// optimize again, for at most `maxPasses` passes. A settled pass has
+/// converged when the graph rebuilt at its bias changes the cost by at most
+/// `biasSettledTolerance` (relative to max(1, cost)); a last pass that reaches
+/// its iteration limit is accepted as a slow tail when its last
+/// `slowTailWindow` iterations lowered the cost by less than
+/// `slowTailMaxMeanRelativeDecrease` per iteration on average and the position
+/// and velocity normalized RMS are both below `slowTailMaxNrms`. Otherwise the
+/// result says which rule ended the fit and `converged` is false. A non-finite
+/// or increasing cost throws FitFailure. The reported objective, residuals,
+/// quality and `graph` are those of the graph rebuilt at the fitted bias.
+///
+/// Every iteration is reported through `checkpoint` as `passFormat` with its
+/// two remaining QString::arg placeholders filled: the lower-numbered one with
+/// the one-based pass, the other with the one-based iteration (QString::arg
+/// fills the lowest-numbered placeholder left, so a caller formats the fixed
+/// parts of its text first). The default reproduces the full fit's texts.
+FitResult fitFactorGraph(const Samples &samples, const InitialState &initial, const Tuning &tuning,
+                         const QString &passFormat = QString::fromLatin1(kFullFitPassFormat),
                          const Checkpoint &checkpoint = Checkpoint());
+
+/// The marginal standard deviation, in degrees, of the rotation of pose `key`
+/// about the navigation vertical, from `graph` linearized at `values`
+/// (QR factorization). Capped at 180 degrees: a rotation about the vertical is
+/// an angle on a circle, and an indeterminate system or a non-finite
+/// covariance means the yaw is simply undetermined, which is what 180 says.
+double yawSigmaDeg(const gtsam::NonlinearFactorGraph &graph, const gtsam::Values &values, gtsam::Key key);
 
 } // namespace FlySight::Fusion::Detail
 

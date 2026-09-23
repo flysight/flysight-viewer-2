@@ -2,14 +2,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
+
+#include <QString>
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/navigation/ImuBias.h>
 
+#include "fusion/factorgraphfit.h"
 #include "fusion/imuintegration.h"
-#include "fusion/stationarywindow.h"
 
 namespace FlySight::Fusion::Detail {
 
@@ -19,84 +22,227 @@ using gtsam::symbol_shorthand::X;
 
 namespace {
 
-// Candidate stationary windows: this long, starting on this grid (seconds
-// since the epoch of the recording).
-constexpr double kWindowLength = 30;
-constexpr double kWindowGrid = 5;
-// A window may end this far (s) past the last sample, so that a recording
-// that stops a hair short of a grid point keeps its last window.
-constexpr double kWindowEndSlack = 1e-6;
-
 // A direction needs a vector at least this long (m/s^2: both are accelerations).
 constexpr double kMinDirectionNorm = .1;
 // cos(angle) within this of -1: the two directions are opposite.
 constexpr double kAntiparallelMargin = 1e-10;
-// The initial attitude must be given at the first fix of the graph, to this many seconds.
-constexpr double kStartTimeTolerance = 1e-9;
 
-/// The quietest accepted window of the recording; `accepted` is false when
-/// there is none. Among equally quiet windows the earliest wins. The scan is
-/// the slow part of preparation on a long recording: every candidate is a
-/// silent cancellation boundary.
-StationaryWindow bestStationaryWindow(const Samples &d, const Checkpoint &checkpoint)
+// The prefix of a segment (spec section 3.2, steps b-d): the first window is
+// this long (s), centred on the anchor, and doubles until the marginal yaw
+// sigma of its first pose is at most this many degrees, the window covers the
+// segment, or a doubling cut the sigma by less than this fraction.
+constexpr double kPrefixLength = 60;
+constexpr double kYawSigmaLimitDeg = 20;
+constexpr double kGrowthMinGain = .2;
+// The heading offsets each prefix window is fitted from, degrees about the vertical.
+constexpr double kHeadingOffsetsDeg[] = {0, 90, 180, 270};
+// Two objectives within this (relative to max(1, the better one)) are equal,
+// and the earlier start wins: an exactly unobservable yaw is then chosen the
+// same way on every compiler instead of by rounding noise.
+constexpr double kSameObjectiveRelative = 1e-9;
+// A prefix fit is a start, not an answer (spec section 3.3, Budgets): one
+// pass of at most this many iterations, no re-preintegration.
+constexpr int kPrefixIterations = 50;
+constexpr int kPrefixPasses = 1;
+
+constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+
+/// A fit whose failure (FitFailure: non-finite or increasing cost) is a start
+/// with infinite objective, reported as "no result". Nothing else is caught:
+/// FusionCancelled is not a std::exception and must reach runPipeline(), and
+/// any other exception is a defect of the fit stage.
+std::optional<FitResult> fitOrFail(const Samples &d, const InitialState &initial, const Tuning &tuning,
+                                   const QString &passFormat, const Checkpoint &checkpoint)
 {
-    StationaryWindow best;
-    const double first = std::max({0., std::ceil(d.imuTime.front()/kWindowGrid)*kWindowGrid});
-    const double last = std::min({d.imuTime.back(), d.gnssTime.back()});
-    // A property of the recording, the same for every window: computed once,
-    // and only when there is a window to assess.
-    double imuGap = 0;
-    bool haveImuGap = false;
-    // The start is accumulated, not computed from an index: the window
-    // boundaries are part of the numerical behavior.
-    for (double s = first; s+kWindowLength <= last+kWindowEndSlack; s += kWindowGrid) {
-        checkpoint.pollCancel();
-        if (!haveImuGap) {
-            imuGap = imuGapLimit(d);
-            haveImuGap = true;
-        }
-        const StationaryWindow c = assessStationaryWindow(d, s, s+kWindowLength, imuGap);
-        if (c.accepted && (!best.accepted || c.score < best.score))
-            best = c;
+    try {
+        return fitFactorGraph(d, initial, tuning, passFormat, checkpoint);
+    } catch (const FitFailure &) {
+        return std::nullopt;
     }
-    return best;
 }
 
-/// Gravity measured over a stationary window gives roll and pitch, and the
-/// mean gyro reading there is the gyro bias. The attitude is anchored at the
-/// fix nearest mid-window and carried by the gyro to the start of the graph
-/// (usually backwards).
-InitialAttitude attitudeFromStationaryWindow(const Samples &d, const StationaryWindow &window,
-                                             double graphStart)
+/// Whether `candidate` is lower than `best` by more than rounding.
+bool lowerObjective(double candidate, double best)
 {
-    InitialAttitude init;
-    init.startTime = graphStart;
-    const double middle = (window.start+window.end)/2;
-    const auto anchor = std::min_element(d.gnssTime.begin(), d.gnssTime.end(),
-        [&](double a, double b) { return std::abs(a-middle) < std::abs(b-middle); });
-    init.anchorTime = *anchor;
-    init.intervalStart = window.start;
-    init.intervalEnd = window.end;
-    init.gyroBias = window.gyroMean;
-    init.rotation = propagateAttitude(d, rotationAligning(window.forceMean, -kGravity),
-                                      *anchor, graphStart, init.gyroBias);
-    init.method = "stationary initialization only; heading unknown";
-    return init;
+    return candidate < best - kSameObjectiveRelative*std::max(1., best);
 }
 
-/// Without a stationary window: specific force is acceleration minus gravity,
-/// so aligning the measured force at the start with (GNSS acceleration -
-/// gravity) gives a usable roll and pitch. The gyro bias starts at zero.
-InitialAttitude coarseAttitude(const Samples &d, double graphStart)
+/// The fix of `d` with the smallest speed accuracy (stored three times in
+/// velocitySigma; the x component is read), the earliest on a tie.
+size_t anchorFix(const Samples &d)
 {
-    InitialAttitude init;
-    init.startTime = graphStart;
-    const size_t k = std::lower_bound(d.gnssTime.begin(), d.gnssTime.end(), graphStart) - d.gnssTime.begin();
-    if (k+1 >= d.gnssTime.size())
-        throw std::invalid_argument("No GNSS initializer interval");
-    const gtsam::Vector3 a = (d.velocity[k+1]-d.velocity[k])/(d.gnssTime[k+1]-d.gnssTime[k]);
-    init.rotation = rotationAligning(interpolateAt(d.imuTime, d.force, graphStart), a-kGravity);
-    return init;
+    return size_t(std::min_element(d.velocitySigma.begin(), d.velocitySigma.end(),
+        [](const gtsam::Vector3 &a, const gtsam::Vector3 &b) { return a.x() < b.x(); }) - d.velocitySigma.begin());
+}
+
+/// The fixes of `segment` inside the window of nominal length `length`
+/// centred on `anchorTime` and clipped to the segment: inclusive indices.
+std::pair<size_t, size_t> prefixFixes(const Samples &segment, double anchorTime, double length)
+{
+    const std::vector<double> &t = segment.gnssTime;
+    const double lo = std::max(t.front(), anchorTime-length/2);
+    const double hi = std::min(t.back(), anchorTime+length/2);
+    const size_t p = size_t(std::lower_bound(t.begin(), t.end(), lo)-t.begin());
+    const size_t q = size_t(std::upper_bound(t.begin(), t.end(), hi)-t.begin())-1;
+    return {p, q};
+}
+
+/// The chosen prefix fit's account: what the trace and the diagnostics report
+/// about the start the segment fit was given.
+void recordPrefix(SegmentAccount &s, const FitResult &best)
+{
+    s.prefixRotation = best.values.at<gtsam::Pose3>(X(0)).rotation();
+    s.prefixGyroBias = best.values.at<gtsam::imuBias::ConstantBias>(B(0)).gyroscope();
+    s.prefixIterations = int(best.history.size());
+    s.prefixPasses = best.stopping.passes;
+    s.prefixOnLimit = best.stopping.rule == StopRule::kIterationLimit;
+}
+
+/// The last finite yaw sigma before the newest entry of `sigmas`; NaN when
+/// every earlier length failed or this is the first.
+double previousSigma(const std::vector<double> &sigmas)
+{
+    for (size_t i = sigmas.size()-1; i-- > 0;) {
+        if (std::isfinite(sigmas[i]))
+            return sigmas[i];
+    }
+    return kNaN;
+}
+
+/// Spec section 3.2, steps b-d: the prefix window grown on the marginal yaw
+/// sigma, each length fitted from the four heading starts. Returns the best
+/// fit of the last length tried, or nothing when every start of that length
+/// failed; `s` holds the account either way.
+std::optional<FitResult> growPrefix(const Samples &segment, size_t anchor, const gtsam::Rot3 &coarse,
+                                    int index, int count, const Tuning &prefixTuning,
+                                    const Checkpoint &checkpoint, SegmentAccount &s)
+{
+    const size_t last = segment.gnssTime.size()-1;
+    const double anchorTime = segment.gnssTime[anchor];
+    for (double length = kPrefixLength;; length *= 2) {
+        const auto [p, q] = prefixFixes(segment, anchorTime, length);
+        const bool covers = p == 0 && q == last;
+        // Fewer than three fixes is not a fit; this only happens at a GNSS
+        // rate far below 1 Hz, and the window cannot then cover the segment.
+        if (q+1-p < 3)
+            continue;
+        const Samples prefix = fittedWindow(segment, segment.gnssTime[p], segment.gnssTime[q]);
+        s.prefixLength = length;
+        s.prefixStart = prefix.gnssTime.front();
+        s.prefixEnd = prefix.gnssTime.back();
+
+        // The coarse attitude carried from the anchor to the window's first
+        // fix with zero bias (backwards; unchanged when the anchor is that fix).
+        const gtsam::Rot3 first = propagateAttitude(prefix, coarse, anchorTime, prefix.gnssTime.front(),
+                                                    gtsam::Vector3::Zero());
+        const QString passFormat = QStringLiteral("Segment %1 of %2: prefix %3 s, pass %4, iteration %5")
+            .arg(index+1).arg(count).arg(length);
+        std::optional<FitResult> best;
+        for (double offsetDeg : kHeadingOffsetsDeg) {
+            const InitialState initial{
+                attitudesCarriedForward(prefix, gtsam::Rot3::Rz(offsetDeg*kPi/180).compose(first),
+                                        gtsam::Vector3::Zero()),
+                gtsam::Vector3::Zero()};
+            ++s.prefixFits;
+            std::optional<FitResult> fit = fitOrFail(prefix, initial, prefixTuning, passFormat, checkpoint);
+            // The first start that completed is the best; a later one
+            // replaces it only by more than rounding.
+            if (fit && (!best || lowerObjective(fit->objective, best->objective)))
+                best = std::move(fit);
+        }
+
+        if (!best) {
+            // All four starts failed: the yaw is not observable here; grow,
+            // unless there is nothing left to grow into.
+            s.prefixYawSigmaDeg.push_back(kNaN);
+            s.yawSigmaDeg = kNaN;
+            if (covers) {
+                s.growthStop = "all_failed";
+                return std::nullopt;
+            }
+            continue;
+        }
+
+        const double sigma = yawSigmaDeg(best->graph, best->values, X(0));
+        s.prefixYawSigmaDeg.push_back(sigma);
+        s.yawSigmaDeg = sigma;
+        recordPrefix(s, *best);
+        if (sigma <= kYawSigmaLimitDeg) {
+            s.growthStop = "observable";
+            return best;
+        }
+        if (covers) {
+            s.growthStop = "covers";
+            return best;
+        }
+        // A doubling that cut the sigma by less than kGrowthMinGain means the
+        // segment has no motion to find; fitting more of it will not help.
+        const double previous = previousSigma(s.prefixYawSigmaDeg);
+        if (std::isfinite(previous) && sigma > (1-kGrowthMinGain)*previous) {
+            s.growthStop = "no_gain";
+            return best;
+        }
+    }
+}
+
+/// Spec section 3.2, step e, and the fallbacks of section 3.3: one segment's
+/// attitudes (one per fix of `segment`, written to `rotations`) and its account.
+SegmentAccount initializeSegment(const Samples &segment, int index, int count, const Tuning &tuning,
+                                 const Tuning &prefixTuning, const Checkpoint &checkpoint,
+                                 std::vector<gtsam::Rot3> &rotations)
+{
+    SegmentAccount s;
+    s.index = index;
+    s.start = segment.gnssTime.front();
+    s.end = segment.gnssTime.back();
+    const size_t anchor = anchorFix(segment);
+    s.anchorTime = segment.gnssTime[anchor];
+    s.anchorSacc = segment.velocitySigma[anchor].x();
+    const gtsam::Rot3 coarse = coarseAttitude(segment, anchor);
+
+    const std::optional<FitResult> prefix = growPrefix(segment, anchor, coarse, index, count,
+                                                       prefixTuning, checkpoint, s);
+    if (!prefix) {
+        // Today's fallback, over this segment only: the coarse attitude at
+        // the anchor carried by the gyro with zero bias.
+        s.startRotation = propagateAttitude(segment, coarse, s.anchorTime, s.start, gtsam::Vector3::Zero());
+        s.startGyroBias = gtsam::Vector3::Zero();
+        rotations = attitudesCarriedForward(segment, s.startRotation, s.startGyroBias);
+        s.gyroBias = s.startGyroBias;
+        s.fallback = true;
+        return s;
+    }
+
+    // The whole segment, started from the prefix fit's attitude at its first
+    // fix carried backwards to the segment's first fix and forwards to its
+    // last with the prefix fit's bias. Always run, even when the prefix
+    // covered the segment: one path, and the segment's bias is then the bias
+    // of a fit that started at its answer.
+    s.startRotation = propagateAttitude(segment, s.prefixRotation, s.prefixStart, s.start, s.prefixGyroBias);
+    s.startGyroBias = s.prefixGyroBias;
+    const InitialState initial{attitudesCarriedForward(segment, s.startRotation, s.startGyroBias),
+                               s.startGyroBias};
+    const QString passFormat = QStringLiteral("Segment %1 of %2: pass %3, iteration %4").arg(index+1).arg(count);
+    const std::optional<FitResult> fit = fitOrFail(segment, initial, tuning, passFormat, checkpoint);
+    if (!fit) {
+        // The prefix start is better information than the coarse attitude:
+        // the segment's attitudes are the start the fit was given.
+        rotations = initial.rotations;
+        s.gyroBias = s.startGyroBias;
+        s.fallback = true;
+        return s;
+    }
+    rotations.resize(segment.gnssTime.size());
+    for (size_t j = 0; j < rotations.size(); ++j)
+        rotations[j] = fit->values.at<gtsam::Pose3>(X(j)).rotation();
+    s.gyroBias = fit->values.at<gtsam::imuBias::ConstantBias>(B(0)).gyroscope();
+    s.iterations = int(fit->history.size());
+    s.converged = fit->converged;
+    // A segment fit that ended on the limit is still the start (its values
+    // are the best available): converged false with fallback false.
+    s.segmentOnLimit = fit->stopping.rule == StopRule::kIterationLimit;
+    s.fallback = false;
+    return s;
 }
 
 } // namespace
@@ -120,33 +266,107 @@ gtsam::Rot3 rotationAligning(const gtsam::Vector3 &from, const gtsam::Vector3 &t
     return gtsam::Rot3(q.normalized());
 }
 
-InitialAttitude initialAttitude(const Samples &fullRecording, double graphStart,
-                                const Checkpoint &checkpoint)
+std::vector<std::pair<size_t, size_t>> segmentBounds(const std::vector<double> &gnssTime,
+                                                     double segmentLength, double minFinalSegment)
 {
-    const StationaryWindow best = bestStationaryWindow(fullRecording, checkpoint);
-    if (best.accepted)
-        return attitudeFromStationaryWindow(fullRecording, best, graphStart);
-    return coarseAttitude(fullRecording, graphStart);
+    // Fix i belongs to the piece whose half-open interval [t0 + k L, t0 + (k+1) L)
+    // contains it; the fixes are walked once and k advances with them.
+    std::vector<std::pair<size_t, size_t>> pieces;
+    const double t0 = gnssTime.front();
+    size_t k = 0;
+    for (size_t i = 0; i < gnssTime.size(); ++i) {
+        bool newPiece = pieces.empty();
+        while (gnssTime[i] >= t0+double(k+1)*segmentLength) {
+            ++k;
+            newPiece = true;
+        }
+        if (newPiece)
+            pieces.push_back({i, i});
+        else
+            pieces.back().second = i;
+    }
+    // The final piece joins the one before it when it is too short to be a
+    // segment in time or in fixes (a segment must have three fixes).
+    if (pieces.size() > 1) {
+        const auto [first, last] = pieces.back();
+        if (gnssTime[last]-gnssTime[first] < minFinalSegment || last+1-first < 3) {
+            pieces.pop_back();
+            pieces.back().second = last;
+        }
+    }
+    return pieces;
 }
 
-gtsam::Values initialValues(const Samples &d, double headingDeg, const InitialAttitude &init)
+gtsam::Rot3 coarseAttitude(const Samples &d, size_t k)
 {
-    if (std::abs(init.startTime-d.gnssTime.front()) > kStartTimeTolerance || !init.gyroBias.allFinite())
-        throw std::invalid_argument("Initialization must be propagated to graph start with finite bias");
+    // The forward difference to the next fix, or at the last fix the backward
+    // one: a segment has at least three fixes, so one of the two exists.
+    const bool forward = k+1 < d.gnssTime.size();
+    const size_t i = forward ? k : k-1, j = forward ? k+1 : k;
+    const gtsam::Vector3 a = (d.velocity[j]-d.velocity[i])/(d.gnssTime[j]-d.gnssTime[i]);
+    return rotationAligning(interpolateAt(d.imuTime, d.force, d.gnssTime[k]), a-kGravity);
+}
 
-    // The heading offset is the constant zero, but its composition stays: the
-    // model is "initial attitude after a heading rotation".
-    gtsam::Rot3 r = gtsam::Rot3::Rz(headingDeg*kPi/180).compose(init.rotation);
-    gtsam::Values values;
-    values.insert(B(0), gtsam::imuBias::ConstantBias(gtsam::Vector3::Zero(), init.gyroBias));
+std::vector<gtsam::Rot3> attitudesCarriedForward(const Samples &d, const gtsam::Rot3 &first,
+                                                 const gtsam::Vector3 &gyroBias)
+{
+    std::vector<gtsam::Rot3> rotations;
+    rotations.reserve(d.gnssTime.size());
+    gtsam::Rot3 r = first;
     for (size_t k = 0; k < d.gnssTime.size(); ++k) {
         if (k) {
             // Carry the attitude across the interval since the previous fix.
             const std::vector<double> e = integrationEdges(d, d.gnssTime[k-1], d.gnssTime[k]);
             for (size_t j = 1; j < e.size(); ++j)
-                r = r.compose(gtsam::Rot3::Expmap(gyroIncrement(d, e[j-1], e[j], init.gyroBias)));
+                r = r.compose(gtsam::Rot3::Expmap(gyroIncrement(d, e[j-1], e[j], gyroBias)));
         }
-        values.insert(X(k), gtsam::Pose3(r, d.position[k]));
+        rotations.push_back(r);
+    }
+    return rotations;
+}
+
+Initialization initialize(const Samples &window, const Tuning &tuning, const Checkpoint &checkpoint)
+{
+    // The prefix budget: one pass of at most kPrefixIterations, and never
+    // more than the tuning allows, so a test that forces the limit forces
+    // the prefix fits too.
+    Tuning prefixTuning = tuning;
+    prefixTuning.maxIterations = std::min(tuning.maxIterations, kPrefixIterations);
+    prefixTuning.maxPasses = std::min(tuning.maxPasses, kPrefixPasses);
+
+    Initialization init;
+    init.account.segmentLength = tuning.segmentLength;
+    init.state.rotations.resize(window.gnssTime.size());
+    const std::vector<std::pair<size_t, size_t>> bounds =
+        segmentBounds(window.gnssTime, tuning.segmentLength, tuning.minFinalSegment);
+    const int count = int(bounds.size());
+    for (int i = 0; i < count; ++i) {
+        const auto [a, b] = bounds[i];
+        // The segment's fix j is the window's fix a + j; every fix of the
+        // window is inside IMU coverage, so the cut keeps exactly these.
+        const Samples segment = fittedWindow(window, window.gnssTime[a], window.gnssTime[b]);
+        if (segment.gnssTime.size() != b-a+1)
+            throw std::logic_error("Segment cut does not hold its fixes");
+        std::vector<gtsam::Rot3> rotations;
+        SegmentAccount s = initializeSegment(segment, i, count, tuning, prefixTuning, checkpoint, rotations);
+        s.firstFix = a;
+        s.lastFix = b;
+        std::copy(rotations.begin(), rotations.end(), init.state.rotations.begin()+std::ptrdiff_t(a));
+        init.account.segments.push_back(std::move(s));
+    }
+    init.state.gyroBias = init.account.segments.front().gyroBias;
+    return init;
+}
+
+gtsam::Values initialValues(const Samples &d, const InitialState &initial)
+{
+    if (initial.rotations.size() != d.gnssTime.size() || !initial.gyroBias.allFinite())
+        throw std::invalid_argument("Initial state must have one attitude per fix and a finite bias");
+
+    gtsam::Values values;
+    values.insert(B(0), gtsam::imuBias::ConstantBias(gtsam::Vector3::Zero(), initial.gyroBias));
+    for (size_t k = 0; k < d.gnssTime.size(); ++k) {
+        values.insert(X(k), gtsam::Pose3(initial.rotations[k], d.position[k]));
         values.insert(V(k), d.velocity[k]);
     }
     return values;

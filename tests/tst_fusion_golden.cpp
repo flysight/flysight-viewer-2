@@ -218,6 +218,8 @@ void FusionGoldenTest::comparatorHoldsItsBounds()
         QVERIFY(!jsonPasses("iterations", 7 + 1e-9, 7));
         QVERIFY(jsonPasses("passes", 2, 2));
         QVERIFY(!jsonPasses("passes", 2 + 1e-9, 2));
+        QVERIFY(jsonPasses("prefix_fits", 8, 8));
+        QVERIFY(!jsonPasses("prefix_fits", 8 + 1e-9, 8));
         QVERIFY(!jsonPasses("epoch_utc_s", timeOneUlpLater, time));
         QVERIFY(!compareJson(QStringLiteral("j"), QJsonObject{{"algorithm", "a"}},
                              QJsonObject{{"algorithm", "b"}}).isEmpty());
@@ -387,12 +389,26 @@ void FusionGoldenTest::channelsWriterIsTheInverseOfTheLoader()
 
 void FusionGoldenTest::cancelAtEachKindOfBoundary_data()
 {
+    // The rows are indexed from the golden's progress array, so a change in a
+    // prefix fit's iteration count cannot silently move a row onto a
+    // different boundary. The first two are the same on every recording:
+    // "Starting fit", then the first prefix fit's graph build.
     QTest::addColumn<int>("cancelAtCall");
     QTest::addColumn<QString>("lastText");
+    const QStringList p = loadFusionGolden(QStringLiteral("coarse_maneuver")).progress;
+    // A row whose call index is the one-based position of `text` in the golden.
+    const auto rowAt = [&p](const char *rowName, const char *text) {
+        const int call = int(p.indexOf(QLatin1String(text))) + 1;
+        QVERIFY2(call > 0, text);
+        QTest::newRow(rowName) << call << QString::fromLatin1(text);
+    };
     QTest::newRow("before the fit") << 1 << QStringLiteral("Starting fit");
     QTest::newRow("graph construction") << 2 << QStringLiteral("Integrating IMU factors");
-    QTest::newRow("first iteration") << 3 << QStringLiteral("Pass 1, iteration 1");
-    QTest::newRow("fourth boundary") << 4 << QStringLiteral("Pass 1, iteration 2");
+    rowAt("prefix fit iteration", "Segment 1 of 1: prefix 60 s, pass 1, iteration 1");
+    rowAt("prefix fit second iteration", "Segment 1 of 1: prefix 60 s, pass 1, iteration 2");
+    rowAt("segment fit iteration", "Segment 1 of 1: pass 1, iteration 1");
+    rowAt("full fit iteration", "Pass 1, iteration 1");
+    rowAt("full fit second iteration", "Pass 1, iteration 2");
 }
 
 void FusionGoldenTest::cancelAtEachKindOfBoundary()
@@ -426,23 +442,23 @@ void FusionGoldenTest::cancelAtEachKindOfBoundary()
 
 void FusionGoldenTest::cancelDuringPreparation_data()
 {
-    // stationary_spin is 40 s long: the initializer assesses two candidate
-    // windows, [0, 30) and [5, 35), and asks once before each without
-    // reporting anything. (coarse_maneuver, which the test above runs, is 6 s
-    // long and has no candidate window: there the first question comes with
-    // "Starting fit".)
+    // Preparation neither reports nor asks: the first question of a run
+    // comes with the first reported boundary, "Starting fit", on every
+    // recording (40 s stationary_spin as 6 s coarse_maneuver), because
+    // nothing in stage 1 grows with the recording beyond single passes; the
+    // initializer's fits come after that boundary.
+    QTest::addColumn<QString>("name");
     QTest::addColumn<int>("cancelAtCall");
     QTest::addColumn<QStringList>("expectedTexts");
-    QTest::newRow("first candidate window") << 1 << QStringList();
-    QTest::newRow("second candidate window") << 2 << QStringList();
-    QTest::newRow("first reported boundary") << 3 << QStringList({QStringLiteral("Starting fit")});
+    QTest::newRow("stationary_spin") << QStringLiteral("stationary_spin") << 1 << QStringList({QStringLiteral("Starting fit")});
+    QTest::newRow("coarse_maneuver") << QStringLiteral("coarse_maneuver") << 1 << QStringList({QStringLiteral("Starting fit")});
 }
 
 void FusionGoldenTest::cancelDuringPreparation()
 {
+    QFETCH(QString, name);
     QFETCH(int, cancelAtCall);
     QFETCH(QStringList, expectedTexts);
-    const QString name = QStringLiteral("stationary_spin");
     const Fusion::Channels channels = toChannels(fusionFixture(name));
 
     QStringList received;
@@ -455,8 +471,8 @@ void FusionGoldenTest::cancelDuringPreparation()
     QVERIFY(cancelled.reason.isEmpty());
     QVERIFY(cancelled.diagnosticsJson.isEmpty());
     QVERIFY(allArraysEmpty(cancelled));
-    // It stopped at the question that was answered "yes", and preparation
-    // reported nothing: the texts are those of the boundaries of the fit.
+    // It stopped at the one question asked, which came with the one reported
+    // boundary: the texts are those of the boundaries of the fit.
     QCOMPARE(calls, cancelAtCall);
     QCOMPARE(received, expectedTexts);
 

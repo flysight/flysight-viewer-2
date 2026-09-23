@@ -52,7 +52,8 @@ void requirePositiveSigmas(const Samples &samples)
 void requireValidTuning(const Tuning &tuning)
 {
     for (double value : { tuning.accDensity, tuning.gyroDensity, tuning.accBiasSigma,
-                          tuning.gyroBiasSigma, tuning.maxGap }) {
+                          tuning.gyroBiasSigma, tuning.maxGap, tuning.segmentLength,
+                          tuning.minFinalSegment }) {
         if (!std::isfinite(value) || value <= 0)
             throw std::invalid_argument("Invalid fusion configuration");
     }
@@ -72,7 +73,7 @@ void requireValidTuning(const Tuning &tuning)
         if (!std::isfinite(value))
             throw std::invalid_argument("Invalid fusion configuration");
     }
-    if (tuning.maxIterations < 1 || tuning.slowTailWindow < 1)
+    if (tuning.maxIterations < 1 || tuning.maxPasses < 1 || tuning.slowTailWindow < 1)
         throw std::invalid_argument("Invalid iteration limit");
 }
 

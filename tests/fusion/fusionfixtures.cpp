@@ -76,8 +76,9 @@ void appendImu(FusionFixture &f, double t,
 /// The reference self-test's "linear" case: 2 s of constant velocity
 /// (12, -4, 2) m/s from (7, 8, 9) m, level and not rotating, exact data.
 /// IMU 100 Hz, i = 0..200; GNSS t = .037 + i * .2, i = 0..8; hAcc = vAcc = 1,
-/// sAcc = .1; origin index 0. Too short for a stationary window, so it uses
-/// the coarse initializer, and its objective is nearly zero.
+/// sAcc = .1; origin index 0. Shorter than one segment (the 60 s prefix
+/// covers it), with an exactly unobservable yaw (the four prefix starts tie
+/// and the first wins), and its objective is nearly zero.
 FusionFixture coarseLinear()
 {
     FusionFixture f;
@@ -148,8 +149,9 @@ FusionFixture coarseManeuver()
 /// IMU 25 Hz, i = 0..1000 (keeps the golden small); GNSS t = .1 + j * .2,
 /// j = 0..199; hAcc = 1, vAcc = 1.5, sAcc = .1; origin index 0. Uniform noise:
 /// force .005, gyro .02 deg/s, position .2, velocity .03; seed 0x8F050003.
-/// The stationary window [0, 30) is accepted and [5, 35) is not, so the
-/// attitude is anchored mid-window and propagated backwards to the start.
+/// One segment at rest whose prefix grows from 60 s to 120 s to cover it
+/// (yaw unobservable and arbitrary; the anchor is the first fix, every sAcc
+/// being equal).
 FusionFixture stationarySpin()
 {
     FusionFixture f;
@@ -175,6 +177,198 @@ FusionFixture stationarySpin()
                   .03 + noise.force * n0, -.02 + noise.force * n1,
                   (-kStandardGravity + .05) + noise.force * n2,
                   .2 + noise.gyro * n3, -.1 + noise.gyro * n4, (.15 + spin) + noise.gyro * n5);
+    }
+    f.originIndex = 0;
+    return f;
+}
+
+// ---------------------------------------------------------------------------
+// The initializer's recordings (spec section 10). Not golden fixtures: their
+// expectations are stated in tst_fusion_kernel. Rotation constants are exact
+// rationals (.6 / .8 and .96 / .28, Pythagorean), so no transcendental
+// function appears; the body force is R^T (a - g) + b_a with g = (0, 0,
+// 9.80665) in NED, and the gyro reads its bias only (the attitude is constant
+// in every recording).
+// ---------------------------------------------------------------------------
+
+/// 90 s that start in motion: constant 20 m/s north with a 2 m/s^2 east
+/// manoeuvre from t = 40 to 50 s, so the 60 s prefix window [0, 30] has no
+/// yaw information and the 120 s window [0, 60] has.
+///
+/// GNSS 5 Hz, t = j * .2, j = 0..449; IMU 25 Hz, t = i * .04, i = 0..2250.
+/// Attitude Rz(psi) with cos psi = .6, sin psi = .8 (53.13 deg). NED: vN = 20,
+/// pN = 20 t; aE = 2 for 40 <= t < 50, else 0; vE = 0 / 2 (t - 40) / 20 and
+/// pE = 0 / (t - 40)^2 / 100 + 20 (t - 50) on the three pieces; down zero.
+/// Body force (.8 aE + .05, .6 aE - .03, -9.80665 + .08); gyro (.2, -.15, .3)
+/// deg/s. hAcc = 1.5, vAcc = 2.5, sAcc = .3 (every fix: the anchor is the
+/// first). Noise: force .005, gyro .02 deg/s, position .2, velocity .03;
+/// seed 0x8F050004. 450 states.
+FusionFixture motionStart()
+{
+    FusionFixture f;
+    f.name = QStringLiteral("motion_start");
+    const NoiseLevels noise{ .005, .02, .2, .03 };
+    NoiseSource source(0x8F050004ull);
+
+    const auto eastAcceleration = [](double t) { return t >= 40 && t < 50 ? 2. : 0.; };
+    for (int j = 0; j <= 449; ++j) {
+        const double t = j * .2;
+        const double velE = t < 40 ? 0 : t < 50 ? 2 * (t - 40) : 20;
+        const double east = t < 40 ? 0 : t < 50 ? (t - 40) * (t - 40) : 100 + 20 * (t - 50);
+        const double n0 = source.next(), n1 = source.next(), n2 = source.next();
+        const double n3 = source.next(), n4 = source.next(), n5 = source.next();
+        appendGnss(f, t,
+                   20 * t + noise.position * n0, east + noise.position * n1, noise.position * n2,
+                   20 + noise.velocity * n3, velE + noise.velocity * n4, noise.velocity * n5,
+                   1.5, 2.5, .3);
+    }
+    for (int i = 0; i <= 2250; ++i) {
+        const double t = i * .04;
+        const double aE = eastAcceleration(t);
+        const double n0 = source.next(), n1 = source.next(), n2 = source.next();
+        const double n3 = source.next(), n4 = source.next(), n5 = source.next();
+        appendImu(f, t,
+                  (.8 * aE + .05) + noise.force * n0, (.6 * aE - .03) + noise.force * n1,
+                  (-kStandardGravity + .08) + noise.force * n2,
+                  .2 + noise.gyro * n3, -.15 + noise.gyro * n4, .3 + noise.gyro * n5);
+    }
+    f.originIndex = 0;
+    return f;
+}
+
+/// 300 s at rest, tilted: longer than two prefix doublings, so that the
+/// growth stop of spec 3.2 d is exercised (the 120 s window has no more yaw
+/// information than the 60 s one). Roll and pitch are the truth's; yaw is
+/// arbitrary.
+///
+/// IMU 25 Hz, t = i * .04, i = 0..7500; GNSS t = .1 + j * .2, j = 0..1499;
+/// position and velocity zero. Attitude Ry(theta), cos theta = .96,
+/// sin theta = .28, as the matrix [[.96, 0, .28], [0, 1, 0], [-.28, 0, .96]];
+/// body force (.28 * 9.80665 + .03, -.02, -.96 * 9.80665 + .05); gyro
+/// (.2, -.1, .15) deg/s. hAcc = 1, vAcc = 1.5, sAcc = .1. Noise as
+/// stationary_spin (.005, .02, .2, .03); seed 0x8F050005. 1500 states.
+FusionFixture restThroughout()
+{
+    FusionFixture f;
+    f.name = QStringLiteral("rest_throughout");
+    const NoiseLevels noise{ .005, .02, .2, .03 };
+    NoiseSource source(0x8F050005ull);
+
+    for (int j = 0; j <= 1499; ++j) {
+        const double t = .1 + j * .2;
+        const double n0 = source.next(), n1 = source.next(), n2 = source.next();
+        const double n3 = source.next(), n4 = source.next(), n5 = source.next();
+        appendGnss(f, t,
+                   noise.position * n0, noise.position * n1, noise.position * n2,
+                   noise.velocity * n3, noise.velocity * n4, noise.velocity * n5,
+                   1, 1.5, .1);
+    }
+    for (int i = 0; i <= 7500; ++i) {
+        const double t = i * .04;
+        const double n0 = source.next(), n1 = source.next(), n2 = source.next();
+        const double n3 = source.next(), n4 = source.next(), n5 = source.next();
+        appendImu(f, t,
+                  (.28 * kStandardGravity + .03) + noise.force * n0, -.02 + noise.force * n1,
+                  (-.96 * kStandardGravity + .05) + noise.force * n2,
+                  .2 + noise.gyro * n3, -.1 + noise.gyro * n4, .15 + noise.gyro * n5);
+    }
+    f.originIndex = 0;
+    return f;
+}
+
+/// 300 s at 15 m/s north with a 3 m/s^2 east manoeuvre from t = 190 to
+/// 200 s, whose fixes carry sAcc 2 m/s except the one at 200 s with .3: that
+/// fix is the anchor, the first prefix is the window 170..230 s (length 60,
+/// unclipped) and it contains the manoeuvre.
+///
+/// GNSS 1 Hz, t = j, j = 0..300; IMU 10 Hz, t = i * .1, i = 0..3000. Attitude
+/// identity. vN = 15, pN = 15 t; aE = 3 for 190 <= t < 200, else 0; vE =
+/// 0 / 3 (t - 190) / 30 and pE = 0 / 1.5 (t - 190)^2 / 150 + 30 (t - 200) on
+/// the three pieces. Body force (.05, aE - .03, -9.80665 + .08); gyro
+/// (.2, -.15, .3) deg/s. hAcc = 1.5, vAcc = 2.5. Noise .005, .02, .2, .03;
+/// seed 0x8F050006. 301 states; the prefix is 61.
+FusionFixture saccAnchor()
+{
+    FusionFixture f;
+    f.name = QStringLiteral("sacc_anchor");
+    const NoiseLevels noise{ .005, .02, .2, .03 };
+    NoiseSource source(0x8F050006ull);
+
+    for (int j = 0; j <= 300; ++j) {
+        const double t = j;
+        const double velE = t < 190 ? 0 : t < 200 ? 3 * (t - 190) : 30;
+        const double east = t < 190 ? 0 : t < 200 ? 1.5 * (t - 190) * (t - 190) : 150 + 30 * (t - 200);
+        const double n0 = source.next(), n1 = source.next(), n2 = source.next();
+        const double n3 = source.next(), n4 = source.next(), n5 = source.next();
+        appendGnss(f, t,
+                   15 * t + noise.position * n0, east + noise.position * n1, noise.position * n2,
+                   15 + noise.velocity * n3, velE + noise.velocity * n4, noise.velocity * n5,
+                   1.5, 2.5, j == 200 ? .3 : 2);
+    }
+    for (int i = 0; i <= 3000; ++i) {
+        const double t = i * .1;
+        const double aE = t >= 190 && t < 200 ? 3 : 0;
+        const double n0 = source.next(), n1 = source.next(), n2 = source.next();
+        const double n3 = source.next(), n4 = source.next(), n5 = source.next();
+        appendImu(f, t,
+                  .05 + noise.force * n0, (aE - .03) + noise.force * n1,
+                  (-kStandardGravity + .08) + noise.force * n2,
+                  .2 + noise.gyro * n3, -.15 + noise.gyro * n4, .3 + noise.gyro * n5);
+    }
+    f.originIndex = 0;
+    return f;
+}
+
+/// 200 s at 15 m/s north with an east manoeuvre in every 30 s block and a
+/// gyro z bias that drifts linearly by exactly 1 deg/s over the length while
+/// the attitude does not rotate: under segmentLength = 60, minFinalSegment =
+/// 12 it has four segments of 60, 60, 60 and 21 fixes, each with its
+/// manoeuvre in the first 20 s (inside the 30 s half-window of the anchor,
+/// which is the segment's first fix), and every segment fit converges on a
+/// constant bias.
+///
+/// GNSS 1 Hz, t = j, j = 0..200; IMU 10 Hz, t = i * .1, i = 0..2000. Attitude
+/// identity. vN = 15, pN = 15 t. With k = j / 30 (GNSS) or i / 300 (IMU) as
+/// integer division and s = t - 30 k: aE = 2 for 10 <= s < 15, -2 for
+/// 15 <= s < 20, else 0; vE = 0 / 2 (s - 10) / 10 - 2 (s - 15) / 0; pE = 50 k
+/// + (0 / (s - 10)^2 / 25 + 10 (s - 15) - (s - 15)^2 / 50) on the four pieces
+/// (continuous: 25 at s = 15, 50 at s = 20). Body force (.05, aE - .03,
+/// -9.80665 + .08); gyro (.2, -.15, .3 + t / 200) deg/s. hAcc = 1.5,
+/// vAcc = 2.5, sAcc = .3. Noise .005, .02, .2, .03; seed 0x8F050007. 201 states.
+FusionFixture driftingBias()
+{
+    FusionFixture f;
+    f.name = QStringLiteral("drifting_bias");
+    const NoiseLevels noise{ .005, .02, .2, .03 };
+    NoiseSource source(0x8F050007ull);
+
+    const auto eastAcceleration = [](double s) { return s < 10 ? 0. : s < 15 ? 2. : s < 20 ? -2. : 0.; };
+    for (int j = 0; j <= 200; ++j) {
+        const double t = j;
+        const int k = j / 30;
+        const double s = t - 30 * k;
+        const double velE = s < 10 ? 0 : s < 15 ? 2 * (s - 10) : s < 20 ? 10 - 2 * (s - 15) : 0;
+        const double east = 50 * k + (s < 10 ? 0
+                                      : s < 15 ? (s - 10) * (s - 10)
+                                      : s < 20 ? 25 + 10 * (s - 15) - (s - 15) * (s - 15)
+                                      : 50);
+        const double n0 = source.next(), n1 = source.next(), n2 = source.next();
+        const double n3 = source.next(), n4 = source.next(), n5 = source.next();
+        appendGnss(f, t,
+                   15 * t + noise.position * n0, east + noise.position * n1, noise.position * n2,
+                   15 + noise.velocity * n3, velE + noise.velocity * n4, noise.velocity * n5,
+                   1.5, 2.5, .3);
+    }
+    for (int i = 0; i <= 2000; ++i) {
+        const double t = i * .1;
+        const int k = i / 300;
+        const double aE = eastAcceleration(t - 30 * k);
+        const double n0 = source.next(), n1 = source.next(), n2 = source.next();
+        const double n3 = source.next(), n4 = source.next(), n5 = source.next();
+        appendImu(f, t,
+                  .05 + noise.force * n0, (aE - .03) + noise.force * n1,
+                  (-kStandardGravity + .08) + noise.force * n2,
+                  .2 + noise.gyro * n3, -.15 + noise.gyro * n4, (.3 + t / 200) + noise.gyro * n5);
     }
     f.originIndex = 0;
     return f;
@@ -284,6 +478,19 @@ FusionFixture fusionFixture(const QString &name)
         if (fixture.name == name)
             return fixture;
     }
+    return FusionFixture();
+}
+
+FusionFixture initializerFixture(const QString &name)
+{
+    if (name == QStringLiteral("motion_start"))
+        return motionStart();
+    if (name == QStringLiteral("rest_throughout"))
+        return restThroughout();
+    if (name == QStringLiteral("sacc_anchor"))
+        return saccAnchor();
+    if (name == QStringLiteral("drifting_bias"))
+        return driftingBias();
     return FusionFixture();
 }
 

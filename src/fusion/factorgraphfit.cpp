@@ -7,9 +7,11 @@
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/inference/Symbol.h>
+#include <gtsam/linear/linearExceptions.h>
 #include <gtsam/navigation/GPSFactor.h>
 #include <gtsam/navigation/ImuFactor.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
+#include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/slam/PriorFactor.h>
 
 #include "fusion/imuintegration.h"
@@ -22,12 +24,14 @@ using gtsam::symbol_shorthand::X;
 
 namespace {
 
-constexpr int kMaxBiasPasses = 5;
 constexpr size_t kStatesPerCheckpoint = 256;
 
 // An iteration may raise the cost by this much (rounding) before it counts as
 // an increase, which is a failure.
 constexpr double kCostIncreaseTolerance = 1e-6;
+
+// A yaw sigma is an angle on a circle: nothing above this (degrees) says more.
+constexpr double kYawSigmaCapDeg = 180;
 
 /// The GNSS measurement of state k: position, then velocity.
 void addGnssFactors(gtsam::NonlinearFactorGraph &graph, const Samples &d, size_t k)
@@ -88,10 +92,12 @@ double meanRelativeDecrease(const std::vector<FitIteration> &history, int outer,
 /// settled before the iteration limit. A pass may settle on a step that did
 /// not move (before == after): that is accepted, as it means LM found no
 /// better point at its current damping. A non-finite or increasing cost
-/// throws FitFailure with the account of the pass it happened in.
+/// throws FitFailure with the account of the pass it happened in. Each
+/// iteration's boundary text is `passFormat` with the pass and the iteration
+/// filled in (fitFactorGraph()'s contract).
 bool runOptimizerPass(const gtsam::NonlinearFactorGraph &graph, gtsam::Values &values,
-                      const Tuning &c, int outer, const Checkpoint &checkpoint,
-                      std::vector<FitIteration> &history)
+                      const Tuning &c, int outer, const QString &passFormat,
+                      const Checkpoint &checkpoint, std::vector<FitIteration> &history)
 {
     gtsam::LevenbergMarquardtParams params;
     params.setLinearSolverType("MULTIFRONTAL_QR");
@@ -100,7 +106,7 @@ bool runOptimizerPass(const gtsam::NonlinearFactorGraph &graph, gtsam::Values &v
 
     bool settled = false;
     for (int i = 0; i < c.maxIterations; ++i) {
-        checkpoint(QStringLiteral("Pass %1, iteration %2").arg(outer+1).arg(i+1));
+        checkpoint(passFormat.arg(outer+1).arg(i+1));
         const double before = optimizer.error();
         optimizer.iterate();
         const double after = optimizer.error();
@@ -176,18 +182,17 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &d, const gtsam::imuB
     return graph;
 }
 
-FitResult fitFactorGraph(const Samples &d, double headingDeg, const Tuning &c,
-                         const InitialAttitude &attitude, const Checkpoint &checkpoint)
+FitResult fitFactorGraph(const Samples &d, const InitialState &initial, const Tuning &c,
+                         const QString &passFormat, const Checkpoint &checkpoint)
 {
     // Validated by the caller already; kept because this is where the arrays
     // are indexed, and it costs nothing next to the fit.
     validateSamples(d, c);
 
     FitResult result;
-    result.heading = headingDeg;
     result.stopping = thresholdsOf(c);
     Stopping &stopping = result.stopping;
-    gtsam::Values values = initialValues(d, headingDeg, attitude);
+    gtsam::Values values = initialValues(d, initial);
 
     // The graph after a pass is rebuilt once, at the pass's fitted bias, and
     // serves three purposes: the cost test, the next pass's graph, and (after
@@ -198,9 +203,9 @@ FitResult fitFactorGraph(const Samples &d, double headingDeg, const Tuning &c,
     double costRebuilt = 0;
     bool lastSettled = false;
     int lastOuter = 0;
-    for (int outer = 0; outer < kMaxBiasPasses; ++outer) {
+    for (int outer = 0; outer < c.maxPasses; ++outer) {
         lastOuter = outer;
-        lastSettled = runOptimizerPass(graph, values, c, outer, checkpoint, result.history);
+        lastSettled = runOptimizerPass(graph, values, c, outer, passFormat, checkpoint, result.history);
         stopping.passes = outer+1;
 
         // The cost test: re-preintegrated at the pass's fitted bias, the cost
@@ -216,24 +221,26 @@ FitResult fitFactorGraph(const Samples &d, double headingDeg, const Tuning &c,
         }
         // A pass that hit the limit is followed by another while passes
         // remain; the slow tail is judged only on the last one.
-        if (outer+1 < kMaxBiasPasses)
+        if (outer+1 < c.maxPasses)
             graph = std::move(rebuilt);
     }
 
     // The objective, the residuals and the quality are those of the graph
     // preintegrated at the fitted bias, not at the bias the last pass was
-    // linearized at: the rebuild, whose cost the test above evaluated.
+    // linearized at: the rebuild, whose cost the test above evaluated. It is
+    // also the reported graph.
     result.values = values;
     result.objective = costRebuilt;
     collectResiduals(d, rebuilt, result);
+    result.graph = std::move(rebuilt);
     stopping.lastPassMeanRelativeDecrease = meanRelativeDecrease(result.history, lastOuter, c.slowTailWindow);
 
     if (!result.converged) {
         if (lastSettled) {
-            // The fifth pass settled but re-preintegrating still moved the cost.
+            // The last pass settled but re-preintegrating still moved the cost.
             stopping.rule = StopRule::kBiasNotSettled;
         } else {
-            // The slow tail: the fifth pass at its limit, judged on its last
+            // The slow tail: the last pass at its limit, judged on its last
             // window of iterations and on the misfit to the GNSS measurements
             // (which does not depend on the bias, so the rebuild's values
             // are the pass's). Strict comparisons, so that a zero bound
@@ -252,6 +259,28 @@ FitResult fitFactorGraph(const Samples &d, double headingDeg, const Tuning &c,
         }
     }
     return result;
+}
+
+double yawSigmaDeg(const gtsam::NonlinearFactorGraph &graph, const gtsam::Values &values, gtsam::Key key)
+{
+    try {
+        gtsam::Marginals marginals(graph, values, gtsam::Marginals::QR);
+        const gtsam::Matrix cov = marginals.marginalCovariance(key);
+        // The Pose3 tangent is [rotation; translation] with the rotation
+        // expressed in the body frame (retract is a right perturbation), so
+        // the rotation block is rotated into the navigation frame before its
+        // vertical (D) element means "about the vertical".
+        const gtsam::Matrix3 body = cov.block<3, 3>(0, 0);
+        const gtsam::Matrix3 R = values.at<gtsam::Pose3>(key).rotation().matrix();
+        const gtsam::Matrix3 navigation = R*body*R.transpose();
+        const double variance = navigation(2, 2);
+        if (!std::isfinite(variance) || variance < 0)
+            return kYawSigmaCapDeg;
+        return std::min(std::sqrt(variance)*180/kPi, kYawSigmaCapDeg);
+    } catch (const gtsam::IndeterminantLinearSystemException &) {
+        // A rank-deficient system: the yaw is undetermined.
+        return kYawSigmaCapDeg;
+    }
 }
 
 } // namespace FlySight::Fusion::Detail
