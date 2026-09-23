@@ -405,6 +405,7 @@
 # 210 - a failed prefix or segment fit is a start with infinite objective; all four failing grows the prefix; all failing at full length falls back and the diagnostics say so;
 #       budgets: a prefix fit is one pass of at most 50 iterations, a segment fit uses the production limits, the stopping rule applies to both, a fit on the limit is still the start and reported
 210 tst_fusion_kernel allPrefixFitsFailFallsBack
+210 tst_fusion_kernel prefixFitsFailAfterACompletedLength
 210 tst_fusion_kernel startsOnTheLimitAreStillUsed
 210 tst_fusion_kernel atRestPrefixStopsGrowing
 210 tst_fusion_kernel validationRejectsEachDefect

@@ -13,8 +13,8 @@
 // The one authority for the golden `trace` object of a success fixture
 // (tests/data/fusion/<fixture>.json): fusion_golden_capture writes it with
 // traceJson(), and tst_fusion_kernel::fitTraceMatchesGolden reads it back
-// through the same function, so the two cannot drift. A later phase that
-// changes PipelineTrace changes this function and re-captures the goldens
+// through the same function, so the two cannot drift. A change to
+// PipelineTrace changes this function and re-captures the goldens
 // (tests/README.md, section 11).
 //
 // Header-only on purpose: PipelineTrace carries gtsam::Rot3 (reached through

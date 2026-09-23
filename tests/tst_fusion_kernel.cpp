@@ -321,6 +321,7 @@ private slots:
     void driftingBiasSegmentsConverge();
     void allPrefixFitsFailFallsBack_data();
     void allPrefixFitsFailFallsBack();
+    void prefixFitsFailAfterACompletedLength();
     void startsOnTheLimitAreStillUsed();
     void temperatureFactorJacobians();
     void temperatureGraphShape();
@@ -877,7 +878,7 @@ void FusionKernelTest::initializerDiagnosticsShape()
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
     const QJsonObject diagnostics = diagnosticsOf(result);
 
-    // The keys of a successful fit after Phase 4, plus `initializer`
+    // Every key of a successful fit's diagnostics, `initializer` among them
     // (QJsonObject sorts its keys).
     QCOMPARE(diagnostics.keys(), QStringList({
         "algorithm", "anchor_time_s", "display_position_velocity", "end_s", "gnss_states", "imu_outputs",
@@ -1041,8 +1042,8 @@ void FusionKernelTest::biasSettledByCostTest()
 {
     // The spec's bias-settled test, on the production tuning. Under the
     // bias-shift rule this fixture needed a third pass of one iteration that
-    // lowered the cost by 8e-15 to prove the bias had stopped moving (the
-    // committed history before this phase has passes of 4, 2, 1 iterations);
+    // lowered the cost by 8e-15 to prove the bias had stopped moving (under
+    // that rule this fixture's history had passes of 4, 2, 1 iterations);
     // under the cost test the second pass's re-preintegration changes the cost
     // by 3.8e-12 relative and the fit is converged there.
     PipelineTrace trace;
@@ -1271,7 +1272,8 @@ void FusionKernelTest::failureDiagnosticsShape()
              QStringList({QStringLiteral("algorithm"), QStringLiteral("failure")}));
 
     // The exception the kernel throws for it is a std::runtime_error carrying
-    // the account, with the text the initializer of a later phase relies on.
+    // the account, with the text that becomes the SolverFailed reason (and
+    // that the initializer tests' forcings throw).
     bool caught = false;
     try {
         throw FitFailure("Nonfinite or increasing optimizer cost", s);
@@ -1596,6 +1598,70 @@ void FusionKernelTest::allPrefixFitsFailFallsBack()
     }
 }
 
+void FusionKernelTest::prefixFitsFailAfterACompletedLength()
+{
+    // The other way to `all_failed`: a length completes, then every start of
+    // every longer window fails. The account must describe the fallback,
+    // not the completed fit that was not used. The forcing spares the 60 s
+    // texts only: on motion_start the 60 s window [0, 30] completes with an
+    // unobservable yaw (sigma above 20; a first length never stops on gain),
+    // the 120 s window [0, 60] fails all four starts and does not cover, and
+    // the 240 s window is the segment and fails all four.
+    const Checkpoint failingLongerPrefixes(
+        [](const QString &text) {
+            if (text.contains(QStringLiteral(": prefix ")) && !text.contains(QStringLiteral(": prefix 60 s")))
+                throw FitFailure(std::string("Nonfinite or increasing optimizer cost"), Stopping{});
+        },
+        [] { return false; });
+    const QString name = QStringLiteral("motion_start");
+    const InitializerRun run = runInitializerFixture(name, Tuning{}, failingLongerPrefixes);
+    QCOMPARE(run.trace.initializer.segments.size(), size_t(1));
+    const SegmentAccount &s = run.trace.initializer.segments.at(0);
+    QCOMPARE(s.prefixFits, 12);
+    QCOMPARE(s.prefixLength, 240.);
+    QCOMPARE(s.prefixYawSigmaDeg.size(), size_t(3));
+    QVERIFY(std::isfinite(s.prefixYawSigmaDeg[0]) && s.prefixYawSigmaDeg[0] > 20);
+    QVERIFY(std::isnan(s.prefixYawSigmaDeg[1]));
+    QVERIFY(std::isnan(s.prefixYawSigmaDeg[2]));
+    QCOMPARE(s.growthStop, std::string("all_failed"));
+    QVERIFY(s.fallback);
+    QVERIFY(std::isnan(s.yawSigmaDeg));
+    QCOMPARE(s.prefixStart, s.start);
+    QCOMPARE(s.prefixEnd, s.end);
+
+    // No prefix fit was used, so the account's prefix-fit fields are their
+    // defaults (initializer.h), not the 60 s fit's, and the diagnostics agree.
+    QCOMPARE(s.prefixIterations, 0);
+    QCOMPARE(s.prefixPasses, 0);
+    QVERIFY(!s.prefixOnLimit);
+    QVERIFY(s.prefixRotation.matrix() == Rot3().matrix());
+    QVERIFY(s.prefixGyroBias.isZero(0));
+    // The propagated start: the coarse attitude at the anchor (the first fix,
+    // so bitwise) carried with zero bias; no segment fit ran.
+    const Samples window = windowOf(name, Tuning{});
+    QVERIFY(s.startRotation.matrix() == coarseAttitude(window, 0).matrix());
+    QVERIFY(s.startGyroBias.isZero(0));
+    QVERIFY(s.gyroBias.isZero(0));
+    QCOMPARE(s.iterations, 0);
+    QVERIFY(!s.converged);
+    QCOMPARE(run.segments.size(), 1);
+    const QJsonObject segment = run.segments.first().toObject();
+    QCOMPARE(segment.value("growth_stop").toString(), QStringLiteral("all_failed"));
+    QCOMPARE(segment.value("fallback").toBool(false), true);
+    QCOMPARE(segment.value("prefix_fits").toInt(-1), 12);
+    QCOMPARE(segment.value("prefix_length_s").toDouble(), 240.);
+    QCOMPARE(segment.value("prefix_iterations").toInt(-1), 0);
+    QCOMPARE(segment.value("prefix_passes").toInt(-1), 0);
+    QCOMPARE(segment.value("prefix_on_limit").toBool(true), false);
+    QVERIFY(segment.value("yaw_sigma_deg").isNull());
+    // The full fit still ran, from the fallback start; its outcome is
+    // logged, not asserted.
+    QVERIFY(!run.trace.history.empty());
+    qInfo() << "motion_start fallback after a completed 60 s fit: full fit outcome" << int(run.result.outcome)
+            << qPrintable(run.result.reason) << ", rule" << run.trace.stopping.rule.c_str()
+            << "after" << run.trace.history.size() << "iterations";
+}
+
 void FusionKernelTest::startsOnTheLimitAreStillUsed()
 {
     // Spec section 3.3, Budgets: one iteration per pass and a negative
@@ -1633,7 +1699,7 @@ void FusionKernelTest::startsOnTheLimitAreStillUsed()
     const Rot3 expected = propagateAttitude(window, s.prefixRotation, s.prefixStart, s.start, s.prefixGyroBias);
     QVERIFY(Rot3::Logmap(s.startRotation.between(expected)).norm() < 1e-9);
     QVERIFY(s.startGyroBias == s.prefixGyroBias);
-    // The failure diagnostics keep Phase 3's shape: no initializer object.
+    // The failure diagnostics keep the completed-pass shape: no initializer object.
     QCOMPARE(limited.diagnostics.keys(), kCompletedPassFailureKeys);
     QCOMPARE(limited.diagnostics.value("stopping").toObject().value("rule").toString(),
              QStringLiteral("iteration limit"));
@@ -1795,6 +1861,10 @@ void FusionKernelTest::temperatureGraphShape()
     const auto sigmas = std::dynamic_pointer_cast<gtsam::noiseModel::Diagonal>(slopePrior->noiseModel());
     QVERIFY(sigmas != nullptr);
     QVERIFY(sigmas->sigmas() == gtsam::Vector(Vector3::Constant(Tuning{}.gyroBiasSlopeSigma)));
+    // Spec section 6's priors, as literals: b0 keeps 0.03 rad/s, b1 is
+    // 0.010 deg/s per degC.
+    QCOMPARE(Tuning{}.gyroBiasSigma, .03);
+    QCOMPARE(Tuning{}.gyroBiasSlopeSigma, .010*kPi/180);
 
     // The stock four-argument builder is unchanged: six factors, ImuFactor at 4.
     const auto stock = buildFactorGraph(d, ConstantBias(), Tuning{});

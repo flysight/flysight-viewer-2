@@ -11,7 +11,12 @@ namespace FlySight::Fusion::Detail {
 ///
 /// Deliberately not a std::exception: no `catch (const std::exception &)` in
 /// the library (or in a solver callback) can mistake a cancellation for a
-/// failure and swallow it. Only runPipeline() catches it.
+/// failure and swallow it. Only runPipeline() catches it. The library's other
+/// catches are narrower and typed, so none can take it either: runPipeline()
+/// catches FitFailure ahead of std::exception, fitOrFail() (initializer.cpp)
+/// catches FitFailure to make a failed prefix or segment fit a start with
+/// infinite objective, and yawSigmaDeg() (factorgraphfit.cpp) catches
+/// gtsam::IndeterminantLinearSystemException and returns the 180-degree cap.
 class FusionCancelled {};
 
 /// The kernel's one progress-and-cancel facility: a boundary of the fit.

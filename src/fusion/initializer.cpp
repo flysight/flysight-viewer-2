@@ -48,9 +48,11 @@ constexpr int kPrefixPasses = 1;
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 /// A fit whose failure (FitFailure: non-finite or increasing cost) is a start
-/// with infinite objective, reported as "no result". Nothing else is caught:
-/// FusionCancelled is not a std::exception and must reach runPipeline(), and
-/// any other exception is a defect of the fit stage.
+/// with infinite objective, reported as "no result". Nothing else is caught,
+/// deliberately: FusionCancelled is not a std::exception and must reach
+/// runPipeline(), and any other exception in a prefix or segment fit (a GTSAM
+/// solver exception included) is fatal for the run, which runPipeline()
+/// reports as SolverFailed; it is not a start that failed.
 std::optional<FitResult> fitOrFail(const Samples &d, const InitialState &initial, const Tuning &tuning,
                                    const QString &passFormat, const Checkpoint &checkpoint)
 {
@@ -112,7 +114,8 @@ double previousSigma(const std::vector<double> &sigmas)
 /// Spec section 3.2, steps b-d: the prefix window grown on the marginal yaw
 /// sigma, each length fitted from the four heading starts. Returns the best
 /// fit of the last length tried, or nothing when every start of that length
-/// failed; `s` holds the account either way.
+/// failed; `s` holds the account either way, and its prefix-fit fields
+/// describe the returned fit only (their defaults when there is none).
 std::optional<FitResult> growPrefix(const Samples &segment, size_t anchor, const gtsam::Rot3 &coarse,
                                     int index, int count, const Tuning &prefixTuning,
                                     const Checkpoint &checkpoint, SegmentAccount &s)
@@ -166,13 +169,17 @@ std::optional<FitResult> growPrefix(const Samples &segment, size_t anchor, const
         const double sigma = yawSigmaDeg(best->graph, best->values, X(0));
         s.prefixYawSigmaDeg.push_back(sigma);
         s.yawSigmaDeg = sigma;
-        recordPrefix(s, *best);
+        // The fit is recorded only where it is returned: a longer window
+        // whose starts all fail falls back with no prefix fit, and the
+        // account must not then describe this one.
         if (sigma <= kYawSigmaLimitDeg) {
             s.growthStop = "observable";
+            recordPrefix(s, *best);
             return best;
         }
         if (covers) {
             s.growthStop = "covers";
+            recordPrefix(s, *best);
             return best;
         }
         // A doubling that cut the sigma by less than kGrowthMinGain means the
@@ -180,6 +187,7 @@ std::optional<FitResult> growPrefix(const Samples &segment, size_t anchor, const
         const double previous = previousSigma(s.prefixYawSigmaDeg);
         if (std::isfinite(previous) && sigma > (1-kGrowthMinGain)*previous) {
             s.growthStop = "no_gain";
+            recordPrefix(s, *best);
             return best;
         }
     }
@@ -203,8 +211,10 @@ SegmentAccount initializeSegment(const Samples &segment, int index, int count, c
     const std::optional<FitResult> prefix = growPrefix(segment, anchor, coarse, index, count,
                                                        prefixTuning, checkpoint, s);
     if (!prefix) {
-        // Today's fallback, over this segment only: the coarse attitude at
-        // the anchor carried by the gyro with zero bias.
+        // The fallback of spec section 3.3, over this segment only: the
+        // coarse attitude at the anchor carried by the gyro with zero bias.
+        // The account's prefix-fit fields stay at their defaults: no prefix
+        // fit was used (initializer.h).
         s.startRotation = propagateAttitude(segment, coarse, s.anchorTime, s.start, gtsam::Vector3::Zero());
         s.startGyroBias = gtsam::Vector3::Zero();
         rotations = attitudesCarriedForward(segment, s.startRotation, s.startGyroBias);

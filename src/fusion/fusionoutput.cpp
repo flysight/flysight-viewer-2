@@ -56,8 +56,9 @@ QJsonObject qualityObject(const Quality &q)
         {"objective_per_state", q.objectivePerState}};
 }
 
-/// The initializer's account (overview layout): one object per segment, the
-/// segment length and the indices of the segments that fell back.
+/// The initializer's account, the diagnostics' `initializer` object: one
+/// object per segment, the segment length and the indices of the segments
+/// that fell back.
 QJsonObject initializerObject(const InitializerAccount &a)
 {
     QJsonArray segments, fallbacks;
