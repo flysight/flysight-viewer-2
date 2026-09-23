@@ -1370,9 +1370,10 @@ QList<GraphNode> CalculationEngine::leafClosure(const QSet<GraphNode> &direct) c
 {
     QSet<GraphNode> leaves;
     QSet<GraphNode> visited;
+    // Breadth-first with a head index: nothing is ever removed from the front
     QList<GraphNode> queue = direct.values();
-    while (!queue.isEmpty()) {
-        const GraphNode n = queue.takeFirst();
+    for (qsizetype head = 0; head < queue.size(); ++head) {
+        const GraphNode n = queue.at(head);
         if (visited.contains(n))
             continue;
         visited.insert(n);
