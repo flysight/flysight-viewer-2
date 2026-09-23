@@ -141,6 +141,12 @@ QString LogbookManager::sessionsDirectory() const
 
 void LogbookManager::initialize()
 {
+    // Calculation records whose session file does not exist. The rule depends
+    // only on the files on disk, so it runs first and identically for every
+    // index branch below. A record whose csv exists but that the index does
+    // not know stays: orphan adoption makes that csv a session.
+    removeStrayCalculationRecords();
+
     // Attempt to read index.json
     const QString indexPath = logbookDirectory() + QStringLiteral("/index.json");
     QFile indexFile(indexPath);
@@ -615,6 +621,9 @@ bool LogbookManager::saveSession(const SessionData& session)
         }
     }
 
+    // Calculation records are neither read nor written here: the session
+    // file's bytes never depend on them.
+
     // Reuse existing UUID or generate a new one
     QString uuid;
     if (m_sessionIdToUuid.contains(sessionId)) {
@@ -687,6 +696,8 @@ bool LogbookManager::remapSessionId(const QString &oldId, const QString &newId)
     if (m_sessionIdToUuid.contains(newId))
         return false;
 
+    // File stems never change (the uuid moves to the new id), so calculation
+    // records need no move.
     const QString uuid = m_sessionIdToUuid.take(oldId);
     m_sessionIdToUuid[newId] = uuid;
 
@@ -726,9 +737,18 @@ bool LogbookManager::removeSession(const QString& sessionId)
     const QString filePath = sessionsDirectory()
         + QStringLiteral("/") + uuid + QStringLiteral(".csv");
 
+    // The session file first: if it stays, its records stay with it.
     if (!QFile::remove(filePath)) {
         qWarning("LogbookManager: failed to remove %s", qPrintable(filePath));
         return false;
+    }
+
+    // Then its records, while the stem is still known. The session is gone
+    // whatever happens here; a record left behind is a stray that the next
+    // start's initialize() removes.
+    if (!removeCalculationRecordsForStem(uuid)) {
+        qWarning("LogbookManager: calculation records of %s not all removed; "
+                 "the next start removes them", qPrintable(sessionId));
     }
 
     m_sessionIdToUuid.remove(sessionId);
@@ -739,6 +759,212 @@ bool LogbookManager::removeSession(const QString& sessionId)
     m_needsFlushBeforeSave.remove(sessionId);
     m_indexNeedsFlush = true;
     return true;
+}
+
+// ============================================================================
+// Calculation records
+// ============================================================================
+
+QString LogbookManager::recordStem(const QString &sessionId) const
+{
+    // As loadSessionRaw(): the stem is the entry's uuid (the id itself for an
+    // identity entry).
+    return m_sessionIdToUuid.value(sessionId);
+}
+
+QString LogbookManager::calculationRecordPath(const QString &stem, const QString &calculationId) const
+{
+    return sessionsDirectory() + QLatin1Char('/') + recordFileName(stem, calculationId);
+}
+
+QStringList LogbookManager::calculationRecordFileNames() const
+{
+    // Never a wildcard built from a stem: an identity stem is an arbitrary
+    // file name and may contain '[', '*' or '?'.
+    QStringList names = QDir(sessionsDirectory()).entryList(
+        QStringList() << (QStringLiteral("*.") + calculationRecordExtension()),
+        QDir::Files, QDir::Name);
+    names.sort();
+    return names;
+}
+
+QStringList LogbookManager::calculationRecordIdsForStem(const QString &stem) const
+{
+    QStringList ids;
+    const QStringList names = calculationRecordFileNames();
+    for (const QString &name : names) {
+        const auto parsed = parseRecordFileName(name);
+        if (parsed && parsed->first == stem)
+            ids.append(parsed->second);
+    }
+    ids.sort();
+    ids.removeDuplicates();     // the extension in two spellings on a case-sensitive file system
+    return ids;
+}
+
+bool LogbookManager::removeCalculationRecordsForStem(const QString &stem)
+{
+    const QString dir = sessionsDirectory();
+    bool allRemoved = true;
+    const QStringList names = calculationRecordFileNames();
+    for (const QString &name : names) {
+        const auto parsed = parseRecordFileName(name);
+        if (!parsed || parsed->first != stem)
+            continue;
+        const QString path = dir + QLatin1Char('/') + name;
+        if (!QFile::remove(path)) {
+            qWarning("LogbookManager: failed to remove calculation record %s", qPrintable(path));
+            allRemoved = false;
+        }
+    }
+    return allRemoved;
+}
+
+int LogbookManager::removeStrayCalculationRecords()
+{
+    const QStringList stemList = sessionFileStems();
+    const QSet<QString> stems(stemList.cbegin(), stemList.cend());
+    const QString dir = sessionsDirectory();
+
+    int removed = 0;
+    const QStringList names = calculationRecordFileNames();
+    for (const QString &name : names) {
+        const auto parsed = parseRecordFileName(name);
+        if (parsed && stems.contains(parsed->first))
+            continue;
+        const QString path = dir + QLatin1Char('/') + name;
+        if (QFile::remove(path))
+            ++removed;
+        else
+            qWarning("LogbookManager: failed to remove stray calculation record %s", qPrintable(path));
+    }
+    return removed;
+}
+
+bool LogbookManager::writeCalculationRecord(const QString &sessionId, const CalculationRecord &record,
+                                            QString *error)
+{
+    if (error)
+        error->clear();
+
+    const QString &calculationId = record.result.calculationId;
+    const auto fail = [&](const QString &text) {
+        qWarning("LogbookManager: calculation record %s of %s not written: %s",
+                 qPrintable(calculationId), qPrintable(sessionId), qPrintable(text));
+        if (error)
+            *error = text;
+        return false;
+    };
+
+    const QString stem = recordStem(sessionId);
+    if (stem.isEmpty())
+        return fail(QStringLiteral("not in the logbook index"));
+
+    // Encode first: a record the format refuses never opens a file, so the
+    // previous record is untouched.
+    QString encodeError;
+    const std::optional<QByteArray> bytes = encodeCalculationRecord(record, &encodeError);
+    if (!bytes)
+        return fail(encodeError);
+
+    // As DataExporter's session write: a temporary file renamed over the
+    // record at commit (no direct-write fallback), so a failure at any step
+    // leaves the previous record intact. Records are not referenced from
+    // index.json, so no index flush is involved. Nothing is retried.
+    const QString path = calculationRecordPath(stem, calculationId);
+    const auto writeError = [&path](const QSaveFile &file) {
+        return QStringLiteral("Couldn't write file '%1': %2").arg(path, file.errorString());
+    };
+
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
+        return fail(writeError(file));
+
+    file.write(*bytes);
+    if (file.error() != QFileDevice::NoError) {
+        const QString text = writeError(file);
+        file.cancelWriting();
+        return fail(text);
+    }
+
+    if (!file.commit())
+        return fail(writeError(file));
+    return true;
+}
+
+CalculationRecordRead LogbookManager::readCalculationRecord(const QString &sessionId,
+                                                            const QString &calculationId) const
+{
+    CalculationRecordRead read;
+
+    const QString stem = recordStem(sessionId);
+    if (stem.isEmpty()) {
+        read.error = QStringLiteral("not in the logbook index");
+        return read;    // Missing
+    }
+
+    QFile file(calculationRecordPath(stem, calculationId));
+    if (!file.exists())
+        return read;    // Missing, no error
+
+    if (!file.open(QIODevice::ReadOnly)) {
+        read.status = CalculationRecordStatus::Unreadable;
+        read.error = file.errorString();
+        return read;
+    }
+    const QByteArray bytes = file.readAll();
+    if (file.error() != QFileDevice::NoError) {
+        read.status = CalculationRecordStatus::Unreadable;
+        read.error = file.errorString();
+        return read;
+    }
+
+    // Deciding what is stale (and deleting it) is the caller's job.
+    CalculationRecord record;
+    read.status = decodeCalculationRecord(bytes, &record, &read.error);
+    if (read.status != CalculationRecordStatus::Ok)
+        return read;
+
+    if (record.result.calculationId != calculationId) {
+        read.status = CalculationRecordStatus::Corrupt;
+        read.error = QStringLiteral("the record belongs to calculation '%1'").arg(record.result.calculationId);
+        return read;
+    }
+
+    read.record = std::move(record);
+    return read;
+}
+
+QStringList LogbookManager::calculationRecordIds(const QString &sessionId) const
+{
+    const QString stem = recordStem(sessionId);
+    if (stem.isEmpty())
+        return {};
+    return calculationRecordIdsForStem(stem);
+}
+
+bool LogbookManager::removeCalculationRecord(const QString &sessionId, const QString &calculationId)
+{
+    const QString stem = recordStem(sessionId);
+    if (stem.isEmpty())
+        return false;
+
+    const QString path = calculationRecordPath(stem, calculationId);
+    if (!QFileInfo::exists(path))
+        return true;
+    if (!QFile::remove(path)) {
+        qWarning("LogbookManager: failed to remove calculation record %s", qPrintable(path));
+        return false;
+    }
+    return true;
+}
+
+bool LogbookManager::removeCalculationRecords(const QString &sessionId)
+{
+    const QString stem = recordStem(sessionId);
+    if (stem.isEmpty())
+        return false;
+    return removeCalculationRecordsForStem(stem);
 }
 
 // ============================================================================

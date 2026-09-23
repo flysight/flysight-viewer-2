@@ -279,6 +279,9 @@ add_library(flysight_core STATIC
   sessionimport.cpp          sessionimport.h
   dataexporter.cpp           dataexporter.h
   logbookmanager.cpp        logbookmanager.h
+  # Stored requested-calculation results: record format and file names (the
+  # logbook manager does the I/O)
+  calculationrecord.cpp      calculationrecord.h
   logbookcolumn.cpp          logbookcolumn.h
   sessionmodel.cpp           sessionmodel.h
   idlescheduler.cpp          idlescheduler.h

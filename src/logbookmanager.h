@@ -11,14 +11,34 @@
 #include <QString>
 #include <QVector>
 
+#include "calculationrecord.h"
 #include "logbookcolumn.h"
 #include "sessiondata.h"
 
 namespace FlySight {
 
-/// The logbook on disk: one CSV per session under sessions/, and index.json,
-/// which maps SESSION_IDs to file names and caches the logbook column values
-/// of every session so that the logbook can be shown without parsing a CSV.
+/// What LogbookManager::readCalculationRecord() found.
+struct CalculationRecordRead {
+    CalculationRecordStatus status = CalculationRecordStatus::Missing;
+    std::optional<CalculationRecord> record;   ///< set only for Ok
+    QString error;                             ///< empty for Ok and for a plain Missing
+};
+
+/// The logbook on disk: one CSV per session under sessions/ (beside it, the
+/// session's calculation record files), and index.json, which maps SESSION_IDs
+/// to file names and caches the logbook column values of every session so
+/// that the logbook can be shown without parsing a CSV.
+///
+/// CALCULATION RECORDS. sessions/ also holds
+/// <stem>.<encoded calculation id>.fvresult files (calculationrecord.h), at
+/// most one per (session, requested calculation): the stored result of an
+/// explicit calculation. They are keyed by the session's file stem (which
+/// never changes), are never referenced from index.json, and are never listed
+/// as sessions (they do not end in .csv). They are written only through
+/// writeCalculationRecord() (QSaveFile, like a session file), and removed with
+/// their session (removeSession), by the stray pass of initialize() when their
+/// session file does not exist, and by explicit removal. The manager only
+/// stores and reports them; the caller decides validity.
 ///
 /// index.json root: "calculationCompatibility" (integer marker,
 /// FlySight::CalculationCompatibilityVersion), "calculationEnvironment"
@@ -53,8 +73,10 @@ class LogbookManager : public QObject {
 public:
     static LogbookManager& instance();
 
-    // Creates sessions directory if missing, loads index.json or scans *.csv
-    // file names. No session file is parsed: every session comes up as a stub.
+    // Creates sessions directory if missing, removes stray calculation records
+    // (those whose session file does not exist; names only, nothing is
+    // opened), then loads index.json or scans *.csv file names. No session
+    // file is parsed: every session comes up as a stub.
     void initialize();
 
     // Drops all in-memory index state so the next initialize() re-reads the current
@@ -71,8 +93,38 @@ public:
     // Reason of the last failed saveSession(); empty after a successful one.
     QString lastSaveError() const;
 
-    // Deletes the .csv file for the given SESSION_ID; returns true on success
+    // Deletes the .csv file and the calculation records of the given
+    // SESSION_ID; returns true when the .csv file was removed. The .csv goes
+    // first: if it cannot be removed, nothing is (false). A record that cannot
+    // be removed afterwards is warned about and left to the next start's stray
+    // pass (still true).
     bool removeSession(const QString& sessionId);
+
+    // --- Calculation records ---
+
+    // Writes sessions/<stem>.<encoded id>.fvresult atomically (QSaveFile),
+    // replacing any previous record for (session, record.result's calculation id).
+    // On failure *error is set, nothing on disk has changed, and the previous
+    // record (if any) is intact. The record is encoded before any file is
+    // opened, so a record the format refuses never touches the disk.
+    bool writeCalculationRecord(const QString &sessionId, const CalculationRecord &record,
+                                QString *error = nullptr);
+
+    // Reads and decodes one record. Missing when the session is unknown or has
+    // no such file; Unreadable when the file cannot be opened / read; the codec's
+    // status otherwise; Corrupt when the record names a different calculation id.
+    // Never deletes anything.
+    CalculationRecordRead readCalculationRecord(const QString &sessionId, const QString &calculationId) const;
+
+    // Calculation ids of the session's record files, sorted. Names only: no
+    // record is opened. Empty for an unknown session.
+    QStringList calculationRecordIds(const QString &sessionId) const;
+
+    // Deletes one record / every record of the session. True when no such file
+    // remains (absent counts as success); false for an unknown session or when a
+    // file could not be removed (warned).
+    bool removeCalculationRecord(const QString &sessionId, const QString &calculationId);
+    bool removeCalculationRecords(const QString &sessionId);
 
     // Writes index.json (atomically): the marker, cacheEnvironment(), the column
     // definitions, and per session uuid / lastAccessed / cached values except
@@ -202,6 +254,28 @@ private:
 
     // File stems of sessions/*.csv, sorted by name. Touches no state.
     QStringList sessionFileStems() const;
+
+    // --- Calculation records (keyed by file stem: the stray pass and
+    //     removeSession have a stem, not an id) ---
+
+    // The file stem the records of SESSION_ID are named after; empty when the
+    // session is not in the logbook.
+    QString recordStem(const QString &sessionId) const;
+
+    QString calculationRecordPath(const QString &stem, const QString &calculationId) const;
+    // Names of the *.fvresult files in sessions/ (QDir::Files), sorted.
+    QStringList calculationRecordFileNames() const;
+    // Calculation ids of the record files whose parsed stem is exactly `stem`, sorted.
+    QStringList calculationRecordIdsForStem(const QString &stem) const;
+    // Removes every record file whose parsed stem is exactly `stem`; false when
+    // one could not be removed (warned).
+    bool removeCalculationRecordsForStem(const QString &stem);
+
+    // Removes every record file whose name does not parse or whose stem has no
+    // session file (*.csv) on disk. Names only: no record and no session file
+    // is opened, and only *.fvresult files are deleted. Returns the number of
+    // files removed.
+    int removeStrayCalculationRecords();
 
     // Maps SESSION_ID strings to UUID filename stems (without extension)
     QMap<QString, QString> m_sessionIdToUuid;

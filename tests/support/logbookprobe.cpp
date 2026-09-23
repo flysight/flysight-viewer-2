@@ -1,6 +1,7 @@
 #include "logbookprobe.h"
 
 #include <QDir>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QSettings>
 
@@ -69,6 +70,18 @@ QStringList sessionCsvFiles()
 {
     return QDir(TestEnvironment::instance().sessionsDir())
         .entryList({QStringLiteral("*.csv")}, QDir::Files, QDir::Name);
+}
+
+QStringList calculationRecordFiles()
+{
+    return QDir(TestEnvironment::instance().sessionsDir())
+        .entryList({QStringLiteral("*.fvresult")}, QDir::Files, QDir::Name);
+}
+
+QString sessionFileStem(const QString &sessionId)
+{
+    const QString path = sessionFilePath(sessionId);
+    return path.isEmpty() ? QString() : QFileInfo(path).completeBaseName();
 }
 
 LogbookColumn descriptionColumn()

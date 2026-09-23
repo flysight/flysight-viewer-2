@@ -41,6 +41,12 @@ QString sessionFilePath(const QString &sessionId);
 /// File names (not paths) of the *.csv files in the sessions directory, sorted.
 QStringList sessionCsvFiles();
 
+/// File names (not paths) of the *.fvresult calculation record files in the sessions directory, sorted.
+QStringList calculationRecordFiles();
+
+/// Base name of sessionFilePath(sessionId): the stem its record files are named after; empty when there is none.
+QString sessionFileStem(const QString &sessionId);
+
 // ---- shared logbook columns -----------------------------------------------
 
 FlySight::LogbookColumn descriptionColumn();    ///< session attribute _DESCRIPTION

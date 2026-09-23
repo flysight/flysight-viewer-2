@@ -172,11 +172,13 @@ flysight_add_test(tst_importer          SOURCES tst_importer.cpp)
 flysight_add_test(tst_source_layer      SOURCES tst_source_layer.cpp)
 
 # Persistence: the on-disk text forms, the exact save / reload round trip, the
-# marker-gated index.json column cache, and the model's per-column refresh
+# marker-gated index.json column cache, the model's per-column refresh, and the
+# stored calculation records
 flysight_add_test(tst_csvformat             SOURCES tst_csvformat.cpp)
 flysight_add_test(tst_persistence_roundtrip SOURCES tst_persistence_roundtrip.cpp)
 flysight_add_test(tst_logbook_index         SOURCES tst_logbook_index.cpp)
 flysight_add_test(tst_column_cache          SOURCES tst_column_cache.cpp)
+flysight_add_test(tst_result_records        SOURCES tst_result_records.cpp)
 
 # Import and merge rules: the pure merge plan, the model's import path against
 # a temporary logbook, and the widget-free import driver / failure text
