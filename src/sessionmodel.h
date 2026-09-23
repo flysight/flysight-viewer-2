@@ -9,6 +9,7 @@
 #include <QMap>
 #include <QSet>
 #include <QVector>
+#include "calculationresultstore.h"
 #include "engine/calculationregistry.h"
 #include "idlescheduler.h"
 #include "logbookcolumn.h"
@@ -118,6 +119,22 @@ struct MergeResult {
 /// A pin prevents eviction and NOTHING else: removeSessions(), a merge, and a
 /// repopulation of the model still remove or change a pinned session. The model
 /// knows pinned ids only; it knows nothing about jobs.
+///
+/// STORED RESULTS. The result of an explicit calculation that the engine
+/// installs with status Ok (a job's publish or a synchronous request) is
+/// written beside the session file by CalculationResultStore, through the
+/// explicit-result listener that attachSession() installs. That includes a
+/// session not saved yet: mergeSessions() reserves its file stem at import
+/// (LogbookManager::reserveSessionFile). A result that an input change drops
+/// deletes its record. Every path that installs a session into a row
+/// (sessionRef(), the unloaded branch of mergeSessions(), the promotion of a
+/// bulk edit's temporary session) restores the session's valid records into
+/// its engine before the row is published (before sessionLoaded, dataChanged
+/// or any plot pass) and deletes the stale ones. Restoring is not requesting:
+/// it starts nothing. Temporary loads (column worker, bulk edit on a stub)
+/// never read a record. Eviction, unloading, a registry change, the model's
+/// destruction and removeSessions() never delete one
+/// (LogbookManager::removeSession does, with the session file).
 class SessionModel : public QAbstractTableModel
 {
     Q_OBJECT
@@ -178,6 +195,10 @@ public:
     };
     const ColumnWorkStats &columnWorkStats() const { return m_columnWorkStats; }
     void resetColumnWorkStats() { m_columnWorkStats = ColumnWorkStats(); }
+
+    /// Work done by the stored-result store (see STORED RESULTS). A test seam.
+    const CalculationResultStore::Stats &storedResultStats() const { return m_resultStore.stats(); }
+    void resetStoredResultStats() { m_resultStore.resetStats(); }
 
     // Data management
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
@@ -274,7 +295,9 @@ public:
     /// for the row, dependencyChanged per key, and modelChanged. Nothing is
     /// emitted for an empty set, an id without a row, or a row that is not
     /// loaded. A published calculation result is not a persistent change: no
-    /// cached column is invalidated, nothing is marked dirty, nothing is saved.
+    /// cached column is invalidated, nothing is marked dirty, nothing is saved
+    /// (the record of a stored result is written by the engine's listener at
+    /// the install itself, see STORED RESULTS).
     /// Must not be called while a RowStabilityGuard is held (it emits).
     void publishCalculationInvalidation(const QString &sessionId, const QSet<DependencyKey> &keys);
 
@@ -294,6 +317,9 @@ public:
     void cancelBulkEdit();
 
 private:
+    // Declared before m_rows so that it outlives every row's engine.
+    CalculationResultStore m_resultStore;
+
     QVector<SessionRow> m_rows;
     QVector<LogbookColumn> m_columns;
 
@@ -328,6 +354,9 @@ private:
     // engine's listener; it is queued per session and published once per
     // event-loop pass, because one user action can cause many registry changes.
     void attachSession(SessionRow &sr);
+    /// Restores the stored results of a row whose session has just been installed
+    /// (see STORED RESULTS). Returns the names the restore invalidated.
+    QSet<DependencyKey> restoreStoredResults(SessionRow &sr);
     void queueInvalidation(const QString &sessionId, const QSet<DependencyKey> &keys);
     void publishInvalidation(int row, const QSet<DependencyKey> &keys);
     QHash<QString, QSet<DependencyKey>> m_pendingInvalidations;

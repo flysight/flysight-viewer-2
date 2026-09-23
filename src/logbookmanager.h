@@ -37,8 +37,11 @@ struct CalculationRecordRead {
 /// as sessions (they do not end in .csv). They are written only through
 /// writeCalculationRecord() (QSaveFile, like a session file), and removed with
 /// their session (removeSession), by the stray pass of initialize() when their
-/// session file does not exist, and by explicit removal. The manager only
-/// stores and reports them; the caller decides validity.
+/// session file does not exist, and by explicit removal. A session
+/// not saved yet may have records under the stem reserved for it
+/// (reserveSessionFile()); if it is never saved they are strays and the next
+/// initialize() removes them. The manager only stores and reports them; the
+/// caller decides validity.
 ///
 /// index.json root: "calculationCompatibility" (integer marker,
 /// FlySight::CalculationCompatibilityVersion), "calculationEnvironment"
@@ -97,7 +100,10 @@ public:
     // SESSION_ID; returns true when the .csv file was removed. The .csv goes
     // first: if it cannot be removed, nothing is (false). A record that cannot
     // be removed afterwards is warned about and left to the next start's stray
-    // pass (still true).
+    // pass (still true). A session that only has a reserved stem
+    // (reserveSessionFile(), never saved) has no .csv: its records are
+    // removed, the reservation is dropped, and the result is true. False for
+    // an id that is neither in the index nor reserved.
     bool removeSession(const QString& sessionId);
 
     // --- Calculation records ---
@@ -199,6 +205,14 @@ public:
     // SESSION_ID has not been read yet.
     bool isIdentityEntry(const QString &sessionId) const;
 
+    // Gives a session that has no session file yet the file stem its first
+    // save will use, so that files kept beside the session file (calculation
+    // records) can be written before that save. Returns the stem: the
+    // session's existing one if it has a file, else a reserved fresh uuid
+    // (idempotent). A reservation is never listed in index.json, is not a
+    // session of the scan, and is forgotten by reset(). Empty id: returns "".
+    QString reserveSessionFile(const QString &sessionId);
+
     // Header-only read of the SESSION_ID recorded in the entry's CSV. nullopt
     // when the id is unknown, the file is unreadable, or it records none.
     std::optional<QString> peekSessionId(const QString &sessionId) const;
@@ -219,7 +233,8 @@ public:
 
     // Atomically replaces a temporary UUID-based session ID with the real SESSION_ID.
     // Updates m_sessionIdToUuid, m_lastAccessed, m_cachedValues, and the unsaved marks.
-    // Returns false if oldId not found or newId already exists.
+    // Returns false if oldId not found or newId already exists (in the index or
+    // as a reservation).
     bool remapSessionId(const QString &oldId, const QString &newId);
 
     // Returns the lastAccessed map (SESSION_ID -> epoch seconds)
@@ -258,8 +273,9 @@ private:
     // --- Calculation records (keyed by file stem: the stray pass and
     //     removeSession have a stem, not an id) ---
 
-    // The file stem the records of SESSION_ID are named after; empty when the
-    // session is not in the logbook.
+    // The file stem the records of SESSION_ID are named after: the index's
+    // uuid, else the stem reserved for a session not saved yet; empty when
+    // it is neither ("not in the logbook index").
     QString recordStem(const QString &sessionId) const;
 
     QString calculationRecordPath(const QString &stem, const QString &calculationId) const;
@@ -277,8 +293,11 @@ private:
     // files removed.
     int removeStrayCalculationRecords();
 
-    // Maps SESSION_ID strings to UUID filename stems (without extension)
+    // Maps SESSION_ID strings to UUID filename stems (without extension).
+    // Means "has a session file": flushIndex() lists every entry.
     QMap<QString, QString> m_sessionIdToUuid;
+
+    QMap<QString, QString> m_reservedStems; // SESSION_ID -> uuid of a session not saved yet
 
     // Maps SESSION_ID -> epoch seconds (last accessed time)
     QMap<QString, double> m_lastAccessed;

@@ -1,0 +1,1103 @@
+// Stored results of explicit calculations on a real SessionModel, a real
+// logbook and a real JobQueue, with fast synthetic calculations
+// (store-requested-calculations, Phase 3):
+//
+//  - an Ok install writes a record, on both install paths (a job's publish and
+//    a synchronous request), also for a session that an import has just
+//    created and that has not been saved yet (its reserved file stem);
+//  - an install with any other status writes and deletes nothing;
+//  - a write failure (a directory at the record's path, a type the record
+//    format refuses) leaves the in-memory result usable and the previous
+//    record intact;
+//  - an input change deletes the record; eviction, a registry change and a
+//    restart do not;
+//  - every load path that installs a session into a row restores its valid
+//    records before the row is published, in passes (explicit-on-explicit
+//    chains), and deletes the stale ones; a result already installed wins;
+//  - the column worker's and the bulk edit's temporary loads never read one;
+//  - deleting a session removes its records, and a stray is removed at the
+//    next start.
+//
+// Expected values are literals (EA1 == 5, "negative input", file names),
+// never recomputed with the code under test. Nothing depends on permission
+// bits, on case sensitivity or on directory iteration order.
+
+#include <functional>
+#include <memory>
+#include <optional>
+
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonObject>
+#include <QScopeGuard>
+#include <QSignalSpy>
+#include <QtTest>
+
+#include "calculationrecord.h"
+#include "calculationresultstore.h"
+#include "engine/calculationengine.h"
+#include "engine/calculationregistry.h"
+#include "engine/storedcalculationresult.h"
+#include "jobfixture.h"
+#include "jobmodel.h"
+#include "jobqueue.h"
+#include "logbookcolumn.h"
+#include "logbookmanager.h"
+#include "logbookprobe.h"
+#include "preferences/preferencekeys.h"
+#include "preferences/preferencesmanager.h"
+#include "sessiondata.h"
+#include "sessionmodel.h"
+#include "testenvironment.h"
+#include "testmain.h"
+#include "testutil.h"
+
+using namespace FlySight;
+using namespace FlySightTest;
+
+using Kind = JobQueue::RequestResult::Kind;
+
+Q_DECLARE_METATYPE(FlySight::DependencyKey)
+
+namespace {
+
+const QString kExpA = QStringLiteral("expA");
+const QString kExpB = QStringLiteral("expB");
+const QString kThrower = QStringLiteral("thrower");
+const QString kUp = QStringLiteral("test.store.up");
+const QString kDown = QStringLiteral("test.store.down");
+const QString kListy = QStringLiteral("test.store.listy");
+const QString kShadow = QStringLiteral("test.store.shadow");
+const QString kExtra = QStringLiteral("test.store.extra");
+const QString kGone = QStringLiteral("test.store.gone");
+
+DependencyKey attrKey(const char *key)
+{
+    return DependencyKey::attribute(QString::fromLatin1(key));
+}
+
+/// Explicit calculations of this test, on the GLOBAL registry (the one real
+/// sessions are bound to); the destructor unregisters exactly these ids.
+/// Construct after JobWorld and before the SessionModel; destroy after the
+/// JobQueue and the SessionModel are gone (as JobWorld).
+///
+/// | Id               | Policy   | Inputs                   | Output                                                   |
+/// |------------------|----------|--------------------------|----------------------------------------------------------|
+/// | test.store.up    | Explicit | attr UP_IN               | UP_OUT = UP_IN * 3 (int)                                 |
+/// | test.store.down  | Explicit | attr UP_OUT, attr DOWN_IN| DOWN_OUT = UP_OUT + DOWN_IN (int)                        |
+/// | test.store.listy | Explicit | attr LY_IN               | LY_OUT = LY_IN * 2 (int) when LY_IN >= 0; else           |
+/// |                  |          |                          | QVariantList{LY_IN} (a type records refuse)              |
+///
+/// Literals: UP_IN = 2, DOWN_IN = 5 give UP_OUT 6 and DOWN_OUT 11.
+/// "test.store.down" sorts before "test.store.up": a restore in id order
+/// meets the downstream record first.
+class StoreWorld {
+public:
+    StoreWorld()
+    {
+        CalculationRegistry &registry = CalculationRegistry::instance();
+
+        CalculationDescriptor up;
+        up.id = kUp;
+        up.policy = EvaluationPolicy::Explicit;
+        up.inputs = {CalcInput::attribute(QStringLiteral("UP_IN"))};
+        up.outputs = {attrKey("UP_OUT")};
+        up.compute = [](const EvaluationContext &ctx) {
+            return CalculationResult().setAttribute(QStringLiteral("UP_OUT"),
+                                                    ctx.attribute(QStringLiteral("UP_IN")).toInt() * 3);
+        };
+
+        CalculationDescriptor down;
+        down.id = kDown;
+        down.policy = EvaluationPolicy::Explicit;
+        down.inputs = {CalcInput::attribute(QStringLiteral("UP_OUT")), CalcInput::attribute(QStringLiteral("DOWN_IN"))};
+        down.outputs = {attrKey("DOWN_OUT")};
+        down.compute = [](const EvaluationContext &ctx) {
+            return CalculationResult().setAttribute(QStringLiteral("DOWN_OUT"),
+                                                    ctx.attribute(QStringLiteral("UP_OUT")).toInt()
+                                                        + ctx.attribute(QStringLiteral("DOWN_IN")).toInt());
+        };
+
+        CalculationDescriptor listy;
+        listy.id = kListy;
+        listy.policy = EvaluationPolicy::Explicit;
+        listy.inputs = {CalcInput::attribute(QStringLiteral("LY_IN"))};
+        listy.outputs = {attrKey("LY_OUT")};
+        listy.compute = [](const EvaluationContext &ctx) {
+            const int in = ctx.attribute(QStringLiteral("LY_IN")).toInt();
+            if (in >= 0)
+                return CalculationResult().setAttribute(QStringLiteral("LY_OUT"), in * 2);
+            return CalculationResult().setAttribute(QStringLiteral("LY_OUT"), QVariantList{QVariant(in)});
+        };
+
+        for (const CalculationDescriptor &d : {up, down, listy}) {
+            if (registry.registerCalculation(d))
+                m_ids.append(d.id);
+        }
+    }
+    ~StoreWorld()
+    {
+        for (const QString &id : std::as_const(m_ids))
+            CalculationRegistry::instance().unregister(id);
+    }
+    StoreWorld(const StoreWorld &) = delete;
+    StoreWorld &operator=(const StoreWorld &) = delete;
+
+    QStringList registeredIds() const { return m_ids; }
+
+private:
+    QStringList m_ids;
+};
+
+/// An OnDemand calculation with no inputs and one int attribute output.
+CalculationDescriptor constantCalculation(const QString &id, const QString &output, int value)
+{
+    CalculationDescriptor d;
+    d.id = id;
+    d.outputs = {DependencyKey::attribute(output)};
+    d.compute = [output, value](const EvaluationContext &) {
+        return CalculationResult().setAttribute(output, value);
+    };
+    return d;
+}
+
+/// The bytes of a file; a null QByteArray when it does not exist or is not a file.
+QByteArray bytesOf(const QString &path)
+{
+    QFile file(path);
+    if (!QFileInfo(path).isFile() || !file.open(QIODevice::ReadOnly))
+        return QByteArray();
+    return file.readAll();
+}
+
+bool writeBytes(const QString &path, const QByteArray &bytes)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    return file.write(bytes) == bytes.size();
+}
+
+/// What a sessionLoaded watcher saw for one session.
+struct LoadWatch {
+    bool seen = false;
+    std::optional<ResultStatus> status;     ///< of the watched calculation, at the emission
+};
+
+} // namespace
+
+class ResultStoreTest : public QObject {
+    Q_OBJECT
+
+private slots:
+    void initTestCase();
+    void init();
+    void cleanup();
+
+    void writesOnOkInstall_data();
+    void writesOnOkInstall();
+    void rejectionIsWritten();
+    void nonOkInstallWritesAndDeletesNothing();
+    void recordBeforeFirstSave_data();
+    void recordBeforeFirstSave();
+    void recordOfNeverSavedSessionIsStray();
+    void removeBeforeFirstSave();
+    void writeFailureLeavesResultUsable();
+    void writeFailureKeepsPreviousRecord();
+    void inputChangeDeletesRecord();
+    void noDeleteWithoutInputChange();
+    void restoreOnEveryLoadPath_data();
+    void restoreOnEveryLoadPath();
+    void bulkEditPromotionRestores();
+    void restoresChainInPasses();
+    void upstreamMissingAfterLastPassDeletes();
+    void staleRecordDeletedOnLoad_data();
+    void staleRecordDeletedOnLoad();
+    void alreadyInstalledIsKept();
+    void temporaryLoadsNeverRestore();
+    void deletingSessionRemovesRecords();
+    void strayRecordRemovedAtRestart();
+
+private:
+    SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
+    CalculationEngine &engine(const QString &id) { return session(id).calculationEngine(); }
+    int row(const QString &id) const { return m_model->getSessionRow(id); }
+    bool isLoaded(const QString &id) const
+    {
+        const int r = row(id);
+        return r >= 0 && std::as_const(*m_model).rowAt(r).isLoaded();
+    }
+    /// The application's edit path. A test function checks it with QVERIFY.
+    [[nodiscard]] bool setInput(const QString &id, const char *key, int value)
+    {
+        return m_model->updateAttribute(id, QString::fromLatin1(key), value);
+    }
+    const CalculationResultStore::Stats &stats() const { return m_model->storedResultStats(); }
+
+    /// sessions/<stem of id>.<encodedId>.fvresult; the stem comes from
+    /// index.json on disk, so the session must be saved and the index flushed.
+    static QString recordPath(const QString &id, const QString &encodedId)
+    {
+        return TestEnvironment::instance().sessionsDir() + QLatin1Char('/') + sessionFileStem(id)
+            + QLatin1Char('.') + encodedId + QStringLiteral(".fvresult");
+    }
+
+    /// Makes each row a stub: touches it (a created row is not in the LRU),
+    /// then evicts with capacity 0 and sets the capacity back to 50. Empty
+    /// when every row is a stub afterwards.
+    [[nodiscard]] QString evict(const QStringList &ids);
+    /// A simulated application restart: new logbook state, a new model of
+    /// stubs from the index, a new queue.
+    void restart();
+    /// Reads the record, applies `mutate`, writes it back. Empty on success.
+    [[nodiscard]] QString rewriteRecord(const QString &id, const QString &calculationId,
+                                        const std::function<void(CalculationRecord &)> &mutate);
+    /// Notes the status of `calculationId` in session `id` at every sessionLoaded for it.
+    void watchLoad(QObject *scope, const QString &id, const QString &calculationId, LoadWatch *out);
+
+    std::unique_ptr<JobWorld> m_world;
+    std::unique_ptr<StoreWorld> m_store;
+    std::unique_ptr<SessionModel> m_model;
+    std::unique_ptr<JobQueue> m_queue;
+    QStringList m_registryBefore;
+};
+
+void ResultStoreTest::initTestCase()
+{
+    TestEnvironment::instance().registerBuiltIns();
+
+    // One logbook column that reads stored data only
+    PreferencesManager::instance().registerPreference(PreferenceKeys::LogbookColumnsVersion, 0);
+    LogbookColumnStore::instance().setColumns({descriptionColumn()});
+
+    qRegisterMetaType<DependencyKey>();
+}
+
+// Four loaded, hidden, unfocused, saved sessions s1..s4 from the descent
+// fixture (so every one has a file stem), none with an input of any synthetic
+// calculation.
+void ResultStoreTest::init()
+{
+    TestEnvironment &env = TestEnvironment::instance();
+    env.useFreshLogbook();
+    env.resetPreferencesToDefaults();
+    LogbookManager::instance().initialize();
+    m_registryBefore = CalculationRegistry::instance().registeredIds();
+
+    m_world = std::make_unique<JobWorld>();
+    m_store = std::make_unique<StoreWorld>();
+    QCOMPARE(m_store->registeredIds(), QStringList({kUp, kDown, kListy}));
+
+    m_model = std::make_unique<SessionModel>();
+    m_model->mergeSessions(JobWorld::sessions({"s1", "s2", "s3", "s4"}));
+    QCOMPARE(m_model->rowCount(), 4);
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(!sessionFileStem("s1").isEmpty());
+
+    m_queue = std::make_unique<JobQueue>(m_model.get());
+}
+
+// Note nothing, tear everything down, and only then check (see tst_jobqueue).
+void ResultStoreTest::cleanup()
+{
+    if (m_queue)
+        m_queue->shutdown();
+    m_queue.reset();
+    m_model.reset();
+    m_store.reset();
+    m_world.reset();
+
+    LogbookColumnStore::instance().setColumns({descriptionColumn()});
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+
+    QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
+    QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
+}
+
+QString ResultStoreTest::evict(const QStringList &ids)
+{
+    for (const QString &id : ids) {
+        if (row(id) < 0)
+            return id + QStringLiteral(" has no row");
+        session(id);
+    }
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
+    QString error;
+    for (const QString &id : ids) {
+        if (isLoaded(id) && error.isEmpty())
+            error = id + QStringLiteral(" is still loaded");
+    }
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    return error;
+}
+
+void ResultStoreTest::restart()
+{
+    if (m_queue)
+        m_queue->shutdown();
+    m_queue.reset();
+    m_model.reset();
+
+    LogbookManager &logbook = LogbookManager::instance();
+    TestEnvironment::instance().reopenLogbook();
+    logbook.initialize();
+
+    m_model = std::make_unique<SessionModel>();
+    m_model->populateFromIndex(logbook.cachedColumnValues(LogbookColumnStore::instance().enabledColumns()),
+                               logbook.lastAccessedMap());
+    m_queue = std::make_unique<JobQueue>(m_model.get());
+}
+
+QString ResultStoreTest::rewriteRecord(const QString &id, const QString &calculationId,
+                                       const std::function<void(CalculationRecord &)> &mutate)
+{
+    LogbookManager &logbook = LogbookManager::instance();
+    const CalculationRecordRead read = logbook.readCalculationRecord(id, calculationId);
+    if (read.status != CalculationRecordStatus::Ok)
+        return QStringLiteral("the record could not be read: ") + read.error;
+    CalculationRecord record = *read.record;
+    mutate(record);
+    QString error;
+    if (!logbook.writeCalculationRecord(id, record, &error))
+        return QStringLiteral("the record could not be written: ") + error;
+    return QString();
+}
+
+void ResultStoreTest::watchLoad(QObject *scope, const QString &id, const QString &calculationId, LoadWatch *out)
+{
+    SessionModel *model = m_model.get();
+    connect(model, &SessionModel::sessionLoaded, scope, [model, id, calculationId, out](const QString &loadedId) {
+        if (loadedId != id)
+            return;
+        const auto guard = model->stableRows();
+        const SessionData *loaded = model->loadedSession(id);
+        out->seen = true;
+        out->status = loaded ? loaded->calculationEngine().resultStatus(calculationId) : std::nullopt;
+    });
+}
+
+// ---- Writing -------------------------------------------------------------------------
+
+void ResultStoreTest::writesOnOkInstall_data()
+{
+    QTest::addColumn<bool>("queued");
+    QTest::newRow("request") << false;
+    QTest::newRow("queue") << true;
+}
+
+// An Ok install writes exactly one record, stamped and equal to the export,
+// before control returns to the event loop.
+void ResultStoreTest::writesOnOkInstall()
+{
+    QFETCH(bool, queued);
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QVERIFY(waitForIdle(*m_model));
+    const QString stem = sessionFileStem("s1");
+    const QString path = recordPath("s1", QStringLiteral("exp%41"));
+    QVERIFY(!QFileInfo::exists(path));
+    m_model->resetStoredResultStats();
+
+    bool existedAtInstall = false;
+    QObject scope;      // owns the connection
+    if (queued) {
+        connect(m_queue.get(), &JobQueue::jobFinished, &scope, [&existedAtInstall, path](JobId, JobState) {
+            existedAtInstall = QFileInfo(path).isFile();
+        });
+        QCOMPARE(m_queue->request("s1", kExpA).kind, Kind::Created);
+        QVERIFY(waitIdle(*m_queue));
+        QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
+    } else {
+        QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+        existedAtInstall = QFileInfo(path).isFile();
+    }
+    QVERIFY(existedAtInstall);
+
+    QCOMPARE(calculationRecordFiles(), QStringList({stem + QStringLiteral(".exp%41.fvresult")}));
+    const CalculationRecordRead read = LogbookManager::instance().readCalculationRecord("s1", kExpA);
+    QCOMPARE(read.status, CalculationRecordStatus::Ok);
+    QVERIFY(read.record->stampsAreCurrent());
+    const std::optional<StoredCalculationResult> exported = engine("s1").exportResult(kExpA);
+    QVERIFY(exported.has_value());
+    QVERIFY(sameContent(read.record->result, *exported));
+    QCOMPARE(stats().recordsWritten, 1);
+    QCOMPARE(stats().writeFailures, 0);
+}
+
+// A rejection is an Ok result with a reason: it is stored like any other.
+void ResultStoreTest::rejectionIsWritten()
+{
+    QVERIFY(setInput("s1", "EA_IN", -1));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+
+    const CalculationRecordRead read = LogbookManager::instance().readCalculationRecord("s1", kExpA);
+    QCOMPARE(read.status, CalculationRecordStatus::Ok);
+    const StoredCalculationResult &result = read.record->result;
+    QCOMPARE(result.detail, QStringLiteral("negative input"));
+    QCOMPARE(result.bundle.reason(), QStringLiteral("negative input"));
+    QCOMPARE(result.bundle.attributeValue(QStringLiteral("EA_DIAG")), QVariant(QStringLiteral("rejected")));
+    QVERIFY(!result.bundle.isAvailable(attrKey("EA1")));
+    QVERIFY(!result.bundle.isAvailable(attrKey("EA2")));
+}
+
+// Failed and MissingInput installs write nothing and delete nothing.
+void ResultStoreTest::nonOkInstallWritesAndDeletesNothing()
+{
+    LogbookManager &logbook = LogbookManager::instance();
+    QVERIFY(setInput("s1", "T_IN", 1));
+    QVERIFY(waitForIdle(*m_model));
+
+    StoredCalculationResult thrower;
+    thrower.calculationId = kThrower;
+    thrower.bundle.setAttribute(QStringLiteral("T_OUT"), 2);
+    thrower.leaves = {GraphNode::storedAttribute(QStringLiteral("T_IN"))};
+    thrower.inputFingerprint = QByteArray(InputFingerprintSize, 't');
+    QVERIFY(logbook.writeCalculationRecord("s1", CalculationRecord::stamped(thrower)));
+
+    StoredCalculationResult expA;
+    expA.calculationId = kExpA;
+    expA.bundle.setAttribute(QStringLiteral("EA1"), 5);
+    expA.leaves = {GraphNode::storedAttribute(QStringLiteral("EA_IN"))};
+    expA.inputFingerprint = QByteArray(InputFingerprintSize, 'a');
+    QVERIFY(logbook.writeCalculationRecord("s2", CalculationRecord::stamped(expA)));
+
+    const QString throwerPath = recordPath("s1", kThrower);
+    const QString expAPath = recordPath("s2", QStringLiteral("exp%41"));
+    const QByteArray throwerBytes = bytesOf(throwerPath);
+    const QByteArray expABytes = bytesOf(expAPath);
+    QVERIFY(!throwerBytes.isEmpty());
+    QVERIFY(!expABytes.isEmpty());
+    m_model->resetStoredResultStats();
+
+    const JobQueue::RequestResult job = m_queue->request("s1", kThrower);
+    QCOMPARE(job.kind, Kind::Created);
+    QVERIFY(waitIdle(*m_queue));
+    QCOMPARE(m_queue->job(job.job).state, JobState::Succeeded);
+    QCOMPARE(m_queue->job(job.job).resultStatus, std::optional<ResultStatus>(ResultStatus::Failed));
+    QCOMPARE(engine("s2").request(kExpA).status, ResultStatus::MissingInput);
+
+    QCOMPARE(bytesOf(throwerPath), throwerBytes);
+    QCOMPARE(bytesOf(expAPath), expABytes);
+    QCOMPARE(stats().recordsWritten, 0);
+    QCOMPARE(stats().writeFailures, 0);
+    QCOMPARE(stats().droppedRecordsDeleted, 0);
+}
+
+void ResultStoreTest::recordBeforeFirstSave_data()
+{
+    QTest::addColumn<bool>("viaRestart");
+    QTest::newRow("evict") << false;
+    QTest::newRow("restart") << true;
+}
+
+// A session created by an import has a logbook identity at once (a reserved
+// stem): a result published before the idle saver ran is stored under it,
+// and the first save uses that stem.
+void ResultStoreTest::recordBeforeFirstSave()
+{
+    QFETCH(bool, viaRestart);
+    const QStringList recordsBefore = calculationRecordFiles();
+    const QStringList csvBefore = sessionCsvFiles();
+
+    QList<SessionData> incoming = JobWorld::sessions({"n1"});
+    incoming[0].setAttribute(QStringLiteral("EA_IN"), 4);
+    const QList<MergeResult> results = m_model->mergeSessions(incoming);
+    QCOMPARE(results.size(), 1);
+    QCOMPARE(results.at(0).outcome, MergeResult::Outcome::Created);
+    m_model->resetStoredResultStats();
+    {
+        // Same event-loop pass: nothing has been saved
+        WarningCapture warnings;
+        QCOMPARE(engine("n1").request(kExpA).status, ResultStatus::Ok);
+        QCOMPARE(warnings.messages(), QStringList());
+    }
+    QCOMPARE(stats().recordsWritten, 1);
+
+    QStringList gained = calculationRecordFiles();
+    for (const QString &name : recordsBefore)
+        gained.removeOne(name);
+    QCOMPARE(gained.size(), 1);
+    QVERIFY2(gained.at(0).endsWith(QStringLiteral(".exp%41.fvresult")), qPrintable(gained.at(0)));
+    QCOMPARE(sessionCsvFiles(), csvBefore);
+
+    // A reservation is never listed in index.json
+    QVERIFY(LogbookManager::instance().flushIndex());
+    QVERIFY(!readIndex()[QStringLiteral("sessions")].toObject().contains(QStringLiteral("n1")));
+
+    // The idle saver saves n1 under the reserved stem
+    QVERIFY(waitForIdle(*m_model));
+    const QString stem = sessionFileStem("n1");
+    QVERIFY(!stem.isEmpty());
+    QCOMPARE(gained.at(0), stem + QStringLiteral(".exp%41.fvresult"));
+    QCOMPARE(sessionCsvFiles().size(), csvBefore.size() + 1);
+
+    if (viaRestart) {
+        restart();
+    } else {
+        QCOMPARE(evict({"n1"}), QString());
+        m_model->resetStoredResultStats();
+    }
+    const Quiet quiet(*m_queue);
+    const int jobs = m_queue->model()->rowCount();
+    CalculationEngine &loaded = engine("n1");
+    QCOMPARE(loaded.resultStatus(kExpA), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(session("n1").getAttribute(QStringLiteral("EA1")), QVariant(5));
+    QCOMPARE(loaded.runCount(kExpA), 0);
+    QCOMPARE(loaded.preparedCount(), 0);
+    QCOMPARE(stats().recordsRestored, 1);
+    QCOMPARE(m_queue->model()->rowCount(), jobs);
+    QVERIFY(quiet.holds());
+}
+
+// A session that is never saved (a crash before the first save) leaves a
+// stray record, which the next start removes.
+void ResultStoreTest::recordOfNeverSavedSessionIsStray()
+{
+    const QStringList recordsBefore = calculationRecordFiles();
+    const QStringList csvBefore = sessionCsvFiles();
+
+    QList<SessionData> incoming = JobWorld::sessions({"n1"});
+    incoming[0].setAttribute(QStringLiteral("EA_IN"), 4);
+    QCOMPARE(m_model->mergeSessions(incoming).at(0).outcome, MergeResult::Outcome::Created);
+    QCOMPARE(engine("n1").request(kExpA).status, ResultStatus::Ok);
+    QStringList gained = calculationRecordFiles();
+    for (const QString &name : recordsBefore)
+        gained.removeOne(name);
+    QCOMPARE(gained.size(), 1);
+
+    // No event-loop pass: the model's destructor saves nothing
+    m_queue->shutdown();
+    m_queue.reset();
+    m_model.reset();
+    restart();
+
+    QVERIFY(!calculationRecordFiles().contains(gained.at(0)));
+    QCOMPARE(calculationRecordFiles(), recordsBefore);
+    QVERIFY(row("n1") < 0);
+    QCOMPARE(sessionCsvFiles(), csvBefore);
+}
+
+// The main window's delete sequence removes the records of a session that
+// was never saved.
+void ResultStoreTest::removeBeforeFirstSave()
+{
+    const QStringList recordsBefore = calculationRecordFiles();
+    QList<SessionData> incoming = JobWorld::sessions({"n1"});
+    incoming[0].setAttribute(QStringLiteral("EA_IN"), 4);
+    QCOMPARE(m_model->mergeSessions(incoming).at(0).outcome, MergeResult::Outcome::Created);
+    QCOMPARE(engine("n1").request(kExpA).status, ResultStatus::Ok);
+    QCOMPARE(calculationRecordFiles().size(), recordsBefore.size() + 1);
+
+    LogbookManager &logbook = LogbookManager::instance();
+    QVERIFY(m_model->removeSessions({"n1"}));
+    QVERIFY(logbook.removeSession("n1"));
+    QVERIFY(logbook.flushIndex());
+
+    QCOMPARE(calculationRecordFiles(), recordsBefore);
+    QVERIFY(!logbook.removeSession("n1"));
+}
+
+// A directory at the record's path: the write fails once, loudly, and the
+// in-memory result is untouched. The next Ok publish writes it.
+void ResultStoreTest::writeFailureLeavesResultUsable()
+{
+    const QString path = recordPath("s1", QStringLiteral("exp%41"));
+    QVERIFY(QDir().mkdir(path));
+    const auto removeDirectory = qScopeGuard([path] { QDir().rmdir(path); });
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    m_model->resetStoredResultStats();
+
+    {
+        WarningCapture warnings;
+        QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+        QCOMPARE(warnings.count(), 1);
+        QCOMPARE(warnings.count(QStringLiteral("not written")), 1);
+    }
+    QCOMPARE(engine("s1").resultStatus(kExpA), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(session("s1").getAttribute(QStringLiteral("EA1")), QVariant(5));
+    QCOMPARE(session("s1").getAttribute(QStringLiteral("DA")), QVariant(105));
+    QCOMPARE(stats().writeFailures, 1);
+    QCOMPARE(stats().recordsWritten, 0);
+    QVERIFY(QFileInfo(path).isDir());
+    QCOMPARE(calculationRecordFiles(), QStringList());     // no temporary file left
+
+    // Tried again at the next Ok publish
+    QVERIFY(QDir().rmdir(path));
+    QVERIFY(setInput("s1", "EA_IN", 6));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QVERIFY(QFileInfo(path).isFile());
+    QCOMPARE(stats().recordsWritten, 1);
+}
+
+// A result the record format refuses (a QVariantList attribute): the previous
+// record keeps its bytes, the in-memory result is usable.
+void ResultStoreTest::writeFailureKeepsPreviousRecord()
+{
+    QVERIFY(setInput("s1", "LY_IN", -1));
+    QVERIFY(waitForIdle(*m_model));
+
+    StoredCalculationResult previous;
+    previous.calculationId = kListy;
+    previous.bundle.setAttribute(QStringLiteral("LY_OUT"), 4);
+    previous.leaves = {GraphNode::storedAttribute(QStringLiteral("LY_IN"))};
+    previous.inputFingerprint = QByteArray(InputFingerprintSize, 'x');
+    QVERIFY(LogbookManager::instance().writeCalculationRecord("s1", CalculationRecord::stamped(previous)));
+    const QString path = recordPath("s1", QStringLiteral("test%2Estore%2Elisty"));
+    const QByteArray bytes = bytesOf(path);
+    QVERIFY(!bytes.isEmpty());
+    m_model->resetStoredResultStats();
+
+    {
+        WarningCapture warnings;
+        QCOMPARE(engine("s1").request(kListy).status, ResultStatus::Ok);
+        QCOMPARE(warnings.count(), 1);
+        QCOMPARE(warnings.count(QStringLiteral("LY_OUT")), 1);
+    }
+    const QVariant value = session("s1").getAttribute(QStringLiteral("LY_OUT"));
+    QCOMPARE(value.typeId(), int(QMetaType::QVariantList));
+    QCOMPARE(value.toList(), QVariantList{QVariant(-1)});
+    QCOMPARE(bytesOf(path), bytes);
+    QCOMPARE(stats().writeFailures, 1);
+    QCOMPARE(stats().recordsWritten, 0);
+}
+
+// ---- Deleting ------------------------------------------------------------------------
+
+// An input change deletes the record of every result it drops, at once; an
+// edit the result does not depend on leaves the record alone.
+void ResultStoreTest::inputChangeDeletesRecord()
+{
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QVERIFY(setInput("s1", "EB_IN", 10));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QCOMPARE(engine("s1").request(kExpB).status, ResultStatus::Ok);
+    const QString pathA = recordPath("s1", QStringLiteral("exp%41"));
+    const QString pathB = recordPath("s1", QStringLiteral("exp%42"));
+    QVERIFY(QFileInfo(pathA).isFile());
+    QVERIFY(QFileInfo(pathB).isFile());
+    const int jobs = m_queue->model()->rowCount();
+    m_model->resetStoredResultStats();
+
+    // No event-loop pass in between
+    QVERIFY(setInput("s1", "EA_IN", 7));
+    QVERIFY(!QFileInfo::exists(pathA));
+    QVERIFY(!QFileInfo::exists(pathB));
+    QCOMPARE(stats().droppedRecordsDeleted, 2);
+    QVERIFY(engine("s1").resultStatus(kExpA) != std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(m_queue->model()->rowCount(), jobs);
+
+    // An attribute expA does not read
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    const QByteArray bytes = bytesOf(pathA);
+    QVERIFY(!bytes.isEmpty());
+    QVERIFY(m_model->updateAttribute("s1", QStringLiteral("_DESCRIPTION"), QStringLiteral("x")));
+    QCOMPARE(bytesOf(pathA), bytes);
+    QCOMPARE(engine("s1").resultStatus(kExpA), std::optional<ResultStatus>(ResultStatus::Ok));
+}
+
+// Eviction, a registry change and a restart never delete a record.
+void ResultStoreTest::noDeleteWithoutInputChange()
+{
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+    const QString path = recordPath("s1", QStringLiteral("exp%41"));
+    const QByteArray bytes = bytesOf(path);
+    QVERIFY(!bytes.isEmpty());
+
+    // (a) eviction
+    QCOMPARE(evict({"s1"}), QString());
+    QCOMPARE(bytesOf(path), bytes);
+
+    // (b) a registry change drops the in-memory result, not the record
+    QCOMPARE(engine("s1").resultStatus(kExpA), std::optional<ResultStatus>(ResultStatus::Ok));
+    m_model->resetStoredResultStats();
+    bool shadowRegistered = false;
+    const auto unregisterShadow = qScopeGuard([&shadowRegistered] {
+        if (shadowRegistered)
+            CalculationRegistry::instance().unregister(kShadow);
+    });
+    shadowRegistered = CalculationRegistry::instance().registerCalculation(
+        constantCalculation(kShadow, QStringLiteral("EA_IN"), 0));
+    QVERIFY(shadowRegistered);
+    QVERIFY(engine("s1").resultStatus(kExpA) != std::optional<ResultStatus>(ResultStatus::Ok));
+    QVERIFY(CalculationRegistry::instance().unregister(kShadow));
+    shadowRegistered = false;
+    m_model->flushPendingInvalidations();
+    QCOMPARE(bytesOf(path), bytes);
+    QCOMPARE(stats().droppedRecordsDeleted, 0);
+
+    // (c) a restart
+    restart();
+    QCOMPARE(bytesOf(path), bytes);
+    QCOMPARE(engine("s1").resultStatus(kExpA), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(stats().recordsRestored, 1);
+    QCOMPARE(bytesOf(path), bytes);
+}
+
+// ---- Restoring -----------------------------------------------------------------------
+
+void ResultStoreTest::restoreOnEveryLoadPath_data()
+{
+    QTest::addColumn<QString>("path");
+    for (const char *path : {"show", "background", "focus", "edit", "startup", "mergeUnloaded"})
+        QTest::newRow(path) << QString::fromLatin1(path);
+}
+
+// Every load path that installs s1 into its row restores the stored result
+// before sessionLoaded, without a run or a job, and never rewrites the record.
+void ResultStoreTest::restoreOnEveryLoadPath()
+{
+    QFETCH(QString, path);
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+    const QString recordFile = recordPath("s1", QStringLiteral("exp%41"));
+    const QByteArray bytes = bytesOf(recordFile);
+    QVERIFY(!bytes.isEmpty());
+    QCOMPARE(evict({"s1", "s2", "s3", "s4"}), QString());
+
+    if (path == QLatin1String("startup"))
+        restart();
+    m_model->resetStoredResultStats();
+    QObject scope;
+    LoadWatch atLoad;
+    watchLoad(&scope, "s1", kExpA, &atLoad);
+    const Quiet quiet(*m_queue);
+
+    if (path == QLatin1String("show") || path == QLatin1String("startup")) {
+        m_model->setRowsVisibility({{row("s1"), true}});
+    } else if (path == QLatin1String("background")) {
+        QMap<int, bool> all;
+        for (const char *id : {"s1", "s2", "s3", "s4"})
+            all.insert(row(QString::fromLatin1(id)), true);
+        m_model->setRowsVisibility(all);
+        QVERIFY(waitForIdle(*m_model));
+    } else if (path == QLatin1String("focus")) {
+        m_model->setFocusedSessionId("s1");
+    } else if (path == QLatin1String("edit")) {
+        QVERIFY(m_model->updateAttribute("s1", QStringLiteral("_DESCRIPTION"), QStringLiteral("renamed")));
+    } else if (path == QLatin1String("mergeUnloaded")) {
+        SessionData incoming;
+        incoming.setAttribute(QStringLiteral("SESSION_ID"), QStringLiteral("s1"));
+        incoming.setAttribute(QStringLiteral("STORE_NOTE"), QStringLiteral("n"));
+        const QList<MergeResult> results = m_model->mergeSessions(QList<SessionData>{incoming});
+        QCOMPARE(results.size(), 1);
+        QCOMPARE(results.at(0).outcome, MergeResult::Outcome::Merged);
+    } else {
+        QFAIL("unknown path");
+    }
+
+    QVERIFY(isLoaded("s1"));
+    QVERIFY(atLoad.seen);
+    QCOMPARE(atLoad.status, std::optional<ResultStatus>(ResultStatus::Ok));
+    CalculationEngine &loaded = engine("s1");
+    QCOMPARE(loaded.resultStatus(kExpA), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(session("s1").getAttribute(QStringLiteral("EA1")), QVariant(5));
+    QCOMPARE(loaded.runCount(kExpA), 0);
+    QCOMPARE(loaded.preparedCount(), 0);
+    QCOMPARE(stats().recordsRestored, 1);
+    QCOMPARE(stats().recordsWritten, 0);
+    QCOMPARE(bytesOf(recordFile), bytes);
+    QVERIFY(quiet.holds());
+}
+
+// The bulk edit's temporary session becomes the row when its save fails: that
+// is an install, so it restores.
+void ResultStoreTest::bulkEditPromotionRestores()
+{
+    TestEnvironment &env = TestEnvironment::instance();
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));     // the index holds the description column's value
+    const QString recordFile = recordPath("s1", QStringLiteral("exp%41"));
+    const QByteArray bytes = bytesOf(recordFile);
+    QVERIFY(!bytes.isEmpty());
+    QCOMPARE(evict({"s1"}), QString());
+    m_model->resetStoredResultStats();
+
+    // A directory at index.json: saveSession()'s pre-save flush fails
+    QVERIFY(QFile::remove(env.indexPath()));
+    QVERIFY(QDir().mkdir(env.indexPath()));
+    const auto removeDirectory = qScopeGuard([&env] { QDir().rmdir(env.indexPath()); });
+    {
+        WarningCapture warnings;
+        m_model->startBulkEdit({row("s1")}, 0, QStringLiteral("bulk"));
+        QVERIFY(waitForIdle(*m_model));
+        QVERIFY(warnings.count() > 0);
+    }
+
+    const SessionRow &sr = std::as_const(*m_model).rowAt(row("s1"));
+    QVERIFY(sr.isLoaded());
+    QVERIFY(sr.dirty);
+    QVERIFY(sr.saveFailed);
+    CalculationEngine &loaded = engine("s1");
+    QCOMPARE(loaded.resultStatus(kExpA), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(session("s1").getAttribute(QStringLiteral("EA1")), QVariant(5));
+    QCOMPARE(loaded.runCount(kExpA), 0);
+    QCOMPARE(loaded.preparedCount(), 0);
+    QCOMPARE(stats().recordsRestored, 1);
+    QCOMPARE(bytesOf(recordFile), bytes);
+}
+
+// An explicit result that reads another one restores in any file order.
+void ResultStoreTest::restoresChainInPasses()
+{
+    QVERIFY(setInput("s1", "UP_IN", 2));
+    QVERIFY(setInput("s1", "DOWN_IN", 5));
+    QCOMPARE(engine("s1").request(kUp).status, ResultStatus::Ok);
+    QCOMPARE(engine("s1").request(kDown).status, ResultStatus::Ok);
+    QCOMPARE(evict({"s1"}), QString());
+
+    // The premise: the downstream record comes first
+    QCOMPARE(LogbookManager::instance().calculationRecordIds("s1"), QStringList({kDown, kUp}));
+    m_model->resetStoredResultStats();
+    const Quiet quiet(*m_queue);
+
+    CalculationEngine &loaded = engine("s1");
+    QCOMPARE(loaded.resultStatus(kUp), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(loaded.resultStatus(kDown), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(session("s1").getAttribute(QStringLiteral("DOWN_OUT")), QVariant(11));
+    QCOMPARE(loaded.runCount(kUp), 0);
+    QCOMPARE(loaded.runCount(kDown), 0);
+    QCOMPARE(loaded.preparedCount(), 0);
+    QCOMPARE(stats().recordsRestored, 2);
+    QCOMPARE(stats().staleRecordsDeleted, 0);
+    QVERIFY(quiet.holds());
+}
+
+// Inputs that stay unavailable after the last pass make a record stale.
+void ResultStoreTest::upstreamMissingAfterLastPassDeletes()
+{
+    QVERIFY(setInput("s1", "UP_IN", 2));
+    QVERIFY(setInput("s1", "DOWN_IN", 5));
+    QCOMPARE(engine("s1").request(kUp).status, ResultStatus::Ok);
+    QCOMPARE(engine("s1").request(kDown).status, ResultStatus::Ok);
+    QCOMPARE(evict({"s1"}), QString());
+    const QString downPath = recordPath("s1", QStringLiteral("test%2Estore%2Edown"));
+    QVERIFY(QFileInfo(downPath).isFile());
+    QVERIFY(LogbookManager::instance().removeCalculationRecord("s1", kUp));
+    m_model->resetStoredResultStats();
+    const Quiet quiet(*m_queue);
+
+    CalculationEngine &loaded = engine("s1");
+    QVERIFY(!QFileInfo::exists(downPath));
+    QVERIFY(loaded.resultStatus(kDown) != std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(stats().staleRecordsDeleted, 1);
+    QCOMPARE(stats().recordsRestored, 0);
+    QCOMPARE(loaded.runCount(kDown), 0);
+    QCOMPARE(loaded.runCount(kUp), 0);
+    QCOMPARE(loaded.preparedCount(), 0);
+    QVERIFY(quiet.holds());
+}
+
+void ResultStoreTest::staleRecordDeletedOnLoad_data()
+{
+    QTest::addColumn<QString>("alteration");
+    for (const char *alteration : {"compatibility", "environment", "resultVersion", "bundle", "leaves",
+                                   "fingerprint", "notARecord", "unsupportedVersion", "unknownCalculation"})
+        QTest::newRow(alteration) << QString::fromLatin1(alteration);
+}
+
+// Every reason a record is stale deletes it when the session is loaded; the
+// calculation then reads not requested, and nothing runs.
+void ResultStoreTest::staleRecordDeletedOnLoad()
+{
+    QFETCH(QString, alteration);
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(evict({"s1"}), QString());
+    const QString expAPath = recordPath("s1", QStringLiteral("exp%41"));
+    QString alteredPath = expAPath;
+
+    bool extraRegistered = false;
+    const auto unregisterExtra = qScopeGuard([&extraRegistered] {
+        if (extraRegistered)
+            CalculationRegistry::instance().unregister(kExtra);
+    });
+
+    if (alteration == QLatin1String("compatibility")) {
+        QCOMPARE(rewriteRecord("s1", kExpA, [](CalculationRecord &r) { r.calculationCompatibility += 1; }),
+                 QString());
+    } else if (alteration == QLatin1String("environment")) {
+        extraRegistered = CalculationRegistry::instance().registerCalculation(
+            constantCalculation(kExtra, QStringLiteral("_STORE_EXTRA"), 1));
+        QVERIFY(extraRegistered);
+    } else if (alteration == QLatin1String("resultVersion")) {
+        QCOMPARE(rewriteRecord("s1", kExpA, [](CalculationRecord &r) { r.result.resultVersion = QStringLiteral("v-old"); }),
+                 QString());
+    } else if (alteration == QLatin1String("bundle")) {
+        QCOMPARE(rewriteRecord("s1", kExpA, [](CalculationRecord &r) {
+                     r.result.bundle.setAttribute(QStringLiteral("NOT_DECLARED"), 1);
+                 }), QString());
+    } else if (alteration == QLatin1String("leaves")) {
+        const CalculationRecordRead read = LogbookManager::instance().readCalculationRecord("s1", kExpA);
+        QCOMPARE(read.status, CalculationRecordStatus::Ok);
+        QCOMPARE(read.record->result.leaves.size(), 1);
+        QCOMPARE(rewriteRecord("s1", kExpA, [](CalculationRecord &r) { r.result.leaves.clear(); }), QString());
+    } else if (alteration == QLatin1String("fingerprint")) {
+        QCOMPARE(rewriteRecord("s1", kExpA, [](CalculationRecord &r) {
+                     r.result.inputFingerprint[0] = char(~r.result.inputFingerprint.at(0));
+                 }), QString());
+    } else if (alteration == QLatin1String("notARecord")) {
+        QVERIFY(writeBytes(expAPath, QByteArrayLiteral("garbage")));
+    } else if (alteration == QLatin1String("unsupportedVersion")) {
+        QByteArray bytes = bytesOf(expAPath);
+        QVERIFY(bytes.size() > 12);
+        bytes.replace(8, 4, QByteArray("\x02\x00\x00\x00", 4));
+        QVERIFY(writeBytes(expAPath, bytes));
+    } else if (alteration == QLatin1String("unknownCalculation")) {
+        QCOMPARE(rewriteRecord("s1", kExpA, [](CalculationRecord &r) { r.result.calculationId = kGone; }),
+                 QString());
+        alteredPath = recordPath("s1", QStringLiteral("test%2Estore%2Egone"));
+        QVERIFY(QFileInfo(expAPath).isFile());
+    } else {
+        QFAIL("unknown alteration");
+    }
+    QVERIFY(QFileInfo(alteredPath).isFile());
+    m_model->resetStoredResultStats();
+    const Quiet quiet(*m_queue);
+
+    CalculationEngine &loaded = engine("s1");
+    QVERIFY(!QFileInfo::exists(alteredPath));
+    QCOMPARE(stats().staleRecordsDeleted, 1);
+    QCOMPARE(loaded.runCount(kExpA), 0);
+    QCOMPARE(loaded.preparedCount(), 0);
+    if (alteration == QLatin1String("unknownCalculation")) {
+        QCOMPARE(loaded.resultStatus(kExpA), std::optional<ResultStatus>(ResultStatus::Ok));
+        QCOMPARE(stats().recordsRestored, 1);
+        QVERIFY(QFileInfo(expAPath).isFile());
+    } else {
+        QVERIFY(loaded.resultStatus(kExpA) != std::optional<ResultStatus>(ResultStatus::Ok));
+        QCOMPARE(stats().recordsRestored, 0);
+    }
+    QVERIFY(quiet.holds());
+}
+
+// A result installed some other way wins, and its record stays. Reachable
+// only by driving the store directly.
+void ResultStoreTest::alreadyInstalledIsKept()
+{
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+    const QString path = recordPath("s1", QStringLiteral("exp%41"));
+    const QByteArray bytes = bytesOf(path);
+    QVERIFY(!bytes.isEmpty());
+
+    std::optional<SessionData> copy = LogbookManager::instance().loadSession("s1");
+    QVERIFY(copy.has_value());
+    CalculationEngine &copyEngine = copy->calculationEngine();
+    QCOMPARE(copyEngine.request(kExpA).status, ResultStatus::Ok);
+    QCOMPARE(copyEngine.runCount(kExpA), 1);
+
+    CalculationResultStore store;
+    CalculationResultStore::RestoreSummary summary = store.restoreSession("s1", copyEngine);
+    QCOMPARE(summary.kept, 1);
+    QCOMPARE(summary.restored, 0);
+    QCOMPARE(summary.deleted, 0);
+    QCOMPARE(bytesOf(path), bytes);
+    QCOMPARE(copyEngine.runCount(kExpA), 1);
+    QCOMPARE(copyEngine.preparedCount(), 0);
+
+    // Also when the installed result is not Ok
+    copy->removeAttribute(QStringLiteral("EA_IN"));
+    QCOMPARE(copyEngine.request(kExpA).status, ResultStatus::MissingInput);
+    summary = store.restoreSession("s1", copyEngine);
+    QCOMPARE(summary.kept, 1);
+    QCOMPARE(summary.restored, 0);
+    QCOMPARE(summary.deleted, 0);
+    QCOMPARE(bytesOf(path), bytes);
+    QCOMPARE(copyEngine.runCount(kExpA), 1);
+    QCOMPARE(copyEngine.preparedCount(), 0);
+    QCOMPARE(store.stats().recordsKept, 2);
+    QCOMPARE(store.stats().restoreCalls, 2);
+}
+
+// The column worker's and the bulk edit's temporary loads never read a
+// record: even a stale one stays until a real load.
+void ResultStoreTest::temporaryLoadsNeverRestore()
+{
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(rewriteRecord("s1", kExpA, [](CalculationRecord &r) { r.calculationCompatibility += 1; }), QString());
+    const QString path = recordPath("s1", QStringLiteral("exp%41"));
+    const QByteArray bytes = bytesOf(path);
+    QVERIFY(!bytes.isEmpty());
+    QCOMPARE(evict({"s1"}), QString());
+    m_model->resetStoredResultStats();
+    m_model->resetColumnWorkStats();
+
+    // The column worker
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), exitTimeColumn()});
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(m_model->columnWorkStats().sessionsLoaded >= 1);
+    QVERIFY(!isLoaded("s1"));
+
+    // The bulk edit on a stub
+    m_model->startBulkEdit({row("s1")}, 0, QStringLiteral("bulk"));
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(!isLoaded("s1"));
+
+    QCOMPARE(stats().restoreCalls, 0);
+    QCOMPARE(stats().recordsRead, 0);
+    QCOMPARE(bytesOf(path), bytes);
+
+    // A real load reads it, and finds it stale
+    session("s1");
+    QCOMPARE(stats().staleRecordsDeleted, 1);
+    QVERIFY(!QFileInfo::exists(path));
+}
+
+// The main window's delete sequence removes the session's records, and only its own.
+void ResultStoreTest::deletingSessionRemovesRecords()
+{
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QVERIFY(setInput("s2", "EA_IN", 4));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QCOMPARE(engine("s2").request(kExpA).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+    const QString csv1 = sessionFilePath("s1");
+    const QString record1 = recordPath("s1", QStringLiteral("exp%41"));
+    const QString record2 = recordPath("s2", QStringLiteral("exp%41"));
+    const QByteArray bytes2 = bytesOf(record2);
+    QVERIFY(QFileInfo(csv1).isFile());
+    QVERIFY(QFileInfo(record1).isFile());
+    QVERIFY(!bytes2.isEmpty());
+
+    LogbookManager &logbook = LogbookManager::instance();
+    QVERIFY(m_model->removeSessions({"s1"}));
+    QVERIFY(logbook.removeSession("s1"));
+    QVERIFY(logbook.flushIndex());
+
+    QVERIFY(!QFileInfo::exists(csv1));
+    QVERIFY(!QFileInfo::exists(record1));
+    QCOMPARE(bytesOf(record2), bytes2);
+}
+
+// A record whose session file is gone is removed by the next start's scan.
+void ResultStoreTest::strayRecordRemovedAtRestart()
+{
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+    const QString stem = sessionFileStem("s1");
+    const QString csv = sessionFilePath("s1");
+    const QString record = recordPath("s1", QStringLiteral("exp%41"));
+    QVERIFY(QFileInfo(record).isFile());
+
+    m_queue->shutdown();
+    m_queue.reset();
+    m_model.reset();
+    QVERIFY(QFile::remove(csv));
+    restart();
+
+    QVERIFY(!QFileInfo::exists(record));
+    for (const QString &name : calculationRecordFiles())
+        QVERIFY2(!name.startsWith(stem), qPrintable(name));
+}
+
+FLYSIGHT_TEST_MAIN(ResultStoreTest)
+#include "tst_result_store.moc"

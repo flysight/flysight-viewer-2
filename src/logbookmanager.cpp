@@ -263,6 +263,7 @@ void LogbookManager::reset()
 {
     // In-memory state only; no file is touched.
     m_sessionIdToUuid.clear();
+    m_reservedStems.clear();    // a restart forgets unsaved sessions, like a process exit
     m_lastAccessed.clear();
     m_cachedValues.clear();
     m_scannedUuids.clear();
@@ -557,6 +558,21 @@ std::optional<SessionData> LogbookManager::loadSession(const QString &sessionId)
 // Identity entries
 // ============================================================================
 
+QString LogbookManager::reserveSessionFile(const QString &sessionId)
+{
+    if (sessionId.isEmpty())
+        return QString();
+    const auto known = m_sessionIdToUuid.constFind(sessionId);
+    if (known != m_sessionIdToUuid.constEnd())
+        return known.value();
+    // Kept apart from m_sessionIdToUuid, which means "has a session file"
+    // (flushIndex() lists it; loads and the save ordering rely on it).
+    QString &stem = m_reservedStems[sessionId];
+    if (stem.isEmpty())
+        stem = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    return stem;
+}
+
 bool LogbookManager::isIdentityEntry(const QString &sessionId) const
 {
     auto it = m_sessionIdToUuid.constFind(sessionId);
@@ -624,10 +640,13 @@ bool LogbookManager::saveSession(const SessionData& session)
     // Calculation records are neither read nor written here: the session
     // file's bytes never depend on them.
 
-    // Reuse existing UUID or generate a new one
+    // Reuse the existing UUID, else the one reserved at import (records may
+    // already be written under it), else generate a new one
     QString uuid;
     if (m_sessionIdToUuid.contains(sessionId)) {
         uuid = m_sessionIdToUuid[sessionId];
+    } else if (m_reservedStems.contains(sessionId)) {
+        uuid = m_reservedStems.value(sessionId);
     } else {
         uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
     }
@@ -644,7 +663,9 @@ bool LogbookManager::saveSession(const SessionData& session)
     }
 
     // d. Memory and file agree again; the next flush may publish the values.
+    //    A reservation becomes the index entry (on failure it stays).
     m_sessionIdToUuid[sessionId] = uuid;
+    m_reservedStems.remove(sessionId);
     m_unsavedColumns.remove(sessionId);
     m_unsavedAll.remove(sessionId);
     m_indexNeedsFlush = true;
@@ -693,7 +714,7 @@ bool LogbookManager::remapSessionId(const QString &oldId, const QString &newId)
         return false;
     if (oldId == newId)
         return true;
-    if (m_sessionIdToUuid.contains(newId))
+    if (m_sessionIdToUuid.contains(newId) || m_reservedStems.contains(newId))
         return false;
 
     // File stems never change (the uuid moves to the new id), so calculation
@@ -730,7 +751,17 @@ bool LogbookManager::remapSessionId(const QString &oldId, const QString &newId)
 bool LogbookManager::removeSession(const QString& sessionId)
 {
     if (!m_sessionIdToUuid.contains(sessionId)) {
-        return false;
+        // Never saved: no session file, only records under the reserved stem.
+        const auto reserved = m_reservedStems.constFind(sessionId);
+        if (reserved == m_reservedStems.constEnd())
+            return false;
+        const QString stem = reserved.value();
+        m_reservedStems.remove(sessionId);
+        if (!removeCalculationRecordsForStem(stem)) {
+            qWarning("LogbookManager: calculation records of %s not all removed; "
+                     "the next start removes them", qPrintable(sessionId));
+        }
+        return true;
     }
 
     const QString uuid = m_sessionIdToUuid[sessionId];
@@ -752,6 +783,7 @@ bool LogbookManager::removeSession(const QString& sessionId)
     }
 
     m_sessionIdToUuid.remove(sessionId);
+    m_reservedStems.remove(sessionId);
     m_lastAccessed.remove(sessionId);
     m_cachedValues.remove(sessionId);
     m_unsavedColumns.remove(sessionId);
@@ -768,8 +800,11 @@ bool LogbookManager::removeSession(const QString& sessionId)
 QString LogbookManager::recordStem(const QString &sessionId) const
 {
     // As loadSessionRaw(): the stem is the entry's uuid (the id itself for an
-    // identity entry).
-    return m_sessionIdToUuid.value(sessionId);
+    // identity entry). A session not saved yet has the stem reserved for it.
+    const auto it = m_sessionIdToUuid.constFind(sessionId);
+    if (it != m_sessionIdToUuid.constEnd())
+        return it.value();
+    return m_reservedStems.value(sessionId);
 }
 
 QString LogbookManager::calculationRecordPath(const QString &stem, const QString &calculationId) const

@@ -749,8 +749,10 @@ void JobModelTest::retentionBound()
     QCOMPARE(m_view->rowCount(), 0);
 }
 
-// Spec 8.4: nothing is persisted. Jobs of every ending leave the settings and
-// the logbook folder byte-identical.
+// Spec 8.4: no job is persisted. Jobs of every ending leave the settings and
+// the logbook folder byte-identical, except for the stored results of the jobs
+// that published Ok (store-requested-calculations): records are results, not
+// jobs.
 void JobModelTest::nothingIsPersisted()
 {
     TestEnvironment &env = TestEnvironment::instance();
@@ -765,6 +767,9 @@ void JobModelTest::nothingIsPersisted()
     const QMap<QString, QByteArray> settingsBefore = snapshot(env.settingsPath());
     const QMap<QString, QByteArray> logbookBefore = snapshot(env.logbookDir());
     QVERIFY(!logbookBefore.isEmpty());
+    const QString stem1 = sessionFileStem("s1"), stem2 = sessionFileStem("s2");
+    QVERIFY(!stem1.isEmpty());
+    QVERIFY(!stem2.isEmpty());
 
     const JobId success = request("s1", "gated");
     const JobId rejection = request("s2", "expA");
@@ -786,7 +791,25 @@ void JobModelTest::nothingIsPersisted()
     m_sessions->flushDirtySessions();
     QSettings().sync();
     QCOMPARE(snapshot(env.settingsPath()), settingsBefore);
-    QCOMPARE(snapshot(env.logbookDir()), logbookBefore);
+
+    // The ResourceExhausted job and the cancelled job stored nothing; the two
+    // that published Ok (the gated success and the expA rejection) did.
+    QMap<QString, QByteArray> logbookAfter = snapshot(env.logbookDir());
+    QStringList records;
+    for (auto it = logbookAfter.begin(); it != logbookAfter.end();) {
+        if (it.key().endsWith(QLatin1String(".fvresult"))) {
+            records.append(it.key());
+            it = logbookAfter.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    QCOMPARE(logbookAfter, logbookBefore);
+    records.sort();
+    QStringList expectedRecords = {QStringLiteral("sessions/") + stem1 + QStringLiteral(".gated.fvresult"),
+                                   QStringLiteral("sessions/") + stem2 + QStringLiteral(".exp%41.fvresult")};
+    expectedRecords.sort();
+    QCOMPARE(records, expectedRecords);
 }
 
 FLYSIGHT_TEST_MAIN(JobModelTest)

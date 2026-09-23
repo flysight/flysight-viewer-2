@@ -282,6 +282,8 @@ add_library(flysight_core STATIC
   # Stored requested-calculation results: record format and file names (the
   # logbook manager does the I/O)
   calculationrecord.cpp      calculationrecord.h
+  # Stored requested-calculation results: written on publish, restored on load (SessionModel owns it)
+  calculationresultstore.cpp calculationresultstore.h
   logbookcolumn.cpp          logbookcolumn.h
   sessionmodel.cpp           sessionmodel.h
   idlescheduler.cpp          idlescheduler.h

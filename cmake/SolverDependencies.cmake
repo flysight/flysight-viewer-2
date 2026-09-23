@@ -528,7 +528,7 @@ set(_FLYSIGHT_GTSAM_REACHERS
     ${_FLYSIGHT_GTSAM_NAMERS}
     FlySightViewer
     flysight_fusion_test_support flysight_fusion_session_support
-    tst_fusion_golden tst_fusion_session tst_fusion_jobs tst_fusion_rows
+    tst_fusion_golden tst_fusion_session tst_fusion_jobs tst_fusion_rows tst_fusion_store
     fusion_runner tst_fusion_runner)
 #   3. stated separately for a clear message, although implied by 2: the
 #      widget-free core, the Python bridge and the plot library never reach it

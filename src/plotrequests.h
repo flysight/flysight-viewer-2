@@ -162,8 +162,11 @@ struct PlotRowState {
 /// Restoring checked plots, applying a profile, the Plots menu, showing a
 /// track, loading or merging a session, an input change, a job ending
 /// cancelled / superseded / failed, a registry change, rowState() and flush()
-/// request nothing: the affected tracks are Missing and the refresh control
-/// shows.
+/// request nothing. A track whose session was loaded with a valid stored
+/// result of the calculation (SessionModel restores it before the row is
+/// published) is Available, or Failed for a stored rejection, exactly as
+/// after a fresh publish, and adds nothing to the refresh count. Every other
+/// affected track is Missing, and the refresh control shows.
 ///
 /// THE WAITING SET. Per plot, the tracks the row is waiting for in the current
 /// episode, each with a `continues` flag. A gesture enters the tracks it got a

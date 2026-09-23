@@ -610,6 +610,10 @@ QList<MergeResult> SessionModel::mergeSessions(const QList<ParsedFile> &files)
             newRow.session = std::move(created);
             newRow.session->setVisible(newRow.visible);
             m_rows.append(std::move(newRow));
+            // Its logbook identity from now on, so that a result published
+            // before the first save is stored (see STORED RESULTS). A new
+            // session has no records: nothing to restore.
+            logbook.reserveSessionFile(file.sessionId);
             attachSession(m_rows.last());   // the element in m_rows, not the local
 
             createdIds.append(file.sessionId);
@@ -623,6 +627,10 @@ QList<MergeResult> SessionModel::mergeSessions(const QList<ParsedFile> &files)
                 result.outcome = MergeResult::Outcome::Unchanged;
             } else {
                 beginMutation();
+                // No restore: the merge uses the ordinary setters, so a
+                // stored result it does not touch stays installed with its
+                // record, and one it touches is dropped by the input change,
+                // which deletes its record.
                 QSet<DependencyKey> keys = SessionMerge::apply(*m_rows[rowIndex].session, plan);
                 keys.unite(plan.changedKeys());
                 recordMerge(file.sessionId, keys);
@@ -666,6 +674,9 @@ QList<MergeResult> SessionModel::mergeSessions(const QList<ParsedFile> &files)
                     row.loadFailed = false;
                     row.session->setVisible(row.visible);
                     attachSession(row);
+                    // Checked against the merged state; the names it
+                    // invalidated are published with the merge's own.
+                    keys.unite(restoreStoredResults(row));
 
                     // The session stays loaded: it is dirty and is saved from
                     // memory. Normal LRU accounting; one eviction pass per batch.
@@ -1049,9 +1060,15 @@ SessionData &SessionModel::sessionRef(int row)
         sr.session->setVisible(sr.visible);
 
         // Listen for broadcast invalidations (after the id remap above, so the
-        // listener captures the final session id)
-        if (!sr.loadFailed)
+        // listener captures the final session id). Stored results go in
+        // before sessionLoaded: no reader ever sees the row without them. The
+        // names the restore invalidated are not published: nothing outside
+        // the model has read this engine yet, because the row is published
+        // only by the sessionLoaded below.
+        if (!sr.loadFailed) {
             attachSession(sr);
+            restoreStoredResults(sr);
+        }
 
         // Emit sessionLoaded for consistency
         emit sessionLoaded(sr.sessionId);
@@ -1240,12 +1257,28 @@ void SessionModel::attachSession(SessionRow &sr)
 
     // The listener captures the model and the session id, never the address of
     // a row or a session: rows move when the vector grows or is sorted, and
-    // the listener travels with the session's engine.
+    // the listener travels with the session's engine. The explicit-result
+    // listener also captures the engine it is installed on: it is owned by
+    // that engine and moves with it.
     const QString sessionId = sr.sessionId;
     sr.session->calculationEngine().setInvalidationListener(
         [this, sessionId](const QSet<DependencyKey> &keys) {
             queueInvalidation(sessionId, keys);
         });
+
+    // Stored results (see STORED RESULTS): both install paths (a job's
+    // publish and a synchronous request) reach this listener.
+    CalculationEngine &engine = sr.session->calculationEngine();
+    engine.setExplicitResultListener(
+        [this, sessionId, &engine](const CalculationEngine::ExplicitResultEvent &event) {
+            m_resultStore.onExplicitResultEvent(sessionId, engine, event);
+        });
+}
+
+QSet<DependencyKey> SessionModel::restoreStoredResults(SessionRow &sr)
+{
+    Q_ASSERT(sr.isLoaded() && !sr.loadFailed);
+    return m_resultStore.restoreSession(sr.sessionId, sr.session->calculationEngine()).invalidated;
 }
 
 void SessionModel::queueInvalidation(const QString &sessionId, const QSet<DependencyKey> &keys)
@@ -1804,7 +1837,8 @@ void SessionModel::processNextDirtyColumn()
         // Session is already loaded; compute from in-memory data
         fillMissingColumns(dirtyIdx, row.session.value());
     } else {
-        // Stub session: load temporarily via LogbookManager::loadSession()
+        // Stub session: load temporarily via LogbookManager::loadSession().
+        // A temporary load: stored results are never read here (see STORED RESULTS)
         auto loaded = logbook.loadSession(row.sessionId);
         if (loaded.has_value()) {
             // Remap UUID-based session ID to real SESSION_ID if needed
@@ -1948,6 +1982,7 @@ void SessionModel::processNextBulkEdit()
             m_saveRemaining--;
     } else {
         // --- STUB PATH (avoids LRU/eviction) ---
+        // A temporary load: stored results are never read here (see STORED RESULTS)
         auto loaded = logbook.loadSession(sr.sessionId);
         if (loaded.has_value()) {
             // UUID remap (same pattern as column worker)
@@ -1982,6 +2017,10 @@ void SessionModel::processNextBulkEdit()
                 sr.dirty = true;
                 sr.saveFailed = true;
                 attachSession(sr);
+                // The row is installed now: its stored results go in before
+                // the dataChanged below. Nobody has read this engine yet, so
+                // the names the restore invalidated are not published.
+                restoreStoredResults(sr);
                 if (!sr.visible && sr.sessionId != m_focusedSessionId)
                     lruInsert(sr.sessionId);
             }

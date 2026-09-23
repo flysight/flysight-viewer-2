@@ -136,9 +136,10 @@ flysight_add_test(tst_time_fit SOURCES tst_time_fit.cpp)
 flysight_add_test(tst_local_coordinates SOURCES tst_local_coordinates.cpp)
 flysight_add_test(tst_simplified_track SOURCES tst_simplified_track.cpp)
 
-# SessionData / SessionModel on the engine (real built-ins, global registry)
+# SessionData / SessionModel on the engine (real built-ins, global registry), and the stored results of explicit calculations
 flysight_add_test(tst_session_engine       SOURCES tst_session_engine.cpp)
 flysight_add_test(tst_session_model_engine SOURCES tst_session_model_engine.cpp)
+flysight_add_test(tst_result_store SOURCES tst_result_store.cpp)
 
 # Job queue and job model (synthetic explicit calculations; no GTSAM)
 flysight_add_test(tst_jobqueue SOURCES tst_jobqueue.cpp)
@@ -338,6 +339,10 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
   flysight_add_fusion_test(tst_fusion_rows SOURCES tst_fusion_rows.cpp
     LIBS flysight_fusion_session_support)
 
+  # Stored fusion results: fit, unload / restart, restore (store-requested-calculations)
+  flysight_add_fusion_test(tst_fusion_store SOURCES tst_fusion_store.cpp
+    LIBS flysight_fusion_session_support)
+
   # The runner, driven as a child process on fixtures written out as CSV
   flysight_add_fusion_test(tst_fusion_runner SOURCES tst_fusion_runner.cpp
     LIBS flysight_fusion_session_support)
@@ -439,12 +444,14 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
     # The two that decide bit-identity ...
     flysight_add_fusion_exact_test(tst_fusion_golden)
     flysight_add_fusion_exact_test(tst_fusion_kernel)
-    # ... and, because they cost about a second each, the three that hold the
-    # registered calculation, the job queue's worker thread and the plot rows
-    # to the same goldens: the bits survive the engine and the 64 MiB worker.
+    # ... and, because they cost about a second each, the four that hold the
+    # registered calculation, the job queue's worker thread, the plot rows and
+    # the stored and restored results to the same goldens: the bits survive
+    # the engine, the 64 MiB worker and the record file.
     flysight_add_fusion_exact_test(tst_fusion_session)
     flysight_add_fusion_exact_test(tst_fusion_jobs)
     flysight_add_fusion_exact_test(tst_fusion_rows)
+    flysight_add_fusion_exact_test(tst_fusion_store)
     # ... and the runner, whose test compares the tool's output with an
     # in-process run through the golden comparator: on this configuration
     # that comparison is bit identity across the process boundary.
