@@ -8,11 +8,11 @@
 #include <QString>
 #include <QStringView>
 
-#include "calculations/builtincalculations.h"
-#include "engine/calculationregistry.h"
 #include "engine/storedcalculationresult.h"
 
 namespace FlySight {
+
+class CalculationRegistry;
 
 /// One stored requested-calculation result, as a record file holds it: the
 /// engine's snapshot plus the two code stamps that were current when it was
@@ -23,13 +23,16 @@ struct CalculationRecord {
     QString calculationEnvironment;     ///< calculationEnvironmentFingerprint() at write time
     StoredCalculationResult result;     ///< the engine's snapshot
 
-    /// The snapshot with the CURRENT stamps (computed fresh from `registry`).
-    static CalculationRecord stamped(const StoredCalculationResult &result,
-                                     const CalculationRegistry &registry = CalculationRegistry::instance());
-    /// Both stamps equal the current ones, computed fresh. Never
+    /// The snapshot with the CURRENT stamps (computed fresh from `registry`;
+    /// without one, from CalculationRegistry::instance()).
+    static CalculationRecord stamped(const StoredCalculationResult &result);
+    static CalculationRecord stamped(const StoredCalculationResult &result, const CalculationRegistry &registry);
+    /// Both stamps equal the current ones, computed fresh (from `registry`, or
+    /// CalculationRegistry::instance()). Never
     /// LogbookManager::cacheEnvironment(): that is the environment of the
     /// cached column values, not of this program.
-    bool stampsAreCurrent(const CalculationRegistry &registry = CalculationRegistry::instance()) const;
+    bool stampsAreCurrent() const;
+    bool stampsAreCurrent(const CalculationRegistry &registry) const;
 };
 
 /// Outcome of reading / decoding one record.
@@ -83,9 +86,9 @@ std::optional<QString> decodeRecordFileId(QStringView text);
 QString recordFileName(const QString &stem, const QString &calculationId);
 
 /// (stem, calculation id) of a record file name. The extension is compared
-/// case-insensitively (QDir name filters match that way); the rest splits at
-/// its last '.'. The stem must be non-empty and the id must decode. nullopt
-/// for anything else.
+/// case-sensitively, on every platform: a name that spells it otherwise
+/// ("X.FVRESULT") is not a record. The rest splits at its last '.'. The stem
+/// must be non-empty and the id must decode. nullopt for anything else.
 std::optional<std::pair<QString, QString>> parseRecordFileName(QStringView fileName);
 
 // ---------------------------------------------------------------- the bytes
@@ -116,16 +119,24 @@ std::optional<std::pair<QString, QString>> parseRecordFileName(QStringView fileN
 //   11  checksum                    32 raw bytes: SHA-256 of every preceding byte
 //
 // The status is not stored: only Ok results are recorded. An available
-// attribute holds one of QString, Double, Float, Int, LongLong, Short, Long,
-// Char, SChar, UInt, ULongLong, UShort, ULong, UChar, Bool or QByteArray (the
-// non-date types of CsvFormat::formatAttributeValue); anything else is
-// refused on both sides.
+// attribute holds one of these QMetaType types (the portable non-date types
+// of CsvFormat::formatAttributeValue), each of which round-trips to the same
+// type and the same bits on every platform:
+//
+//   QString, QByteArray, Bool, Double, Float, Int, UInt, LongLong, ULongLong,
+//   Short, UShort, Char, SChar, UChar
+//
+// Float is written as a double (DoublePrecision) and read back as the same
+// float. Anything else is refused on both sides, in particular Long and ULong:
+// Qt streams them as 64-bit integers but `long` is 32 bits wide on Windows
+// and 64 on Linux / macOS, so a value could not come back everywhere.
 //
 // Pure functions: no file I/O, no engine, no global state. Safe on any thread.
 
 /// The record's bytes, or nullopt (with *error set) when the calculation id is
 /// empty, an available attribute has a type a record cannot hold, a sample
-/// count is >= 0xFFFFFFFE, or the stream fails.
+/// count is >= 0xFFFFFFFE, or the stream fails. *error is a lower-case phrase,
+/// like the decoder's: the logbook manager puts it after "not written: ".
 std::optional<QByteArray> encodeCalculationRecord(const CalculationRecord &record, QString *error = nullptr);
 
 /// Decodes `bytes`. Checks, in order: the magic (NotARecord), the format

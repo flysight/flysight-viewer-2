@@ -1,5 +1,7 @@
 #include "logbookcolumn.h"
 
+#include <algorithm>
+
 #include <QHash>
 #include <QSettings>
 
@@ -170,6 +172,11 @@ QStringList FlySight::logbookColumnExplicitCalculations(const LogbookColumn &col
     ids.sort();
     ids.removeDuplicates();
     return ids;
+}
+
+bool FlySight::containsAnyOf(const QStringList &ids, const QSet<QString> &set)
+{
+    return std::any_of(ids.cbegin(), ids.cend(), [&set](const QString &id) { return set.contains(id); });
 }
 
 // ============================================================================

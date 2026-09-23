@@ -11,6 +11,9 @@
 #include <QVector>
 #include <QtEndian>
 
+#include "calculations/builtincalculations.h"
+#include "engine/calculationregistry.h"
+
 namespace FlySight {
 
 namespace {
@@ -45,28 +48,28 @@ void pinStream(QDataStream &stream)
     stream.setFloatingPointPrecision(QDataStream::DoublePrecision);
 }
 
-/// The attribute types a record can hold: the non-date types
-/// CsvFormat::formatAttributeValue handles. Widening the set is a format
-/// change (bump CalculationRecordFormatVersion).
+/// The attribute types a record can hold (the list in the header): the
+/// non-date types CsvFormat::formatAttributeValue handles that round-trip on
+/// every platform. Long and ULong are not among them: their width differs
+/// between Windows and Linux / macOS. Widening the set is a format change
+/// (bump CalculationRecordFormatVersion).
 bool isRecordableAttributeType(int typeId)
 {
     switch (typeId) {
     case QMetaType::QString:
+    case QMetaType::QByteArray:
+    case QMetaType::Bool:
     case QMetaType::Double:
     case QMetaType::Float:
     case QMetaType::Int:
+    case QMetaType::UInt:
     case QMetaType::LongLong:
+    case QMetaType::ULongLong:
     case QMetaType::Short:
-    case QMetaType::Long:
+    case QMetaType::UShort:
     case QMetaType::Char:
     case QMetaType::SChar:
-    case QMetaType::UInt:
-    case QMetaType::ULongLong:
-    case QMetaType::UShort:
-    case QMetaType::ULong:
     case QMetaType::UChar:
-    case QMetaType::Bool:
-    case QMetaType::QByteArray:
         return true;
     default:
         return false;
@@ -102,6 +105,11 @@ QString outputName(const DependencyKey &key)
 // Stamps
 // ============================================================================
 
+CalculationRecord CalculationRecord::stamped(const StoredCalculationResult &result)
+{
+    return stamped(result, CalculationRegistry::instance());
+}
+
 CalculationRecord CalculationRecord::stamped(const StoredCalculationResult &result,
                                              const CalculationRegistry &registry)
 {
@@ -110,6 +118,11 @@ CalculationRecord CalculationRecord::stamped(const StoredCalculationResult &resu
     record.calculationEnvironment = calculationEnvironmentFingerprint(registry);
     record.result = result;
     return record;
+}
+
+bool CalculationRecord::stampsAreCurrent() const
+{
+    return stampsAreCurrent(CalculationRegistry::instance());
 }
 
 bool CalculationRecord::stampsAreCurrent(const CalculationRegistry &registry) const
@@ -192,7 +205,7 @@ QString recordFileName(const QString &stem, const QString &calculationId)
 std::optional<std::pair<QString, QString>> parseRecordFileName(QStringView fileName)
 {
     const QString suffix = QLatin1Char('.') + calculationRecordExtension();
-    if (!fileName.endsWith(suffix, Qt::CaseInsensitive))
+    if (!fileName.endsWith(suffix, Qt::CaseSensitive))
         return std::nullopt;
 
     const QStringView rest = fileName.chopped(suffix.size());
@@ -222,9 +235,9 @@ std::optional<QByteArray> encodeCalculationRecord(const CalculationRecord &recor
 
     const StoredCalculationResult &result = record.result;
     if (result.calculationId.isEmpty())
-        return fail(QStringLiteral("The record has no calculation id"));
+        return fail(QStringLiteral("the record has no calculation id"));
     if (result.inputFingerprint.size() != InputFingerprintSize)
-        return fail(QStringLiteral("The input fingerprint has %1 bytes, not %2")
+        return fail(QStringLiteral("the input fingerprint has %1 bytes, not %2")
                         .arg(result.inputFingerprint.size()).arg(InputFingerprintSize));
 
     QByteArray bytes;
@@ -246,7 +259,7 @@ std::optional<QByteArray> encodeCalculationRecord(const CalculationRecord &recor
         stream << quint32(result.leaves.size());
         for (const GraphNode &leaf : result.leaves) {
             if (!isStoredLeafKind(leaf.kind))
-                return fail(QStringLiteral("Leaf '%1' is not an input a record can hold").arg(leaf.a));
+                return fail(QStringLiteral("leaf '%1' is not an input a record can hold").arg(leaf.a));
             stream << storedLeafKindCode(leaf.kind) << leaf.a << leaf.b;
         }
 
@@ -261,7 +274,7 @@ std::optional<QByteArray> encodeCalculationRecord(const CalculationRecord &recor
                     continue;
                 const QVariant value = bundle.attributeValue(key.attributeKey);
                 if (!isRecordableAttributeType(value.typeId())) {
-                    return fail(QStringLiteral("Attribute '%1' has a type a record cannot hold (%2)")
+                    return fail(QStringLiteral("attribute '%1' has a type a record cannot hold (%2)")
                                     .arg(key.attributeKey, QString::fromLatin1(value.metaType().name())));
                 }
                 stream << value;
@@ -273,7 +286,7 @@ std::optional<QByteArray> encodeCalculationRecord(const CalculationRecord &recor
                     continue;
                 const QVector<double> samples = bundle.measurementValues(sensor, name);
                 if (quint64(samples.size()) > kMaxSampleCount) {
-                    return fail(QStringLiteral("Measurement '%1' has too many samples for a record (%2)")
+                    return fail(QStringLiteral("measurement '%1' has too many samples for a record (%2)")
                                     .arg(outputName(key)).arg(samples.size()));
                 }
                 // The bytes of operator<<(QList<double>) at the pinned
@@ -287,7 +300,7 @@ std::optional<QByteArray> encodeCalculationRecord(const CalculationRecord &recor
         }
 
         if (stream.status() != QDataStream::Ok)
-            return fail(QStringLiteral("The record could not be encoded (stream status %1)")
+            return fail(QStringLiteral("the record could not be encoded (stream status %1)")
                             .arg(int(stream.status())));
     }
 

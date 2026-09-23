@@ -3,6 +3,7 @@
 
 #include <QList>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -99,6 +100,10 @@ QList<DependencyKey> logbookColumnNames(const LogbookColumn &col);
 /// sorted and unique. Empty for a column that is not explicit-backed.
 QStringList logbookColumnExplicitCalculations(const LogbookColumn &col,
                                               const CalculationRegistry &registry);
+
+/// True when some id of `ids` (a column's explicit calculations, as above) is
+/// in `set`: "does this column depend on one of these calculations".
+bool containsAnyOf(const QStringList &ids, const QSet<QString> &set);
 
 // ============================================================================
 // LogbookColumnStore — QObject singleton for persistence

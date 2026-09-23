@@ -7,10 +7,11 @@
 //    fingerprint), computed fresh;
 //  - the binary codec: a bit-exact round trip (-0, NaN payloads, infinities,
 //    subnormals, null / empty / non-ASCII strings, unavailable outputs, output
-//    order), the pinned byte layout, refusal of other format versions, of
-//    damaged and of hand-crafted inconsistent payloads (without allocating what
-//    a crafted count claims), refusal at encode of attribute types a record
-//    cannot hold, and the size;
+//    order), a round trip of every attribute type a record accepts, the pinned
+//    byte layout, refusal of other format versions, of damaged and of
+//    hand-crafted inconsistent payloads (without allocating what a crafted
+//    count claims), refusal at encode of every other attribute type (Long and
+//    ULong included: their width is not portable), and the size;
 //  - LogbookManager's record files on a real temporary logbook: write, read,
 //    replace, list, remove, both write failures (a refused encoding, a
 //    directory at the record's path) leaving the previous state intact,
@@ -25,6 +26,7 @@
 #include <QtTest>
 
 #include <cfloat>
+#include <climits>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -259,6 +261,30 @@ QString recordDifference(const CalculationRecord &a, const CalculationRecord &b)
     return QString();
 }
 
+// The attribute types a record accepts: the list of calculationrecord.h,
+// spelled out here, never taken from the code under test.
+const QList<int> kRecordableTypes = {
+    QMetaType::QString, QMetaType::QByteArray, QMetaType::Bool, QMetaType::Double, QMetaType::Float,
+    QMetaType::Int, QMetaType::UInt, QMetaType::LongLong, QMetaType::ULongLong, QMetaType::Short,
+    QMetaType::UShort, QMetaType::Char, QMetaType::SChar, QMetaType::UChar};
+
+// A snapshot whose only output is the attribute "_A" = value.
+StoredCalculationResult attributeSnapshot(const QVariant &value)
+{
+    StoredCalculationResult r;
+    r.calculationId = QStringLiteral("x.y");
+    r.inputFingerprint = QByteArray(32, '\x22');
+    r.bundle.setAttribute(QStringLiteral("_A"), value);
+    return r;
+}
+
+float floatFromBits(quint32 bits)
+{
+    float v = 0.0f;
+    std::memcpy(&v, &bits, sizeof v);
+    return v;
+}
+
 // ---- hand-crafted payloads --------------------------------------------------
 
 void pin(QDataStream &s)
@@ -351,6 +377,8 @@ private slots:
     void fileNamesDifferIgnoringCase();
     void stampsAreCurrent();
     void roundTripIsBitExact();
+    void attributeTypesRoundTrip_data();
+    void attributeTypesRoundTrip();
     void unavailableAndEmptyOutputs();
     void rejectionShapedRecord();
     void layoutIsPinned();
@@ -471,8 +499,9 @@ void ResultRecordsTest::fileNameParsing_data()
 
     QTest::newRow("dotted stem") << QStringLiteral("a.b.x%2Ey.fvresult") << true << QStringLiteral("a.b")
                                  << QStringLiteral("x.y");
-    QTest::newRow("upper-case extension") << QStringLiteral("s.x.FVRESULT") << true << QStringLiteral("s")
-                                          << QStringLiteral("x");
+    // The extension is compared case-sensitively on every platform
+    QTest::newRow("upper-case extension") << QStringLiteral("s.x.FVRESULT") << false << QString() << QString();
+    QTest::newRow("mixed-case extension") << QStringLiteral("s.x.fvResult") << false << QString() << QString();
     QTest::newRow("fusion") << QStringLiteral("3f2c-9a1e.builtin%2Efusion%2Efit.fvresult") << true
                             << QStringLiteral("3f2c-9a1e") << QStringLiteral("builtin.fusion.fit");
     QTest::newRow("no id") << QStringLiteral("x.fvresult") << false << QString() << QString();
@@ -496,7 +525,7 @@ void ResultRecordsTest::fileNameParsing()
         return;
     QCOMPARE(parsed->first, stem);
     QCOMPARE(parsed->second, id);
-    QCOMPARE(recordFileName(stem, id).compare(fileName, Qt::CaseInsensitive), 0);
+    QCOMPARE(recordFileName(stem, id), fileName);
 }
 
 void ResultRecordsTest::fileNamesDifferIgnoringCase()
@@ -592,6 +621,61 @@ void ResultRecordsTest::roundTripIsBitExact()
     QCOMPARE(decoded.result.detail, decoded.result.bundle.reason());
 
     // The decoded record encodes to the same bytes
+    QCOMPARE(encoded(decoded), bytes);
+}
+
+void ResultRecordsTest::attributeTypesRoundTrip_data()
+{
+    QTest::addColumn<QVariant>("value");
+
+    QTest::newRow("QString") << QVariant(QString::fromUtf8("h\xC3\xA9llo"));
+    QTest::newRow("QString null") << QVariant(QString());
+    QTest::newRow("QByteArray") << QVariant(QByteArray("a\0\xFF", 3));
+    QTest::newRow("QByteArray empty") << QVariant(QByteArray(""));
+    QTest::newRow("Bool") << QVariant(false);
+    QTest::newRow("Double -0") << QVariant(-0.0);
+    QTest::newRow("Double NaN payload") << QVariant(fromBits(kSignedPayloadNaN));
+    QTest::newRow("Double subnormal") << QVariant(1e-320);
+    QTest::newRow("Float") << QVariant::fromValue(1.1f);
+    QTest::newRow("Float -0") << QVariant::fromValue(-0.0f);
+    QTest::newRow("Float -inf") << QVariant::fromValue(-std::numeric_limits<float>::infinity());
+    QTest::newRow("Float NaN payload") << QVariant::fromValue(floatFromBits(0x7FC0ABCDu));
+    QTest::newRow("Float subnormal") << QVariant::fromValue(floatFromBits(0x00000001u));
+    QTest::newRow("Float max") << QVariant::fromValue(FLT_MAX);
+    QTest::newRow("Int") << QVariant::fromValue(int(INT_MIN));
+    QTest::newRow("UInt") << QVariant::fromValue(uint(UINT_MAX));
+    QTest::newRow("LongLong") << QVariant::fromValue(qlonglong(LLONG_MIN));
+    QTest::newRow("ULongLong") << QVariant::fromValue(qulonglong(ULLONG_MAX));
+    QTest::newRow("Short") << QVariant::fromValue(short(SHRT_MIN));
+    QTest::newRow("UShort") << QVariant::fromValue(ushort(USHRT_MAX));
+    QTest::newRow("Char") << QVariant::fromValue(char(0x7F));
+    QTest::newRow("SChar") << QVariant::fromValue(static_cast<signed char>(-128));
+    QTest::newRow("UChar") << QVariant::fromValue(static_cast<uchar>(255));
+}
+
+// Every accepted type comes back as the same type with the same bits (a null
+// string as a null string), and the decoded record encodes to the same bytes.
+void ResultRecordsTest::attributeTypesRoundTrip()
+{
+    QFETCH(QVariant, value);
+    QVERIFY(kRecordableTypes.contains(value.typeId()));
+
+    const CalculationRecord record = CalculationRecord::stamped(attributeSnapshot(value));
+    const QByteArray bytes = encoded(record);
+    QVERIFY(!bytes.isEmpty());
+    CalculationRecord decoded;
+    QString error;
+    QCOMPARE(decodeCalculationRecord(bytes, &decoded, &error), CalculationRecordStatus::Ok);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+
+    const QVariant back = decoded.result.bundle.attributeValue(QStringLiteral("_A"));
+    QCOMPARE(back.typeId(), value.typeId());
+    const QString difference = variantDifference(QStringLiteral("_A"), back, value);
+    QVERIFY2(difference.isEmpty(), qPrintable(difference));
+    if (value.typeId() == QMetaType::QByteArray) {
+        QCOMPARE(back.toByteArray(), value.toByteArray());
+        QCOMPARE(back.toByteArray().isNull(), value.toByteArray().isNull());
+    }
     QCOMPARE(encoded(decoded), bytes);
 }
 
@@ -806,6 +890,15 @@ void ResultRecordsTest::corruptInputIsRefused_data()
         s << quint32(0) << quint32(1) << quint8(1) << QStringLiteral("a") << QString() << true
           << QVariant(QVariantList{1, 2});
     }) << corrupt << QStringLiteral("cannot hold");
+    // Long and ULong are refused on read too, whatever the bytes hold
+    QTest::newRow("Long attribute") << craft([&](QDataStream &s) {
+        s << quint32(0) << quint32(1) << quint8(1) << QStringLiteral("a") << QString() << true
+          << QVariant::fromValue(long(5));
+    }) << corrupt << QStringLiteral("attribute 'a' has a type a record cannot hold");
+    QTest::newRow("ULong attribute") << craft([&](QDataStream &s) {
+        s << quint32(0) << quint32(1) << quint8(1) << QStringLiteral("a") << QString() << true
+          << QVariant::fromValue(static_cast<unsigned long>(5));
+    }) << corrupt << QStringLiteral("attribute 'a' has a type a record cannot hold");
     QTest::newRow("invalid attribute") << craft([&](QDataStream &s) {
         s << quint32(0) << quint32(1) << quint8(1) << QStringLiteral("a") << QString() << true << QVariant();
     }) << corrupt << QStringLiteral("cannot hold");
@@ -846,17 +939,43 @@ void ResultRecordsTest::encoderRefusesUnsupportedAttribute()
 
     StoredCalculationResult noId = sampleSnapshot(QString());
     QVERIFY(!encodeCalculationRecord(CalculationRecord::stamped(noId), &error).has_value());
-    QCOMPARE(error, QStringLiteral("The record has no calculation id"));
+    QCOMPARE(error, QStringLiteral("the record has no calculation id"));
 
     StoredCalculationResult list = sampleSnapshot();
     list.bundle.setAttribute(QStringLiteral("_X"), QVariantList{1, 2});
     QVERIFY(!encodeCalculationRecord(CalculationRecord::stamped(list), &error).has_value());
-    QCOMPARE(error, QStringLiteral("Attribute '_X' has a type a record cannot hold (QVariantList)"));
+    QCOMPARE(error, QStringLiteral("attribute '_X' has a type a record cannot hold (QVariantList)"));
 
     StoredCalculationResult point = sampleSnapshot();
     point.bundle.setAttribute(QStringLiteral("_P"), QPointF(1.0, 2.0));
     QVERIFY(!encodeCalculationRecord(CalculationRecord::stamped(point), &error).has_value());
-    QCOMPARE(error, QStringLiteral("Attribute '_P' has a type a record cannot hold (QPointF)"));
+    QCOMPARE(error, QStringLiteral("attribute '_P' has a type a record cannot hold (QPointF)"));
+
+    // Not portable: `long` is 32 bits on Windows, 64 on Linux / macOS
+    QVERIFY(!encodeCalculationRecord(CalculationRecord::stamped(attributeSnapshot(QVariant::fromValue(long(5)))),
+                                     &error).has_value());
+    QCOMPARE(error, QStringLiteral("attribute '_A' has a type a record cannot hold (long)"));
+    QVERIFY(!encodeCalculationRecord(
+                 CalculationRecord::stamped(attributeSnapshot(QVariant::fromValue(static_cast<unsigned long>(5)))),
+                 &error).has_value());
+    QCOMPARE(error, QStringLiteral("attribute '_A' has a type a record cannot hold (ulong)"));
+
+    // Exactly the accepted types encode: every core type Qt can default-construct
+    // (the GUI types need a QGuiApplication, and none of them is accepted)
+    int accepted = 0;
+    for (int typeId = QMetaType::FirstCoreType; typeId <= QMetaType::LastCoreType; ++typeId) {
+        const QMetaType type(typeId);
+        if (!type.isValid())
+            continue;
+        const QVariant value(type, nullptr);
+        if (!value.isValid())
+            continue;
+        const bool encodes = encodeCalculationRecord(CalculationRecord::stamped(attributeSnapshot(value))).has_value();
+        QVERIFY2(encodes == kRecordableTypes.contains(typeId), type.name());
+        if (encodes)
+            ++accepted;
+    }
+    QCOMPARE(accepted, int(kRecordableTypes.size()));
 
     // The error pointer is optional, and a success clears it
     QVERIFY(!encodeCalculationRecord(CalculationRecord::stamped(point)).has_value());
@@ -995,7 +1114,7 @@ void ResultRecordsTest::writeFailureRefusedEncoding()
     QString error;
     QTest::ignoreMessage(QtWarningMsg,
                          QRegularExpression(QStringLiteral("calculation record builtin\\.fusion\\.fit of s1 not written: "
-                                                           "Attribute '_BAD'")));
+                                                           "attribute '_BAD'")));
     QVERIFY(!logbook.writeCalculationRecord(QStringLiteral("s1"), CalculationRecord::stamped(refused), &error));
     QVERIFY(!error.isEmpty());
     QVERIFY(error.contains(QStringLiteral("'_BAD'")));
@@ -1190,12 +1309,16 @@ void ResultRecordsTest::strayRecordsRemovedAtScan()
     QVERIFY(writeFile(dir + QLatin1Char('/') + stray, recordBytes));
     QVERIFY(writeFile(dir + QLatin1Char('/') + junk, "junk"));
     QVERIFY(writeFile(dir + QStringLiteral("/notes.txt"), "notes"));
+    // Hand-renamed: another spelling of the extension is not a record, of a
+    // session or of none, so it is neither listed nor removed as a stray
+    QVERIFY(writeFile(dir + QLatin1Char('/') + stem1 + QStringLiteral(".x.FVRESULT"), recordBytes));
+    QVERIFY(writeFile(dir + QStringLiteral("/0badc0de-0000-4000-8000-000000000001.x.FVRESULT"), recordBytes));
     QVERIFY(writeFile(dir + QStringLiteral("/x.csv.AbC123"), "a leftover session-save temporary"));
     QVERIFY(writeFile(dir + QLatin1Char('/') + stem1 + QString::fromLatin1(kFitSuffix) + QStringLiteral(".Q1w2E3"),
                       "a leftover record temporary"));
 
     QMap<QString, QByteArray> expected = directoryContents(dir);
-    QCOMPARE(expected.size(), 9);
+    QCOMPARE(expected.size(), 11);
     QVERIFY(expected.remove(stray) == 1);
     QVERIFY(expected.remove(junk) == 1);
 

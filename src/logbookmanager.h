@@ -41,18 +41,18 @@ struct CalculationRecordRead {
 /// like a session file), and removed with their session (removeSession), by
 /// the stray pass of initialize() when their session file does not exist, and
 /// by explicit removal. A session not saved yet may have records under the
-/// stem reserved for it
-/// (reserveSessionFile()); if it is never saved they are strays and the next
-/// initialize() removes them. The manager only stores and reports them; the
-/// caller decides validity.
+/// stem reserved for it (reserveSessionFile()); if it is never saved they are
+/// strays and the next initialize() removes them. The manager only stores and
+/// reports them; the caller decides validity.
 ///
 /// index.json root: "calculationCompatibility" (integer marker,
 /// FlySight::CalculationCompatibilityVersion), "calculationEnvironment"
 /// (calculationEnvironmentFingerprint() the cached values were computed under),
 /// "columns", "sessions" (per id: "uuid", "lastAccessed", "values", and
-/// "records", the record stamp: calculation id -> current result version of
-/// each known and confirmed record of the session, "" when the descriptor
-/// declares none; always written, {} when there is none).
+/// "records", the record stamp: calculation id -> the result version the
+/// cached values over that calculation were computed under, for each known
+/// and confirmed record of the session, "" when the descriptor declares none;
+/// always written, {} when there is none).
 ///
 /// CACHE VALIDITY is decided here and nowhere else. initialize() keeps the
 /// cached "values" only when both the marker and the environment recorded in
@@ -154,13 +154,19 @@ public:
     // record is opened. Empty for an unknown session.
     QStringList calculationRecordIds(const QString &sessionId) const;
 
-    // Deletes one record / every record of the session. True when no such file
-    // remains (absent counts as success); false for an unknown session or when a
-    // file could not be removed (warned). Drops the session's cached values
-    // over the calculation and emits calculationRecordsChanged(), except for an
-    // unknown session and for an absent record that was neither known nor
-    // unconfirmed (nothing changed). Never flushes index.json.
-    bool removeCalculationRecord(const QString &sessionId, const QString &calculationId);
+    // Deletes one record. True when no such file remains (absent counts as
+    // success); false for an unknown session or when the file could not be
+    // removed (warned). *removedFile (optional) is set to whether a file was
+    // removed. Looks at the record's one path: nothing is listed. Drops the
+    // session's cached values over the calculation and emits
+    // calculationRecordsChanged(), except for an unknown session and for an
+    // absent record that was neither known nor unconfirmed (nothing changed).
+    // Never flushes index.json.
+    bool removeCalculationRecord(const QString &sessionId, const QString &calculationId,
+                                 bool *removedFile = nullptr);
+    // removeCalculationRecord() for every id with a file and every id known or
+    // unconfirmed. A test seam: no product code calls it (a session's records
+    // go with removeSession(), stale ones one by one).
     bool removeCalculationRecords(const QString &sessionId);
 
     // --- Record stamps of cached column values (see RECORD STAMPS) ---
@@ -339,7 +345,9 @@ private:
     QString recordStem(const QString &sessionId) const;
 
     QString calculationRecordPath(const QString &stem, const QString &calculationId) const;
-    // Names of the *.fvresult files in sessions/ (QDir::Files), sorted.
+    // Names of the files in sessions/ (QDir::Files) that end in "." +
+    // calculationRecordExtension(), compared case-sensitively (another
+    // spelling of the extension is not a record, on any file system), sorted.
     QStringList calculationRecordFileNames() const;
     // Calculation ids of the record files whose parsed stem is exactly `stem`, sorted.
     QStringList calculationRecordIdsForStem(const QString &stem) const;
@@ -374,7 +382,7 @@ private:
     bool dropRecordDependentValues(const QString &sessionId, const QStringList &calculationIds);
     // removeCalculationRecord() for a resolved stem.
     bool removeCalculationRecordOfStem(const QString &sessionId, const QString &stem,
-                                       const QString &calculationId);
+                                       const QString &calculationId, bool *removedFile);
 
     // Maps SESSION_ID strings to UUID filename stems (without extension).
     // Means "has a session file": flushIndex() lists every entry.

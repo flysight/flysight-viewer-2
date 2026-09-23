@@ -10,8 +10,6 @@
 #include <QUuid>
 #include <QDateTime>
 
-#include <algorithm>
-
 #include "calculations/builtincalculations.h"
 #include "dataimporter.h"
 #include "engine/calculationregistry.h"
@@ -122,11 +120,6 @@ QString currentResultVersion(const QString &calculationId)
     if (!instance || !instance->descriptor)
         return QString();
     return instance->descriptor->resultVersion;
-}
-
-bool intersects(const QStringList &ids, const QSet<QString> &set)
-{
-    return std::any_of(ids.cbegin(), ids.cend(), [&set](const QString &id) { return set.contains(id); });
 }
 
 } // anonymous namespace
@@ -890,10 +883,14 @@ QString LogbookManager::calculationRecordPath(const QString &stem, const QString
 QStringList LogbookManager::calculationRecordFileNames() const
 {
     // Never a wildcard built from a stem: an identity stem is an arbitrary
-    // file name and may contain '[', '*' or '?'.
+    // file name and may contain '[', '*' or '?'. A name filter may match
+    // without regard to case, so the extension is checked again, exactly: a
+    // hand-renamed "X.FVRESULT" is not a record (not listed, never removed as
+    // a stray), as on a file system that tells the two apart.
+    const QString suffix = QLatin1Char('.') + calculationRecordExtension();
     QStringList names = QDir(sessionsDirectory()).entryList(
-        QStringList() << (QStringLiteral("*.") + calculationRecordExtension()),
-        QDir::Files, QDir::Name);
+        QStringList() << (QLatin1Char('*') + suffix), QDir::Files, QDir::NoSort);
+    names.removeIf([&suffix](const QString &name) { return !name.endsWith(suffix, Qt::CaseSensitive); });
     names.sort();
     return names;
 }
@@ -907,8 +904,7 @@ QStringList LogbookManager::calculationRecordIdsForStem(const QString &stem) con
         if (parsed && parsed->first == stem)
             ids.append(parsed->second);
     }
-    ids.sort();
-    ids.removeDuplicates();     // the extension in two spellings on a case-sensitive file system
+    ids.sort();     // encoded names do not sort like the ids they encode
     return ids;
 }
 
@@ -997,9 +993,13 @@ bool LogbookManager::writeCalculationRecord(const QString &sessionId, const Calc
         if (error)
             *error = text;
     };
-    // A failure after the stem is known: the in-memory result and the disk may
-    // now disagree, so the pair is unconfirmed (its values stay out of
-    // index.json) until it is written or removed, or the row is evicted.
+    // Every failure after the stem is known (steps b, d and e): the in-memory
+    // result and the disk may now disagree, so the pair is unconfirmed (its
+    // values stay out of index.json) until it is written or removed, or the
+    // row is evicted, and the values over it are dropped. After step c both
+    // are already done and doing them again changes nothing; only the signal
+    // is new. The known set is never touched: the previous record, if any,
+    // is intact.
     const auto fail = [&](const QString &text) {
         warn(text);
         m_unconfirmedRecords[sessionId].insert(calculationId);
@@ -1031,13 +1031,8 @@ bool LogbookManager::writeCalculationRecord(const QString &sessionId, const Calc
     //    Flush first; the mark of c keeps the calculation out of the stamp and
     //    its values out of the file. As saveSession step b: if that fails,
     //    the record is not written.
-    if (m_recordBackedOnDisk.value(sessionId).contains(calculationId)) {
-        if (!flushIndex()) {
-            warn(QStringLiteral("index.json could not be written"));
-            emit calculationRecordsChanged(sessionId, calculationId);
-            return false;
-        }
-    }
+    if (m_recordBackedOnDisk.value(sessionId).contains(calculationId) && !flushIndex())
+        return fail(QStringLiteral("index.json could not be written"));
 
     // e. As DataExporter's session write: a temporary file renamed over the
     //    record at commit (no direct-write fallback), so a failure at any step
@@ -1047,25 +1042,20 @@ bool LogbookManager::writeCalculationRecord(const QString &sessionId, const Calc
     const auto writeError = [&path](const QSaveFile &file) {
         return QStringLiteral("Couldn't write file '%1': %2").arg(path, file.errorString());
     };
-    const auto writeFailed = [&](const QString &text) {
-        warn(text);
-        emit calculationRecordsChanged(sessionId, calculationId);
-        return false;
-    };
 
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly))
-        return writeFailed(writeError(file));
+        return fail(writeError(file));
 
     file.write(*bytes);
     if (file.error() != QFileDevice::NoError) {
         const QString text = writeError(file);
         file.cancelWriting();
-        return writeFailed(text);
+        return fail(text);
     }
 
     if (!file.commit())
-        return writeFailed(writeError(file));
+        return fail(writeError(file));
 
     // f. The disk now holds what the engine holds.
     m_knownRecords[sessionId].insert(calculationId);
@@ -1125,17 +1115,22 @@ QStringList LogbookManager::calculationRecordIds(const QString &sessionId) const
     return calculationRecordIdsForStem(stem);
 }
 
-bool LogbookManager::removeCalculationRecord(const QString &sessionId, const QString &calculationId)
+bool LogbookManager::removeCalculationRecord(const QString &sessionId, const QString &calculationId,
+                                             bool *removedFile)
 {
+    if (removedFile)
+        *removedFile = false;
     const QString stem = recordStem(sessionId);
     if (stem.isEmpty())
         return false;       // unknown session: no signal
-    return removeCalculationRecordOfStem(sessionId, stem, calculationId);
+    return removeCalculationRecordOfStem(sessionId, stem, calculationId, removedFile);
 }
 
 bool LogbookManager::removeCalculationRecordOfStem(const QString &sessionId, const QString &stem,
-                                                   const QString &calculationId)
+                                                   const QString &calculationId, bool *removedFile)
 {
+    if (removedFile)
+        *removedFile = false;
     // No index flush comes first (see the crash table above writeCalculationRecord).
     const QString path = calculationRecordPath(stem, calculationId);
     if (!QFileInfo::exists(path)) {
@@ -1162,6 +1157,8 @@ bool LogbookManager::removeCalculationRecordOfStem(const QString &sessionId, con
         emit calculationRecordsChanged(sessionId, calculationId);
         return false;
     }
+    if (removedFile)
+        *removedFile = true;
     m_knownRecords[sessionId].remove(calculationId);
     m_unconfirmedRecords[sessionId].remove(calculationId);
     emit calculationRecordsChanged(sessionId, calculationId);
@@ -1175,7 +1172,9 @@ bool LogbookManager::removeCalculationRecords(const QString &sessionId)
         return false;
 
     // The rule of removeCalculationRecord() per id: every id with a file, and
-    // every id known or unconfirmed without one.
+    // every id known or unconfirmed without one. Every listed file of the stem
+    // is at the path of its id (the listing and the parse accept only the
+    // canonical name), so the per-id removal reaches all of them.
     QSet<QString> ids = m_knownRecords.value(sessionId) + m_unconfirmedRecords.value(sessionId);
     const QStringList listed = calculationRecordIdsForStem(stem);
     ids.unite(QSet<QString>(listed.cbegin(), listed.cend()));
@@ -1184,13 +1183,9 @@ bool LogbookManager::removeCalculationRecords(const QString &sessionId)
 
     bool allRemoved = true;
     for (const QString &id : std::as_const(sorted)) {
-        if (!removeCalculationRecordOfStem(sessionId, stem, id))
+        if (!removeCalculationRecordOfStem(sessionId, stem, id, nullptr))
             allRemoved = false;
     }
-    // A file of the stem in another spelling of the name, which the per-id
-    // path does not reach
-    if (!removeCalculationRecordsForStem(stem))
-        allRemoved = false;
     return allRemoved;
 }
 
@@ -1246,10 +1241,8 @@ void LogbookManager::validateRecordStamps(const QMap<QString, LogbookColumn> &co
                                           const QMap<QString, QJsonObject> &stamps,
                                           const QMap<QString, QStringList> &valuesOnDisk)
 {
-    const CalculationRegistry &registry = CalculationRegistry::instance();
-    QHash<QString, QStringList> explicitByDefKey;
-    for (auto it = columnsByDefKey.constBegin(); it != columnsByDefKey.constEnd(); ++it)
-        explicitByDefKey.insert(it.key(), logbookColumnExplicitCalculations(it.value(), registry));
+    // Keyed by the same definition keys: each column's key is its map key
+    const QHash<QString, QStringList> explicitByDefKey = explicitCalculationsByDefKey(columnsByDefKey.values());
 
     // m_recordBackedOnDisk describes the file on disk, which keeps every value
     // until the next flush: the ones dropped below and those of an index that
@@ -1320,7 +1313,7 @@ bool LogbookManager::dropRecordDependentValues(const QString &sessionId, const Q
     bool removed = false;
     for (auto it = cachedIt->begin(); it != cachedIt->end();) {
         const auto columnIt = byDefKey.constFind(it.key());
-        if (columnIt == byDefKey.constEnd() || intersects(columnIt.value(), changed)) {
+        if (columnIt == byDefKey.constEnd() || containsAnyOf(columnIt.value(), changed)) {
             it = cachedIt->erase(it);
             removed = true;
         } else {
@@ -1382,7 +1375,7 @@ bool LogbookManager::flushIndex()
                 if (!defKeyToEphemeralUuid.contains(defKey))
                     continue;
                 const QStringList ids = byDefKey.value(defKey);
-                if (intersects(ids, unconfirmed))
+                if (containsAnyOf(ids, unconfirmed))
                     continue;
                 valuesObj[defKeyToEphemeralUuid[defKey]] = cit.value();
                 for (const QString &id : ids) {
@@ -1393,7 +1386,19 @@ bool LogbookManager::flushIndex()
         }
         entry[QStringLiteral("values")] = valuesObj;
 
-        // The record stamp, even when empty (an entry without one is an older build's)
+        // The record stamp, even when empty (an entry without one is an older
+        // build's). It records the CURRENT result version, not the one a
+        // record on disk was written with: the stamp says which version the
+        // cached values over the calculation were computed under. That is
+        // safe because a value over an explicit calculation is computed only
+        // for a loaded row, from its engine, and the load deleted every
+        // record whose result version was not current before any value could
+        // be computed (the result store's restore; a publish writes the
+        // current version).
+        // A confirmed record of an unloaded session may still be of an older
+        // version (an upgrade): no value over it is kept (initialize()
+        // dropped it, the worker leaves it pending), so the stamp's version
+        // vouches for nothing until the load that deletes the record.
         QJsonObject recordsObj;
         for (const QString &id : confirmed)
             recordsObj[id] = currentResultVersion(id);
