@@ -13,6 +13,9 @@ the [plugin README](../python_plugins/README.md).
   (plots, calculations, logbook columns, plugins).
 - Only the recorded `SCHEMA_VER` header attribute selects a schema correction.
 - Saved logbook files contain the recorded values, never converted ones.
+- The results of explicitly requested calculations (sensor fusion) are stored
+  in files beside the session file, never in it, and are used only while they
+  are still valid (section 12).
 - Normal handling of legacy files is silent: no dialog, no setting, no badge.
 
 ## 2. Recorded file format
@@ -129,7 +132,9 @@ Enumeration (`sensorKeys`, `measurementKeys`, `hasMeasurement`,
 never appears in it because it happened to be computed.
 The purely derived sensors `Local`, `Simplified`, and `Fusion` therefore never
 appear in enumeration or in saved files, and `Fusion` additionally reads
-unavailable until sensor fusion has been requested for the session.
+unavailable until sensor fusion has been requested for the session, or a
+still-valid stored result of it was restored when the session was loaded
+(section 12).
 
 In C++ (`SessionData`): `getMeasurement` and `effectiveUnit` read the effective
 layer; `sourceMeasurement`, `sourceUnit`, `hasSourceMeasurement`, and
@@ -253,7 +258,10 @@ recovered with ordinary tools:
 - `$DATA`, then rows of **source** samples.
 
 Effective values are never written. Saving with a warm or a cold calculation
-cache gives identical bytes.
+cache gives identical bytes. No calculated result is written either: the
+stored results of requested calculations are separate files (section 12), and
+saving a session that has one gives exactly the same bytes as saving it
+without.
 
 Numbers, in rows and in `$VAR` values, are written as the shortest decimal
 text that parses back to the identical double. `-0` keeps its sign. Non-finite
@@ -304,6 +312,16 @@ recomputed in the background. Session files, ids, and access times are
 untouched. This happened once on the upgrade to this version, because
 gyro-dependent columns changed for every legacy session.
 
+Each session entry also has `"records"`: an object naming the requested
+calculations that have a stored result for that session (section 12), each
+mapped to its calculation's result version, and `{}` when there are none. A
+value cached for a column that depends on such a calculation is valid only
+together with this stamp. For a session with a stored sensor fusion result:
+
+```json
+"records": {"builtin.fusion.fit": "batch-temperature-bias-v3"}
+```
+
 An edit or a merge refreshes only the columns that can depend on the change,
 and an interrupted save cannot leave cached values that disagree with the
 saved session file. A save that fails (a full disk, say) loses nothing: the
@@ -312,14 +330,103 @@ session stays in memory with its changes, its affected columns stay out of
 application closes.
 
 A column that depends on an explicitly requested calculation (a sensor fusion
-value at a marker, for example) is cached as unavailable, because such results
-are not saved: after a restart the session reads unavailable until the
-calculation is requested again. Loaded rows show the live value.
+value at a marker, for example) is computed, while the session is loaded, from
+the restored or just-published result, and cached like any other column. At
+start-up such a cached value is kept only while the session's `"records"`
+stamp matches the record files on disk and the calculations' current result
+versions; writing or deleting a record drops it. For a session that is not
+loaded and has no cached value, the column is unavailable when the session has
+no stored result. When it has one, the column stays empty (pending) until the
+session is loaded, because records are read only when a session is loaded.
+
+Before a record is written whose calculation `index.json` lists as present
+under a cached value, the index is rewritten without that value, so a crash at
+any point cannot leave a cached value that disagrees with the records. A value
+whose record may disagree with the loaded session (a record write or removal
+that failed, or a change of the registered calculations while the session was
+loaded) is kept out of `index.json` until the record is written or deleted
+again or the session is unloaded. An index written before stamps existed keeps
+such a value only for a session without a record.
 
 Developers: when to change the marker is described in
 [CALCULATIONS.md](CALCULATIONS.md#9-when-to-bump-calculationcompatibilityversion).
 
-## 12. What Viewer never does
+## 12. Stored calculation results
+
+**What.** A result of an explicitly requested calculation (today only sensor
+fusion) is stored when the calculation publishes it: a success with all its
+outputs (measurements with their samples and unit, attributes including the
+diagnostics), or a rejection or solver failure with its reason and
+diagnostics. Nothing is stored for a computation that was cancelled, ran out
+of memory, or whose inputs changed while it ran, nor for a calculation that
+failed. On-demand and plugin results are never stored: they are recomputed in
+milliseconds.
+
+**Where.** One file per (session, calculation) in `sessions/`, next to the
+session file: `<stem>.<encoded calculation id>.fvresult`. `<stem>` is the
+session file's name without `.csv`. In the id, every byte other than `a-z`,
+`0-9`, `_` and `-` is written as `%` and two upper-case hex digits, so the
+sensor fusion record of a session is `<uuid>.builtin%2Efusion%2Efit.fvresult`.
+A record never ends in `.csv`, so the logbook scan never takes it for a
+session. It is written through a temporary file that replaces the previous
+record at the end, like a session save. A session that is imported and
+computed before its first save gets its record under the name its first save
+will use.
+
+**Format.** Binary, not meant to be read by people: the magic `FVRESULT`, a
+format version (1), then the two code stamps, the calculation id, the result
+version, the reason, the input fingerprint (SHA-256), the names of the inputs
+the result depended on, and the outputs. Doubles are stored as their eight
+bytes, so a restored value is bit for bit the published one: `-0`, NaN and the
+infinities included. Strings round-trip exactly. A SHA-256 of everything before
+it closes the file. The size is of the order of the session file. A record of
+another format version, or a damaged one, is treated as stale.
+
+**Validity.** A record is used only while all of these hold:
+
+- `CalculationCompatibilityVersion`, the calculation environment fingerprint
+  (both as in section 11, but computed fresh when the session is loaded) and
+  the calculation's result version equal the ones it was written with. For
+  sensor fusion the result version is the kernel's algorithm string, the
+  `"algorithm"` of its diagnostics.
+- The names of the inputs the result reached are the same: source
+  measurements with their unit text, attributes and declared preferences,
+  directly or through other calculations, including inputs that were looked
+  at and found absent.
+- A fingerprint over those inputs' current values equals the stored one.
+
+So an edit the result does not depend on (a marker, a description) keeps the
+record, and an edit it depends on (a merge that adds or changes IMU data, a
+changed `SCHEMA_VER`, a changed local origin) makes it stale. Because the
+environment fingerprint covers every registered calculation and every declared
+preference, any change to those (editing the altitude markers, for example)
+also makes every record stale at its session's next load.
+
+**Lifecycle.**
+
+- A record is written when the result is published, and replaced by the next
+  publish for the same session and calculation.
+- It is deleted when an input it depends on changes, when its session is
+  deleted from the logbook, when it is found stale as the session is loaded,
+  and at start-up when no session file with its stem exists.
+- It is never deleted by hiding a track, unloading a session, quitting, or a
+  change of the registered calculations. Such a change is checked at the next
+  load instead.
+- When a session is loaded, every valid record is restored before anything
+  reads the session. Restoring is not requesting: nothing is computed. A stale
+  or missing record leaves the calculation not computed until it is requested
+  again from the plot list.
+- A write that fails (a full disk, say) leaves the previous record, if any,
+  intact and the result in memory. The next publish tries again.
+
+**Guarantees.** The session file is untouched: its bytes, its format and what
+it lists do not depend on whether a record exists. Records are derived data.
+Deleting them by hand (with Viewer closed) is safe and only means that the
+calculation has to be requested again. Existing logbooks have no records and
+need no migration. Records are not meant to be shared between logbooks or
+machines; one whose stamps do not match is simply discarded.
+
+## 13. What Viewer never does
 
 - Infer the schema from the firmware version, a file name, a date, or the data.
 - Rewrite recorded header attributes. None of them is editable in the logbook
@@ -328,7 +435,7 @@ Developers: when to change the marker is described in
 - Rescale stored data.
 - Show a dialog, badge, or warning for legacy files.
 
-## 13. Adding a future schema version
+## 14. Adding a future schema version
 
 For maintainers:
 

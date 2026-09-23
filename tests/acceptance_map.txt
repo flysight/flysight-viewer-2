@@ -1,5 +1,5 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Three specifications, three item ranges:
+# (tests/audit/cleanup_audit.cmake). Four specifications, four item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
@@ -11,6 +11,10 @@
 #             per-step IMU noise, temperature-dependent gyro bias, the
 #             command-line runner): item = 200 + requirement number. Stated in
 #             full in tests/README.md, appendix C.
+#   301-350   storing requested calculation results with the session (record
+#             files, restore on load, validity, logbook columns over them):
+#             item = 300 + clause number. Stated in full in
+#             tests/README.md, appendix D.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -20,10 +24,11 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the three ranges; every item 1-19 needs a line;
-# every item 101-120 or 201-247 needs at least one test or audit line (manual
-# and ci lines never stand alone). The human-readable matrices are
-# tests/README.md sections 9.1, 9.2 and 9.3; keep them in sync with this file.
+# Every item must lie in one of the four ranges; every item 1-19 needs a line;
+# every item 101-120, 201-247 or 301-350 needs at least one test or audit line
+# (manual and ci lines never stand alone). The human-readable matrices are
+# tests/README.md sections 9.1, 9.2, 9.3 and 9.4; keep them in sync with this
+# file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -335,9 +340,10 @@
 117 manual M8
 117 manual M9
 
-# 118 - every transition through model signals; a test view renders the whole history from the model alone
+# 118 - every transition through model signals; a test view renders the whole history from the model alone; no job is persisted
 118 tst_jobmodel historyFromSignalsAlone
 118 tst_jobmodel retentionBound
+118 tst_jobmodel nothingIsPersisted
 
 # 119 - the application stays interactive during a fit (pan and zoom: manual only, widgets)
 119 tst_fusion_rows editsAndVisibilityDuringFit
@@ -584,3 +590,311 @@
 
 # 247 - docs/ describes the segmented initializer, the stopping rule with its slow tail, the per-step term and its meaning at other rates, and the temperature-dependent bias (docs/SENSOR_FUSION.md sections 4 and 5)
 247 audit fusion-model
+
+# ---- Storing requested calculation results with the session: item = 300 + clause number ----
+
+# 301 - (2) the result of a requested calculation that ended as a function of its inputs is stored on disk beside the session: success with its outputs, rejection / solver failure with reason and diagnostics
+301 tst_result_store writesOnOkInstall
+301 tst_result_store rejectionIsWritten
+301 tst_fusion_store restoredAfterEvictionIsBitIdentical
+301 tst_fusion_store restoredRejectionShowsBadge
+
+# 302 - (2) it is restored at load, so readers, plot rows and logbook columns see it as if just published, while valid
+302 tst_result_store restoreOnEveryLoadPath
+302 tst_calcengine_restore restoreIntoFreshEngine
+302 tst_fusion_store restoredAfterRestartIsBitIdentical
+302 tst_result_columns restartShowsCachedValueWithoutLoading
+
+# 303 - (2) on-demand and plugin results are never stored
+303 tst_calcengine_restore exportOnlyInstalledOk
+303 tst_calcengine_restore restoreNotFound
+
+# 304 - (2) a stored result is a memory, not a request: stale or missing, the calculation reads not requested until a gesture
+304 tst_fusion_store codeStampChangeDropsRecordOnLoad
+304 tst_fusion_store dependencyEditDropsRecord
+304 tst_result_store staleRecordDeletedOnLoad
+304 tst_calcengine_restore restoreStaleChecks
+304 audit stored-results
+
+# 305 - (2) the session file is unchanged: bytes, format, enumeration; derived sensors never in it
+305 tst_fusion_store sessionFileBytesUnaffectedByRecord
+305 tst_result_records saveSessionIgnoresRecords
+305 tst_result_records strayRecordsRemovedAtScan
+305 audit stored-results
+
+# 306 - (2) kernel, job queue gestures and plot-row semantics unchanged beyond counting a restored result as computed
+306 tst_fusion_golden successFixturesMatchGolden
+306 tst_plot_requests rowScript
+306 tst_fusion_rows realRowScript
+306 audit gestures
+
+# 307 - (3) at most one record per (session, calculation), written at the install on the main thread, replaced by the next publish
+307 tst_result_store writesOnOkInstall
+307 tst_result_records writeReadReplace
+307 tst_calcengine_restore installedOnSyncAndAsync
+
+# 308 - (3) a record holds the id, the outcome, every installed output (measurements with unit, attributes with the diagnostics) and the validity stamp
+308 tst_result_records roundTripIsBitExact
+308 tst_result_records rejectionShapedRecord
+308 tst_result_records unavailableAndEmptyOutputs
+308 tst_result_store rejectionIsWritten
+
+# 309 - (3) nothing stored for a result not installed (cancelled, out of memory, refused) or not Ok; such a run deletes nothing
+309 tst_result_store nonOkInstallWritesAndDeletesNothing
+309 tst_jobmodel nothingIsPersisted
+309 tst_calcengine_restore installedForEveryStatus
+309 tst_calcengine_restore exportOnlyInstalledOk
+
+# 310 - (3) a record is removed only when stale on load, with its session, on an input change, or replaced; never by eviction, unload, registry change, quit
+310 tst_result_store noDeleteWithoutInputChange
+310 tst_result_store inputChangeDeletesRecord
+310 tst_calcengine_restore droppedByInputChange
+310 tst_calcengine_restore droppedByPreferenceAndSource
+310 tst_calcengine_restore noDropEventWithoutInputChange
+310 tst_calcengine_restore droppedByRequestOfUpstream
+
+# 311 - (3) values round-trip bit for bit (-0, NaN, infinities; strings byte for byte)
+311 tst_result_records roundTripIsBitExact
+311 tst_result_records layoutIsPinned
+311 tst_calcengine_restore restoreNaNPayloadAndSignedZero
+311 tst_calcengine_restore sameContentBitExactAttributes
+311 tst_fusion_session restoredFitIsIndistinguishable
+
+# 312 - (3) the golden tests cannot tell a restored fusion result from a fresh one
+312 tst_fusion_store restoredAfterEvictionIsBitIdentical
+312 tst_fusion_store restoredAfterRestartIsBitIdentical
+312 tst_fusion_session restoredFitIsIndistinguishable
+
+# 313 - (4.1) the input fingerprint covers the values the result depended on, transitively, absent ones included; the record lists their names
+313 tst_calcengine_restore fingerprintKnownAnswer
+313 tst_calcengine_restore fingerprintCanonicalForms
+313 tst_calcengine_restore leafKindCodes
+313 tst_calcengine_restore exportLeaves
+313 tst_calcengine_restore restoreChain
+
+# 314 - (4.1) an edit the result does not depend on keeps the record valid
+314 tst_fusion_store unrelatedEditKeepsRecord
+314 tst_fusion_store mergeIntoUnloadedSession
+314 tst_result_store inputChangeDeletesRecord
+314 tst_calcengine_restore restoreIgnoresAttributeType
+
+# 315 - (4.1) an edit it depends on (IMU merge, SCHEMA_VER, any dependency) invalidates it
+315 tst_fusion_store dependencyEditDropsRecord
+315 tst_fusion_store mergeIntoLoadedSessionDropsRecord
+315 tst_fusion_store mergeIntoUnloadedSession
+315 tst_calcengine_restore restoreStaleChecks
+315 manual M18
+
+# 316 - (4.2) valid only while CalculationCompatibilityVersion, the environment fingerprint and the result version match; fusion's is the algorithm string
+316 tst_fusion_store codeStampChangeDropsRecordOnLoad
+316 tst_result_store staleRecordDeletedOnLoad
+316 tst_result_records stampsAreCurrent
+316 tst_fusion_session registrationShape
+316 audit stored-results
+
+# 317 - (4.2) the bump rule gains the clause: bump it, or the calculation's result version
+317 audit stored-results
+
+# 318 - (4) a record that fails any check is deleted at load; the calculation reads not requested; nothing is recomputed
+318 tst_result_store staleRecordDeletedOnLoad
+318 tst_result_store upstreamMissingAfterLastPassDeletes
+318 tst_fusion_store codeStampChangeDropsRecordOnLoad
+
+# 319 - (5) every load path installs the valid records before any reader asks
+319 tst_result_store restoreOnEveryLoadPath
+319 tst_result_store bulkEditPromotionRestores
+319 tst_result_store restoresChainInPasses
+319 tst_result_store alreadyInstalledIsKept
+319 tst_fusion_store mergeIntoUnloadedSession
+
+# 320 - (5) same outputs, status, detail and dependency edges as a fresh publish; later invalidation identical
+320 tst_calcengine_restore restoreIntoFreshEngine
+320 tst_calcengine_restore restoredResultInvalidatesLikePublished
+320 tst_calcengine_restore restoreBeatsOutstandingTicket
+320 tst_calcengine_restore restoreNeverReplaces
+320 tst_fusion_session restoredFitIsIndistinguishable
+
+# 321 - (5) plot rows count a restored result as computed: no refresh count, no job; stale or absent as today
+321 tst_fusion_store restoredAfterEvictionIsBitIdentical
+321 tst_fusion_store restoredAfterRestartIsBitIdentical
+321 tst_fusion_store dependencyEditDropsRecord
+321 manual M1
+321 manual M16
+
+# 322 - (5) blocker inspection reports a restored result as a published one, NotProduced with its detail
+322 tst_calcengine_restore restoreRejection
+322 tst_fusion_store restoredRejectionShowsBadge
+322 tst_fusion_store restoredSolverFailureShowsBadge
+
+# 323 - (5) logbook columns over a requested calculation: computed from the restored or published result, cached with the record stamp; unavailable without a record
+323 tst_result_columns columnExplicitCalculations
+323 tst_result_columns unrequestedIsCachedUnavailable
+323 tst_result_columns stampWrittenOnFlush
+323 tst_result_columns publishedResultIsCached
+323 tst_result_columns restartShowsCachedValueWithoutLoading
+323 tst_result_columns noRecordStaysUnavailableAfterRestart
+323 tst_result_columns recordBeforeFirstSaveIsCachedAfterSave
+323 tst_calcregistry explicitDependencies
+323 tst_column_cache explicitBackedColumnFollowsItsResult
+323 tst_fusion_jobs columnOnFusionOutputIsCachedFromRecord
+323 manual M17
+
+# 324 - (5) dropping or writing a record drops the values stamped with it: crashes, old indexes, failed writes, environment changes
+324 tst_result_columns inputChangeDropsCachedValue
+324 tst_result_columns onlyDependentColumnsDrop
+324 tst_result_columns staleRecordOnLoadDropsCachedValue
+324 tst_result_columns workerLeavesPendingWithRecord
+324 tst_result_columns crashAfterRecordWrite
+324 tst_result_columns crashAfterRecordDelete
+324 tst_result_columns rewriteAfterDropFlushesIndexFirst
+324 tst_result_columns writeAfterStartupDropFlushesIndexFirst
+324 tst_result_columns oldIndexWithoutStamp
+324 tst_result_columns resultVersionChangeDropsCachedValue
+324 tst_result_columns writeFailureKeepsValueOutOfIndex
+324 tst_result_columns environmentChangeDiscardsCachedValue
+324 tst_result_columns environmentChangeUnconfirmsLoadedRows
+324 tst_result_columns managerDropsDependentValues
+324 tst_result_columns deletingSessionRemovesStamp
+
+# 325 - (5) unloading (eviction, hide beyond the cache capacity, quit) loses nothing
+325 tst_result_store noDeleteWithoutInputChange
+325 tst_fusion_store restoredAfterEvictionIsBitIdentical
+325 manual M16
+325 manual M17
+
+# 326 - (5) publishing writes the record, nothing else does: a restore never rewrites it
+326 tst_result_store restoreOnEveryLoadPath
+326 tst_calcengine_restore restoreIsNotAnInstall
+326 audit stored-results
+
+# 327 - (5) written through the logbook manager atomically; a failed write leaves the previous record and the in-memory result; tried again at the next publish
+327 tst_result_store writeFailureLeavesResultUsable
+327 tst_result_store writeFailureKeepsPreviousRecord
+327 tst_result_records writeFailureRefusedEncoding
+327 tst_result_records writeFailureDirectoryAtPath
+327 tst_result_records writeForUnknownSession
+327 audit stored-results
+
+# 328 - (5) a session fitted before its first save stores its result under its reserved stem; a never-saved session's record is a stray
+328 tst_result_store recordBeforeFirstSave
+328 tst_result_store recordOfNeverSavedSessionIsStray
+328 tst_result_store removeBeforeFirstSave
+328 tst_fusion_store fittedBeforeFirstSaveIsRestored
+
+# 329 - (5) a record is deleted with its session and when found stale
+329 tst_result_store deletingSessionRemovesRecords
+329 tst_result_records removeSessionDeletesRecords
+329 tst_result_records removeSessionDottedStems
+329 tst_result_records failedSessionRemovalKeepsRecords
+329 tst_result_records removeOneAndAll
+329 tst_result_columns removingReservedSessionForgetsIt
+329 manual M19
+
+# 330 - (6) one file per (session, calculation) next to the session file, named from its stem and the id, never mistaken for a session
+330 tst_result_records fileIdEncoding
+330 tst_result_records fileNameParsing
+330 tst_result_records fileNamesDifferIgnoringCase
+330 tst_result_records strayRecordsRemovedAtScan
+330 tst_result_records orphanAdoptionKeepsRecord
+330 tst_result_records recordsFollowRemap
+330 audit stored-results
+
+# 331 - (6) the encoding: bit-exact doubles, readable without the session, the order of the session file's size, a version so a future format is refused
+331 tst_result_records layoutIsPinned
+331 tst_result_records futureVersionIsRefused
+331 tst_result_records corruptInputIsRefused
+331 tst_result_records readStatuses
+331 tst_result_records sizeIsOrderOfSamples
+331 tst_result_records encoderRefusesUnsupportedAttribute
+331 tst_result_store staleRecordDeletedOnLoad
+
+# 332 - (6) existing logbooks have no records: not requested until requested; no migration
+332 tst_result_columns oldIndexWithoutStamp
+332 tst_result_columns noRecordStaysUnavailableAfterRestart
+332 tst_fusion_jobs columnOnFusionOutputIsCachedFromRecord
+
+# 333 - (7) publish, restore and record writes on the main thread; the engine's threading rules unchanged
+333 tst_result_store writesOnOkInstall
+333 audit one-worker
+333 audit stored-results
+
+# 334 - (7) the store never reads a record for a session not being loaded, and never starts a calculation
+334 tst_result_store temporaryLoadsNeverRestore
+334 tst_result_columns workerLeavesPendingWithRecord
+334 tst_result_columns restartShowsCachedValueWithoutLoading
+334 audit stored-results
+
+# 335 - (7) purity: with or without a record, every reader sees the same value
+335 tst_calcengine_restore restoreIntoFreshEngine
+335 tst_fusion_session restoredFitIsIndistinguishable
+335 tst_fusion_store fittedBeforeFirstSaveIsRestored
+
+# 336 - (7) saving a session with a stored result gives the same bytes as without
+336 tst_fusion_store sessionFileBytesUnaffectedByRecord
+336 tst_result_records saveSessionIgnoresRecords
+
+# 337 - (8) test: a fusion fixture fitted, saved, unloaded, reloaded: seventeen channels and diagnostics bit-identical to the goldens, no job, no refresh count
+337 tst_fusion_store restoredAfterEvictionIsBitIdentical
+
+# 338 - (8) test: the same after an application restart
+338 tst_fusion_store restoredAfterRestartIsBitIdentical
+
+# 339 - (8) test: a rejection and a solver failure restored with their reason; the warning as today; no job
+339 tst_fusion_store restoredRejectionShowsBadge
+339 tst_fusion_store restoredSolverFailureShowsBadge
+
+# 340 - (8) test: an unrelated edit keeps the record; merging IMU data or changing any dependency drops it, reads not requested, the file is gone
+340 tst_fusion_store unrelatedEditKeepsRecord
+340 tst_fusion_store dependencyEditDropsRecord
+340 tst_fusion_store mergeIntoLoadedSessionDropsRecord
+340 tst_fusion_store mergeIntoUnloadedSession
+340 tst_result_store inputChangeDeletesRecord
+
+# 341 - (8) test: bumping the compatibility version, the environment fingerprint or the result version drops the record on load
+341 tst_fusion_store codeStampChangeDropsRecordOnLoad
+341 tst_result_store staleRecordDeletedOnLoad
+
+# 342 - (8) test: a failed write leaves the in-memory result usable and the previous record intact
+342 tst_result_store writeFailureLeavesResultUsable
+342 tst_result_store writeFailureKeepsPreviousRecord
+
+# 343 - (8) test: deleting a session removes its records; a stray record is ignored and removed by the next scan
+343 tst_result_store deletingSessionRemovesRecords
+343 tst_result_store strayRecordRemovedAtRestart
+343 tst_result_records removeSessionDeletesRecords
+343 tst_result_records strayRecordsRemovedAtScan
+
+# 344 - (8) test: a logbook column over Fusion/roll is cached from a valid record, unavailable without one, invalidated when the record is dropped
+344 tst_fusion_jobs columnOnFusionOutputIsCachedFromRecord
+344 tst_result_columns publishedResultIsCached
+344 tst_result_columns unrequestedIsCachedUnavailable
+344 tst_result_columns inputChangeDropsCachedValue
+344 tst_result_columns staleRecordOnLoadDropsCachedValue
+344 tst_result_columns deletingSessionRemovesStamp
+
+# 345 - (8) test: saving a session with a stored result produces the same session-file bytes as without
+345 tst_fusion_store sessionFileBytesUnaffectedByRecord
+
+# 346 - (9) docs/ describe the record files and amend DATA_SCHEMA 11, CALCULATIONS 8 / 9 / 12 / 15, SENSOR_FUSION 2 / 7
+346 audit stored-results
+
+# 347 - (10) a requested result is kept as long as its inputs and its code are the same, and not a moment longer
+347 tst_fusion_store unrelatedEditKeepsRecord
+347 tst_fusion_store dependencyEditDropsRecord
+347 tst_fusion_store codeStampChangeDropsRecordOnLoad
+
+# 348 - (10) the session file is the recording; derived data lives beside it, never in it
+348 tst_fusion_store sessionFileBytesUnaffectedByRecord
+348 audit stored-results
+
+# 349 - (10) restoring is not requesting: nothing starts on its own
+349 tst_calcengine_restore restoreIsNotAnInstall
+349 tst_result_store restoreOnEveryLoadPath
+349 tst_fusion_store restoredAfterRestartIsBitIdentical
+349 audit stored-results
+349 manual M17
+
+# 350 - (10) a restored result is indistinguishable from a fresh one, to the bit
+350 tst_fusion_session restoredFitIsIndistinguishable
+350 tst_fusion_store restoredAfterEvictionIsBitIdentical
+350 tst_calcengine_restore restoreIntoFreshEngine

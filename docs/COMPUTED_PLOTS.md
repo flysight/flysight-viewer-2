@@ -74,7 +74,9 @@ Nothing else starts a computation. In particular:
 - editing a recording.
 
 After any of these the row simply shows the refresh icon with the number of
-tracks that are not computed. Press it when you want them.
+tracks that are not computed. Tracks whose result was kept from earlier
+(section 6) count as computed and are drawn at once. Press the icon when you
+want the others.
 
 ## 4. Cancelling
 
@@ -103,8 +105,15 @@ computation.
   not be used - and the row shows the refresh icon at once instead of the
   cancel control. Nothing is recomputed automatically; pressing refresh computes the track
   from the new data as soon as the old computation has stopped.
-- **When you quit.** Results are not saved. After a restart the plots are
-  still checked and the rows show the refresh icon.
+- **Hiding a track or quitting loses nothing.** Results are kept with the
+  recording in the logbook. When the track is shown again, also after a
+  restart, the plot is drawn at once, without the refresh icon and without
+  computing.
+- **After an update of FlySight Viewer** that changes how such a plot is
+  computed, or after a change to calculations or to preferences that
+  calculations read (for example editing the altitude markers), kept results
+  are discarded when their track is next shown. The track is "not computed"
+  again.
 - Moving markers, zooming, panning and changing display settings never discard
   a result.
 
@@ -139,5 +148,7 @@ stop.
   one.
 - There is no window that lists computations. The rows and their tooltips are
   where progress and failures are reported.
-- A logbook column based on a computed plot is blank for recordings that are
-  not loaded, and after a restart until the plot has been computed again.
+- A logbook column based on a computed plot shows the kept value for
+  recordings that are not loaded. It stays blank for a recording that has
+  never been computed. After an update it can stay blank until the recording
+  is shown.

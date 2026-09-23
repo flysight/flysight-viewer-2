@@ -14,10 +14,12 @@
 12. [Manual verification](#12-manual-verification)
     - 12.1 [Plot-driven jobs](#121-plot-driven-jobs)
     - 12.2 [The fusion runner and the reference recordings](#122-the-fusion-runner-and-the-reference-recordings)
+    - 12.3 [Stored results](#123-stored-results)
 
 [Appendix A. The acceptance items (1-19)](#appendix-a-the-acceptance-items-1-19)
 [Appendix B. The acceptance items of sensor fusion and plot-driven jobs (101-120)](#appendix-b-the-acceptance-items-of-sensor-fusion-and-plot-driven-jobs-101-120)
 [Appendix C. The acceptance items of the sensor fusion improvements (201-247)](#appendix-c-the-acceptance-items-of-the-sensor-fusion-improvements-201-247)
+[Appendix D. The acceptance items of stored requested results (301-350)](#appendix-d-the-acceptance-items-of-stored-requested-results-301-350)
 
 ## 1. What this is
 
@@ -36,8 +38,8 @@ The tests are not a standalone project. `tests/` is added by
 test is registered with CTest. Test executables have no install rules, so
 packages are the same whether or not the option is set.
 
-There are 42 test executables plus the audit. `ctest -N` lists 43 entries, or
-49 where the bit-exact runs of the six fusion golden tests are registered
+There are 47 test executables plus the audit. `ctest -N` lists 48 entries, or
+55 where the bit-exact runs of the seven fusion golden tests are registered
 (`tst_fusion_*_exact`: the same executables a second time, label `exact`,
 Release only; sections 3 and 11). `solver_deploy_probe`,
 `fusion_golden_capture` and `fusion_runner` are also built, but are not tests
@@ -54,7 +56,7 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 
 | Test | Covers |
 |------|--------|
-| `tst_calcregistry` | Calculation engine: value types, registration order and validation, family instances, private registries, registration-derived static dependencies (followed through source conversions) and `dependsOnExplicit()`, the one authority for "explicit-backed", source inputs refused outside source conversions |
+| `tst_calcregistry` | Calculation engine: value types, registration order and validation, family instances, private registries, registration-derived static dependencies (followed through source conversions), `explicitDependencies()` (which explicit calculations stand behind a name) and its non-emptiness `dependsOnExplicit()`, the one authority for "explicit-backed", source inputs refused outside source conversions |
 | `tst_calcengine` | Calculation engine: resolution, caching, dependency recording, invalidation across sessions, explicit policy, preferences, families, measurement layers |
 | `tst_calcengine_safety` | Calculation engine: nested scopes, cycles (single and overlapping rings: the same literal answers for every read order), exceptions, re-entrancy guards |
 | `tst_calcengine_oracle` | Calculation engine: randomized (seeded) sequences, and randomized (seeded) topologies full of overlapping rings, compared against a fresh evaluation; the same with explicit calculations in play (blocker inspection, synchronous and asynchronous requests, requests refused because an input changed), where an explicit calculation may run only in a request or publish step |
@@ -82,7 +84,7 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | Test | Covers |
 |------|--------|
 | `tst_jobqueue` | The application-wide `JobQueue` on a real `SessionModel`, real session engines and the global registry, with the synthetic explicit calculations of `jobfixture.h` (no GTSAM): publication through the session model, the 64 MiB worker thread, deduplication, one job at a time in request order, refusals (missing input, unloaded or unknown session, blocked, done, unknown), never loading a session, every superseded / succeeded / failed / cancelled path with its reason text, a running job whose ticket went stale (input edit, merge, registration removed, model destroyed, the row's session data replaced - "Session data replaced", not "removed or unloaded") asked to stop at once and ended Superseded with the refusal's reason without its compute reaching the end, a new request behind it created rather than deduplicated and run with the new inputs, first writer wins between a user cancel and a stale stop, cancel wins over a completed compute, pruning of unwanted queued jobs, a job cancelled from a `rowsInserted` slot (no pin left, no `jobQueued` after its `jobFinished`), session removal, deferred eviction, repopulation, merge, sort, shutdown in every order, and the idle scheduler working during a job (sensor-fusion-jobs acceptance 8, 10, 11, 14, 17) |
-| `tst_jobmodel` | The `JobModel` contract under `QAbstractItemModelTester`: every role on every column, a test view that renders the whole job history from model signals alone, never more than one running row, ordered UTC timestamps, progress and cancel-requested as their own signals, removal of finished rows only, the retention bound, and nothing persisted (sensor-fusion-jobs acceptance 18) |
+| `tst_jobmodel` | The `JobModel` contract under `QAbstractItemModelTester`: every role on every column, a test view that renders the whole job history from model signals alone, never more than one running row, ordered UTC timestamps, progress and cancel-requested as their own signals, removal of finished rows only, the retention bound, and no job persisted: the settings and the logbook folder are byte-identical after jobs of every ending, except for the stored results of the two jobs that published `Ok` (sensor-fusion-jobs acceptance 18; store-requested item 309) |
 | `tst_plot_requests` | `PlotRequests`, the widget-free logic behind the plot list's rows, on a real `PlotModel`, `JobQueue`, `SessionModel`, real session engines and the global registry, with the synthetic plots of `plotfixture.h` (no widgets, no GTSAM): track conditions and row aggregation (counts, progress label, tooltip text, change signals, coalesced passes, text-only progress updates), ordinary and unchecked plots never inspected, hidden rows, stubs and failed-load placeholders are not tracks, the two gestures as one-shot requests, chained continuation and everything that stops it, everything that is not a gesture (programmatic checks, profile apply, startup restore, showing, loading, merging, input invalidation, a superseded job), a running job gone stale showing refresh instead of cancel at once and a refresh queueing a new job behind it, sessions without input never listed, the failed badge and its reason, `PlotRequests::isMerelyUncomputed()` (the plot widget's "No data available" warning is withheld for a value that waits on an explicit calculation or was rejected by one, and for nothing else: one case per blocker state, and asking runs nothing), rows sharing a job, cancel, cancel then refresh while the job winds down, pruning of queued jobs on uncheck and hide, session removal, registry changes, queue shutdown, and null collaborators (sensor-fusion-jobs acceptance 11, 13, 15, 16) |
 | `tst_plot_row_layout` | `layoutPlotRow()` (`src/ui/docks/plotselection/PlotRowLayout.h`), the pure geometry of a plot-list row's control cluster, without widgets or a font: control only, control and warning, warning only, nothing shown, an empty label, right-to-left as the exact mirror image, and the control's hit rectangle (the icon's column over the full row height, out to the row's edge; label and badge outside it) |
 | `tst_plot_row_delegate` | `PlotRowDelegate` in an offscreen `QTreeView` on a real `PlotRequests`, `PlotModel`, `JobQueue` and `SessionModel`, driven by synthesized mouse and key events; the **only test that links Qt Widgets** (`FLYSIGHT_BUILD_WIDGET_TESTS`, label `widgets`). What the view owns: plain rows are pixel-identical to the base delegate, the control is painted and the name elided rather than the cluster, a click on the check box and Space are the check gesture while unchecking, `setPlotEnabled()`, `togglePlot()`, `setData()` and a start-up style restore with the view attached start nothing, refresh and cancel clicks (no toggle, no selection change), press/release pairs that must do nothing, the inert label and badge, right clicks, a double click on refresh, the tooltip from `PlotRowState`, repaint on `rowStateChanged`, and survival of a destroyed `PlotRequests` (sensor-fusion-jobs acceptance 16, wiring half). The offscreen platform has no fonts, so text is drawn as boxes; the assertions are about geometry, identity and events, not about letter shapes |
@@ -104,7 +106,7 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | `tst_persistence_roundtrip` | Save / reload on the real importer, exporter and logbook: acceptance 5 (bit-identical samples, units and header attributes preserved, `SCHEMA_VER` only if recorded, effective values unchanged, second cycle byte-identical, independent of any cache) and acceptance 6 (a released logbook file is not rescaled, relabelled or stamped by a save; the `loadSession` backfill is additive and idempotent); non-finite samples, ragged sensors, unrepresentable text; the file writer and the in-memory writer agree (also across the 4 MB flush boundary); an unsupported stored `SCHEMA_VER` is never written |
 | `tst_logbook_index` | `LogbookManager`'s `index.json` column cache: the calculation-compatibility marker and environment fingerprint gate the cached values (acceptance 18 at the storage level), unsaved-column tracking and save ordering (an interrupted save never leaves a cached column that disagrees with the session file), orphan session files adopted, marks follow remap / remove / reset; the raw load with its failure reason, the legacy backfill as a separate step, identity-entry queries, a legacy flat index coming up as stubs without rewriting a session file |
 | `tst_result_records` | Stored requested-calculation results: the record file name (percent-encoded calculation id, canonical, dot-free, distinct under case folding; the parse of a name), the code stamps computed fresh, the binary record format (bit-exact round trip of `-0`, NaN payloads, infinities and subnormals, null / empty / non-ASCII strings and unavailable outputs; the pinned byte layout; other format versions, damaged and crafted payloads refused without allocating; unsupported attribute types refused at encode; size), and `LogbookManager`'s record files: write, read, replace, list, remove, write failures leaving the previous record intact, removal with the session (dotted identity stems), stray records removed by `initialize()` in all three index branches, orphan adoption, remap, and a session save that never depends on records |
-| `tst_column_cache` | The same through `SessionModel`: upgrade discards and lazily recomputes (acceptance 18), an edit refreshes only the affected columns with a warm and a cold engine, merges and bulk edits, interrupted saves, environment changes (declared preference, altitude-marker registrations) discarding loaded and unloaded rows without saving, save failures (the row stays dirty and loaded, is skipped by the idle saver and the LRU, stays out of the index, and is saved by a later edit or the shutdown flush), line breaks flattened at edit |
+| `tst_column_cache` | The same through `SessionModel`: upgrade discards and lazily recomputes (acceptance 18), an edit refreshes only the affected columns with a warm and a cold engine, merges and bulk edits, interrupted saves, environment changes (declared preference, altitude-marker registrations) discarding loaded and unloaded rows without saving, save failures (the row stays dirty and loaded, is skipped by the idle saver and the LRU, stays out of the index, and is saved by a later edit or the shutdown flush), line breaks flattened at edit, a column over an explicit result cached from the result the session has and following its record, shown by a stub after a restart without a load (`explicitBackedColumnFollowsItsResult`) |
 
 **Import and merge, workflows**
 
@@ -129,10 +131,10 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | `tst_solver_smoke` | GTSAM's exported CMake target compiles, links and runs in a test: the install is the shipped configuration (`4.3a0`, TBB on, bundled Eigen 3.4, built without Boost: `GTSAM_ENABLE_BOOST_SERIALIZATION` and `GTSAM_USE_BOOST_FEATURES` are `0`), a small pose graph optimizes to its analytic answer (Eigen, METIS, TBB, library loading), and the main thread really has the 64 MiB stack of `flysight_solver_stack()` (the test uses 48 MiB of it; with a default stack it crashes). Label `fusion`. Nothing from the fusion model is involved |
 | `tst_fusion_golden` | The fusion kernel (`flysight_fusion`) through its public API, `src/fusion/fusion.h`, only. What it reaches: `Fusion::run()` on the twelve committed synthetic fixtures and nothing internal. In spec order: the initializer's prefix and segment fits are boundaries of the same kinds as the full fit's, so cancellation at each kind of boundary (`Starting fit`, graph construction, a prefix fit iteration, a segment fit iteration, a full fit iteration) leaves an empty result and no state behind, and preparation has no boundary of its own (the first is `Starting fit`); the progress texts at the kernel's boundaries, prefix and segment texts included, are the golden's; two runs are bit-identical with TBB on, a 64 MiB worker thread matches the main thread, and nothing depends on the caller's data. The golden comparison: for every fixture the fit reproduces the goldens captured from the kernel by `fusion_golden_capture` (three successes: seventeen channels and the diagnostics with their `initializer`, `stopping`, `quality` and `model` objects; nine rejections: the exact reason), the channel writer of the capture tool is the inverse of the loader on the committed files (and the hex sample form round-trips signed zero, a NaN and a subnormal by bit pattern), and the comparator holds its bounds (sensor-fusion-jobs acceptance 4; section 11). Label `fusion` |
 | `tst_fusion_kernel` | The kernel's internals through the seams of `src/fusion/` (the only test that includes those headers), with the literal expectations of the reference's self-test: the shared unwrap rule, preintegration across exact boundaries, every validation defect, backward attitude propagation, heading freedom, dense reconstruction timing and endpoint correction, an exact constant-velocity fit, TBB really on. In spec order: the segmented initializer (segment cutting on fixes and the merge of a short final piece, a window shorter than one segment, the smallest-sAcc anchor and the carried-back start, prefix growth on the marginal yaw sigma about the vertical, the growth stop when a doubling gains nothing, the prefix budget of one pass and 50 iterations and starts that end on the limit, the fallback when every prefix start fails, its progress texts and diagnostics keys, the four synthetic initializer recordings of the specification and `coarse_maneuver`); the stopping rule (the bias-settled cost test, the slow tail accepted and refused on each bound, non-convergence and a never-settling bias as solver failures with their failure shapes); the per-step IMU noise term (the density covariance exactly without a signal change, the specified covariance for a known change, the `dt` scaling, the constants in `model.per_step`); the temperature-dependent gyro bias (the custom IMU factor's six Jacobians against finite differences and its equivalence with `ImuFactor` at zero slope, the graph shape with `T_ref` and the slope prior last, the reconstruction at each interval's own bias, a recording without the temperature channel rejected by name, a constant temperature leaving `b1` at its prior and agreeing with the constant-bias fit, the drifting-bias recording recovering `b1` within 20 % in at most 30 iterations). The golden comparison: the fit trace (the segment account and the cost before and after every optimizer iteration) against the goldens, which localizes a golden failure to a stage, and the chosen prefix fit's iteration count against the golden's (acceptance 4; section 11). Label `fusion` |
-| `tst_fusion_session` | Sensor fusion as a registered calculation (`src/fusion/fusionregistration.cpp`) on real `SessionData` engines bound to the global registry, with the real fit on the test's main thread. What it reaches: the engine's request, prepare / compute / publish and blocker paths on fixture sessions whose effective inputs are bit-identical to the kernel's fixtures, and a natural session through the real input chain. The registration's shape: three registrations, the fit with 22 inputs (all required, `IMU/temperature` the last measurement) and 18 outputs, explicit, title "Sensor fusion". In spec order: cancellation at each kind of boundary through the engine's facility publishes and caches nothing (sensor-fusion-jobs acceptance 10); a session with the temperature column carries it to the kernel bit for bit and matches the kernel's direct run, and a session without `IMU/temperature` is `MissingInput` / `NotApplicable` like one without IMU data, a local origin or a time fit (11). The lifecycle: reads of every fusion value, `accH`, the system-time axis, the diagnostics and an interpolated logbook value never run the fit, in any order, nor does the exporter (5); a request runs once, publishes all outputs together, and brings `accH` and `_system_time` with it (6); prepare / compute / publish equals `request()` bit for bit (7); an input change after publication drops everything while markers do not (8); a rejection is a cached result with its reason, `NotProduced` for inspection, and requestable again after an input change (9); blocker inspection reports the fit through on-demand intermediates and never starts it (12); two sessions are independent. The golden comparison: every published result equals the kernel's goldens. Label `fusion` |
-| `tst_fusion_jobs` | The real fit through `JobQueue` on a real `SessionModel`, on the queue's 64 MiB worker: one job publishes all outputs together and announces them through the session model (acceptance 6); the queue gives the bits a synchronous request gives (7); an input edit during the fit asks the fit to stop at once, ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job (11); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before and after a published fit, while the loaded row's cell shows the golden's number the moment the job publishes (`dataChanged` for that row only, and the number already there when the view is told); shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the queue delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 11 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
+| `tst_fusion_session` | Sensor fusion as a registered calculation (`src/fusion/fusionregistration.cpp`) on real `SessionData` engines bound to the global registry, with the real fit on the test's main thread. What it reaches: the engine's request, prepare / compute / publish and blocker paths on fixture sessions whose effective inputs are bit-identical to the kernel's fixtures, and a natural session through the real input chain. The registration's shape: three registrations, the fit with 22 inputs (all required, `IMU/temperature` the last measurement) and 18 outputs, explicit, title "Sensor fusion". In spec order: cancellation at each kind of boundary through the engine's facility publishes and caches nothing (sensor-fusion-jobs acceptance 10); a session with the temperature column carries it to the kernel bit for bit and matches the kernel's direct run, and a session without `IMU/temperature` is `MissingInput` / `NotApplicable` like one without IMU data, a local origin or a time fit (11). The lifecycle: reads of every fusion value, `accH`, the system-time axis, the diagnostics and an interpolated logbook value never run the fit, in any order, nor does the exporter (5); a request runs once, publishes all outputs together, and brings `accH` and `_system_time` with it (6); prepare / compute / publish equals `request()` bit for bit (7); an input change after publication drops everything while markers do not (8); a rejection is a cached result with its reason, `NotProduced` for inspection, and requestable again after an input change (9); blocker inspection reports the fit through on-demand intermediates and never starts it (12); two sessions are independent. The fit declares its kernel's algorithm string as its result version, and a fit exported from one session and restored into another is indistinguishable from the fresh one: every channel bit for bit, the diagnostics byte for byte, status, detail, dependency edges, blockers and invalidation (`restoredFitIsIndistinguishable`). The golden comparison: every published result equals the kernel's goldens. Label `fusion` |
+| `tst_fusion_jobs` | The real fit through `JobQueue` on a real `SessionModel`, on the queue's 64 MiB worker: one job publishes all outputs together and announces them through the session model (acceptance 6); the queue gives the bits a synchronous request gives (7); an input edit during the fit asks the fit to stop at once, ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job (11); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before the fit, from the published result after it (with the `"records"` stamp in `index.json`), shown by the unloaded row after a restart without a load, and dropped with the record by an input change (`columnOnFusionOutputIsCachedFromRecord`), while the loaded row's cell shows the golden's number the moment the job publishes (`dataChanged` for that row only, and the number already there when the view is told); shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the queue delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 11 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit, driven as a child process on fixtures written out as `TRACK.CSV` / `SENSOR.CSV`: its diagnostics equal a direct `Fusion::run()` on the fixture and equal the application's own import-and-fit path (`SessionImport` on a `SessionModel`); the CSV output reloads bit for bit; `--dump-inputs` shows the effective inputs, including the legacy gyro scale of a file without `SCHEMA_VER`; a rejection exits 1 with the failure JSON and writes no CSV; usage and import failures exit 64 and 3; no calculation on the fit's input path declares a preference (the premise of the model-free import); and the seventeen output channels of `fitOutputChannels()` are the golden's columns in order. Label `fusion` |
-| `tst_fusion_golden_exact`, `tst_fusion_kernel_exact`, `tst_fusion_session_exact`, `tst_fusion_jobs_exact`, `tst_fusion_rows_exact`, `tst_fusion_runner_exact` | Not executables: the six tests above that compare with the goldens, run a second time with `FLYSIGHT_FUSION_EXACT=1` and otherwise the same environment, so that every golden comparison is bit equality (section 11, "Tolerance policy"). Registered only where that is a fair demand, the compiler the goldens were captured with (`FLYSIGHT_FUSION_EXACT_TESTS`, section 3). The first two decide bit-identity; the next three show that the bits survive the engine, the queue's worker thread and the plot rows; the last is bit identity across the process boundary (the runner's output against an in-process run). Labels `fusion` and `exact` |
+| `tst_fusion_golden_exact`, `tst_fusion_kernel_exact`, `tst_fusion_session_exact`, `tst_fusion_jobs_exact`, `tst_fusion_rows_exact`, `tst_fusion_store_exact`, `tst_fusion_runner_exact` | Not executables: the seven tests above that compare with the goldens, run a second time with `FLYSIGHT_FUSION_EXACT=1` and otherwise the same environment, so that every golden comparison is bit equality (section 11, "Tolerance policy"). Registered only where that is a fair demand, the compiler the goldens were captured with (`FLYSIGHT_FUSION_EXACT_TESTS`, section 3). The first two decide bit-identity; the next four show that the bits survive the engine, the queue's worker thread, the plot rows and a stored and restored record; the last is bit identity across the process boundary (the runner's output against an in-process run). Labels `fusion` and `exact` |
 | `tst_fusion_rows` | The plot-row script with the **real** fusion plots: `PlotModel` + `PlotRequests` + `JobQueue` + `SessionModel` + the fusion registration, with real fits on the queue's 64 MiB worker and the seventeen plots of `fusionPlots()` (`tests/fusion/fusionsessions.h`, which mirrors `MainWindow::registerBuiltInPlots()`; `audit_cleanup` pins the application's list at seventeen rows). All seventeen plots are explicit-backed and the six local-frame plots are not; the row script of acceptance 15 on three real tracks (three jobs, the count falling as each publishes, unchecking mid-way removes the queued job and lets the running one finish, cancel leaves the plot checked and the track missing with nothing published, a fourth track is missing with a count of one and starts nothing, refresh computes it), with every published track held to the kernel's goldens and the job history as a literal; roll, pitch and yaw share one job and one progress text; `accH` is blocked by the fit and never has a job of its own; a session without IMU data is in no count, list or tooltip of any of the seventeen rows before, during and after a fit (11); a rejected recording shows the warning badge with the reason, offers no retry, and becomes refreshable when its input changes (9); sessions are edited, tracks hidden and shown and other values read while a real fit runs, without disturbing it (19, the half that needs no widget). Steered by the first progress text of a job and by `jobFinished`: no gate, no sleeps. Label `fusion` |
 | `tst_fusion_store` | The fit's stored result: bit-identical after unload and restart (also when fitted before the first save), rejection / solver failure badge, dependency and code-stamp invalidation, merges, session file untouched; also run as `_exact` |
 
@@ -161,7 +163,7 @@ comparison (section 12.2).
 
 | Test | Covers |
 |------|--------|
-| `audit_cleanup` | No old mechanism remains, each fact has one authority, none of the mechanisms of `sensor-fusion-clean-port` that have no successor exists, the structural rules of background work hold (one worker, no locks, GTSAM confined, gestures from the row delegate only, a widget-free core), and every line of `tests/acceptance_map.txt` resolves (section 10) |
+| `audit_cleanup` | No old mechanism remains, each fact has one authority, none of the mechanisms of `sensor-fusion-clean-port` that have no successor exists, the structural rules of background work hold (one worker, no locks, GTSAM confined, gestures from the row delegate only, a widget-free core), stored results live beside the session file and are named, written, read, restored and deleted in one place each, and every line of `tests/acceptance_map.txt` resolves (section 10) |
 
 The `tst_calc*` tests drive `src/engine/` with synthetic calculations against
 `FakeSessionState` / `FakePreferenceProvider` (`support/fakesessionstate.h`).
@@ -196,7 +198,12 @@ Tests that use `LogbookManager::initialize()` together with cached column
 values must call `TestEnvironment::registerBuiltIns()` first, as the
 application does: the calculation-environment fingerprint captured at
 `initialize()` is compared with the one of the next start, and registering in
-between would make every reopen discard the cache. For the same reason set the
+between would make every reopen discard the cache. Stored results follow the
+same rule: a record is valid only while the environment fingerprint it was
+written with is current, so a test that registers a calculation between
+writing a record and loading its session sees the record deleted as stale.
+`tst_result_store` and `tst_fusion_store` use exactly that to simulate an
+environment change. For the same reason set the
 logbook columns (`LogbookColumnStore::setColumns`, which flushes the index)
 before planting a hand-edited `index.json`. `tst_logbook_index` and
 `tst_column_cache` remove whatever they register globally in `cleanup()`.
@@ -249,7 +256,7 @@ where they run. CMake 3.22 or newer is needed for the automatic DLL and
 | `FLYSIGHT_BUILD_TESTS` | `OFF` | Adds `tests/` to the application build. No install rules: packaging is unaffected |
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | Only with the first: also build `tst_python_bridge`. `OFF` removes the target. If NumPy is missing from the build-time Python the test is still built but listed as **Disabled**, not omitted (section 5) |
 | `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | Only with the first: also build `tst_plot_row_delegate`, the one test that links Qt Widgets (it runs an offscreen `QTreeView`). `OFF` removes the target, and then no test target links Widgets. Forwarded by the root `CMakeLists.txt` like the others |
-| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | Only with the first: also build the GTSAM-linked tests (`tst_solver_smoke`, `tst_fusion_golden`, `tst_fusion_kernel`, `tst_fusion_session`, `tst_fusion_jobs`, `tst_fusion_rows`, `tst_fusion_runner`) and the executables `solver_deploy_probe`, `fusion_golden_capture` (the golden capture tool) and `fusion_runner` (the command-line fit), all defined in one block of `tests/CMakeLists.txt` (the tests through `flysight_add_fusion_test()`). `OFF` removes the targets, and then no test target references GTSAM. Forwarded by the root `CMakeLists.txt` like the other two |
+| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | Only with the first: also build the GTSAM-linked tests (`tst_solver_smoke`, `tst_fusion_golden`, `tst_fusion_kernel`, `tst_fusion_session`, `tst_fusion_jobs`, `tst_fusion_rows`, `tst_fusion_store`, `tst_fusion_runner`) and the executables `solver_deploy_probe`, `fusion_golden_capture` (the golden capture tool) and `fusion_runner` (the command-line fit), all defined in one block of `tests/CMakeLists.txt` (the tests through `flysight_add_fusion_test()`). `OFF` removes the targets, and then no test target references GTSAM. Forwarded by the root `CMakeLists.txt` like the other two |
 | `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | Only with the fusion tests: register the bit-exact runs `tst_fusion_*_exact` (label `exact`; no new executable). `AUTO` registers them when the compiler is 64-bit MSVC of the same major.minor as `cl_version` in `tests/data/fusion/capture.json` (19.44; the file is written by `fusion_golden_capture` at every capture), and otherwise prints "Fusion exact tests not registered: ..." at configure time; `ON` registers them whatever the compiler is; `OFF` never does. In every mode they exist for the Release configuration only. Forwarded by the root `CMakeLists.txt` like the others (section 11, "Tolerance policy") |
 
 All four sub-options are forwarded by the root (superbuild) `CMakeLists.txt` to
@@ -260,7 +267,7 @@ CTest labels: every executable has `core`; `tst_python_bridge` also `python`;
 `tst_session_oracle` also `oracle`; `audit_cleanup` has `audit`. GTSAM-linked
 tests also have `fusion`, so `ctest -LE fusion` is the GTSAM-free run. The
 Widgets test also has `widgets` (`ctest -LE widgets` runs everything else).
-The bit-exact runs have `core`, `fusion` and `exact` (`ctest -L exact`; six
+The bit-exact runs have `core`, `fusion` and `exact` (`ctest -L exact`; seven
 on the capture configuration).
 
 Environment: `FLYSIGHT_FUSION_EXACT=1` in the calling environment switches the
@@ -410,7 +417,9 @@ singleton exists. It:
 
 `TestEnvironment::useFreshLogbook()` switches to a new empty logbook folder and
 calls `LogbookManager::reset()`; `reopenLogbook()` calls `reset()` alone, which
-simulates an application restart on the same folder.
+simulates an application restart on the same folder. Stored-result records live
+in the test logbook's `sessions/` folder and go with it. `reset()` also forgets
+the file stems reserved for sessions not saved yet, as a process exit would.
 
 `tst_python_bridge` additionally runs with `PYTHONDONTWRITEBYTECODE=1`, so the
 interpreter writes no `__pycache__` next to the SDK in the source tree.
@@ -520,7 +529,10 @@ missing invalidation in the code under test.
   `messages()`, `matching(fragment)`, `count(fragment)`). `logbookprobe.h`:
   what is on disk in the test logbook (`readIndex`, `writeIndex`,
   `indexValue`, `sessionFilePath`, which is empty for an unknown session,
-  `sessionCsvFiles`), the shared logbook columns (`descriptionColumn`,
+  `sessionCsvFiles`, `calculationRecordFiles` (the `*.fvresult` names in
+  `sessions/`), `sessionFileStem` (the stem of a session's file, empty before
+  its first save) and `indexRecordStamp` (a session's `"records"` stamp in
+  `index.json`)), the shared logbook columns (`descriptionColumn`,
   `gyroColumn`, `exitTimeColumn`), `writeAltitudes`, and the
   `dependencyChanged` spy checks (`spyHasAttribute`, `spyHasMeasurement`).
   `Synthetic::attr` / `Synthetic::measKey` (`fakesessionstate.h`) are the
@@ -547,6 +559,15 @@ missing invalidation in the code under test.
   the fusion library live in `tests/fusion/` instead (section 11, "Fusion
   sessions"), which only the `fusion` tests link: the support library stays
   free of GTSAM, `flysight_fusion` and Qt Widgets.
+- Stored results. `SessionModel::storedResultStats()` /
+  `resetStoredResultStats()` count the records written, read, restored, kept
+  and deleted, and the time spent restoring and writing. Provoke a write
+  failure portably, with a directory at the record's path or an output
+  attribute type a record refuses; never with permission bits (Windows ignores
+  the read-only attribute on directories). Expected record names are literals
+  (`<stem> + ".builtin%2Efusion%2Efit.fvresult"`). Never call
+  `verifyAgainstFresh()` / `evaluateFresh()` on a session with a fit
+  installed: the oracle replays requested calculations and would fit again.
 - `QVERIFY` / `QCOMPARE` return from the function they are written in, so in
   a helper they would let the calling test carry on after a failure. A helper
   that can fail returns `bool` (`[[nodiscard]]`), or a `QString` that is empty
@@ -598,8 +619,8 @@ missing invalidation in the code under test.
 
 ## 9. Acceptance traceability
 
-Three specifications, three ranges of items in `tests/acceptance_map.txt`, the
-machine-checked form of the three tables below (section 10); keep them in sync.
+Four specifications, four ranges of items in `tests/acceptance_map.txt`, the
+machine-checked form of the four tables below (section 10); keep them in sync.
 
 ### 9.1 Schema and calculation engine (items 1-19)
 
@@ -717,6 +738,7 @@ never stand alone.
 | 17 | remove / unload with a queued or running job; shutdown | `tst_jobqueue::removeSessionWithRunningJob`, `removeSessionWithQueuedJob`, `evictionDeferredWhileJobActive`, `shutdownWithQueuedAndRunning`; `tst_fusion_jobs::shutdownDuringFit` |
 | 17 | quitting the application | `manual M8`, `M9` |
 | 18 | every transition through model signals; history from the model alone | `tst_jobmodel::historyFromSignalsAlone`, `retentionBound` |
+| 18 | ... and no job is persisted (the records of jobs that published `Ok` are results, not jobs) | `tst_jobmodel::nothingIsPersisted` |
 | 19 | sessions editable, tracks shown / hidden, other values readable while a real fit runs | `tst_fusion_rows::editsAndVisibilityDuringFit`; `tst_jobqueue::idleSchedulerKeepsWorking` |
 | 19 | plots pan and zoom during a fit | `manual M5` - widget-only, no automated test is possible in the harness |
 | 20 | none of the branch's mechanisms exists | `audit branch-mechanisms`, `audit naming`, `audit one-worker` |
@@ -790,6 +812,69 @@ rather than items of their own, so that the range stays 201-247.
 | 246 | 10 test 9 | section 6, as amended: a recording without `IMU/temperature` is rejected by the kernel (the reason names the channel) and blocked in a session like any missing input; constant temperature leaves `b1` at its prior | `tst_fusion_kernel::validationRejectsEachDefect`, `constantTemperatureKeepsSlopeAtPrior`; `tst_fusion_session::missingInputsAreNotApplicable` |
 | 247 | 11 | `docs/` describes the segmented initializer, the stopping rule with its slow tail, the per-step term and its meaning at other output rates, and the temperature-dependent bias, in the place that documents the fusion model | `docs/SENSOR_FUSION.md` sections 4 and 5; `audit fusion-model` (the document describes no retired mechanism: no resting-window detector, candidate window, coarse-only initializer, frozen algorithm, bias-shift test, branch name, or input count from before the temperature channel) |
 
+### 9.4 Stored requested calculation results (items 301-350)
+
+The fifty clauses of the specification "Storing requested calculation results
+with the session", stated in full in
+[appendix D](#appendix-d-the-acceptance-items-of-stored-requested-results-301-350).
+In the map, item = 300 + the clause number; the same four line forms as 9.2,
+and every item has at least one test or audit line. "Section" is the section
+of the specification. Clauses 37-45 are its section 8 tests, one per bullet,
+and clauses 47-50 its principles.
+
+| # | Section | Clause | Evidence |
+|---|---|---|---|
+| 301 | 2 | the result of a requested calculation that ended as a function of its inputs is stored on disk beside the session: success with its outputs, rejection / solver failure with reason and diagnostics | `tst_result_store::writesOnOkInstall`, `rejectionIsWritten`; `tst_fusion_store::restoredAfterEvictionIsBitIdentical`, `restoredRejectionShowsBadge` |
+| 302 | 2 | it is restored at load, so readers, plot rows and logbook columns see it as if just published, while valid | `tst_result_store::restoreOnEveryLoadPath`; `tst_calcengine_restore::restoreIntoFreshEngine`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`; `tst_result_columns::restartShowsCachedValueWithoutLoading` |
+| 303 | 2 | on-demand and plugin results are never stored | `tst_calcengine_restore::exportOnlyInstalledOk`, `restoreNotFound` |
+| 304 | 2 | a stored result is a memory, not a request: stale or missing, the calculation reads not requested until a gesture | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`, `dependencyEditDropsRecord`; `tst_result_store::staleRecordDeletedOnLoad`; `tst_calcengine_restore::restoreStaleChecks`; `audit stored-results` |
+| 305 | 2 | the session file is unchanged: bytes, format, enumeration; derived sensors never in it | `tst_fusion_store::sessionFileBytesUnaffectedByRecord`; `tst_result_records::saveSessionIgnoresRecords`, `strayRecordsRemovedAtScan`; `audit stored-results` |
+| 306 | 2 | kernel, job queue gestures and plot-row semantics unchanged beyond counting a restored result as computed | `tst_fusion_golden::successFixturesMatchGolden`; `tst_plot_requests::rowScript`; `tst_fusion_rows::realRowScript`; `audit gestures` |
+| 307 | 3 | at most one record per (session, calculation), written at the install on the main thread, replaced by the next publish | `tst_result_store::writesOnOkInstall`; `tst_result_records::writeReadReplace`; `tst_calcengine_restore::installedOnSyncAndAsync` |
+| 308 | 3 | a record holds the id, the outcome, every installed output (measurements with unit, attributes with the diagnostics) and the validity stamp | `tst_result_records::roundTripIsBitExact`, `rejectionShapedRecord`, `unavailableAndEmptyOutputs`; `tst_result_store::rejectionIsWritten` |
+| 309 | 3 | nothing stored for a result not installed (cancelled, out of memory, refused) or not Ok; such a run deletes nothing | `tst_result_store::nonOkInstallWritesAndDeletesNothing`; `tst_jobmodel::nothingIsPersisted`; `tst_calcengine_restore::installedForEveryStatus`, `exportOnlyInstalledOk` |
+| 310 | 3 | a record is removed only when stale on load, with its session, on an input change, or replaced; never by eviction, unload, registry change, quit | `tst_result_store::noDeleteWithoutInputChange`, `inputChangeDeletesRecord`; `tst_calcengine_restore::droppedByInputChange`, `droppedByPreferenceAndSource`, `noDropEventWithoutInputChange`, `droppedByRequestOfUpstream` |
+| 311 | 3 | values round-trip bit for bit (-0, NaN, infinities; strings byte for byte) | `tst_result_records::roundTripIsBitExact`, `layoutIsPinned`; `tst_calcengine_restore::restoreNaNPayloadAndSignedZero`, `sameContentBitExactAttributes`; `tst_fusion_session::restoredFitIsIndistinguishable` |
+| 312 | 3 | the golden tests cannot tell a restored fusion result from a fresh one | `tst_fusion_store::restoredAfterEvictionIsBitIdentical`, `restoredAfterRestartIsBitIdentical`; `tst_fusion_session::restoredFitIsIndistinguishable` |
+| 313 | 4.1 | the input fingerprint covers the values the result depended on, transitively, absent ones included; the record lists their names | `tst_calcengine_restore::fingerprintKnownAnswer`, `fingerprintCanonicalForms`, `leafKindCodes`, `exportLeaves`, `restoreChain` |
+| 314 | 4.1 | an edit the result does not depend on keeps the record valid | `tst_fusion_store::unrelatedEditKeepsRecord`, `mergeIntoUnloadedSession`; `tst_result_store::inputChangeDeletesRecord`; `tst_calcengine_restore::restoreIgnoresAttributeType` |
+| 315 | 4.1 | an edit it depends on (IMU merge, SCHEMA_VER, any dependency) invalidates it | `tst_fusion_store::dependencyEditDropsRecord`, `mergeIntoLoadedSessionDropsRecord`, `mergeIntoUnloadedSession`; `tst_calcengine_restore::restoreStaleChecks`; `manual M18` |
+| 316 | 4.2 | valid only while CalculationCompatibilityVersion, the environment fingerprint and the result version match; fusion's is the algorithm string | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_result_store::staleRecordDeletedOnLoad`; `tst_result_records::stampsAreCurrent`; `tst_fusion_session::registrationShape`; `audit stored-results` |
+| 317 | 4.2 | the bump rule gains the clause: bump it, or the calculation's result version | `audit stored-results` |
+| 318 | 4 | a record that fails any check is deleted at load; the calculation reads not requested; nothing is recomputed | `tst_result_store::staleRecordDeletedOnLoad`, `upstreamMissingAfterLastPassDeletes`; `tst_fusion_store::codeStampChangeDropsRecordOnLoad` |
+| 319 | 5 | every load path installs the valid records before any reader asks | `tst_result_store::restoreOnEveryLoadPath`, `bulkEditPromotionRestores`, `restoresChainInPasses`, `alreadyInstalledIsKept`; `tst_fusion_store::mergeIntoUnloadedSession` |
+| 320 | 5 | same outputs, status, detail and dependency edges as a fresh publish; later invalidation identical | `tst_calcengine_restore::restoreIntoFreshEngine`, `restoredResultInvalidatesLikePublished`, `restoreBeatsOutstandingTicket`, `restoreNeverReplaces`; `tst_fusion_session::restoredFitIsIndistinguishable` |
+| 321 | 5 | plot rows count a restored result as computed: no refresh count, no job; stale or absent as today | `tst_fusion_store::restoredAfterEvictionIsBitIdentical`, `restoredAfterRestartIsBitIdentical`, `dependencyEditDropsRecord`; `manual M1`, `M16` |
+| 322 | 5 | blocker inspection reports a restored result as a published one, NotProduced with its detail | `tst_calcengine_restore::restoreRejection`; `tst_fusion_store::restoredRejectionShowsBadge`, `restoredSolverFailureShowsBadge` |
+| 323 | 5 | logbook columns over a requested calculation: computed from the restored or published result, cached with the record stamp; unavailable without a record | `tst_result_columns::columnExplicitCalculations`, `unrequestedIsCachedUnavailable`, `stampWrittenOnFlush`, `publishedResultIsCached`, `restartShowsCachedValueWithoutLoading`, `noRecordStaysUnavailableAfterRestart`, `recordBeforeFirstSaveIsCachedAfterSave`; `tst_calcregistry::explicitDependencies`; `tst_column_cache::explicitBackedColumnFollowsItsResult`; `tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord`; `manual M17` |
+| 324 | 5 | dropping or writing a record drops the values stamped with it: crashes, old indexes, failed writes, environment changes | `tst_result_columns::inputChangeDropsCachedValue`, `onlyDependentColumnsDrop`, `staleRecordOnLoadDropsCachedValue`, `workerLeavesPendingWithRecord`, `crashAfterRecordWrite`, `crashAfterRecordDelete`, `rewriteAfterDropFlushesIndexFirst`, `writeAfterStartupDropFlushesIndexFirst`, `oldIndexWithoutStamp`, `resultVersionChangeDropsCachedValue`, `writeFailureKeepsValueOutOfIndex`, `environmentChangeDiscardsCachedValue`, `environmentChangeUnconfirmsLoadedRows`, `managerDropsDependentValues`, `deletingSessionRemovesStamp` |
+| 325 | 5 | unloading (eviction, hide beyond the cache capacity, quit) loses nothing | `tst_result_store::noDeleteWithoutInputChange`; `tst_fusion_store::restoredAfterEvictionIsBitIdentical`; `manual M16`, `M17` |
+| 326 | 5 | publishing writes the record, nothing else does: a restore never rewrites it | `tst_result_store::restoreOnEveryLoadPath`; `tst_calcengine_restore::restoreIsNotAnInstall`; `audit stored-results` |
+| 327 | 5 | written through the logbook manager atomically; a failed write leaves the previous record and the in-memory result; tried again at the next publish | `tst_result_store::writeFailureLeavesResultUsable`, `writeFailureKeepsPreviousRecord`; `tst_result_records::writeFailureRefusedEncoding`, `writeFailureDirectoryAtPath`, `writeForUnknownSession`; `audit stored-results` |
+| 328 | 5 | a session fitted before its first save stores its result under its reserved stem; a never-saved session's record is a stray | `tst_result_store::recordBeforeFirstSave`, `recordOfNeverSavedSessionIsStray`, `removeBeforeFirstSave`; `tst_fusion_store::fittedBeforeFirstSaveIsRestored` |
+| 329 | 5 | a record is deleted with its session and when found stale | `tst_result_store::deletingSessionRemovesRecords`; `tst_result_records::removeSessionDeletesRecords`, `removeSessionDottedStems`, `failedSessionRemovalKeepsRecords`, `removeOneAndAll`; `tst_result_columns::removingReservedSessionForgetsIt`; `manual M19` |
+| 330 | 6 | one file per (session, calculation) next to the session file, named from its stem and the id, never mistaken for a session | `tst_result_records::fileIdEncoding`, `fileNameParsing`, `fileNamesDifferIgnoringCase`, `strayRecordsRemovedAtScan`, `orphanAdoptionKeepsRecord`, `recordsFollowRemap`; `audit stored-results` |
+| 331 | 6 | the encoding: bit-exact doubles, readable without the session, the order of the session file's size, a version so a future format is refused | `tst_result_records::layoutIsPinned`, `futureVersionIsRefused`, `corruptInputIsRefused`, `readStatuses`, `sizeIsOrderOfSamples`, `encoderRefusesUnsupportedAttribute`; `tst_result_store::staleRecordDeletedOnLoad` |
+| 332 | 6 | existing logbooks have no records: not requested until requested; no migration | `tst_result_columns::oldIndexWithoutStamp`, `noRecordStaysUnavailableAfterRestart`; `tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord` |
+| 333 | 7 | publish, restore and record writes on the main thread; the engine's threading rules unchanged | `tst_result_store::writesOnOkInstall`; `audit one-worker`, `audit stored-results` |
+| 334 | 7 | the store never reads a record for a session not being loaded, and never starts a calculation | `tst_result_store::temporaryLoadsNeverRestore`; `tst_result_columns::workerLeavesPendingWithRecord`, `restartShowsCachedValueWithoutLoading`; `audit stored-results` |
+| 335 | 7 | purity: with or without a record, every reader sees the same value | `tst_calcengine_restore::restoreIntoFreshEngine`; `tst_fusion_session::restoredFitIsIndistinguishable`; `tst_fusion_store::fittedBeforeFirstSaveIsRestored` |
+| 336 | 7 | saving a session with a stored result gives the same bytes as without | `tst_fusion_store::sessionFileBytesUnaffectedByRecord`; `tst_result_records::saveSessionIgnoresRecords` |
+| 337 | 8 | a fusion fixture fitted, saved, unloaded, reloaded: seventeen channels and diagnostics bit-identical to the goldens, no job, no refresh count | `tst_fusion_store::restoredAfterEvictionIsBitIdentical` |
+| 338 | 8 | the same after an application restart | `tst_fusion_store::restoredAfterRestartIsBitIdentical` |
+| 339 | 8 | a rejection and a solver failure restored with their reason; the warning as today; no job | `tst_fusion_store::restoredRejectionShowsBadge`, `restoredSolverFailureShowsBadge` |
+| 340 | 8 | an unrelated edit keeps the record; merging IMU data or changing any dependency drops it, reads not requested, the file is gone | `tst_fusion_store::unrelatedEditKeepsRecord`, `dependencyEditDropsRecord`, `mergeIntoLoadedSessionDropsRecord`, `mergeIntoUnloadedSession`; `tst_result_store::inputChangeDeletesRecord` |
+| 341 | 8 | bumping the compatibility version, the environment fingerprint or the result version drops the record on load | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_result_store::staleRecordDeletedOnLoad` |
+| 342 | 8 | a failed write leaves the in-memory result usable and the previous record intact | `tst_result_store::writeFailureLeavesResultUsable`, `writeFailureKeepsPreviousRecord` |
+| 343 | 8 | deleting a session removes its records; a stray record is ignored and removed by the next scan | `tst_result_store::deletingSessionRemovesRecords`, `strayRecordRemovedAtRestart`; `tst_result_records::removeSessionDeletesRecords`, `strayRecordsRemovedAtScan` |
+| 344 | 8 | a logbook column over Fusion/roll is cached from a valid record, unavailable without one, invalidated when the record is dropped | `tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord`; `tst_result_columns::publishedResultIsCached`, `unrequestedIsCachedUnavailable`, `inputChangeDropsCachedValue`, `staleRecordOnLoadDropsCachedValue`, `deletingSessionRemovesStamp` |
+| 345 | 8 | saving a session with a stored result produces the same session-file bytes as without | `tst_fusion_store::sessionFileBytesUnaffectedByRecord` |
+| 346 | 9 | docs/ describe the record files and amend DATA_SCHEMA 11, CALCULATIONS 8 / 9 / 12 / 15, SENSOR_FUSION 2 / 7 | `audit stored-results` |
+| 347 | 10 | a requested result is kept as long as its inputs and its code are the same, and not a moment longer | `tst_fusion_store::unrelatedEditKeepsRecord`, `dependencyEditDropsRecord`, `codeStampChangeDropsRecordOnLoad` |
+| 348 | 10 | the session file is the recording; derived data lives beside it, never in it | `tst_fusion_store::sessionFileBytesUnaffectedByRecord`; `audit stored-results` |
+| 349 | 10 | restoring is not requesting: nothing starts on its own | `tst_calcengine_restore::restoreIsNotAnInstall`; `tst_result_store::restoreOnEveryLoadPath`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`; `audit stored-results`; `manual M17` |
+| 350 | 10 | a restored result is indistinguishable from a fresh one, to the bit | `tst_fusion_session::restoredFitIsIndistinguishable`; `tst_fusion_store::restoredAfterEvictionIsBitIdentical`; `tst_calcengine_restore::restoreIntoFreshEngine` |
+
 ## 10. Cleanup audit
 
 `audit_cleanup` runs `tests/audit/cleanup_audit.cmake`, a CMake script over
@@ -853,8 +938,9 @@ takes about a second. It fails, listing **all** violations, when
   `request(` through an object is the job request in `plotrequests.cpp`:
   explicit work runs only as a job), the UI refers to
   the job queue beyond `AppContext.h`, or `EvaluationPolicy::Explicit` is
-  tested outside the engine (`CalculationRegistry::dependsOnExplicit()` is the
-  one authority for "explicit-backed");
+  tested outside the engine (`CalculationRegistry::explicitDependencies()` is
+  the one authority for "explicit-backed"; `dependsOnExplicit()` is its
+  non-emptiness);
 - **group `widget-free-core`**: the queue, the job model, the plot request
   logic, the plot model or `PlotRowLayout.h` includes a widget header;
 - **group `fusion-model`** (items 212, 218, 234, 247): a name of the retired
@@ -888,10 +974,28 @@ takes about a second. It fails, listing **all** violations, when
   `fusion/fusion.h` and `fusion/fusionregistration.h` only; the capture tool
   and `fusiontrace.h` see the trace seam `fusion/fusionpipeline.h`, which is
   not in the pattern);
+- **group `stored-results`** (items 304, 305, 316, 317, 326, 327, 330, 333,
+  334, 346, 348, 349): the record file extension is spelled as a literal in a
+  `.cpp` other than `calculationrecord.cpp`; a record file name is built or
+  parsed outside the record format and the logbook manager; a record is
+  written, read or removed by anything but the result store and the logbook
+  manager; the result store is used outside the session model; anything but
+  the store exports or restores an engine result; anything but the session
+  model installs the explicit-result listener or calls `restoreSession`; the
+  store names the job queue, the plot requests or a request / prepare /
+  publish call; the exporter, the importer, the merge, the number formatter or
+  `SessionData` names a record; the record or store code includes a widget
+  header; the fusion algorithm string appears anywhere but
+  `src/fusion/fusion.h`; the compatibility rule stops naming the result
+  version exactly once in `builtincalculations.h` or in
+  `docs/CALCULATIONS.md`; or any text outside this file says that requested
+  results are kept in memory only or are not saved. This file is excluded from
+  the last rule because this section describes it;
 - a line of `tests/acceptance_map.txt` is malformed, names a test function, a
   manual step (`**M<k> ` in this file), a CI token or an audit group that does
-  not exist, or an item outside 1-19, 101-120 and 201-247; an item 1-19 has no
-  line; or an item 101-120 or 201-247 has no test or audit line.
+  not exist, or an item outside 1-19, 101-120, 201-247 and 301-350; an item
+  1-19 has no line; or an item 101-120, 201-247 or 301-350 has no test or
+  audit line.
 
 Whether a target **links** GTSAM is not a text question (link items come from
 variables and from other targets' link interfaces). That half of the
@@ -929,8 +1033,9 @@ a second authority.
 last captured by `fusion_golden_capture`, the capture tool built with the
 fusion tests. `tst_fusion_golden` and `tst_fusion_kernel` compare the kernel
 with them, and so, through the registered calculation and the job queue, do
-`tst_fusion_session`, `tst_fusion_jobs` and `tst_fusion_rows`
-(sensor-fusion-jobs acceptance 4). A golden test that goes red means that the
+`tst_fusion_session`, `tst_fusion_jobs` and `tst_fusion_rows` and, through a
+stored and restored record, `tst_fusion_store` (sensor-fusion-jobs acceptance
+4). A golden test that goes red means that the
 kernel no longer produces what it produced at the last capture: an unintended
 numerical change, or an intended one whose phase has not re-captured yet.
 
@@ -1312,8 +1417,9 @@ What changes, and what it means:
 
 ### Fusion sessions
 
-`tst_fusion_session`, `tst_fusion_jobs` and `tst_fusion_rows` test sensor fusion
-as a registered calculation, on real sessions. `tests/fusion/fusionsessions.h`
+`tst_fusion_session`, `tst_fusion_jobs`, `tst_fusion_rows` and
+`tst_fusion_store` test sensor fusion as a registered calculation, on real
+sessions. `tests/fusion/fusionsessions.h`
 (`flysight_fusion_session_support`) turns a fixture into a `SessionData` whose
 twenty-two effective inputs are bit-identical to the fixture, so that
 session-level results are held to the same goldens as the kernel. It relies on
@@ -1376,7 +1482,7 @@ objectives, are in section 12.2.
 
 ## 12. Manual verification
 
-Two scripts. Each step opens with its bold id and, in parentheses, the items
+Three scripts. Each step opens with its bold id and, in parentheses, the items
 of `tests/acceptance_map.txt` it is evidence for; the map cites the ids
 (`manual M<k>`) and `audit_cleanup` checks that they exist here.
 
@@ -1419,7 +1525,7 @@ middle is rejected for its IMU gap. The script needs the fusion plots (the
 step; for M5 note what you did while the fit ran, for M6 and M9 the wait you
 observed.
 
-**M1 Startup (116).** Check "Sensor fusion > Roll" with three fusable tracks visible, let it compute, quit, restart. After restart the row is still checked. Track visibility is not kept across restarts, so no track is visible and the row is plain; show the three tracks again: the row shows the refresh control with the count 3 and no job starts (no progress appears, CPU idle) until the control is pressed. The debug output contains no "No data available" line for the fusion plot.
+**M1 Startup (116, 321).** Check "Sensor fusion > Roll" with three fusable tracks visible, press refresh, and cancel as soon as the first track has published. Quit and restart. After the restart the row is still checked. Track visibility is not kept across restarts, so no track is visible and the row is plain. Show the three tracks again: the first track's roll is drawn at once (its stored result), the row shows the refresh control with the count 2, and no job starts (no progress appears, CPU idle) until the control is pressed. The debug output contains no "No data available" line for the fusion plot.
 
 **M2 Profile (116).** Uncheck Roll. With fusable tracks visible, apply a profile that checks fusion plots: the rows show refresh with counts; nothing starts. (The Plots menu and its shortcuts list a fixed set of GNSS plots; no fusion plot can be toggled from there.)
 
@@ -1495,6 +1601,25 @@ Pass / fail and the numbers per step (the exit code, `stopping.rule`,
 expectation is reported with its numbers, not adjusted: the expectations are
 the specification's, and whether a miss is a defect or a correction of the
 specification is Michael's call.
+
+### 12.3 Stored results
+
+What the automated tests cannot show: the real application hiding, showing and
+restarting with stored results, and the files it leaves in the logbook. Use
+the preamble of 12.1 (a COPY of a logbook, never the real one), the same
+recordings, and a file browser open on
+`<scratch>/FlySight Viewer/logbook/sessions/`.
+
+**M16 Hide and show again (321, 325).** Set Preferences > Logbook > "Maximum cached sessions" to 0. With three fusable tracks visible and "Sensor fusion > Roll" checked, press refresh and let the three fits finish. `sessions/` now holds three `<uuid>.builtin%2Efusion%2Efit.fvresult` files. Hide the three tracks; with a capacity of 0 every hidden track is unloaded at once. Show them again: roll is drawn at once for each, the row is plain (no refresh icon, no count), no job starts, and the modification times of the three files are unchanged. Set the preference back.
+
+**M17 Restart (323, 325, 349).** Add a logbook column over a fusion value (roll at the exit marker). With the three tracks of M16 fitted, quit and start again. Before any track is shown, the column shows a number for each of the three, and nothing loads (no progress in the status bar). Show them: the plots draw at once, the row is plain, no job starts.
+
+**M18 Change an input (315).** Edit the description of one fitted track: its roll stays drawn and its record file keeps its modification time. Then re-import a copy of that track's `SENSOR.CSV` in which the `az` value of one `$IMU` row was changed (the header, `SESSION_ID` included, unchanged). The track's roll disappears, the row shows the refresh control with 1, the record file is gone, the logbook cell of the column of M17 becomes empty, and nothing starts until refresh is pressed. Refresh fits it again, and a record file appears again.
+
+**M19 Delete (329).** Delete one fitted track from the logbook: its `.csv` and its `.fvresult` files are gone. With the application closed, copy another track's record file to a name whose `<uuid>` part matches no `.csv` (change one character). Start the application: the copy is gone, no extra track appears, and no dialog is shown.
+
+Pass / fail and a note per step go in the phase report. A step that fails is
+reported as it failed, not adjusted.
 
 ## Appendix A. The acceptance items (1-19)
 
@@ -1780,3 +1905,147 @@ added after the first numbering are stated as the second sentence of items
     its slow-tail acceptance, the per-step term and its meaning at other
     output rates, and the temperature-dependent bias, in the place that
     documents the fusion model.
+
+## Appendix D. The acceptance items of stored requested results (301-350)
+
+The clauses of the specification "Storing requested calculation results with
+the session", one sentence each, with the specification's section number in
+front. These are items 301-350 of `tests/acceptance_map.txt` (item = 300 + the
+number below) and the rows of section 9.4. Two sentences of the
+specification's scope have no item, because no test can show them: stored
+results are not shared between logbooks or machines, and a record need not be
+readable by people.
+
+1. (2) The result of every explicitly requested calculation that ended as a
+   function of its inputs is stored on disk alongside the session: a
+   successful result with all its outputs, or a rejection or solver failure
+   with its reason and diagnostics.
+2. (2) It is restored when the session is loaded, so that readers, plot rows
+   and logbook columns see it exactly as if it had just been published,
+   provided it is still valid.
+3. (2) On-demand and plugin calculation results are never stored.
+4. (2) A stored result is a memory, not a request: when it is stale or
+   missing, the calculation reads as not requested, exactly as before, until a
+   gesture requests it.
+5. (2) The session file is unchanged: its bytes, its format and what it
+   enumerates; derived sensors never appear in enumeration or in the session
+   file.
+6. (2) The kernel, the job queue's gestures and the plot rows' semantics are
+   unchanged beyond counting a restored result as computed.
+7. (3) For each (session, requested calculation) there is at most one record,
+   written when the result is published (the moment the engine installs it, on
+   the main thread) and replaced by the next publish for the same pair.
+8. (3) A record holds the calculation id and the outcome (`Ok` with outputs,
+   or `Ok` with the reason of a rejection or solver failure and no
+   measurements), every output the publish installed (measurements with
+   samples and unit, attributes with the diagnostics), and the validity stamp.
+9. (3) Nothing is stored for a result the engine did not install (`Cancelled`,
+   `ResourceExhausted`, a refused publish) or for an `UndeclaredRead` or
+   `InvalidOutput` status, and such a run deletes nothing.
+10. (3) A record is removed only when it is found stale on load, when its
+    session is deleted, when an input it depends on changes, or when the next
+    publish for the same pair replaces it; never by eviction, unloading, a
+    registry change or quitting.
+11. (3) Values round-trip bit for bit: every double of a restored measurement
+    equals the published one, `-0`, NaN and the infinities included, and a
+    restored attribute string is byte-identical.
+12. (3) The golden tests cannot tell a restored fusion result from a freshly
+    computed one.
+13. (4.1) The input fingerprint covers the values the result depended on as
+    the engine's dependency records name them (source measurements with their
+    samples and unit text, attributes, declared preferences), directly or
+    transitively, absent ones included; the record lists their names so that
+    the check can be repeated on load.
+14. (4.1) An edit the result does not depend on (moving a marker, a
+    description) leaves the record valid.
+15. (4.1) An edit it depends on (a merge that adds IMU data, a changed
+    `SCHEMA_VER`, any other dependency) invalidates it.
+16. (4.2) A record is valid only while `CalculationCompatibilityVersion`, the
+    calculation environment fingerprint and the calculation's result version
+    equal the current ones; for sensor fusion the result version is the
+    kernel's algorithm string.
+17. (4.2) The compatibility-version rule gains the clause: bump it, or the
+    calculation's result version, whenever a change can alter what a requested
+    calculation produces.
+18. (4) A record that fails any check is deleted when the session is loaded,
+    and the calculation reads as not requested; nothing is recomputed on its
+    own.
+19. (5) On every load of a session (from the logbook at start-up, on show, on
+    reveal, on an import-merge into an existing session) every valid record is
+    installed into the engine before any reader asks.
+20. (5) A restored result has the same outputs, status, detail and dependency
+    edges as a fresh publish, so that later invalidation behaves identically.
+21. (5) Plot rows count a session with a restored result as computed: no
+    refresh count, no job; a stale or absent record leaves the row as before.
+22. (5) Blocker inspection reports a restored result as it reports a published
+    one, a failure's `NotProduced` with its detail included.
+23. (5) Logbook columns that depend on a requested calculation are computed
+    from the restored or published result when the session is loaded, and
+    cached in `index.json` like any other column, stamped so that dropping the
+    record drops them; without a record the column stays unavailable.
+24. (5) Dropping or writing a record drops the cached values stamped with it,
+    whatever happens around it: a crash, an index written before the stamp, a
+    failed write, an environment change.
+25. (5) Unloading a session (eviction, hiding beyond the cache capacity,
+    quitting) loses nothing: the record is already on disk.
+26. (5) Publishing writes the record, and nothing else does: a restore never
+    rewrites it.
+27. (5) Records are written through the logbook manager with the atomicity of
+    a session save; a failed write leaves the previous record, if any, intact
+    and the in-memory result untouched, and the write is tried again at the
+    next publish.
+28. (5, as settled) A session imported and computed before its first save
+    stores its result under the file stem reserved for it; if it is never
+    saved, the record is removed at the next start.
+29. (5) A record is deleted when its session is deleted from the logbook and
+    when it is found stale.
+30. (6) There is one record file per (session, calculation) in the logbook,
+    next to the session file, named from the session's file stem and the
+    calculation id, in a form the logbook's session scan can never mistake for
+    a session.
+31. (6) The encoding round-trips doubles bit for bit, makes one record
+    readable without the session, has a size of the order of the session file,
+    and carries a version field so that a future format can refuse or migrate
+    an old record.
+32. (6) Existing logbooks have no records: every requested calculation reads
+    as not requested until it is requested; there is no migration.
+33. (7) Publish, restore and the writing of records happen on the main thread;
+    the engine keeps its threading rules.
+34. (7) The store never reads a record for a session that is not being loaded,
+    and never starts a calculation.
+35. (7) Purity holds: with or without a record, the value every reader sees
+    for a requested output is the same function of the session's inputs.
+36. (7) Saving a session with a stored result gives the same bytes as saving
+    it without.
+37. (8) Test: a fusion fixture fitted, saved, unloaded and reloaded yields the
+    seventeen channels and the diagnostics bit-identical to the goldens, with
+    no job created; the row shows no refresh count.
+38. (8) Test: the same after an application restart (the test's logbook
+    directory survives across two `SessionModel` lifetimes).
+39. (8) Test: a rejection and a solver failure are restored with their reason;
+    the row shows the warning as before; no job runs.
+40. (8) Test: editing an attribute the result does not depend on keeps the
+    record; merging IMU data, or changing any dependency, drops it, the
+    calculation reads not requested, and the file is gone.
+41. (8) Test: bumping `CalculationCompatibilityVersion`, the environment
+    fingerprint or the calculation's result version drops the record on load.
+42. (8) Test: a record whose write fails leaves the in-memory result usable
+    and the previous record intact.
+43. (8) Test: deleting a session removes its records; a stray record whose
+    session does not exist is ignored and removed by the next logbook scan.
+44. (8) Test: a logbook column over `Fusion/roll` is cached from a valid
+    record, unavailable without one, and invalidated when the record is
+    dropped.
+45. (8) Test: saving a session with a stored result produces the same
+    session-file bytes as without it.
+46. (9) `docs/` describes the record files (what they hold, when they are
+    valid, that the session file is untouched) and amends the data schema's
+    section 11, the calculation note's sections 8 and 9 and its description of
+    restore, and the sensor fusion document's statement that results are lost
+    on restart.
+47. (10) A requested result is expensive and deterministic: it is kept as long
+    as its inputs and its code are the same, and not a moment longer.
+48. (10) The session file is the recording; derived data lives beside it,
+    never in it.
+49. (10) Restoring is not requesting: nothing starts on its own.
+50. (10) A restored result is indistinguishable from a fresh one, to the bit.

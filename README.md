@@ -324,7 +324,8 @@ flysight-viewer-2/
 │   ├── SENSOR_FUSION.md                   # The GNSS/IMU fit: inputs, model, limitations, lifecycle
 │   ├── LOCAL_COORDINATES.md               # The recording-wide north/east/down frame; simplified track
 │   ├── DATA_SCHEMA.md                     # Recorded schema, source preservation, conversion layer,
-│   │                                      #   escape hatch, saved-file guarantees
+│   │                                      #   escape hatch, saved-file guarantees, stored
+│   │                                      #   calculation results
 │   └── CALCULATIONS.md                    # Developer note: registered calculations, background
 │                                          #   execution, job queue, plot-driven requests
 ├── cmake/
@@ -412,11 +413,11 @@ flysight-viewer-2/
 - [docs/COMPUTED_PLOTS.md](docs/COMPUTED_PLOTS.md): plots that are computed on request - the refresh control and its count, progress and cancel, the warning badge, what starts a computation and what never does
 - [docs/SENSOR_FUSION.md](docs/SENSOR_FUSION.md): the "Sensor fusion" plots - what the GNSS/IMU fit computes, what it needs, what it rejects, and how far to trust it
 - [docs/LOCAL_COORDINATES.md](docs/LOCAL_COORDINATES.md): the "GNSS (Local frame)" plots - the recording-wide north/east/down frame and the simplified map track
-- [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md): the recorded file format, `SCHEMA_VER`, source versus effective values, the conversion layer, import / merge rules, and what saved files contain
+- [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md): the recorded file format, `SCHEMA_VER`, source versus effective values, the conversion layer, import / merge rules, what saved files contain, and the stored results of requested calculations
 
 ## Developer Documentation
 
-- [docs/CALCULATIONS.md](docs/CALCULATIONS.md): how to write a registered calculation (declared inputs, multi-output, candidates, cache versioning), and how explicit calculations run in the background: the asynchronous request, blocker inspection, the threading rule, the job queue, plot-driven requests, and sensor fusion as a registered calculation
+- [docs/CALCULATIONS.md](docs/CALCULATIONS.md): how to write a registered calculation (declared inputs, multi-output, candidates, cache versioning), and how explicit calculations run in the background: the asynchronous request, blocker inspection, the threading rule, the job queue, stored results of requested calculations, plot-driven requests, and sensor fusion as a registered calculation
 - [python_plugins/README.md](python_plugins/README.md): writing Python plugins
 - [tests/README.md](tests/README.md): building, running, and writing tests; the acceptance traceability matrices, the cleanup audit, fusion golden regression, and the manual verification script
 

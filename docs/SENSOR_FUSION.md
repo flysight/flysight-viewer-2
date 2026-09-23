@@ -42,8 +42,14 @@ document describes what is computed, from what, and how far to trust it.
 - Check a plot, or press the refresh icon on its row. A fit takes from seconds
   to several minutes, depending on the length of the recording. All seventeen
   plots of one recording come from the same fit, so it runs once.
-- Results are kept in memory only. After a restart the plots are checked but
-  not computed; press refresh.
+- Results are stored with the recording in the logbook (in a file beside the
+  session file) and come back when the recording is loaded again, after hiding
+  it or after a restart. A fitted recording is not fitted again.
+- A stored result is dropped when an input of the fit changes (a re-import or
+  merge of different data, a changed `SCHEMA_VER`, a changed local origin),
+  after an update that changes the fit's arithmetic, and after a change of the
+  registered calculations or of a preference that calculations read. The plot
+  then shows the refresh icon again. Nothing is recomputed on its own.
 
 ## 3. Inputs
 
@@ -332,7 +338,8 @@ columns, the map, exports and plugins all read "unavailable" and move on.
 **The plot is the request.** Checking a fusion plot by hand, or pressing the
 refresh control on its row, creates one job per visible recording that lacks
 the result. Nothing else does: not restoring checked plots at start-up, not a
-profile, not showing a track, not an import.
+profile, not showing a track, not an import. Loading a recording whose stored
+result is still valid restores that result: no job, no refresh count.
 
 **Three steps.** *Prepare*, on the main thread, resolves and captures the
 twenty-two inputs. *Compute* runs on the application's one worker thread, which
@@ -364,16 +371,27 @@ worker, is not a function of the inputs and is never cached: the recording
 stays "not computed".
 
 **Invalidation.** A change to a declared input (a re-import, a merge, a changed
-`SCHEMA_VER`, a changed origin) drops the result and every value derived from
-it. Moving markers, zooming, and display preferences do not.
+`SCHEMA_VER`, a changed origin) drops the result, every value derived from
+it, and its stored copy. Moving markers, zooming, and display preferences do
+not.
+
+**Stored results.** The fit's result is stored when it is published: a
+success, a rejection or a solver failure. It is restored bit for bit when the
+recording is loaded, and the restored result is indistinguishable from a fresh
+one. Its code stamp is the algorithm string of the diagnostics
+(`batch-temperature-bias-v3`): a change that can alter what the fit returns
+changes that string, and every stored fit is then dropped at its recording's
+next load. A cancelled fit, or one that ran out of memory, stores nothing. A
+stored rejection shows the warning badge again, with its reason.
 
 **One at a time.** Jobs run one after another in the order requested. Quitting
 cancels them and waits for the running fit to reach its next cancellation
 boundary: at most one solver step.
 
 **Logbook columns** over fusion values show the live value for a loaded
-recording and are never cached for unloaded ones, because the result is not
-saved with the recording.
+recording, and for an unloaded one the value cached from its stored result. A
+recording without a stored result shows none. One with a stored result whose
+value is not cached yet (after an update, say) stays empty until it is loaded.
 
 ## 8. Validation
 
@@ -387,9 +405,10 @@ demonstrated by tests, all labelled `fusion`:
 | --- | --- |
 | `tst_fusion_golden` | the kernel through its public API reproduces its goldens for twelve synthetic fixtures (three fits, nine rejections), the progress texts at its boundaries, cancellation at each kind of boundary (prefix, segment and full-fit iterations included), determinism and thread independence |
 | `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the two stopping rules forced through the tuning, the per-step covariance, the temperature factor's Jacobians and the three temperature cases, and the fit trace iteration by iteration against the goldens |
-| `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input |
-| `tst_fusion_jobs` | the real fit through the job queue: supersede, cancel, rejection, shutdown |
+| `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, a fit exported and restored into another session is indistinguishable |
+| `tst_fusion_jobs` | the real fit through the job queue: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result |
 | `tst_fusion_rows` | the plot rows with the real fusion plots, end to end |
+| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), rejection and solver-failure badges, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit on a recording written as `TRACK.CSV` / `SENSOR.CSV`, against a direct kernel run and against the application's own import path |
 
 The goldens live in `tests/data/fusion/`. In exact mode
@@ -400,7 +419,7 @@ degrees; ten times the largest difference measured between compilers in CI:
 the numbers are in the tolerance policy of `tests/README.md`). Exact mode is
 not opt-in on the capture configuration: where the compiler matches
 `tests/data/fusion/capture.json` (64-bit MSVC 19.44, as the capture tool
-recorded it) and the configuration is Release, CTest runs each of these six
+recorded it) and the configuration is Release, CTest runs each of these seven
 tests a second time as `tst_fusion_*_exact` (label `exact`; CMake option
 `FLYSIGHT_FUSION_EXACT_TESTS`, `AUTO` by default). With any other compiler the
 configure log says that they were not registered, and only the portable mode

@@ -154,7 +154,14 @@ invalidates every loaded session.
 `EvaluationPolicy::Explicit` calculations run only through
 `CalculationEngine::request(id)`; before that their outputs read as unavailable
 (`ResultStatus::NotRequested`) without starting work, and they revert to that
-state when an input changes. The same calculation can be run in the background
+state when an input changes. A result an explicit calculation installs with
+status `Ok` is stored beside the session file and restored when the session is
+loaded again (section 15.8); restoring is not requesting. A descriptor may
+declare `CalculationDescriptor::resultVersion`, opaque text that identifies the
+arithmetic of the calculation's results. The engine never interprets it and it
+is not part of the environment fingerprint; a stored result is used only while
+it is unchanged (section 9). `builtin.fusion.fit` declares its kernel's
+`Fusion::Algorithm` (section 17). The same calculation can be run in the background
 (section 12), and section 13 reports which explicit calculations stand behind a
 name. `request` returns the names whose cached "not requested"
 answer was dropped: a future model-level caller must publish that set through
@@ -177,8 +184,17 @@ existing session yields for any logbook column:
 - the interpolation family;
 - `SessionModel::computeColumnValues` (what a column stores, or its unit).
 
+Bump it, or the calculation's result version (`CalculationDescriptor::resultVersion`, section 8), whenever a change can alter what a requested calculation produces.
+A stored result is used only while this marker, the environment fingerprint
+and the result version it was stored with all equal the current ones (section
+15.8). Bumping a result version drops the stored results of that calculation
+only; bumping the marker drops every stored result and every cached column
+value.
+
 Do not bump it for added, removed, or renamed registrations: the environment
-fingerprint (`calculationEnvironmentFingerprint`) covers those. Never reuse a
+fingerprint (`calculationEnvironmentFingerprint`) covers those. Since it covers
+every registration and every declared preference value, such a change also
+makes every stored result stale at its session's next load. Never reuse a
 value, and never use 0.
 
 ## 10. Testing a calculation
@@ -198,7 +214,10 @@ Mutate a session only through the `SessionData` setters or
 `SessionMerge::apply`; they tell the engine what changed. Every model-level
 mutation must also call `invalidateColumns` or `invalidateAllColumns` before
 returning to the event loop (the rule is spelled out in `src/sessionmodel.h`),
-which keeps the cached logbook columns in step with the saved file.
+which keeps the cached logbook columns in step with the saved file. A mutation
+that changes an input of a stored result deletes its record through the
+engine's explicit-result listener (section 15.8); the call site needs to do
+nothing more.
 
 ## 12. Asynchronous request
 
@@ -340,6 +359,65 @@ A compute function that returns normally although cancellation was requested
 yields `Completed`, and publishing it would be correct. Whether to publish it
 is the job queue's decision (it does not: cancel wins).
 
+**Export and restore.** The engine's half of stored results (the store is
+section 15.8). Main thread only.
+
+- `exportResult(id)` returns a `StoredCalculationResult`
+  (`src/engine/storedcalculationresult.h`), or nothing unless a plain explicit
+  calculation (not a family) has an installed result with status `Ok`. Its
+  members:
+  - `calculationId`, `resultVersion` (the descriptor's at publish), `detail`
+    (always the bundle's reason), and `bundle` (the outputs, in order);
+  - `leaves`: every stored attribute, source measurement, source unit and
+    declared preference the result reached through the recorded edges,
+    transitively, through on-demand and explicit results alike, the ones that
+    were looked at and found absent included. The list is sorted and unique;
+  - `inputFingerprint`: SHA-256 over a pinned canonical encoding of the leaves
+    and their current values. Attribute and preference values use the session
+    file's text; samples are encoded as their bits, with every NaN as one
+    pattern and `-0` kept. A change of the encoding means a new magic, so every
+    stored fingerprint then mismatches.
+
+  Export is an inspection that reads the state and the preferences for the
+  fingerprint. It never computes. The code stamps are not part of the snapshot
+  (the engine does not depend on `src/calculations/`); the record adds them.
+- `restoreResult(snapshot)` returns a `RestoreOutcome {kind, staleCheck,
+  status, invalidated}`:
+  - kinds: `NotFound`, `NotExplicit`, `AlreadyInstalled` (a result is cached,
+    whatever its status: nothing changes, a cached result is never replaced),
+    `Stale`, `Restored`;
+  - stale checks, in order: `ResultVersion`, `Bundle` (an undeclared output, or
+    a detail that is not the bundle's reason), `InputsUnavailable`, `Leaves`,
+    `Fingerprint`;
+  - it gathers the inputs exactly as `prepare()` does (on-demand intermediates
+    are evaluated as for a fresh request) and never runs the compute function;
+  - a stale restore caches nothing for the calculation: it still reads "not
+    requested";
+  - a successful one installs through the same step as a publish, so status,
+    detail, bundle, edges, blockers, `dependenciesOf()` and later invalidation
+    equal those of a fresh publish;
+  - it counts no run and creates no ticket;
+  - an outstanding ticket for the calculation then publishes as `RefusedStale`
+    / `AlreadyPublished`;
+  - `invalidated` must be published like `RequestOutcome::invalidated`
+    whenever anything may have read the engine before the restore.
+- `setExplicitResultListener(listener)` receives `ExplicitResultEvent {kind,
+  instanceId, status}`:
+  - `Installed` is reported for every requested install of an explicit
+    calculation (a synchronous `request()`, `prepare()`'s `NothingToRun` /
+    `Blocked`, a `Published` publish), whatever its status;
+  - `DroppedByInputChange` is reported for leaf notifications, preference
+    broadcasts, and the cascade when an upstream calculation that a requested
+    result read as "not requested" is requested, published or restored;
+  - neither is reported for `restoreResult()`'s own install, `clear()`, a
+    registry change, or the destruction of the registry or the engine;
+  - events are delivered in order at the end of the engine call, never inside
+    an evaluation. The listener travels with the engine (a moved `SessionData`
+    keeps it);
+  - an `Installed` can be followed in the same call by a
+    `DroppedByInputChange` for the same result; `exportResult()` then already
+    returns nothing at the `Installed` event.
+
 ## 13. Blocker inspection
 
 "Why is this name unavailable, and can requesting something change that?"
@@ -371,6 +449,8 @@ Rules:
   from such an output. The same inputs would give the same answer, so nothing
   offers to run it again; an input change makes the name `Blocked` again.
 - `Blocked` outranks `NotProduced`; `notProduced` may be non-empty in both.
+- A restored result (section 12, export and restore) is reported exactly as a
+  published one: a stored rejection is `NotProduced` with its detail.
 - A name another candidate already provides is `Available`, even if an explicit
   candidate precedes the provider. A stored attribute or a name with source
   data never consults derived candidates. Rings end the walk.
@@ -433,9 +513,10 @@ run explicit work any other way: the engine's synchronous `request()` (section
 8) is for tests, and the cleanup audit (group `gestures`) keeps every call of
 it out of `src/` outside `src/engine`. Python plugins are ordinary on-demand
 readers and start nothing either
-(`tst_python_bridge::pluginsNeverStartExplicitWork`). A result that was
-cancelled, superseded, or failed is simply missing, and whoever still wants it
-asks again.
+(`tst_python_bridge::pluginsNeverStartExplicitWork`). Loading a session starts
+none either: a stored result is restored, not requested (15.8). A result that
+was cancelled, superseded, or failed is simply missing, and whoever still wants
+it asks again.
 
 ### 15.1 What a job is
 
@@ -468,7 +549,7 @@ then `CalculationEngine::readiness()`: `Unknown` -> `UnknownCalculation`,
 `MissingInput` -> `MissingInput` (no job can be created for a session without
 the inputs), `Blocked` -> `Blocked` (request the blockers instead: chaining is
 the caller's), `Done` -> `NothingToDo` (already computed, a cached rejection or
-failure included, or not an explicit calculation), `Ready` -> a new Queued job
+failure included, a restored result included, or not an explicit calculation), `Ready` -> a new Queued job
 (`Created`). It never prepares and never starts anything synchronously.
 
 **Deduplication.** A request whose `(sessionId, instanceId)` equals that of a
@@ -602,8 +683,11 @@ marks the ticket, and the job is stopped and ends Superseded (section 15.3).
 `SessionModel::publishCalculationInvalidation(sessionId, keys)` is how
 engine-returned invalidations reach consumers: one publishing `dataChanged` for
 the row, `dependencyChanged` per key, `modelChanged` - immediately, and only
-for a loaded row. A published result is not a persistent change: no cached
-logbook column is invalidated, nothing is marked dirty, nothing is saved.
+for a loaded row. Publishing marks nothing dirty and saves no session file.
+The engine's explicit-result listener stores an `Ok` result as a record beside
+the session file during the install itself (15.8), and writing that record
+drops the session's cached values of the columns over that calculation
+(section 17).
 
 ### 15.5 The worker and what crosses threads
 
@@ -662,7 +746,8 @@ progress and a jobs dock can be a pure view of it.
 - Finished rows are kept for the life of the application up to
   `finishedLimit()` (default 200, `setFinishedLimit()`); the oldest finished
   rows are trimmed after a job's end transition has been signalled; active rows
-  never. Nothing is persisted.
+  never. No job is persisted: the job history lives as long as the
+  application. (The result a job published may be: 15.8.)
 
 ### 15.7 API and threading rules
 
@@ -693,6 +778,63 @@ engine callback (they inspect or publish to engines).
 
 Tests: `tests/tst_jobqueue.cpp`, `tests/tst_jobmodel.cpp`, and the controllable
 calculations of `tests/support/jobfixture.h`.
+
+### 15.8 Stored results
+
+The application's half of stored results (the engine's is section 12, export
+and restore; the files are described in
+[DATA_SCHEMA.md](DATA_SCHEMA.md#12-stored-calculation-results) section 12).
+
+- `CalculationResultStore` (`src/calculationresultstore.h`) is owned by
+  `SessionModel`, holds no state but counters, and runs on the main thread
+  only. Every record file is read, written and deleted through
+  `LogbookManager`.
+- `SessionModel::attachSession()` installs the engine's explicit-result
+  listener, so both install paths write: the queue's publish and a synchronous
+  `request()`.
+- `Installed` with status `Ok`: `exportResult()`, then
+  `CalculationRecord::stamped()` (which adds `CalculationCompatibilityVersion`
+  and the environment fingerprint, computed fresh), then
+  `LogbookManager::writeCalculationRecord()`, on the main thread. The write is
+  atomic (`QSaveFile`). A failure is warned once, leaves the previous record
+  and the in-memory result untouched, and is not retried before the next `Ok`
+  publish.
+- `Installed` with any other status writes nothing and deletes nothing.
+- `DroppedByInputChange`: `LogbookManager::removeCalculationRecord()`.
+- Every path that installs a session into a row restores that session's valid
+  records after `attachSession()` and before the row is published
+  (`sessionLoaded`, `dataChanged`, any plot pass): `sessionRef()`, the unloaded
+  branch of `mergeSessions()`, and the promotion of a bulk edit's temporary
+  session. The loaded-in-place merge needs no restore: it changes the session
+  through the setters, so only the results it touches are dropped, with their
+  records. The names a restore invalidates need no publication after a fresh
+  load, because nothing has read the new engine yet; the unloaded merge
+  publishes them with the names the merge changed.
+- Records are restored in passes until a pass restores none, so
+  explicit-on-explicit chains restore in any file order. `InputsUnavailable`
+  counts as stale only after the last pass.
+- These are deleted at a load: unreadable records, records of an unsupported
+  format, records with stale stamps (`CalculationRecord::stampsAreCurrent()`),
+  records failing a stale check, and records of a calculation that is not
+  registered as explicit. A record whose result is already installed
+  (`AlreadyInstalled`) is kept.
+- The column worker's and the bulk edit's temporary loads never read a record.
+- Records are deleted with their session (`LogbookManager::removeSession`) and,
+  as strays whose session file does not exist, at `initialize()`. Eviction,
+  unloading, a registry change and the model's destruction never delete one.
+- A session created by an import has its file stem reserved
+  (`LogbookManager::reserveSessionFile`), so a result published before its
+  first save is stored under the name that save will use. A session that is
+  never saved leaves a stray, removed at the next start.
+- After a restore `readiness()` is `Done`, so `JobQueue::request()` answers
+  `NothingToDo`.
+- Record format and file names: `src/calculationrecord.h` and DATA_SCHEMA
+  section 12. Test seam: `SessionModel::storedResultStats()` /
+  `resetStoredResultStats()` (records written, read, restored, kept and
+  deleted, and the time spent).
+
+Tests: `tests/tst_calcengine_restore.cpp`, `tests/tst_result_records.cpp`,
+`tests/tst_result_store.cpp`, `tests/tst_fusion_store.cpp`.
 
 ## 16. Plot-driven requests
 
@@ -825,8 +967,10 @@ A plot is **explicit-backed** when any name in the static dependency closure of
 its y name - `CalculationRegistry::staticDependencies(name).names`, which
 includes the name itself and looks through source conversions - has a candidate
 or a source conversion with explicit policy. One registry query answers it,
-`CalculationRegistry::dependsOnExplicit(name)`, which the logbook column cache
-(section 17) asks too, so rows and columns cannot disagree. It is a pure
+`CalculationRegistry::dependsOnExplicit(name)`. The logbook column cache asks
+`CalculationRegistry::explicitDependencies(name)` (which explicit calculations;
+section 17), of which `dependsOnExplicit()` is the non-emptiness, so rows and
+columns cannot disagree. It is a pure
 function of the registrations, memoized in the registry and per plot id, and
 dropped by a registry observer. It is exact: `staticDependencies()` is a
 superset of every dynamic dependency set and a blocker is always reached
@@ -868,7 +1012,10 @@ explicit-backed, or unknown does nothing and returns 0.
 
 **A gesture is an explicit call from the view. It is never inferred from a
 model change** ("when in doubt, it is not a gesture"). None of the following
-starts a job; the affected tracks are `Missing` and the refresh control shows:
+starts a job. An affected track is `Missing` and the refresh control shows,
+unless its session was loaded with a valid stored result (15.8): that makes it
+`Available`, or `Failed` for a stored rejection, exactly as after a publish,
+and it adds nothing to the refresh count:
 
 - restoring checked plots at startup (`PlotModel::setPlots()` with settings),
   applying a profile (`setPlotEnabled()`), the Plots menu and its shortcuts
@@ -1033,7 +1180,10 @@ result emits `dependencyChanged` per name, `dataChanged` for the row, and
 `modelChanged` (`SessionModel::publishCalculationInvalidation()`, 15.4). The
 plot widget and the legend rebuild on `modelChanged`, the logbook repaints from
 `dataChanged`, the measure tool reads at interaction time. Nothing connects the
-queue or the component to the plot, the legend, or the logbook.
+queue or the component to the plot, the legend, or the logbook. A restored
+result (15.8) needs no publication: it is installed before the row's
+`sessionLoaded`, which already makes the plot, the legend and the rows read the
+session.
 
 Tests: `tests/tst_plot_row_layout.cpp` (geometry, no widgets) and
 `tests/tst_plot_row_delegate.cpp` (the delegate in an offscreen `QTreeView`;
@@ -1102,9 +1252,9 @@ session-level outputs are bit-identical to the kernel's goldens.
 | `Fusion::Outcome` | The compute function |
 | --- | --- |
 | `Succeeded` | returns all seventeen measurements and `_FUSION_DIAGNOSTICS` |
-| `Rejected`, `SolverFailed` | returns **only** `_FUSION_DIAGNOSTICS` and `setReason(reason)`: the measurements are unset, so unavailable. A function of the inputs, cached like any result (`ResultStatus::Ok`): the job ends Succeeded with that reason, `resultDetail()` returns it, blocker inspection reports `NotProduced` with that detail, and a second request runs nothing until a declared input changes |
-| `Cancelled` | throws `CalculationCancelled`: nothing is published, nothing is cached |
-| `std::bad_alloc` | not handled: it propagates to the engine (`ResourceExhausted` on the asynchronous path; nothing cached) |
+| `Rejected`, `SolverFailed` | returns **only** `_FUSION_DIAGNOSTICS` and `setReason(reason)`: the measurements are unset, so unavailable. A function of the inputs, cached like any result (`ResultStatus::Ok`): the job ends Succeeded with that reason, `resultDetail()` returns it, blocker inspection reports `NotProduced` with that detail, and a second request runs nothing until a declared input changes. Stored and restored like a success (15.8) |
+| `Cancelled` | throws `CalculationCancelled`: nothing is published, nothing is cached, nothing is stored |
+| `std::bad_alloc` | not handled: it propagates to the engine (`ResourceExhausted` on the asynchronous path; nothing cached, nothing stored) |
 
 **Progress and cancellation.** The compute function hands the kernel two
 callbacks over `ctx.progress()`: one forwards each progress text to
@@ -1136,17 +1286,38 @@ section 16.1.
 `_time`, and `accH`. They are explicit-backed (16.3), so they are computed
 from the plot list and nowhere else.
 
-**Logbook columns.** A column that depends on an explicit calculation - any
-name it reads answers true to `CalculationRegistry::dependsOnExplicit()`, the
-same query as 16.3 - is cached as *unavailable* (`SessionModel::computeColumnValues`),
-whatever is published in memory: explicit results are never saved, and a cached
-value is the column's value for the session as it is on disk. Loaded rows
-display the live value; publication does not touch the cache; a stub shows
-nothing, which is what a reload would show. `CalculationCompatibilityVersion`
-changes only with a code change that can alter a value an existing session
-yields for a column (section 9). This rule is not such a change - a session as
-it is on disk has no explicit result, so its columns over one are unavailable
-with or without the rule. The marker's current value, 2, identifies the
+**Stored results.** The fit's result version is `Fusion::Algorithm`
+(`src/fusion/fusion.h`), the same string as the diagnostics' `"algorithm"`. The
+literal exists once in `src/`, in that header. Change it whenever a change can
+alter what the fit returns for the same channels; that drops every stored fit.
+The record holds the seventeen measurements and `_FUSION_DIAGNOSTICS`, or, for
+a rejection or solver failure, the diagnostics and the reason. Its leaves are
+the source data and attributes behind the 22 inputs: the IMU and GNSS source
+columns, `SCHEMA_VER`, the `TIME` sensor, the stored origin attributes. Markers
+and preferences are not among them.
+
+**Logbook columns.** A column over names for which
+`CalculationRegistry::explicitDependencies()` is not empty
+(`logbookColumnExplicitCalculations()`, the same registry answer as 16.3) is,
+for a loaded row, computed from the engine like any other column
+(`SessionModel::computeColumnValues`): the restored or published value, or
+unavailable when the calculation is not requested. It is cached in
+`index.json` together with the session's `"records"` stamp (calculation id ->
+result version of each record on disk). Writing or deleting a record drops the
+values over that calculation at once
+(`LogbookManager::calculationRecordsChanged`); a loaded row recomputes them on
+the next event-loop pass (`refreshRecordColumns`, which emits nothing: loaded
+cells are live). A stub is settled without a load: pending (not cached, shown
+empty) when the logbook knows a record of it, unavailable otherwise. The
+column worker never reads a record. The ordering rule: a record write flushes
+the index first when the index on disk lists that calculation under a cached
+value, so no crash leaves a value that disagrees with the records. Unconfirmed
+records (a failed write or removal, an environment change while loaded) keep
+their values out of `index.json` until the row is evicted or the record is
+written or deleted again. `CalculationCompatibilityVersion` did not change for
+this: an index written before the stamp holds explicit-backed values only as
+"unavailable", and at start-up they are kept only for sessions without a
+record. The marker's current value, 2, identifies the
 centered time fit (`_TIME_FIT_A` / `_TIME_FIT_B`, and with them every non-GNSS
 `_time`); the constant's comment lists what each value stands for.
 
@@ -1156,6 +1327,10 @@ test's main thread), `tests/tst_fusion_jobs.cpp` (the job queue's worker on a
 real `SessionModel`), `tests/tst_fusion_rows.cpp` (the plot rows of section
 16 with the seventeen real plots and real fits) and
 `tests/tst_fusion_runner.cpp` (the command-line runner against the
-application's import path); the column rule without GTSAM in
-`tst_column_cache::explicitBackedColumnIsNeverCached`. The model, its
+application's import path) and `tests/tst_fusion_store.cpp` (the fit's stored
+result: unload, restart, rejections, invalidation, merges, the session file
+untouched); the column rule without GTSAM in
+`tst_column_cache::explicitBackedColumnFollowsItsResult` and
+`tests/tst_result_columns.cpp` (the stamp, crash points, pending stubs), and
+with a real fit in `tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord`. The model, its
 limitations and what is rejected are in [SENSOR_FUSION.md](SENSOR_FUSION.md).

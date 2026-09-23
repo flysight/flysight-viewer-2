@@ -15,7 +15,10 @@
 #     core; the stationary-window initializer, its silent poll and the
 #     constant-bias algorithm strings retired by the sensor fusion improvements
 #     stay absent, and the fusion tools stay isolated (items 212, 218, 231,
-#     233, 234, 247).
+#     233, 234, 247);
+#   - the stored results of requested calculations live beside the session
+#     file, never in it: they are named, written, read, restored and deleted in
+#     one place each, and the documents describe them (items 301-350).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -384,8 +387,12 @@ expect_only("one call of request( in product code: the job request" "[.>]request
 # the regex when it exists. Until then AppContext only carries the pointer.
 expect_only("no jobs window, no view of the queue" "[Jj]ob[Qq]ueue|JobModel"
   "^src/ui/docks/AppContext\\.h$" src/ui)
-# CalculationRegistry::dependsOnExplicit() is the one definition of
-# "explicit-backed"; plot rows and the logbook column cache ask it.
+# CalculationRegistry::explicitDependencies() is the one definition of
+# "explicit-backed" (dependsOnExplicit() is its non-emptiness): plot rows ask
+# dependsOnExplicit(), the logbook column cache asks explicitDependencies()
+# through logbookColumnExplicitCalculations(). Neither tests the policy
+# itself, and neither does the result store: what may be stored is decided by
+# CalculationEngine::exportResult().
 expect_only("one authority: explicit-backed" "EvaluationPolicy::Explicit"
   "^src/engine/|^src/fusion/fusionregistration\\.cpp$" src)
 
@@ -488,14 +495,83 @@ expect_only("the tools see the public header or the trace seam only"
   "^src/fusion/|^tests/tst_fusion_kernel\\.cpp$"
   src tests)
 
+# =============================================================================
+# Storing requested calculation results with the session (acceptance items
+# 301-350): the result of an explicit calculation is kept in a record file
+# beside the session file. The rules below keep the file names and the file
+# I/O in the record format and the logbook manager, the store as the one caller
+# of that I/O and of the engine's export / restore, restoring separate from
+# requesting, the session file ignorant of records, the result version one
+# literal, and the documents current.
+# =============================================================================
+
+# ─────────────────────────────── stored-results (items 304, 305, 316, 317, 326, 327, 330, 333, 334, 346, 348, 349)
+audit_group(stored-results)
+# Allow: none expected. The extension and the magic are file-local constants of
+# calculationrecord.cpp; everything else asks calculationRecordExtension() or the
+# name functions. Header comments are not searched (a comment may quote the
+# extension); a .cpp comment that quotes it is reworded.
+expect_only("one authority: the record file extension" "\"\\.?fvresult\""
+  "^src/calculationrecord\\.cpp$" "src/*.cpp")
+# Allow: a new user of the record file names is the logbook manager or nobody.
+expect_only("record file names: the record format and the logbook manager only"
+  "recordFileName\\(|parseRecordFileName\\(|calculationRecordExtension\\(|calculationRecordPath\\(|calculationRecordFileNames\\("
+  "^src/calculationrecord\\.(cpp|h)$|^src/logbookmanager\\.(cpp|h)$" src)
+# Allow: none expected. Records are written on an Ok install, read at a load and
+# deleted on an input change or when stale - all by the result store; the
+# logbook manager deletes them itself with their session and as strays.
+expect_only("records are written, read and removed by the result store"
+  "\\b(write|read|remove)CalculationRecords?\\("
+  "^src/logbookmanager\\.(cpp|h)$|^src/calculationresultstore\\.(cpp|h)$" src)
+expect_only("one result store, owned by the session model" "CalculationResultStore"
+  "^src/calculationresultstore\\.(cpp|h)$|^src/sessionmodel\\.(cpp|h)$" src)
+# Allow: none expected. exportResult() / restoreResult() have one product caller.
+expect_only("only the result store exports and restores results" "exportResult\\(|restoreResult\\("
+  "^src/engine/|^src/calculationresultstore\\.(cpp|h)$" src)
+expect_only("one explicit-result listener, installed by the session model" "setExplicitResultListener\\("
+  "^src/engine/|^src/sessionmodel\\.cpp$" src)
+expect_only("stored results are restored at a load only" "restoreSession\\("
+  "^src/calculationresultstore\\.(cpp|h)$|^src/sessionmodel\\.cpp$" src)
+# Restoring is not requesting. Allow: none expected; a comment that names the
+# queue is reworded.
+expect_none("restoring is not requesting" "JobQueue|PlotRequests|[.>](request|prepare|publish)\\("
+  "src/calculationresultstore.*")
+# The session file is the recording: nothing on its path knows a record exists.
+# Allow: none expected.
+expect_none("the session file knows nothing of stored results"
+  "CalculationRecord|calculationrecord|CalculationResultStore|StoredCalculationResult|exportResult|fvresult"
+  src/dataexporter.cpp src/dataexporter.h src/dataimporter.cpp src/dataimporter.h
+  src/sessionmerge.cpp src/sessionmerge.h src/csvformat.cpp src/csvformat.h "src/sessiondata.*")
+expect_none("stored results are widget-free"
+  "QtWidgets|#include [<\"]Q(Widget|Application|MessageBox|Dialog)|#include \"(\\.\\./)?ui/"
+  "src/calculationrecord.*" "src/calculationresultstore.*" "src/engine/storedcalculationresult.*")
+# Fusion's result version is its kernel's algorithm string, spelled once.
+# Allow: none expected. A changed algorithm changes the one literal; a comment
+# or test in src that quotes it names Fusion::Algorithm instead.
+expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v3" 1 src)
+expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v3"
+  "^src/fusion/fusion\\.h$" src)
+# The compatibility rule names the result version, in the code and in the note.
+# Allow: reword the sentence, never duplicate it; the count is 1 in each file.
+expect_count("the bump rule names the result version" "CalculationDescriptor::resultVersion" 1
+  src/calculations/builtincalculations.h)
+expect_count("the bump rule names the result version (docs)" "Bump it, or the calculation's result version" 1
+  docs/CALCULATIONS.md)
+# Allow: tests/README.md is excluded because its section 10 describes this rule.
+# Say what is kept instead of what used to be lost.
+expect_none("no text says requested results are not kept"
+  "[Rr]esults are kept in memory only|[Rr]esults are not saved|explicit results are never saved|[Aa]n explicit result is never (persisted|saved)|cached as present and invalid|never cached for unloaded ones"
+  src tests docs python_plugins README.md ":!tests/README.md")
+
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 
 # ─────────────────────────────── acceptance traceability
 # tests/acceptance_map.txt: items 1-19 (the schema / engine specification),
 # 101-120 (sensor fusion and plot-driven jobs, item = 100 + acceptance number)
-# and 201-247 (the sensor fusion improvements, item = 200 + requirement
-# number). Four line forms; see the head of the map.
+# 201-247 (the sensor fusion improvements, item = 200 + requirement
+# number) and 301-350 (storing requested calculation results with the session,
+# item = 300 + clause number). Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -565,8 +641,8 @@ else()
 
     list(APPEND items_seen "${item}")
     if(NOT ((item GREATER_EQUAL 1 AND item LESS_EQUAL 19) OR (item GREATER_EQUAL 101 AND item LESS_EQUAL 120)
-            OR (item GREATER_EQUAL 201 AND item LESS_EQUAL 247)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120 and 201-247: ${line}")
+            OR (item GREATER_EQUAL 201 AND item LESS_EQUAL 247) OR (item GREATER_EQUAL 301 AND item LESS_EQUAL 350)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247 and 301-350: ${line}")
     endif()
   endforeach()
 
@@ -584,6 +660,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 201 247)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 301 350)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
