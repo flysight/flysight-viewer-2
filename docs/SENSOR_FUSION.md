@@ -272,7 +272,7 @@ a known mounting heading or equate GNSS course with sensor orientation.
 ends hundreds of degrees off on a unit whose bias drifts, and a resting unit
 whose bias exceeds 1 deg/s failed the previous initializer's resting-window
 detector. Starting every pose near its answer converged every recording the
-reference corpus (97 recordings from seven units) fitted worst in 9-17
+reference corpus (97 recordings from seven units) fitted worst in 8-17
 iterations. Nothing is propagated further than a segment.
 
 **Numerical convergence does not establish physical accuracy.** The recording
