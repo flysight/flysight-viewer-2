@@ -402,7 +402,9 @@ private:
     /// PENDING when LogbookManager knows a record of the session for any
     /// calculation the column depends on, else cached as unavailable (row and
     /// LogbookManager::updateCachedValues). Loads nothing and reads no record:
-    /// the record set comes from knownCalculationRecords().
+    /// the record set comes from knownCalculationRecords(). "No record, so
+    /// unavailable" holds only while an Explicit calculation's outputs have no
+    /// other candidate (docs/CALCULATIONS.md section 8).
     void settleExplicitColumns(int row);
     ColumnWorkStats m_columnWorkStats;
 

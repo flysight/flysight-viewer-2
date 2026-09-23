@@ -166,6 +166,16 @@ void SessionModel::rebuildColumns()
 
     // Rebuild cached values for all sessions to reflect new column set
     LogbookManager &logbook = LogbookManager::instance();
+    // Computes `indices` of a loaded row from its session and makes them the
+    // row's and the manager's cached values (replacing what either held)
+    const auto computeRow = [this, &logbook](SessionRow &row, const QVector<int> &indices) {
+        const QMap<LogbookColumn, QVariant> colValues = computeColumnValues(row.session.value(), indices);
+        logbook.setCachedValues(row.sessionId, colValues);
+        QMap<int, QVariant> indexed;
+        for (int i : indices)
+            indexed[i] = colValues.value(m_columns[i]);
+        row.cachedValues = indexed;
+    };
     for (int rowIndex = 0; rowIndex < m_rows.size(); ++rowIndex) {
         SessionRow &row = m_rows[rowIndex];
         // Indices change: the worker settles stubs again (without a load when
@@ -179,12 +189,7 @@ void SessionModel::rebuildColumns()
                 if (!isExplicitBacked(i))
                     indices.append(i);
             }
-            QMap<LogbookColumn, QVariant> colValues = computeColumnValues(row.session.value(), indices);
-            logbook.setCachedValues(row.sessionId, colValues);
-            QMap<int, QVariant> indexed;
-            for (int i : std::as_const(indices))
-                indexed[i] = colValues.value(m_columns[i]);
-            row.cachedValues = indexed;
+            computeRow(row, indices);
             settleExplicitColumns(rowIndex);
         } else if (row.isLoaded()) {
             // A row with unsaved changes: the marks name the columns that were
@@ -196,12 +201,7 @@ void SessionModel::rebuildColumns()
 
             // Loaded session: recompute all column values from in-memory data
             // (the one place that computes a whole row)
-            QMap<LogbookColumn, QVariant> colValues = computeColumnValues(row.session.value(), allIndices);
-            logbook.setCachedValues(row.sessionId, colValues);
-            QMap<int, QVariant> indexed;
-            for (int i = 0; i < m_columns.size(); ++i)
-                indexed[i] = colValues.value(m_columns[i]);
-            row.cachedValues = indexed;
+            computeRow(row, allIndices);
         } else {
             // Stub session: remap existing cached values to new column indices.
             // Columns that already have values keep them; new columns are left
@@ -1521,14 +1521,20 @@ void SessionModel::settleExplicitColumns(int row)
     // the manager knows its records (a later remap moves them)
     const QSet<QString> known = logbook.knownCalculationRecords(sr.sessionId);
 
+    // "No record, so unavailable" relies on an invariant nothing enforces:
+    // an Explicit calculation's outputs have no other candidate, so while it
+    // is not requested (no record: nothing restores it) they read as
+    // unavailable, and so does every column over them (docs/CALCULATIONS.md
+    // section 8; checked for the registered built-ins by
+    // tst_fusion_session::explicitOutputsHaveOneCandidate). A registration
+    // that gave such a name a second candidate would make the value cached
+    // here wrong.
+
     QMap<LogbookColumn, QVariant> unavailable;
     for (int i = 0; i < m_columns.size(); ++i) {
         if (sr.cachedValues.contains(i) || sr.pendingColumns.contains(i) || !isExplicitBacked(i))
             continue;
-        const QStringList &ids = m_columnExplicitCalculations[i];
-        const bool hasRecord = std::any_of(ids.cbegin(), ids.cend(),
-                                           [&known](const QString &id) { return known.contains(id); });
-        if (hasRecord) {
+        if (containsAnyOf(m_columnExplicitCalculations[i], known)) {
             sr.pendingColumns.insert(i);        // only a load may read it
         } else {
             sr.cachedValues[i] = QVariant();
@@ -1928,15 +1934,13 @@ bool SessionModel::evictSession(const QString &sessionId)
     // Values over records the engine could not vouch for (a failed write or
     // removal, an environment change while loaded) go with the engine; the
     // worker settles them against the records on disk.
-    const QStringList unconfirmed =
+    const QStringList unconfirmedIds =
         LogbookManager::instance().discardUnconfirmedCalculationRecords(sessionId);
+    const QSet<QString> unconfirmed(unconfirmedIds.cbegin(), unconfirmedIds.cend());
     bool dropped = false;
     if (!unconfirmed.isEmpty()) {
         for (int i = 0; i < m_columnExplicitCalculations.size(); ++i) {
-            const QStringList &ids = m_columnExplicitCalculations[i];
-            const bool over = std::any_of(ids.cbegin(), ids.cend(),
-                                          [&unconfirmed](const QString &id) { return unconfirmed.contains(id); });
-            if (over && sr.cachedValues.remove(i) > 0)
+            if (containsAnyOf(m_columnExplicitCalculations[i], unconfirmed) && sr.cachedValues.remove(i) > 0)
                 dropped = true;
         }
     }
