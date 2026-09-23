@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include <QCoreApplication>
+#include <QString>
 #include <QVector>
 
 #include "calculations/registration.h"
@@ -79,11 +80,18 @@ constexpr FitInput kFitInputs[] = {
     { "IMU",   "wz",    &Fusion::Channels::wz }
 };
 
+} // namespace
+
+// ---- the tables, as the public header exposes them --------------------------
+// Three functions over kFitInputs and kFitOutputs for the registration below
+// and for the tooling (fusion_runner), so that the tool feeds the kernel what
+// computeFit() feeds it by construction: one table, one assembly.
+
 // The measurements of kFitInputs, then the four origin attributes. Everything
 // behind them (GNSS/lat, the TIME sensor, the time fit) is transitive and
 // tracked by the engine. Markers and preferences are not inputs: they do not
 // move the fit.
-QList<CalcInput> fitInputs()
+QList<CalcInput> Fusion::fitInputs()
 {
     QList<CalcInput> inputs;
     for (const FitInput &input : kFitInputs)
@@ -95,6 +103,37 @@ QList<CalcInput> fitInputs()
     return inputs;
 }
 
+// The effective input values as the kernel takes them. Field-by-field copies
+// of implicitly shared vectors: no sample is copied and none is touched.
+Fusion::Channels Fusion::channelsFrom(const MeasurementReader &measurement, const AttributeReader &attribute)
+{
+    Fusion::Channels channels;
+    for (const FitInput &input : kFitInputs)
+        channels.*(input.samples) = measurement(input.sensor, input.name);
+
+    // A stored, hand-edited origin index that is not a number must not
+    // silently mean "fix 0": -1 is the kernel's "outside the GNSS samples".
+    bool isNumber = false;
+    const qlonglong originIndex = attribute(SessionKeys::LocalOriginIndex).toLongLong(&isNumber);
+    channels.originIndex = isNumber ? originIndex : -1;
+    channels.originLat = attribute(SessionKeys::LocalOriginLat).toDouble();
+    channels.originLon = attribute(SessionKeys::LocalOriginLon).toDouble();
+    channels.originHMSL = attribute(SessionKeys::LocalOriginHmsl).toDouble();
+    return channels;
+}
+
+QList<Fusion::FitOutputChannel> Fusion::fitOutputChannels(const Result &result)
+{
+    QList<FitOutputChannel> channels;
+    for (const FitOutput &output : kFitOutputs)
+        channels.append({ QString::fromLatin1(output.name), result.*(output.samples) });
+    return channels;
+}
+
+// ---- the registered calculations ---------------------------------------------
+
+namespace {
+
 QList<DependencyKey> fitOutputs()
 {
     QList<DependencyKey> outputs;
@@ -104,23 +143,12 @@ QList<DependencyKey> fitOutputs()
     return outputs;
 }
 
-// The effective input values as the kernel takes them. Field-by-field copies
-// of implicitly shared vectors: no sample is copied and none is touched.
+// The engine's context as the two readers of the public assembly.
 Fusion::Channels channelsFrom(const EvaluationContext &ctx)
 {
-    Fusion::Channels channels;
-    for (const FitInput &input : kFitInputs)
-        channels.*(input.samples) = ctx.measurement(input.sensor, input.name);
-
-    // A stored, hand-edited origin index that is not a number must not
-    // silently mean "fix 0": -1 is the kernel's "outside the GNSS samples".
-    bool isNumber = false;
-    const qlonglong originIndex = ctx.attribute(SessionKeys::LocalOriginIndex).toLongLong(&isNumber);
-    channels.originIndex = isNumber ? originIndex : -1;
-    channels.originLat = ctx.attribute(SessionKeys::LocalOriginLat).toDouble();
-    channels.originLon = ctx.attribute(SessionKeys::LocalOriginLon).toDouble();
-    channels.originHMSL = ctx.attribute(SessionKeys::LocalOriginHmsl).toDouble();
-    return channels;
+    return Fusion::channelsFrom(
+        [&ctx](const QString &sensor, const QString &name) { return ctx.measurement(sensor, name); },
+        [&ctx](const QString &key) { return ctx.attribute(key); });
 }
 
 // A fit that ended with a result, as the bundle the engine caches. A rejected
@@ -168,7 +196,7 @@ void registerFit(CalculationRegistry &registry)
     CalculationDescriptor d;
     d.id = QString::fromLatin1(Fusion::FitCalculationId);
     d.title = QCoreApplication::translate("Fusion", "Sensor fusion");
-    d.inputs = fitInputs();
+    d.inputs = Fusion::fitInputs();
     d.outputs = fitOutputs();
     d.policy = EvaluationPolicy::Explicit;
     d.compute = computeFit;

@@ -335,6 +335,13 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
   flysight_add_fusion_test(tst_fusion_rows SOURCES tst_fusion_rows.cpp
     LIBS flysight_fusion_session_support)
 
+  # The runner, driven as a child process on fixtures written out as CSV
+  flysight_add_fusion_test(tst_fusion_runner SOURCES tst_fusion_runner.cpp
+    LIBS flysight_fusion_session_support)
+  target_compile_definitions(tst_fusion_runner PRIVATE
+    FLYSIGHT_FUSION_RUNNER="$<TARGET_FILE:fusion_runner>")
+  add_dependencies(tst_fusion_runner fusion_runner)   # $<TARGET_FILE> creates no build order
+
   # ---- bit-exact golden regression (label "exact") --------------------------
   # The same executables run a second time with FLYSIGHT_FUSION_EXACT=1, which
   # turns every golden comparison into bit equality (tests/README.md section
@@ -435,9 +442,13 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
     flysight_add_fusion_exact_test(tst_fusion_session)
     flysight_add_fusion_exact_test(tst_fusion_jobs)
     flysight_add_fusion_exact_test(tst_fusion_rows)
+    # ... and the runner, whose test compares the tool's output with an
+    # in-process run through the golden comparator: on this configuration
+    # that comparison is bit identity across the process boundary.
+    flysight_add_fusion_exact_test(tst_fusion_runner)
   endif()
 
-  # ---- two executables that are not tests and are not installed -------------
+  # ---- three executables that are not tests and are not installed -----------
   # solver_deploy_probe is copied into an installed application tree and run
   # there to prove the deployed solver runtime is complete (tests/README.md
   # section 1). fusion_golden_capture runs the product kernel on the twelve
@@ -472,6 +483,14 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
     FLYSIGHT_CAPTURE_CMAKE_VERSION="${CMAKE_VERSION}"
     FLYSIGHT_CAPTURE_GTSAM_DIR="${GTSAM_DIR}"
     FLYSIGHT_FUSION_FIXTURE_SOURCE_DIR="${CMAKE_CURRENT_LIST_DIR}/fusion")
+
+  # Command-line runner: the fit on one recording imported as the application
+  # imports it (spec section 8). Not a test, not installed; run by hand with the
+  # Qt, GeographicLib and solver library directories on the path. Links the
+  # public headers of the fusion library only, never GTSAM.
+  add_executable(fusion_runner fusion_runner.cpp)
+  target_link_libraries(fusion_runner PRIVATE flysight_core flysight_fusion)
+  flysight_solver_stack(fusion_runner)
 endif()
 
 # ---- cleanup audit ---------------------------------------------------------
