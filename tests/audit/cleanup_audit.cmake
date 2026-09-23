@@ -16,9 +16,10 @@
 #     constant-bias algorithm strings retired by the sensor fusion improvements
 #     stay absent, and the fusion tools stay isolated (items 212, 218, 231,
 #     233, 234, 247);
-#   - the stored results of requested calculations live beside the session
-#     file, never in it: they are named, written, read, restored and deleted in
-#     one place each, and the documents describe them (items 301-350).
+#   - the stored results of requested calculations live in the logbook's
+#     cache/ folder, never in the session file: they are named, written, read,
+#     restored and deleted in one place each, and the documents describe them
+#     (items 301-350).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -497,8 +498,8 @@ expect_only("the tools see the public header or the trace seam only"
 
 # =============================================================================
 # Storing requested calculation results with the session (acceptance items
-# 301-350): the result of an explicit calculation is kept in a record file
-# beside the session file. The rules below keep the file names and the file
+# 301-350): the result of an explicit calculation is kept in a record file in
+# the logbook's cache/ folder, never in the session file. The rules below keep the file names and the file
 # I/O in the record format and the logbook manager, the store as the one caller
 # of that I/O and of the engine's export / restore, restoring separate from
 # requesting, the session file ignorant of records, the result version one

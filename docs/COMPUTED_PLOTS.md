@@ -106,9 +106,12 @@ computation.
   cancel control. Nothing is recomputed automatically; pressing refresh computes the track
   from the new data as soon as the old computation has stopped.
 - **Hiding a track or quitting loses nothing.** Results are kept with the
-  recording in the logbook. When the track is shown again, also after a
-  restart, the plot is drawn at once, without the refresh icon and without
-  computing.
+  recording in the logbook, in its `cache/` folder. When the track is shown
+  again, also after a restart, the plot is drawn at once, without the refresh
+  icon and without computing.
+- **Deleting the logbook's `cache/` folder** while FlySight Viewer is closed is
+  safe: the recordings are untouched, and every such track is "not computed"
+  again at the next start.
 - **After an update of FlySight Viewer** that changes how such a plot is
   computed, or after a change to calculations or to preferences that
   calculations read (for example editing the altitude markers), kept results

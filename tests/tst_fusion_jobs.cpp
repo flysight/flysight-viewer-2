@@ -600,7 +600,7 @@ void FusionJobsTest::columnOnFusionOutputIsCachedFromRecord()
     //    goes and the column with it, and it comes back unavailable
     QCOMPARE(engine("a").resultStatus(kFit), std::optional<ResultStatus>(ResultStatus::Ok));
     QCOMPARE(engine("a").runCount(kFit), 0);
-    const QString recordPath = TestEnvironment::instance().sessionsDir() + QLatin1Char('/')
+    const QString recordPath = TestEnvironment::instance().cacheDir() + QLatin1Char('/')
         + sessionFileStem("a") + QStringLiteral(".builtin%2Efusion%2Efit.fvresult");
     QVERIFY(QFileInfo::exists(recordPath));
     QVERIFY(m_model->updateAttribute("a", QStringLiteral("_LOCAL_ORIGIN_INDEX"), QVariant::fromValue(qlonglong(4))));

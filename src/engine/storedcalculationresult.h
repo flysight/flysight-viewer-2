@@ -15,8 +15,8 @@ namespace FlySight {
 
 /// The installed result of one plain explicit calculation, as a plain value:
 /// what CalculationEngine::exportResult() hands out and restoreResult() takes
-/// back. The engine and the record format that stores it beside the session
-/// exchange exactly this.
+/// back. The engine and the record format that stores it in the logbook's
+/// cache exchange exactly this.
 ///
 /// Members:
 ///  - calculationId: the plain registration id (equal to the instance id;

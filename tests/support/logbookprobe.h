@@ -10,9 +10,9 @@
 
 #include "logbookcolumn.h"
 
-/// Probes of what the test logbook holds on disk (index.json and the session
-/// files), the logbook columns the suites share, and small helpers for the
-/// model-level suites. Everything goes through TestEnvironment, so it can only
+/// Probes of what the test logbook holds on disk (index.json, the session
+/// files and the calculation records), the logbook columns the suites share,
+/// and small helpers for the model-level suites. Everything goes through TestEnvironment, so it can only
 /// ever look inside the temporary logbook of the running test.
 namespace FlySightTest {
 
@@ -46,7 +46,8 @@ QString sessionFilePath(const QString &sessionId);
 /// File names (not paths) of the *.csv files in the sessions directory, sorted.
 QStringList sessionCsvFiles();
 
-/// File names (not paths) of the *.fvresult calculation record files in the sessions directory, sorted.
+/// File names (not paths) of the *.fvresult calculation record files in the
+/// cache directory (TestEnvironment::cacheDir()), sorted; empty when it does not exist.
 QStringList calculationRecordFiles();
 
 /// Base name of sessionFilePath(sessionId): the stem its record files are named after; empty when there is none.

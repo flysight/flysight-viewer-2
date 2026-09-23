@@ -593,7 +593,7 @@
 
 # ---- Storing requested calculation results with the session: item = 300 + clause number ----
 
-# 301 - (2) the result of a requested calculation that ended as a function of its inputs is stored on disk beside the session: success with its outputs, rejection / solver failure with reason and diagnostics
+# 301 - (2) the result of a requested calculation that ended as a function of its inputs is stored on disk in the logbook's cache: success with its outputs, rejection / solver failure with reason and diagnostics
 301 tst_result_store writesOnOkInstall
 301 tst_result_store rejectionIsWritten
 301 tst_fusion_store restoredAfterEvictionIsBitIdentical
@@ -775,6 +775,7 @@
 327 tst_result_store writeFailureKeepsPreviousRecord
 327 tst_result_records writeFailureRefusedEncoding
 327 tst_result_records writeFailureDirectoryAtPath
+327 tst_result_records writeFailureCacheFolderNotCreated
 327 tst_result_records writeForUnknownSession
 327 audit stored-results
 
@@ -793,13 +794,17 @@
 329 tst_result_columns removingReservedSessionForgetsIt
 329 manual M19
 
-# 330 - (6) one file per (session, calculation) next to the session file, named from its stem and the id, never mistaken for a session
+# 330 - (6) one file per (session, calculation) in the logbook's cache/ folder (a sibling of sessions/, which holds only the recordings), named from its stem and the id, never mistaken for a session; cache/ may be deleted while the application is closed, after which every requested calculation reads not requested
 330 tst_result_records fileIdEncoding
 330 tst_result_records fileNameParsing
 330 tst_result_records fileNamesDifferIgnoringCase
 330 tst_result_records strayRecordsRemovedAtScan
 330 tst_result_records orphanAdoptionKeepsRecord
 330 tst_result_records recordsFollowRemap
+330 tst_result_records cacheFolderCreatedByFirstWrite
+330 tst_result_columns deletedCacheFolderForgetsRequests
+330 tst_fusion_store deletedCacheFolderReadsNotRequested
+330 manual M19
 330 audit stored-results
 
 # 331 - (6) the encoding: bit-exact doubles, readable without the session, the order of the session file's size, a version so a future format is refused

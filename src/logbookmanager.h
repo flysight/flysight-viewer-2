@@ -26,24 +26,30 @@ struct CalculationRecordRead {
     QString error;                             ///< empty for Ok and for a plain Missing
 };
 
-/// The logbook on disk: one CSV per session under sessions/ (beside it, the
-/// session's calculation record files), and index.json, which maps SESSION_IDs
-/// to file names and caches the logbook column values of every session so
-/// that the logbook can be shown without parsing a CSV.
+/// The logbook on disk: one CSV per session under sessions/ (the recordings
+/// and nothing else), the sessions' calculation record files under cache/,
+/// and index.json, which maps SESSION_IDs to file names and caches the logbook
+/// column values of every session so that the logbook can be shown without
+/// parsing a CSV.
 ///
-/// CALCULATION RECORDS. sessions/ also holds
-/// <stem>.<encoded calculation id>.fvresult files (calculationrecord.h), at
-/// most one per (session, requested calculation): the stored result of an
-/// explicit calculation. They are keyed by the session's file stem (which
-/// never changes), are referenced only by the per-session record stamp (see
-/// RECORD STAMPS), and are never listed as sessions (they do not end in
-/// .csv). They are written only through writeCalculationRecord() (QSaveFile,
-/// like a session file), and removed with their session (removeSession), by
-/// the stray pass of initialize() when their session file does not exist, and
-/// by explicit removal. A session not saved yet may have records under the
-/// stem reserved for it (reserveSessionFile()); if it is never saved they are
-/// strays and the next initialize() removes them. The manager only stores and
-/// reports them; the caller decides validity.
+/// CALCULATION RECORDS. cache/, a sibling of sessions/, holds
+/// <stem>.<encoded calculation id>.fvresult files (calculationrecord.h), flat,
+/// at most one per (session, requested calculation): the stored result of an
+/// explicit calculation. Everything in cache/ is derived: the folder may be
+/// deleted while the application is closed (the next initialize() finds no
+/// record, and the start-up check drops the cached values that relied on
+/// one). It is created by the first record write and never otherwise; a
+/// missing folder holds no record. Records are keyed by the session's file
+/// stem (which never changes), are referenced only by the per-session record
+/// stamp (see RECORD STAMPS), and are never listed as sessions (they are not
+/// in sessions/). They are written only through writeCalculationRecord()
+/// (QSaveFile, like a session file), and removed with their session
+/// (removeSession), by the stray pass of initialize() when their session file
+/// does not exist (the pass deletes in cache/ only), and by explicit removal.
+/// A session not saved yet may have records under the stem reserved for it
+/// (reserveSessionFile()); if it is never saved they are strays and the next
+/// initialize() removes them. The manager only stores and reports them; the
+/// caller decides validity.
 ///
 /// index.json root: "calculationCompatibility" (integer marker,
 /// FlySight::CalculationCompatibilityVersion), "calculationEnvironment"
@@ -102,9 +108,9 @@ public:
     static LogbookManager& instance();
 
     // Creates sessions directory if missing, removes stray calculation records
-    // (those whose session file does not exist; names only, nothing is
-    // opened), then loads index.json or scans *.csv file names. No session
-    // file is parsed: every session comes up as a stub.
+    // from cache/ (those whose session file does not exist; names only,
+    // nothing is opened), then loads index.json or scans *.csv file names. No
+    // session file is parsed: every session comes up as a stub.
     void initialize();
 
     // Drops all in-memory index state so the next initialize() re-reads the current
@@ -133,14 +139,16 @@ public:
 
     // --- Calculation records ---
 
-    // Writes sessions/<stem>.<encoded id>.fvresult atomically (QSaveFile),
-    // replacing any previous record for (session, record.result's calculation id).
-    // On failure *error is set and the previous record (if any) is intact. The
-    // record is encoded before any file is opened, so a record the format
-    // refuses never touches the disk. Drops the session's cached values over
-    // the calculation, flushes index.json first when the ordering rule asks
-    // for it (RECORD STAMPS; if that flush fails the record is not written),
-    // and emits calculationRecordsChanged() unless the session is unknown.
+    // Writes cache/<stem>.<encoded id>.fvresult atomically (QSaveFile),
+    // replacing any previous record for (session, record.result's calculation id),
+    // and creates cache/ first when it is missing. On failure (including a
+    // cache/ that cannot be created) *error is set and the previous record (if
+    // any) is intact. The record is encoded before any file is opened, so a
+    // record the format refuses never touches the disk. Drops the session's
+    // cached values over the calculation, flushes index.json first when the
+    // ordering rule asks for it (RECORD STAMPS; if that flush fails the record
+    // is not written), and emits calculationRecordsChanged() unless the
+    // session is unknown.
     bool writeCalculationRecord(const QString &sessionId, const CalculationRecord &record,
                                 QString *error = nullptr);
 
@@ -263,9 +271,9 @@ public:
     bool isIdentityEntry(const QString &sessionId) const;
 
     // Gives a session that has no session file yet the file stem its first
-    // save will use, so that files kept beside the session file (calculation
-    // records) can be written before that save. Returns the stem: the
-    // session's existing one if it has a file, else a reserved fresh uuid
+    // save will use, so that files named after the session file (calculation
+    // records in cache/) can be written before that save. Returns the stem:
+    // the session's existing one if it has a file, else a reserved fresh uuid
     // (idempotent). A reservation is never listed in index.json, is not a
     // session of the scan, and is forgotten by reset(). Empty id: returns "".
     QString reserveSessionFile(const QString &sessionId);
@@ -330,6 +338,10 @@ private:
     // Returns the full path to the sessions directory
     QString sessionsDirectory() const;
 
+    // Returns the full path to the cache directory, which holds the
+    // calculation records. Unlike sessionsDirectory() it never creates it.
+    QString cacheDirectory() const;
+
     // Scans *.csv filenames only (no parsing); populates m_sessionIdToUuid with identity mappings
     QStringList scanSessionFilenames();
 
@@ -345,9 +357,10 @@ private:
     QString recordStem(const QString &sessionId) const;
 
     QString calculationRecordPath(const QString &stem, const QString &calculationId) const;
-    // Names of the files in sessions/ (QDir::Files) that end in "." +
+    // Names of the files in cache/ (QDir::Files) that end in "." +
     // calculationRecordExtension(), compared case-sensitively (another
     // spelling of the extension is not a record, on any file system), sorted.
+    // Empty when cache/ does not exist.
     QStringList calculationRecordFileNames() const;
     // Calculation ids of the record files whose parsed stem is exactly `stem`, sorted.
     QStringList calculationRecordIdsForStem(const QString &stem) const;
@@ -355,9 +368,10 @@ private:
     // one could not be removed (warned).
     bool removeCalculationRecordsForStem(const QString &stem);
 
-    // Removes every record file whose name does not parse or whose stem has no
-    // session file (*.csv) on disk. Names only: no record and no session file
-    // is opened, and only *.fvresult files are deleted. Returns the number of
+    // Removes every record file in cache/ whose name does not parse or whose
+    // stem has no session file (sessions/*.csv) on disk. Names only: no record
+    // and no session file is opened, only *.fvresult files in cache/ are
+    // deleted, and nothing in sessions/ is. Returns the number of
     // files removed.
     int removeStrayCalculationRecords();
 

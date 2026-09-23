@@ -75,6 +75,7 @@ void HarnessTest::logbookIsIsolated()
              qPrintable(env.logbookDir()));
     QVERIFY(env.logbookDir().endsWith(QStringLiteral("/FlySight Viewer/logbook")));
     QCOMPARE(env.sessionsDir(), env.logbookDir() + QStringLiteral("/sessions"));
+    QCOMPARE(env.cacheDir(), env.logbookDir() + QStringLiteral("/cache"));
     QCOMPARE(env.indexPath(), env.logbookDir() + QStringLiteral("/index.json"));
 
     LogbookManager &logbook = LogbookManager::instance();
@@ -83,8 +84,10 @@ void HarnessTest::logbookIsIsolated()
     QVERIFY(logbook.hasDeferredScan());
     QVERIFY(logbook.scannedUuids().isEmpty());
 
-    // initialize() created the sessions directory inside the temporary root.
+    // initialize() created the sessions directory inside the temporary root,
+    // and not the cache directory (the first calculation record creates it).
     QVERIFY(QDir(env.sessionsDir()).exists());
+    QVERIFY(!QFileInfo::exists(env.cacheDir()));
 
     // reset() drops the state again.
     env.reopenLogbook();

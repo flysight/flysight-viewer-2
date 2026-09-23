@@ -93,7 +93,7 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
     LogbookManager &logbook = LogbookManager::instance();
 
     // 1. A session the manager knows no record of has none to restore, and
-    //    the directory is not listed. The known set holds every record file
+    //    the cache/ folder is not listed. The known set holds every record file
     //    the application can have produced: initialize() adopts the name of
     //    every record whose stem is a session file of the index (after its
     //    stray pass), the manager's own writes and removals keep it current,

@@ -207,6 +207,7 @@ private slots:
     void managerDropsDependentValues();
     void deletingSessionRemovesStamp();
     void removingReservedSessionForgetsIt();
+    void deletedCacheFolderForgetsRequests();
 
 private:
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
@@ -223,10 +224,10 @@ private:
     }
     const CalculationResultStore::Stats &stats() const { return m_model->storedResultStats(); }
 
-    /// sessions/<stem of id>.<encoded>.fvresult; the stem comes from index.json on disk.
+    /// cache/<stem of id>.<encoded>.fvresult; the stem comes from index.json on disk.
     static QString recordPath(const QString &id, const QString &encoded)
     {
-        return TestEnvironment::instance().sessionsDir() + QLatin1Char('/') + sessionFileStem(id)
+        return TestEnvironment::instance().cacheDir() + QLatin1Char('/') + sessionFileStem(id)
             + QLatin1Char('.') + encoded + QStringLiteral(".fvresult");
     }
 
@@ -871,7 +872,7 @@ void ResultColumnsTest::resultVersionChangeDropsCachedValue()
 void ResultColumnsTest::writeFailureKeepsValueOutOfIndex()
 {
     const QString path = recordPath("s1", kEncodedY);
-    QVERIFY(QDir().mkdir(path));
+    QVERIFY(QDir().mkpath(path));
     const auto removeDirectory = qScopeGuard([path] { QDir().rmdir(path); });
     LogbookManager &logbook = LogbookManager::instance();
 
@@ -1083,6 +1084,101 @@ void ResultColumnsTest::removingReservedSessionForgetsIt()
     QCOMPARE(logbook.unconfirmedCalculationRecords("n1"), QSet<QString>());
     QCOMPARE(calculationRecordFiles(), QStringList());
     QVERIFY(!logbook.removeSession("n1"));
+}
+
+// Everything in cache/ is derived: deleting the folder while the application
+// is closed is safe. At the next start no record is known, every requested
+// calculation reads as not requested, and the start-up stamp check drops each
+// cached value over a vanished record (the rest of the index is kept). Nothing
+// runs, no job is created, no record is read and none is written again; the
+// column worker settles the values as unavailable without a load.
+void ResultColumnsTest::deletedCacheFolderForgetsRequests()
+{
+    TestEnvironment &env = TestEnvironment::instance();
+    LogbookManager &logbook = LogbookManager::instance();
+
+    QVERIFY(fit("s1", kCalcX));
+    QVERIFY(fit("s1", kCalcY));
+    QVERIFY(fit("s2", kCalcY));
+    QCOMPARE(calculationRecordFiles().size(), 3);
+    QCOMPARE(indexValue("s1", xColumn()), QJsonValue(QStringLiteral("x:d1")));
+    QCOMPARE(indexValue("s1", yColumn()), QJsonValue(6.0));
+    QCOMPARE(indexValue("s2", yColumn()), QJsonValue(10.0));
+    QCOMPARE(indexRecordStamp("s1"), stampOf({{kCalcX, QString()}, {kCalcY, QStringLiteral("y-v1")}}));
+    QCOMPARE(indexRecordStamp("s2"), stampOf({{kCalcY, QStringLiteral("y-v1")}}));
+    const QStringList sessionFiles = sessionCsvFiles();
+    const QByteArray csv1 = bytesOf(sessionFilePath("s1"));
+    const QByteArray csv2 = bytesOf(sessionFilePath("s2"));
+
+    // The application closes; the user deletes cache/; the application starts
+    resetModel();
+    QVERIFY(QDir(env.cacheDir()).removeRecursively());
+    QVERIFY(!QFileInfo::exists(env.cacheDir()));
+    restart();
+
+    // No record is known, and exactly the values over a vanished record are
+    // gone: X and Y of s1, Y of s2. X of s2 (never requested, cached as
+    // unavailable with no record) and the descriptions stay.
+    const QString xKey = LogbookManager::columnDefKey(xColumn());
+    const QString yKey = LogbookManager::columnDefKey(yColumn());
+    const QString dKey = LogbookManager::columnDefKey(descriptionColumn());
+    QVERIFY(!logbook.cachedValuesDiscardedOnLoad());
+    for (const char *id : {"s1", "s2"}) {
+        QVERIFY(logbook.knownCalculationRecords(id).isEmpty());
+        QVERIFY(logbook.calculationRecordIds(id).isEmpty());
+        QVERIFY(!logbook.cachedValuesForSession(id).contains(yKey));
+        QVERIFY(logbook.cachedValuesForSession(id).contains(dKey));
+        QVERIFY(!isLoaded(id));
+        QVERIFY(!isCached(id, kY));
+    }
+    QVERIFY(!logbook.cachedValuesForSession("s1").contains(xKey));
+    QVERIFY(!isCached("s1", kX));
+    QVERIFY(logbook.cachedValuesForSession("s2").value(xKey).isNull());
+    QVERIFY(isCached("s2", kX));
+    QVERIFY(!cached("s2", kX).isValid());
+    QCOMPARE(cached("s1", kD), QVariant(QStringLiteral("d1")));
+    QCOMPARE(cached("s2", kD), QVariant(QStringLiteral("d2")));
+
+    // The column worker settles them as unavailable without loading anything
+    m_model->resetColumnWorkStats();
+    m_model->resetStoredResultStats();
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+    for (const char *id : {"s1", "s2"}) {
+        QVERIFY(!isLoaded(id));
+        for (int column : {kX, kY}) {
+            QVERIFY(isCached(id, column));
+            QVERIFY(!cached(id, column).isValid());
+        }
+        QVERIFY(indexValue(id, xColumn()).isNull());
+        QVERIFY(indexValue(id, yColumn()).isNull());
+        QCOMPARE(indexRecordStamp(id), QJsonValue(QJsonObject()));
+    }
+
+    // Loading a session: not requested, nothing restored, nothing run
+    for (const char *id : {"s1", "s2"}) {
+        session(id);
+        QVERIFY(waitForIdle(*m_model));
+        for (const QString &calculation : {kCalcX, kCalcY}) {
+            QCOMPARE(engine(id).resultStatus(calculation), std::optional<ResultStatus>());
+            QCOMPARE(engine(id).runCount(calculation), 0);
+        }
+        QVERIFY(!session(id).getAttribute(QStringLiteral("Y_OUT")).isValid());
+        QVERIFY(!session(id).getAttribute(QStringLiteral("X_OUT")).isValid());
+        QVERIFY(!cached(id, kY).isValid());
+    }
+    QCOMPARE(stats().restoreCalls, 2);
+    QCOMPARE(stats().recordListings, 0);
+    QCOMPARE(stats().recordsRead, 0);
+    QCOMPARE(stats().recordsWritten, 0);
+    QCOMPARE(m_queue->model()->rowCount(), 0);
+
+    // No record came back, and the recordings are untouched
+    QVERIFY(!QFileInfo::exists(env.cacheDir()));
+    QCOMPARE(sessionCsvFiles(), sessionFiles);
+    QCOMPARE(bytesOf(sessionFilePath("s1")), csv1);
+    QCOMPARE(bytesOf(sessionFilePath("s2")), csv2);
 }
 
 FLYSIGHT_TEST_MAIN(ResultColumnsTest)

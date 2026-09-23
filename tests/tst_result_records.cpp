@@ -12,12 +12,14 @@
 //    hand-crafted inconsistent payloads (without allocating what a crafted
 //    count claims), refusal at encode of every other attribute type (Long and
 //    ULong included: their width is not portable), and the size;
-//  - LogbookManager's record files on a real temporary logbook: write, read,
-//    replace, list, remove, both write failures (a refused encoding, a
-//    directory at the record's path) leaving the previous state intact,
-//    removal with the session (dotted identity stems included), the stray pass
-//    of initialize() in all three index branches, orphan adoption, remap, and a
-//    session save that never depends on records.
+//  - LogbookManager's record files on a real temporary logbook, in its cache/
+//    folder: write, read, replace, list, remove, the folder created by the
+//    first write only (a missing folder holds no record), the write failures
+//    (a refused encoding, a directory at the record's path, a cache/ that
+//    cannot be created) leaving the previous state intact, removal with the
+//    session (dotted identity stems included), the stray pass of initialize()
+//    in all three index branches (cache/ only, sessions/ untouched), orphan
+//    adoption, remap, and a session save that never depends on records.
 //
 // Expected values are literals, never produced by the code under test. Nothing
 // depends on permission bits, on the platform's case sensitivity or on
@@ -394,6 +396,8 @@ private slots:
     void readStatuses();
     void writeFailureRefusedEncoding();
     void writeFailureDirectoryAtPath();
+    void cacheFolderCreatedByFirstWrite();
+    void writeFailureCacheFolderNotCreated();
     void writeForUnknownSession();
     void removeOneAndAll();
     void removeSessionDeletesRecords();
@@ -1017,10 +1021,15 @@ void ResultRecordsTest::writeReadReplace()
     QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s1"), first, &error));
     QVERIFY(error.isEmpty());
 
-    // Exactly the session file and the record; no temporary file
-    const QString dir = TestEnvironment::instance().sessionsDir();
-    QCOMPARE(QDir(dir).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name),
-             sorted({stem + QStringLiteral(".csv"), stem + QString::fromLatin1(kFitSuffix)}));
+    // The session file alone in sessions/, the record alone in cache/ (created
+    // by this first write); no temporary file
+    TestEnvironment &env = TestEnvironment::instance();
+    const QString dir = env.cacheDir();
+    const auto everything = [](const QString &path) {
+        return QDir(path).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
+    };
+    QCOMPARE(everything(env.sessionsDir()), QStringList({stem + QStringLiteral(".csv")}));
+    QCOMPARE(everything(dir), QStringList({stem + QString::fromLatin1(kFitSuffix)}));
     QCOMPARE(calculationRecordFiles(), QStringList({stem + QString::fromLatin1(kFitSuffix)}));
 
     CalculationRecordRead read = logbook.readCalculationRecord(QStringLiteral("s1"), QString::fromLatin1(kFitId));
@@ -1040,7 +1049,8 @@ void ResultRecordsTest::writeReadReplace()
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
 
     QCOMPARE(logbook.calculationRecordIds(QStringLiteral("s1")), QStringList({QString::fromLatin1(kFitId)}));
-    QCOMPARE(QDir(dir).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot).size(), 2);
+    QCOMPARE(everything(env.sessionsDir()), QStringList({stem + QStringLiteral(".csv")}));
+    QCOMPARE(everything(dir).size(), 1);
 }
 
 void ResultRecordsTest::readStatuses()
@@ -1048,7 +1058,7 @@ void ResultRecordsTest::readStatuses()
     LogbookManager &logbook = LogbookManager::instance();
     const QString stem = saveIndexed(QStringLiteral("s1"));
     QVERIFY(!stem.isEmpty());
-    const QString dir = TestEnvironment::instance().sessionsDir();
+    const QString dir = TestEnvironment::instance().cacheDir();
 
     CalculationRecordRead read = logbook.readCalculationRecord(QStringLiteral("nobody"), QStringLiteral("x"));
     QCOMPARE(read.status, CalculationRecordStatus::Missing);
@@ -1060,6 +1070,7 @@ void ResultRecordsTest::readStatuses()
     QVERIFY(read.error.isEmpty());
     QVERIFY(!read.record.has_value());
 
+    QVERIFY(QDir().mkpath(dir));
     QVERIFY(writeFile(dir + QLatin1Char('/') + stem + QStringLiteral(".garbage.fvresult"), "garbage"));
     read = logbook.readCalculationRecord(QStringLiteral("s1"), QStringLiteral("garbage"));
     QCOMPARE(read.status, CalculationRecordStatus::NotARecord);
@@ -1102,7 +1113,7 @@ void ResultRecordsTest::writeFailureRefusedEncoding()
     LogbookManager &logbook = LogbookManager::instance();
     const QString stem = saveIndexed(QStringLiteral("s1"));
     QVERIFY(!stem.isEmpty());
-    const QString path = TestEnvironment::instance().sessionsDir() + QLatin1Char('/') + stem
+    const QString path = TestEnvironment::instance().cacheDir() + QLatin1Char('/') + stem
         + QString::fromLatin1(kFitSuffix);
 
     QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s1"), recordFor(QString::fromLatin1(kFitId))));
@@ -1128,15 +1139,15 @@ void ResultRecordsTest::writeFailureDirectoryAtPath()
     LogbookManager &logbook = LogbookManager::instance();
     const QString stem = saveIndexed(QStringLiteral("s1"));
     QVERIFY(!stem.isEmpty());
-    const QString dir = TestEnvironment::instance().sessionsDir();
+    const QString dir = TestEnvironment::instance().cacheDir();
     const QString path = dir + QLatin1Char('/') + stem + QString::fromLatin1(kFitSuffix);
 
-    QVERIFY(QDir().mkdir(path));
+    QVERIFY(QDir().mkpath(path));
     const auto listing = [&dir]() {
         return QDir(dir).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
     };
     const QStringList before = listing();
-    QCOMPARE(before.size(), 2);
+    QCOMPARE(before.size(), 1);
 
     QString error;
     QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("not written: Couldn't write file")));
@@ -1152,6 +1163,85 @@ void ResultRecordsTest::writeFailureDirectoryAtPath()
     QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s1"), recordFor(QString::fromLatin1(kFitId)), &error));
     QVERIFY(error.isEmpty());
     QCOMPARE(calculationRecordFiles(), QStringList({stem + QString::fromLatin1(kFitSuffix)}));
+}
+
+void ResultRecordsTest::cacheFolderCreatedByFirstWrite()
+{
+    TestEnvironment &env = TestEnvironment::instance();
+    LogbookManager &logbook = LogbookManager::instance();
+    const QString stem = saveIndexed(QStringLiteral("s1"));
+    QVERIFY(!stem.isEmpty());
+
+    // init()'s initialize() and a session save create sessions/ only. Without
+    // cache/ there is simply no record: nothing fails and nothing creates it.
+    QVERIFY(QFileInfo(env.sessionsDir()).isDir());
+    QVERIFY(!QFileInfo::exists(env.cacheDir()));
+    const CalculationRecordRead read = logbook.readCalculationRecord(QStringLiteral("s1"), QString::fromLatin1(kFitId));
+    QCOMPARE(read.status, CalculationRecordStatus::Missing);
+    QVERIFY(read.error.isEmpty());
+    QVERIFY(logbook.calculationRecordIds(QStringLiteral("s1")).isEmpty());
+    QVERIFY(calculationRecordFiles().isEmpty());
+    bool removedFile = true;
+    QVERIFY(logbook.removeCalculationRecord(QStringLiteral("s1"), QString::fromLatin1(kFitId), &removedFile));
+    QVERIFY(!removedFile);
+    QVERIFY(logbook.removeCalculationRecords(QStringLiteral("s1")));
+    QVERIFY(logbook.flushIndex());
+    env.reopenLogbook();
+    logbook.initialize();
+    QVERIFY(logbook.knownCalculationRecords(QStringLiteral("s1")).isEmpty());
+    QVERIFY(!QFileInfo::exists(env.cacheDir()));
+
+    // The first write creates it, with the record in it and nothing else
+    QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s1"), recordFor(QString::fromLatin1(kFitId))));
+    QVERIFY(QFileInfo(env.cacheDir()).isDir());
+    QCOMPARE(QDir(env.cacheDir()).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot),
+             QStringList({stem + QString::fromLatin1(kFitSuffix)}));
+    QCOMPARE(sessionCsvFiles(), QStringList({stem + QStringLiteral(".csv")}));
+
+    // Removing the session empties the folder and leaves it in place
+    QVERIFY(logbook.removeSession(QStringLiteral("s1")));
+    QVERIFY(QFileInfo(env.cacheDir()).isDir());
+    QVERIFY(calculationRecordFiles().isEmpty());
+}
+
+void ResultRecordsTest::writeFailureCacheFolderNotCreated()
+{
+    TestEnvironment &env = TestEnvironment::instance();
+    LogbookManager &logbook = LogbookManager::instance();
+    const QString stem = saveIndexed(QStringLiteral("s1"));
+    QVERIFY(!stem.isEmpty());
+
+    // A file where the folder should be: cache/ cannot be created
+    QVERIFY(writeFile(env.cacheDir(), "not a folder"));
+    const QByteArray csvBefore = readFileBytes(sessionFilePath(QStringLiteral("s1")));
+    QSignalSpy changed(&logbook, &LogbookManager::calculationRecordsChanged);
+
+    QString error;
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("of s1 not written: Couldn't create folder")));
+    QVERIFY(!logbook.writeCalculationRecord(QStringLiteral("s1"), recordFor(QString::fromLatin1(kFitId)), &error));
+    QVERIFY2(error.startsWith(QStringLiteral("Couldn't create folder '")), qPrintable(error));
+    QVERIFY2(error.contains(env.cacheDir()), qPrintable(error));
+
+    // An ordinary write failure: warned, reported, unconfirmed, nothing on disk
+    // changed, and the record is not known
+    QCOMPARE(changed.count(), 1);
+    QCOMPARE(logbook.unconfirmedCalculationRecords(QStringLiteral("s1")), QSet<QString>({QString::fromLatin1(kFitId)}));
+    QVERIFY(logbook.knownCalculationRecords(QStringLiteral("s1")).isEmpty());
+    QVERIFY(QFileInfo(env.cacheDir()).isFile());
+    QCOMPARE(readFileBytes(env.cacheDir()), QByteArray("not a folder"));
+    QCOMPARE(sessionCsvFiles(), QStringList({stem + QStringLiteral(".csv")}));
+    QCOMPARE(readFileBytes(sessionFilePath(QStringLiteral("s1"))), csvBefore);
+    QVERIFY(calculationRecordFiles().isEmpty());
+    QCOMPARE(logbook.readCalculationRecord(QStringLiteral("s1"), QString::fromLatin1(kFitId)).status,
+             CalculationRecordStatus::Missing);
+
+    // Tried again once the folder can be made
+    QVERIFY(QFile::remove(env.cacheDir()));
+    QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s1"), recordFor(QString::fromLatin1(kFitId)), &error));
+    QVERIFY(error.isEmpty());
+    QCOMPARE(calculationRecordFiles(), QStringList({stem + QString::fromLatin1(kFitSuffix)}));
+    QVERIFY(logbook.unconfirmedCalculationRecords(QStringLiteral("s1")).isEmpty());
+    QCOMPARE(logbook.knownCalculationRecords(QStringLiteral("s1")), QSet<QString>({QString::fromLatin1(kFitId)}));
 }
 
 void ResultRecordsTest::writeForUnknownSession()
@@ -1177,7 +1267,7 @@ void ResultRecordsTest::removeOneAndAll()
 
     QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s1"), recordFor(QStringLiteral("a.one"))));
     QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s1"), recordFor(QStringLiteral("b.two"))));
-    const QString twoPath = TestEnvironment::instance().sessionsDir() + QLatin1Char('/') + stem
+    const QString twoPath = TestEnvironment::instance().cacheDir() + QLatin1Char('/') + stem
         + QStringLiteral(".b%2Etwo.fvresult");
     const QByteArray twoBytes = readFileBytes(twoPath);
     QCOMPARE(logbook.calculationRecordIds(QStringLiteral("s1")), QStringList({"a.one", "b.two"}));
@@ -1206,15 +1296,15 @@ void ResultRecordsTest::removeSessionDeletesRecords()
     const QString stem1 = saveIndexed(QStringLiteral("s1"));
     const QString stem2 = saveIndexed(QStringLiteral("s2"));
     QVERIFY(!stem1.isEmpty() && !stem2.isEmpty());
-    const QString dir = TestEnvironment::instance().sessionsDir();
+    TestEnvironment &env = TestEnvironment::instance();
 
     QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s1"), recordFor(QString::fromLatin1(kFitId))));
     QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s1"), recordFor(QStringLiteral("x"))));
     QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s2"), recordFor(QString::fromLatin1(kFitId))));
     QCOMPARE(calculationRecordFiles().size(), 3);
 
-    const QString csv2 = dir + QLatin1Char('/') + stem2 + QStringLiteral(".csv");
-    const QString record2 = dir + QLatin1Char('/') + stem2 + QString::fromLatin1(kFitSuffix);
+    const QString csv2 = env.sessionsDir() + QLatin1Char('/') + stem2 + QStringLiteral(".csv");
+    const QString record2 = env.cacheDir() + QLatin1Char('/') + stem2 + QString::fromLatin1(kFitSuffix);
     const QByteArray csv2Bytes = readFileBytes(csv2);
     const QByteArray record2Bytes = readFileBytes(record2);
 
@@ -1266,7 +1356,7 @@ void ResultRecordsTest::failedSessionRemovalKeepsRecords()
     const QString stem = saveIndexed(QStringLiteral("s1"));
     QVERIFY(!stem.isEmpty());
     QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s1"), recordFor(QString::fromLatin1(kFitId))));
-    const QString recordPath = TestEnvironment::instance().sessionsDir() + QLatin1Char('/') + stem
+    const QString recordPath = TestEnvironment::instance().cacheDir() + QLatin1Char('/') + stem
         + QString::fromLatin1(kFitSuffix);
     const QByteArray recordBytes = readFileBytes(recordPath);
 
@@ -1298,7 +1388,8 @@ void ResultRecordsTest::strayRecordsRemovedAtScan()
     const QString stem1 = saveIndexed(QStringLiteral("s1"));
     const QString stem2 = saveIndexed(QStringLiteral("s2"));
     QVERIFY(!stem1.isEmpty() && !stem2.isEmpty());
-    const QString dir = env.sessionsDir();
+    const QString dir = env.cacheDir();
+    const QString sessionsDir = env.sessionsDir();
 
     QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s1"), recordFor(QString::fromLatin1(kFitId))));
     QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s2"), recordFor(QStringLiteral("exp.a"))));
@@ -1313,14 +1404,20 @@ void ResultRecordsTest::strayRecordsRemovedAtScan()
     // session or of none, so it is neither listed nor removed as a stray
     QVERIFY(writeFile(dir + QLatin1Char('/') + stem1 + QStringLiteral(".x.FVRESULT"), recordBytes));
     QVERIFY(writeFile(dir + QStringLiteral("/0badc0de-0000-4000-8000-000000000001.x.FVRESULT"), recordBytes));
-    QVERIFY(writeFile(dir + QStringLiteral("/x.csv.AbC123"), "a leftover session-save temporary"));
     QVERIFY(writeFile(dir + QLatin1Char('/') + stem1 + QString::fromLatin1(kFitSuffix) + QStringLiteral(".Q1w2E3"),
                       "a leftover record temporary"));
+    // The pass works in cache/ only and never touches sessions/, not even a
+    // file there that is named like a stray record
+    QVERIFY(writeFile(sessionsDir + QStringLiteral("/x.csv.AbC123"), "a leftover session-save temporary"));
+    QVERIFY(writeFile(sessionsDir + QStringLiteral("/notes.txt"), "notes"));
+    QVERIFY(writeFile(sessionsDir + QLatin1Char('/') + stray, recordBytes));
 
     QMap<QString, QByteArray> expected = directoryContents(dir);
-    QCOMPARE(expected.size(), 11);
+    QCOMPARE(expected.size(), 8);
     QVERIFY(expected.remove(stray) == 1);
     QVERIFY(expected.remove(junk) == 1);
+    const QMap<QString, QByteArray> sessionsBefore = directoryContents(sessionsDir);
+    QCOMPARE(sessionsBefore.size(), 5);
 
     if (branch == QLatin1String("legacy")) {
         QJsonObject entry1;
@@ -1338,11 +1435,13 @@ void ResultRecordsTest::strayRecordsRemovedAtScan()
     env.reopenLogbook();
     logbook.initialize();
 
-    // Exactly the stray record and junk.fvresult are gone; every other file keeps its bytes
+    // Exactly the stray record and junk.fvresult are gone from cache/; every
+    // other file there keeps its bytes, and sessions/ is exactly as it was
     const QMap<QString, QByteArray> after = directoryContents(dir);
     QCOMPARE(after.keys(), expected.keys());
     for (auto it = expected.constBegin(); it != expected.constEnd(); ++it)
         QVERIFY2(after.value(it.key()) == it.value(), qPrintable(it.key()));
+    QVERIFY(directoryContents(sessionsDir) == sessionsBefore);
 
     // No record ever shows up as a session
     QCOMPARE(sessionCsvFiles(), sorted({stem1 + QStringLiteral(".csv"), stem2 + QStringLiteral(".csv")}));
@@ -1375,7 +1474,7 @@ void ResultRecordsTest::orphanAdoptionKeepsRecord()
     const QString stem = QFileInfo(orphanFiles.first()).completeBaseName();
     QVERIFY(logbook.writeCalculationRecord(QStringLiteral("c"), recordFor(QStringLiteral("x"))));
     const QString recordName = stem + QStringLiteral(".x.fvresult");
-    const QByteArray recordBytes = readFileBytes(env.sessionsDir() + QLatin1Char('/') + recordName);
+    const QByteArray recordBytes = readFileBytes(env.cacheDir() + QLatin1Char('/') + recordName);
 
     env.reopenLogbook();
     logbook.initialize();
@@ -1385,7 +1484,7 @@ void ResultRecordsTest::orphanAdoptionKeepsRecord()
     QCOMPARE(logbook.cachedColumnValues({descriptionColumn()}).keys(), sorted({QStringLiteral("a"), stem}));
     QVERIFY(logbook.isIdentityEntry(stem));
     QCOMPARE(calculationRecordFiles(), QStringList({recordName}));
-    QCOMPARE(readFileBytes(env.sessionsDir() + QLatin1Char('/') + recordName), recordBytes);
+    QCOMPARE(readFileBytes(env.cacheDir() + QLatin1Char('/') + recordName), recordBytes);
     QCOMPARE(logbook.calculationRecordIds(stem), QStringList({"x"}));
     QCOMPARE(logbook.readCalculationRecord(stem, QStringLiteral("x")).status, CalculationRecordStatus::Ok);
 }
@@ -1435,7 +1534,7 @@ void ResultRecordsTest::saveSessionIgnoresRecords()
     QVERIFY(!csvBefore.isEmpty());
 
     QVERIFY(logbook.writeCalculationRecord(QStringLiteral("s1"), recordFor(QString::fromLatin1(kFitId))));
-    const QString recordPath = TestEnvironment::instance().sessionsDir() + QLatin1Char('/') + stem
+    const QString recordPath = TestEnvironment::instance().cacheDir() + QLatin1Char('/') + stem
         + QString::fromLatin1(kFitSuffix);
     const QByteArray recordBytes = readFileBytes(recordPath);
 

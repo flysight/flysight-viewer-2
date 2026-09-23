@@ -240,11 +240,11 @@ private:
     }
     const CalculationResultStore::Stats &stats() const { return m_model->storedResultStats(); }
 
-    /// sessions/<stem of id>.<encodedId>.fvresult; the stem comes from
+    /// cache/<stem of id>.<encodedId>.fvresult; the stem comes from
     /// index.json on disk, so the session must be saved and the index flushed.
     static QString recordPath(const QString &id, const QString &encodedId)
     {
-        return TestEnvironment::instance().sessionsDir() + QLatin1Char('/') + sessionFileStem(id)
+        return TestEnvironment::instance().cacheDir() + QLatin1Char('/') + sessionFileStem(id)
             + QLatin1Char('.') + encodedId + QStringLiteral(".fvresult");
     }
 
@@ -607,7 +607,7 @@ void ResultStoreTest::removeBeforeFirstSave()
 void ResultStoreTest::writeFailureLeavesResultUsable()
 {
     const QString path = recordPath("s1", QStringLiteral("exp%41"));
-    QVERIFY(QDir().mkdir(path));
+    QVERIFY(QDir().mkpath(path));
     const auto removeDirectory = qScopeGuard([path] { QDir().rmdir(path); });
     QVERIFY(setInput("s1", "EA_IN", 4));
     m_model->resetStoredResultStats();

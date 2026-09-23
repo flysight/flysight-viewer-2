@@ -157,6 +157,13 @@ QString LogbookManager::sessionsDirectory() const
     return dir;
 }
 
+QString LogbookManager::cacheDirectory() const
+{
+    // Never created here: a missing folder simply holds no record, and only
+    // writeCalculationRecord() creates it.
+    return logbookDirectory() + QStringLiteral("/cache");
+}
+
 // ============================================================================
 // Initialize
 // ============================================================================
@@ -877,7 +884,7 @@ QString LogbookManager::recordStem(const QString &sessionId) const
 
 QString LogbookManager::calculationRecordPath(const QString &stem, const QString &calculationId) const
 {
-    return sessionsDirectory() + QLatin1Char('/') + recordFileName(stem, calculationId);
+    return cacheDirectory() + QLatin1Char('/') + recordFileName(stem, calculationId);
 }
 
 QStringList LogbookManager::calculationRecordFileNames() const
@@ -888,7 +895,8 @@ QStringList LogbookManager::calculationRecordFileNames() const
     // hand-renamed "X.FVRESULT" is not a record (not listed, never removed as
     // a stray), as on a file system that tells the two apart.
     const QString suffix = QLatin1Char('.') + calculationRecordExtension();
-    QStringList names = QDir(sessionsDirectory()).entryList(
+    // A missing cache/ folder lists nothing.
+    QStringList names = QDir(cacheDirectory()).entryList(
         QStringList() << (QLatin1Char('*') + suffix), QDir::Files, QDir::NoSort);
     names.removeIf([&suffix](const QString &name) { return !name.endsWith(suffix, Qt::CaseSensitive); });
     names.sort();
@@ -910,7 +918,7 @@ QStringList LogbookManager::calculationRecordIdsForStem(const QString &stem) con
 
 bool LogbookManager::removeCalculationRecordsForStem(const QString &stem)
 {
-    const QString dir = sessionsDirectory();
+    const QString dir = cacheDirectory();
     bool allRemoved = true;
     const QStringList names = calculationRecordFileNames();
     for (const QString &name : names) {
@@ -930,7 +938,7 @@ int LogbookManager::removeStrayCalculationRecords()
 {
     const QStringList stemList = sessionFileStems();
     const QSet<QString> stems(stemList.cbegin(), stemList.cend());
-    const QString dir = sessionsDirectory();
+    const QString dir = cacheDirectory();
 
     int removed = 0;
     const QStringList names = calculationRecordFileNames();
@@ -1037,7 +1045,10 @@ bool LogbookManager::writeCalculationRecord(const QString &sessionId, const Calc
     // e. As DataExporter's session write: a temporary file renamed over the
     //    record at commit (no direct-write fallback), so a failure at any step
     //    leaves the previous record intact (the known set is unchanged).
-    //    Nothing is retried.
+    //    Nothing is retried. The cache/ folder is created by the first write;
+    //    failing to create it is a failure of this write like any other.
+    if (!QDir().mkpath(cacheDirectory()))
+        return fail(QStringLiteral("Couldn't create folder '%1'").arg(cacheDirectory()));
     const QString path = calculationRecordPath(stem, calculationId);
     const auto writeError = [&path](const QSaveFile &file) {
         return QStringLiteral("Couldn't write file '%1': %2").arg(path, file.errorString());

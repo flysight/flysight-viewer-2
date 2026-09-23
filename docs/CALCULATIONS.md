@@ -155,8 +155,8 @@ invalidates every loaded session.
 `CalculationEngine::request(id)`; before that their outputs read as unavailable
 (`ResultStatus::NotRequested`) without starting work, and they revert to that
 state when an input changes. A result an explicit calculation installs with
-status `Ok` is stored beside the session file and restored when the session is
-loaded again (section 15.8); restoring is not requesting. Explicit family
+status `Ok` is stored in the logbook's `cache/` folder and restored when the
+session is loaded again (section 15.8); restoring is not requesting. Explicit family
 instances are not stored. A descriptor may declare
 `CalculationDescriptor::resultVersion`, opaque text that identifies the
 arithmetic of the calculation's results. The engine never interprets it and it
@@ -698,8 +698,8 @@ marks the ticket, and the job is stopped and ends Superseded (section 15.3).
 engine-returned invalidations reach consumers: one publishing `dataChanged` for
 the row, `dependencyChanged` per key, `modelChanged` - immediately, and only
 for a loaded row. Publishing marks nothing dirty and saves no session file.
-The engine's explicit-result listener stores an `Ok` result as a record beside
-the session file during the install itself (15.8), and writing that record
+The engine's explicit-result listener stores an `Ok` result as a record in the
+logbook's `cache/` folder during the install itself (15.8), and writing that record
 drops the session's cached values of the columns over that calculation
 (section 17).
 
@@ -802,7 +802,10 @@ and restore; the files are described in
 - `CalculationResultStore` (`src/calculationresultstore.h`) is owned by
   `SessionModel`, holds no state but counters, and runs on the main thread
   only. Every record file is read, written and deleted through
-  `LogbookManager`.
+  `LogbookManager`, in the logbook's `cache/` folder (a sibling of
+  `sessions/`, which holds only the session files). The manager creates
+  `cache/` at the first record write; a failure to create it is a failed write
+  like any other. A missing `cache/` holds no record.
 - `SessionModel::attachSession()` installs the engine's explicit-result
   listener, so both install paths write: the queue's publish and a synchronous
   `request()`.
@@ -830,8 +833,8 @@ and restore; the files are described in
   publishes them with the names the merge changed.
 - A session the logbook manager knows no record of
   (`LogbookManager::knownCalculationRecords()`: the names seen at start-up
-  plus its own writes and removals) is restored without listing the
-  directory. Otherwise the listing of the session's record files is the
+  plus its own writes and removals) is restored without listing
+  `cache/`. Otherwise the listing of the session's record files is the
   source of ids.
 - Records are restored in passes until a pass restores none, so
   explicit-on-explicit chains restore in any file order. `InputsUnavailable`
@@ -843,8 +846,13 @@ and restore; the files are described in
   (`AlreadyInstalled`) is kept.
 - The column worker's and the bulk edit's temporary loads never read a record.
 - Records are deleted with their session (`LogbookManager::removeSession`) and,
-  as strays whose session file does not exist, at `initialize()`. Eviction,
-  unloading, a registry change and the model's destruction never delete one.
+  as strays whose session file does not exist in `sessions/`, at
+  `initialize()`; that pass deletes in `cache/` only. Eviction, unloading, a
+  registry change and the model's destruction never delete one.
+- `cache/` may be deleted while the application is closed: `initialize()` then
+  knows no record, every explicit calculation reads as not requested, and the
+  start-up stamp check (DATA_SCHEMA section 11) drops each cached column value
+  over a vanished record.
 - A session created by an import has its file stem reserved
   (`LogbookManager::reserveSessionFile`), so a result published before its
   first save is stored under the name that save will use. A session that is
@@ -1326,7 +1334,7 @@ for a loaded row, computed from the engine like any other column
 (`SessionModel::computeColumnValues`): the restored or published value, or
 unavailable when the calculation is not requested. It is cached in
 `index.json` together with the session's `"records"` stamp (calculation id ->
-result version of each record on disk). Writing or deleting a record drops the
+result version of each record in `cache/`). Writing or deleting a record drops the
 values over that calculation at once
 (`LogbookManager::calculationRecordsChanged`); a loaded row recomputes them on
 the next event-loop pass (`refreshRecordColumns`, which emits nothing: loaded

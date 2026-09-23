@@ -42,9 +42,11 @@ document describes what is computed, from what, and how far to trust it.
 - Check a plot, or press the refresh icon on its row. A fit takes from seconds
   to several minutes, depending on the length of the recording. All seventeen
   plots of one recording come from the same fit, so it runs once.
-- Results are stored with the recording in the logbook (in a file beside the
-  session file) and come back when the recording is loaded again, after hiding
-  it or after a restart. A fitted recording is not fitted again.
+- Results are stored with the recording in the logbook (in a file in the
+  logbook's `cache/` folder, never in the session file) and come back when the
+  recording is loaded again, after hiding it or after a restart. A fitted
+  recording is not fitted again. Deleting `cache/` while FlySight Viewer is
+  closed only means that the fits have to be requested again.
 - A stored result is dropped when an input of the fit changes (a re-import or
   merge of different data, a changed `SCHEMA_VER`, a changed local origin),
   after an update that changes the fit's arithmetic, and after a change of the
@@ -408,7 +410,7 @@ demonstrated by tests, all labelled `fusion`:
 | `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, a fit exported and restored into another session is indistinguishable |
 | `tst_fusion_jobs` | the real fit through the job queue: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result |
 | `tst_fusion_rows` | the plot rows with the real fusion plots, end to end |
-| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), rejection and solver-failure badges, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched |
+| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), rejection and solver-failure badges, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit on a recording written as `TRACK.CSV` / `SENSOR.CSV`, against a direct kernel run and against the application's own import path |
 
 The goldens live in `tests/data/fusion/`. In exact mode

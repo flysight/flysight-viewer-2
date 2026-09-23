@@ -38,6 +38,7 @@ public:
     QString logbookFolder() const;   ///< current value of general/logbookFolder
     QString logbookDir() const;      ///< logbookFolder() + "/FlySight Viewer/logbook"
     QString sessionsDir() const;     ///< logbookDir() + "/sessions"
+    QString cacheDir() const;        ///< logbookDir() + "/cache" (calculation records)
     QString indexPath() const;       ///< logbookDir() + "/index.json"
 
     /// Creates and returns a fresh subdirectory of rootPath().

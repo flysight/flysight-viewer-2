@@ -1330,7 +1330,7 @@ void ColumnCacheTest::explicitBackedColumnFollowsItsResult()
     QCOMPARE(cached(0, kX).toString(), QStringLiteral("computed"));
     QCOMPARE(indexValue(readIndex(), "g1", explicitColumn).toString(), QStringLiteral("computed"));
     QCOMPARE(indexRecordStamp("g1"), QJsonValue(QJsonObject{{id, QString()}}));
-    const QString recordPath = TestEnvironment::instance().sessionsDir() + QLatin1Char('/')
+    const QString recordPath = TestEnvironment::instance().cacheDir() + QLatin1Char('/')
         + sessionFileStem("g1") + QStringLiteral(".test%2Eexplicit.fvresult");
     QVERIFY(QFileInfo::exists(recordPath));
 

@@ -14,8 +14,8 @@ the [plugin README](../python_plugins/README.md).
 - Only the recorded `SCHEMA_VER` header attribute selects a schema correction.
 - Saved logbook files contain the recorded values, never converted ones.
 - The results of explicitly requested calculations (sensor fusion) are stored
-  in files beside the session file, never in it, and are used only while they
-  are still valid (section 12).
+  in separate files in the logbook's `cache/` folder, never in the session
+  file, and are used only while they are still valid (section 12).
 - Normal handling of legacy files is silent: no dialog, no setting, no badge.
 
 ## 2. Recorded file format
@@ -364,16 +364,31 @@ of memory, or whose inputs changed while it ran, nor for a calculation that
 failed. On-demand and plugin results are never stored: they are recomputed in
 milliseconds.
 
-**Where.** One file per (session, calculation) in `sessions/`, next to the
-session file: `<stem>.<encoded calculation id>.fvresult`. `<stem>` is the
+**Where.** The logbook folder holds:
+
+```
+FlySight Viewer/logbook/
+  index.json                                   the logbook column cache (section 11)
+  sessions/<uuid>.csv                          the recordings (section 9)
+  cache/<uuid>.builtin%2Efusion%2Efit.fvresult the stored results
+```
+
+One file per (session, calculation) in `cache/`, a sibling of `sessions/`, with
+no subfolders: `<stem>.<encoded calculation id>.fvresult`. `<stem>` is the
 session file's name without `.csv`. In the id, every byte other than `a-z`,
 `0-9`, `_` and `-` is written as `%` and two upper-case hex digits, so the
 sensor fusion record of a session is `<uuid>.builtin%2Efusion%2Efit.fvresult`.
-A record never ends in `.csv`, so the logbook scan never takes it for a
-session. It is written through a temporary file that replaces the previous
-record at the end, like a session save. A session that is imported and
-computed before its first save gets its record under the name its first save
-will use.
+`sessions/` holds only the recordings; everything in `cache/` is derived.
+`cache/` is created by the first record written, and a logbook without it
+simply has no stored results. A record is written through a temporary file
+that replaces the previous record at the end, like a session save. A session
+that is imported and computed before its first save gets its record under the
+name its first save will use.
+
+`cache/` may be deleted while FlySight Viewer is closed. At the next start
+every requested calculation reads as not requested until it is requested again
+from the plot list, and the logbook column values that came from a stored
+result are dropped (section 11) and show as unavailable.
 
 **Format.** Binary, not meant to be read by people: the magic `FVRESULT`, a
 format version (1), then the two code stamps, the calculation id, the result
@@ -419,7 +434,8 @@ also makes every record stale at its session's next load.
   publish for the same session and calculation.
 - It is deleted when an input it depends on changes, when its session is
   deleted from the logbook, when it is found stale as the session is loaded,
-  and at start-up when no session file with its stem exists.
+  and at start-up when no session file with its stem exists in `sessions/`
+  (that start-up pass deletes in `cache/` only).
 - It is never deleted by hiding a track, unloading a session, quitting, or a
   change of the registered calculations. Such a change is checked at the next
   load instead.
@@ -432,8 +448,8 @@ also makes every record stale at its session's next load.
 
 **Guarantees.** The session file is untouched: its bytes, its format and what
 it lists do not depend on whether a record exists. Records are derived data.
-Deleting them by hand (with Viewer closed) is safe and only means that the
-calculation has to be requested again. Existing logbooks have no records and
+Deleting them by hand, or the whole `cache/` folder, with Viewer closed is safe
+and only means that the calculation has to be requested again. Existing logbooks have no records and
 need no migration. Records are not meant to be shared between logbooks or
 machines; one whose stamps do not match is simply discarded.
 

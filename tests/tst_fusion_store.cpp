@@ -10,7 +10,9 @@
 //  - validity follows the inputs (an unrelated edit keeps the record, a
 //    dependency edit or an IMU merge drops it) and the code stamps;
 //  - a fit published before the session's first save is stored and restored;
-//  - the session file's bytes never depend on a record.
+//  - the session file's bytes never depend on a record;
+//  - the logbook's cache/ folder deleted while the application is closed: the
+//    fit reads not requested at the next start, and nothing runs.
 //
 // The oracle (verifyAgainstFresh / evaluateFresh) is never used on a session
 // with the fit installed: it would run the fit again. Expected values are
@@ -20,6 +22,7 @@
 #include <memory>
 #include <optional>
 
+#include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -131,6 +134,7 @@ private slots:
     void sessionFileBytesUnaffectedByRecord();
     void fittedBeforeFirstSaveIsRestored_data();
     void fittedBeforeFirstSaveIsRestored();
+    void deletedCacheFolderReadsNotRequested();
 
 private:
     [[nodiscard]] QString addSessions(const QList<SessionData> &sessions)
@@ -170,11 +174,11 @@ private:
     }
     const CalculationResultStore::Stats &stats() const { return m_model->storedResultStats(); }
 
-    /// sessions/<stem>.builtin%2Efusion%2Efit.fvresult; the stem comes from
+    /// cache/<stem>.builtin%2Efusion%2Efit.fvresult; the stem comes from
     /// index.json on disk.
     static QString recordPath(const QString &id)
     {
-        return TestEnvironment::instance().sessionsDir() + QLatin1Char('/') + sessionFileStem(id) + kRecordSuffix;
+        return TestEnvironment::instance().cacheDir() + QLatin1Char('/') + sessionFileStem(id) + kRecordSuffix;
     }
 
     FitValues capture(const QString &id);
@@ -187,7 +191,8 @@ private:
     [[nodiscard]] QString unloadAndReload(const QString &id);
     /// A simulated application restart: new logbook state, a model of stubs
     /// from the index, a new queue, plot model (unchecked) and request component.
-    void restart();
+    /// `whileClosed` runs after the old objects are gone and before initialize().
+    void restart(const std::function<void()> &whileClosed = {});
     /// Reads the record, applies `mutate`, writes it back. Empty on success.
     [[nodiscard]] QString rewriteRecord(const QString &id, const std::function<void(CalculationRecord &)> &mutate);
     void watchLoad(QObject *scope, const QString &id, LoadWatch *out);
@@ -315,7 +320,7 @@ QString FusionStoreTest::unloadAndReload(const QString &id)
     return QString();
 }
 
-void FusionStoreTest::restart()
+void FusionStoreTest::restart(const std::function<void()> &whileClosed)
 {
     if (m_queue)
         m_queue->shutdown();
@@ -323,6 +328,8 @@ void FusionStoreTest::restart()
     m_plots.reset();
     m_queue.reset();
     m_model.reset();
+    if (whileClosed)
+        whileClosed();
 
     LogbookManager &logbook = LogbookManager::instance();
     TestEnvironment::instance().reopenLogbook();
@@ -986,6 +993,55 @@ void FusionStoreTest::fittedBeforeFirstSaveIsRestored()
     QCOMPARE(engine("a").readiness(kFit).state, CalculationReadiness::State::Done);
     QCOMPARE(m_queue->model()->rowCount(), 0);
     QCOMPARE(stats().recordsRestored, 1);
+}
+
+// ---- The cache folder ----------------------------------------------------------------------
+
+// Spec 6: everything in cache/ is derived. Deleted while the application is
+// closed, the fit reads not requested at the next start: the plot row offers
+// refresh, no job starts, nothing is read or written, and the recording is
+// untouched.
+void FusionStoreTest::deletedCacheFolderReadsNotRequested()
+{
+    TestEnvironment &env = TestEnvironment::instance();
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("a"))}), QString());
+    QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
+    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(QFileInfo(recordPath("a")).isFile());
+    const QString csvPath = sessionFilePath("a");
+    const QByteArray csv = bytesOf(csvPath);
+    QVERIFY(!csv.isEmpty());
+
+    bool removed = false;
+    restart([&] { removed = QDir(env.cacheDir()).removeRecursively(); });
+    QVERIFY(removed);
+    QVERIFY(LogbookManager::instance().knownCalculationRecords("a").isEmpty());
+
+    check(QStringLiteral("roll"));
+    const Quiet quiet(*m_queue);
+    show({"a"});
+    QVERIFY(isLoaded("a"));
+
+    QVERIFY(isNotRequested(engine("a").resultStatus(kFit)));
+    QVERIFY2(availableIn("a").isEmpty(), qPrintable(availableIn("a")));
+    QCOMPARE(engine("a").runCount(kFit), 0);
+    QCOMPARE(engine("a").preparedCount(), 0);
+    const PlotRowState state = row(kRoll);
+    QCOMPARE(state.missingCount, 1);
+    QCOMPARE(state.control(), Control::Refresh);
+    QCOMPARE(state.controlCount(), 1);
+    PlotFixture::spin(m_requests.get());
+    QCOMPARE(m_queue->model()->rowCount(), 0);
+    QVERIFY(quiet.holds());
+
+    QCOMPARE(stats().recordListings, 0);
+    QCOMPARE(stats().recordsRead, 0);
+    QCOMPARE(stats().recordsWritten, 0);
+    QVERIFY(!QFileInfo::exists(env.cacheDir()));
+    QCOMPARE(sessionFilePath("a"), csvPath);
+    QCOMPARE(bytesOf(csvPath), csv);
 }
 
 FLYSIGHT_TEST_MAIN(FusionStoreTest)

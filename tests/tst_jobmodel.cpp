@@ -806,8 +806,8 @@ void JobModelTest::nothingIsPersisted()
     }
     QCOMPARE(logbookAfter, logbookBefore);
     records.sort();
-    QStringList expectedRecords = {QStringLiteral("sessions/") + stem1 + QStringLiteral(".gated.fvresult"),
-                                   QStringLiteral("sessions/") + stem2 + QStringLiteral(".exp%41.fvresult")};
+    QStringList expectedRecords = {QStringLiteral("cache/") + stem1 + QStringLiteral(".gated.fvresult"),
+                                   QStringLiteral("cache/") + stem2 + QStringLiteral(".exp%41.fvresult")};
     expectedRecords.sort();
     QCOMPARE(records, expectedRecords);
 }

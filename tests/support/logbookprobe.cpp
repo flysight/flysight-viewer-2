@@ -87,7 +87,7 @@ QStringList sessionCsvFiles()
 
 QStringList calculationRecordFiles()
 {
-    return QDir(TestEnvironment::instance().sessionsDir())
+    return QDir(TestEnvironment::instance().cacheDir())
         .entryList({QStringLiteral("*.fvresult")}, QDir::Files, QDir::Name);
 }
 

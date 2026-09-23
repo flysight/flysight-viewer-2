@@ -54,15 +54,15 @@ inline constexpr quint32 CalculationRecordFormatVersion = 1;
 // ---------------------------------------------------------------- file names
 //
 // A record of session file stem S (the <uuid> of sessions/<uuid>.csv) and
-// calculation id I is named
+// calculation id I lives in the logbook's cache/ folder and is named
 //
 //     S + "." + encodeRecordFileId(I) + "." + calculationRecordExtension()
 //
 // e.g. "3f2c...-9a1e.builtin%2Efusion%2Efit.fvresult". The encoded id holds no
 // '.', so the name splits unambiguously at its last two dots even when the
-// stem contains dots. A record never ends in ".csv", and neither does its
-// QSaveFile temporary ("<name>.XXXXXX"), so the logbook's session scan
-// (sessions/*.csv) can never take one for a session.
+// stem contains dots. A record is never in sessions/, and never ends in
+// ".csv", nor does its QSaveFile temporary ("<name>.XXXXXX"), so the
+// logbook's session scan (sessions/*.csv) can never take one for a session.
 
 /// The record file extension, without the dot ("fvresult").
 QString calculationRecordExtension();

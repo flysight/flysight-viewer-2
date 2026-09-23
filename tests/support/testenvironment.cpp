@@ -142,6 +142,11 @@ QString TestEnvironment::sessionsDir() const
     return logbookDir() + QStringLiteral("/sessions");
 }
 
+QString TestEnvironment::cacheDir() const
+{
+    return logbookDir() + QStringLiteral("/cache");
+}
+
 QString TestEnvironment::indexPath() const
 {
     return logbookDir() + QStringLiteral("/index.json");

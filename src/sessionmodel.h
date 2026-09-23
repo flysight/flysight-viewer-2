@@ -136,8 +136,8 @@ struct MergeResult {
 ///
 /// STORED RESULTS. The result of an explicit calculation that the engine
 /// installs with status Ok (a job's publish or a synchronous request) is
-/// written beside the session file by CalculationResultStore, through the
-/// explicit-result listener that attachSession() installs. That includes a
+/// written to the logbook's cache/ folder by CalculationResultStore, through
+/// the explicit-result listener that attachSession() installs. That includes a
 /// session not saved yet: mergeSessions() reserves its file stem at import
 /// (LogbookManager::reserveSessionFile). A result that an input change drops
 /// deletes its record. Every path that installs a session into a row

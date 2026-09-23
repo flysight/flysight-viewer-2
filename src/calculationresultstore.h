@@ -11,8 +11,9 @@ namespace FlySight {
 
 /// Stored results of explicitly requested calculations (the spec
 /// "store-requested-calculations"): the rules between a session's engine and
-/// its record files in the logbook. Main thread only. SessionModel owns one
-/// and is its only product caller. Tests may drive it directly.
+/// its record files in the logbook's cache/ folder. Main thread only.
+/// SessionModel owns one and is its only product caller. Tests may drive it
+/// directly.
 ///
 /// It holds no state but its counters: every record lives on disk, and all
 /// record I/O goes through LogbookManager.
