@@ -1,6 +1,6 @@
 {
     "diagnostics": {
-        "algorithm": "batch-shared-bias-v1",
+        "algorithm": "batch-shared-bias-v2",
         "failure": "Missing or mismatched Local/velE"
     },
     "fixture": "reject_length",

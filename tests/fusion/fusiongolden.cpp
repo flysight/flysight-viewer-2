@@ -99,15 +99,18 @@ QHash<QString, QVector<double>> loadChannels(const QString &fileName, int rows)
     return channels;
 }
 
-/// Numbers under these keys are counts or copies of an input, never the
-/// result of solver arithmetic: they are exact in both modes.
+/// Numbers under these keys are counts or copies of an input (the tuning
+/// thresholds under `stopping` among them), never the result of solver
+/// arithmetic: they are exact in both modes.
 bool isExactKey(const QString &key)
 {
     static const QSet<QString> keys{
         QStringLiteral("gnss_states"), QStringLiteral("imu_outputs"), QStringLiteral("iterations"),
         QStringLiteral("imu_count"), QStringLiteral("gnss_count"), QStringLiteral("origin_index"),
         QStringLiteral("origin"), QStringLiteral("epoch_utc_s"), QStringLiteral("node"),
-        QStringLiteral("rows")};
+        QStringLiteral("rows"), QStringLiteral("passes"), QStringLiteral("window"),
+        QStringLiteral("bias_settled_tolerance"), QStringLiteral("max_mean_relative_decrease"),
+        QStringLiteral("max_nrms")};
     return keys.contains(key);
 }
 

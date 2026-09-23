@@ -1,6 +1,7 @@
 #include "fusion/fusionoutput.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -14,11 +15,42 @@ namespace FlySight::Fusion::Detail {
 
 namespace {
 
-const char kAlgorithm[] = "batch-shared-bias-v1";
+const char kAlgorithm[] = "batch-shared-bias-v2";
 
 QJsonArray toJsonArray(const gtsam::Vector3 &v)
 {
     return QJsonArray{v.x(), v.y(), v.z()};
+}
+
+/// A measurement that could not be taken (NaN) is null, written explicitly:
+/// what QJsonValue(double) makes of a NaN is not part of the format.
+QJsonValue numberOrNull(double value)
+{
+    return std::isfinite(value) ? QJsonValue(value) : QJsonValue(QJsonValue::Null);
+}
+
+/// The rule that ended the fit, what it was judged on, and the thresholds in force.
+QJsonObject stoppingObject(const Stopping &s)
+{
+    return QJsonObject{
+        {"rule", QString::fromStdString(s.rule)},
+        {"passes", s.passes},
+        {"last_pass_mean_relative_decrease", numberOrNull(s.lastPassMeanRelativeDecrease)},
+        {"repreintegration_cost_difference", numberOrNull(s.repreintegrationCostDifference)},
+        {"bias_settled_tolerance", s.biasSettledTolerance},
+        {"slow_tail", QJsonObject{
+            {"window", s.slowTailWindow},
+            {"max_mean_relative_decrease", s.slowTailMaxMeanRelativeDecrease},
+            {"max_nrms", s.slowTailMaxNrms}}}};
+}
+
+QJsonObject qualityObject(const Quality &q)
+{
+    return QJsonObject{
+        {"imu_nrms", q.imuNrms},
+        {"position_nrms", q.positionNrms},
+        {"velocity_nrms", q.velocityNrms},
+        {"objective_per_state", q.objectivePerState}};
 }
 
 /// The one fit that was run, in the shape of a list of candidate fits: the
@@ -106,12 +138,19 @@ QJsonObject successDiagnostics(const PreparedInput &prepared, const InitialAttit
         {"display_position_velocity", "linear interpolation of optimized GNSS states at original IMU times"},
         {"orientation", "body to fixed NED; quaternion xyzw; RPY degrees"},
         {"limitations", "Local batch convergence; heading may be ambiguous. Dense output is not an IMU-rate smoothing posterior."},
-        {"residuals", residualArray(fit)}};
+        {"residuals", residualArray(fit)},
+        {"stopping", stoppingObject(fit.stopping)},
+        {"quality", qualityObject(fit.quality)}};
 }
 
-QJsonObject failureDiagnostics(const QString &reason)
+QJsonObject failureDiagnostics(const QString &reason, const Stopping *stopping, const Quality *quality)
 {
-    return QJsonObject{{"algorithm", kAlgorithm}, {"failure", reason}};
+    QJsonObject diagnostics{{"algorithm", kAlgorithm}, {"failure", reason}};
+    if (stopping)
+        diagnostics.insert("stopping", stoppingObject(*stopping));
+    if (quality)
+        diagnostics.insert("quality", qualityObject(*quality));
+    return diagnostics;
 }
 
 QString toCompactJson(const QJsonObject &object)

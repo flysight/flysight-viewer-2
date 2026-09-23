@@ -30,13 +30,20 @@ struct Samples {
 
 /// The model's tuning. The defaults are the model; only maxGap is derived
 /// from the recording (1.6 median IMU intervals), and only a test changes
-/// anything else.
+/// anything else. The four stopping fields and relativeTolerance may be set
+/// to a negative value by a test, which makes the corresponding test
+/// impossible to satisfy ("never settles", "never accepted"); production
+/// never does.
 struct Tuning {
     double accDensity = .015, gyroDensity = .001;   ///< IMU noise densities
     double accBiasSigma = .3, gyroBiasSigma = .03;  ///< prior on the shared biases
     double maxGap = .025;                           ///< longest IMU interval the fit integrates across, s
     double relativeTolerance = 1e-8;                ///< cost decrease at which a pass has settled
     int maxIterations = 100;                        ///< per bias pass
+    double biasSettledTolerance = 1e-6;             ///< a settled pass has converged when re-preintegrating at its bias changes the cost by at most this, relative to max(1, cost)
+    int slowTailWindow = 20;                        ///< iterations at the end of a final pass at the limit over which the slow tail is judged
+    double slowTailMaxMeanRelativeDecrease = 1e-4;  ///< slow tail: mean (before - after) / max(1, before) over the window must be below this
+    double slowTailMaxNrms = 2;                     ///< slow tail: position and velocity normalized RMS must both be below this
 };
 
 constexpr double kPi = 3.14159265358979323846;

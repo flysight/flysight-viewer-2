@@ -98,11 +98,17 @@ variables.
 IMU integration splits at exact GNSS boundaries and original IMU timestamps,
 using linearly interpolated midpoint inputs. Batch Levenberg-Marquardt uses QR,
 100 iterations per pass, a relative cost-change threshold of 1e-8, and up to
-five bias reintegrations. Convergence requires a settled cost and bias shifts
-below 1e-5 m/s^2 and 1e-6 rad/s. Reported factors are reintegrated at the final
-bias. Modeling noise densities are 0.015 m/s^2/sqrt(Hz) and
-0.001 rad/s/sqrt(Hz), with integration covariance I x 1e-8. These are modeling
-weights, not sensor specifications.
+five bias reintegrations. A pass has settled when an iteration lowers the cost
+by at most 1e-8 of max(1, cost); the fit has converged when the graph
+re-preintegrated at the settled pass's bias changes that cost by at most 1e-6
+relative (of max(1, cost)). A fifth pass that reaches its iteration limit
+without settling is accepted when, over its last 20 iterations, the mean
+relative decrease per iteration is below 1e-4 and the position and velocity
+normalized RMS (root mean squared whitened residual per scalar component) are
+both below 2; the diagnostics then say `slow tail accepted`. Reported factors
+are reintegrated at the final bias. Modeling noise densities are
+0.015 m/s^2/sqrt(Hz) and 0.001 rad/s/sqrt(Hz), with integration covariance
+I x 1e-8. These are modeling weights, not sensor specifications.
 
 Dense orientation follows bias-corrected gyro increments with a distributed
 correction in the fixed NED frame to reach the next optimized attitude.
@@ -138,12 +144,21 @@ origin, height and time method), `initialization`, `stationary_interval_s`,
 `objective`, `orientation` (the output convention, as text), `residuals`
 (one entry per position and velocity factor), `selected_heading_deg`, `seeds`
 (per starting heading: biases, convergence, iterations, objective, residual
-RMS), `seed_comparison_performed`,
+RMS), `stopping` (the rule that ended the fit: `settled`, `slow tail
+accepted`, `iteration limit`, `bias not settled` or `cost increased`; the
+number of passes; the last pass's mean relative cost decrease per iteration;
+the re-preintegration cost difference; the thresholds in force), `quality`
+(`imu_nrms`, `position_nrms`, `velocity_nrms`, the normalized RMS of each
+factor kind's whitened residuals, and `objective_per_state`),
+`seed_comparison_performed`,
 `max_seed_vs_selected_angle_deg`, `max_seed_vs_selected_acceleration_m_s2`,
 `max_endpoint_correction_deg`, `display_position_velocity` and `limitations`.
-When the recording was rejected or the solver failed it is
-`{"algorithm", "failure"}` with the reason. A successful stop describes the
-optimizer's numerical behaviour, not an independent accuracy assessment.
+When the recording was rejected it is `{"algorithm", "failure"}` with the
+reason; when the solver failed it is the same, plus `stopping` and `quality`
+when the fit completed a pass (`iteration limit`, `bias not settled`), or
+`stopping` alone when a pass raised the cost (`cost increased`). A successful
+stop describes the optimizer's numerical behaviour, not an independent accuracy
+assessment.
 
 ## 5. Initialization and limitations
 
@@ -170,11 +185,11 @@ implemented.
 diagnostic recording `24-09-07/08-35-23` no stationary window passed and the
 coarse initializer produced a poor converged fit, with large residuals
 (position and velocity RMS of 25.9 m and 7.5 m/s) and an accelerometer bias
-near 19 m/s^2. The stopping test can treat a no-update step and a zero bias
-shift as settled. That behaviour is part of the frozen algorithm. Heading
-ambiguity, local minima, the shared constant-bias assumption and sampling
-limits remain material limitations. Inspect the diagnostics and the physical
-plausibility of a result before interpreting it.
+near 19 m/s^2. The stopping test can treat a no-update step as settled, and a
+slow tail is accepted on numerical grounds alone. Heading ambiguity, local
+minima, the shared constant-bias assumption and sampling limits remain material
+limitations. Inspect the diagnostics and the physical plausibility of a result
+before interpreting it.
 
 ## 6. What is rejected
 
@@ -255,11 +270,10 @@ saved with the recording.
 
 ## 8. Validation
 
-The algorithm is frozen: for identical inputs this implementation must produce
-the same objective, biases, residuals, output timestamps and output channels as
-the reference implementation on the branch `sensor-fusion-clean-port`
-(revision `83a64479fd4e7e2e10bce0b5477c5dd7a49dee7d`). That is demonstrated by
-tests, all labelled `fusion`:
+For identical inputs the kernel must reproduce its goldens (objective, biases,
+residuals, output timestamps and output channels), captured from it by
+`fusion_golden_capture` at the end of the last phase that changed numerical
+results. That is demonstrated by tests, all labelled `fusion`:
 
 | Test | What it holds |
 | --- | --- |

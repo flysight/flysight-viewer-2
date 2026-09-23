@@ -26,8 +26,12 @@ QJsonObject successDiagnostics(const PreparedInput &prepared, const InitialAttit
                                const FitResult &fit, const Samples &window,
                                const DenseTrajectory &dense);
 
-/// The diagnostics of a rejected recording or a failed fit.
-QJsonObject failureDiagnostics(const QString &reason);
+/// The diagnostics of a rejected recording or a failed fit: the algorithm and
+/// the reason, plus the stopping account when the fit ran a pass (`stopping`
+/// given) and the quality of the reported fit when it completed its passes
+/// (`quality` given). A rejection has neither.
+QJsonObject failureDiagnostics(const QString &reason, const Stopping *stopping = nullptr,
+                               const Quality *quality = nullptr);
 
 QString toCompactJson(const QJsonObject &object);
 

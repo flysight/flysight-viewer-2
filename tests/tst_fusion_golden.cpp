@@ -216,6 +216,8 @@ void FusionGoldenTest::comparatorHoldsItsBounds()
         QVERIFY(!samplesPass(timeChannel, timeOneUlpLater, time));
         QVERIFY(jsonPasses("iterations", 7, 7));
         QVERIFY(!jsonPasses("iterations", 7 + 1e-9, 7));
+        QVERIFY(jsonPasses("passes", 2, 2));
+        QVERIFY(!jsonPasses("passes", 2 + 1e-9, 2));
         QVERIFY(!jsonPasses("epoch_utc_s", timeOneUlpLater, time));
         QVERIFY(!compareJson(QStringLiteral("j"), QJsonObject{{"algorithm", "a"}},
                              QJsonObject{{"algorithm", "b"}}).isEmpty());

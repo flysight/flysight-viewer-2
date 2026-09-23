@@ -1,8 +1,9 @@
 // Fusion kernel internals.
 //
 // What the golden fixtures of tst_fusion_golden cannot reach (every
-// stationary gate, exact integration boundaries, heading freedom, the
-// solver-failure path), with the literal expectations of the reference's own
+// stationary gate, exact integration boundaries, heading freedom, the two
+// stopping rules forced through the tuning, the solver-failure path and its
+// diagnostics shapes), with the literal expectations of the reference's own
 // self-test (sensor-fusion-clean-port, tests/fusion_regression.cpp), and the
 // fit trace that localizes a golden failure to a stage: initializer first,
 // then each optimizer iteration.
@@ -12,6 +13,7 @@
 
 #include <cmath>
 #include <limits>
+#include <set>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -25,6 +27,7 @@
 
 #include "calculations/anglehelper.h"
 #include "fusion/factorgraphfit.h"
+#include "fusion/fusionoutput.h"
 #include "fusion/fusionpipeline.h"
 #include "fusion/fusionsamples.h"
 #include "fusion/imuintegration.h"
@@ -128,6 +131,22 @@ Fusion::Result rejectedBy(const Fusion::Channels &channels)
     return runPipeline(channels, Tuning{}, Checkpoint());
 }
 
+QJsonObject diagnosticsOf(const Fusion::Result &result)
+{
+    return QJsonDocument::fromJson(result.diagnosticsJson.toUtf8()).object();
+}
+
+/// The failure diagnostics of a fit that completed its passes: QJsonObject
+/// sorts its keys.
+const QStringList kCompletedPassFailureKeys{QStringLiteral("algorithm"), QStringLiteral("failure"),
+                                            QStringLiteral("quality"), QStringLiteral("stopping")};
+
+bool allChannelsEmpty(const Fusion::Result &result)
+{
+    return result.time.isEmpty() && result.north.isEmpty() && result.accN.isEmpty()
+        && result.roll.isEmpty() && result.yaw.isEmpty() && result.qw.isEmpty();
+}
+
 } // namespace
 
 class FusionKernelTest : public QObject {
@@ -147,7 +166,12 @@ private slots:
     void exactConstantVelocityFit();
     void fitTraceMatchesGolden_data();
     void fitTraceMatchesGolden();
+    void biasSettledByCostTest();
+    void slowTailAtTheIterationLimit_data();
+    void slowTailAtTheIterationLimit();
     void nonConvergenceIsSolverFailure();
+    void biasNeverSettlesIsSolverFailure();
+    void failureDiagnosticsShape();
 };
 
 void FusionKernelTest::solverUsesTbb()
@@ -216,6 +240,25 @@ void FusionKernelTest::validationRejectsEachDefect()
     bad.force.erase(bad.force.begin()+40, bad.force.begin()+50);
     bad.gyro.erase(bad.gyro.begin()+40, bad.gyro.begin()+50);
     QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(bad, tuning));
+
+    // The tuning: the stopping thresholds must be finite and the window at
+    // least one iteration; a negative tolerance or bound is legal (a test's
+    // "never" forcing).
+    Tuning t;
+    t.slowTailWindow = 0;
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+    t = Tuning{};
+    t.biasSettledTolerance = std::numeric_limits<double>::quiet_NaN();
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+    t = Tuning{};
+    t.slowTailMaxNrms = std::numeric_limits<double>::infinity();
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+    t = Tuning{};
+    t.relativeTolerance = -1;
+    validateSamples(d, t);
+    t = Tuning{};
+    t.biasSettledTolerance = -1;
+    validateSamples(d, t);
 
     // The whole pipeline: a malformed recording is a Rejected result, never
     // an exception and never a crash.
@@ -456,6 +499,16 @@ void FusionKernelTest::exactConstantVelocityFit()
     QVERIFY(fitted.converged);
     QVERIFY(fitted.objective < 1e-12);
 
+    // An exact fit settles in one pass and re-preintegrating at its bias
+    // changes nothing; every quality metric is at the noise floor.
+    QCOMPARE(fitted.stopping.rule, std::string(StopRule::kSettled));
+    QCOMPARE(fitted.stopping.passes, 1);
+    QVERIFY(fitted.stopping.repreintegrationCostDifference < 1e-12);
+    QVERIFY(fitted.quality.positionNrms < 1e-5 && fitted.quality.velocityNrms < 1e-5
+            && fitted.quality.imuNrms < 1e-5);
+    QVERIFY(fitted.quality.objectivePerState < 1e-12);
+    QVERIFY(std::isfinite(fitted.stopping.lastPassMeanRelativeDecrease));
+
     const DenseTrajectory output = reconstructTrajectory(linear, fitted);
     QVERIFY(!output.time.empty());
     for (size_t i = 0; i < output.time.size(); ++i) {
@@ -496,37 +549,249 @@ void FusionKernelTest::fitTraceMatchesGolden()
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
 }
 
+void FusionKernelTest::biasSettledByCostTest()
+{
+    // The spec's bias-settled test, on the production tuning. Under the
+    // bias-shift rule this fixture needed a third pass of one iteration that
+    // lowered the cost by 8e-15 to prove the bias had stopped moving (the
+    // committed history before this phase has passes of 4, 2, 1 iterations);
+    // under the cost test the second pass's re-preintegration changes the cost
+    // by 3.8e-12 relative and the fit is converged there.
+    PipelineTrace trace;
+    const Fusion::Result result = runPipeline(
+        toChannels(fusionFixture(QStringLiteral("coarse_maneuver"))), Tuning{}, Checkpoint(), &trace);
+    QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
+    QVERIFY(trace.converged);
+    QVERIFY(trace.stopping.rule == StopRule::kSettled);
+    qInfo() << "coarse_maneuver converged after" << trace.stopping.passes << "passes";
+    QVERIFY(trace.stopping.passes <= 2);
+
+    std::set<int> outers;
+    for (const FitIteration &h : trace.history)
+        outers.insert(h.outer);
+    QCOMPARE(int(outers.size()), trace.stopping.passes);
+
+    // The cost test re-derived from the trace: the reported objective is the
+    // cost of the graph rebuilt at the fitted bias, the last history row's
+    // `after` is the pass's final cost.
+    const QJsonObject diagnostics = diagnosticsOf(result);
+    const QJsonObject stopping = diagnostics.value("stopping").toObject();
+    const double after = trace.history.back().after;
+    const double objective = diagnostics.value("objective").toDouble();
+    const double ratio = std::abs(objective-after)/std::max(1., after);
+    QVERIFY(std::abs(objective-after) <= 1e-6*std::max(1., after));
+    QVERIFY(std::abs(stopping.value("repreintegration_cost_difference").toDouble()-ratio) <= 1e-9);
+    QCOMPARE(stopping.value("rule").toString(), QStringLiteral("settled"));
+    QCOMPARE(stopping.value("passes").toInt(), trace.stopping.passes);
+    QCOMPARE(stopping.value("bias_settled_tolerance").toDouble(), 1e-6);
+    const QJsonObject slowTail = stopping.value("slow_tail").toObject();
+    QCOMPARE(slowTail.value("window").toInt(), 20);
+    QCOMPARE(slowTail.value("max_mean_relative_decrease").toDouble(), 1e-4);
+    QCOMPARE(slowTail.value("max_nrms").toDouble(), 2.);
+    const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
+    QCOMPARE(seed.value("converged").toBool(false), true);
+    QCOMPARE(seed.value("iterations").toInt(), int(trace.history.size()));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-shared-bias-v2"));
+
+    // The quality metrics recomputed from the residuals array: 28 states, so
+    // 28 position and velocity factors of dimension 3 and 27 IMU factors of
+    // dimension 9.
+    QCOMPARE(diagnostics.value("gnss_states").toInt(), 28);
+    double sumPosition = 0, sumVelocity = 0, sumImu = 0;
+    for (const QJsonValue &entry : diagnostics.value("residuals").toArray()) {
+        const QJsonObject r = entry.toObject();
+        const QString kind = r.value("kind").toString();
+        const double error = r.value("squared_whitened_error").toDouble();
+        if (kind == QStringLiteral("position"))
+            sumPosition += error;
+        else if (kind == QStringLiteral("velocity"))
+            sumVelocity += error;
+        else if (kind == QStringLiteral("imu"))
+            sumImu += error;
+    }
+    const QJsonObject quality = diagnostics.value("quality").toObject();
+    QVERIFY(withinPortableBound(quality.value("position_nrms").toDouble(), std::sqrt(sumPosition/(3*28))));
+    QVERIFY(withinPortableBound(quality.value("velocity_nrms").toDouble(), std::sqrt(sumVelocity/(3*28))));
+    QVERIFY(withinPortableBound(quality.value("imu_nrms").toDouble(), std::sqrt(sumImu/(9*27))));
+    QVERIFY(sameRecomputedValue(quality.value("objective_per_state").toDouble(), objective/28.));
+}
+
+void FusionKernelTest::slowTailAtTheIterationLimit_data()
+{
+    QTest::addColumn<double>("maxNrms");
+    QTest::addColumn<double>("maxMeanRelativeDecrease");
+    QTest::addColumn<bool>("accepted");
+    QTest::newRow("accepted") << 2. << 1e-4 << true;
+    QTest::newRow("nrms bound fails") << 0. << 1e-4 << false;
+    QTest::newRow("decrease bound fails") << 2. << 0. << false;
+}
+
+void FusionKernelTest::slowTailAtTheIterationLimit()
+{
+    // The spec's slow-tail test. A negative relative tolerance means no pass
+    // ever settles (before - after >= -1e-6 by the cost-increase guard, so it
+    // is never <= -max(1, before)), so every pass runs its 25 iterations: the
+    // first four do the work and the rest are steps of order 1e-15 or exact
+    // no-ops (GTSAM's LM leaves the values untouched when it rejects a step).
+    // The last 20 iterations of pass five therefore have a mean relative
+    // decrease of about 0, and the fit's position and velocity normalized RMS
+    // are about 0.098 and 0.19: accepted with the production bounds, refused
+    // with either bound at zero (the comparisons are strict).
+    QFETCH(double, maxNrms);
+    QFETCH(double, maxMeanRelativeDecrease);
+    QFETCH(bool, accepted);
+
+    Tuning tuning;
+    tuning.relativeTolerance = -1;
+    tuning.maxIterations = 25;
+    tuning.slowTailMaxNrms = maxNrms;
+    tuning.slowTailMaxMeanRelativeDecrease = maxMeanRelativeDecrease;
+    PipelineTrace trace;
+    const Fusion::Result result = runPipeline(
+        toChannels(fusionFixture(QStringLiteral("coarse_maneuver"))), tuning, Checkpoint(), &trace);
+
+    QCOMPARE(trace.history.size(), size_t(125));
+    for (const FitIteration &h : trace.history)
+        QVERIFY2(h.before >= h.after, qPrintable(QStringLiteral("pass %1, iteration %2").arg(h.outer).arg(h.iteration)));
+    QCOMPARE(trace.stopping.passes, 5);
+    const QJsonObject diagnostics = diagnosticsOf(result);
+    const QJsonObject stopping = diagnostics.value("stopping").toObject();
+    const QJsonObject quality = diagnostics.value("quality").toObject();
+    QCOMPARE(stopping.value("passes").toInt(), 5);
+    const double meanDecrease = stopping.value("last_pass_mean_relative_decrease").toDouble(-1);
+
+    if (accepted) {
+        QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
+        QVERIFY(result.reason.isEmpty());
+        for (const QVector<double> *channel : { &result.time, &result.north, &result.east, &result.down,
+                                                &result.velN, &result.velE, &result.velD,
+                                                &result.accN, &result.accE, &result.accD,
+                                                &result.roll, &result.pitch, &result.yaw,
+                                                &result.qx, &result.qy, &result.qz, &result.qw })
+            QVERIFY(channel->size() > 0);
+        QVERIFY(trace.converged);
+        QVERIFY(trace.stopping.rule == StopRule::kSlowTailAccepted);
+        QCOMPARE(stopping.value("rule").toString(), QStringLiteral("slow tail accepted"));
+        QVERIFY(meanDecrease >= 0 && meanDecrease < 1e-4);
+        QVERIFY(quality.value("position_nrms").toDouble(9) < 2);
+        QVERIFY(quality.value("velocity_nrms").toDouble(9) < 2);
+        const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
+        QCOMPARE(seed.value("converged").toBool(false), true);
+        QCOMPARE(seed.value("iterations").toInt(), 125);
+    } else {
+        QVERIFY(result.outcome == Fusion::Outcome::SolverFailed);
+        QCOMPARE(result.reason,
+                 QStringLiteral("Batch fusion did not converge (iteration limit); sensor fusion unavailable"));
+        QVERIFY(!trace.converged);
+        QVERIFY(trace.stopping.rule == StopRule::kIterationLimit);
+        QCOMPARE(diagnostics.keys(), kCompletedPassFailureKeys);
+        QCOMPARE(diagnostics.value("failure").toString(), result.reason);
+        QCOMPARE(stopping.value("rule").toString(), QStringLiteral("iteration limit"));
+        const QJsonObject slowTail = stopping.value("slow_tail").toObject();
+        QCOMPARE(slowTail.value("max_nrms").toDouble(-1), maxNrms);
+        QCOMPARE(slowTail.value("max_mean_relative_decrease").toDouble(-1), maxMeanRelativeDecrease);
+        QVERIFY(quality.value("position_nrms").toDouble() > 0);
+        // A rejected LM step is an exact no-op and an accepted one lowers the
+        // cost, so the mean is never negative and a zero bound always refuses.
+        QVERIFY(meanDecrease >= 0);
+        QVERIFY(allChannelsEmpty(result));
+    }
+}
+
 void FusionKernelTest::nonConvergenceIsSolverFailure()
 {
-    // One iteration per bias pass, and a pass counts as settled only when its
-    // cost stops decreasing altogether: five passes are not enough for that.
-    //
-    // THE ONE PLACE TO WATCH ON OTHER PLATFORMS. On the capture machine the
-    // fifth pass still lowers the cost, but only by about 1.9e-12 on a cost of
-    // about 2: roughly a thousand times rounding noise, not more. A platform
-    // whose arithmetic differs in the last bits (another libm, fma contraction
-    // inside GTSAM) could see that pass change nothing, count as settled, and
-    // report convergence. If this test fails elsewhere with Succeeded, that is
-    // the reason; the remedy is a harder non-convergence case for that
-    // platform (fewer passes' worth of progress), never a change to the kernel.
+    // One iteration per bias pass and a negative tolerance: no pass can settle
+    // on any platform, so the fifth pass ends at its one-iteration limit
+    // deterministically, and one iteration cannot fill the 20-iteration
+    // slow-tail window, so the slow tail is not judged.
     Tuning tuning;
     tuning.maxIterations = 1;
-    tuning.relativeTolerance = 1e-300;
+    tuning.relativeTolerance = -1;
     PipelineTrace trace;
     const Fusion::Result result = runPipeline(
         toChannels(fusionFixture(QStringLiteral("coarse_maneuver"))), tuning, Checkpoint(), &trace);
 
     QVERIFY(result.outcome == Fusion::Outcome::SolverFailed);
     QCOMPARE(result.reason,
-             QStringLiteral("Batch fusion did not converge; sensor fusion unavailable"));
+             QStringLiteral("Batch fusion did not converge (iteration limit); sensor fusion unavailable"));
     QVERIFY(!trace.converged);
     QCOMPARE(trace.history.size(), size_t(5));
+    QVERIFY(trace.stopping.rule == StopRule::kIterationLimit);
+    QCOMPARE(trace.stopping.passes, 5);
 
-    const QJsonObject diagnostics = QJsonDocument::fromJson(result.diagnosticsJson.toUtf8()).object();
-    QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure")}));
+    const QJsonObject diagnostics = diagnosticsOf(result);
+    QCOMPARE(diagnostics.keys(), kCompletedPassFailureKeys);
     QCOMPARE(diagnostics.value("failure").toString(), result.reason);
-    QVERIFY(result.time.isEmpty() && result.north.isEmpty() && result.accN.isEmpty()
-            && result.roll.isEmpty() && result.yaw.isEmpty() && result.qw.isEmpty());
+    QCOMPARE(diagnostics.value("stopping").toObject().value("passes").toInt(), 5);
+    QVERIFY(allChannelsEmpty(result));
+}
+
+void FusionKernelTest::biasNeverSettlesIsSolverFailure()
+{
+    // A negative bias-settled tolerance: the cost test can never pass, so
+    // every settled pass is followed by another until the fifth.
+    Tuning tuning;
+    tuning.biasSettledTolerance = -1;
+    PipelineTrace trace;
+    const Fusion::Result result = runPipeline(
+        toChannels(fusionFixture(QStringLiteral("coarse_linear"))), tuning, Checkpoint(), &trace);
+
+    QVERIFY(result.outcome == Fusion::Outcome::SolverFailed);
+    QCOMPARE(result.reason,
+             QStringLiteral("Batch fusion did not converge (bias not settled); sensor fusion unavailable"));
+    QVERIFY(!trace.converged);
+    QVERIFY(trace.stopping.rule == StopRule::kBiasNotSettled);
+    QCOMPARE(trace.stopping.passes, 5);
+
+    const QJsonObject diagnostics = diagnosticsOf(result);
+    QCOMPARE(diagnostics.keys(), kCompletedPassFailureKeys);
+    QCOMPARE(diagnostics.value("failure").toString(), result.reason);
+    QVERIFY(diagnostics.value("quality").toObject().value("position_nrms").toDouble(9) < 1e-3);
+    QCOMPARE(diagnostics.value("stopping").toObject().value("bias_settled_tolerance").toDouble(), -1.);
+    QVERIFY(allChannelsEmpty(result));
+}
+
+void FusionKernelTest::failureDiagnosticsShape()
+{
+    // The `cost increased` shape, proven on the writer directly: LM rejects
+    // an increasing step by construction, so the guard is reachable only
+    // through non-finite arithmetic, which no deterministic input forces.
+    const Tuning tuning;
+    Stopping s;
+    s.rule = StopRule::kCostIncreased;
+    s.passes = 2;
+    s.biasSettledTolerance = tuning.biasSettledTolerance;
+    s.slowTailWindow = tuning.slowTailWindow;
+    s.slowTailMaxMeanRelativeDecrease = tuning.slowTailMaxMeanRelativeDecrease;
+    s.slowTailMaxNrms = tuning.slowTailMaxNrms;
+    QVERIFY(std::isnan(s.lastPassMeanRelativeDecrease) && std::isnan(s.repreintegrationCostDifference));
+
+    const QJsonObject diagnostics = failureDiagnostics(QStringLiteral("Nonfinite or increasing optimizer cost"), &s);
+    QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure"),
+                                              QStringLiteral("stopping")}));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-shared-bias-v2"));
+    QCOMPARE(diagnostics.value("failure").toString(), QStringLiteral("Nonfinite or increasing optimizer cost"));
+    const QJsonObject stopping = diagnostics.value("stopping").toObject();
+    QCOMPARE(stopping.value("rule").toString(), QStringLiteral("cost increased"));
+    QCOMPARE(stopping.value("passes").toInt(), 2);
+    QVERIFY(stopping.value("last_pass_mean_relative_decrease").isNull());
+    QVERIFY(stopping.value("repreintegration_cost_difference").isNull());
+    QCOMPARE(stopping.value("slow_tail").toObject().value("window").toInt(), 20);
+
+    // A rejection: the algorithm and the reason, nothing else.
+    QCOMPARE(failureDiagnostics(QStringLiteral("x")).keys(),
+             QStringList({QStringLiteral("algorithm"), QStringLiteral("failure")}));
+
+    // The exception the kernel throws for it is a std::runtime_error carrying
+    // the account, with the text the initializer of a later phase relies on.
+    bool caught = false;
+    try {
+        throw FitFailure("Nonfinite or increasing optimizer cost", s);
+    } catch (const std::runtime_error &e) {
+        caught = true;
+        QCOMPARE(QString::fromUtf8(e.what()), QStringLiteral("Nonfinite or increasing optimizer cost"));
+    }
+    QVERIFY(caught);
 }
 
 FLYSIGHT_TEST_MAIN(FusionKernelTest)

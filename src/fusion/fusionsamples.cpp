@@ -52,11 +52,21 @@ void requirePositiveSigmas(const Samples &samples)
 void requireValidTuning(const Tuning &tuning)
 {
     for (double value : { tuning.accDensity, tuning.gyroDensity, tuning.accBiasSigma,
-                          tuning.gyroBiasSigma, tuning.maxGap, tuning.relativeTolerance }) {
+                          tuning.gyroBiasSigma, tuning.maxGap }) {
         if (!std::isfinite(value) || value <= 0)
             throw std::invalid_argument("Invalid fusion configuration");
     }
-    if (tuning.maxIterations < 1)
+    // The tolerances and bounds need only be finite: a negative value is a
+    // legal "never" forcing for a test (the settle test, the cost test and the
+    // slow-tail bounds are then never satisfied), and it is the only way to
+    // force a pass to run to maxIterations, since a rejected LM step is an
+    // exact no-op that a zero tolerance would count as settled.
+    for (double value : { tuning.relativeTolerance, tuning.biasSettledTolerance,
+                          tuning.slowTailMaxMeanRelativeDecrease, tuning.slowTailMaxNrms }) {
+        if (!std::isfinite(value))
+            throw std::invalid_argument("Invalid fusion configuration");
+    }
+    if (tuning.maxIterations < 1 || tuning.slowTailWindow < 1)
         throw std::invalid_argument("Invalid iteration limit");
 }
 

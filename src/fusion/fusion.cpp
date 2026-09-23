@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <exception>
 #include <new>
-#include <stdexcept>
 
 #include "fusion/factorgraphfit.h"
 #include "fusion/fusionoutput.h"
@@ -57,7 +56,22 @@ FitPlan planFit(const Channels &channels, const Tuning &baseTuning, const Checkp
     return plan;
 }
 
-/// Stage 2: the fit and everything after it. Throws the failure reason.
+/// A Rejected or SolverFailed result: the reason, its diagnostics (with the
+/// stopping account and the quality when the fit got far enough to have
+/// them), no channels.
+Result withoutChannels(Outcome outcome, const QString &reason, const Stopping *stopping = nullptr,
+                       const Quality *quality = nullptr)
+{
+    Result result;
+    result.outcome = outcome;
+    result.reason = reason;
+    result.diagnosticsJson = toCompactJson(failureDiagnostics(result.reason, stopping, quality));
+    return result;
+}
+
+/// Stage 2: the fit and everything after it. A fit that completed its passes
+/// without converging is a SolverFailed result naming the rule that ended it;
+/// anything else that fails throws the failure reason.
 Result fitAndAssemble(const FitPlan &plan, const Checkpoint &checkpoint, PipelineTrace *trace)
 {
     checkpoint(QStringLiteral("Starting fit"));
@@ -67,9 +81,14 @@ Result fitAndAssemble(const FitPlan &plan, const Checkpoint &checkpoint, Pipelin
     if (trace) {
         trace->history = fit.history;
         trace->converged = fit.converged;
+        trace->stopping = fit.stopping;
     }
-    if (!fit.converged)
-        throw std::runtime_error("Batch fusion did not converge; sensor fusion unavailable");
+    if (!fit.converged) {
+        return withoutChannels(Outcome::SolverFailed,
+            QStringLiteral("Batch fusion did not converge (%1); sensor fusion unavailable")
+                .arg(QString::fromStdString(fit.stopping.rule)),
+            &fit.stopping, &fit.quality);
+    }
 
     const DenseTrajectory dense = reconstructTrajectory(plan.window, fit);
     Result result;
@@ -77,16 +96,6 @@ Result fitAndAssemble(const FitPlan &plan, const Checkpoint &checkpoint, Pipelin
     fillOutputChannels(dense, plan.prepared.epoch, result);
     result.diagnosticsJson = toCompactJson(
         successDiagnostics(plan.prepared, plan.attitude, fit, plan.window, dense));
-    return result;
-}
-
-/// A Rejected or SolverFailed result: the reason, its diagnostics, no channels.
-Result withoutChannels(Outcome outcome, const char *what)
-{
-    Result result;
-    result.outcome = outcome;
-    result.reason = QString::fromUtf8(what);
-    result.diagnosticsJson = toCompactJson(failureDiagnostics(result.reason));
     return result;
 }
 
@@ -110,7 +119,7 @@ Result runPipeline(const Channels &channels, const Tuning &baseTuning,
     } catch (const std::bad_alloc &) {
         throw;
     } catch (const std::exception &e) {
-        return withoutChannels(Outcome::Rejected, e.what());
+        return withoutChannels(Outcome::Rejected, QString::fromUtf8(e.what()));
     }
     if (trace)
         trace->attitude = plan.attitude;
@@ -121,8 +130,15 @@ Result runPipeline(const Channels &channels, const Tuning &baseTuning,
         return Result();
     } catch (const std::bad_alloc &) {
         throw;
+    } catch (const FitFailure &e) {
+        // Before the generic handler: it is a std::runtime_error. A pass
+        // raised the cost, so there is a stopping account but no rebuild and
+        // therefore no quality.
+        if (trace)
+            trace->stopping = e.stopping;
+        return withoutChannels(Outcome::SolverFailed, QString::fromUtf8(e.what()), &e.stopping);
     } catch (const std::exception &e) {
-        return withoutChannels(Outcome::SolverFailed, e.what());
+        return withoutChannels(Outcome::SolverFailed, QString::fromUtf8(e.what()));
     }
 }
 

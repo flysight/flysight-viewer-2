@@ -1,7 +1,7 @@
 {
     "channels_file": "stationary_spin.channels.txt",
     "diagnostics": {
-        "algorithm": "batch-shared-bias-v1",
+        "algorithm": "batch-shared-bias-v2",
         "anchor_time_s": 15,
         "display_position_velocity": "linear interpolation of optimized GNSS states at original IMU times",
         "end_s": 39.80000019073486,
@@ -27,6 +27,12 @@
         "max_seed_vs_selected_angle_deg": null,
         "objective": 11.095095993796871,
         "orientation": "body to fixed NED; quaternion xyzw; RPY degrees",
+        "quality": {
+            "imu_nrms": 0.011773728000615616,
+            "objective_per_state": 0.05547547996898436,
+            "position_nrms": 0.10164153723029232,
+            "velocity_nrms": 0.16167681871805412
+        },
         "residuals": [
             {
                 "kind": "position",
@@ -3644,7 +3650,7 @@
                     -0.00023615675842140866
                 ],
                 "heading_deg": 0,
-                "iterations": 6,
+                "iterations": 5,
                 "objective": 11.095095993796871,
                 "position_residual_rms_m": 0.19433909861157514,
                 "velocity_residual_rms_m_s": 0.02800324644257726
@@ -3655,7 +3661,19 @@
         "stationary_interval_s": [
             0,
             30
-        ]
+        ],
+        "stopping": {
+            "bias_settled_tolerance": 1e-06,
+            "last_pass_mean_relative_decrease": 0.40003764022609695,
+            "passes": 1,
+            "repreintegration_cost_difference": 5.183969195625704e-07,
+            "rule": "settled",
+            "slow_tail": {
+                "max_mean_relative_decrease": 1e-04,
+                "max_nrms": 2,
+                "window": 20
+            }
+        }
     },
     "fixture": "stationary_spin",
     "outcome": "succeeded",
@@ -3667,8 +3685,6 @@
         "Pass 1, iteration 3",
         "Pass 1, iteration 4",
         "Pass 1, iteration 5",
-        "Integrating IMU factors",
-        "Pass 2, iteration 1",
         "Integrating IMU factors"
     ],
     "rows": 995,
@@ -3710,12 +3726,6 @@
                 4,
                 11.095090242136267,
                 11.095090242136267
-            ],
-            [
-                1,
-                0,
-                11.095095993796871,
-                11.095095993796871
             ]
         ],
         "interval_s": [

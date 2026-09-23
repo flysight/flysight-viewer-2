@@ -1,6 +1,6 @@
 {
     "diagnostics": {
-        "algorithm": "batch-shared-bias-v1",
+        "algorithm": "batch-shared-bias-v2",
         "failure": "IMU gap at 0.353000 s; fusion unavailable across missing data"
     },
     "fixture": "reject_imu_gap",

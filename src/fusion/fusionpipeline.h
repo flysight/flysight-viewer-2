@@ -21,6 +21,7 @@ struct PipelineTrace {
     InitialAttitude attitude;
     std::vector<FitIteration> history;
     bool converged = false;
+    Stopping stopping;              ///< filled whenever a pass ran, including for a FitFailure
 };
 
 /// The whole fit: adapter, checks, window, initializer, fit, reconstruction,
@@ -30,7 +31,8 @@ struct PipelineTrace {
 ///
 /// `baseTuning` is Tuning{} in production (maxGap is always replaced by the
 /// value derived from the recording). It is a parameter only so that a test
-/// can force a solver failure, e.g. non-convergence with maxIterations = 1.
+/// can force a stopping rule, e.g. non-convergence with maxIterations = 1 and
+/// a negative relativeTolerance (no pass can settle).
 Result runPipeline(const Channels &channels, const Tuning &baseTuning,
                    const Checkpoint &checkpoint, PipelineTrace *trace = nullptr);
 

@@ -1,6 +1,6 @@
 {
     "diagnostics": {
-        "algorithm": "batch-shared-bias-v1",
+        "algorithm": "batch-shared-bias-v2",
         "failure": "Local origin index outside GNSS samples"
     },
     "fixture": "reject_origin",

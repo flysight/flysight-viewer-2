@@ -1,7 +1,7 @@
 {
     "channels_file": "coarse_linear.channels.txt",
     "diagnostics": {
-        "algorithm": "batch-shared-bias-v1",
+        "algorithm": "batch-shared-bias-v2",
         "anchor_time_s": 0,
         "display_position_velocity": "linear interpolation of optimized GNSS states at original IMU times",
         "end_s": 1.6000001430511475,
@@ -27,6 +27,12 @@
         "max_seed_vs_selected_angle_deg": null,
         "objective": 2.899361808753532e-12,
         "orientation": "body to fixed NED; quaternion xyzw; RPY degrees",
+        "quality": {
+            "imu_nrms": 2.464528839532982e-10,
+            "objective_per_state": 3.2215131208372574e-13,
+            "position_nrms": 4.6335717337520765e-07,
+            "velocity_nrms": 8.214123804388046e-09
+        },
         "residuals": [
             {
                 "kind": "position",
@@ -217,7 +223,19 @@
         "stationary_interval_s": [
             0,
             0
-        ]
+        ],
+        "stopping": {
+            "bias_settled_tolerance": 1e-06,
+            "last_pass_mean_relative_decrease": 1.4135975260751698e-05,
+            "passes": 1,
+            "repreintegration_cost_difference": 9.603655769033015e-23,
+            "rule": "settled",
+            "slow_tail": {
+                "max_mean_relative_decrease": 1e-04,
+                "max_nrms": 2,
+                "window": 20
+            }
+        }
     },
     "fixture": "coarse_linear",
     "outcome": "succeeded",
