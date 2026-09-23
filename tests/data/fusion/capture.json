@@ -1,131 +1,56 @@
 {
-  "description": "Provenance of the fusion goldens in this directory. Procedure: tests/README.md, 'Fusion golden parity'.",
-  "reference_branch": "sensor-fusion-clean-port",
-  "reference_revision": "83a64479fd4e7e2e10bce0b5477c5dd7a49dee7d",
-  "capture_date": "2026-09-21",
-  "machine": {
-    "os": "Microsoft Windows 11 Home 10.0.26200",
-    "cpu": "Intel(R) Core(TM) Ultra 7 155U"
-  },
-  "compiler": {
-    "generator": "Visual Studio 17 2022, x64, Release",
-    "msvc_toolset": "14.44.35207",
-    "cl_version": "19.44.35220",
-    "windows_sdk": "10.0.26100.0",
-    "cmake": "3.31.5"
-  },
-  "cl_command_line_batchfusion_cpp": "/c /I\"C:\\USERS\\CRWPE\\APPDATA\\LOCAL\\TEMP\\FSGOLD-BUILD\\BUILD-NOBOOST\\FUSION_GOLDEN_HARNESS_AUTOGEN\\INCLUDE_RELEASE\" /I\"C:\\USERS\\CRWPE\\APPDATA\\LOCAL\\TEMP\\CLAUDE\\C--USERS-CRWPE-DESKTOP-FLYSIGHT-VIEWER-2\\53F8FC9F-D9CD-470E-91AC-8328DCAECB72\\SCRATCHPAD\\BRANCH-CAPTURE\\BRANCH\\SRC\" /I\"C:\\USERS\\CRWPE\\DESKTOP\\FLYSIGHT-VIEWER-2\\TESTS\\FUSION\" /nologo /W1 /WX- /diagnostics:column /O2 /Ob2 /D _UNICODE /D UNICODE /D WIN32 /D _WINDOWS /D NDEBUG /D _ENABLE_EXTENDED_ALIGNED_STORAGE /D EIGEN_NO_STATIC_ASSERT /D QT_CORE_LIB /D QT_NO_DEBUG /D WIN64 /D _WIN64 /D UNICODE /D _UNICODE /D \"CMAKE_INTDIR=\\\"Release\\\"\" /EHsc /MD /GS /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /GR /std:c++17 /permissive- /Fo\"FUSION_GOLDEN_HARNESS.DIR\\RELEASE\\\\\" /Fd\"FUSION_GOLDEN_HARNESS.DIR\\RELEASE\\VC143.PDB\" /external:W0 /Gd /TP /wd4267  /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/build-solver-deps/GTSAM-install/include/gtsam/3rdparty/SuiteSparse_config\" /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/build-solver-deps/GTSAM-install/include/gtsam/3rdparty/CCOLAMD\" /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/build-solver-deps/GTSAM-install/include\" /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/build-solver-deps/oneTBB-install/include\" /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/build-solver-deps/GTSAM-install/include/gtsam/3rdparty/metis\" /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/build-solver-deps/GTSAM-install/include/gtsam/3rdparty/cephes\" /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/build-solver-deps/GTSAM-install/include/gtsam/3rdparty/Eigen\" /external:I \"C:/Qt/6.9.3/msvc2022_64/include/QtCore\" /external:I \"C:/Qt/6.9.3/msvc2022_64/include\" /external:I \"C:/Qt/6.9.3/msvc2022_64/mkspecs/win32-msvc\" /bigobj -Zc:__cplusplus -utf-8 C:\\USERS\\CRWPE\\APPDATA\\LOCAL\\TEMP\\CLAUDE\\C--USERS-CRWPE-DESKTOP-FLYSIGHT-VIEWER-2\\53F8FC9F-D9CD-470E-91AC-8328DCAECB72\\SCRATCHPAD\\BRANCH-CAPTURE\\BRANCH\\SRC\\BATCHFUSION.CPP",
-  "qt": "6.9.3 (msvc2022_64)",
-  "solver": {
-    "gtsam_version": "4.3a0",
-    "repository": "https://github.com/borglab/gtsam.git",
-    "revision": "814a734d68cbf5068a4bf20d63ba67c4935905bb",
-    "install_prefix": "build-solver-deps/GTSAM-install",
-    "onetbb_install_prefix": "build-solver-deps/oneTBB-install",
-    "onetbb_version": "2022.1.0",
-    "options_from": "build-solver-deps/gtsam-build/CMakeCache.txt",
-    "options": {
-      "BUILD_SHARED_LIBS": "ON",
-      "CMAKE_CXX_FLAGS": "/DWIN32 /D_WINDOWS /EHsc",
-      "CMAKE_CXX_FLAGS_RELEASE": "/O2 /Ob2 /DNDEBUG",
-      "GTSAM_WITH_TBB": "ON",
-      "GTSAM_ENABLE_BOOST_SERIALIZATION": "OFF",
-      "GTSAM_USE_BOOST_FEATURES": "OFF",
-      "GTSAM_USE_SYSTEM_EIGEN": "OFF",
-      "GTSAM_USE_SYSTEM_METIS": "OFF",
-      "GTSAM_WITH_EIGEN_MKL": "OFF",
-      "GTSAM_BUILD_WITH_MARCH_NATIVE": "OFF",
-      "GTSAM_USE_QUATERNIONS": "OFF",
-      "GTSAM_POSE3_EXPMAP": "ON",
-      "GTSAM_ROT3_EXPMAP": "1",
-      "GTSAM_TANGENT_PREINTEGRATION": "ON",
-      "GTSAM_SLOW_BUT_CORRECT_EXPMAP": "OFF",
-      "GTSAM_SLOW_BUT_CORRECT_BETWEENFACTOR": "OFF",
-      "GTSAM_DEFAULT_ALLOCATOR": "TBB",
-      "GTSAM_BUILD_UNSTABLE": "OFF",
-      "GTSAM_BUILD_TESTS": "OFF",
-      "GTSAM_BUILD_PYTHON": "OFF",
-      "GTSAM_BUILD_EXAMPLES_ALWAYS": "OFF",
-      "GTSAM_INSTALL_GEOGRAPHICLIB": "OFF",
-      "GTSAM_COMPILE_OPTIONS_PRIVATE_RELEASE": "$<$<VERSION_LESS:3.31.5,3.15>:/MD>;/O2"
+    "capture_date": "2026-09-22",
+    "captured_by": "fusion_golden_capture",
+    "compiler": {
+        "cl_version": "19.44.35220.0",
+        "cmake": "3.31.5",
+        "configuration": "Release",
+        "generator": "Visual Studio 17 2022",
+        "id": "MSVC",
+        "platform": "x64",
+        "version": "19.44.35220.0"
     },
-    "config_h": {
-      "GTSAM_ENABLE_BOOST_SERIALIZATION": 0,
-      "GTSAM_USE_BOOST_FEATURES": 0,
-      "GTSAM_USE_TBB": true
+    "description": "Provenance of the fusion goldens in this directory, written by fusion_golden_capture from the product kernel. Procedure: tests/README.md, section 11.",
+    "determinism": {
+        "byte_identical": true,
+        "method": "every fixture is captured twice in one process and the bytes of each file compared before it is written",
+        "runs": 2
     },
-    "gtsam_link_interface": "TBB::tbb;TBB::tbbmalloc;metis-gtsam-if;cephes-gtsam-if;gtsam_eigen3"
-  },
-  "determinism": {
-    "runs": 2,
-    "byte_identical": true,
-    "statement": "Two consecutive runs of the harness built against the solver above (out-noboost-1, out-noboost-2) produced byte-identical files for all fixtures, with TBB on."
-  },
-  "cross_check": {
-    "reference": "Boost-enabled GTSAM, fork commit 8938b9f (upstream 814a734 plus a GeographicLib CMake line), Boost 1.87 static, third-party/GTSAM-install",
-    "install_prefix": "third-party/GTSAM-install",
-    "onetbb_install_prefix": "third-party/oneTBB-install",
-    "options_from": "third-party/gtsam-build/CMakeCache.txt",
-    "options": {
-      "BUILD_SHARED_LIBS": "ON",
-      "CMAKE_CXX_FLAGS": "/DWIN32 /D_WINDOWS /EHsc",
-      "CMAKE_CXX_FLAGS_RELEASE": "/O2 /Ob2 /DNDEBUG",
-      "GTSAM_WITH_TBB": "ON",
-      "GTSAM_ENABLE_BOOST_SERIALIZATION": "ON",
-      "GTSAM_USE_BOOST_FEATURES": "ON",
-      "GTSAM_USE_SYSTEM_EIGEN": "OFF",
-      "GTSAM_USE_SYSTEM_METIS": "OFF",
-      "GTSAM_WITH_EIGEN_MKL": "OFF",
-      "GTSAM_BUILD_WITH_MARCH_NATIVE": "(not set)",
-      "GTSAM_USE_QUATERNIONS": "OFF",
-      "GTSAM_POSE3_EXPMAP": "ON",
-      "GTSAM_ROT3_EXPMAP": "1",
-      "GTSAM_TANGENT_PREINTEGRATION": "ON",
-      "GTSAM_SLOW_BUT_CORRECT_EXPMAP": "OFF",
-      "GTSAM_SLOW_BUT_CORRECT_BETWEENFACTOR": "OFF",
-      "GTSAM_DEFAULT_ALLOCATOR": "TBB",
-      "GTSAM_BUILD_UNSTABLE": "OFF",
-      "GTSAM_BUILD_TESTS": "OFF",
-      "GTSAM_BUILD_PYTHON": "OFF",
-      "GTSAM_BUILD_EXAMPLES_ALWAYS": "OFF",
-      "GTSAM_INSTALL_GEOGRAPHICLIB": "ON",
-      "GTSAM_COMPILE_OPTIONS_PRIVATE_RELEASE": "$<$<VERSION_LESS:3.31.5,3.15>:/MD>;/O2"
+    "fixture_generator_note": "The fixture generator the goldens were captured with. The goldens are valid for these inputs only: if either file changes, re-capture (tests/README.md, section 11).",
+    "fixture_generator_sha256_lf": {
+        "tests/fusion/fusionfixtures.cpp": "568b1b6ce8f6244beafe92e3b3e8c08797e57531d6929946ad57ed6952055906",
+        "tests/fusion/fusionfixtures.h": "8fab525d41d9562578863f537d574d7c3f5e51c007aabafc13ffc346aacf9364"
     },
-    "config_h": {
-      "GTSAM_ENABLE_BOOST_SERIALIZATION": 1,
-      "GTSAM_USE_BOOST_FEATURES": 1,
-      "GTSAM_USE_TBB": true
+    "machine": {
+        "cpu_architecture": "x86_64",
+        "os": "Windows 11 Version 25H2"
     },
-    "gtsam_link_interface": "Boost::serialization;Boost::system;Boost::filesystem;Boost::thread;Boost::date_time;Boost::regex;Boost::timer;Boost::chrono;TBB::tbb;TBB::tbbmalloc;metis-gtsam-if;cephes-gtsam-if;gtsam_eigen3",
-    "cl_command_line_batchfusion_cpp": "/c /I\"C:\\USERS\\CRWPE\\APPDATA\\LOCAL\\TEMP\\FSGOLD-BUILD\\BUILD-BOOST\\FUSION_GOLDEN_HARNESS_AUTOGEN\\INCLUDE_RELEASE\" /I\"C:\\USERS\\CRWPE\\APPDATA\\LOCAL\\TEMP\\CLAUDE\\C--USERS-CRWPE-DESKTOP-FLYSIGHT-VIEWER-2\\53F8FC9F-D9CD-470E-91AC-8328DCAECB72\\SCRATCHPAD\\BRANCH-CAPTURE\\BRANCH\\SRC\" /I\"C:\\USERS\\CRWPE\\DESKTOP\\FLYSIGHT-VIEWER-2\\TESTS\\FUSION\" /nologo /W1 /WX- /diagnostics:column /O2 /Ob2 /D _UNICODE /D UNICODE /D WIN32 /D _WINDOWS /D NDEBUG /D _ENABLE_EXTENDED_ALIGNED_STORAGE /D EIGEN_NO_STATIC_ASSERT /D QT_CORE_LIB /D QT_NO_DEBUG /D WIN64 /D _WIN64 /D UNICODE /D _UNICODE /D \"CMAKE_INTDIR=\\\"Release\\\"\" /EHsc /MD /GS /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /GR /std:c++17 /permissive- /Fo\"FUSION_GOLDEN_HARNESS.DIR\\RELEASE\\\\\" /Fd\"FUSION_GOLDEN_HARNESS.DIR\\RELEASE\\VC143.PDB\" /external:W0 /Gd /TP /wd4267  /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/third-party/GTSAM-install/include/gtsam/3rdparty/SuiteSparse_config\" /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/third-party/GTSAM-install/include/gtsam/3rdparty/CCOLAMD\" /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/third-party/GTSAM-install/include\" /external:I \"C:/Program Files/Boost/boost_1_87_0\" /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/third-party/oneTBB-install/include\" /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/third-party/GTSAM-install/include/gtsam/3rdparty/metis\" /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/third-party/GTSAM-install/include/gtsam/3rdparty/cephes\" /external:I \"C:/Users/crwpe/Desktop/flysight-viewer-2/third-party/GTSAM-install/include/gtsam/3rdparty/Eigen\" /external:I \"C:/Qt/6.9.3/msvc2022_64/include/QtCore\" /external:I \"C:/Qt/6.9.3/msvc2022_64/include\" /external:I \"C:/Qt/6.9.3/msvc2022_64/mkspecs/win32-msvc\" /bigobj -Zc:__cplusplus -utf-8 C:\\USERS\\CRWPE\\APPDATA\\LOCAL\\TEMP\\CLAUDE\\C--USERS-CRWPE-DESKTOP-FLYSIGHT-VIEWER-2\\53F8FC9F-D9CD-470E-91AC-8328DCAECB72\\SCRATCHPAD\\BRANCH-CAPTURE\\BRANCH\\SRC\\BATCHFUSION.CPP",
-    "runs": 2,
-    "runs_byte_identical": true,
-    "comparison": "diff -rq out-noboost-1 out-boost-1 (no output), and SHA-256 of every file",
-    "files_compared": 15,
-    "byte_identical": true,
-    "date": "2026-09-21"
-  },
-  "sha256_lf": {
-    "coarse_linear.channels.txt": "20b090bb44c3b64876c72a5f5d83a61efb2bdd9f226a94cd7ed80f498286a40f",
-    "coarse_linear.json": "3522985c81307cdc3631f4c8b415981ca0f9be8486a1a2ddcfa2339b8521f6d9",
-    "coarse_maneuver.channels.txt": "fbf0a9a54a83fe65bace59f4cb6c1b13123c5bca3dd018117091267694e4da70",
-    "coarse_maneuver.json": "ecb7536756acdd0656bcf1691a45508e2f6188db39885c68646614fada4b66c5",
-    "reject_coverage.json": "43d6b94acb23047dc06e80cb44cd403e5b799af8d9969e45606be6b032af3c6d",
-    "reject_gnss_gap.json": "48c1c27d17197b67be794964663126173cc77b45b9938b7a212931aca098a1b3",
-    "reject_imu_gap.json": "66802eb9e60f8f079d562dbaed8007ab86d3db52033c1179146e641149eb502a",
-    "reject_length.json": "bfe0911d72ba435160ceba5ba29b819ac421f3e5d7c4a3ac0c2a15227987ae7c",
-    "reject_nonfinite.json": "592b7044bc10ba840ce67235966928053d58b8e1f616082df3b847a1f2020f33",
-    "reject_origin.json": "087a0b11071f1bd8245776dbab54789d8adbcbf71bb62f03805fce33c08eb976",
-    "reject_sigma.json": "78ce07be9d8cd2d39fba891d3862b88f8f8a8ba1b148dc5cb398c71774884bd2",
-    "reject_time_order.json": "d26c3b406ea3e31a2246ad98f7b2d1f34ad808bb6fc351bc2be9591b1f393d6d",
-    "reject_too_few_fixes.json": "f9bfa0842a8a745c5ce5684bc611c529428afd08ee5d9d952bc3e03b996a9a68",
-    "stationary_spin.channels.txt": "ba2b27300a24b3c873f14ad49807db8aa6e024267fb35ebcd6e7d1fd86fc5aa3",
-    "stationary_spin.json": "ac7826ee2a3436c9874ba17e52c02ad00b98997e5ef96e42c824d4a63b3755b4"
-  },
-  "sha256_note": "Hashes of the files as captured (LF line endings). A checkout with core.autocrlf=true has CRLF in the working tree; the loader accepts both.",
-  "fixture_generator_sha256_lf": {
-    "tests/fusion/fusionfixtures.cpp": "568b1b6ce8f6244beafe92e3b3e8c08797e57531d6929946ad57ed6952055906",
-    "tests/fusion/fusionfixtures.h": "e30840ef2277c048689f3525427f3da26aaec8e8fea4cd52aaaceda6e9ed43bc"
-  },
-  "fixture_generator_note": "The fixture generator the capture harness was compiled with (LF line endings; unchanged since the capture commit). The goldens are valid for these inputs only: if either file changes, re-capture (tests/README.md, section 11)."
+    "qt": "6.9.3",
+    "repository_revision": "1f3139a155ca4d45f879c2b6c44955977411c481",
+    "sha256_lf": {
+        "coarse_linear.channels.txt": "20b090bb44c3b64876c72a5f5d83a61efb2bdd9f226a94cd7ed80f498286a40f",
+        "coarse_linear.json": "c0e9def6b638b8ff9207adf8c863691a664fb600de112a8a5b4c8b9c7e442aba",
+        "coarse_maneuver.channels.txt": "fbf0a9a54a83fe65bace59f4cb6c1b13123c5bca3dd018117091267694e4da70",
+        "coarse_maneuver.json": "ee6b50a14d58b036527f6483a21371fbf6b9a79d250f61755c906dd4f92ee527",
+        "reject_coverage.json": "43d6b94acb23047dc06e80cb44cd403e5b799af8d9969e45606be6b032af3c6d",
+        "reject_gnss_gap.json": "48c1c27d17197b67be794964663126173cc77b45b9938b7a212931aca098a1b3",
+        "reject_imu_gap.json": "66802eb9e60f8f079d562dbaed8007ab86d3db52033c1179146e641149eb502a",
+        "reject_length.json": "bfe0911d72ba435160ceba5ba29b819ac421f3e5d7c4a3ac0c2a15227987ae7c",
+        "reject_nonfinite.json": "592b7044bc10ba840ce67235966928053d58b8e1f616082df3b847a1f2020f33",
+        "reject_origin.json": "087a0b11071f1bd8245776dbab54789d8adbcbf71bb62f03805fce33c08eb976",
+        "reject_sigma.json": "78ce07be9d8cd2d39fba891d3862b88f8f8a8ba1b148dc5cb398c71774884bd2",
+        "reject_time_order.json": "d26c3b406ea3e31a2246ad98f7b2d1f34ad808bb6fc351bc2be9591b1f393d6d",
+        "reject_too_few_fixes.json": "f9bfa0842a8a745c5ce5684bc611c529428afd08ee5d9d952bc3e03b996a9a68",
+        "stationary_spin.channels.txt": "ba2b27300a24b3c873f14ad49807db8aa6e024267fb35ebcd6e7d1fd86fc5aa3",
+        "stationary_spin.json": "5ec27d97f9e228932b30967740dc9a00a188739a88a836a4e76605c1b14dfad1"
+    },
+    "sha256_note": "Hashes of the files as written (LF line endings). A checkout with core.autocrlf=true has CRLF in the working tree; the loader accepts both.",
+    "solver": {
+        "gtsam_dir": "C:/Users/crwpe/Desktop/flysight-viewer-2/build-solver-deps/GTSAM-install/CMake",
+        "gtsam_enable_boost_serialization": 0,
+        "gtsam_use_boost_features": 0,
+        "gtsam_use_tbb": true,
+        "gtsam_version": "4.3a0",
+        "pinned_in": "cmake/SolverSuperbuild.cmake"
+    }
 }

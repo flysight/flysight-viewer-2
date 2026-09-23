@@ -521,13 +521,14 @@ endfunction()
 # gtsam:
 #   1. only these targets NAME gtsam on their own link line
 set(_FLYSIGHT_GTSAM_NAMERS
-    flysight_fusion tst_solver_smoke solver_deploy_probe tst_fusion_kernel)
+    flysight_fusion tst_solver_smoke solver_deploy_probe tst_fusion_kernel
+    fusion_golden_capture)
 #   2. only those, plus these, REACH gtsam through anything they link
 set(_FLYSIGHT_GTSAM_REACHERS
     ${_FLYSIGHT_GTSAM_NAMERS}
     FlySightViewer
     flysight_fusion_test_support flysight_fusion_session_support
-    tst_fusion_parity tst_fusion_session tst_fusion_jobs tst_fusion_rows)
+    tst_fusion_golden tst_fusion_session tst_fusion_jobs tst_fusion_rows)
 #   3. stated separately for a clear message, although implied by 2: the
 #      widget-free core, the Python bridge and the plot library never reach it
 set(_FLYSIGHT_GTSAM_NEVER

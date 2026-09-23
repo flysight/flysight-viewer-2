@@ -1,11 +1,13 @@
 // Fusion kernel, through its public API only (src/fusion/fusion.h).
 //
-// Spec acceptance 4: for each committed synthetic fixture the ported fit
-// reproduces the golden outputs captured from sensor-fusion-clean-port
-// (tests/data/fusion/, procedure in tests/README.md "Fusion golden parity").
-// Also the behavior the fusion calculation relies on: rejections as results,
-// progress and cancellation at the reference's boundaries, determinism, and
-// independence of the calling thread.
+// Golden regression against the product kernel (spec acceptance 4): for each
+// committed synthetic fixture the fit reproduces the goldens captured from the
+// kernel itself by fusion_golden_capture (tests/data/fusion/, procedure in
+// tests/README.md section 11). Goldens change only by re-capture at the end
+// of a phase that deliberately changes numerical results, never to make a
+// test pass. Also the behavior the fusion calculation relies on: rejections
+// as results, progress and cancellation at the kernel's boundaries,
+// determinism, and independence of the calling thread.
 //
 // Expectations are the committed goldens and literals, never a second call of
 // the code under test, except in the determinism and thread tests, where
@@ -18,6 +20,7 @@
 #include <limits>
 #include <memory>
 
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -92,20 +95,9 @@ double largestStep(const QVector<double> &angles)
     return largest;
 }
 
-/// The reference's wording of a progress text of the port. The port dropped
-/// the historical "Heading 0 deg"; the boundaries are the same.
-QString referenceProgressText(const QString &text)
-{
-    if (text == QStringLiteral("Starting fit"))
-        return QStringLiteral("Starting heading 0 deg");
-    if (text.startsWith(QStringLiteral("Pass ")))
-        return QStringLiteral("Heading 0 deg, pass ") + text.mid(5);
-    return text;
-}
-
 } // namespace
 
-class FusionParityTest : public QObject {
+class FusionGoldenTest : public QObject {
     Q_OBJECT
 
 private slots:
@@ -115,7 +107,8 @@ private slots:
     void successFixturesMatchGolden();
     void rejectionFixturesMatchGolden_data();
     void rejectionFixturesMatchGolden();
-    void progressMatchesReferenceBoundaries();
+    void progressMatchesGoldenBoundaries();
+    void channelsWriterIsTheInverseOfTheLoader();
     void cancelAtEachKindOfBoundary_data();
     void cancelAtEachKindOfBoundary();
     void cancelDuringPreparation_data();
@@ -165,7 +158,7 @@ bool jsonPasses(const char *key, double got, double golden)
 
 // The comparator itself: a bound wide enough for every compiler must still be
 // a bound. Both modes are exercised whatever mode the executable runs in.
-void FusionParityTest::comparatorHoldsItsBounds()
+void FusionGoldenTest::comparatorHoldsItsBounds()
 {
     const double NaN = std::numeric_limits<double>::quiet_NaN();
     const double oneUlpAboveOne = std::nextafter(1.0, 2.0);
@@ -250,7 +243,7 @@ void FusionParityTest::comparatorHoldsItsBounds()
     }
 }
 
-void FusionParityTest::fixturesAreDeterministic()
+void FusionGoldenTest::fixturesAreDeterministic()
 {
     const QList<FusionFixture> first = fusionFixtures(), second = fusionFixtures();
     QCOMPARE(first.size(), 12);
@@ -276,14 +269,14 @@ void FusionParityTest::fixturesAreDeterministic()
     }
 }
 
-void FusionParityTest::successFixturesMatchGolden_data()
+void FusionGoldenTest::successFixturesMatchGolden_data()
 {
     QTest::addColumn<QString>("name");
     for (const QString &name : kSuccessFixtures)
         QTest::newRow(qPrintable(name)) << name;
 }
 
-void FusionParityTest::successFixturesMatchGolden()
+void FusionGoldenTest::successFixturesMatchGolden()
 {
     QFETCH(QString, name);
     const FusionGolden golden = loadFusionGolden(name);
@@ -315,7 +308,7 @@ void FusionParityTest::successFixturesMatchGolden()
         QVERIFY(qAbs(result.yaw.last() - result.yaw.first()) > 360.0);
 }
 
-void FusionParityTest::rejectionFixturesMatchGolden_data()
+void FusionGoldenTest::rejectionFixturesMatchGolden_data()
 {
     QTest::addColumn<QString>("name");
     for (const FusionFixture &fixture : fusionFixtures()) {
@@ -324,7 +317,7 @@ void FusionParityTest::rejectionFixturesMatchGolden_data()
     }
 }
 
-void FusionParityTest::rejectionFixturesMatchGolden()
+void FusionGoldenTest::rejectionFixturesMatchGolden()
 {
     QFETCH(QString, name);
     const FusionGolden golden = loadFusionGolden(name);
@@ -341,20 +334,56 @@ void FusionParityTest::rejectionFixturesMatchGolden()
     QCOMPARE(diagnostics, golden.diagnostics);
 }
 
-void FusionParityTest::progressMatchesReferenceBoundaries()
+void FusionGoldenTest::progressMatchesGoldenBoundaries()
 {
+    // The golden's progress array is the kernel's own texts, in order, as the
+    // capture tool collected them.
     const QString name = QStringLiteral("coarse_maneuver");
     const FusionGolden golden = loadFusionGolden(name);
 
     QStringList received;
     const Fusion::Result result = Fusion::run(toChannels(fusionFixture(name)),
-        [&received](const QString &text) { received.append(referenceProgressText(text)); });
+        [&received](const QString &text) { received.append(text); });
     QVERIFY(result.outcome == Fusion::Outcome::Succeeded);
     QVERIFY(golden.progress.size() > 4);
     QCOMPARE(received, golden.progress);
 }
 
-void FusionParityTest::cancelAtEachKindOfBoundary_data()
+void FusionGoldenTest::channelsWriterIsTheInverseOfTheLoader()
+{
+    // fusion_golden_capture writes a channels file with fusionChannelsText();
+    // loadFusionGolden() reads it back. No fit runs here: the committed files
+    // go through the loader, back through the writer, and must come out as
+    // the same bytes (LF-normalized: the working tree may hold CRLF).
+    for (const QString &name : kSuccessFixtures) {
+        const FusionGolden golden = loadFusionGolden(name);
+        Fusion::Result result;
+        // The seventeen arrays through the field order fusionChannel() defines
+        // (the object is not const; only the accessor's view of it is).
+        for (const QString &channel : fusionChannelNames())
+            const_cast<QVector<double> &>(fusionChannel(result, channel)) = golden.channels.value(channel);
+
+        QFile file(QStringLiteral(FLYSIGHT_FUSION_GOLDEN_DIR "/") + name + QStringLiteral(".channels.txt"));
+        QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(file.fileName()));
+        QByteArray committed = file.readAll();
+        committed.replace("\r\n", "\n");
+        QVERIFY(!committed.isEmpty());
+        QCOMPARE(fusionChannelsText(result), committed);
+    }
+
+    // The sample form itself, by bit pattern: signed zero, a NaN and a
+    // subnormal must survive, which a comparison by value could not show.
+    const double NaN = std::numeric_limits<double>::quiet_NaN();
+    for (const double value : {0.0, -0.0, NaN, std::numeric_limits<double>::denorm_min(), 1700000000.037}) {
+        const QByteArray text = toHexBits(value);
+        QCOMPARE(text.size(), 16);
+        QVERIFY2(sameBits(fromHexBits(text, QStringLiteral("(test)")), value), text.constData());
+    }
+    QCOMPARE(toHexBits(-0.0), QByteArray("8000000000000000"));
+    QCOMPARE(toHexBits(1.0), QByteArray("3FF0000000000000"));
+}
+
+void FusionGoldenTest::cancelAtEachKindOfBoundary_data()
 {
     QTest::addColumn<int>("cancelAtCall");
     QTest::addColumn<QString>("lastText");
@@ -364,7 +393,7 @@ void FusionParityTest::cancelAtEachKindOfBoundary_data()
     QTest::newRow("fourth boundary") << 4 << QStringLiteral("Pass 1, iteration 2");
 }
 
-void FusionParityTest::cancelAtEachKindOfBoundary()
+void FusionGoldenTest::cancelAtEachKindOfBoundary()
 {
     QFETCH(int, cancelAtCall);
     QFETCH(QString, lastText);
@@ -393,7 +422,7 @@ void FusionParityTest::cancelAtEachKindOfBoundary()
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
 }
 
-void FusionParityTest::cancelDuringPreparation_data()
+void FusionGoldenTest::cancelDuringPreparation_data()
 {
     // stationary_spin is 40 s long: the initializer assesses two candidate
     // windows, [0, 30) and [5, 35), and asks once before each without
@@ -407,7 +436,7 @@ void FusionParityTest::cancelDuringPreparation_data()
     QTest::newRow("first reported boundary") << 3 << QStringList({QStringLiteral("Starting fit")});
 }
 
-void FusionParityTest::cancelDuringPreparation()
+void FusionGoldenTest::cancelDuringPreparation()
 {
     QFETCH(int, cancelAtCall);
     QFETCH(QStringList, expectedTexts);
@@ -436,7 +465,7 @@ void FusionParityTest::cancelDuringPreparation()
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
 }
 
-void FusionParityTest::cancelNeverRequestedChangesNothing()
+void FusionGoldenTest::cancelNeverRequestedChangesNothing()
 {
     const Fusion::Channels channels = toChannels(fusionFixture(QStringLiteral("coarse_maneuver")));
     const Fusion::Result plain = Fusion::run(channels);
@@ -452,7 +481,7 @@ void FusionParityTest::cancelNeverRequestedChangesNothing()
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
 }
 
-void FusionParityTest::twoRunsAreBitIdentical()
+void FusionGoldenTest::twoRunsAreBitIdentical()
 {
     // The solver runs its eliminations on TBB threads (tst_fusion_kernel's
     // solverUsesTbb asserts that); the result must not depend on scheduling.
@@ -463,7 +492,7 @@ void FusionParityTest::twoRunsAreBitIdentical()
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
 }
 
-void FusionParityTest::workerThreadMatchesMainThread()
+void FusionGoldenTest::workerThreadMatchesMainThread()
 {
     const Fusion::Channels channels = toChannels(fusionFixture(QStringLiteral("stationary_spin")));
     const Fusion::Result onMain = Fusion::run(channels);
@@ -480,7 +509,7 @@ void FusionParityTest::workerThreadMatchesMainThread()
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
 }
 
-void FusionParityTest::resultIsIndependentOfCallerState()
+void FusionGoldenTest::resultIsIndependentOfCallerState()
 {
     const QString name = QStringLiteral("coarse_linear");
     const Fusion::Result reference = runFixture(name);
@@ -502,5 +531,5 @@ void FusionParityTest::resultIsIndependentOfCallerState()
     QVERIFY(allArraysEmpty(empty));
 }
 
-FLYSIGHT_TEST_MAIN(FusionParityTest)
-#include "tst_fusion_parity.moc"
+FLYSIGHT_TEST_MAIN(FusionGoldenTest)
+#include "tst_fusion_golden.moc"

@@ -288,14 +288,13 @@ expect_none("no hand-cached failure" "catch *\\(" src/fusion/fusionregistration.
 # ─────────────────────────────── naming
 # The algorithm is a batch factor-graph fit and nothing is named after a
 # filter; the branch's sensor and output names are gone.
-# Allow: tests/README.md reproduces the golden-capture harness verbatim, which
-# names the branch's files and fields, and capture.json records the branch's
-# compiler command line: both are excluded. The patterns are case-sensitive on
+# Allow: tests/README.md is excluded because its section 10 spells these
+# patterns when it describes this rule. The patterns are case-sensitive on
 # purpose (SP_MediaSeekForward contains the three letters in lower case after
 # an upper-case S; "[Ee]kf" does not match it).
 audit_group(naming)
 set(NAMING_PATHS src tests docs python_plugins cmake CMakeLists.txt README.md
-    ":!tests/README.md" ":!tests/data/fusion/capture.json")
+    ":!tests/README.md")
 expect_none("nothing is named after a filter" "EKF|[Ee]kf" ${NAMING_PATHS})
 expect_none("branch output names are gone" "posN|posE|posD|_IMU_GNSS_EKF|ImuGnssEkf" ${NAMING_PATHS})
 # Allow: these two counts pin the application's plot list to the list the
@@ -309,11 +308,12 @@ expect_count("six local-frame plots" "^ *\\{\"GNSS \\(Local frame\\)\", " 6 src/
 # checked at configure time by flysight_assert_solver_confinement()
 # (cmake/SolverDependencies.cmake), which sees real link closures.
 audit_group(solver-confinement)
-# Allow: a new kernel file under src/fusion is already allowed. A new TEST
-# that needs GTSAM types is added to the regex and to the FUSION block of
-# tests/CMakeLists.txt; nothing else under src ever is.
+# Allow: a new kernel file under src/fusion is already allowed. A new TEST or
+# tool that needs GTSAM types is added to the regex and to the FUSION block of
+# tests/CMakeLists.txt (and, if it links gtsam itself, to _FLYSIGHT_GTSAM_NAMERS
+# in cmake/SolverDependencies.cmake); nothing else under src ever is.
 expect_only("GTSAM headers: kernel and its tests only" "#include <gtsam/"
-  "^src/fusion/|^tests/(tst_solver_smoke\\.cpp|solverprobe\\.h|solver_deploy_probe\\.cpp|tst_fusion_kernel\\.cpp|README\\.md)$"
+  "^src/fusion/|^tests/(tst_solver_smoke\\.cpp|solverprobe\\.h|solver_deploy_probe\\.cpp|tst_fusion_kernel\\.cpp|fusion_golden_capture\\.cpp|README\\.md)$"
   src tests cmake)
 expect_none("public and registration files are GTSAM-free" "#include <(gtsam|Eigen)"
   src/fusion/fusion.h src/fusion/fusionregistration.h src/fusion/fusionregistration.cpp)
@@ -329,11 +329,9 @@ expect_none("nobody but the application references the fusion library" "fusion/|
 # Narrow and case-sensitive on purpose: the GTSAM_..._BOOST_... option and
 # macro names and the "Boost::" test of the Boost-free guard in
 # cmake/SolverDependencies.cmake must not match.
-# Allow: tests/README.md (the capture harness's cross-check against a
-# Boost-enabled solver build) is excluded.
 expect_none("no Boost in FlySight sources or build"
   "#include <boost/|boost::[a-z]|find_package\\(Boost|find_dependency\\(Boost|Boost::boost|BoostDiscovery"
-  src tests cmake CMakeLists.txt third-party/CMakeLists.txt ":!tests/README.md")
+  src tests cmake CMakeLists.txt third-party/CMakeLists.txt)
 
 # ─────────────────────────────── one-worker
 # One thread owns all state; the worker owns captured inputs and nothing else.

@@ -232,9 +232,9 @@
 103 tst_map_models boundsClearedWhenNoTrack
 103 tst_map_models recoversAfterSourceCorrection
 
-# 104 - the ported fusion reproduces the goldens captured from sensor-fusion-clean-port
-104 tst_fusion_parity successFixturesMatchGolden
-104 tst_fusion_parity rejectionFixturesMatchGolden
+# 104 - the kernel reproduces its goldens (captured from it by fusion_golden_capture)
+104 tst_fusion_golden successFixturesMatchGolden
+104 tst_fusion_golden rejectionFixturesMatchGolden
 104 tst_fusion_kernel fitTraceMatchesGolden
 
 # 105 - reads of fusion outputs, accH, the diagnostics, an interpolated value: unavailable, nothing runs
@@ -272,8 +272,8 @@
 109 tst_fusion_rows rejectedTrackShowsBadge
 
 # 110 - cancel stops at the next solver boundary, publishes nothing, requestable; the next job starts
-110 tst_fusion_parity cancelAtEachKindOfBoundary
-110 tst_fusion_parity cancelDuringPreparation
+110 tst_fusion_golden cancelAtEachKindOfBoundary
+110 tst_fusion_golden cancelDuringPreparation
 110 tst_fusion_session cancelStopsAtNextBoundary
 110 tst_jobqueue cancelRunningThenNextStarts
 110 tst_fusion_jobs cancelDuringFitThenNextJobStarts

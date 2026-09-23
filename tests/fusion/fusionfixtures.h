@@ -11,10 +11,13 @@ namespace FlySightTest {
 /// twenty-one inputs the fit consumes, as plain arrays.
 ///
 /// This header and its source use Qt Core and the C++ standard library only
-/// and include nothing from src/. They are compiled twice: by the ported
-/// tests, and by the golden capture harness against sensor-fusion-clean-port
-/// (tests/README.md, "Fusion golden parity"). Both sides therefore feed the
-/// same bits to the code they test.
+/// and include nothing from src/. They are compiled once, into
+/// flysight_fusion_test_support, and used by the tests and by the capture
+/// tool fusion_golden_capture (tests/README.md, section 11), so the goldens
+/// and the tests see the same inputs. The generator's bit-reproducibility
+/// rules (fusionfixtures.cpp) still matter: the fixtures must be the same bits
+/// on every CI compiler for the portable comparison to mean anything, and
+/// capture.json records the generator's hash.
 struct FusionFixture {
     QString name;                                  ///< also the golden file stem
     QVector<double> gnssTime, north, east, down, velN, velE, velD, hAcc, vAcc, sAcc;

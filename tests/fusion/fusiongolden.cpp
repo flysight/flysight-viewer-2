@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 
@@ -34,7 +35,19 @@ bool sameBitPattern(double a, double b)
     return std::memcmp(&a, &b, sizeof(double)) == 0;
 }
 
-/// The double whose IEEE-754 bit pattern is the 16 hexadecimal digits `text`.
+/// Line 2 of a channels file: the one expression the loader checks against
+/// and the writer produces, so the two cannot differ.
+QByteArray channelsColumnsLine()
+{
+    return "# columns: " + fusionChannelNames().join(QLatin1Char(' ')).toLatin1();
+}
+
+} // namespace
+
+// The sample form of a channels file, reader and writer side by side: each is
+// exactly the inverse of the other (bit pattern, not value: NaN payloads, -0.0
+// and subnormals survive the round trip).
+
 double fromHexBits(const QByteArray &text, const QString &path)
 {
     bool ok = false;
@@ -46,6 +59,17 @@ double fromHexBits(const QByteArray &text, const QString &path)
     return value;
 }
 
+QByteArray toHexBits(double value)
+{
+    quint64 bits;
+    std::memcpy(&bits, &value, sizeof bits);
+    char text[17];
+    std::snprintf(text, sizeof text, "%016llX", static_cast<unsigned long long>(bits));
+    return QByteArray(text, 16);
+}
+
+namespace {
+
 QHash<QString, QVector<double>> loadChannels(const QString &fileName, int rows)
 {
     const QString path = goldenPath(fileName);
@@ -56,7 +80,7 @@ QHash<QString, QVector<double>> loadChannels(const QString &fileName, int rows)
         lines.removeLast();
 
     const QStringList &names = fusionChannelNames();
-    const QByteArray columns = "# columns: " + names.join(QLatin1Char(' ')).toLatin1();
+    const QByteArray columns = channelsColumnsLine();
     if (lines.size() != rows + 2 || lines.at(0) != kChannelsHeader || lines.at(1) != columns)
         qFatal("Fusion golden: %s does not have the v1 header, the expected columns and %d rows",
                qPrintable(path), rows);
@@ -166,6 +190,30 @@ const QVector<double> &fusionChannel(const FlySight::Fusion::Result &r, const QS
     if (index < 0)
         qFatal("Fusion golden: no channel named %s", qPrintable(name));
     return *arrays[index];
+}
+
+QByteArray fusionChannelsText(const FlySight::Fusion::Result &result)
+{
+    const QStringList &names = fusionChannelNames();
+    QList<const QVector<double> *> columns;
+    for (const QString &name : names) {
+        const QVector<double> &channel = fusionChannel(result, name);
+        if (channel.size() != result.time.size())
+            qFatal("Fusion golden: channel %s has %lld samples, _time has %lld",
+                   qPrintable(name), qlonglong(channel.size()), qlonglong(result.time.size()));
+        columns.append(&channel);
+    }
+
+    QByteArray text = QByteArray(kChannelsHeader) + '\n' + channelsColumnsLine() + '\n';
+    for (qsizetype row = 0; row < result.time.size(); ++row) {
+        for (qsizetype column = 0; column < columns.size(); ++column) {
+            if (column > 0)
+                text += ' ';
+            text += toHexBits(columns.at(column)->at(row));
+        }
+        text += '\n';
+    }
+    return text;
 }
 
 FusionGolden loadFusionGolden(const QString &name)

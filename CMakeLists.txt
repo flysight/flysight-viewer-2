@@ -84,7 +84,7 @@ endif()
 #   - Forwarded to the application project; tests/CMakeLists.txt owns the option
 #   - With it OFF no test target links Qt Widgets (ctest -LE widgets is the equivalent at run time)
 #
-# FLYSIGHT_FUSION_EXACT_TESTS: With the fusion tests, run the golden parity tests again in bit-exact mode (AUTO|ON|OFF, default AUTO)
+# FLYSIGHT_FUSION_EXACT_TESTS: With the fusion tests, run the golden regression tests again in bit-exact mode (AUTO|ON|OFF, default AUTO)
 #   - Forwarded to the application project; tests/CMakeLists.txt owns the option
 #   - AUTO registers the tst_fusion_*_exact tests (ctest -L exact; no new executables) only when the
 #     compiler is the one the goldens were captured with (tests/data/fusion/capture.json)
@@ -98,7 +98,7 @@ option(FLYSIGHT_BUILD_PYTHON_TESTS "With FLYSIGHT_BUILD_TESTS: also build the em
 option(FLYSIGHT_BUILD_FUSION_TESTS "With FLYSIGHT_BUILD_TESTS: also build the GTSAM-linked tests" ON)
 option(FLYSIGHT_BUILD_WIDGET_TESTS "With FLYSIGHT_BUILD_TESTS: also build the tests that need Qt Widgets" ON)
 set(FLYSIGHT_FUSION_EXACT_TESTS "AUTO" CACHE STRING
-    "With the fusion tests: run the golden parity tests again in bit-exact mode (AUTO: when the compiler matches capture.json; ON; OFF)")
+    "With the fusion tests: run the golden regression tests again in bit-exact mode (AUTO: when the compiler matches capture.json; ON; OFF)")
 set_property(CACHE FLYSIGHT_FUSION_EXACT_TESTS PROPERTY STRINGS AUTO ON OFF)
 
 # Handle option interaction: THIRD_PARTY_ONLY implies no app build

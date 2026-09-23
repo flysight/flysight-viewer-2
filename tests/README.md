@@ -10,7 +10,7 @@
 8. [Writing a test](#8-writing-a-test)
 9. [Acceptance traceability](#9-acceptance-traceability)
 10. [Cleanup audit](#10-cleanup-audit)
-11. [Fusion golden parity](#11-fusion-golden-parity)
+11. [Fusion golden regression](#11-fusion-golden-regression)
 12. [Manual verification: plot-driven jobs](#12-manual-verification-plot-driven-jobs)
 
 [Appendix A. The acceptance items (1-19)](#appendix-a-the-acceptance-items-1-19)
@@ -36,8 +36,8 @@ packages are the same whether or not the option is set.
 There are 41 test executables plus the audit. `ctest -N` lists 42 entries, or
 47 where the bit-exact runs of the five fusion golden tests are registered
 (`tst_fusion_*_exact`: the same executables a second time, label `exact`,
-Release only; sections 3 and 11). `solver_deploy_probe` is also built, but is not a test (see
-below).
+Release only; sections 3 and 11). `solver_deploy_probe` and
+`fusion_golden_capture` are also built, but are not tests (see below).
 
 **Harness**
 
@@ -119,16 +119,16 @@ below).
 | Test | Covers |
 |------|--------|
 | `tst_solver_smoke` | GTSAM's exported CMake target compiles, links and runs in a test: the install is the shipped configuration (`4.3a0`, TBB on, bundled Eigen 3.4, built without Boost: `GTSAM_ENABLE_BOOST_SERIALIZATION` and `GTSAM_USE_BOOST_FEATURES` are `0`), a small pose graph optimizes to its analytic answer (Eigen, METIS, TBB, library loading), and the main thread really has the 64 MiB stack of `flysight_solver_stack()` (the test uses 48 MiB of it; with a default stack it crashes). Label `fusion`. Nothing from the fusion model is involved |
-| `tst_fusion_parity` | The fusion kernel (`flysight_fusion`) through its public API, `src/fusion/fusion.h`, only: for every committed synthetic fixture the fit reproduces the golden outputs captured from `sensor-fusion-clean-port` (three successes: seventeen channels and the diagnostics; nine rejections: the exact reason), progress texts at the reference's boundaries, cancellation at each kind of boundary leaving an empty result and no state behind (including the silent ones of preparation, before each candidate stationary window, where no progress text is emitted), two runs bit-identical with TBB on, a 64 MiB worker thread matching the main thread, and no dependence on the caller's data (sensor-fusion-jobs acceptance 4; section 11). Label `fusion` |
-| `tst_fusion_kernel` | The kernel's internals, with the literal expectations of the reference's self-test: the shared unwrap rule, preintegration across exact boundaries, every validation defect, backward attitude propagation, heading freedom, dense reconstruction timing and endpoint correction, the ten stationary-gate cases, the stationary-window scan asking for cancellation once per candidate window without reporting (and a window assessed with a given gap limit equal to one that derives it), the coarse initializer, an exact constant-velocity fit, non-convergence as a solver failure, TBB really on, and the fit trace (initializer result and cost before and after every optimizer iteration) against the goldens, which localizes a parity failure to a stage (acceptance 4; section 11). The only test that includes internal `src/fusion/` headers. Label `fusion` |
+| `tst_fusion_golden` | The fusion kernel (`flysight_fusion`) through its public API, `src/fusion/fusion.h`, only: golden regression against the kernel itself. For every committed synthetic fixture the fit reproduces the goldens captured from the kernel by `fusion_golden_capture` (three successes: seventeen channels and the diagnostics; nine rejections: the exact reason), the progress texts at the kernel's boundaries are the golden's, the channel writer of the capture tool is the inverse of the loader on the committed files (and the hex sample form round-trips signed zero, a NaN and a subnormal by bit pattern), cancellation at each kind of boundary leaves an empty result and no state behind (including the silent ones of preparation, before each candidate stationary window, where no progress text is emitted), two runs are bit-identical with TBB on, a 64 MiB worker thread matches the main thread, and nothing depends on the caller's data (sensor-fusion-jobs acceptance 4; section 11). Label `fusion` |
+| `tst_fusion_kernel` | The kernel's internals, with the literal expectations of the reference's self-test: the shared unwrap rule, preintegration across exact boundaries, every validation defect, backward attitude propagation, heading freedom, dense reconstruction timing and endpoint correction, the ten stationary-gate cases, the stationary-window scan asking for cancellation once per candidate window without reporting (and a window assessed with a given gap limit equal to one that derives it), the coarse initializer, an exact constant-velocity fit, non-convergence as a solver failure, TBB really on, and the fit trace (initializer result and cost before and after every optimizer iteration) against the goldens, which localizes a golden failure to a stage (acceptance 4; section 11). The only test that includes internal `src/fusion/` headers. Label `fusion` |
 | `tst_fusion_session` | Sensor fusion as a registered calculation (`src/fusion/fusionregistration.cpp`) on real `SessionData` engines bound to the global registry, with the real fit on the test's main thread: the shape of the three registrations (21 inputs, 18 outputs, explicit, title "Sensor fusion"); fixture sessions whose effective inputs are bit-identical to the kernel's fixtures; reads of every fusion value, `accH`, the system-time axis, the diagnostics and an interpolated logbook value never run the fit, in any order, nor does the exporter (sensor-fusion-jobs acceptance 5); a request runs once, publishes all outputs together, matches the kernel's goldens, and brings `accH` and `_system_time` with it (6); prepare / compute / publish equals `request()` bit for bit (7); an input change after publication drops everything while markers do not (8); a rejection is a cached result with its reason, `NotProduced` for inspection, and requestable again after an input change (9); cancellation at each kind of boundary through the engine's facility publishes and caches nothing (10); sessions without IMU data, without a local origin or without a time fit are `MissingInput` / `NotApplicable` (11); blocker inspection reports the fit through on-demand intermediates and never starts it (12); a natural session through the real input chain; two sessions are independent. Label `fusion` |
 | `tst_fusion_jobs` | The real fit through `JobQueue` on a real `SessionModel`, on the queue's 64 MiB worker: one job publishes all outputs together and announces them through the session model (acceptance 6); the queue gives the bits a synchronous request gives (7); an input edit during the fit asks the fit to stop at once, ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job (11); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before and after a published fit, while the loaded row's cell shows the golden's number the moment the job publishes (`dataChanged` for that row only, and the number already there when the view is told); shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the queue delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 11 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
-| `tst_fusion_parity_exact`, `tst_fusion_kernel_exact`, `tst_fusion_session_exact`, `tst_fusion_jobs_exact`, `tst_fusion_rows_exact` | Not executables: the five tests above that compare with the goldens, run a second time with `FLYSIGHT_FUSION_EXACT=1` and otherwise the same environment, so that every golden comparison is bit equality (section 11, "Tolerance policy"). Registered only where that is a fair demand, the compiler the goldens were captured with (`FLYSIGHT_FUSION_EXACT_TESTS`, section 3). The first two decide parity; the other three show that the bits survive the engine, the queue's worker thread and the plot rows. Labels `fusion` and `exact` |
+| `tst_fusion_golden_exact`, `tst_fusion_kernel_exact`, `tst_fusion_session_exact`, `tst_fusion_jobs_exact`, `tst_fusion_rows_exact` | Not executables: the five tests above that compare with the goldens, run a second time with `FLYSIGHT_FUSION_EXACT=1` and otherwise the same environment, so that every golden comparison is bit equality (section 11, "Tolerance policy"). Registered only where that is a fair demand, the compiler the goldens were captured with (`FLYSIGHT_FUSION_EXACT_TESTS`, section 3). The first two decide bit-identity; the other three show that the bits survive the engine, the queue's worker thread and the plot rows. Labels `fusion` and `exact` |
 | `tst_fusion_rows` | The plot-row script with the **real** fusion plots: `PlotModel` + `PlotRequests` + `JobQueue` + `SessionModel` + the fusion registration, with real fits on the queue's 64 MiB worker and the seventeen plots of `fusionPlots()` (`tests/fusion/fusionsessions.h`, which mirrors `MainWindow::registerBuiltInPlots()`; `audit_cleanup` pins the application's list at seventeen rows). All seventeen plots are explicit-backed and the six local-frame plots are not; the row script of acceptance 15 on three real tracks (three jobs, the count falling as each publishes, unchecking mid-way removes the queued job and lets the running one finish, cancel leaves the plot checked and the track missing with nothing published, a fourth track is missing with a count of one and starts nothing, refresh computes it), with every published track held to the kernel's goldens and the job history as a literal; roll, pitch and yaw share one job and one progress text; `accH` is blocked by the fit and never has a job of its own; a session without IMU data is in no count, list or tooltip of any of the seventeen rows before, during and after a fit (11); a rejected recording shows the warning badge with the reason, offers no retry, and becomes refreshable when its input changes (9); sessions are edited, tracks hidden and shown and other values read while a real fit runs, without disturbing it (19, the half that needs no widget). Steered by the first progress text of a job and by `jobFinished`: no gate, no sleeps. Label `fusion` |
 
-`solver_deploy_probe` is built with these but is not a test and is not counted
-above: a plain executable (no Qt) around the same pose-graph exercise
-(`solverprobe.h`). A QtTest executable cannot run inside an installed
+Two executables are built with these but are not tests and are not counted
+above. `solver_deploy_probe` is a plain executable (no Qt) around the same
+pose-graph exercise (`solverprobe.h`). A QtTest executable cannot run inside an installed
 application tree, because Qt Test is not deployed; this one can. Copy it into
 the installed tree, run it with a minimal `PATH`, and remove it again: it
 starts only if every solver library was deployed.
@@ -139,6 +139,10 @@ cp build/FlySightViewer-build/Release/solver_deploy_probe.exe build/install/
 (cd build/install && PATH=/c/Windows/System32 ./solver_deploy_probe.exe)   # prints "solver probe ok, error=..."
 rm build/install/solver_deploy_probe.exe
 ```
+
+`fusion_golden_capture` is the other: it runs the product kernel on the twelve
+synthetic fixtures and writes the goldens of `tests/data/fusion/` (section 11,
+"The capture tool" and "Re-capture procedure").
 
 **Audit**
 
@@ -232,8 +236,8 @@ where they run. CMake 3.22 or newer is needed for the automatic DLL and
 | `FLYSIGHT_BUILD_TESTS` | `OFF` | Adds `tests/` to the application build. No install rules: packaging is unaffected |
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | Only with the first: also build `tst_python_bridge`. `OFF` removes the target. If NumPy is missing from the build-time Python the test is still built but listed as **Disabled**, not omitted (section 5) |
 | `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | Only with the first: also build `tst_plot_row_delegate`, the one test that links Qt Widgets (it runs an offscreen `QTreeView`). `OFF` removes the target, and then no test target links Widgets. Forwarded by the root `CMakeLists.txt` like the others |
-| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | Only with the first: also build the GTSAM-linked tests (`tst_solver_smoke`, `tst_fusion_parity`, `tst_fusion_kernel`, `tst_fusion_session`, `tst_fusion_jobs`, `tst_fusion_rows`) and `solver_deploy_probe`, all defined in one block of `tests/CMakeLists.txt` through `flysight_add_fusion_test()`. `OFF` removes the targets, and then no test target references GTSAM. Forwarded by the root `CMakeLists.txt` like the other two |
-| `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | Only with the fusion tests: register the bit-exact runs `tst_fusion_*_exact` (label `exact`; no new executable). `AUTO` registers them when the compiler is 64-bit MSVC of the same major.minor as `cl_version` in `tests/data/fusion/capture.json` (19.44), and otherwise prints "Fusion exact tests not registered: ..." at configure time; `ON` registers them whatever the compiler is; `OFF` never does. In every mode they exist for the Release configuration only. Forwarded by the root `CMakeLists.txt` like the others (section 11, "Tolerance policy") |
+| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | Only with the first: also build the GTSAM-linked tests (`tst_solver_smoke`, `tst_fusion_golden`, `tst_fusion_kernel`, `tst_fusion_session`, `tst_fusion_jobs`, `tst_fusion_rows`), `solver_deploy_probe` and the golden capture tool `fusion_golden_capture`, all defined in one block of `tests/CMakeLists.txt` (the tests through `flysight_add_fusion_test()`). `OFF` removes the targets, and then no test target references GTSAM. Forwarded by the root `CMakeLists.txt` like the other two |
+| `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | Only with the fusion tests: register the bit-exact runs `tst_fusion_*_exact` (label `exact`; no new executable). `AUTO` registers them when the compiler is 64-bit MSVC of the same major.minor as `cl_version` in `tests/data/fusion/capture.json` (19.44; the file is written by `fusion_golden_capture` at every capture), and otherwise prints "Fusion exact tests not registered: ..." at configure time; `ON` registers them whatever the compiler is; `OFF` never does. In every mode they exist for the Release configuration only. Forwarded by the root `CMakeLists.txt` like the others (section 11, "Tolerance policy") |
 
 All four sub-options are forwarded by the root (superbuild) `CMakeLists.txt` to
 the application project, unconditionally, so switching one back reaches the
@@ -259,7 +263,7 @@ ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -LE p
 ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -LE fusion   # everything that does not link GTSAM
 ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -L oracle
 ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -L audit
-ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -L exact    # bit-exact golden parity, where registered
+ctest --test-dir build/FlySightViewer-build -C Release --output-on-failure -L exact    # bit-exact golden regression, where registered
 ```
 
 ## 4. Running one test / one function
@@ -672,7 +676,7 @@ never stand alone.
 | 3 | duplicate endpoints, closed, degenerate, empty; non-finite skipped | `tst_simplified_track::duplicatePositionEndpoints`, `closedTrack`, `degenerateTracks`, `emptyTrack`, `nonFiniteSamplesAreSkipped` |
 | 3 | projection once per recording, in the local-coordinate calculation | `tst_simplified_track::projectionRunsOncePerRecording`; `audit local-projection` |
 | 3 | no origin: no track, no dot, bounds; recovery | `tst_simplified_track::unavailableWithoutOriginAndRecovers`; `tst_map_models::noOriginRemovesTrackAndDot`, `boundsClearedWhenNoTrack`, `recoversAfterSourceCorrection` |
-| 4 | the port reproduces the goldens | `tst_fusion_parity::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`. Bit for bit on the capture compiler: the same functions in the CTest tests `tst_fusion_parity_exact` and `tst_fusion_kernel_exact` (the map names test functions, not CTest tests, so these have no line of their own) |
+| 4 | the kernel reproduces its goldens, captured from it by `fusion_golden_capture` | `tst_fusion_golden::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`. Bit for bit on the capture compiler: the same functions in the CTest tests `tst_fusion_golden_exact` and `tst_fusion_kernel_exact` (the map names test functions, not CTest tests, so these have no line of their own) |
 | 5 | reads (outputs, `accH`, diagnostics, interpolated value) never run anything | `tst_fusion_session::readsNeverRunTheFit`; `tst_fusion_jobs::readersNeverStartAFit` |
 | 5 | ... nor does a Python plugin that reads an explicit output or a value derived from one (synthetic explicit calculation; no GTSAM) | `tst_python_bridge::pluginsNeverStartExplicitWork`; `audit gestures` (product code never calls the engine's synchronous `request()`) |
 | 6 | runs once, publishes together, derived values appear, second request runs nothing | `tst_fusion_session::requestRunsOnceAndPublishesTogether`; `tst_fusion_jobs::jobPublishesAllOutputsTogether` |
@@ -681,7 +685,7 @@ never stand alone.
 | 8 | input change while running: superseded, nothing published, requestable | `tst_calcengine_async::inputChangeWhileRunningRefuses`; `tst_session_engine::asyncRequestOnSession`; `tst_jobqueue::inputChangeWhileRunningSupersedes`; `tst_fusion_jobs::inputChangeDuringFitSupersedes`; (stopped early) `tst_calcengine_async::willBeRefusedReportsTheEnginesMarks`, `tst_jobqueue::staleRunningJobIsStoppedAtOnce`, `requestWhileStaleJobWindsDown`, `tst_plot_requests::staleRunningJobShowsRefreshAtOnce` |
 | 8 | change after publication drops the result and dependents | `tst_calcengine_async::changeAfterPublicationDropsDependents`; `tst_fusion_session::changeAfterPublicationDropsEverything` |
 | 9 | rejection: unavailable, diagnostics reason, succeeded job with the reason, no second run, fresh run after an input change | `tst_fusion_session::rejectionIsACachedResult`; `tst_fusion_jobs::rejectedRecordingIsSucceededJob`; (synthetic) `tst_jobqueue::rejectionSucceedsWithReason`; (the row) `tst_fusion_rows::rejectedTrackShowsBadge` |
-| 10 | cancel stops at the next boundary, publishes nothing, requestable; the next job starts | `tst_fusion_parity::cancelAtEachKindOfBoundary`, `cancelDuringPreparation`; `tst_fusion_session::cancelStopsAtNextBoundary`; `tst_jobqueue::cancelRunningThenNextStarts`; `tst_fusion_jobs::cancelDuringFitThenNextJobStarts` |
+| 10 | cancel stops at the next boundary, publishes nothing, requestable; the next job starts | `tst_fusion_golden::cancelAtEachKindOfBoundary`, `cancelDuringPreparation`; `tst_fusion_session::cancelStopsAtNextBoundary`; `tst_jobqueue::cancelRunningThenNextStarts`; `tst_fusion_jobs::cancelDuringFitThenNextJobStarts` |
 | 11 | no-IMU session: never missing / pending / failed; no job possible | `tst_jobqueue::refusesMissingInput`; `tst_plot_requests::sessionWithoutInputIsNeverListed`; `tst_fusion_session::missingInputsAreNotApplicable`; `tst_fusion_jobs::noImuSessionCannotHaveAJob`; `tst_fusion_rows::noImuSessionIsNeverCounted` (all seventeen real rows) |
 | 12 | blockers report fusion for `accH`, nothing after publication, never a fit | `tst_calcengine_blockers::derivedNameReportsExplicitBlocker`, `inspectionNeverRunsExplicit`; `tst_fusion_session::blockersReportFusion` |
 | 13 | B consumes A: one gesture runs A then B | `tst_calcengine_blockers::chainedBlockers`; `tst_plot_requests::chainedBlockersContinue` |
@@ -739,11 +743,10 @@ takes about a second. It fails, listing **all** violations, when
 - **group `naming`**: something is named after a filter (the case-sensitive
   pattern `EKF|[Ee]kf`), a branch output name (`posN` ...) or the branch's sensor
   key reappears, or `MainWindow` no longer registers exactly seventeen "Sensor
-  fusion" and six "GNSS (Local frame)" plots. This file and
-  `tests/data/fusion/capture.json` are excluded: they name the branch's files
-  in the capture procedure;
+  fusion" and six "GNSS (Local frame)" plots. This file is excluded: this
+  section spells the patterns;
 - **group `solver-confinement`**: a GTSAM header is included outside
-  `src/fusion/` and the four GTSAM test sources, the public or registration
+  `src/fusion/` and the five GTSAM test and tool sources, the public or registration
   files of the fusion library include GTSAM or Eigen, the kernel includes a
   session, engine, queue, preference or GUI header (the registration adapter
   excepted) or logs, `flysight_core`'s calculation, engine, session-model, queue
@@ -800,30 +803,36 @@ comment in the script saying what to edit: add a `:!path` exclusion to an
 rule, and change an `expect_count` number only when the fact really has gained
 a second authority.
 
-## 11. Fusion golden parity
+## 11. Fusion golden regression
 
-The sensor fusion kernel (`src/fusion/`, library `flysight_fusion`) is a
-retyping, in this repository's style, of the batch GNSS/IMU factor-graph fit of
-the branch `sensor-fusion-clean-port` (reference revision
-`83a64479fd4e7e2e10bce0b5477c5dd7a49dee7d`). The algorithm is frozen: for
-identical inputs the port must produce the same objective, biases, residuals,
-output timestamps and output channels. That is demonstrated, not asserted:
-`tests/data/fusion/` holds outputs captured from the branch's own, unchanged
-code for twelve synthetic fixtures, and `tst_fusion_parity` /
-`tst_fusion_kernel` compare the port with them (sensor-fusion-jobs
-acceptance 4).
+`tests/data/fusion/` holds what the product kernel (`src/fusion/`, library
+`flysight_fusion`) produced for twelve synthetic fixtures when the goldens were
+last captured by `fusion_golden_capture`, the capture tool built with the
+fusion tests. `tst_fusion_golden` and `tst_fusion_kernel` compare the kernel
+with them, and so, through the registered calculation and the job queue, do
+`tst_fusion_session`, `tst_fusion_jobs` and `tst_fusion_rows`
+(sensor-fusion-jobs acceptance 4). A golden test that goes red means that the
+kernel no longer produces what it produced at the last capture: an unintended
+numerical change, or an intended one whose phase has not re-captured yet.
 
-**Goldens change only by re-capture from the branch, never to make the port
-pass.** A fixture is never adjusted to make the port pass either; the only
-reason to change one is that the *reference* does not do with it what the
-fixture is for (for the committed fixtures no adjustment was needed: all twelve
-behaved as intended on the reference with the parameters below).
+**Goldens change only by re-capture with the tool, at the end of a phase that
+deliberately changes numerical results, never by hand and never to make a test
+pass.** A fixture is adjusted only when its specification changes, never to
+make a test pass either.
+
+History, in one sentence: the first goldens were captured from the branch
+`sensor-fusion-clean-port` by an out-of-tree harness; on 2026-09-22 the
+in-tree tool reproduced them bit for bit from the ported kernel, apart from the
+wording of the progress texts, which is now the kernel's own; since that
+capture the branch is the source of nothing.
 
 ### Fixtures
 
 Generated in code by `tests/fusion/fusionfixtures.cpp`, which uses Qt Core and
-the standard library only, includes nothing from `src/`, and is compiled both
-by the tests and by the capture harness, so both sides see the same bits. To be
+the standard library only, includes nothing from `src/`, and is compiled once,
+into `flysight_fusion_test_support`, for the tests and for
+`fusion_golden_capture`, so the goldens and the tests see the same bits
+(`capture.json` records the generator's hash). To be
 bit-identical with any IEEE-754 compiler the generators use only `+ - * /`,
 compute every sample from its index, and draw noise from SplitMix64 mapped to
 [-1, 1) in one fixed order (all GNSS fixes in time order, each drawing north,
@@ -833,11 +842,11 @@ attributes are 45, -75, 100 (they appear in the diagnostics only).
 
 | Fixture | Content | Exercises |
 |---|---|---|
-| `coarse_linear` | The reference self-test's exact constant-velocity case. IMU `t = i*.01`, `i = 0..200`, force `(0, 0, -9.80665)`, rate 0. GNSS `t = .037 + i*.2`, `i = 0..8`, position `(7, 8, 9) + t*(12, -4, 2)`, velocity `(12, -4, 2)`, `hAcc = vAcc = 1`, `sAcc = .1`. Origin index 0. No noise | coarse initializer, near-zero objective (2.9e-12), boundary timing; 9 states, 160 output samples |
+| `coarse_linear` | The exact constant-velocity case. IMU `t = i*.01`, `i = 0..200`, force `(0, 0, -9.80665)`, rate 0. GNSS `t = .037 + i*.2`, `i = 0..8`, position `(7, 8, 9) + t*(12, -4, 2)`, velocity `(12, -4, 2)`, `hAcc = vAcc = 1`, `sAcc = .1`. Origin index 0. No noise | coarse initializer, near-zero objective (2.9e-12), boundary timing; 9 states, 160 output samples |
 | `coarse_maneuver` | 6 s. IMU `i = 0..600` at `.01`. GNSS `t = -.163 + j*.2`, `j = 0..32` (one fix before and two after IMU coverage). Origin index 3; `hAcc = 12` for `j < 3`, else `1.5`; `vAcc = 2.5`, `sAcc = .3`. NED acceleration `(1.5 - .4t, .8t, -.6 + .1t^2)`, `v(0) = (20, -5, 3)`, `p(0) = 0`, velocity and position its exact polynomial integrals; attitude identity, so force `= a - (0, 0, 9.80665) + (.05, -.03, .08)` and rate `= (.2, -.15, .3)` deg/s. Uniform noise: force `.02`, rate `.05` deg/s, position `.3`, velocity `.1`; seed `0x8F050002` | trimming of fixes outside IMU coverage, a fit that starts after the first fix, several LM iterations over three bias passes, non-zero biases and residuals; 28 states, 540 output samples |
 | `stationary_spin` | 40 s. IMU `i = 0..1000` at `.04` (25 Hz keeps the golden small). GNSS `t = .1 + j*.2`, `j = 0..199`. Position and velocity zero. Force `(0, 0, -9.80665) + (.03, -.02, .05)`; rate `(.2, -.1, .15)` deg/s plus 90 deg/s on `wz` for `t >= 31`. `hAcc = 1`, `vAcc = 1.5`, `sAcc = .1`. Noise: force `.005`, rate `.02`, position `.2`, velocity `.03`; seed `0x8F050003` | stationary window `[0, 30)` accepted and `[5, 35)` rejected, anchor at 15 s propagated backwards, yaw through more than two turns (unwrap); 200 states, 995 output samples |
 
-Rejections, each one mutation, with the reason the reference gives:
+Rejections, each one mutation, with the reason the kernel gives:
 
 | Fixture | Base and mutation | Reason |
 |---|---|---|
@@ -855,28 +864,45 @@ Rejections, each one mutation, with the reason the reference gives:
 
 - `<fixture>.json` (all twelve; `QJsonDocument::Indented`, so every double is
   in shortest round-trip form and therefore exact): `fixture`; `outcome`
-  (`"succeeded"` or `"rejected"`); `diagnostics`, the reference's diagnostics
+  (`"succeeded"` or `"rejected"`); `diagnostics`, the kernel's diagnostics
   object (objective, biases, RMS values, every residual, the input audit and
   the initializer description are inside it; for a rejection it is
-  `{"algorithm", "failure"}`); `progress`, the reference's progress texts in
-  order (empty for rejections); and for successes `trace` (`method`,
-  `interval_s`, `anchor_time_s`, `gyro_bias_rad_s`, `start_quaternion_xyzw`,
-  `converged`, `history` as `[pass, iteration, cost before, cost after]` rows),
-  `rows` and `channels_file`.
+  `{"algorithm", "failure"}`); `progress`, the kernel's progress texts in
+  order (`Starting fit`, `Integrating IMU factors`, `Pass N, iteration M`;
+  empty for rejections, since nothing is reported before the fit starts); and
+  for successes `trace` (`method`, `interval_s`, `anchor_time_s`,
+  `gyro_bias_rad_s`, `start_quaternion_xyzw`, `converged`, `history` as
+  `[pass, iteration, cost before, cost after]` rows), `rows` and
+  `channels_file`.
 - `<fixture>.channels.txt` (the three successes): line 1
   `# flysight fusion golden channels v1`; line 2 `# columns: _time north east
-  down velN velE velD accN accE accD roll pitch yaw qx qy qz qw` (the branch's
-  `posN/posE/posD` under their new names; roll, pitch and yaw are the
-  **unwrapped** values); then one line per output sample: seventeen
-  space-separated 16-digit upper-case hexadecimal IEEE-754 bit patterns. Exact
-  by construction and locale-proof; the loader accepts LF and CRLF.
-- `capture.json`: provenance. Reference revision, date, machine, compiler and
-  the exact `cl` command line of `batchfusion.cpp`, the solver's repository,
-  revision, build options and `config.h` macros, the two-run determinism
-  statement, the cross-check (below), the SHA-256 of every golden file as
-  captured (LF line endings), and the SHA-256 of the fixture generator
-  (`tests/fusion/fusionfixtures.cpp` / `.h`) the harness was compiled with: the
-  goldens are valid for those inputs only.
+  down velN velE velD accN accE accD roll pitch yaw qx qy qz qw` (roll, pitch
+  and yaw are the **unwrapped** values); then one line per output sample:
+  seventeen space-separated 16-digit upper-case hexadecimal IEEE-754 bit
+  patterns. Exact by construction and locale-proof; the tool writes LF, the
+  loader accepts LF and CRLF.
+- `capture.json`: provenance, written by the tool. `description` and
+  `captured_by`; `capture_date`; `repository_revision`, the `--revision` text
+  the procedure passes (`git rev-parse HEAD`), or `null` when none was given
+  (never committed that way); `machine` (`os`, `cpu_architecture`); `compiler`
+  (`id`, `version`, and on MSVC `cl_version`, the same string as `version`
+  and what the configure-time gate of the exact tests reads; `generator`,
+  `platform`, `configuration`, `cmake`); `qt`; `solver` (`gtsam_version`,
+  `gtsam_use_tbb`, `gtsam_enable_boost_serialization`,
+  `gtsam_use_boost_features`, `gtsam_dir`, and `pinned_in`, the file that
+  fixes the solver revision at the recorded repository revision);
+  `determinism` (two runs in one process, byte-identical, and the method);
+  `sha256_lf`, the SHA-256 of each of the fifteen fixture files as written
+  (LF line endings; `sha256_note`); and `fixture_generator_sha256_lf`, the
+  SHA-256 of `tests/fusion/fusionfixtures.cpp` and `.h` with CRLF normalized
+  to LF (`fixture_generator_note`: the goldens are valid for those inputs
+  only).
+
+  Revision convention: the capture happens before the phase's commit exists,
+  so `repository_revision` is the parent of the commit that contains the
+  goldens, and that commit's own changes are what the kernel was at capture
+  time. The commit that holds the goldens is
+  `git log -1 -- tests/data/fusion/capture.json`.
 
 About 650 KB in total.
 
@@ -885,18 +911,20 @@ About 650 KB in total.
 - **Exact mode** (`FLYSIGHT_FUSION_EXACT=1`): every sample has the golden's
   bit pattern, every JSON number is equal, and `diagnosticsJson` is byte-equal
   to the compact serialization of the golden diagnostics. This is the mode that
-  decides whether the port is faithful. It is meaningful on the capture
-  configuration: the capture machine's compiler and flags (`capture.json`),
-  Release, and the same GTSAM binary the goldens were captured against. There,
-  with `/fp:precise` on x64 (scalar SSE2 arithmetic, no contraction),
-  restructuring code into functions cannot change a bit, so a difference is a
-  transcription defect to be found, not tolerated. `fitTraceMatchesGolden`
+  proves a rebuild on the capture configuration is bit-identical to the
+  capture, which is what catches an unintended numerical change. It is
+  meaningful on the capture configuration: the capture machine's compiler and
+  flags (`capture.json`), Release, and the same GTSAM binary the goldens were
+  captured against. There, with `/fp:precise` on x64 (scalar SSE2 arithmetic,
+  no contraction), restructuring code into functions cannot change a bit, so a
+  difference is a change to be found, not tolerated. `fitTraceMatchesGolden`
   says where: the initializer, or the first optimizer iteration whose cost
-  differs. Result at the time of the port: 0 of 28 815 samples not
+  differs. Result at the first in-tree capture (2026-09-22, the unchanged
+  kernel against the goldens of the port): 0 of 28 815 samples not
   bit-identical, all three traces and diagnostics identical.
 
   Exact mode runs automatically where it is meaningful: the CTest tests
-  `tst_fusion_parity_exact`, `tst_fusion_kernel_exact`,
+  `tst_fusion_golden_exact`, `tst_fusion_kernel_exact`,
   `tst_fusion_session_exact`, `tst_fusion_jobs_exact` and
   `tst_fusion_rows_exact` (label `exact`) are the ordinary fusion executables
   run again with `FLYSIGHT_FUSION_EXACT=1`, so on the capture configuration an
@@ -907,7 +935,7 @@ About 650 KB in total.
   configure time, so a re-capture moves the gate with it). The gate is the
   compiler because code generation is what decides the last bit. It
   deliberately does not register the tests for another compiler and let them
-  fail: a Visual Studio update that changes a bit is not a defect of the port,
+  fail: a Visual Studio update that changes a bit is not a defect of the kernel,
   and a red test that nobody can fix except by touching the goldens invites
   exactly that. Instead the configure log says `Fusion exact tests not
   registered: compiler differs from capture.json (...)`, the portable
@@ -984,7 +1012,7 @@ About 650 KB in total.
   sub-microsecond timestamp changes (5e-5 degrees of orientation, 7e-6 m/s^2 of
   acceleration), and far below anything physical or any transcription error: a
   wrong constant, index or term moves outputs by many orders more.
-  `comparatorHoldsItsBounds` (`tst_fusion_parity`) holds the comparator to
+  `comparatorHoldsItsBounds` (`tst_fusion_golden`) holds the comparator to
   this: values just inside the bound pass and just outside fail, at zero and at
   small and large goldens; one part in 100 000 of a sample fails; `_time` and
   the counts fail on one unit in the last place; and exact mode rejects one
@@ -1008,402 +1036,116 @@ About 650 KB in total.
 ```powershell
 ctest --test-dir build/FlySightViewer-build -C Release -L exact --output-on-failure
 # where the exact tests are not registered (another compiler), by hand:
-$env:FLYSIGHT_FUSION_EXACT = "1"; ctest --test-dir build/FlySightViewer-build -C Release -R "tst_fusion_(parity|kernel|session|jobs|rows)$" --output-on-failure
+$env:FLYSIGHT_FUSION_EXACT = "1"; ctest --test-dir build/FlySightViewer-build -C Release -R "tst_fusion_(golden|kernel|session|jobs|rows)$" --output-on-failure
 ```
 
-### Solver configuration of the goldens
+### The capture tool
 
-The goldens were captured against the solver this application ships: upstream
-GTSAM `814a734` (4.3a0, `https://github.com/borglab/gtsam.git`) built
-**without Boost** (`GTSAM_ENABLE_BOOST_SERIALIZATION=OFF`,
-`GTSAM_USE_BOOST_FEATURES=OFF`, TBB on), the same binary the tests run against.
-The branch itself was validated against a Boost-enabled build of fork commit
-`8938b9f` (upstream `814a734` plus one GeographicLib CMake line) with Boost 1.87.
-To bridge the two, the same harness sources were built a second time against
-that old build and run the same way: on the capture machine, on 2026-09-21, all
-twelve `<fixture>.json` and all three `.channels.txt` were **byte-identical**
-between the two solver builds, and between two consecutive runs of each
-(`capture.json`, `"cross_check"` and `"determinism"`). A re-capture repeats the
-cross-check when a Boost-enabled install is available (step 6). It is optional
-on a machine that has none, and must then be recorded in `capture.json` as not
-done. If the two outputs ever differ, in any file, by any amount: stop, commit
-nothing, and ask Michael; which configuration is the reference is his decision.
+`fusion_golden_capture` (`tests/fusion_golden_capture.cpp`) is a plain
+executable in the `FLYSIGHT_BUILD_FUSION_TESTS` block of
+`tests/CMakeLists.txt`: not a test, not installed. It links
+`flysight_fusion_test_support` (the fixtures, the golden readers and writers,
+and through it `flysight_fusion`) and `gtsam`, has the 64 MiB main-thread
+stack of `flysight_solver_stack()` because the fits run on its main thread,
+and is one of the targets named in `_FLYSIGHT_GTSAM_NAMERS`
+(`cmake/SolverDependencies.cmake`) and in the audit's `solver-confinement`
+regex, because it includes `fusion/fusionpipeline.h` for the trace seam and
+`<gtsam/config.h>` for the provenance.
 
-### Capture procedure
-
-Nothing of the harness or of the branch is committed; this section is the
-record. Everything below happens outside the working tree and changes no
-repository state (`git archive` is read-only; `git worktree add` is not, and is
-not used). `<repo>` is this checkout, `<scratch>` any directory outside it.
-MSBuild fails when paths get long: keep `<build>` short (for example
-`C:/Users/<you>/AppData/Local/Temp/fsgold-build`).
-
-1. Confirm the reference: `git rev-parse sensor-fusion-clean-port` prints
-   `83a64479fd4e7e2e10bce0b5477c5dd7a49dee7d`. If it does not, stop.
-2. Export the branch's sources:
-   `git archive --format=tar 83a64479fd4e7e2e10bce0b5477c5dd7a49dee7d src | tar -x -C <scratch>/branch`
-3. Create `<scratch>/harness/CMakeLists.txt` and `<scratch>/harness/main.cpp`
-   with the contents reproduced below. The harness has its own CMake because
-   neither the branch's nor this repository's solver discovery can serve both
-   solver builds (this repository's refuses a Boost-enabled GTSAM). It compiles
-   the branch's `batchfusion.cpp`, `imugnssekf.cpp`, `fusioninput.cpp` and the
-   three sources of its `flysight_model` library (`sessiondata.cpp` and the two
-   files of its old calculation mechanism, which the harness globs because the
-   cleanup audit forbids their names in this tree) unchanged, with exactly the branch target's options (`/EHsc /bigobj`, Release
-   defaults: `/O2 /Ob2 /fp:precise`, no `/arch`, no `/fp:fast`) and a 64 MiB
-   stack, plus this repository's `tests/fusion/fusionfixtures.cpp`. `main.cpp`
-   stores each fixture in a branch `SessionData` as stored values (the branch's
-   getters return a stored value before trying a calculated one) and then does
-   what the branch's calculation did around the kernel and nothing else:
-   `prepareFusionInput`, `runFusion`, `unwrapDegrees` on roll, pitch and yaw,
-   and on an exception the two-key failure diagnostics.
-4. Shipping build (Boost-free). `BOOST_ROOT` unset.
-   ```
-   cmake -G "Visual Studio 17 2022" -A x64 -S <scratch>/harness -B <build>/build-noboost
-     -DCMAKE_PREFIX_PATH=C:/Qt/6.9.3/msvc2022_64
-     -DHARNESS_BRANCH_SRC=<scratch>/branch/src -DHARNESS_FIXTURE_DIR=<repo>/tests/fusion
-     -DHARNESS_GTSAM_PREFIX=<repo>/build-solver-deps/GTSAM-install
-     -DHARNESS_TBB_PREFIX=<repo>/build-solver-deps/oneTBB-install
-   cmake --build <build>/build-noboost --config Release
-   ```
-   (On a machine where the superbuild installed the solver in the default place
-   the two prefixes are `<repo>/third-party/GTSAM-install` and
-   `<repo>/third-party/oneTBB-install`.) The configure log must show a `gtsam`
-   link interface without `Boost::` and both Boost macros `0`.
-5. Run it twice, with a `PATH` that holds Qt's `bin`, that solver's
-   `GTSAM-install/bin` and `oneTBB-install/bin`, the system directories, and no
-   other solver. The first line of output names the solver configuration the
-   process was compiled against; check it, and `where gtsam.dll`.
-   ```
-   <build>/build-noboost/Release/fusion_golden_harness.exe <scratch>/out-noboost-1
-   <build>/build-noboost/Release/fusion_golden_harness.exe <scratch>/out-noboost-2
-   diff -rq <scratch>/out-noboost-1 <scratch>/out-noboost-2      # must print nothing
-   ```
-   If two runs differ, stop: nothing below means anything without a
-   deterministic reference.
-6. Cross-check build (Boost-enabled; Windows, where such an install exists).
-   The same harness sources, generator, configuration and flags; only the
-   solver prefix differs, and the Boost its package config asks for:
-   ```
-   cmake -G "Visual Studio 17 2022" -A x64 -S <scratch>/harness -B <build>/build-boost
-     -DCMAKE_PREFIX_PATH=C:/Qt/6.9.3/msvc2022_64
-     -DHARNESS_BRANCH_SRC=<scratch>/branch/src -DHARNESS_FIXTURE_DIR=<repo>/tests/fusion
-     -DHARNESS_GTSAM_PREFIX=<old>/GTSAM-install -DHARNESS_TBB_PREFIX=<old>/oneTBB-install
-     -DBOOST_ROOT="C:/Program Files/Boost/boost_1_87_0"
-   cmake --build <build>/build-boost --config Release
-   ```
-   Run it twice into `out-boost-1` and `out-boost-2` with the *old* solver's
-   `bin` directories on `PATH` instead (never both solvers on one `PATH`), then
-   ```
-   diff -rq <scratch>/out-boost-1 <scratch>/out-boost-2          # must print nothing
-   diff -rq <scratch>/out-noboost-1 <scratch>/out-boost-1        # must print nothing
-   ```
-   and compare `sha256sum` of every file in both directories. Any difference:
-   stop and ask (see "Solver configuration of the goldens").
-7. Sanity: the harness prints one line per fixture and marks any fixture whose
-   outcome is not the intended one. `coarse_linear`'s objective is tiny,
-   `stationary_spin`'s `initialization` is the stationary method with
-   `stationary_interval_s = [0, 30]`, `coarse_maneuver`'s `gnss_states` is 28,
-   and each rejection reason is the one in the table above.
-8. Copy the fifteen files of `out-noboost-1` to `tests/data/fusion/` and rewrite
-   `capture.json`: date, machine, compiler, the `cl` command line of
-   `batchfusion.cpp` from
-   `<build>/build-*/fusion_golden_harness.dir/Release/fusion_golden_harness.tlog/CL.command.1.tlog`
-   (UTF-16), the solver options from `gtsam-build/CMakeCache.txt` and
-   `include/gtsam/config.h` of both solver builds, the determinism statement,
-   the cross-check result, and the hashes. A `capture.json` with
-   `"byte_identical": false` is never committed.
-9. Run the fusion tests in exact mode: `ctest -L exact` (section 3,
-   `FLYSIGHT_FUSION_EXACT_TESTS`; its `AUTO` gate reads the `cl_version` just
-   written, so reconfigure first).
-
-`<scratch>/harness/CMakeLists.txt`:
-
-```cmake
-# Golden capture harness for the fusion kernel (tests/README.md, "Fusion
-# golden parity"). Builds the fusion sources of sensor-fusion-clean-port,
-# unchanged, with the branch target's compile flags, against the GTSAM install
-# named by HARNESS_GTSAM_PREFIX. Not part of the FlySight Viewer build.
-cmake_minimum_required(VERSION 3.18)
-project(FusionGoldenHarness LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_AUTOMOC ON)
-
-set(HARNESS_BRANCH_SRC   "" CACHE PATH "src/ directory exported from sensor-fusion-clean-port")
-set(HARNESS_FIXTURE_DIR  "" CACHE PATH "tests/fusion directory of the FlySight Viewer repository")
-set(HARNESS_GTSAM_PREFIX "" CACHE PATH "GTSAM install prefix")
-set(HARNESS_TBB_PREFIX   "" CACHE PATH "oneTBB install prefix")
-foreach(_path HARNESS_BRANCH_SRC HARNESS_FIXTURE_DIR HARNESS_GTSAM_PREFIX HARNESS_TBB_PREFIX)
-  if(NOT IS_DIRECTORY "${${_path}}")
-    message(FATAL_ERROR "${_path} is not a directory: '${${_path}}'")
-  endif()
-endforeach()
-list(PREPEND CMAKE_PREFIX_PATH "${HARNESS_GTSAM_PREFIX}" "${HARNESS_TBB_PREFIX}")
-
-find_package(Qt6 REQUIRED COMPONENTS Core)
-
-# No effect with a Boost-free GTSAM (its package config never looks for
-# Boost); needed by the Boost-enabled install's find_dependency(Boost ...).
-if(MSVC)
-  set(Boost_USE_STATIC_LIBS ON)
-endif()
-find_package(GTSAM 4.3 CONFIG REQUIRED)
-
-# State in the configure log which solver this build uses.
-get_target_property(_gtsam_interface gtsam INTERFACE_LINK_LIBRARIES)
-message(STATUS "HARNESS gtsam prefix: ${HARNESS_GTSAM_PREFIX}")
-message(STATUS "HARNESS gtsam INTERFACE_LINK_LIBRARIES: ${_gtsam_interface}")
-file(STRINGS "${HARNESS_GTSAM_PREFIX}/include/gtsam/config.h" _gtsam_boost_macros
-     REGEX "define GTSAM_(ENABLE_BOOST_SERIALIZATION|USE_BOOST_FEATURES) ")
-foreach(_line IN LISTS _gtsam_boost_macros)
-  message(STATUS "HARNESS gtsam config.h: ${_line}")
-endforeach()
-
-# The branch's flysight_model library: sessiondata.cpp and the two sources of
-# its old per-value calculation mechanism (its dependency manager and its
-# calculated-value cache). They are globbed because this file is reproduced in
-# tests/README.md, where the cleanup audit forbids the old mechanism's names.
-file(GLOB HARNESS_MODEL_SOURCES
-  "${HARNESS_BRANCH_SRC}/sessiondata.cpp"
-  "${HARNESS_BRANCH_SRC}/dependencym*.cpp"
-  "${HARNESS_BRANCH_SRC}/calculatedv*.cpp")
-list(LENGTH HARNESS_MODEL_SOURCES _model_source_count)
-if(NOT _model_source_count EQUAL 3)
-  message(FATAL_ERROR "Expected the three flysight_model sources, found: ${HARNESS_MODEL_SOURCES}")
-endif()
-
-add_executable(fusion_golden_harness
-  main.cpp
-  "${HARNESS_BRANCH_SRC}/batchfusion.cpp"
-  "${HARNESS_BRANCH_SRC}/imugnssekf.cpp"
-  "${HARNESS_BRANCH_SRC}/fusioninput.cpp"
-  ${HARNESS_MODEL_SOURCES}
-  "${HARNESS_FIXTURE_DIR}/fusionfixtures.cpp")
-target_include_directories(fusion_golden_harness PRIVATE
-  "${HARNESS_BRANCH_SRC}" "${HARNESS_FIXTURE_DIR}")
-target_link_libraries(fusion_golden_harness PRIVATE gtsam Qt6::Core)
-if(MSVC)
-  # Exactly the branch's flysight_fusion target options, plus the 64 MiB
-  # main-thread stack its fit executables were linked with. No other flag.
-  target_compile_options(fusion_golden_harness PRIVATE /EHsc /bigobj)
-  target_link_options(fusion_golden_harness PRIVATE /STACK:67108864)
-endif()
+```
+fusion_golden_capture [--revision <text>] [<output-directory>]
 ```
 
-`<scratch>/harness/main.cpp`:
+The output directory defaults to this checkout's `tests/data/fusion/`
+(`FLYSIGHT_FUSION_GOLDEN_DIR`) and is created if missing; `--revision` is
+recorded in `capture.json` as `repository_revision` (without it the tool
+records `null` and warns on stderr). Anything else on the command line is a
+usage error.
 
-```cpp
-// Golden capture harness for the fusion kernel.
-//
-// Drives the UNCHANGED fusion code of sensor-fusion-clean-port with the
-// synthetic fixtures of tests/fusion/fusionfixtures.cpp and writes, per
-// fixture, what the ported kernel is later compared with. It does what the
-// branch's calculation did around the kernel (adapter, fit, unwrap, failure
-// diagnostics) and nothing else.
-//
-// usage: fusion_golden_harness <output directory>
+For each fixture, in `fusionFixtures()` order, the tool runs
+`Detail::runPipeline()` with the production `Tuning`, a progress-collecting
+`Checkpoint` and a `PipelineTrace`: exactly what `Fusion::run()` does, plus
+the trace, so the golden is what the public API returns plus the trace. It
+builds the golden object (`diagnostics` is the compact
+`Result::diagnosticsJson` parsed and written indented, nothing edited; `trace`
+is `traceJson()` of `tests/fusion/fusiontrace.h`, the same function
+`tst_fusion_kernel::fitTraceMatchesGolden` reads the golden back with) and the
+channels file (`fusionChannelsText()` of `tests/fusion/fusiongolden.cpp`,
+next to the loader; `channelsWriterIsTheInverseOfTheLoader` holds it to the
+committed files). Then it captures the fixture a **second time** and compares
+the bytes of both files: only when the two captures are identical does it
+write anything of that fixture (TBB is on; two runs must not differ). It
+prints one line per fixture, `<fixture>: succeeded, <rows> rows, objective
+<objective>` or `<fixture>: rejected (<reason>)` (or `solver_failed
+(<reason>)`), followed by `  ** UNEXPECTED **` when the outcome is not the
+fixture's `expectSuccess`; after the last fixture it writes `capture.json` and
+prints `wrote <n> files to <directory>`. Files are written with LF line
+endings and overwrite what is there.
 
-#include "batchfusion.h"
-#include "calculations/anglehelper.h"
-#include "calculations/localcoordinatecalculations.h"
-#include "fusionfixtures.h"
-#include "fusioninput.h"
-#include "imugnssekf.h"
-#include "sessiondata.h"
+Exit statuses: 0 ok; 1 usage or I/O error; 2 at least one fixture's outcome
+was unexpected (the files are still written so that they can be looked at; a
+capture that exits 2 is never committed); 3 the two captures of a fixture
+differed (nothing further is written).
 
-#include <gtsam/config.h>
+### Re-capture procedure
 
-#include <QCoreApplication>
-#include <QDir>
-#include <QFile>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
+Every phase that changes numerical results ends with this. Git Bash, from the
+repository root, on the capture machine (64-bit MSVC 19.44, Release, the test
+build in `build-phase1/`):
 
-#include <cstdio>
-#include <cstring>
-#include <iostream>
-#include <stdexcept>
-#include <string>
+```bash
+# 1. Build the kernel, the tests and the tool (Release).
+cmake --build build-phase1 --config Release
 
-using namespace FlySight;
-using FlySightTest::FusionFixture;
+# 2. Capture into tests/data/fusion/ (the default output directory), recording HEAD.
+#    PATH: Qt's bin, then the GTSAM and oneTBB install bin directories (gtsam.dll,
+#    metis-gtsam.dll, cephes-gtsam.dll, tbb12.dll, tbbmalloc.dll). No other solver on PATH.
+PATH="/c/Qt/6.9.3/msvc2022_64/bin:$PWD/build-solver-deps/GTSAM-install/bin:$PWD/build-solver-deps/oneTBB-install/bin:$PATH" \
+  build-phase1/FlySightViewer-build/Release/fusion_golden_capture.exe --revision "$(git rev-parse HEAD)"
+#    Check: twelve lines, one per fixture, in fixture order; the three success fixtures
+#    "succeeded", the nine reject_* "rejected (<reason>)"; no "** UNEXPECTED **";
+#    then "wrote 16 files to .../tests/data/fusion"; exit status 0.
 
-namespace {
+# 3. Reconfigure the application build: the exact-test gate reads capture.json at
+#    configure time (file(READ) is not a dependency, so this step is explicit).
+cmake build-phase1/FlySightViewer-build
+#    Check: the log says "Fusion exact tests registered for Release (... MSVC 19.44...)".
 
-void writeFile(const QString &path, const QByteArray &bytes)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly))
-        throw std::runtime_error("Cannot create " + path.toStdString());
-    file.write(bytes);
-}
+# 4. Run the fusion tests in both modes.
+ctest --test-dir build-phase1/FlySightViewer-build -C Release -L fusion --output-on-failure
+ctest --test-dir build-phase1/FlySightViewer-build -C Release -L exact --output-on-failure
+#    Check: all green. -L fusion covers the portable comparison and (on this machine) the
+#    exact runs; -L exact alone is the explicit bit-identity proof of the rebuilt kernel.
 
-// A branch session holding the fixture as STORED values: the branch's getters
-// return a stored value before trying a calculated one, so the real adapter
-// runs without importing a file or registering a calculation.
-SessionData sessionFor(const FusionFixture &f)
-{
-    SessionData s;
-    s.setMeasurement("GNSS", SessionKeys::Time, f.gnssTime);
-    s.setMeasurement("IMU", SessionKeys::Time, f.imuTime);
-    s.setMeasurement(LocalCoordinates::Sensor, "north", f.north);
-    s.setMeasurement(LocalCoordinates::Sensor, "east", f.east);
-    s.setMeasurement(LocalCoordinates::Sensor, "down", f.down);
-    s.setMeasurement(LocalCoordinates::Sensor, "velN", f.velN);
-    s.setMeasurement(LocalCoordinates::Sensor, "velE", f.velE);
-    s.setMeasurement(LocalCoordinates::Sensor, "velD", f.velD);
-    s.setMeasurement("GNSS", "hAcc", f.hAcc);
-    s.setMeasurement("GNSS", "vAcc", f.vAcc);
-    s.setMeasurement("GNSS", "sAcc", f.sAcc);
-    s.setMeasurement("IMU", "ax", f.ax);
-    s.setMeasurement("IMU", "ay", f.ay);
-    s.setMeasurement("IMU", "az", f.az);
-    s.setMeasurement("IMU", "wx", f.wx);
-    s.setMeasurement("IMU", "wy", f.wy);
-    s.setMeasurement("IMU", "wz", f.wz);
-    s.setAttribute(LocalCoordinates::OriginIndex, qlonglong(f.originIndex));
-    s.setAttribute(LocalCoordinates::OriginLatitude, f.originLat);
-    s.setAttribute(LocalCoordinates::OriginLongitude, f.originLon);
-    s.setAttribute(LocalCoordinates::OriginHeight, f.originHMSL);
-    return s;
-}
-
-// The stages of runFusion() called the way runFusion() calls them, to record
-// what the diagnostics do not carry: the initializer's result and the cost
-// before and after every optimizer iteration.
-QJsonObject traceOf(const FusionInput &input)
-{
-    using namespace BatchFusion;
-    const Input &full = input.recording;
-    Config config;
-    config.maxGap = 1.6 * medianInterval(full.imuTime);
-    const Input d = window(full, input.usableStart, full.gnssTime.back());
-    const Initialization init = initialize(full, d.gnssTime.front());
-    const Result r = solve(d, 0., config, init);
-
-    const auto q = init.rotation.toQuaternion();
-    QJsonArray history;
-    for (const Iteration &h : r.history)
-        history.append(QJsonArray{h.outer, h.iteration, h.before, h.after});
-    return {{"method", QString::fromStdString(init.method)},
-            {"interval_s", QJsonArray{init.intervalStart, init.intervalEnd}},
-            {"anchor_time_s", init.anchorTime},
-            {"gyro_bias_rad_s", QJsonArray{init.gyroBias.x(), init.gyroBias.y(), init.gyroBias.z()}},
-            {"start_quaternion_xyzw", QJsonArray{q.x(), q.y(), q.z(), q.w()}},
-            {"converged", r.converged},
-            {"history", history}};
-}
-
-QByteArray hexBits(double value)
-{
-    quint64 bits;
-    std::memcpy(&bits, &value, sizeof bits);
-    char text[17];
-    std::snprintf(text, sizeof text, "%016llX", static_cast<unsigned long long>(bits));
-    return QByteArray(text, 16);
-}
-
-QByteArray channelsText(const FusionOutput &out)
-{
-    QByteArray text("# flysight fusion golden channels v1\n"
-                    "# columns: _time north east down velN velE velD accN accE accD"
-                    " roll pitch yaw qx qy qz qw\n");
-    const QVector<double> *columns[] = {
-        &out.time, &out.posN, &out.posE, &out.posD, &out.velN, &out.velE, &out.velD,
-        &out.accN, &out.accE, &out.accD, &out.roll, &out.pitch, &out.yaw,
-        &out.qx, &out.qy, &out.qz, &out.qw};
-    for (qsizetype i = 0; i < out.time.size(); ++i) {
-        bool first = true;
-        for (const QVector<double> *column : columns) {
-            if (!first)
-                text += ' ';
-            first = false;
-            text += hexBits(column->at(i));
-        }
-        text += '\n';
-    }
-    return text;
-}
-
-void capture(const FusionFixture &fixture, const QDir &directory)
-{
-    QJsonObject golden{{"fixture", fixture.name}};
-    QJsonArray progress;
-    FusionOutput out;
-    bool succeeded = false;
-    try {
-        const SessionData session = sessionFor(fixture);
-        const FusionInput input = prepareFusionInput(session);
-        out = runFusion(input, [&progress](const std::string &text) {
-            progress.append(QString::fromStdString(text));
-            return true;
-        });
-        out.roll = Calculations::unwrapDegrees(out.roll);
-        out.pitch = Calculations::unwrapDegrees(out.pitch);
-        out.yaw = Calculations::unwrapDegrees(out.yaw);
-        golden["trace"] = traceOf(input);
-        succeeded = true;
-    } catch (const std::exception &e) {
-        out = FusionOutput();
-        out.diagnostics = {{"algorithm", "batch-shared-bias-v1"},
-                           {"failure", QString::fromUtf8(e.what())}};
-    }
-    golden["outcome"] = succeeded ? "succeeded" : "rejected";
-    golden["diagnostics"] = out.diagnostics;
-    golden["progress"] = succeeded ? progress : QJsonArray();
-    if (succeeded) {
-        const QString channelsFile = fixture.name + ".channels.txt";
-        golden["rows"] = int(out.time.size());
-        golden["channels_file"] = channelsFile;
-        writeFile(directory.filePath(channelsFile), channelsText(out));
-    }
-    writeFile(directory.filePath(fixture.name + ".json"),
-              QJsonDocument(golden).toJson(QJsonDocument::Indented));
-
-    std::cout << fixture.name.toStdString() << ": " << (succeeded ? "succeeded" : "rejected");
-    if (succeeded)
-        std::cout << ", " << out.time.size() << " rows, objective "
-                  << out.diagnostics["objective"].toDouble();
-    else
-        std::cout << " (" << out.diagnostics["failure"].toString().toStdString() << ")";
-    if (succeeded != fixture.expectSuccess)
-        std::cout << "  ** UNEXPECTED **";
-    std::cout << std::endl;
-}
-
-} // namespace
-
-int main(int argc, char **argv)
-{
-    QCoreApplication app(argc, argv);
-    // Which solver build this process was compiled against (stdout only).
-    std::cout << "GTSAM " << GTSAM_VERSION_STRING
-              << " GTSAM_ENABLE_BOOST_SERIALIZATION=" << GTSAM_ENABLE_BOOST_SERIALIZATION
-              << " GTSAM_USE_BOOST_FEATURES=" << GTSAM_USE_BOOST_FEATURES
-#ifdef GTSAM_USE_TBB
-              << " GTSAM_USE_TBB=1"
-#else
-              << " GTSAM_USE_TBB=0"
-#endif
-              << std::endl;
-    try {
-        if (app.arguments().size() != 2)
-            throw std::runtime_error("usage: fusion_golden_harness <output directory>");
-        const QDir directory(app.arguments().at(1));
-        if (!directory.exists() && !QDir().mkpath(directory.absolutePath()))
-            throw std::runtime_error("Cannot create the output directory");
-        for (const FusionFixture &fixture : FlySightTest::fusionFixtures())
-            capture(fixture, directory);
-        return 0;
-    } catch (const std::exception &e) {
-        std::cerr << e.what() << '\n';
-        return 1;
-    }
-}
+# 5. Report the changed golden files; they are part of the phase's files.
+git status --porcelain -- tests/data/fusion/
+git diff --stat -- tests/data/fusion/
 ```
+
+PowerShell equivalent of step 2's `PATH`:
+`$env:PATH = "C:\Qt\6.9.3\msvc2022_64\bin;$PWD\build-solver-deps\GTSAM-install\bin;$PWD\build-solver-deps\oneTBB-install\bin;$env:PATH"`
+then
+`build-phase1\FlySightViewer-build\Release\fusion_golden_capture.exe --revision (git rev-parse HEAD)`.
+
+What changes, and what it means:
+
+- `capture.json` changes on every capture (date, revision, hashes).
+- A `<fixture>.json` / `.channels.txt` changes when the phase changed that
+  fixture's numbers or texts. A phase that changes the `algorithm` string
+  changes all twelve `.json` files; the nine `reject_*.json` otherwise change
+  only when a rejection reason changes.
+- Two captures of the same build are byte-identical; the tool verifies this
+  in-process and refuses to write otherwise (exit 3).
+- A `** UNEXPECTED **` line (exit 2) means a success fixture no longer
+  converges or a rejection fixture is no longer rejected: a kernel regression
+  or a fixture the phase invalidated. Do not commit that capture; fix the
+  kernel, or (only when the phase's specification says a fixture's expectation
+  changes) the fixture and its `expectSuccess`, then capture again.
+- A red test after the capture means the kernel and the goldens disagree with
+  the tests' literal expectations (a count, a text, a key set), which the phase
+  resolves in the tests or the kernel, never by editing a golden.
+- The phase's report lists every file `git status` shows under
+  `tests/data/fusion/`.
 
 ### Fusion sessions
 

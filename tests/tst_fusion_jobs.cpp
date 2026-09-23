@@ -425,7 +425,7 @@ void FusionJobsTest::cancelDuringFitThenNextJobStarts()
     // Evidence of a stop at a boundary, not asserted: if the worker had
     // already returned when the cancel was processed, the job still ends
     // Cancelled (cancel wins). The boundary stop itself is proven in
-    // tst_fusion_session::cancelStopsAtNextBoundary and in tst_fusion_parity.
+    // tst_fusion_session::cancelStopsAtNextBoundary and in tst_fusion_golden.
     qInfo().noquote() << "cancel to job end:" << cancelToEndMs << "ms; last progress text:" << first.progressText;
 
     QCOMPARE(publishedTrace(dependencySpy, "s1"), QString());

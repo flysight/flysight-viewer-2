@@ -263,7 +263,7 @@ tests, all labelled `fusion`:
 
 | Test | What it holds |
 | --- | --- |
-| `tst_fusion_parity` | the kernel reproduces the goldens captured from the reference for twelve synthetic fixtures (three fits, nine rejections) |
+| `tst_fusion_golden` | the kernel reproduces the goldens captured from the kernel by `fusion_golden_capture` for twelve synthetic fixtures (three fits, nine rejections) |
 | `tst_fusion_kernel` | the kernel's stages, and the fit trace iteration by iteration against the goldens |
 | `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results |
 | `tst_fusion_jobs` | the real fit through the job queue: supersede, cancel, rejection, shutdown |

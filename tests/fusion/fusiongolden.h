@@ -1,6 +1,7 @@
 #ifndef FLYSIGHTTEST_FUSIONGOLDEN_H
 #define FLYSIGHTTEST_FUSIONGOLDEN_H
 
+#include <QByteArray>
 #include <QHash>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -13,12 +14,13 @@
 
 namespace FlySightTest {
 
-/// What sensor-fusion-clean-port produced for one fixture (tests/data/fusion/,
-/// see tests/README.md, "Fusion golden parity").
+/// What the product kernel produced for one fixture when the goldens were
+/// last captured by fusion_golden_capture (tests/data/fusion/, see
+/// tests/README.md section 11).
 struct FusionGolden {
     QString outcome;                  ///< "succeeded" or "rejected"
-    QJsonObject diagnostics;          ///< the reference's diagnostics object
-    QStringList progress;             ///< the reference's progress texts, in order
+    QJsonObject diagnostics;          ///< the kernel's diagnostics object
+    QStringList progress;             ///< the kernel's progress texts, in order
     QJsonObject trace;                ///< initializer result and optimizer history (successes only)
     QHash<QString, QVector<double>> channels;   ///< by column name (successes only), exact bits
 };
@@ -29,15 +31,31 @@ const QStringList &fusionChannelNames();
 /// The array of `result` that the column `name` of fusionChannelNames() holds.
 const QVector<double> &fusionChannel(const FlySight::Fusion::Result &result, const QString &name);
 
+/// The channels file of `result`, byte for byte as loadFusionGolden() reads it
+/// back: the v1 header line, the column line, then one line per output sample
+/// with the seventeen channels of fusionChannelNames() as toHexBits(), space
+/// separated; LF line endings, a final LF, nothing else. The writer used by
+/// fusion_golden_capture; channelsWriterIsTheInverseOfTheLoader
+/// (tst_fusion_golden) holds it to the committed files.
+QByteArray fusionChannelsText(const FlySight::Fusion::Result &result);
+
+/// One sample of a channels file: the sixteen upper-case hexadecimal digits of
+/// the IEEE-754 bit pattern of `value` (exact by construction, locale-proof),
+/// and its inverse, which aborts the executable (qFatal, naming `path`) on
+/// anything that is not sixteen hexadecimal digits.
+QByteArray toHexBits(double value);
+double fromHexBits(const QByteArray &text, const QString &path);
+
 /// Loads <FLYSIGHT_FUSION_GOLDEN_DIR>/<name>.json and its channels file.
 /// Tolerates CRLF line endings; aborts the test executable (qFatal) on a
 /// missing or malformed file, so a broken golden cannot look like a pass.
 FusionGolden loadFusionGolden(const QString &name);
 
 /// True when FLYSIGHT_FUSION_EXACT=1: every number must equal the golden bit
-/// for bit. This is the mode that decides parity on the capture configuration.
-/// Otherwise the portable bound (withinPortableBound) applies to everything
-/// that is not a count, a time stamp or text.
+/// for bit. This is the mode that proves a rebuild on the capture configuration
+/// is bit-identical to the capture. Otherwise the portable bound
+/// (withinPortableBound) applies to everything that is not a count, a time
+/// stamp or text.
 bool exactParityRequested();
 
 /// The portable bound: |got - golden| <= floor + kPortableRelative * |golden|.

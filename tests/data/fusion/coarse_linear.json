@@ -222,10 +222,10 @@
     "fixture": "coarse_linear",
     "outcome": "succeeded",
     "progress": [
-        "Starting heading 0 deg",
+        "Starting fit",
         "Integrating IMU factors",
-        "Heading 0 deg, pass 1, iteration 1",
-        "Heading 0 deg, pass 1, iteration 2",
+        "Pass 1, iteration 1",
+        "Pass 1, iteration 2",
         "Integrating IMU factors"
     ],
     "rows": 160,

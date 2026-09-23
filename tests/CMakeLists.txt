@@ -304,7 +304,7 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
     SOURCES tst_solver_smoke.cpp solverprobe.h
     LIBS gtsam)
 
-  # Fusion kernel: golden parity against sensor-fusion-clean-port (tests/README.md section 11)
+  # Fusion kernel: golden regression against the product kernel (tests/README.md section 11)
   add_library(flysight_fusion_test_support STATIC
     fusion/fusionfixtures.cpp fusion/fusionfixtures.h
     fusion/fusiongolden.cpp   fusion/fusiongolden.h)
@@ -315,8 +315,11 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
   if(NOT MSVC)
     target_compile_options(flysight_fusion_test_support PRIVATE -ffp-contract=off)  # fixture bits
   endif()
-  flysight_add_fusion_test(tst_fusion_parity SOURCES tst_fusion_parity.cpp LIBS flysight_fusion_test_support)
-  flysight_add_fusion_test(tst_fusion_kernel SOURCES tst_fusion_kernel.cpp LIBS flysight_fusion_test_support gtsam)
+  flysight_add_fusion_test(tst_fusion_golden SOURCES tst_fusion_golden.cpp LIBS flysight_fusion_test_support)
+  # fusion/fusiontrace.h is header-only (it reaches gtsam::Rot3) and is listed
+  # for IDE visibility in the two targets that link gtsam and include it.
+  flysight_add_fusion_test(tst_fusion_kernel SOURCES tst_fusion_kernel.cpp fusion/fusiontrace.h
+    LIBS flysight_fusion_test_support gtsam)
 
   # Fusion as a registered calculation: sessions, engine, job queue (tests/README.md)
   add_library(flysight_fusion_session_support STATIC
@@ -332,15 +335,16 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
   flysight_add_fusion_test(tst_fusion_rows SOURCES tst_fusion_rows.cpp
     LIBS flysight_fusion_session_support)
 
-  # ---- bit-exact golden parity (label "exact") ------------------------------
+  # ---- bit-exact golden regression (label "exact") --------------------------
   # The same executables run a second time with FLYSIGHT_FUSION_EXACT=1, which
   # turns every golden comparison into bit equality (tests/README.md section
-  # 11, "Tolerance policy"). Bit identity is a fair demand only on the
-  # configuration the goldens were captured with, which
-  # tests/data/fusion/capture.json records: MSVC, x64, and the same compiler
+  # 11, "Tolerance policy"): the proof that a rebuild is bit-identical to the
+  # capture. Bit identity is a fair demand only on the configuration the
+  # goldens were captured with, which tests/data/fusion/capture.json records
+  # (written by fusion_golden_capture): MSVC, x64, and the same compiler
   # major.minor (code generation is what decides the last bit; a Visual Studio
   # update may legitimately change it, and that is a reason to look and
-  # re-validate, not a defect of the port) - and the Release configuration:
+  # re-capture, not a defect of the kernel) - and the Release configuration:
   # the goldens promise nothing about a Debug or RelWithDebInfo build, so the
   # exact tests exist for Release only (flysight_add_fusion_exact_test below).
   #
@@ -422,8 +426,8 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
   if(_fs_exact)
     message(STATUS "Fusion exact tests registered for Release (FLYSIGHT_FUSION_EXACT_TESTS=${FLYSIGHT_FUSION_EXACT_TESTS}, "
                    "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}): ctest -C Release -L exact")
-    # The two that decide parity ...
-    flysight_add_fusion_exact_test(tst_fusion_parity)
+    # The two that decide bit-identity ...
+    flysight_add_fusion_exact_test(tst_fusion_golden)
     flysight_add_fusion_exact_test(tst_fusion_kernel)
     # ... and, because they cost about a second each, the three that hold the
     # registered calculation, the job queue's worker thread and the plot rows
@@ -433,14 +437,41 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
     flysight_add_fusion_exact_test(tst_fusion_rows)
   endif()
 
-  # Not a test and not installed: copied into an installed application tree
-  # and run there to prove the deployed solver runtime is complete (see
-  # tests/README.md).
+  # ---- two executables that are not tests and are not installed -------------
+  # solver_deploy_probe is copied into an installed application tree and run
+  # there to prove the deployed solver runtime is complete (tests/README.md
+  # section 1). fusion_golden_capture runs the product kernel on the twelve
+  # fixtures and writes the goldens of tests/data/fusion/ (the re-capture
+  # procedure of tests/README.md section 11); it is run by hand with the DLL
+  # directories on PATH, so it needs no flysight_solver_test_environment().
   add_executable(solver_deploy_probe solver_deploy_probe.cpp solverprobe.h)
   target_link_libraries(solver_deploy_probe PRIVATE gtsam)
   if(MSVC)
     target_compile_options(solver_deploy_probe PRIVATE /bigobj)
   endif()
+
+  # The capture tool names gtsam (it includes fusion/fusionpipeline.h for the
+  # trace seam and <gtsam/config.h> for the provenance), so it is listed in
+  # _FLYSIGHT_GTSAM_NAMERS (cmake/SolverDependencies.cmake) and in the audit's
+  # solver-confinement regex. FLYSIGHT_FUSION_GOLDEN_DIR, its default output
+  # directory, comes from flysight_fusion_test_support. Fits run on the main
+  # thread, hence the 64 MiB stack. The FLYSIGHT_CAPTURE_* definitions are
+  # what capture.json records about the build that captured.
+  add_executable(fusion_golden_capture fusion_golden_capture.cpp fusion/fusiontrace.h)
+  target_link_libraries(fusion_golden_capture PRIVATE flysight_fusion_test_support gtsam)
+  flysight_solver_stack(fusion_golden_capture)
+  if(MSVC)
+    target_compile_options(fusion_golden_capture PRIVATE /bigobj)
+  endif()
+  target_compile_definitions(fusion_golden_capture PRIVATE
+    FLYSIGHT_CAPTURE_COMPILER_ID="${CMAKE_CXX_COMPILER_ID}"
+    FLYSIGHT_CAPTURE_COMPILER_VERSION="${CMAKE_CXX_COMPILER_VERSION}"
+    FLYSIGHT_CAPTURE_GENERATOR="${CMAKE_GENERATOR}"
+    FLYSIGHT_CAPTURE_PLATFORM="${CMAKE_GENERATOR_PLATFORM}"
+    FLYSIGHT_CAPTURE_CONFIGURATION="$<CONFIG>"
+    FLYSIGHT_CAPTURE_CMAKE_VERSION="${CMAKE_VERSION}"
+    FLYSIGHT_CAPTURE_GTSAM_DIR="${GTSAM_DIR}"
+    FLYSIGHT_FUSION_FIXTURE_SOURCE_DIR="${CMAKE_CURRENT_LIST_DIR}/fusion")
 endif()
 
 # ---- cleanup audit ---------------------------------------------------------

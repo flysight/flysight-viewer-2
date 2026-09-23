@@ -1,10 +1,10 @@
 // Fusion kernel internals.
 //
-// What the golden fixtures of tst_fusion_parity cannot reach (every
+// What the golden fixtures of tst_fusion_golden cannot reach (every
 // stationary gate, exact integration boundaries, heading freedom, the
 // solver-failure path), with the literal expectations of the reference's own
 // self-test (sensor-fusion-clean-port, tests/fusion_regression.cpp), and the
-// fit trace that localizes a parity failure to a stage: initializer first,
+// fit trace that localizes a golden failure to a stage: initializer first,
 // then each optimizer iteration.
 //
 // The only test source that includes internal src/fusion/ headers, and one of
@@ -33,6 +33,7 @@
 #include "fusion/trajectoryreconstruction.h"
 #include "fusionfixtures.h"
 #include "fusiongolden.h"
+#include "fusiontrace.h"
 #include "testmain.h"
 
 using namespace FlySight;
@@ -122,27 +123,6 @@ bool hasGate(const StationaryWindow &window, const char *gate)
     return std::find(window.rejected.begin(), window.rejected.end(), gate) != window.rejected.end();
 }
 
-QJsonArray toJsonArray(const Vector3 &v)
-{
-    return QJsonArray{v.x(), v.y(), v.z()};
-}
-
-/// The trace in the shape the capture harness wrote it.
-QJsonObject traceJson(const PipelineTrace &trace)
-{
-    const auto q = trace.attitude.rotation.toQuaternion();
-    QJsonArray history;
-    for (const FitIteration &h : trace.history)
-        history.append(QJsonArray{h.outer, h.iteration, h.before, h.after});
-    return {{"method", QString::fromStdString(trace.attitude.method)},
-            {"interval_s", QJsonArray{trace.attitude.intervalStart, trace.attitude.intervalEnd}},
-            {"anchor_time_s", trace.attitude.anchorTime},
-            {"gyro_bias_rad_s", toJsonArray(trace.attitude.gyroBias)},
-            {"start_quaternion_xyzw", QJsonArray{q.x(), q.y(), q.z(), q.w()}},
-            {"converged", trace.converged},
-            {"history", history}};
-}
-
 Fusion::Result rejectedBy(const Fusion::Channels &channels)
 {
     return runPipeline(channels, Tuning{}, Checkpoint());
@@ -172,7 +152,7 @@ private slots:
 
 void FusionKernelTest::solverUsesTbb()
 {
-    // twoRunsAreBitIdentical (tst_fusion_parity) means something only if the
+    // twoRunsAreBitIdentical (tst_fusion_golden) means something only if the
     // solver really is multi-threaded.
 #ifndef GTSAM_USE_TBB
     QFAIL("GTSAM was built without TBB (GTSAM_USE_TBB is not defined)");
@@ -508,7 +488,8 @@ void FusionKernelTest::fitTraceMatchesGolden()
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
 
     // Initializer first, then every optimizer iteration in order: the first
-    // difference reported is the first stage that diverged.
+    // difference reported is the first stage that diverged. traceJson() is
+    // the function the capture tool wrote the golden with (fusiontrace.h).
     const QJsonObject got = traceJson(trace);
     QCOMPARE(got.value("history").toArray().size(), golden.trace.value("history").toArray().size());
     const QString difference = compareJson(QStringLiteral("trace"), got, golden.trace);

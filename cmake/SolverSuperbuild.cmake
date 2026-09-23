@@ -48,18 +48,19 @@ endif()
 #     stems on macOS and Linux). "tbb12" carries oneTBB's binary version.
 #   - README.md: the versions under "Solver dependencies (GTSAM, oneTBB)" and
 #     the runtime file names in the deployment table
-#   - tests/README.md (several places: the tst_solver_smoke row of the test
-#     table, "Solver configuration of the goldens", and the
-#     find_package(GTSAM 4.3 ...) of the capture harness) and
-#     tests/data/fusion/capture.json ("solver"): the revision and versions the
+#   - tests/README.md (the tst_solver_smoke row of the test table, and
+#     section 11, "Fusion golden regression") and
+#     tests/data/fusion/capture.json (solver.gtsam_version): the solver the
 #     fusion goldens were captured against
 #   - the comments in this file that say 4.3a0 / 2022.1.0
 #
 # Moving the GTSAM pin changes the solver the fusion goldens were captured
-# against. They must be re-validated before the new pin is accepted, by the
-# procedure in tests/README.md, "Fusion golden parity": never edited to match.
-# A oneTBB pin changes the threading runtime only, but the parity tests are
-# the check that it did not change the results either.
+# against. Moving it means re-capturing the goldens with fusion_golden_capture
+# (the re-capture procedure of tests/README.md, section 11) and examining the
+# golden diff; the exact tests (ctest -L exact) then prove that a rebuild is
+# bit-identical to the new capture. The goldens are never edited to match. A
+# oneTBB pin changes the threading runtime only, but the golden tests are the
+# check that it did not change the results either.
 #
 # GTSAM: the fusion work was developed against commit
 # 8938b9f158fa2f88ccfe3c31069a1452456b7eca of the fork

@@ -202,9 +202,9 @@ cmake --build build
 | `FLYSIGHT_BUILD_TESTS` | `OFF` | Build the Qt Test suite under `tests/`; run with CTest |
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | With tests enabled: build the embedded-Python plugin bridge test (needs NumPy in the build interpreter) |
 | `FLYSIGHT_BUILD_SOLVER_DEPS` | `ON` | With `FLYSIGHT_BUILD_THIRD_PARTY`: also download and build oneTBB and GTSAM. `OFF` reuses the installs in `GTSAM_INSTALL_DIR` / `ONETBB_INSTALL_DIR` |
-| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | With tests enabled: build the GTSAM-linked tests (`tst_solver_smoke` and the `tst_fusion_*` tests) and `solver_deploy_probe`. With `OFF` no test target references GTSAM |
+| `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | With tests enabled: build the GTSAM-linked tests (`tst_solver_smoke` and the `tst_fusion_*` tests), `solver_deploy_probe` and the golden capture tool `fusion_golden_capture`. With `OFF` no test target references GTSAM |
 | `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | With tests enabled: build `tst_plot_row_delegate`, the one test that links Qt Widgets (it runs an offscreen `QTreeView`). With `OFF` no test target links Widgets |
-| `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | With the fusion tests: run the golden parity tests a second time in bit-exact mode (`tst_fusion_*_exact`, `ctest -C Release -L exact`; Release configuration only). `AUTO` registers them only when the compiler is the one the goldens were captured with (64-bit MSVC 19.44, read from `tests/data/fusion/capture.json`) and otherwise says so at configure time; `ON` forces them, `OFF` removes them |
+| `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | With the fusion tests: run the golden regression tests a second time in bit-exact mode (`tst_fusion_*_exact`, `ctest -C Release -L exact`; Release configuration only). `AUTO` registers them only when the compiler is the one the goldens were captured with (64-bit MSVC 19.44, read from `tests/data/fusion/capture.json`) and otherwise says so at configure time; `ON` forces them, `OFF` removes them |
 
 **Path Variables:**
 
@@ -222,7 +222,7 @@ cmake --build build
 
 The sensor fusion solver is [GTSAM](https://github.com/borglab/gtsam) 4.3a0 with [oneTBB](https://github.com/uxlfoundation/oneTBB) 2022.1.0. Both are built by the third-party superbuild (targets `ext_oneTBB`, then `ext_GTSAM`) with the options in `cmake/SolverSuperbuild.cmake`.
 
-- **Pinned revisions.** Each library is pinned to a full commit SHA in `cmake/SolverSuperbuild.cmake` and downloaded into `<build>/solver-sources/`; build directories are `<build>/oneTBB-build` and `<build>/gtsam-build`. To move a pin, edit the SHA there; the CI cache key hashes that file, so it follows. The comment above the pins lists the other places that state the version or names that depend on it (the `find_package` version and required targets, `tst_solver_smoke`, the CI deployment checks, this README, the golden provenance) and must be kept in sync. Moving the GTSAM pin also means re-validating the fusion goldens ([tests/README.md](tests/README.md), "Fusion golden parity"). To build an existing source tree offline, pass `-DGTSAM_SOURCE_DIR=<dir>` / `-DONETBB_SOURCE_DIR=<dir>`.
+- **Pinned revisions.** Each library is pinned to a full commit SHA in `cmake/SolverSuperbuild.cmake` and downloaded into `<build>/solver-sources/`; build directories are `<build>/oneTBB-build` and `<build>/gtsam-build`. To move a pin, edit the SHA there; the CI cache key hashes that file, so it follows. The comment above the pins lists the other places that state the version or names that depend on it (the `find_package` version and required targets, `tst_solver_smoke`, the CI deployment checks, this README, the golden provenance) and must be kept in sync. Moving the GTSAM pin also means re-capturing the fusion goldens with `fusion_golden_capture` and examining the golden diff ([tests/README.md](tests/README.md), "Fusion golden regression"). To build an existing source tree offline, pass `-DGTSAM_SOURCE_DIR=<dir>` / `-DONETBB_SOURCE_DIR=<dir>`.
 - **Reusing an install.** `-DFLYSIGHT_BUILD_SOLVER_DEPS=OFF` defines none of the solver targets and leaves GeographicLib and KDDockWidgets in the superbuild; the application then uses whatever is installed in `GTSAM_INSTALL_DIR` and `ONETBB_INSTALL_DIR`. Combine it with those two variables to keep a solver install outside `third-party/`.
 - **GTSAM is built without Boost** (`GTSAM_ENABLE_BOOST_SERIALIZATION=OFF`, `GTSAM_USE_BOOST_FEATURES=OFF`). It needs no Boost to build, to configure against, or at run time. The application refuses a Boost-enabled GTSAM install at configure time (`cmake/SolverDependencies.cmake`). FlySight Viewer does not use Boost.
 - **Who links GTSAM.** Only the static library `flysight_fusion` (`src/fusion/`), and through it the application and the fusion tests. `flysight_model`, `flysight_core`, the Python bridge and every other test never reach it; `flysight_assert_solver_confinement()` (`cmake/SolverDependencies.cmake`) fails the configure otherwise.
@@ -417,7 +417,7 @@ flysight-viewer-2/
 
 - [docs/CALCULATIONS.md](docs/CALCULATIONS.md): how to write a registered calculation (declared inputs, multi-output, candidates, cache versioning), and how explicit calculations run in the background: the asynchronous request, blocker inspection, the threading rule, the job queue, plot-driven requests, and sensor fusion as a registered calculation
 - [python_plugins/README.md](python_plugins/README.md): writing Python plugins
-- [tests/README.md](tests/README.md): building, running, and writing tests; the acceptance traceability matrices, the cleanup audit, fusion golden parity, and the manual verification script
+- [tests/README.md](tests/README.md): building, running, and writing tests; the acceptance traceability matrices, the cleanup audit, fusion golden regression, and the manual verification script
 
 ## Deployment
 
