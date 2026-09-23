@@ -36,11 +36,12 @@ struct CalculationRecordRead {
 /// most one per (session, requested calculation): the stored result of an
 /// explicit calculation. They are keyed by the session's file stem (which
 /// never changes), are referenced only by the per-session record stamp (see
-/// RECORD STAMPS), and are never listed as sessions (they do not end in .csv). They are written only through
-/// writeCalculationRecord() (QSaveFile, like a session file), and removed with
-/// their session (removeSession), by the stray pass of initialize() when their
-/// session file does not exist, and by explicit removal. A session
-/// not saved yet may have records under the stem reserved for it
+/// RECORD STAMPS), and are never listed as sessions (they do not end in
+/// .csv). They are written only through writeCalculationRecord() (QSaveFile,
+/// like a session file), and removed with their session (removeSession), by
+/// the stray pass of initialize() when their session file does not exist, and
+/// by explicit removal. A session not saved yet may have records under the
+/// stem reserved for it
 /// (reserveSessionFile()); if it is never saved they are strays and the next
 /// initialize() removes them. The manager only stores and reports them; the
 /// caller decides validity.
@@ -358,11 +359,14 @@ private:
     // whose stem is the file of a session of m_sessionIdToUuid. Names only.
     void adoptCalculationRecordSet();
     // Applies the start-up validity rule (class comment, CACHE VALIDITY) to the
-    // cached values of explicit-backed columns and sets m_recordBackedOnDisk.
+    // cached values of explicit-backed columns, and sets m_recordBackedOnDisk
+    // from every value on disk (kept, dropped, or of an index not valid).
     // `columnsByDefKey`: the index's columns; `stamps`: per session, the
-    // "records" object of the entries that have one.
+    // "records" object of the entries that have one; `valuesOnDisk`: per
+    // session, the definition keys of the values of its entry.
     void validateRecordStamps(const QMap<QString, LogbookColumn> &columnsByDefKey,
-                              const QMap<QString, QJsonObject> &stamps);
+                              const QMap<QString, QJsonObject> &stamps,
+                              const QMap<QString, QStringList> &valuesOnDisk);
     // Removes from the session's cached values every value whose column depends
     // on one of `calculationIds`, and every value of a column that is not
     // enabled. True (and m_indexNeedsFlush set) when something was removed.
@@ -407,6 +411,7 @@ private:
     QMap<QString, QSet<QString>> m_unconfirmedRecords;  // SESSION_ID -> ids whose record may disagree with the loaded engine
     QMap<QString, QSet<QString>> m_recordBackedOnDisk;  // SESSION_ID -> ids index.json on disk lists as present
                                                         //   AND on which some value it holds for the session depends
+                                                        //   (every value on disk, even one not kept in memory)
 };
 
 } // namespace FlySight

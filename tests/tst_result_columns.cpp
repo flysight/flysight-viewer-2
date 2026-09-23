@@ -195,6 +195,8 @@ private slots:
     void crashAfterRecordWrite();
     void crashAfterRecordDelete();
     void rewriteAfterDropFlushesIndexFirst();
+    void writeAfterStartupDropFlushesIndexFirst_data();
+    void writeAfterStartupDropFlushesIndexFirst();
     void oldIndexWithoutStamp_data();
     void oldIndexWithoutStamp();
     void resultVersionChangeDropsCachedValue();
@@ -626,6 +628,7 @@ void ResultColumnsTest::crashAfterRecordWrite()
 
     const QString xKey = LogbookManager::columnDefKey(xColumn());
     QVERIFY(!LogbookManager::instance().cachedValuesForSession("s1").contains(xKey));
+    QVERIFY(LogbookManager::instance().cachedValuesForSession("s2").contains(xKey));
     QVERIFY(LogbookManager::instance().cachedValuesForSession("s2").value(xKey).isNull());
 
     m_model->resetColumnWorkStats();
@@ -701,6 +704,83 @@ void ResultColumnsTest::rewriteAfterDropFlushesIndexFirst()
     QVERIFY(waitForIdle(*m_model));
     QVERIFY(isCached("s1", kX));
     QVERIFY(!cached("s1", kX).isValid());
+}
+
+void ResultColumnsTest::writeAfterStartupDropFlushesIndexFirst_data()
+{
+    QTest::addColumn<bool>("environmentChanged");
+    QTest::newRow("droppedAtStart") << false;
+    QTest::newRow("indexNotValid") << true;
+}
+
+// index.json on disk holds a value over X with X in the stamp, which the
+// start did not keep: the record was deleted before a crash (the check drops
+// the value), or the index was written in another environment (nothing is
+// kept). The first write of X in that run still flushes the index first, so
+// that after a crash (and back in the first environment) the value stays
+// dropped rather than being checked against the new record.
+void ResultColumnsTest::writeAfterStartupDropFlushesIndexFirst()
+{
+    QFETCH(bool, environmentChanged);
+    const QString indexPath = TestEnvironment::instance().indexPath();
+    const QString xKey = LogbookManager::columnDefKey(xColumn());
+    const QString path = recordPath("s1", kEncodedX);
+
+    QCOMPARE(engine("s1").request(kCalcX).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(indexValue("s1", xColumn()), QJsonValue(QStringLiteral("x:d1")));
+    QCOMPARE(indexRecordStamp("s1"), stampOf({{kCalcX, QString()}}));
+
+    bool extraRegistered = false;
+    const auto unregister = qScopeGuard([this, &extraRegistered] {
+        if (extraRegistered) {
+            resetModel();
+            CalculationRegistry::instance().unregister(kExtra);
+        }
+    });
+    if (environmentChanged) {
+        // Another environment for the next run (registered with no model)
+        resetModel();
+        CalculationDescriptor extra;
+        extra.id = kExtra;
+        extra.outputs = {DependencyKey::attribute(QStringLiteral("_COLUMNS_EXTRA"))};
+        extra.compute = [](const EvaluationContext &) {
+            return CalculationResult().setAttribute(QStringLiteral("_COLUMNS_EXTRA"), 1);
+        };
+        QVERIFY(CalculationRegistry::instance().registerCalculation(extra));
+        extraRegistered = true;
+    } else {
+        QVERIFY(m_model->updateAttribute("s1", QStringLiteral("_DESCRIPTION"), QStringLiteral("e")));
+        QVERIFY(!QFileInfo::exists(path));
+    }
+    const QByteArray indexBytes = bytesOf(indexPath);
+    crash();
+    QVERIFY(!LogbookManager::instance().cachedValuesForSession("s1").contains(xKey));
+    QCOMPARE(LogbookManager::instance().cachedValuesDiscardedOnLoad(), environmentChanged);
+
+    // Before any flush: an edit of X's input and a new fit
+    QVERIFY(m_model->updateAttribute("s1", QStringLiteral("_DESCRIPTION"), QStringLiteral("f")));
+    QCOMPARE(bytesOf(indexPath), indexBytes);
+    QCOMPARE(engine("s1").request(kCalcX).status, ResultStatus::Ok);
+    QVERIFY(QFileInfo(path).isFile());
+    {
+        const QJsonObject root = readIndex();
+        QVERIFY(indexValue(root, "s1", xColumn()).isUndefined());
+        QVERIFY(indexRecordStamp(root, "s1").isObject());
+        QVERIFY(!indexRecordStamp(root, "s1").toObject().contains(kCalcX));
+    }
+
+    // A crash, then a start in the first environment: the old value is not shown
+    if (environmentChanged) {
+        resetModel();
+        QVERIFY(CalculationRegistry::instance().unregister(kExtra));
+        extraRegistered = false;
+    }
+    crash();
+    QVERIFY(!LogbookManager::instance().cachedValuesForSession("s1").contains(xKey));
+    QVERIFY(!isLoaded("s1"));
+    QVERIFY(!isCached("s1", kX));
+    QCOMPARE(cell("s1", kX), QString());
 }
 
 // ---- Old indexes, versions, failures ----------------------------------------------------

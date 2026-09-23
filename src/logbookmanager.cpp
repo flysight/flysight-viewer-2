@@ -219,7 +219,8 @@ void LogbookManager::initialize()
                 }
 
                 // Parse sessions
-                QMap<QString, QJsonObject> stamps;      // entries that have "records"
+                QMap<QString, QJsonObject> stamps;      // entries that have a "records" object
+                QMap<QString, QStringList> valuesOnDisk; // definition keys of every value on disk
                 for (auto it = sessionsObj.constBegin(); it != sessionsObj.constEnd(); ++it) {
                     const QString sessionId = it.key();
                     const QJsonObject entry = it.value().toObject();
@@ -228,8 +229,10 @@ void LogbookManager::initialize()
                         m_sessionIdToUuid[sessionId] = uuid;
                     }
 
-                    // An entry without it was written by an older build
-                    if (entry.contains(QStringLiteral("records")))
+                    // An entry without it was written by an older build. One
+                    // that is not an object is treated the same way (for the
+                    // validity rule, an empty stamp and no stamp agree).
+                    if (entry[QStringLiteral("records")].isObject())
                         stamps.insert(sessionId, entry[QStringLiteral("records")].toObject());
 
                     // lastAccessed
@@ -237,8 +240,10 @@ void LogbookManager::initialize()
                         m_lastAccessed[sessionId] = entry[QStringLiteral("lastAccessed")].toDouble();
                     }
 
-                    // values — translate UUID-keyed entries to definition-key-keyed
-                    if (valid && entry.contains(QStringLiteral("values"))) {
+                    // values — translate UUID-keyed entries to definition-key-keyed.
+                    // Kept only when valid, but every one is noted: until the
+                    // next flush, the file on disk still holds it.
+                    if (entry.contains(QStringLiteral("values"))) {
                         const QJsonObject valuesObj = entry[QStringLiteral("values")].toObject();
                         QMap<QString, QJsonValue> sessionValues;
                         for (auto vit = valuesObj.constBegin(); vit != valuesObj.constEnd(); ++vit) {
@@ -246,8 +251,11 @@ void LogbookManager::initialize()
                             if (!defKey.isEmpty())
                                 sessionValues[defKey] = vit.value();
                         }
-                        if (!sessionValues.isEmpty())
-                            m_cachedValues[sessionId] = sessionValues;
+                        if (!sessionValues.isEmpty()) {
+                            valuesOnDisk.insert(sessionId, sessionValues.keys());
+                            if (valid)
+                                m_cachedValues[sessionId] = sessionValues;
+                        }
                     }
                 }
 
@@ -268,8 +276,9 @@ void LogbookManager::initialize()
                 }
 
                 adoptCalculationRecordSet();
-                if (valid)
-                    validateRecordStamps(columnsByDefKey, stamps);
+                // Also when not valid (nothing is cached then): the record
+                // backing of the values on disk is noted either way
+                validateRecordStamps(columnsByDefKey, stamps, valuesOnDisk);
 
                 m_cacheEnvironment = currentEnvironment;
                 m_hasIndexData = true;
@@ -954,6 +963,9 @@ int LogbookManager::removeStrayCalculationRecords()
 //     load)                                                                  the worker caches unavailable
 //   delete, then write again before      no V, e absent         present    V missing: pending until loaded
 //     any flush                            (step d flushed first)
+//   a write before any flush of a run    no V, e absent         present    V missing: pending until loaded
+//     whose start dropped V (or found      (step d flushed first)
+//     the index not valid)
 //   step d's flush failed                V / present            absent     stamp != disk: V dropped
 //                                                               (deleted before)
 //   a failed write (encode or I/O)       V never flushed since  previous   missing or older values only;
@@ -964,9 +976,14 @@ int LogbookManager::removeStrayCalculationRecords()
 //                                          version              (stale)    pending; the load deletes the record
 //
 // The only sequence the stamp cannot see (present -> deleted -> written again
-// with no flush in between) is the one step d flushes before. A removal needs
-// no flush first: a value that depended on the removed record is listed as
-// present in a stamp, and the record is now absent.
+// with no flush in between, possibly across a restart) is the one step d
+// flushes before. Step d asks m_recordBackedOnDisk, which describes EVERY
+// value index.json on disk holds: set by each committed flush from the values
+// it wrote, and at initialize() from every value read from the file, whether
+// the start-up check kept it or not and whether the index was valid or not (a
+// dropped value stays on disk until the next flush). A removal needs no flush
+// first: a value that depended on the removed record is listed as present in
+// a stamp, and the record is now absent.
 bool LogbookManager::writeCalculationRecord(const QString &sessionId, const CalculationRecord &record,
                                             QString *error)
 {
@@ -1226,12 +1243,30 @@ void LogbookManager::adoptCalculationRecordSet()
 }
 
 void LogbookManager::validateRecordStamps(const QMap<QString, LogbookColumn> &columnsByDefKey,
-                                          const QMap<QString, QJsonObject> &stamps)
+                                          const QMap<QString, QJsonObject> &stamps,
+                                          const QMap<QString, QStringList> &valuesOnDisk)
 {
     const CalculationRegistry &registry = CalculationRegistry::instance();
     QHash<QString, QStringList> explicitByDefKey;
     for (auto it = columnsByDefKey.constBegin(); it != columnsByDefKey.constEnd(); ++it)
         explicitByDefKey.insert(it.key(), logbookColumnExplicitCalculations(it.value(), registry));
+
+    // m_recordBackedOnDisk describes the file on disk, which keeps every value
+    // until the next flush: the ones dropped below and those of an index that
+    // was not valid count as well. Without a stamp, every e of the value
+    // counts (a write of any of them flushes first).
+    for (auto sit = valuesOnDisk.constBegin(); sit != valuesOnDisk.constEnd(); ++sit) {
+        const auto stampIt = stamps.constFind(sit.key());
+        QSet<QString> backed;
+        for (const QString &defKey : sit.value()) {
+            for (const QString &id : explicitByDefKey.value(defKey)) {
+                if (stampIt == stamps.constEnd() || stampIt->contains(id))
+                    backed.insert(id);
+            }
+        }
+        if (!backed.isEmpty())
+            m_recordBackedOnDisk.insert(sit.key(), backed);
+    }
 
     for (auto sit = m_cachedValues.begin(); sit != m_cachedValues.end(); ++sit) {
         const QString &sessionId = sit.key();
@@ -1239,7 +1274,6 @@ void LogbookManager::validateRecordStamps(const QMap<QString, LogbookColumn> &co
         const auto stampIt = stamps.constFind(sessionId);
         const bool stamped = stampIt != stamps.constEnd();
 
-        QSet<QString> backed;
         for (auto vit = sit->begin(); vit != sit->end();) {
             const QStringList ids = explicitByDefKey.value(vit.key());
             bool keep = true;
@@ -1266,16 +1300,8 @@ void LogbookManager::validateRecordStamps(const QMap<QString, LogbookColumn> &co
                 m_indexNeedsFlush = true;
                 continue;
             }
-            if (stamped) {
-                for (const QString &id : ids) {
-                    if (stampIt->contains(id))
-                        backed.insert(id);
-                }
-            }
             ++vit;
         }
-        if (!backed.isEmpty())
-            m_recordBackedOnDisk.insert(sessionId, backed);
     }
 }
 
