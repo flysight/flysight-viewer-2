@@ -314,9 +314,10 @@ gyro-dependent columns changed for every legacy session.
 
 Each session entry also has `"records"`: an object naming the requested
 calculations that have a stored result for that session (section 12), each
-mapped to its calculation's result version, and `{}` when there are none. A
-value cached for a column that depends on such a calculation is valid only
-together with this stamp. For a session with a stored sensor fusion result:
+mapped to the result version the cached values over it were computed under,
+and `{}` when there are none. A value cached for a column that depends on such
+a calculation is valid only together with this stamp. For a session with a
+stored sensor fusion result:
 
 ```json
 "records": {"builtin.fusion.fit": "batch-temperature-bias-v3"}
@@ -343,10 +344,11 @@ Before a record is written whose calculation `index.json` lists as present
 under a cached value, the index is rewritten without that value, so a crash at
 any point cannot leave a cached value that disagrees with the records. A value
 whose record may disagree with the loaded session (a record write or removal
-that failed, or a change of the registered calculations while the session was
-loaded) is kept out of `index.json` until the record is written or deleted
-again or the session is unloaded. An index written before stamps existed keeps
-such a value only for a session without a record.
+that failed, or a change of the registered calculations or of a declared
+preference while the session was loaded) is kept out of `index.json` until the
+record is written or deleted again or the session is unloaded. An index
+written before stamps existed keeps such a value only for a session without a
+record.
 
 Developers: when to change the marker is described in
 [CALCULATIONS.md](CALCULATIONS.md#9-when-to-bump-calculationcompatibilityversion).
@@ -378,9 +380,18 @@ format version (1), then the two code stamps, the calculation id, the result
 version, the reason, the input fingerprint (SHA-256), the names of the inputs
 the result depended on, and the outputs. Doubles are stored as their eight
 bytes, so a restored value is bit for bit the published one: `-0`, NaN and the
-infinities included. Strings round-trip exactly. A SHA-256 of everything before
-it closes the file. The size is of the order of the session file. A record of
-another format version, or a damaged one, is treated as stale.
+infinities included. Strings round-trip exactly. An attribute is stored with
+its type, which must be one of: string, byte array, boolean, double, float
+(stored as a double and read back as the same float), and the 8-, 16-, 32-
+and 64-bit signed and unsigned integers (`char`, `signed char`,
+`unsigned char`, `short`, `unsigned short`, `int`, `unsigned int`,
+`qlonglong`, `qulonglong`). `long` and `unsigned long` are refused, because
+their width differs between Windows and Linux / macOS; a result holding any
+other type is not stored (the write fails and the result stays in memory). A
+SHA-256 of everything before it closes the file. The size is of the order of
+the session file. A record of another format version, or a damaged one, is
+treated as stale. Only a name ending exactly in `.fvresult` (lower case) is a
+record.
 
 **Validity.** A record is used only while all of these hold:
 

@@ -542,6 +542,13 @@ expect_none("the session file knows nothing of stored results"
   "CalculationRecord|calculationrecord|CalculationResultStore|StoredCalculationResult|exportResult|fvresult"
   src/dataexporter.cpp src/dataexporter.h src/dataimporter.cpp src/dataimporter.h
   src/sessionmerge.cpp src/sessionmerge.h src/csvformat.cpp src/csvformat.h "src/sessiondata.*")
+# The engine layer knows nothing above it: the code stamps are added by the
+# record format, and the store, the logbook and the session model call the
+# engine, never the reverse. Allow: none expected. The engine includes only
+# itself, ../dependencykey.h and ../csvformat.h.
+expect_none("the engine includes nothing of the calculations, the records, the store, the logbook, the model or fusion"
+  "#include +[\"<](\\.\\./)*(calculations/|fusion/|logbook|sessionmodel|calculationrecord|calculationresultstore)"
+  src/engine)
 expect_none("stored results are widget-free"
   "QtWidgets|#include [<\"]Q(Widget|Application|MessageBox|Dialog)|#include \"(\\.\\./)?ui/"
   "src/calculationrecord.*" "src/calculationresultstore.*" "src/engine/storedcalculationresult.*")
@@ -568,7 +575,7 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 
 # ─────────────────────────────── acceptance traceability
 # tests/acceptance_map.txt: items 1-19 (the schema / engine specification),
-# 101-120 (sensor fusion and plot-driven jobs, item = 100 + acceptance number)
+# 101-120 (sensor fusion and plot-driven jobs, item = 100 + acceptance number),
 # 201-247 (the sensor fusion improvements, item = 200 + requirement
 # number) and 301-350 (storing requested calculation results with the session,
 # item = 300 + clause number). Four line forms; see the head of the map.

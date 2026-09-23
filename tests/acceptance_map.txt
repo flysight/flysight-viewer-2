@@ -659,6 +659,7 @@
 311 tst_calcengine_restore restoreNaNPayloadAndSignedZero
 311 tst_calcengine_restore sameContentBitExactAttributes
 311 tst_fusion_session restoredFitIsIndistinguishable
+311 tst_result_records attributeTypesRoundTrip
 
 # 312 - (3) the golden tests cannot tell a restored fusion result from a fresh one
 312 tst_fusion_store restoredAfterEvictionIsBitIdentical
@@ -680,6 +681,7 @@
 
 # 315 - (4.1) an edit it depends on (IMU merge, SCHEMA_VER, any dependency) invalidates it
 315 tst_fusion_store dependencyEditDropsRecord
+315 tst_fusion_session restoredFitIsIndistinguishable
 315 tst_fusion_store mergeIntoLoadedSessionDropsRecord
 315 tst_fusion_store mergeIntoUnloadedSession
 315 tst_calcengine_restore restoreStaleChecks
@@ -737,6 +739,7 @@
 323 tst_calcregistry explicitDependencies
 323 tst_column_cache explicitBackedColumnFollowsItsResult
 323 tst_fusion_jobs columnOnFusionOutputIsCachedFromRecord
+323 tst_fusion_session explicitOutputsHaveOneCandidate
 323 manual M17
 
 # 324 - (5) dropping or writing a record drops the values stamped with it: crashes, old indexes, failed writes, environment changes

@@ -156,14 +156,25 @@ invalidates every loaded session.
 (`ResultStatus::NotRequested`) without starting work, and they revert to that
 state when an input changes. A result an explicit calculation installs with
 status `Ok` is stored beside the session file and restored when the session is
-loaded again (section 15.8); restoring is not requesting. A descriptor may
-declare `CalculationDescriptor::resultVersion`, opaque text that identifies the
+loaded again (section 15.8); restoring is not requesting. Explicit family
+instances are not stored. A descriptor may declare
+`CalculationDescriptor::resultVersion`, opaque text that identifies the
 arithmetic of the calculation's results. The engine never interprets it and it
 is not part of the environment fingerprint; a stored result is used only while
 it is unchanged (section 9). `builtin.fusion.fit` declares its kernel's
-`Fusion::Algorithm` (section 17). The same calculation can be run in the background
-(section 12), and section 13 reports which explicit calculations stand behind a
-name. `request` returns the names whose cached "not requested"
+`Fusion::Algorithm` (section 17). The same calculation can be run in the
+background (section 12), and section 13 reports which explicit calculations
+stand behind a name.
+
+An explicit calculation's outputs must have no other candidate. Only then do
+they read as unavailable whenever the calculation is not requested, and the
+logbook relies on that: a session that is not loaded and has no stored result
+gets "unavailable" cached for every column over such an output without being
+loaded (`SessionModel::settleExplicitColumns`, section 17). The registry does
+not enforce it; `tst_fusion_session::explicitOutputsHaveOneCandidate` checks it
+for the registered built-ins.
+
+`request` returns the names whose cached "not requested"
 answer was dropped: a future model-level caller must publish that set through
 `SessionModel`, which is the single emitter of `dependencyChanged`. An explicit
 calculation whose input transitively depends on its own output is a cycle like
@@ -184,8 +195,10 @@ existing session yields for any logbook column:
 - the interpolation family;
 - `SessionModel::computeColumnValues` (what a column stores, or its unit).
 
-Bump it, or the calculation's result version (`CalculationDescriptor::resultVersion`, section 8), whenever a change can alter what a requested calculation produces.
-A stored result is used only while this marker, the environment fingerprint
+Bump it, or the calculation's result version
+(`CalculationDescriptor::resultVersion`, section 8), whenever a change can
+alter what a requested calculation produces. A stored result is used only
+while this marker, the environment fingerprint
 and the result version it was stored with all equal the current ones (section
 15.8). Bumping a result version drops the stored results of that calculation
 only; bumping the marker drops every stored result and every cached column
@@ -549,8 +562,9 @@ then `CalculationEngine::readiness()`: `Unknown` -> `UnknownCalculation`,
 `MissingInput` -> `MissingInput` (no job can be created for a session without
 the inputs), `Blocked` -> `Blocked` (request the blockers instead: chaining is
 the caller's), `Done` -> `NothingToDo` (already computed, a cached rejection or
-failure included, a restored result included, or not an explicit calculation), `Ready` -> a new Queued job
-(`Created`). It never prepares and never starts anything synchronously.
+failure included, a restored result included, or not an explicit
+calculation), `Ready` -> a new Queued job (`Created`). It never prepares and
+never starts anything synchronously.
 
 **Deduplication.** A request whose `(sessionId, instanceId)` equals that of a
 queued or running job creates nothing. The exception: a *running job that has
@@ -800,7 +814,11 @@ and restore; the files are described in
   and the in-memory result untouched, and is not retried before the next `Ok`
   publish.
 - `Installed` with any other status writes nothing and deletes nothing.
-- `DroppedByInputChange`: `LogbookManager::removeCalculationRecord()`.
+- `DroppedByInputChange`: `LogbookManager::removeCalculationRecord()`, which
+  looks at the record's one path (no directory listing).
+- Explicit family instances (`<familyId>#<key>`) are not stored: the store
+  ignores their events (`exportResult()` refuses them), so their results are
+  lost on unload like on-demand ones. No built-in family is explicit.
 - Every path that installs a session into a row restores that session's valid
   records after `attachSession()` and before the row is published
   (`sessionLoaded`, `dataChanged`, any plot pass): `sessionRef()`, the unloaded
@@ -810,6 +828,11 @@ and restore; the files are described in
   records. The names a restore invalidates need no publication after a fresh
   load, because nothing has read the new engine yet; the unloaded merge
   publishes them with the names the merge changed.
+- A session the logbook manager knows no record of
+  (`LogbookManager::knownCalculationRecords()`: the names seen at start-up
+  plus its own writes and removals) is restored without listing the
+  directory. Otherwise the listing of the session's record files is the
+  source of ids.
 - Records are restored in passes until a pass restores none, so
   explicit-on-explicit chains restore in any file order. `InputsUnavailable`
   counts as stale only after the last pass.
@@ -830,8 +853,8 @@ and restore; the files are described in
   `NothingToDo`.
 - Record format and file names: `src/calculationrecord.h` and DATA_SCHEMA
   section 12. Test seam: `SessionModel::storedResultStats()` /
-  `resetStoredResultStats()` (records written, read, restored, kept and
-  deleted, and the time spent).
+  `resetStoredResultStats()` (records written, restore calls and listings,
+  records read, restored, kept and deleted, and the time spent).
 
 Tests: `tests/tst_calcengine_restore.cpp`, `tests/tst_result_records.cpp`,
 `tests/tst_result_store.cpp`, `tests/tst_fusion_store.cpp`.
@@ -1325,12 +1348,13 @@ Tests (label `fusion`, behind `FLYSIGHT_BUILD_FUSION_TESTS`):
 `tests/tst_fusion_session.cpp` (real `SessionData` engines, the fit on the
 test's main thread), `tests/tst_fusion_jobs.cpp` (the job queue's worker on a
 real `SessionModel`), `tests/tst_fusion_rows.cpp` (the plot rows of section
-16 with the seventeen real plots and real fits) and
+16 with the seventeen real plots and real fits),
 `tests/tst_fusion_runner.cpp` (the command-line runner against the
 application's import path) and `tests/tst_fusion_store.cpp` (the fit's stored
 result: unload, restart, rejections, invalidation, merges, the session file
 untouched); the column rule without GTSAM in
 `tst_column_cache::explicitBackedColumnFollowsItsResult` and
 `tests/tst_result_columns.cpp` (the stamp, crash points, pending stubs), and
-with a real fit in `tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord`. The model, its
+with a real fit in
+`tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord`. The model, its
 limitations and what is rejected are in [SENSOR_FUSION.md](SENSOR_FUSION.md).
