@@ -74,10 +74,9 @@ inline bool operator!=(const StoredResolution &a, const StoredResolution &b) { r
 /// CalculationResult normalizes on the way in: an output is available exactly
 /// when its QVariant is valid / its sample vector is non-empty.
 ///
-/// The code stamps (the calculation-compatibility marker and the calculation
-/// environment fingerprint) are deliberately absent: the engine layer does
-/// not depend on the built-in calculations that define them. Whoever stores a
-/// snapshot adds them. What the result's lookups resolved to is not a stamp:
+/// The code stamp (the calculation-compatibility marker) is deliberately
+/// absent: the engine layer does not depend on the built-in calculations that
+/// define it. Whoever stores a snapshot adds it. What the result's lookups resolved to is not a stamp:
 /// it is part of the snapshot (`resolutions`), and the engine checks it.
 ///
 /// Pinned. The leaf kind codes (storedLeafKindCode), the resolution provider

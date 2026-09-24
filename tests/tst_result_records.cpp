@@ -3,12 +3,13 @@
 //
 //  - the record file name: the percent-encoding of a calculation id (canonical,
 //    dot-free, injective under case folding) and the parse of a file name;
-//  - the code stamps (calculation-compatibility marker and environment
-//    fingerprint), computed fresh;
+//  - the code stamp (the calculation-compatibility marker), computed fresh;
+//    the environment fingerprint is not a stamp;
 //  - the binary codec: a bit-exact round trip (-0, NaN payloads, infinities,
 //    subnormals, null / empty / non-ASCII strings, unavailable outputs, output
 //    order), a round trip of every attribute type a record accepts, the pinned
-//    byte layout, refusal of other format versions, of damaged and of
+//    byte layout, refusal of other format versions, the previous one (1)
+//    included, of damaged and of
 //    hand-crafted inconsistent payloads (without allocating what a crafted
 //    count claims), refusal at encode of every other attribute type (Long and
 //    ULong included: their width is not portable), and the size;
@@ -226,9 +227,7 @@ QString recordDifference(const CalculationRecord &a, const CalculationRecord &b)
 {
     if (a.calculationCompatibility != b.calculationCompatibility)
         return QStringLiteral("compatibility %1 != %2").arg(a.calculationCompatibility).arg(b.calculationCompatibility);
-    QString d = sameStringDifference(QStringLiteral("environment"), a.calculationEnvironment, b.calculationEnvironment);
-    if (!d.isEmpty())
-        return d;
+    QString d;
 
     const StoredCalculationResult &x = a.result;
     const StoredCalculationResult &y = b.result;
@@ -341,9 +340,9 @@ void pin(QDataStream &s)
     s.setFloatingPointPrecision(QDataStream::DoublePrecision);
 }
 
-// A record whose header is valid (magic, version 1, stamps 7 / "e", id "x.y",
-// version "v1", null reason, 32-byte fingerprint), with `body` writing the
-// leaves and outputs, and a correct SHA-256 trailer.
+// A record whose header is valid (magic, version 2, compatibility 7, id
+// "x.y", version "v1", null reason, 32-byte fingerprint), with `body` writing
+// the leaves, outputs and resolutions, and a correct SHA-256 trailer.
 QByteArray craft(const std::function<void(QDataStream &)> &body)
 {
     QByteArray bytes;
@@ -351,9 +350,31 @@ QByteArray craft(const std::function<void(QDataStream &)> &body)
         QDataStream s(&bytes, QIODevice::WriteOnly);
         pin(s);
         s.writeRawData("FVRESULT", 8);
-        s << quint32(1) << qint32(7) << QStringLiteral("e") << QStringLiteral("x.y") << QStringLiteral("v1")
+        s << quint32(2) << qint32(7) << QStringLiteral("x.y") << QStringLiteral("v1")
           << QString() << QByteArray(32, '\xAB');
         body(s);
+    }
+    bytes.append(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256));
+    return bytes;
+}
+
+// A record of format version 1 as it was written: magic, version 1,
+// compatibility 2, the environment fingerprint (40 '0'), id "x.y", version
+// "v1", null reason, 32-byte fingerprint, no leaves, no outputs, then no
+// resolutions only when `withResolutions` (Phase 1 of stored-results-validity
+// added the section without a version bump; ce2fb2b had none), and a correct
+// SHA-256 trailer.
+QByteArray craftFormatOne(bool withResolutions)
+{
+    QByteArray bytes;
+    {
+        QDataStream s(&bytes, QIODevice::WriteOnly);
+        pin(s);
+        s.writeRawData("FVRESULT", 8);
+        s << quint32(1) << qint32(2) << QString(40, QLatin1Char('0')) << QStringLiteral("x.y")
+          << QStringLiteral("v1") << QString() << QByteArray(32, '\xAB') << quint32(0) << quint32(0);
+        if (withResolutions)
+            s << quint32(0);
     }
     bytes.append(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256));
     return bytes;
@@ -385,7 +406,6 @@ CalculationRecord largeSampleRecord()
     r.bundle.setMeasurement(QStringLiteral("S"), QStringLiteral("m"), samples, QStringLiteral("u"));
     CalculationRecord record;
     record.calculationCompatibility = 7;
-    record.calculationEnvironment = QStringLiteral("e");
     record.result = r;
     return record;
 }
@@ -431,6 +451,8 @@ private slots:
     void layoutIsPinned();
     void futureVersionIsRefused_data();
     void futureVersionIsRefused();
+    void formatOneIsRefused_data();
+    void formatOneIsRefused();
     void corruptInputIsRefused_data();
     void corruptInputIsRefused();
     void encoderRefusesUnsupportedAttribute();
@@ -595,24 +617,21 @@ void ResultRecordsTest::stampsAreCurrent()
     const CalculationRecord record = CalculationRecord::stamped(sampleSnapshot());
     QVERIFY(record.stampsAreCurrent());
     QCOMPARE(record.calculationCompatibility, 2);
-    QCOMPARE(record.calculationEnvironment, calculationEnvironmentFingerprint());
-    QVERIFY(QRegularExpression(QStringLiteral("^[0-9a-f]{40}$")).match(record.calculationEnvironment).hasMatch());
 
     CalculationRecord other = record;
     other.calculationCompatibility = 3;
     QVERIFY(!other.stampsAreCurrent());
 
-    other = record;
-    other.calculationEnvironment = QString(40, QLatin1Char('0'));
-    QVERIFY(!other.stampsAreCurrent());
-
-    // Computed fresh: a registration after the record was stamped makes it stale.
+    // A registration changes the environment fingerprint and never makes a
+    // record stale by itself (plan stored-results-validity).
+    const QString environmentBefore = calculationEnvironmentFingerprint();
     CalculationDescriptor extra;
     extra.id = QString::fromLatin1(kExtraId);
     extra.outputs = {DependencyKey::attribute(QStringLiteral("_TEST_RESULTRECORDS_EXTRA"))};
     extra.compute = [](const EvaluationContext &) { return CalculationResult(); };
     QVERIFY(CalculationRegistry::instance().registerCalculation(extra));
-    QVERIFY(!record.stampsAreCurrent());
+    QVERIFY(calculationEnvironmentFingerprint() != environmentBefore);
+    QVERIFY(record.stampsAreCurrent());
     QVERIFY(CalculationRecord::stamped(sampleSnapshot()).stampsAreCurrent());
 }
 
@@ -740,7 +759,6 @@ void ResultRecordsTest::unavailableAndEmptyOutputs()
     r.bundle.setAttribute(QStringLiteral("_INVALID"), QVariant());                     // unavailable
     CalculationRecord record;
     record.calculationCompatibility = 5;
-    record.calculationEnvironment = QStringLiteral("env");
     record.result = r;
 
     CalculationRecord decoded;
@@ -766,7 +784,6 @@ void ResultRecordsTest::unavailableAndEmptyOutputs()
     QVERIFY(decoded.result.bundle.reason().isNull());
     QVERIFY(decoded.result.detail.isNull());
     QCOMPARE(decoded.calculationCompatibility, 5);
-    QCOMPARE(decoded.calculationEnvironment, QStringLiteral("env"));
 }
 
 void ResultRecordsTest::rejectionShapedRecord()
@@ -810,8 +827,7 @@ void ResultRecordsTest::rejectionShapedRecord()
 }
 
 // The bytes of a small record, written out by hand from the layout table of
-// the phase document (format version 1 with the resolutions of plan
-// stored-results-validity, Phase 1).
+// the phase document: format version 2 (plan stored-results-validity).
 void ResultRecordsTest::layoutIsPinned()
 {
     StoredCalculationResult r;
@@ -826,35 +842,33 @@ void ResultRecordsTest::layoutIsPinned()
     r.bundle.setUnavailable(DependencyKey::attribute(QStringLiteral("a")));
     CalculationRecord record;
     record.calculationCompatibility = 7;
-    record.calculationEnvironment = QStringLiteral("e");
     record.result = r;
 
     const QByteArray expectedPrefix = QByteArray::fromHex(
         "4656524553554C54"                      // 1  magic "FVRESULT"
-        "01000000"                              // 2  format version 1
+        "02000000"                              // 2  format version 2
         "07000000"                              // 3  calculation compatibility 7
-        "02000000" "6500"                       // 4  environment "e"
-        "06000000" "78002E007900"               // 5  calculation id "x.y"
-        "04000000" "76003100"                   // 6  result version "v1"
-        "FFFFFFFF"                              // 7  reason: null string
-        "20000000"                              // 8  fingerprint: 32 bytes of 0xAB
+        "06000000" "78002E007900"               // 4  calculation id "x.y"
+        "04000000" "76003100"                   // 5  result version "v1"
+        "FFFFFFFF"                              // 6  reason: null string
+        "20000000"                              // 7  fingerprint: 32 bytes of 0xAB
         "ABABABABABABABABABABABABABABABAB"
         "ABABABABABABABABABABABABABABABAB"
-        "01000000"                              // 9  one leaf
-        "01" "02000000" "5300" "02000000" "7400"    // 9a SourceMeasurement "S" "t"
-        "02000000"                              // 10 two outputs
-        "02" "02000000" "5300" "02000000" "6D00"    // 10a measurement "S" "m"
+        "01000000"                              // 8  one leaf
+        "01" "02000000" "5300" "02000000" "7400"    // 8a SourceMeasurement "S" "t"
+        "02000000"                              // 9  two outputs
+        "02" "02000000" "5300" "02000000" "6D00"    // 9a measurement "S" "m"
         "01"                                        //     available
         "02000000"                                  //     two samples
         "000000000000F03F"                          //     1.0
         "0000000000000080"                          //     -0.0
         "02000000" "7500"                           //     unit "u"
-        "01" "02000000" "6100" "FFFFFFFF"           // 10a attribute "a", second null
+        "01" "02000000" "6100" "FFFFFFFF"           // 9a attribute "a", second null
         "00"                                        //     unavailable
-        "02000000"                                  // 11 two resolutions
-        "01" "02000000" "6100" "FFFFFFFF"           // 11a attribute "a", second null
+        "02000000"                                  // 10 two resolutions
+        "01" "02000000" "6100" "FFFFFFFF"           // 10a attribute "a", second null
         "01" "FFFFFFFF" "FFFFFFFF"                  //     SessionData, id and version null
-        "02" "02000000" "5300" "02000000" "7400"    // 11a measurement "S" "t"
+        "02" "02000000" "5300" "02000000" "7400"    // 10a measurement "S" "t"
         "02" "02000000" "6300" "02000000" "7600");  //     Calculation "c", version "v"
 
     const QByteArray bytes = encoded(record);
@@ -873,7 +887,7 @@ void ResultRecordsTest::futureVersionIsRefused_data()
     QTest::addColumn<quint32>("version");
     QTest::addColumn<bool>("fixChecksum");
 
-    const QList<quint32> versions = {0, 2, 3, 0xFFFFFFFFu};
+    const QList<quint32> versions = {0, 1, 3, 0xFFFFFFFFu};
     for (quint32 v : versions) {
         QTest::addRow("%u, stale checksum", v) << v << false;
         QTest::addRow("%u, matching checksum", v) << v << true;
@@ -895,6 +909,32 @@ void ResultRecordsTest::futureVersionIsRefused()
     QCOMPARE(decodeCalculationRecord(bytes, &out, &error), CalculationRecordStatus::UnsupportedVersion);
     QCOMPARE(error, QStringLiteral("format version %1 is not supported").arg(version));
     QCOMPARE(out.calculationCompatibility, 12345);
+}
+
+// Both layouts format version 1 ever had, and a genuine record spliced back
+// into it: refused by the version check, before the checksum.
+void ResultRecordsTest::formatOneIsRefused_data()
+{
+    QTest::addColumn<QByteArray>("bytes");
+
+    QTest::newRow("without resolutions (ce2fb2b)") << craftFormatOne(false);
+    QTest::newRow("with resolutions (Phase 1)") << craftFormatOne(true);
+    QTest::newRow("a genuine record in format 1") << asFormatOne(encoded(recordFor(QStringLiteral("x"))));
+}
+
+void ResultRecordsTest::formatOneIsRefused()
+{
+    QFETCH(QByteArray, bytes);
+    QVERIFY(bytes.size() > 48);
+    QCOMPARE(bytes.mid(8, 4), QByteArray::fromHex("01000000"));
+
+    CalculationRecord out;
+    out.calculationCompatibility = 12345;
+    QString error;
+    QCOMPARE(decodeCalculationRecord(bytes, &out, &error), CalculationRecordStatus::UnsupportedVersion);
+    QCOMPARE(error, QStringLiteral("format version 1 is not supported"));
+    QCOMPARE(out.calculationCompatibility, 12345);
+    QVERIFY(out.result.calculationId.isEmpty());
 }
 
 void ResultRecordsTest::corruptInputIsRefused_data()
@@ -971,7 +1011,7 @@ void ResultRecordsTest::corruptInputIsRefused_data()
     QTest::newRow("output count too large") << craft([&](QDataStream &s) {
         s << quint32(0) << quint32(1000);
     }) << corrupt << QStringLiteral("output count");
-    // Section 11: no leaves, no outputs, then the resolutions
+    // Section 10: no leaves, no outputs, then the resolutions
     QTest::newRow("unknown resolution name kind") << craft([&](QDataStream &s) {
         s << quint32(0) << quint32(0) << quint32(1) << quint8(3) << QStringLiteral("a") << QString() << quint8(1)
           << QString() << QString();
@@ -993,13 +1033,11 @@ void ResultRecordsTest::corruptInputIsRefused()
 
     CalculationRecord out;
     out.calculationCompatibility = 12345;
-    out.calculationEnvironment = QStringLiteral("untouched");
     QString message;
     QCOMPARE(int(decodeCalculationRecord(bytes, &out, &message)), status);
     QVERIFY2(message.contains(error), qPrintable(message));
 
     QCOMPARE(out.calculationCompatibility, 12345);
-    QCOMPARE(out.calculationEnvironment, QStringLiteral("untouched"));
     QVERIFY(out.result.calculationId.isEmpty());
     QVERIFY(out.result.bundle.setOutputs().isEmpty());
 }
@@ -1148,10 +1186,10 @@ void ResultRecordsTest::readStatuses()
     const QByteArray xBytes = readFileBytes(dir + QLatin1Char('/') + stem + QStringLiteral(".x.fvresult"));
     QVERIFY(!xBytes.isEmpty());
 
-    QVERIFY(writeFile(dir + QLatin1Char('/') + stem + QStringLiteral(".z.fvresult"), patchVersion(xBytes, 2)));
+    QVERIFY(writeFile(dir + QLatin1Char('/') + stem + QStringLiteral(".z.fvresult"), patchVersion(xBytes, 3)));
     read = logbook.readCalculationRecord(QStringLiteral("s1"), QStringLiteral("z"));
     QCOMPARE(read.status, CalculationRecordStatus::UnsupportedVersion);
-    QCOMPARE(read.error, QStringLiteral("format version 2 is not supported"));
+    QCOMPARE(read.error, QStringLiteral("format version 3 is not supported"));
 
     // A valid record of id "x" under the name of id "y"
     QVERIFY(QFile::copy(dir + QLatin1Char('/') + stem + QStringLiteral(".x.fvresult"),

@@ -1,6 +1,7 @@
 #ifndef FLYSIGHTTEST_LOGBOOKPROBE_H
 #define FLYSIGHTTEST_LOGBOOKPROBE_H
 
+#include <QByteArray>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QList>
@@ -52,6 +53,47 @@ QStringList calculationRecordFiles();
 
 /// Base name of sessionFilePath(sessionId): the stem its record files are named after; empty when there is none.
 QString sessionFileStem(const QString &sessionId);
+
+// ---- calculation records ----------------------------------------------------
+
+/// Makes an existing file unreadable to QFile::open() while it lives, and puts
+/// it back (same path, same bytes, readable) on release() or destruction.
+/// A mechanism the platform does not honour changes nothing and says why in
+/// skipReason(); the caller QSKIPs the row.
+///
+/// A directory at a record's path is never listed as a record (the listing
+/// takes files only), so the result store reaches it only through the ids the
+/// logbook manager knows - within a run, not after a restart (the next
+/// initialize() lists names, and a directory has none it would adopt).
+class UnreadableFile {
+public:
+    enum class Mechanism {
+        Directory,             ///< every platform: the file is removed and a directory made at its path
+        LockedWithoutSharing,  ///< Windows only: held open with share mode 0 (CreateFileW)
+        NoReadPermission       ///< not Windows: permissions cleared; skipped when it stays readable (root)
+    };
+    UnreadableFile(const QString &path, Mechanism mechanism);
+    ~UnreadableFile();                       // release()
+    Q_DISABLE_COPY_MOVE(UnreadableFile)
+    QString skipReason() const;              ///< empty when the path exists and QFile cannot open it for reading
+    bool release();                          ///< idempotent; false when the file could not be put back
+
+private:
+    QString m_path;
+    Mechanism m_mechanism;
+    QByteArray m_bytes;
+    QString m_skip;
+    void *m_handle = nullptr;                ///< Windows HANDLE while locked
+    bool m_applied = false;
+};
+
+/// The same record in the layout of format version 1 as Phase 1 of
+/// stored-results-validity wrote it: version field 1 and the environment
+/// fingerprint string (40 '0' characters, QDataStream form pinned to Qt_6_0
+/// little-endian) after the compatibility stamp, with a fresh SHA-256 trailer;
+/// an empty array unless `formatTwo` holds at least 48 bytes with version
+/// field 2. It only splices bytes: the codec is not used.
+QByteArray asFormatOne(const QByteArray &formatTwo);
 
 // ---- shared logbook columns -----------------------------------------------
 

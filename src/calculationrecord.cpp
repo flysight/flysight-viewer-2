@@ -12,7 +12,6 @@
 #include <QtEndian>
 
 #include "calculations/builtincalculations.h"
-#include "engine/calculationregistry.h"
 
 namespace FlySight {
 
@@ -109,28 +108,15 @@ QString outputName(const DependencyKey &key)
 
 CalculationRecord CalculationRecord::stamped(const StoredCalculationResult &result)
 {
-    return stamped(result, CalculationRegistry::instance());
-}
-
-CalculationRecord CalculationRecord::stamped(const StoredCalculationResult &result,
-                                             const CalculationRegistry &registry)
-{
     CalculationRecord record;
     record.calculationCompatibility = CalculationCompatibilityVersion;
-    record.calculationEnvironment = calculationEnvironmentFingerprint(registry);
     record.result = result;
     return record;
 }
 
 bool CalculationRecord::stampsAreCurrent() const
 {
-    return stampsAreCurrent(CalculationRegistry::instance());
-}
-
-bool CalculationRecord::stampsAreCurrent(const CalculationRegistry &registry) const
-{
-    return calculationCompatibility == CalculationCompatibilityVersion
-        && calculationEnvironment == calculationEnvironmentFingerprint(registry);
+    return calculationCompatibility == CalculationCompatibilityVersion;
 }
 
 // ============================================================================
@@ -250,7 +236,6 @@ std::optional<QByteArray> encodeCalculationRecord(const CalculationRecord &recor
         stream.writeRawData(kMagic, kMagicSize);
         stream << quint32(CalculationRecordFormatVersion);
         stream << qint32(record.calculationCompatibility);
-        stream << record.calculationEnvironment;
         stream << result.calculationId;
         stream << result.resultVersion;
         // Written once; the decoder restores it as the bundle's reason and as
@@ -369,8 +354,8 @@ CalculationRecordStatus decodeCalculationRecord(const QByteArray &bytes, Calcula
     StoredCalculationResult &result = record.result;
     qint32 compatibility = 0;
     QString reason;
-    stream >> compatibility >> record.calculationEnvironment >> result.calculationId
-           >> result.resultVersion >> reason >> result.inputFingerprint;
+    stream >> compatibility >> result.calculationId >> result.resultVersion
+           >> reason >> result.inputFingerprint;
     if (stream.status() != QDataStream::Ok)
         return fail(Status::Corrupt, truncated);
     record.calculationCompatibility = compatibility;

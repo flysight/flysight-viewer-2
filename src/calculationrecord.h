@@ -12,44 +12,46 @@
 
 namespace FlySight {
 
-class CalculationRegistry;
-
 /// One stored requested-calculation result, as a record file holds it: the
-/// engine's snapshot plus the two code stamps that were current when it was
-/// written. The logbook manager does all record I/O; this header only defines
-/// the value, its file name and its bytes.
+/// engine's snapshot plus the code stamp that was current when it was
+/// written. The calculation environment fingerprint is not part of a record:
+/// what else is registered never makes a stored result stale (plan
+/// stored-results-validity). The logbook manager does all record I/O; this
+/// header only defines the value, its file name and its bytes.
 struct CalculationRecord {
     int calculationCompatibility = 0;   ///< CalculationCompatibilityVersion at write time
-    QString calculationEnvironment;     ///< calculationEnvironmentFingerprint() at write time
-    StoredCalculationResult result;     ///< the engine's snapshot
+    StoredCalculationResult result;     ///< the engine's snapshot, with its resolutions
 
-    /// The snapshot with the CURRENT stamps (computed fresh from `registry`;
-    /// without one, from CalculationRegistry::instance()).
+    /// The snapshot with the CURRENT code stamp.
     static CalculationRecord stamped(const StoredCalculationResult &result);
-    static CalculationRecord stamped(const StoredCalculationResult &result, const CalculationRegistry &registry);
-    /// Both stamps equal the current ones, computed fresh (from `registry`, or
-    /// CalculationRegistry::instance()). Never
-    /// LogbookManager::cacheEnvironment(): that is the environment of the
-    /// cached column values, not of this program.
+    /// calculationCompatibility == CalculationCompatibilityVersion. The
+    /// calculation's own result version and the lookups (what provided each
+    /// name, with its result version) are checked by the engine when it
+    /// restores the snapshot; nothing else is.
     bool stampsAreCurrent() const;
-    bool stampsAreCurrent(const CalculationRegistry &registry) const;
 };
 
 /// Outcome of reading / decoding one record.
 enum class CalculationRecordStatus {
     Ok,
     Missing,             ///< no record file (or the session is not in the logbook)
-    Unreadable,          ///< the file exists but could not be opened or read
+    Unreadable,          ///< the file (or whatever is at its path) exists but could not be opened or
+                         ///< read; the result store skips it: kept, not restored
     NotARecord,          ///< does not start with the magic
     UnsupportedVersion,  ///< format version other than CalculationRecordFormatVersion
     Corrupt              ///< checksum, structure, trailing bytes, wrong calculation id
 };
 
-/// The format version this program writes and the only one it reads. Any
-/// other version is UnsupportedVersion (there is no migration: the caller
-/// treats the record as stale). Changing anything after the version field,
-/// including the set of attribute types a record can hold, bumps it.
-inline constexpr quint32 CalculationRecordFormatVersion = 1;
+/// The format version this program writes and the only one it reads.
+/// Changing anything after the version field, including the set of attribute
+/// types a record can hold, bumps it. History:
+///   1 - first format (the environment fingerprint as a second stamp; the
+///       resolutions were added late, without a bump);
+///   2 - the environment fingerprint left the record; the resolutions are
+///       section 10.
+/// A record of any other version is UnsupportedVersion and is deleted as stale
+/// when its session loads; there is no migration.
+inline constexpr quint32 CalculationRecordFormatVersion = 2;
 
 // ---------------------------------------------------------------- file names
 //
@@ -93,42 +95,36 @@ std::optional<std::pair<QString, QString>> parseRecordFileName(QStringView fileN
 
 // ---------------------------------------------------------------- the bytes
 //
-// Format version 1. After the 8-byte magic "FVRESULT" everything is written
+// Format version 2. After the 8-byte magic "FVRESULT" everything is written
 // with one QDataStream pinned to Qt_6_0, little-endian, double precision (a
 // double is its 8 IEEE-754 bytes; a QString is a quint32 byte length,
 // 0xFFFFFFFF for a null string, and UTF-16LE code units):
 //
 //    1  magic                       8 raw bytes "FVRESULT"
-//    2  format version              quint32 (1)
+//    2  format version              quint32 (2)
 //    3  calculation compatibility   qint32
-//    4  calculation environment     QString
-//    5  calculation id              QString, non-empty
-//    6  result version              QString
-//    7  reason / detail             QString (the bundle's reason(); written once)
-//    8  input fingerprint           QByteArray, InputFingerprintSize bytes
-//    9  leaf count                  quint32
-//   9a  per leaf                    quint8 storedLeafKindCode, QString a, QString b
-//   10  output count                quint32
-//  10a  per output (setOutputs()    quint8 key code (1 attribute, 2 measurement),
+//    4  calculation id              QString, non-empty
+//    5  result version              QString
+//    6  reason / detail             QString (the bundle's reason(); written once)
+//    7  input fingerprint           QByteArray, InputFingerprintSize bytes
+//    8  leaf count                  quint32
+//   8a  per leaf                    quint8 storedLeafKindCode, QString a, QString b
+//    9  output count                quint32
+//   9a  per output (setOutputs()    quint8 key code (1 attribute, 2 measurement),
 //       order)                      QString first (key or sensor), QString second
 //                                   (measurement name; null for an attribute),
 //                                   bool available, then only if available:
 //                                   attribute: QVariant (QDataStream's own form);
 //                                   measurement: quint32 count, count doubles,
 //                                   QString unit
-//   11  resolution count            quint32
-//  11a  per resolution (snapshot    quint8 name code (1 attribute, 2 measurement: the output
+//   10  resolution count            quint32
+//  10a  per resolution (snapshot    quint8 name code (1 attribute, 2 measurement: the output
 //       order)                      key codes), QString first (key or sensor), QString second
 //                                   (measurement name; null for an attribute), quint8
 //                                   storedResolutionProviderCode, QString instance id,
 //                                   QString result version (both as held: empty/null unless
 //                                   Calculation)
-//   12  checksum                    32 raw bytes: SHA-256 of every preceding byte
-//
-// Section 11 was added to format version 1 together with the snapshot's
-// resolutions; a record without it decodes as Corrupt and is deleted as stale
-// at load. The version number changes once for that work, when the record
-// format is final (format 2).
+//   11  checksum                    32 raw bytes: SHA-256 of every preceding byte
 //
 // The status is not stored: only Ok results are recorded. An available
 // attribute holds one of these QMetaType types (the portable non-date types

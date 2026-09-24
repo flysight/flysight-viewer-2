@@ -1305,7 +1305,8 @@ QSet<DependencyKey> SessionModel::restoreStoredResults(SessionRow &sr)
     // Pending columns were waiting for exactly this: they are computed from
     // the engine on the next pass. The row's cached values stay: they were
     // valid for the records on disk, and the restore installs exactly those
-    // (a stale record it deletes drops its values through the manager).
+    // (a stale record it deletes, or one it skips, drops its values through
+    // the manager).
     const bool hadPending = !sr.pendingColumns.isEmpty();
     sr.pendingColumns.clear();
     const QString sessionId = sr.sessionId;     // sr is not used after the restore
@@ -1373,17 +1374,7 @@ void SessionModel::checkCalculationEnvironment()
     // Which columns a name can affect follows the registrations.
     rebuildColumnDependencies();
 
-    // A registry change drops explicit results from loaded engines and keeps
-    // their records (they are checked at the next load), so a loaded engine
-    // can no longer vouch for them. Values over them stay out of index.json
-    // until the row is evicted or the record is written or deleted again.
-    // Before the early return: A -> B -> A within one pass drops the
-    // in-memory results all the same.
     LogbookManager &logbook = LogbookManager::instance();
-    for (const SessionRow &row : std::as_const(m_rows)) {
-        if (row.isLoaded() && !row.loadFailed)
-            logbook.markCalculationRecordsUnconfirmed(row.sessionId);
-    }
 
     // Unchanged covers A -> B -> A within one event-loop pass, and the startup
     // registrations, which are complete before LogbookManager::initialize().
@@ -1932,8 +1923,8 @@ bool SessionModel::evictSession(const QString &sessionId)
     fillMissingColumns(row, sr.session.value(), ColumnSource::LoadedRow);
 
     // Values over records the engine could not vouch for (a failed write or
-    // removal, an environment change while loaded) go with the engine; the
-    // worker settles them against the records on disk.
+    // removal, a record skipped at the load) go with the engine; the worker
+    // settles them against the records on disk.
     const QStringList unconfirmedIds =
         LogbookManager::instance().discardUnconfirmedCalculationRecords(sessionId);
     const QSet<QString> unconfirmed(unconfirmedIds.cbegin(), unconfirmedIds.cend());

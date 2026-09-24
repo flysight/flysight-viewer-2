@@ -22,12 +22,12 @@ void addIdentity(SessionData &session, const QString &sessionId)
     session.setAttribute(QStringLiteral("SCHEMA_VER"), QStringLiteral("2"));
 }
 
-void addGnssSide(SessionData &session, const FusionFixture &f)
+void addGnssSide(SessionData &session, const FusionFixture &f, const QString &sAccName = QStringLiteral("sAcc"))
 {
     session.setSourceMeasurement("GNSS", "time", f.gnssTime, "s");
     session.setSourceMeasurement("GNSS", "hAcc", f.hAcc, "m");
     session.setSourceMeasurement("GNSS", "vAcc", f.vAcc, "m");
-    session.setSourceMeasurement("GNSS", "sAcc", f.sAcc, "m/s");
+    session.setSourceMeasurement(QStringLiteral("GNSS"), sAccName, f.sAcc, QStringLiteral("m/s"));
     session.setSourceMeasurement("Local", "north", f.north, "m");
     session.setSourceMeasurement("Local", "east", f.east, "m");
     session.setSourceMeasurement("Local", "down", f.down, "m");
@@ -130,6 +130,18 @@ SessionData sessionWithoutImu(const FusionFixture &fixture, const QString &sessi
 SessionData fixtureSession(const QString &fixtureName, const QString &sessionId)
 {
     SessionData session = sessionFromFixture(fusionFixture(fixtureName), sessionId);
+    session.setAttribute(SessionKeys::ExitTime, kFixtureExitTime);
+    return session;
+}
+
+SessionData fixtureSessionWithSAccStoredAs(const QString &fixtureName, const QString &sessionId,
+                                          const QString &storedAs)
+{
+    const FusionFixture fixture = fusionFixture(fixtureName);
+    SessionData session;
+    addIdentity(session, sessionId);
+    addGnssSide(session, fixture, storedAs);
+    addImuSide(session, fixture);
     session.setAttribute(SessionKeys::ExitTime, kFixtureExitTime);
     return session;
 }

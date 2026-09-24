@@ -975,6 +975,10 @@ int LogbookManager::removeStrayCalculationRecords()
 //   a failed write (encode or I/O)       V never flushed since  previous   missing or older values only;
 //                                          the failure            or none    the check applies
 //                                          (unconfirmed)
+//   a record skipped at a load           as last flushed before  present    V agrees with the record
+//     (unreadable)                         the load, or no V and            (it was computed from it),
+//                                          e absent (a flush while          or V missing: pending
+//                                          skipped: unconfirmed)            until loaded
 //   the model's refresh flush            V1 / present, current  present    valid: the stub shows V1
 //   a result-version bump (upgrade)      V / present, old       present    version != current: V dropped,
 //                                          version              (stale)    pending; the load deletes the record
@@ -1214,13 +1218,6 @@ QSet<QString> LogbookManager::unconfirmedCalculationRecords(const QString &sessi
     return m_unconfirmedRecords.value(sessionId);
 }
 
-void LogbookManager::markCalculationRecordsUnconfirmed(const QString &sessionId)
-{
-    const QSet<QString> known = m_knownRecords.value(sessionId);
-    if (!known.isEmpty())
-        m_unconfirmedRecords[sessionId].unite(known);
-}
-
 QStringList LogbookManager::discardUnconfirmedCalculationRecords(const QString &sessionId)
 {
     const QSet<QString> unconfirmed = m_unconfirmedRecords.take(sessionId);
@@ -1229,6 +1226,17 @@ QStringList LogbookManager::discardUnconfirmedCalculationRecords(const QString &
     if (!ids.isEmpty())
         dropRecordDependentValues(sessionId, ids);
     return ids;
+}
+
+void LogbookManager::markCalculationRecordSkipped(const QString &sessionId, const QString &calculationId)
+{
+    if (recordStem(sessionId).isEmpty())
+        return;
+    // The same three steps as a failed write: the pair is unconfirmed, the
+    // values over it go, and the model hears of it. The known set is untouched.
+    m_unconfirmedRecords[sessionId].insert(calculationId);
+    dropRecordDependentValues(sessionId, {calculationId});
+    emit calculationRecordsChanged(sessionId, calculationId);
 }
 
 void LogbookManager::adoptCalculationRecordSet()

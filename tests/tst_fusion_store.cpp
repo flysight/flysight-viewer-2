@@ -8,7 +8,12 @@
 //    publish, and the goldens), with no job, no run and no refresh count;
 //  - a rejection and a solver failure come back with their reason and badge;
 //  - validity follows the inputs (an unrelated edit keeps the record, a
-//    dependency edit or an IMU merge drops it) and the code stamps;
+//    dependency edit or an IMU merge drops it), what the fit looked up and the
+//    code stamps; nothing unrelated to what it reached (altitude markers,
+//    other registrations, the descent-pause preference, another plug-in set)
+//    makes it stale, in memory or across a restart; a registration that
+//    provides a name it looked up drops it and its record at once; a lookup
+//    that resolves differently at load deletes it;
 //  - a fit published before the session's first save is stored and restored;
 //  - the session file's bytes never depend on a record;
 //  - the logbook's cache/ folder deleted while the application is closed: the
@@ -32,7 +37,9 @@
 #include <QScopeGuard>
 #include <QtTest>
 
+#include "altitudemarkerfeature.h"
 #include "calculationrecord.h"
+#include "calculations/builtincalculations.h"
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
 #include "fusion/fusionregistration.h"
@@ -48,6 +55,7 @@
 #include "plotfixture.h"
 #include "plotmodel.h"
 #include "plotrequests.h"
+#include "plugincodeidentity.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
@@ -109,6 +117,58 @@ bool isNotRequested(const std::optional<ResultStatus> &status)
     return !status.has_value() || *status == ResultStatus::NotRequested;
 }
 
+/// The entry of `resolutions` for `name`; nullptr when there is none.
+const StoredResolution *resolutionOf(const QList<StoredResolution> &resolutions, const DependencyKey &name)
+{
+    for (const StoredResolution &r : resolutions) {
+        if (r.name == name)
+            return &r;
+    }
+    return nullptr;
+}
+
+/// An OnDemand calculation with no inputs and one attribute output.
+CalculationDescriptor constantAttribute(const QString &id, const QString &output, const QVariant &value)
+{
+    CalculationDescriptor d;
+    d.id = id;
+    d.outputs = {DependencyKey::attribute(output)};
+    d.compute = [output, value](const EvaluationContext &) {
+        return CalculationResult().setAttribute(output, value);
+    };
+    return d;
+}
+
+/// A stand-in plug-in calculation: constantAttribute() declaring the plug-in
+/// code identity of one file as its result version.
+CalculationDescriptor pluginStandIn(const QString &id, const QString &output, double value,
+                                    const QString &fileName, const QByteArray &bytes)
+{
+    PluginCodeIngredients ingredients;
+    ingredients.files = {PluginSourceFile{fileName, bytes}};
+    ingredients.sdk = QByteArray("sdk");
+    ingredients.pythonVersion = QStringLiteral("3.13.3");
+    ingredients.numpyVersion = QStringLiteral("2.2.4");
+    CalculationDescriptor d = constantAttribute(id, output, value);
+    d.resultVersion = pluginCodeIdentity(ingredients);
+    return d;
+}
+
+/// OnDemand: GNSS/sAcc = the samples of GNSS/testSAcc, unit "m/s".
+CalculationDescriptor sAccFrom(const QString &id)
+{
+    CalculationDescriptor d;
+    d.id = id;
+    d.inputs = {CalcInput::measurement(QStringLiteral("GNSS"), QStringLiteral("testSAcc"))};
+    d.outputs = {DependencyKey::measurement(QStringLiteral("GNSS"), QStringLiteral("sAcc"))};
+    d.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setMeasurement(QStringLiteral("GNSS"), QStringLiteral("sAcc"),
+                                                  ctx.measurement(QStringLiteral("GNSS"), QStringLiteral("testSAcc")),
+                                                  QStringLiteral("m/s"));
+    };
+    return d;
+}
+
 } // namespace
 
 class FusionStoreTest : public QObject {
@@ -131,6 +191,10 @@ private slots:
     void mergeIntoUnloadedSession();
     void codeStampChangeDropsRecordOnLoad_data();
     void codeStampChangeDropsRecordOnLoad();
+    void storedFitSurvivesUnrelatedChanges_data();
+    void storedFitSurvivesUnrelatedChanges();
+    void runtimeRegistrationDropsFitAndRecord();
+    void lookupResolvingDifferentlyAtLoadDeletesFit();
     void sessionFileBytesUnaffectedByRecord();
     void fittedBeforeFirstSaveIsRestored_data();
     void fittedBeforeFirstSaveIsRestored();
@@ -196,6 +260,15 @@ private:
     /// Reads the record, applies `mutate`, writes it back. Empty on success.
     [[nodiscard]] QString rewriteRecord(const QString &id, const std::function<void(CalculationRecord &)> &mutate);
     void watchLoad(QObject *scope, const QString &id, LoadWatch *out);
+    /// storedFitSurvivesUnrelatedChanges' runtime step on the loaded session
+    /// "a": `apply` changes the calculation environment and the fit stays
+    /// installed, bit for bit, with its record. Empty when all of that held.
+    [[nodiscard]] QString runtimeStep(const std::function<void()> &apply, const QByteArray &r0,
+                                      const FitValues &fresh);
+    /// Its restart check: after restart(whileClosed) the fit of "a" is
+    /// restored when the row is shown, with no job. Empty when that held.
+    [[nodiscard]] QString restartCheck(const std::function<void()> &whileClosed, const QByteArray &r0,
+                                       const FitValues &fresh);
     /// Empty when the blocker reports agree in state, blockers and notes.
     static QString reportDifference(const BlockerReport &got, const BlockerReport &expected);
 
@@ -203,6 +276,8 @@ private:
     std::unique_ptr<JobQueue> m_queue;
     std::unique_ptr<PlotModel> m_plots;
     std::unique_ptr<PlotRequests> m_requests;
+    std::unique_ptr<ExtraRegistrations> m_extra;
+    std::unique_ptr<AltitudeMarkerManager> m_altitudes;
     QStringList m_registryBefore;
 };
 
@@ -227,6 +302,7 @@ void FusionStoreTest::init()
     env.resetPreferencesToDefaults();
     LogbookManager::instance().initialize();
     m_registryBefore = CalculationRegistry::instance().registeredIds();
+    m_extra = std::make_unique<ExtraRegistrations>();
 
     m_model = std::make_unique<SessionModel>();
     m_queue = std::make_unique<JobQueue>(m_model.get());
@@ -255,6 +331,10 @@ void FusionStoreTest::cleanup()
     m_queue.reset();
     m_model.reset();
     PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    // After the model: registrations removed with a live model would reach it
+    m_altitudes.reset();
+    writeAltitudes({});
+    m_extra.reset();
 
     QCOMPARE(stillPinned, QStringList());
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
@@ -369,6 +449,60 @@ void FusionStoreTest::watchLoad(QObject *scope, const QString &id, LoadWatch *ou
         out->seen = true;
         out->status = loaded ? loaded->calculationEngine().resultStatus(kFit) : std::nullopt;
     });
+}
+
+QString FusionStoreTest::runtimeStep(const std::function<void()> &apply, const QByteArray &r0,
+                                     const FitValues &fresh)
+{
+    const QString env0 = calculationEnvironmentFingerprint();
+    const int runs = engine("a").runCount(kFit);
+    m_model->resetStoredResultStats();
+    const Quiet quiet(*m_queue);
+    apply();
+    m_model->flushPendingInvalidations();
+    if (calculationEnvironmentFingerprint() == env0)
+        return QStringLiteral("the environment fingerprint did not change");
+    if (engine("a").resultStatus(kFit) != std::optional<ResultStatus>(ResultStatus::Ok))
+        return QStringLiteral("the fit was dropped");
+    if (engine("a").runCount(kFit) != runs)
+        return QStringLiteral("the fit ran");
+    if (bytesOf(recordPath("a")) != r0)
+        return QStringLiteral("the record changed");
+    if (stats().droppedRecordsDeleted != 0)
+        return QStringLiteral("a record was deleted");
+    const QString difference = differenceFrom(fresh, "a");
+    if (!difference.isEmpty())
+        return difference;
+    if (!quiet.holds())
+        return QStringLiteral("a job started");
+    return QString();
+}
+
+QString FusionStoreTest::restartCheck(const std::function<void()> &whileClosed, const QByteArray &r0,
+                                      const FitValues &fresh)
+{
+    restart(whileClosed);
+    check(QStringLiteral("roll"));
+    const Quiet quiet(*m_queue);
+    show({"a"});
+    if (!isLoaded("a"))
+        return QStringLiteral("a was not loaded");
+    if (engine("a").resultStatus(kFit) != std::optional<ResultStatus>(ResultStatus::Ok))
+        return QStringLiteral("the fit was not restored");
+    if (engine("a").runCount(kFit) != 0)
+        return QStringLiteral("the fit ran");
+    if (stats().recordsRestored != 1 || stats().staleRecordsDeleted != 0)
+        return QStringLiteral("%1 restored, %2 deleted").arg(stats().recordsRestored).arg(stats().staleRecordsDeleted);
+    if (bytesOf(recordPath("a")) != r0)
+        return QStringLiteral("the record changed");
+    const QString difference = differenceFrom(fresh, "a");
+    if (!difference.isEmpty())
+        return difference;
+    if (m_queue->model()->rowCount() != 0)
+        return QStringLiteral("a job was created");
+    if (!quiet.holds())
+        return QStringLiteral("a job started");
+    return QString();
 }
 
 QString FusionStoreTest::reportDifference(const BlockerReport &got, const BlockerReport &expected)
@@ -838,22 +972,18 @@ void FusionStoreTest::mergeIntoUnloadedSession()
 void FusionStoreTest::codeStampChangeDropsRecordOnLoad_data()
 {
     QTest::addColumn<QString>("stamp");
-    for (const char *stamp : {"compatibility", "resultVersion", "environment"})
+    for (const char *stamp : {"compatibility", "resultVersion", "providerResultVersion"})
         QTest::newRow(stamp) << QString::fromLatin1(stamp);
 }
 
-// Spec 8: bumping the compatibility marker, the environment fingerprint or
-// the calculation's result version drops the record on load.
+// Bumping the compatibility marker, the fit's result version, or the result
+// version recorded for a calculation its lookups went through drops the
+// record on load.
 void FusionStoreTest::codeStampChangeDropsRecordOnLoad()
 {
     QFETCH(QString, stamp);
     const auto restoreCapacity = qScopeGuard([] {
         PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
-    });
-    bool extraRegistered = false;
-    const auto unregisterExtra = qScopeGuard([&extraRegistered] {
-        if (extraRegistered)
-            CalculationRegistry::instance().unregister(kExtra);
     });
 
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
@@ -876,15 +1006,20 @@ void FusionStoreTest::codeStampChangeDropsRecordOnLoad()
         QCOMPARE(rewriteRecord("a", [](CalculationRecord &r) {
                      r.result.resultVersion = QStringLiteral("batch-temperature-bias-v2");
                  }), QString());
-    } else if (stamp == QLatin1String("environment")) {
-        CalculationDescriptor extra;
-        extra.id = kExtra;
-        extra.outputs = {DependencyKey::attribute(QStringLiteral("_STORE_EXTRA"))};
-        extra.compute = [](const EvaluationContext &) {
-            return CalculationResult().setAttribute(QStringLiteral("_STORE_EXTRA"), 1);
-        };
-        extraRegistered = CalculationRegistry::instance().registerCalculation(extra);
-        QVERIFY(extraRegistered);
+    } else if (stamp == QLatin1String("providerResultVersion")) {
+        bool found = false;
+        bool byCalculation = false;
+        QCOMPARE(rewriteRecord("a", [&](CalculationRecord &r) {
+                     for (StoredResolution &resolution : r.result.resolutions) {
+                         if (resolution.name == DependencyKey::measurement(QStringLiteral("IMU"), QStringLiteral("az"))) {
+                             found = true;
+                             byCalculation = resolution.provider == StoredResolution::Provider::Calculation;
+                             resolution.resultVersion = QStringLiteral("v-old");
+                         }
+                     }
+                 }), QString());
+        QVERIFY(found);
+        QVERIFY(byCalculation);
     } else {
         QFAIL("unknown stamp");
     }
@@ -907,6 +1042,190 @@ void FusionStoreTest::codeStampChangeDropsRecordOnLoad()
     QCOMPARE(state.control(), Control::Refresh);
     QCOMPARE(m_queue->model()->rowCount(), jobs);
     QVERIFY(quiet.holds());
+}
+
+void FusionStoreTest::storedFitSurvivesUnrelatedChanges_data()
+{
+    QTest::addColumn<QString>("change");
+    for (const char *change : {"altitudeMarker", "unrelatedCalculation", "descentPause", "unrelatedPluginSet"})
+        QTest::newRow(change) << QString::fromLatin1(change);
+}
+
+// Spec 10, first item: changes of the calculation environment that the fit
+// never reached (an altitude marker, a calculation of a name it never looks
+// up, the descent-pause preference, another plug-in set) leave the installed
+// fit and its record alone, and the record is restored with no job after a
+// restart with the change in effect.
+void FusionStoreTest::storedFitSurvivesUnrelatedChanges()
+{
+    QFETCH(QString, change);
+    const auto restoreCapacity = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    });
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
+    show({"a"});
+    check(QStringLiteral("roll"));
+    QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
+    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QVERIFY(waitForIdle(*m_model));
+    const QByteArray r0 = bytesOf(recordPath("a"));
+    QVERIFY(!r0.isEmpty());
+    const FitValues fresh = capture("a");
+    PreferencesManager &prefs = PreferencesManager::instance();
+
+    if (change == QLatin1String("altitudeMarker")) {
+        m_altitudes = std::make_unique<AltitudeMarkerManager>();
+        QCOMPARE(runtimeStep([] { writeAltitudes({1000}); }, r0, fresh), QString());
+        QVERIFY(CalculationRegistry::instance().contains(QStringLiteral("builtin.altitude._ALTITUDE_1000_FT")));
+        m_model->resetStoredResultStats();
+        QCOMPARE(unloadAndReload("a"), QString());
+        QCOMPARE(stats().recordsRestored, 1);
+        QCOMPARE(engine("a").runCount(kFit), 0);
+        // The manager lives on: the next run registers the same marker
+        QCOMPARE(restartCheck({}, r0, fresh), QString());
+        QCOMPARE(runtimeStep([] { writeAltitudes({}); }, r0, fresh), QString());
+        QVERIFY(!CalculationRegistry::instance().contains(QStringLiteral("builtin.altitude._ALTITUDE_1000_FT")));
+        QCOMPARE(restartCheck({}, r0, fresh), QString());
+    } else if (change == QLatin1String("unrelatedCalculation")) {
+        const CalculationDescriptor extra = constantAttribute(kExtra, QStringLiteral("_STORE_EXTRA"), 1);
+        bool changed = false;
+        QCOMPARE(runtimeStep([&] { changed = m_extra->add(extra); }, r0, fresh), QString());
+        QVERIFY(changed);
+        QCOMPARE(restartCheck({}, r0, fresh), QString());
+        QCOMPARE(runtimeStep([&] { changed = m_extra->remove(kExtra); }, r0, fresh), QString());
+        QVERIFY(changed);
+        QCOMPARE(restartCheck({}, r0, fresh), QString());
+    } else if (change == QLatin1String("descentPause")) {
+        CalculationRecord record;
+        QCOMPARE(decodeCalculationRecord(r0, &record), CalculationRecordStatus::Ok);
+        QVERIFY(!record.result.leaves.contains(GraphNode::preference(PreferenceKeys::ImportDescentPauseSeconds)));
+        QCOMPARE(runtimeStep([&] { prefs.setValue(PreferenceKeys::ImportDescentPauseSeconds, 45.0); }, r0, fresh),
+                 QString());
+        QCOMPARE(restartCheck({}, r0, fresh), QString());
+        QCOMPARE(runtimeStep([&] { prefs.setValue(PreferenceKeys::ImportDescentPauseSeconds, 30.0); }, r0, fresh),
+                 QString());
+        QCOMPARE(restartCheck({}, r0, fresh), QString());
+    } else if (change == QLatin1String("unrelatedPluginSet")) {
+        const QString a = QStringLiteral("test.plugin.a");
+        const QString b = QStringLiteral("test.plugin.b");
+        const CalculationDescriptor setA =
+            pluginStandIn(a, QStringLiteral("_TEST_PLUGIN_A"), 1.0, QStringLiteral("a.py"), QByteArray("a = 1\n"));
+        const CalculationDescriptor setB =
+            pluginStandIn(b, QStringLiteral("_TEST_PLUGIN_B"), 2.0, QStringLiteral("b.py"), QByteArray("b = 1\n"));
+        QVERIFY(setA.resultVersion != setB.resultVersion);
+        const QList<std::function<bool()>> runs = {
+            [&] { return m_extra->add(setA); },
+            [&] { return m_extra->remove(a) && m_extra->add(setB); },
+            [&] { return m_extra->remove(b); }};
+        for (const std::function<bool()> &nextRun : runs) {
+            const QString env0 = calculationEnvironmentFingerprint();
+            bool loaded = false;
+            QCOMPARE(restartCheck([&] { loaded = nextRun(); }, r0, fresh), QString());
+            QVERIFY(loaded);
+            QVERIFY(calculationEnvironmentFingerprint() != env0);
+        }
+    } else {
+        QFAIL("unknown change");
+    }
+}
+
+// Spec 10, second item: registering, while the application runs, a
+// calculation that provides a name the fit looked up drops the installed fit
+// and deletes its record at once; the row offers refresh and nothing starts.
+void FusionStoreTest::runtimeRegistrationDropsFitAndRecord()
+{
+    const auto restoreCapacity = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    });
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
+    show({"a"});
+    check(QStringLiteral("roll"));
+    QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
+    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QVERIFY(waitForIdle(*m_model));
+    const QString path = recordPath("a");
+    const QByteArray r0 = bytesOf(path);
+    QVERIFY(!r0.isEmpty());
+    CalculationRecord record;
+    QCOMPARE(decodeCalculationRecord(r0, &record), CalculationRecordStatus::Ok);
+    QVERIFY(resolutionOf(record.result.resolutions, DependencyKey::attribute(QStringLiteral("_LOCAL_ORIGIN_INDEX"))));
+
+    m_model->resetStoredResultStats();
+    {
+        const Quiet quiet(*m_queue);
+        QVERIFY(m_extra->add(constantAttribute(QStringLiteral("test.store.originShadow"),
+                                               QStringLiteral("_LOCAL_ORIGIN_INDEX"),
+                                               QVariant::fromValue(qlonglong(0)))));
+        // No event-loop pass in between
+        QVERIFY(!QFileInfo::exists(path));
+        QCOMPARE(stats().droppedRecordsDeleted, 1);
+        QVERIFY(isNotRequested(engine("a").resultStatus(kFit)));
+        QVERIFY2(availableIn("a").isEmpty(), qPrintable(availableIn("a")));
+
+        const PlotRowState state = row(kRoll);
+        QCOMPARE(state.missingCount, 1);
+        QCOMPARE(state.control(), Control::Refresh);
+        PlotFixture::spin(m_requests.get());
+        QVERIFY(quiet.holds());
+    }
+
+    QVERIFY(waitForIdle(*m_model));
+    m_model->resetStoredResultStats();
+    QCOMPARE(unloadAndReload("a"), QString());
+    QCOMPARE(stats().recordsRead, 0);
+    QVERIFY(isNotRequested(engine("a").resultStatus(kFit)));
+    QCOMPARE(engine("a").runCount(kFit), 0);
+}
+
+// Spec 10, third item: a new candidate for a looked-up name (GNSS/sAcc, which
+// only a registered calculation provides here), computing from the same
+// inputs and tried first, registered before the load: the record is deleted
+// and the fit reads not requested.
+void FusionStoreTest::lookupResolvingDifferentlyAtLoadDeletesFit()
+{
+    const QString sacc0 = QStringLiteral("test.store.sacc0");
+    const QString sacc1 = QStringLiteral("test.store.sacc1");
+    QVERIFY(m_extra->add(sAccFrom(sacc1)));
+    QCOMPARE(addSessions({fixtureSessionWithSAccStoredAs(QStringLiteral("coarse_linear"), QStringLiteral("a"),
+                                                         QStringLiteral("testSAcc"))}),
+             QString());
+    QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
+    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
+    QCOMPARE(engine("a").resultStatus(kFit), std::optional<ResultStatus>(ResultStatus::Ok));
+    QVERIFY(waitForIdle(*m_model));
+    const QString path = recordPath("a");
+    const QByteArray r0 = bytesOf(path);
+    QVERIFY(!r0.isEmpty());
+    CalculationRecord record;
+    QCOMPARE(decodeCalculationRecord(r0, &record), CalculationRecordStatus::Ok);
+    const StoredResolution *sAcc = resolutionOf(record.result.resolutions,
+                                                DependencyKey::measurement(QStringLiteral("GNSS"), QStringLiteral("sAcc")));
+    QVERIFY(sAcc);
+    QCOMPARE(sAcc->provider, StoredResolution::Provider::Calculation);
+    QCOMPARE(sAcc->instanceId, sacc1);
+    QVERIFY(sAcc->resultVersion.isEmpty());
+
+    // Re-registering goes to the end: sacc0 is tried first at the next load
+    bool reordered = false;
+    restart([&] { reordered = m_extra->add(sAccFrom(sacc0)) && m_extra->remove(sacc1) && m_extra->add(sAccFrom(sacc1)); });
+    QVERIFY(reordered);
+    check(QStringLiteral("roll"));
+    const Quiet quiet(*m_queue);
+    show({"a"});
+    QVERIFY(isLoaded("a"));
+
+    QVERIFY(!QFileInfo::exists(path));
+    QCOMPARE(stats().staleRecordsDeleted, 1);
+    QVERIFY(isNotRequested(engine("a").resultStatus(kFit)));
+    QCOMPARE(engine("a").runCount(kFit), 0);
+    QCOMPARE(row(kRoll).control(), Control::Refresh);
+    QVERIFY(quiet.holds());
+
+    // Which check failed
+    const CalculationEngine::RestoreOutcome outcome = engine("a").restoreResult(record.result);
+    QCOMPARE(outcome.kind, CalculationEngine::RestoreOutcome::Kind::Stale);
+    QCOMPARE(outcome.staleCheck, CalculationEngine::RestoreOutcome::StaleCheck::Resolutions);
 }
 
 // ---- The session file ------------------------------------------------------------------

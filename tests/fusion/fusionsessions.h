@@ -59,6 +59,13 @@ constexpr double kFixtureExitTime = kFixtureEpochUtc + 1.0;
 /// exit marker at kFixtureExitTime.
 FlySight::SessionData fixtureSession(const QString &fixtureName, const QString &sessionId = QStringLiteral("f1"));
 
+/// fixtureSession() with the GNSS/sAcc source data stored as GNSS/<storedAs>
+/// (same samples, unit "m/s"). GNSS/sAcc then has no source data and no
+/// built-in candidate, so only a registered calculation can provide it
+/// (tst_fusion_store's lookup test).
+FlySight::SessionData fixtureSessionWithSAccStoredAs(const QString &fixtureName, const QString &sessionId,
+                                                     const QString &storedAs);
+
 /// The same without any IMU column (spec acceptance 11).
 FlySight::SessionData sessionWithoutImu(const FusionFixture &fixture, const QString &sessionId);
 

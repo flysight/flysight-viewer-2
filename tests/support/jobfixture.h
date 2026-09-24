@@ -12,6 +12,8 @@
 #include <QString>
 #include <QStringList>
 
+#include "engine/calculationdescriptor.h"
+#include "engine/calculationregistry.h"
 #include "jobmodel.h"
 #include "jobqueue.h"
 #include "sessiondata.h"
@@ -97,6 +99,29 @@ public:
 
 private:
     std::shared_ptr<Gate> m_gate;
+    QStringList m_ids;
+};
+
+/// Calculations one test function adds to the GLOBAL registry beyond a
+/// JobWorld. Destroy it after the JobQueue and the SessionModel are gone (as
+/// JobWorld): the destructor unregisters, newest first and as runtime
+/// changes, every id it registered and still holds.
+class ExtraRegistrations {
+public:
+    ExtraRegistrations() = default;
+    ~ExtraRegistrations();
+    Q_DISABLE_COPY_MOVE(ExtraRegistrations)
+
+    /// Registers on the global registry; false (and nothing held) when it refuses.
+    [[nodiscard]] bool add(const FlySight::CalculationDescriptor &d);
+    [[nodiscard]] bool addFamily(const FlySight::CalculationFamily &f);
+    /// Unregisters and forgets `id`; false when it is not held or the registry refuses.
+    [[nodiscard]] bool remove(const QString &id,
+                              FlySight::CalculationRegistry::Removal removal
+                              = FlySight::CalculationRegistry::Removal::Change);
+    QStringList ids() const { return m_ids; }    ///< held, in registration order
+
+private:
     QStringList m_ids;
 };
 

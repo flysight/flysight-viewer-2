@@ -26,6 +26,12 @@ namespace FlySight {
 ///    DroppedByInputChange). A teardown removal reports nothing.
 ///  - restoreSession() installs a session's valid records into its engine
 ///    and deletes the stale ones. It is not a request: it starts nothing.
+///  - A record that exists but cannot be read (Unreadable) is skipped:
+///    neither restored nor deleted; the calculation reads as not requested and
+///    the logbook manager keeps the column values over it out of index.json
+///    (LogbookManager::markCalculationRecordSkipped()). A record whose inputs
+///    stay unavailable only because it reads the result of a skipped record is
+///    skipped too. The next load tries again.
 ///  - Explicit family instances ("<familyId>#<key>") are not stored: their
 ///    events are ignored (CalculationEngine::exportResult() refuses them).
 class CalculationResultStore {
@@ -35,10 +41,13 @@ public:
         int writeFailures = 0;          ///< Ok installs whose record could not be encoded or written
         int restoreCalls = 0;           ///< restoreSession() calls
         int recordListings = 0;         ///< ... that listed the session's record files (the manager knew some)
-        int recordsRead = 0;            ///< record files read by restoreSession()
+        int recordsRead = 0;            ///< records read by restoreSession() (listed or known ids)
         int recordsRestored = 0;        ///< ... installed into the engine
         int recordsKept = 0;            ///< ... not installed because a result was already installed (AlreadyInstalled)
-        int staleRecordsDeleted = 0;    ///< deleted by restoreSession(): unreadable, stamps, stale, unknown calculation
+        int staleRecordsDeleted = 0;    ///< deleted by restoreSession(): not a record, damaged, another format
+                                        ///< version, another compatibility marker, stale (RestoreOutcome),
+                                        ///< unknown calculation
+        int recordsSkipped = 0;         ///< kept, not restored: could not be read, or read the result of one that could not
         int droppedRecordsDeleted = 0;  ///< deleted because an input or registry change dropped the in-memory result
         qint64 restoreNanoseconds = 0;  ///< wall time inside restoreSession() (listing, reading, checks, restore)
         qint64 writeNanoseconds = 0;    ///< wall time exporting, stamping, encoding and writing records
@@ -48,6 +57,7 @@ public:
         int restored = 0;
         int kept = 0;
         int deleted = 0;
+        int skipped = 0;
         QSet<DependencyKey> invalidated;   ///< union of RestoreOutcome::invalidated over every restoreResult() call
     };
 

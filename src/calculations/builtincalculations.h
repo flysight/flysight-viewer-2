@@ -32,13 +32,15 @@ void registerBuiltInCalculations(CalculationRegistry &registry = CalculationRegi
 /// never set it to 0 (0 is what an index without the field reads as). Not
 /// related to SCHEMA_VER, which describes recorded data, not this program.
 ///
-/// Bump it, or the calculation's result version
+/// Bump it, or the result version of the calculation concerned
 /// (CalculationDescriptor::resultVersion), whenever a change can alter what a
-/// requested calculation produces. A stored result of an explicit calculation
-/// is used only while this marker, the environment fingerprint and the result
-/// version it was stored with all equal the current ones. Bumping a result
-/// version drops the stored results of that calculation only; bumping this
-/// marker drops every stored result and every cached column value.
+/// requested calculation, or anything it reads, produces. A stored result of an
+/// explicit calculation is used only while this marker and the result version it
+/// was stored with equal the current ones, and every name it looked up still
+/// resolves to the same provider with the same result version. Bumping a result
+/// version drops the stored results of that calculation and of every requested
+/// calculation whose lookups went through it; bumping this marker drops every
+/// stored result and every cached column value.
 ///
 /// History: 1 - first marker; invalidates every released index.json, whose
 /// gyro-derived columns were computed without the legacy-gyro schema correction.

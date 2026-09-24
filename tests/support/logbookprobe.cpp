@@ -1,9 +1,24 @@
 #include "logbookprobe.h"
 
+#include <QCryptographicHash>
+#include <QDataStream>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QIODevice>
 #include <QJsonDocument>
 #include <QSettings>
+#include <QtEndian>
+
+#ifdef Q_OS_WIN
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #include "dependencykey.h"
 #include "fixturebuilder.h"
@@ -95,6 +110,151 @@ QString sessionFileStem(const QString &sessionId)
 {
     const QString path = sessionFilePath(sessionId);
     return path.isEmpty() ? QString() : QFileInfo(path).completeBaseName();
+}
+
+// ---- calculation records ----------------------------------------------------
+
+UnreadableFile::UnreadableFile(const QString &path, Mechanism mechanism)
+    : m_path(path), m_mechanism(mechanism)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        m_skip = QStringLiteral("the file cannot be read before the test: %1").arg(file.errorString());
+        return;
+    }
+    m_bytes = file.readAll();
+    if (file.error() != QFileDevice::NoError) {
+        m_skip = QStringLiteral("the file cannot be read before the test: %1").arg(file.errorString());
+        return;
+    }
+    file.close();
+
+    switch (mechanism) {
+    case Mechanism::Directory:
+        if (!QFile::remove(path)) {
+            m_skip = QStringLiteral("the file could not be removed");
+            return;
+        }
+        m_applied = true;       // from here on release() puts the bytes back
+        if (!QDir().mkdir(path)) {
+            release();
+            m_skip = QStringLiteral("no directory could be made at the path");
+            return;
+        }
+        break;
+
+    case Mechanism::LockedWithoutSharing:
+#ifdef Q_OS_WIN
+    {
+        const HANDLE handle = CreateFileW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(path).utf16()),
+                                          GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                                          nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            m_skip = QStringLiteral("CreateFileW failed (error %1)").arg(qulonglong(GetLastError()));
+            return;
+        }
+        m_handle = handle;
+        m_applied = true;
+        break;
+    }
+#else
+        m_skip = QStringLiteral("Windows only");
+        return;
+#endif
+
+    case Mechanism::NoReadPermission:
+#ifdef Q_OS_WIN
+        m_skip = QStringLiteral("not on Windows");
+        return;
+#else
+        if (!QFile::setPermissions(path, QFileDevice::Permissions())) {
+            m_skip = QStringLiteral("the permissions could not be changed");
+            return;
+        }
+        m_applied = true;
+        break;
+#endif
+    }
+
+    // The mechanism must actually make the path unreadable here.
+    if (!QFileInfo::exists(path)) {
+        release();
+        m_skip = QStringLiteral("nothing at the path");
+        return;
+    }
+    QFile probe(path);
+    if (probe.open(QIODevice::ReadOnly)) {
+        probe.close();
+        release();
+        m_skip = QStringLiteral("the file stays readable here (running as root?)");
+    }
+}
+
+UnreadableFile::~UnreadableFile()
+{
+    release();
+}
+
+QString UnreadableFile::skipReason() const
+{
+    return m_skip;
+}
+
+bool UnreadableFile::release()
+{
+    if (!m_applied)
+        return true;
+    m_applied = false;
+
+    switch (m_mechanism) {
+    case Mechanism::Directory:
+        // No directory when mkdir failed: only the bytes go back.
+        if (QFileInfo(m_path).isDir() && !QDir().rmdir(m_path))
+            return false;
+        return writeFile(m_path, m_bytes);
+
+    case Mechanism::LockedWithoutSharing:
+#ifdef Q_OS_WIN
+        if (m_handle) {
+            const bool closed = CloseHandle(static_cast<HANDLE>(m_handle)) != 0;
+            m_handle = nullptr;
+            return closed;
+        }
+#endif
+        return true;
+
+    case Mechanism::NoReadPermission:
+        return QFile::setPermissions(m_path, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                                 | QFileDevice::ReadUser | QFileDevice::WriteUser);
+    }
+    return false;
+}
+
+QByteArray asFormatOne(const QByteArray &formatTwo)
+{
+    constexpr int kMagicSize = 8;
+    constexpr int kChecksumSize = 32;
+    if (formatTwo.size() < kMagicSize + 4 + 4 + kChecksumSize
+        || qFromLittleEndian<quint32>(formatTwo.constData() + kMagicSize) != 2u)
+        return QByteArray();
+
+    QByteArray environment;
+    {
+        QDataStream stream(&environment, QIODevice::WriteOnly);
+        stream.setVersion(QDataStream::Qt_6_0);
+        stream.setByteOrder(QDataStream::LittleEndian);
+        stream << QString(40, QLatin1Char('0'));
+    }
+
+    QByteArray one = formatTwo.first(kMagicSize);
+    char version[4];
+    qToLittleEndian<quint32>(1u, version);
+    one.append(version, 4);
+    one.append(formatTwo.mid(kMagicSize + 4, 4));           // the compatibility stamp
+    one.append(environment);
+    one.append(formatTwo.mid(16, formatTwo.size() - 16 - kChecksumSize));
+    one.append(QCryptographicHash::hash(one, QCryptographicHash::Sha256));
+    return one;
 }
 
 LogbookColumn descriptionColumn()

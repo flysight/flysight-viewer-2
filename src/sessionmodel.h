@@ -139,15 +139,17 @@ struct MergeResult {
 /// written to the logbook's cache/ folder by CalculationResultStore, through
 /// the explicit-result listener that attachSession() installs. That includes a
 /// session not saved yet: mergeSessions() reserves its file stem at import
-/// (LogbookManager::reserveSessionFile). A result that an input change drops
-/// deletes its record. Every path that installs a session into a row
-/// (sessionRef(), the unloaded branch of mergeSessions(), the promotion of a
-/// bulk edit's temporary session) restores the session's valid records into
-/// its engine before the row is published (before sessionLoaded, dataChanged
-/// or any plot pass) and deletes the stale ones. Restoring is not requesting:
-/// it starts nothing. Temporary loads (column worker, bulk edit on a stub)
-/// never read a record. Eviction, unloading, a registry change, the model's
-/// destruction and removeSessions() never delete one
+/// (LogbookManager::reserveSessionFile). A result that an input change, or a
+/// registry change made while the application runs, drops deletes its record.
+/// Every path that installs a session into a row (sessionRef(), the unloaded
+/// branch of mergeSessions(), the promotion of a bulk edit's temporary
+/// session) restores the session's valid records into its engine before the
+/// row is published (before sessionLoaded, dataChanged or any plot pass) and
+/// deletes the stale ones; a record that cannot be read is skipped (kept for
+/// the next load, its column values never cached meanwhile). Restoring is not
+/// requesting: it starts nothing. Temporary loads (column worker, bulk edit on
+/// a stub) never read a record. Eviction, unloading, a registration removed as
+/// teardown, the model's destruction and removeSessions() never delete one
 /// (LogbookManager::removeSession does, with the session file).
 class SessionModel : public QAbstractTableModel
 {

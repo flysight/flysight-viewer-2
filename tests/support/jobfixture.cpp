@@ -201,6 +201,41 @@ QList<SessionData> JobWorld::sessions(const QStringList &ids)
     return result;
 }
 
+// ---- ExtraRegistrations ---------------------------------------------------------
+
+ExtraRegistrations::~ExtraRegistrations()
+{
+    CalculationRegistry &registry = CalculationRegistry::instance();
+    for (auto it = m_ids.crbegin(); it != m_ids.crend(); ++it)
+        registry.unregister(*it);
+}
+
+bool ExtraRegistrations::add(const CalculationDescriptor &d)
+{
+    if (!CalculationRegistry::instance().registerCalculation(d))
+        return false;
+    m_ids.append(d.id);
+    return true;
+}
+
+bool ExtraRegistrations::addFamily(const CalculationFamily &f)
+{
+    if (!CalculationRegistry::instance().registerFamily(f))
+        return false;
+    m_ids.append(f.id);
+    return true;
+}
+
+bool ExtraRegistrations::remove(const QString &id, CalculationRegistry::Removal removal)
+{
+    if (!m_ids.contains(id))
+        return false;
+    if (!CalculationRegistry::instance().unregister(id, removal))
+        return false;
+    m_ids.removeOne(id);
+    return true;
+}
+
 bool waitIdle(JobQueue &queue, int timeoutMs)
 {
     return QTest::qWaitFor([&queue] { return queue.isIdle(); }, timeoutMs);

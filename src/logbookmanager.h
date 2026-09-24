@@ -76,8 +76,8 @@ struct CalculationRecordRead {
 /// RECORD STAMPS. The manager knows which calculations have a record file per
 /// session (knownCalculationRecords(): one names-only listing at initialize(),
 /// then its own writes and removals; no record is opened). Ids whose record
-/// may disagree with the loaded session's engine (a failed write or removal,
-/// an environment change while loaded) are UNCONFIRMED: flushIndex() leaves
+/// may disagree with the loaded session's engine (a failed write or removal, a
+/// record skipped at the session's load) are UNCONFIRMED: flushIndex() leaves
 /// them out of the stamp and omits the values over them. Writing or removing
 /// a record drops the session's cached values over that calculation and emits
 /// calculationRecordsChanged(). Ordering rule: a write whose calculation
@@ -153,8 +153,9 @@ public:
                                 QString *error = nullptr);
 
     // Reads and decodes one record. Missing when the session is unknown or has
-    // no such file; Unreadable when the file cannot be opened / read; the codec's
-    // status otherwise; Corrupt when the record names a different calculation id.
+    // no such file; Unreadable when the file, or whatever stands at its path,
+    // cannot be opened / read; the codec's status otherwise; Corrupt when the
+    // record names a different calculation id.
     // Never deletes anything.
     CalculationRecordRead readCalculationRecord(const QString &sessionId, const QString &calculationId) const;
 
@@ -187,14 +188,19 @@ public:
     // Ids whose record may disagree with the loaded session's engine. Values
     // that depend on them are never written to index.json.
     QSet<QString> unconfirmedCalculationRecords(const QString &sessionId) const;
-    // Marks every known record of the session unconfirmed. SessionModel calls
-    // it for each loaded row on a calculation-environment change, because a
-    // registry change drops explicit results from memory and keeps their records.
-    void markCalculationRecordsUnconfirmed(const QString &sessionId);
     // The session's in-memory results are being discarded (eviction): drops
     // the cached values that depend on its unconfirmed records, forgets the
     // marks, and returns the ids. From now on the records on disk are the truth.
     QStringList discardUnconfirmedCalculationRecords(const QString &sessionId);
+    // A record of the session exists but was not restored at the session's load
+    // for a reason that may pass (the result store: it could not be read,
+    // or it reads the result of one that could not). The loaded engine does not
+    // hold what the record holds, so the pair is UNCONFIRMED until the record is
+    // written or removed, or the row is evicted: values over it stay out of
+    // index.json and the stamp leaves it out. Drops the session's cached values
+    // over the calculation and emits calculationRecordsChanged(). The known set
+    // is untouched (the file is still there). Nothing for an unknown session.
+    void markCalculationRecordSkipped(const QString &sessionId, const QString &calculationId);
 
     // Writes index.json (atomically): the marker, cacheEnvironment(), the column
     // definitions, and per session uuid / lastAccessed / cached values (except
@@ -320,9 +326,9 @@ public:
     static QVariant jsonToVariant(const QJsonValue &jv);
 
 signals:
-    // A record of (sessionId, calculationId) was written, removed, or a write or
-    // removal of it failed. The cached values of the session that depend on the
-    // calculation have already been dropped here. Emitted synchronously, from
+    // A record of (sessionId, calculationId) was written, removed, skipped at a
+    // load, or a write or removal of it failed. The cached values of the
+    // session that depend on the calculation have already been dropped here. Emitted synchronously, from
     // inside the record method (so possibly from an engine listener): a receiver
     // must only drop state and defer work. Not emitted by removeSession(), the
     // stray pass, or initialize().

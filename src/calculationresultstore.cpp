@@ -103,20 +103,41 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
     //    is a fresh uuid, so its files are all the manager's own writes. Only
     //    a file put there behind the application's back is missing from it,
     //    until the next initialize() (the same rule as the record stamps).
-    //    When the manager knows some record, the listing (names only) is the
-    //    source of ids (not the registry, nor the known set), so that a record
-    //    of a calculation no longer registered is found and deleted.
+    //    When the manager knows some record, the ids to read are the union of
+    //    the listing (names only) and the known set, never the registry. The
+    //    listing finds records the known set does not (a calculation no longer
+    //    registered, a file put there behind the application's back while
+    //    another record was known); the known set finds a record the listing
+    //    cannot see because something other than a file stands at its path (a
+    //    directory), which must be read - and found Unreadable - rather than
+    //    silently ignored. A known id with nothing at its path reads Missing
+    //    and is passed over.
     ++m_stats.restoreCalls;
-    if (logbook.knownCalculationRecords(sessionId).isEmpty())
+    const QSet<QString> known = logbook.knownCalculationRecords(sessionId);
+    if (known.isEmpty())
         return summary;
     ++m_stats.recordListings;
-    const QStringList ids = logbook.calculationRecordIds(sessionId);
-    if (ids.isEmpty())
-        return summary;
+    QSet<QString> idSet = known;
+    for (const QString &id : logbook.calculationRecordIds(sessionId))
+        idSet.insert(id);
+    QStringList ids(idSet.cbegin(), idSet.cend());
+    ids.sort();
 
     const auto staleDelete = [&](const QString &calculationId, const char *why) {
         deleteRecord(sessionId, calculationId, why);
         ++summary.deleted;
+    };
+
+    // A record kept for the next load: not restored, not deleted, and the
+    // manager keeps the column values over it out of index.json while the
+    // loaded engine does not hold what it holds.
+    QSet<QString> skipped;
+    const auto skip = [&](const QString &calculationId, const QString &reason) {
+        logbook.markCalculationRecordSkipped(sessionId, calculationId);
+        skipped.insert(calculationId);
+        ++summary.skipped;
+        qWarning("CalculationResultStore: stored %s of %s skipped (kept for the next load): %s",
+                 qPrintable(calculationId), qPrintable(sessionId), qPrintable(reason));
     };
 
     // 2. Read and stamp check, in id order.
@@ -126,14 +147,18 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
         ++m_stats.recordsRead;
         switch (read.status) {
         case CalculationRecordStatus::Missing:
-            break;      // vanished since the listing
+            break;      // vanished since the listing, or a known id with nothing at its path
         case CalculationRecordStatus::Ok:
             if (!read.record->stampsAreCurrent())
-                staleDelete(id, "calculation compatibility or environment changed");
+                staleDelete(id, "calculation compatibility changed");
             else
                 pending.append(std::move(*read.record));
             break;
         case CalculationRecordStatus::Unreadable:
+            // A transient failure to read (a lock, a permission) is not
+            // evidence that the record is wrong.
+            skip(id, read.error);
+            break;
         case CalculationRecordStatus::NotARecord:
         case CalculationRecordStatus::UnsupportedVersion:
         case CalculationRecordStatus::Corrupt:
@@ -171,14 +196,43 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
                 break;
             case RestoreOutcome::Kind::NotFound:
             case RestoreOutcome::Kind::NotExplicit:
-                // Current stamps make this unreachable in practice (the
-                // environment fingerprint covers registrations); no record is
-                // kept that can never be used.
+                // The calculation is not registered, or not as an explicit one
+                // (a plug-in calculation removed, an id re-registered on
+                // demand): no record is kept that can never be used.
                 staleDelete(id, "calculation not registered as explicit");
                 break;
             }
         }
         if (!progressed) {
+            // A record whose inputs stay unavailable because it reads the
+            // result of a skipped record is skipped too: deleting it would
+            // destroy a good record because of another file's transient
+            // failure. A requested result's resolutions name every
+            // calculation reached through its lookups, explicit results
+            // included, so such a record names the skipped one directly; the
+            // scan repeats only to make the rule independent of that.
+            const auto readsSkipped = [&skipped](const CalculationRecord &record) {
+                for (const StoredResolution &r : record.result.resolutions) {
+                    if (r.provider == StoredResolution::Provider::Calculation && skipped.contains(r.instanceId))
+                        return true;
+                }
+                return false;
+            };
+            bool skippedAny = true;
+            while (skippedAny) {
+                skippedAny = false;
+                QList<CalculationRecord> rest;
+                for (const CalculationRecord &record : std::as_const(next)) {
+                    if (readsSkipped(record)) {
+                        skip(record.result.calculationId,
+                             QStringLiteral("it reads a stored result that could not be read"));
+                        skippedAny = true;
+                    } else {
+                        rest.append(record);
+                    }
+                }
+                next = std::move(rest);
+            }
             for (const CalculationRecord &record : std::as_const(next))
                 staleDelete(record.result.calculationId, "inputs unavailable");
             break;
@@ -190,6 +244,7 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
     m_stats.recordsRestored += summary.restored;
     m_stats.recordsKept += summary.kept;
     m_stats.staleRecordsDeleted += summary.deleted;
+    m_stats.recordsSkipped += summary.skipped;
     return summary;
 }
 
