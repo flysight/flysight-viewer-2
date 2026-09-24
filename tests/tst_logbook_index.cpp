@@ -117,7 +117,7 @@ void LogbookIndexTest::init()
 
 void LogbookIndexTest::cleanup()
 {
-    CalculationRegistry::instance().unregister(QString::fromLatin1(kExtraId));
+    CalculationRegistry::instance().unregister(QString::fromLatin1(kExtraId), CalculationRegistry::Removal::Change);
 }
 
 void LogbookIndexTest::prepareCachedSession()

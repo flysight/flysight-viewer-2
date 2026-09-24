@@ -559,7 +559,7 @@ void BuiltinsEngineTest::fingerprintChanges()
     QVERIFY(b.registry.registerCalculation(extra));
     const QString withExtra = calculationEnvironmentFingerprint(b.registry);
     QVERIFY(withExtra != base);
-    QVERIFY(b.registry.unregister(extra.id));
+    QVERIFY(b.registry.unregister(extra.id, CalculationRegistry::Removal::Change));
     QCOMPARE(calculationEnvironmentFingerprint(b.registry), base);
 
     // Two registrations with different outputs, swapped: they are never
@@ -590,13 +590,13 @@ void BuiltinsEngineTest::fingerprintChanges()
     QVERIFY(b.registry.registerCalculation(rival));
     QVERIFY(calculationEnvironmentFingerprint(a.registry) != calculationEnvironmentFingerprint(b.registry));
     QVERIFY(calculationEnvironmentFingerprint(a.registry) != withBoth);
-    QVERIFY(b.registry.unregister(rival.id));
-    QVERIFY(b.registry.unregister(rival2.id));
+    QVERIFY(b.registry.unregister(rival.id, CalculationRegistry::Removal::Change));
+    QVERIFY(b.registry.unregister(rival2.id, CalculationRegistry::Removal::Change));
     QCOMPARE(calculationEnvironmentFingerprint(b.registry), withBoth);
 
     // Before or after a family is a difference too: a family may accept any name
     World early;
-    QVERIFY(early.registry.unregister(QStringLiteral("builtin.interpolation")));
+    QVERIFY(early.registry.unregister(QStringLiteral("builtin.interpolation"), CalculationRegistry::Removal::Change));
     QVERIFY(early.registry.registerCalculation(extra));
     QVERIFY(early.registry.registerCalculation(second));
     Calculations::registerInterpolationFamily(early.registry);
@@ -644,7 +644,7 @@ void BuiltinsEngineTest::fingerprintCoversResultVersions()
         QVERIFY(registry.registerCalculation(constantCalculation("test.pinned", "_TEST_PINNED", QString())));
         QCOMPARE(calculationEnvironmentFingerprint(registry),
                  sha1("attribute:_TEST_PINNED\n#test.pinned\nfamilies\nconversions\n"));
-        QVERIFY(registry.unregister(QStringLiteral("test.pinned")));
+        QVERIFY(registry.unregister(QStringLiteral("test.pinned"), CalculationRegistry::Removal::Change));
         // The version is a backslash and a line feed between letters: escaped
         QVERIFY(registry.registerCalculation(constantCalculation("test.pinned", "_TEST_PINNED", "a\\b\nc")));
         QCOMPARE(calculationEnvironmentFingerprint(registry),
@@ -657,7 +657,8 @@ void BuiltinsEngineTest::fingerprintCoversResultVersions()
     const QString base = calculationEnvironmentFingerprint(world.registry);
     const QString extraId = QStringLiteral("test.versioned");
     const auto reRegister = [&](const QString &version) {
-        if (world.registry.contains(extraId) && !world.registry.unregister(extraId))
+        if (world.registry.contains(extraId)
+            && !world.registry.unregister(extraId, CalculationRegistry::Removal::Change))
             return false;
         return world.registry.registerCalculation(constantCalculation(extraId, "_TEST_VERSIONED", version));
     };
@@ -673,7 +674,7 @@ void BuiltinsEngineTest::fingerprintCoversResultVersions()
     QVERIFY(v2 != unversioned);
     QVERIFY(reRegister(QStringLiteral("v1")));
     QCOMPARE(calculationEnvironmentFingerprint(world.registry), v1);
-    QVERIFY(world.registry.unregister(extraId));
+    QVERIFY(world.registry.unregister(extraId, CalculationRegistry::Removal::Change));
     QCOMPARE(calculationEnvironmentFingerprint(world.registry), base);
 
     // Two candidates for one output: the version of the second (never the
@@ -681,7 +682,7 @@ void BuiltinsEngineTest::fingerprintCoversResultVersions()
     QVERIFY(world.registry.registerCalculation(constantCalculation("test.first", "_TEST_SHARED", "f1")));
     QVERIFY(world.registry.registerCalculation(constantCalculation("test.second", "_TEST_SHARED", "s1")));
     const QString secondS1 = calculationEnvironmentFingerprint(world.registry);
-    QVERIFY(world.registry.unregister(QStringLiteral("test.second")));
+    QVERIFY(world.registry.unregister(QStringLiteral("test.second"), CalculationRegistry::Removal::Change));
     QVERIFY(world.registry.registerCalculation(constantCalculation("test.second", "_TEST_SHARED", "s2")));
     QCOMPARE(world.registry.candidatesFor(attr("_TEST_SHARED")).size(), 2);
     QCOMPARE(world.registry.candidatesFor(attr("_TEST_SHARED")).first().instanceId, QStringLiteral("test.first"));
@@ -761,14 +762,16 @@ void BuiltinsEngineTest::altitudeMarkerTeardownReportsNothing()
     };
     QVERIFY(registry.registerCalculation(reader));
     // Declared before the engine: runs after it on every exit
-    auto unregisterReader = qScopeGuard([&registry, readerId] { registry.unregister(readerId); });
+    auto unregisterReader = qScopeGuard([&registry, readerId] {
+        registry.unregister(readerId, CalculationRegistry::Removal::Change);
+    });
 
     FakeSessionState state;     // empty: no GNSS data, so the altitude calculation cannot run
     QStringList events;
     auto engine = std::make_unique<CalculationEngine>(&state, &registry);
     engine->setExplicitResultListener([&events](const CalculationEngine::ExplicitResultEvent &event) {
         const QString kind = event.kind == CalculationEngine::ExplicitResultEvent::Kind::Installed
-                                 ? QStringLiteral("Installed") : QStringLiteral("DroppedByInputChange");
+                                 ? QStringLiteral("Installed") : QStringLiteral("Dropped");
         const QString status = event.status == ResultStatus::MissingInput ? QStringLiteral("MissingInput")
                                                                           : QString::number(int(event.status));
         events.append(kind + QLatin1Char(' ') + event.instanceId + QLatin1Char(' ') + status);
@@ -780,7 +783,7 @@ void BuiltinsEngineTest::altitudeMarkerTeardownReportsNothing()
     // A runtime removal (the manager refreshes): reported
     writeAltitudes({});
     QVERIFY(!registry.contains(QStringLiteral("builtin.altitude._ALTITUDE_1000_M")));
-    QCOMPARE(std::exchange(events, {}), QStringList({"DroppedByInputChange test.readsAltitude MissingInput"}));
+    QCOMPARE(std::exchange(events, {}), QStringList({"Dropped test.readsAltitude MissingInput"}));
     QVERIFY(!engine->resultStatus(readerId).has_value());
 
     // The teardown: nothing reported
@@ -793,7 +796,7 @@ void BuiltinsEngineTest::altitudeMarkerTeardownReportsNothing()
     QVERIFY(!engine->resultStatus(readerId).has_value());
 
     engine.reset();
-    QVERIFY(registry.unregister(readerId));
+    QVERIFY(registry.unregister(readerId, CalculationRegistry::Removal::Change));
     unregisterReader.dismiss();
     writeAltitudes({});
     QCOMPARE(registry.registeredIds(), idsBefore);

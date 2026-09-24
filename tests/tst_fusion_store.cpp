@@ -55,11 +55,11 @@
 #include "plotfixture.h"
 #include "plotmodel.h"
 #include "plotrequests.h"
-#include "plugincodeidentity.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
 #include "sessionmodel.h"
+#include "storedresults.h"
 #include "testenvironment.h"
 #include "testmain.h"
 #include "testutil.h"
@@ -139,18 +139,14 @@ CalculationDescriptor constantAttribute(const QString &id, const QString &output
     return d;
 }
 
-/// A stand-in plug-in calculation: constantAttribute() declaring the plug-in
-/// code identity of one file as its result version.
+/// A stand-in plug-in calculation: constantAttribute() declaring as its
+/// result version the plug-in code identity of a folder whose a_plugin.py
+/// holds `aPlugin`.
 CalculationDescriptor pluginStandIn(const QString &id, const QString &output, double value,
-                                    const QString &fileName, const QByteArray &bytes)
+                                    const QByteArray &aPlugin)
 {
-    PluginCodeIngredients ingredients;
-    ingredients.files = {PluginSourceFile{fileName, bytes}};
-    ingredients.sdk = QByteArray("sdk");
-    ingredients.pythonVersion = QStringLiteral("3.13.3");
-    ingredients.numpyVersion = QStringLiteral("2.2.4");
     CalculationDescriptor d = constantAttribute(id, output, value);
-    d.resultVersion = pluginCodeIdentity(ingredients);
+    d.resultVersion = standInPluginIdentity(aPlugin);
     return d;
 }
 
@@ -1109,9 +1105,9 @@ void FusionStoreTest::storedFitSurvivesUnrelatedChanges()
         const QString a = QStringLiteral("test.plugin.a");
         const QString b = QStringLiteral("test.plugin.b");
         const CalculationDescriptor setA =
-            pluginStandIn(a, QStringLiteral("_TEST_PLUGIN_A"), 1.0, QStringLiteral("a.py"), QByteArray("a = 1\n"));
+            pluginStandIn(a, QStringLiteral("_TEST_PLUGIN_A"), 1.0, QByteArray("a = 1\n"));
         const CalculationDescriptor setB =
-            pluginStandIn(b, QStringLiteral("_TEST_PLUGIN_B"), 2.0, QStringLiteral("b.py"), QByteArray("b = 1\n"));
+            pluginStandIn(b, QStringLiteral("_TEST_PLUGIN_B"), 2.0, QByteArray("b = 1\n"));
         QVERIFY(setA.resultVersion != setB.resultVersion);
         const QList<std::function<bool()>> runs = {
             [&] { return m_extra->add(setA); },

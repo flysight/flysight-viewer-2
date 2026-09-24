@@ -122,7 +122,7 @@ void SessionEngineTest::init()
 void SessionEngineTest::cleanup()
 {
     for (const QString &id : std::as_const(m_temporaryIds))
-        CalculationRegistry::instance().unregister(id);
+        CalculationRegistry::instance().unregister(id, CalculationRegistry::Removal::Change);
     m_temporaryIds.clear();
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
 }

@@ -1,6 +1,6 @@
 // Stored results of explicit calculations on a real SessionModel, a real
 // logbook and a real JobQueue, with fast synthetic calculations
-// (store-requested-calculations, Phase 3):
+// (store-requested-calculations):
 //
 //  - an Ok install writes a record, on both install paths (a job's publish and
 //    a synchronous request), also for a session that an import has just
@@ -15,13 +15,15 @@
 //    preference change that does not reach it leaves the record valid across
 //    loads and restarts; a record whose lookups resolve differently at load,
 //    or whose plug-in provider's code identity changed, is stale; an
-//    unreadable record is skipped and restored later; a format-1 record is
-//    deleted;
+//    unreadable record is skipped (and every record that reads it), restored
+//    later, replaced by the next publish, and left behind or removed with its
+//    session as documented; a format-1 record is deleted;
 //  - an explicit family instance is not stored (its install writes nothing,
 //    its drop removes nothing);
 //  - every load path that installs a session into a row restores its valid
-//    records before the row is published, in passes (explicit-on-explicit
-//    chains), and deletes the stale ones; a result already installed wins; a
+//    records before the row is published, upstream records first
+//    (explicit-on-explicit chains, a fallback candidate included), and deletes
+//    the stale ones; a result already installed wins; a
 //    session the logbook knows no record of is not listed;
 //  - the column worker's and the bulk edit's temporary loads never read one;
 //  - deleting a session removes its records, and a stray is removed at the
@@ -62,6 +64,7 @@
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
 #include "sessionmodel.h"
+#include "storedresults.h"
 #include "testenvironment.h"
 #include "testmain.h"
 #include "testutil.h"
@@ -159,7 +162,7 @@ public:
     ~StoreWorld()
     {
         for (const QString &id : std::as_const(m_ids))
-            CalculationRegistry::instance().unregister(id);
+            CalculationRegistry::instance().unregister(id, CalculationRegistry::Removal::Change);
     }
     StoreWorld(const StoreWorld &) = delete;
     StoreWorld &operator=(const StoreWorld &) = delete;
@@ -240,16 +243,11 @@ bool hasResolution(const QList<StoredResolution> &resolutions, const DependencyK
     return false;
 }
 
-/// The plug-in ingredients of pluginEditStalesRecordsThatReadIt(): "v1", or v1
-/// with the one change a row names.
+/// The plug-in ingredients of pluginEditStalesRecordsThatReadIt(): "v1" (the
+/// stand-in folder), or v1 with the one change a row names.
 PluginCodeIngredients pluginIngredients(const QString &row)
 {
-    PluginCodeIngredients i;
-    i.files = {PluginSourceFile{QStringLiteral("a_plugin.py"), QByteArray("x = 1\n")},
-               PluginSourceFile{QStringLiteral("helper.py"), QByteArray("y = 2\n")}};
-    i.sdk = QByteArray("sdk");
-    i.pythonVersion = QStringLiteral("3.13.3");
-    i.numpyVersion = QStringLiteral("2.2.4");
+    PluginCodeIngredients i = standInPluginIngredients();
     if (row == QLatin1String("editedFile"))
         i.files[0].bytes = QByteArray("x = 2\n");
     else if (row == QLatin1String("addedFile"))
@@ -301,6 +299,12 @@ private slots:
     void unreadableRecordIsSkipped_data();
     void unreadableRecordIsSkipped();
     void dependentOfSkippedRecordIsKept();
+    void restoresUpstreamFirst_data();
+    void restoresUpstreamFirst();
+    void skippedRecordIsReplacedByPublish_data();
+    void skippedRecordIsReplacedByPublish();
+    void deletingSessionWithSkippedRecord_data();
+    void deletingSessionWithSkippedRecord();
     void registryChangeDeletesRecord_data();
     void registryChangeDeletesRecord();
     void recordSurvivesUnrelatedChanges_data();
@@ -823,13 +827,13 @@ void ResultStoreTest::noDeleteWithoutInputChange()
     bool shadowRegistered = false;
     const auto unregisterShadow = qScopeGuard([&shadowRegistered] {
         if (shadowRegistered)
-            CalculationRegistry::instance().unregister(kShadow);
+            CalculationRegistry::instance().unregister(kShadow, CalculationRegistry::Removal::Change);
     });
     shadowRegistered = CalculationRegistry::instance().registerCalculation(
         constantCalculation(kShadow, QStringLiteral("_STORE_SHADOW"), 0));
     QVERIFY(shadowRegistered);
     QCOMPARE(engine("s1").resultStatus(kExpA), std::optional<ResultStatus>(ResultStatus::Ok));
-    QVERIFY(CalculationRegistry::instance().unregister(kShadow));
+    QVERIFY(CalculationRegistry::instance().unregister(kShadow, CalculationRegistry::Removal::Change));
     shadowRegistered = false;
     m_model->flushPendingInvalidations();
     QCOMPARE(bytesOf(path), bytes);
@@ -871,7 +875,7 @@ void ResultStoreTest::explicitFamilyIsNotStored()
     bool registered = false;
     const auto unregisterFamily = qScopeGuard([&registered] {
         if (registered)
-            CalculationRegistry::instance().unregister(kFamily);
+            CalculationRegistry::instance().unregister(kFamily, CalculationRegistry::Removal::Change);
     });
     registered = CalculationRegistry::instance().registerFamily(family);
     QVERIFY(registered);
@@ -1307,6 +1311,246 @@ void ResultStoreTest::dependentOfSkippedRecordIsKept()
     QCOMPARE(loaded.runCount(kUp), 0);
     QCOMPARE(loaded.runCount(kDown), 0);
     QCOMPARE(stats().recordsRestored, 2);
+}
+
+void ResultStoreTest::restoresUpstreamFirst_data()
+{
+    QTest::addColumn<QString>("upstream");
+    QTest::addColumn<QString>("downstream");
+
+    QTest::newRow("downstream id first") << QStringLiteral("test.store.z.upstream")
+                                         << QStringLiteral("test.store.a.downstream");
+    QTest::newRow("upstream id first") << QStringLiteral("test.store.a.upstream")
+                                       << QStringLiteral("test.store.z.downstream");
+}
+
+// A requested calculation F (downstream) reads Y, whose first candidate reads
+// the output of another requested calculation E (upstream) and whose second
+// does not. F's record names E through its resolutions, so it is restored
+// after E whatever the id order: restored first, Y would resolve to the second
+// candidate and the record would be refused. While E's record is skipped,
+// F's is skipped too, not deleted, and both come back once E's is readable.
+void ResultStoreTest::restoresUpstreamFirst()
+{
+    QFETCH(QString, upstream);
+    QFETCH(QString, downstream);
+    LogbookManager &logbook = LogbookManager::instance();
+    const QString y1 = QStringLiteral("test.store.y1");
+    const QString y2 = QStringLiteral("test.store.y2");
+    QVERIFY(m_extra->add(timesExplicit(upstream, QStringLiteral("E_IN"), QStringLiteral("E_OUT"), 3)));
+    QVERIFY(m_extra->add(plusOne(y1, QStringLiteral("E_OUT"), QStringLiteral("Y"))));        // tried first
+    QVERIFY(m_extra->add(plusOne(y2, QStringLiteral("Y_ALT_IN"), QStringLiteral("Y"))));
+    QVERIFY(m_extra->add(timesExplicit(downstream, QStringLiteral("Y"), QStringLiteral("F_OUT"), 10)));
+    m_model->flushPendingInvalidations();
+
+    QVERIFY(setInput("s1", "E_IN", 2));
+    QVERIFY(setInput("s1", "Y_ALT_IN", 100));
+    QCOMPARE(engine("s1").request(upstream).status, ResultStatus::Ok);
+    QCOMPARE(engine("s1").request(downstream).status, ResultStatus::Ok);
+    QCOMPARE(session("s1").getAttribute(QStringLiteral("F_OUT")), QVariant(70));     // (2 * 3 + 1) * 10
+    const std::optional<CalculationRecord> record = storedRecord("s1", downstream);
+    QVERIFY(record.has_value());
+    QVERIFY(hasResolution(record->result.resolutions, attrKey("Y"), StoredResolution::Provider::Calculation, y1));
+    QVERIFY(hasResolution(record->result.resolutions, attrKey("E_OUT"), StoredResolution::Provider::Calculation,
+                          upstream));
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(evict({"s1"}), QString());
+    const QString upPath = recordPath("s1", encodeRecordFileId(upstream));
+    const QString downPath = recordPath("s1", encodeRecordFileId(downstream));
+    const QByteArray upBytes = bytesOf(upPath);
+    const QByteArray downBytes = bytesOf(downPath);
+    QVERIFY(!upBytes.isEmpty());
+    QVERIFY(!downBytes.isEmpty());
+    // The premise: the ids sort as the row says
+    QStringList inIdOrder{upstream, downstream};
+    inIdOrder.sort();
+    QCOMPARE(logbook.calculationRecordIds("s1"), inIdOrder);
+
+    // 1. Both restored, nothing run
+    m_model->resetStoredResultStats();
+    {
+        const Quiet quiet(*m_queue);
+        CalculationEngine &loaded = engine("s1");
+        QCOMPARE(loaded.resultStatus(upstream), std::optional<ResultStatus>(ResultStatus::Ok));
+        QCOMPARE(loaded.resultStatus(downstream), std::optional<ResultStatus>(ResultStatus::Ok));
+        QCOMPARE(session("s1").getAttribute(QStringLiteral("F_OUT")), QVariant(70));
+        QCOMPARE(loaded.runCount(upstream), 0);
+        QCOMPARE(loaded.runCount(downstream), 0);
+        QCOMPARE(loaded.preparedCount(), 0);
+        QCOMPARE(stats().recordsRestored, 2);
+        QCOMPARE(stats().staleRecordsDeleted, 0);
+        QVERIFY(quiet.holds());
+    }
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(evict({"s1"}), QString());
+    QCOMPARE(bytesOf(downPath), downBytes);
+
+    // 2. The upstream record cannot be read: the downstream one is kept
+    UnreadableFile unreadable(upPath, UnreadableFile::Mechanism::Directory);
+    if (!unreadable.skipReason().isEmpty())
+        QSKIP(qPrintable(unreadable.skipReason()));
+    m_model->resetStoredResultStats();
+    {
+        WarningCapture warnings;
+        CalculationEngine &loaded = engine("s1");
+        QVERIFY(loaded.resultStatus(upstream) != std::optional<ResultStatus>(ResultStatus::Ok));
+        QVERIFY(loaded.resultStatus(downstream) != std::optional<ResultStatus>(ResultStatus::Ok));
+        QCOMPARE(loaded.runCount(downstream), 0);
+        QCOMPARE(stats().recordsSkipped, 2);
+        QCOMPARE(stats().staleRecordsDeleted, 0);
+        QCOMPARE(stats().recordsRestored, 0);
+        QCOMPARE(bytesOf(downPath), downBytes);
+        const QStringList reads = warnings.matching(QStringLiteral("it reads a stored result that could not be read"));
+        QCOMPARE(reads.size(), 1);
+        QVERIFY(reads.at(0).contains(downstream));
+        QCOMPARE(logbook.unconfirmedCalculationRecords("s1"), QSet<QString>({upstream, downstream}));
+    }
+
+    // 3. Readable again: both restored
+    QVERIFY(unreadable.release());
+    QCOMPARE(bytesOf(upPath), upBytes);
+    QCOMPARE(evict({"s1"}), QString());
+    m_model->resetStoredResultStats();
+    CalculationEngine &loaded = engine("s1");
+    QCOMPARE(loaded.resultStatus(upstream), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(loaded.resultStatus(downstream), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(session("s1").getAttribute(QStringLiteral("F_OUT")), QVariant(70));
+    QCOMPARE(loaded.runCount(downstream), 0);
+    QCOMPARE(stats().recordsRestored, 2);
+}
+
+void ResultStoreTest::skippedRecordIsReplacedByPublish_data()
+{
+    QTest::addColumn<int>("mechanism");
+
+    QTest::newRow("directory") << int(UnreadableFile::Mechanism::Directory);
+    QTest::newRow("locked without sharing") << int(UnreadableFile::Mechanism::LockedWithoutSharing);
+    QTest::newRow("no read permission") << int(UnreadableFile::Mechanism::NoReadPermission);
+}
+
+// A record skipped at a load is replaced by the next publish of the pair once
+// the file can be written again: the new bytes are on disk, the pair is no
+// longer unconfirmed, and index.json gets the value of a column over it.
+void ResultStoreTest::skippedRecordIsReplacedByPublish()
+{
+    QFETCH(int, mechanism);
+    LogbookManager &logbook = LogbookManager::instance();
+    LogbookColumn ea1Column;
+    ea1Column.type = ColumnType::SessionAttribute;
+    ea1Column.attributeKey = QStringLiteral("EA1");
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), ea1Column});    // cleanup() restores
+
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+    const QString path = recordPath("s1", QStringLiteral("exp%41"));
+    const QByteArray r0 = bytesOf(path);
+    QVERIFY(!r0.isEmpty());
+    QCOMPARE(evict({"s1"}), QString());
+
+    UnreadableFile unreadable(path, UnreadableFile::Mechanism(mechanism));
+    if (!unreadable.skipReason().isEmpty())
+        QSKIP(qPrintable(unreadable.skipReason()));
+    m_model->resetStoredResultStats();
+    {
+        WarningCapture warnings;
+        session("s1");
+        QCOMPARE(stats().recordsSkipped, 1);
+        QCOMPARE(logbook.unconfirmedCalculationRecords("s1"), QSet<QString>({kExpA}));
+    }
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(logbook.flushIndex());
+    QVERIFY(indexValue("s1", ea1Column).isUndefined());
+
+    // Writable again; a new publish with another input
+    QVERIFY(unreadable.release());
+    QVERIFY(setInput("s1", "EA_IN", 7));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QCOMPARE(session("s1").getAttribute(QStringLiteral("EA1")), QVariant(8));
+    QVERIFY(waitForIdle(*m_model));
+
+    const QByteArray r1 = bytesOf(path);
+    QVERIFY(!r1.isEmpty());
+    QVERIFY(r1 != r0);
+    QCOMPARE(stats().recordsWritten, 1);
+    const std::optional<CalculationRecord> record = storedRecord("s1", kExpA);
+    QVERIFY(record.has_value());
+    QCOMPARE(record->result.bundle.attributeValue(QStringLiteral("EA1")), QVariant(8));
+    QVERIFY(logbook.unconfirmedCalculationRecords("s1").isEmpty());
+    QVERIFY(logbook.knownCalculationRecords("s1").contains(kExpA));
+    QVERIFY(logbook.flushIndex());
+    const QJsonValue value = indexValue("s1", ea1Column);
+    QVERIFY(value.isDouble());
+    QCOMPARE(value.toDouble(), 8.0);
+}
+
+void ResultStoreTest::deletingSessionWithSkippedRecord_data()
+{
+    QTest::addColumn<int>("mechanism");
+
+    QTest::newRow("directory") << int(UnreadableFile::Mechanism::Directory);
+    QTest::newRow("locked without sharing") << int(UnreadableFile::Mechanism::LockedWithoutSharing);
+    QTest::newRow("no read permission") << int(UnreadableFile::Mechanism::NoReadPermission);
+}
+
+// Deleting a session while its record is skipped (DATA_SCHEMA section 12):
+// a file that can be removed goes with the session; a file locked without
+// sharing stays behind as a stray, which the next start removes once the lock
+// is gone; a directory at the record's path is no record, is never listed,
+// and stays.
+void ResultStoreTest::deletingSessionWithSkippedRecord()
+{
+    QFETCH(int, mechanism);
+    const auto kind = UnreadableFile::Mechanism(mechanism);
+    LogbookManager &logbook = LogbookManager::instance();
+
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+    const QString stem = sessionFileStem("s1");
+    const QString csv = sessionFilePath("s1");
+    const QString path = recordPath("s1", QStringLiteral("exp%41"));
+    QVERIFY(QFileInfo(path).isFile());
+    QCOMPARE(evict({"s1"}), QString());
+
+    UnreadableFile unreadable(path, kind);
+    if (!unreadable.skipReason().isEmpty())
+        QSKIP(qPrintable(unreadable.skipReason()));
+    m_model->resetStoredResultStats();
+    {
+        WarningCapture warnings;
+        session("s1");
+        QCOMPARE(stats().recordsSkipped, 1);
+    }
+
+    {
+        WarningCapture warnings;
+        QVERIFY(m_model->removeSessions({"s1"}));
+        QVERIFY(logbook.removeSession("s1"));
+        QVERIFY(logbook.flushIndex());
+        QCOMPARE(warnings.count(QStringLiteral("not all removed")),
+                 kind == UnreadableFile::Mechanism::LockedWithoutSharing ? 1 : 0);
+    }
+    QVERIFY(!QFileInfo::exists(csv));
+
+    switch (kind) {
+    case UnreadableFile::Mechanism::NoReadPermission:
+        QVERIFY(!QFileInfo::exists(path));
+        break;
+    case UnreadableFile::Mechanism::LockedWithoutSharing:
+        QVERIFY(QFileInfo(path).isFile());
+        QVERIFY(unreadable.release());
+        restart();
+        QVERIFY(!QFileInfo::exists(path));
+        break;
+    case UnreadableFile::Mechanism::Directory:
+        QVERIFY(QFileInfo(path).isDir());
+        restart();
+        QVERIFY(QFileInfo(path).isDir());
+        break;
+    }
+    for (const QString &name : calculationRecordFiles())
+        QVERIFY2(!name.startsWith(stem), qPrintable(name));
 }
 
 void ResultStoreTest::registryChangeDeletesRecord_data()

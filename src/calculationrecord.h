@@ -15,9 +15,9 @@ namespace FlySight {
 /// One stored requested-calculation result, as a record file holds it: the
 /// engine's snapshot plus the code stamp that was current when it was
 /// written. The calculation environment fingerprint is not part of a record:
-/// what else is registered never makes a stored result stale (plan
-/// stored-results-validity). The logbook manager does all record I/O; this
-/// header only defines the value, its file name and its bytes.
+/// what else is registered never makes a stored result stale. The logbook
+/// manager does all record I/O; this header only defines the value, its file
+/// name and its bytes.
 struct CalculationRecord {
     int calculationCompatibility = 0;   ///< CalculationCompatibilityVersion at write time
     StoredCalculationResult result;     ///< the engine's snapshot, with its resolutions
@@ -36,7 +36,7 @@ enum class CalculationRecordStatus {
     Ok,
     Missing,             ///< no record file (or the session is not in the logbook)
     Unreadable,          ///< the file (or whatever is at its path) exists but could not be opened or
-                         ///< read; the result store skips it: kept, not restored
+                         ///< read in full; the result store skips it: kept, not restored
     NotARecord,          ///< does not start with the magic
     UnsupportedVersion,  ///< format version other than CalculationRecordFormatVersion
     Corrupt              ///< checksum, structure, trailing bytes, wrong calculation id
@@ -45,8 +45,7 @@ enum class CalculationRecordStatus {
 /// The format version this program writes and the only one it reads.
 /// Changing anything after the version field, including the set of attribute
 /// types a record can hold, bumps it. History:
-///   1 - first format (the environment fingerprint as a second stamp; the
-///       resolutions were added late, without a bump);
+///   1 - first format (the environment fingerprint as a second stamp);
 ///   2 - the environment fingerprint left the record; the resolutions are
 ///       section 10.
 /// A record of any other version is UnsupportedVersion and is deleted as stale

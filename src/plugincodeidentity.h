@@ -18,7 +18,9 @@ namespace FlySight {
 // changing the SDK file, or upgrading Python or numpy changes it.
 //
 // This file has no Python dependency: the host reads the ingredients and
-// calls pluginCodeIdentity(); tests build ingredients by hand.
+// calls pluginCodeIdentity(); tests build ingredients by hand. When the SDK
+// file lives in the plug-in folder (as shipped), it is digested twice: once
+// as the SDK and once as one of the files.
 //
 // The digest (the contract; do not change it without changing the version
 // number in the first line) is SHA-256 over the concatenation of the
@@ -63,19 +65,18 @@ inline constexpr char PluginCodeIdentityPrefix[] = "plugins-sha256:";
 /// Written in place of a version that could not be read.
 inline constexpr char PluginCodeIdentityUnknownVersion[] = "none";
 
-/// The whole file, or nullopt when it cannot be opened, reading fails, or
-/// fewer bytes than QFile::size() were read.
-std::optional<QByteArray> readWholeFile(const QString &path);
-
-/// Every *.py file under `pluginDir`, recursively, read with readWholeFile(),
-/// sorted by name as the digest sorts. Not the host's import list: that stays
-/// the top-level *.py files only (every one of which is in this list).
+/// Every *.py file under `pluginDir`, recursively, read with readWholeFile()
+/// (fileread.h), sorted by name as the digest sorts. Not the host's import
+/// list: that stays the top-level *.py files only (every one of which is in
+/// this list).
 ///
-/// In each directory the files are listed with the host's flags (QDir::Files,
-/// no QDir::Hidden, so file-system-hidden files are skipped). Subdirectories
-/// named "__pycache__", whose name starts with '.', that the file system
-/// reports hidden, or that are symbolic links or junctions are not entered
-/// (so the walk cannot cycle); a symbolic link to a file is read through.
+/// Every *.py file counts, hidden ones included (a name starting with '.', or
+/// the file system's hidden attribute). Subdirectories named "__pycache__",
+/// whose name starts with '.', or that the file system reports hidden are not
+/// entered. A symbolic link or junction is read through, to a file or to a
+/// folder, under its own name; a folder that is already on the way down from
+/// `pluginDir` (the same folder on disk, however it is reached) is not
+/// entered again, so a link loop ends.
 /// An empty or missing folder gives an empty list.
 QList<PluginSourceFile> readPluginCodeFiles(const QString &pluginDir);
 

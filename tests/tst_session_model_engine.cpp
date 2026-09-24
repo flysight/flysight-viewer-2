@@ -411,7 +411,8 @@ void SessionModelEngineTest::altitudeMarkerOnlyForRegisteredCalculation()
     bool squatting = true;      // so that a failing assertion below still frees the id
     const auto removeSquatter = qScopeGuard([&registry, &squatting] {
         if (squatting)
-            registry.unregister(QStringLiteral("builtin.altitude._ALTITUDE_2000_M"));
+            registry.unregister(QStringLiteral("builtin.altitude._ALTITUDE_2000_M"),
+                                CalculationRegistry::Removal::Change);
     });
 
     QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("id already registered")));
@@ -425,7 +426,8 @@ void SessionModelEngineTest::altitudeMarkerOnlyForRegisteredCalculation()
     QVERIFY(!settings.contains(QStringLiteral("markers/_ALTITUDE_2000_M/color")));
 
     // Control: with the id free again, the next refresh adds the marker.
-    QVERIFY(registry.unregister(QStringLiteral("builtin.altitude._ALTITUDE_2000_M")));
+    QVERIFY(registry.unregister(QStringLiteral("builtin.altitude._ALTITUDE_2000_M"),
+                                CalculationRegistry::Removal::Change));
     squatting = false;
     writeAltitudes({1000, 2000});
     QCOMPARE(altitudeMarkerKeys(), QStringList({"_ALTITUDE_1000_M", "_ALTITUDE_2000_M"}));

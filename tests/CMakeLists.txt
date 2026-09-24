@@ -48,6 +48,7 @@ add_library(flysight_test_support STATIC
   support/builtinfixture.cpp   support/builtinfixture.h
   support/oraclecatalogue.cpp  support/oraclecatalogue.h
   support/logbookprobe.cpp     support/logbookprobe.h
+  support/storedresults.cpp    support/storedresults.h
   support/testmain.h           support/testutil.h
   support/asyncdriver.h
   support/jobfixture.cpp      support/jobfixture.h

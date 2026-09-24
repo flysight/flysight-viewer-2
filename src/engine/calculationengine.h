@@ -118,9 +118,9 @@ public:
     /// What happened to an explicit calculation's cached result.
     struct ExplicitResultEvent {
         enum class Kind {
-            Installed,              ///< request(), prepare() (NothingToRun / Blocked) or publish() cached a requested result
-            DroppedByInputChange    ///< an invalidation that started at an input, or at a registry change
-                                    ///< made while the application runs, dropped a requested result
+            Installed,  ///< request(), prepare() (NothingToRun / Blocked) or publish() cached a requested result
+            Dropped     ///< an invalidation that started at an input, or at a registry change made
+                        ///< while the application runs, dropped a requested result
         };
         Kind kind = Kind::Installed;
         QString instanceId;                                 ///< == the calculation id for a plain calculation
@@ -139,15 +139,15 @@ public:
     ///
     /// The listener may call exportResult() and any const inspection; it must
     /// not mutate the session. An Installed event can be followed in the same
-    /// call by a DroppedByInputChange for the same result (a deferred
-    /// invalidation flushed right after the install): at the Installed event
-    /// exportResult() then already returns nullopt.
+    /// call by a Dropped event for the same result (a deferred invalidation
+    /// flushed right after the install): at the Installed event exportResult()
+    /// then already returns nullopt.
     ///
     /// Never called for restoreResult()'s own install, clear(), a removal with
     /// CalculationRegistry::Removal::Teardown, the registry's destruction or
-    /// the engine's destruction. Travels
-    /// with the engine (a moved SessionData keeps it), like the invalidation
-    /// listener. Nothing is queued while no listener is set.
+    /// the engine's destruction. Travels with the engine (a moved SessionData
+    /// keeps it), like the invalidation listener. Nothing is queued while no
+    /// listener is set.
     void setExplicitResultListener(ExplicitResultListener l);
 
     // ---- explicit evaluation -----------------------------------------------
@@ -207,10 +207,10 @@ public:
     /// (NotRequested, MissingInput, Cycle, Failed, UndeclaredRead,
     /// InvalidOutput), or a result whose evaluation met a dependency ring (what
     /// provided a name may then have been a provisional answer that no cache
-    /// entry holds). Const: never resolves,
-    /// never computes, never changes the cache; reads the session state and the
-    /// preference provider for the fingerprint. May be called from an
-    /// explicit-result listener; not from inside a compute function.
+    /// entry holds). Const: never resolves, never computes, never changes the
+    /// cache; reads the session state and the preference provider for the
+    /// fingerprint. May be called from an explicit-result listener; not from
+    /// inside a compute function.
     std::optional<StoredCalculationResult> exportResult(const CalculationId &id) const;
 
     struct RestoreOutcome {
@@ -240,17 +240,16 @@ public:
         /// calculation was "not requested", exactly like
         /// PublishOutcome::invalidated. Non-empty only when gathering ran
         /// (Stale with InputsUnavailable / Resolutions / Leaves / Fingerprint,
-        /// or Restored).
-        /// The caller passes them on so consumers re-read.
+        /// or Restored). The caller passes them on so consumers re-read.
         QSet<DependencyKey> invalidated;
     };
     /// Installs `snapshot` as the published result of its calculation, provided
     /// it is still valid here. The checks, in order: ResultVersion, Bundle,
     /// then after gathering InputsUnavailable, Resolutions (the repeated
     /// lookups must give the snapshot's answers), Leaves, Fingerprint. Not a
-    /// request: it runs no compute function
-    /// (on-demand inputs are evaluated as for a fresh request, as prepare()
-    /// does), counts no run, creates no ticket, and queues no Installed event.
+    /// request: it runs no compute function (on-demand inputs are evaluated as
+    /// for a fresh request, as prepare() does), counts no run, creates no
+    /// ticket, and queues no Installed event.
     /// On success the edges, status, detail and bundle are those a fresh
     /// publish would install. An outstanding ticket for the same calculation
     /// then publishes as RefusedStale / AlreadyPublished. A stale snapshot
@@ -426,14 +425,15 @@ private:
     void installRequested(const GraphNode &C, const ResultEntry &entry, const Scope &scope, InstallOrigin origin);
 
     // Stored results
-    /// Everything a result reached from `direct` through the recorded edges:
-    /// breadth-first over m_dependsOn following Resolution and Result nodes
-    /// (explicit results included); Prepared nodes are ignored.
+    /// What closureOf() collects.
     struct Closure {
         QList<GraphNode> leaves;         ///< StoredAttribute / SourceMeasurement / SourceUnit / Preference; sorted by storedLeafLess, unique
         QList<GraphNode> resolutions;    ///< every Resolution node visited, unique, in no particular order
     };
-    /// Const; touches the edge maps only.
+    /// Everything a result reached from `direct` through the recorded edges:
+    /// breadth-first over m_dependsOn following Resolution and Result nodes
+    /// (explicit results included); Prepared nodes are ignored. Const; touches
+    /// the edge maps only.
     Closure closureOf(const QSet<GraphNode> &direct) const;
 
     /// The StoredResolution of each node, sorted by storedResolutionLess; nullopt when

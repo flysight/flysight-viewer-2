@@ -1,6 +1,6 @@
 // Logbook columns over explicit results on a real SessionModel, a real logbook
 // and a real JobQueue, with fast synthetic explicit calculations
-// (store-requested-calculations, Phase 4):
+// (store-requested-calculations):
 //
 //  - a loaded row caches the engine's value: unavailable before any request,
 //    the restored or published value after one; index.json stamps it with the
@@ -309,7 +309,7 @@ void ResultColumnsTest::initTestCase()
 void ResultColumnsTest::cleanupTestCase()
 {
     for (const QString &id : std::as_const(m_registered))
-        CalculationRegistry::instance().unregister(id);
+        CalculationRegistry::instance().unregister(id, CalculationRegistry::Removal::Change);
 }
 
 // Two loaded, hidden, unfocused, saved and indexed sessions.
@@ -743,7 +743,7 @@ void ResultColumnsTest::writeAfterStartupDropFlushesIndexFirst()
     const auto unregister = qScopeGuard([this, &extraRegistered] {
         if (extraRegistered) {
             resetModel();
-            CalculationRegistry::instance().unregister(kExtra);
+            CalculationRegistry::instance().unregister(kExtra, CalculationRegistry::Removal::Change);
         }
     });
     if (environmentChanged) {
@@ -789,7 +789,7 @@ void ResultColumnsTest::writeAfterStartupDropFlushesIndexFirst()
     // A crash, then a start in the first environment: the old value is not shown
     if (environmentChanged) {
         resetModel();
-        QVERIFY(CalculationRegistry::instance().unregister(kExtra));
+        QVERIFY(CalculationRegistry::instance().unregister(kExtra, CalculationRegistry::Removal::Change));
         extraRegistered = false;
     }
     crash();
@@ -957,7 +957,7 @@ void ResultColumnsTest::environmentChangeDiscardsCachedValue()
 
     const auto unregister = qScopeGuard([this] {
         resetModel();
-        CalculationRegistry::instance().unregister(kExtra);
+        CalculationRegistry::instance().unregister(kExtra, CalculationRegistry::Removal::Change);
     });
     CalculationDescriptor extra;
     extra.id = kExtra;
@@ -1010,8 +1010,8 @@ void ResultColumnsTest::registryChangeKeepsLoadedRowConfirmed()
 
     const auto unregister = qScopeGuard([this] {
         resetModel();
-        CalculationRegistry::instance().unregister(kShadow);
-        CalculationRegistry::instance().unregister(kExtra);
+        CalculationRegistry::instance().unregister(kShadow, CalculationRegistry::Removal::Change);
+        CalculationRegistry::instance().unregister(kExtra, CalculationRegistry::Removal::Change);
     });
     CalculationDescriptor extra;
     extra.id = kExtra;
@@ -1022,7 +1022,7 @@ void ResultColumnsTest::registryChangeKeepsLoadedRowConfirmed()
 
     // A -> B -> A within one pass
     QVERIFY(registry.registerCalculation(extra));
-    QVERIFY(registry.unregister(kExtra));
+    QVERIFY(registry.unregister(kExtra, CalculationRegistry::Removal::Change));
     m_model->flushPendingInvalidations();
     QCOMPARE(logbook.unconfirmedCalculationRecords("s1"), QSet<QString>());
     QCOMPARE(engine("s1").resultStatus(kCalcY), std::optional<ResultStatus>(ResultStatus::Ok));

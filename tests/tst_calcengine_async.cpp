@@ -544,7 +544,7 @@ void CalcEngineAsyncTest::transitiveChangesRefuse()
     else if (change == QLatin1String("preference"))
         w.prefs.set(w.registry, "p", 6);
     else if (change == QLatin1String("registry"))
-        QVERIFY(w.registry.unregister("sum"));
+        QVERIFY(w.registry.unregister("sum", CalculationRegistry::Removal::Change));
     else
         w.engine.clear();
 
@@ -577,7 +577,7 @@ void CalcEngineAsyncTest::unrelatedChangeDoesNotRefuse()
     w.state.setAttribute(w.engine, "EB_IN", 11);
     w.state.setAttribute(w.engine, "A", 9);
     w.prefs.set(w.registry, "p", 6);
-    QVERIFY(w.registry.unregister("wAlt"));
+    QVERIFY(w.registry.unregister("wAlt", CalculationRegistry::Removal::Change));
     QCOMPARE(w.engine.attribute("X"), QVariant(11));
     QVERIFY(!w.engine.isAvailable(attr("EA1")));
 
@@ -632,7 +632,7 @@ void CalcEngineAsyncTest::registrationRemovedRefuses()
         QCOMPARE(prepared.kind, Prepare::Kind::Ready);
         ComputedCalculation computed = computeOn(ComputeMode(mode), *prepared.ticket);
 
-        QVERIFY(w.registry.unregister("expA"));
+        QVERIFY(w.registry.unregister("expA", CalculationRegistry::Removal::Change));
         if (reregister)
             QVERIFY(w.registry.registerCalculation(Synthetic::expA()));     // does not revive the ticket
 
@@ -652,7 +652,7 @@ void CalcEngineAsyncTest::registrationRemovedRefuses()
     World w;
     Prepare prepared = w.engine.prepare("expA");
     QCOMPARE(prepared.kind, Prepare::Kind::Ready);
-    QVERIFY(w.registry.unregister("expA"));
+    QVERIFY(w.registry.unregister("expA", CalculationRegistry::Removal::Change));
     ComputedCalculation computed = computeOn(ComputeMode(mode), *prepared.ticket);
     QCOMPARE(computed.kind, ComputedCalculation::Kind::Completed);
     QCOMPARE(prepared.ticket->publish(std::move(computed)).reason, PublishOutcome::Reason::RegistrationRemoved);
@@ -756,18 +756,18 @@ void CalcEngineAsyncTest::willBeRefusedReportsTheEnginesMarks()
     } else if (cause == QLatin1String("preference")) {
         prefs.set(registry, "p", 6);
     } else if (cause == QLatin1String("candidate")) {
-        QVERIFY(registry.unregister("sum"));
+        QVERIFY(registry.unregister("sum", CalculationRegistry::Removal::Change));
     } else if (cause == QLatin1String("clear")) {
         engine->clear();
     } else if (cause == QLatin1String("unregister")) {
-        QVERIFY(registry.unregister("trans"));
+        QVERIFY(registry.unregister("trans", CalculationRegistry::Removal::Change));
     } else if (cause == QLatin1String("reregister")) {
-        QVERIFY(registry.unregister("trans"));
+        QVERIFY(registry.unregister("trans", CalculationRegistry::Removal::Change));
         QVERIFY(registry.registerCalculation(trans()));
     } else if (cause == QLatin1String("staleThenGone")) {
         state.setAttribute(*engine, "A", 2);
         QCOMPARE(ticket.refusalReason(), PublishOutcome::Reason::InputsChanged);
-        QVERIFY(registry.unregister("trans"));      // "gone" outranks "stale"
+        QVERIFY(registry.unregister("trans", CalculationRegistry::Removal::Change));      // "gone" outranks "stale"
     } else {
         engine.reset();
     }

@@ -34,6 +34,7 @@
 #include <functional>
 #include <limits>
 
+#include <QBuffer>
 #include <QCryptographicHash>
 #include <QDataStream>
 #include <QDir>
@@ -47,11 +48,13 @@
 #include "calculations/builtincalculations.h"
 #include "engine/calculationregistry.h"
 #include "engine/storedcalculationresult.h"
+#include "fileread.h"
 #include "fixturebuilder.h"
 #include "logbookcolumn.h"
 #include "logbookmanager.h"
 #include "logbookprobe.h"
 #include "sessiondata.h"
+#include "storedresults.h"
 #include "testenvironment.h"
 #include "testmain.h"
 #include "testutil.h"
@@ -116,17 +119,6 @@ QString stringWithNul()
     return s;
 }
 
-StoredResolution makeResolution(const DependencyKey &name, StoredResolution::Provider provider,
-                                const QString &instanceId = QString(), const QString &version = QString())
-{
-    StoredResolution r;
-    r.name = name;
-    r.provider = provider;
-    r.instanceId = instanceId;
-    r.resultVersion = version;
-    return r;
-}
-
 // Every value the bit-exact round trip covers. `scale` changes the samples of
 // the first measurement only, so two snapshots can differ.
 StoredCalculationResult sampleSnapshot(const QString &id = QString::fromLatin1(kFitId), double scale = 1.0)
@@ -140,11 +132,12 @@ StoredCalculationResult sampleSnapshot(const QString &id = QString::fromLatin1(k
                 GraphNode::sourceUnit(QStringLiteral("IMU"), QStringLiteral("wx")),
                 GraphNode::preference(QStringLiteral("fusion/test"))};
     r.resolutions = {
-        makeResolution(DependencyKey::attribute(QStringLiteral("_JUMPER_MASS")), StoredResolution::Provider::SessionData),
-        makeResolution(DependencyKey::attribute(QStringLiteral("_SCHEMA")), StoredResolution::Provider::Nothing),
-        makeResolution(DependencyKey::measurement(QStringLiteral("IMU"), QStringLiteral("wx")),
-                       StoredResolution::Provider::Calculation,
-                       QStringLiteral("builtin.conversion.default#IMU/wx"), QStringLiteral("v7"))};
+        storedResolution(DependencyKey::attribute(QStringLiteral("_JUMPER_MASS")),
+                         StoredResolution::Provider::SessionData),
+        storedResolution(DependencyKey::attribute(QStringLiteral("_SCHEMA")), StoredResolution::Provider::Nothing),
+        storedResolution(DependencyKey::measurement(QStringLiteral("IMU"), QStringLiteral("wx")),
+                         StoredResolution::Provider::Calculation,
+                         QStringLiteral("builtin.conversion.default#IMU/wx"), QStringLiteral("v7"))};
 
     r.bundle.setMeasurement(QStringLiteral("Fusion"), QStringLiteral("scaled"),
                             {1.5 * scale, -2.25 * scale, 3.0 * scale}, QStringLiteral("m/s"));
@@ -358,12 +351,11 @@ QByteArray craft(const std::function<void(QDataStream &)> &body)
     return bytes;
 }
 
-// A record of format version 1 as it was written: magic, version 1,
-// compatibility 2, the environment fingerprint (40 '0'), id "x.y", version
-// "v1", null reason, 32-byte fingerprint, no leaves, no outputs, then no
-// resolutions only when `withResolutions` (Phase 1 of stored-results-validity
-// added the section without a version bump; ce2fb2b had none), and a correct
-// SHA-256 trailer.
+// A record of format version 1 as development builds wrote it: magic, version
+// 1, compatibility 2, the environment fingerprint (40 '0'), id "x.y", version
+// "v1", null reason, 32-byte fingerprint, no leaves, no outputs, then, only
+// when `withResolutions`, an empty resolutions section (format 1 was written
+// both with and without one), and a correct SHA-256 trailer.
 QByteArray craftFormatOne(bool withResolutions)
 {
     QByteArray bytes;
@@ -436,7 +428,7 @@ private slots:
     void init();
     void cleanup();
 
-    // Record format (Tasks 2.1, 2.2)
+    // Record format
     void fileIdEncoding_data();
     void fileIdEncoding();
     void fileNameParsing_data();
@@ -458,9 +450,10 @@ private slots:
     void encoderRefusesUnsupportedAttribute();
     void sizeIsOrderOfSamples();
 
-    // Logbook storage (Tasks 2.3, 2.4)
+    // Logbook storage
     void writeReadReplace();
     void readStatuses();
+    void shortReadIsUnreadable();
     void writeFailureRefusedEncoding();
     void writeFailureDirectoryAtPath();
     void cacheFolderCreatedByFirstWrite();
@@ -497,7 +490,7 @@ void ResultRecordsTest::init()
 
 void ResultRecordsTest::cleanup()
 {
-    CalculationRegistry::instance().unregister(QString::fromLatin1(kExtraId));
+    CalculationRegistry::instance().unregister(QString::fromLatin1(kExtraId), CalculationRegistry::Removal::Change);
 }
 
 QString ResultRecordsTest::saveIndexed(const QString &sessionId)
@@ -623,7 +616,7 @@ void ResultRecordsTest::stampsAreCurrent()
     QVERIFY(!other.stampsAreCurrent());
 
     // A registration changes the environment fingerprint and never makes a
-    // record stale by itself (plan stored-results-validity).
+    // record stale by itself.
     const QString environmentBefore = calculationEnvironmentFingerprint();
     CalculationDescriptor extra;
     extra.id = QString::fromLatin1(kExtraId);
@@ -826,8 +819,8 @@ void ResultRecordsTest::rejectionShapedRecord()
     QVERIFY(decodedEmpty.result.bundle.reason().isEmpty() && !decodedEmpty.result.bundle.reason().isNull());
 }
 
-// The bytes of a small record, written out by hand from the layout table of
-// the phase document: format version 2 (plan stored-results-validity).
+// The bytes of a small record, written out by hand from the layout table in
+// calculationrecord.h: format version 2.
 void ResultRecordsTest::layoutIsPinned()
 {
     StoredCalculationResult r;
@@ -835,9 +828,11 @@ void ResultRecordsTest::layoutIsPinned()
     r.resultVersion = QStringLiteral("v1");
     r.inputFingerprint = QByteArray(32, '\xAB');
     r.leaves = {GraphNode::sourceMeasurement(QStringLiteral("S"), QStringLiteral("t"))};
-    r.resolutions = {makeResolution(DependencyKey::attribute(QStringLiteral("a")), StoredResolution::Provider::SessionData),
-                     makeResolution(DependencyKey::measurement(QStringLiteral("S"), QStringLiteral("t")),
-                                    StoredResolution::Provider::Calculation, QStringLiteral("c"), QStringLiteral("v"))};
+    r.resolutions = {storedResolution(DependencyKey::attribute(QStringLiteral("a")),
+                                      StoredResolution::Provider::SessionData),
+                     storedResolution(DependencyKey::measurement(QStringLiteral("S"), QStringLiteral("t")),
+                                      StoredResolution::Provider::Calculation, QStringLiteral("c"),
+                                      QStringLiteral("v"))};
     r.bundle.setMeasurement(QStringLiteral("S"), QStringLiteral("m"), {1.0, -0.0}, QStringLiteral("u"));
     r.bundle.setUnavailable(DependencyKey::attribute(QStringLiteral("a")));
     CalculationRecord record;
@@ -917,8 +912,8 @@ void ResultRecordsTest::formatOneIsRefused_data()
 {
     QTest::addColumn<QByteArray>("bytes");
 
-    QTest::newRow("without resolutions (ce2fb2b)") << craftFormatOne(false);
-    QTest::newRow("with resolutions (Phase 1)") << craftFormatOne(true);
+    QTest::newRow("without resolutions") << craftFormatOne(false);
+    QTest::newRow("with resolutions") << craftFormatOne(true);
     QTest::newRow("a genuine record in format 1") << asFormatOne(encoded(recordFor(QStringLiteral("x"))));
 }
 
@@ -1211,6 +1206,49 @@ void ResultRecordsTest::readStatuses()
                      stem + QStringLiteral(".y.fvresult"), stem + QStringLiteral(".z.fvresult")}));
     QCOMPARE(logbook.calculationRecordIds(QStringLiteral("s1")),
              QStringList({"garbage", "x", "y", "z"}));
+}
+
+// A record read short (fewer bytes than the file's size) is Unreadable and
+// skipped, never decoded as Corrupt and deleted: the logbook manager reads
+// records with readWholeFile(). No file system gives a short read on demand,
+// so the rule is tested on readWholeDevice(), which readWholeFile() calls with
+// QFile::size() as the expected size: a device holding the first half of a
+// valid record's bytes, expected to hold all of them.
+void ResultRecordsTest::shortReadIsUnreadable()
+{
+    const QByteArray bytes = encoded(recordFor(QStringLiteral("x")));
+    const qsizetype half = bytes.size() / 2;
+    QVERIFY(half > 0);
+
+    QBuffer shortDevice;
+    shortDevice.setData(bytes.first(half));
+    QVERIFY(shortDevice.open(QIODevice::ReadOnly));
+    QString error;
+    QVERIFY(!readWholeDevice(shortDevice, bytes.size(), &error).has_value());
+    QCOMPARE(error, QStringLiteral("short read: %1 of %2 bytes").arg(half).arg(bytes.size()));
+
+    QBuffer wholeDevice;
+    wholeDevice.setData(bytes);
+    QVERIFY(wholeDevice.open(QIODevice::ReadOnly));
+    const std::optional<QByteArray> whole = readWholeDevice(wholeDevice, bytes.size(), &error);
+    QVERIFY(whole.has_value());
+    QCOMPARE(*whole, bytes);
+    QVERIFY(error.isEmpty());
+
+    // From a file, its size is what is expected: the whole file, an empty one
+    // included, is read; what cannot be opened is not
+    const QString dir = TestEnvironment::instance().newTempDir(QStringLiteral("read"));
+    const QString path = dir + QStringLiteral("/record.fvresult");
+    QVERIFY(writeFile(path, bytes));
+    const std::optional<QByteArray> fromFile = readWholeFile(path, &error);
+    QVERIFY(fromFile.has_value());
+    QCOMPARE(*fromFile, bytes);
+    QVERIFY(writeFile(path, QByteArray()));
+    const std::optional<QByteArray> empty = readWholeFile(path, &error);
+    QVERIFY(empty.has_value());
+    QVERIFY(empty->isEmpty());
+    QVERIFY(!readWholeFile(dir, &error).has_value());
+    QVERIFY(!error.isEmpty());
 }
 
 void ResultRecordsTest::writeFailureRefusedEncoding()

@@ -254,7 +254,7 @@ void CalcEngineOracleTest::randomizedSequences()
             // Unregister or re-register: also moves the candidate to the end.
             const QString id = toggled.at(pick(int(toggled.size())));
             if (registry.contains(id)) {
-                QVERIFY2(registry.unregister(id), where.constData());
+                QVERIFY2(registry.unregister(id, CalculationRegistry::Removal::Change), where.constData());
             } else if (id == QLatin1String("fallbackX")) {
                 QVERIFY2(registry.registerCalculation(Synthetic::fallbackX()), where.constData());
             } else if (id == QLatin1String("wAlt")) {
@@ -379,7 +379,7 @@ void CalcEngineOracleTest::randomizedTopologies()
         } else {
             const CalculationDescriptor &d = descriptors.at(pick(int(descriptors.size())));
             if (registry.contains(d.id))
-                QVERIFY2(registry.unregister(d.id), where.constData());
+                QVERIFY2(registry.unregister(d.id, CalculationRegistry::Removal::Change), where.constData());
             else
                 QVERIFY2(registry.registerCalculation(d), where.constData());
         }

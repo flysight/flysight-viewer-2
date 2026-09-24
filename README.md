@@ -377,6 +377,7 @@ flysight-viewer-2/
 │   ├── dataimporter.*, parsedfile.h       # Parser: a file as recorded, nothing added
 │   ├── dataexporter.*                     # Writer: source data and stored attributes only
 │   ├── sessionmerge.*, sessionimport.*    # Merge rules (plan / apply) and the import flow
+│   ├── fileread.*                         # Reading a whole file: a short read is a failure
 │   ├── plugincodeidentity.*               # Plug-in code identity: one digest over the plugin
 │   │                                      #   folder, the SDK and the Python / NumPy versions
 │   └── pluginhost.*, pluginadapters.*,    # Python plugin host and the adapters that turn

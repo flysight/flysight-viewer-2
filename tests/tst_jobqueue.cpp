@@ -360,7 +360,9 @@ void JobQueueTest::workerIsNotMainThreadAndHasLargeStack()
     };
     CalculationRegistry &registry = CalculationRegistry::instance();
     QVERIFY(registry.registerCalculation(probe));
-    const auto unregister = qScopeGuard([&registry] { registry.unregister(QStringLiteral("threadprobe")); });
+    const auto unregister = qScopeGuard([&registry] {
+        registry.unregister(QStringLiteral("threadprobe"), CalculationRegistry::Removal::Change);
+    });
     m_model->flushPendingInvalidations();
 
     g_probeThread.store(0);
@@ -701,8 +703,8 @@ void JobQueueTest::registrationRemovedSupersedes()
     // clean-up stays balanced.
     const CalculationDescriptor gatedDescriptor = *registry.instance(QStringLiteral("gated"))->descriptor;
     const CalculationDescriptor throwerDescriptor = *registry.instance(QStringLiteral("thrower"))->descriptor;
-    QVERIFY(registry.unregister(QStringLiteral("gated")));
-    QVERIFY(registry.unregister(QStringLiteral("thrower")));
+    QVERIFY(registry.unregister(QStringLiteral("gated"), CalculationRegistry::Removal::Change));
+    QVERIFY(registry.unregister(QStringLiteral("thrower"), CalculationRegistry::Removal::Change));
     m_model->flushPendingInvalidations();
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
 
@@ -845,11 +847,11 @@ void JobQueueTest::registrationRemovedStopsRunningJobAtOnce()
 
     // An unrelated registration change stops nothing
     const CalculationDescriptor throwerDescriptor = *registry.instance(QStringLiteral("thrower"))->descriptor;
-    QVERIFY(registry.unregister(QStringLiteral("thrower")));
+    QVERIFY(registry.unregister(QStringLiteral("thrower"), CalculationRegistry::Removal::Change));
     QVERIFY(!m_queue->job(running).cancelRequested);
 
     const CalculationDescriptor gatedDescriptor = *registry.instance(QStringLiteral("gated"))->descriptor;
-    QVERIFY(registry.unregister(QStringLiteral("gated")));
+    QVERIFY(registry.unregister(QStringLiteral("gated"), CalculationRegistry::Removal::Change));
     QVERIFY(m_queue->job(running).cancelRequested);     // from the registry's notification
     QCOMPARE(stateOf(running), JobState::Running);
 
@@ -1426,7 +1428,9 @@ void JobQueueTest::mergeIntoSessionWithRunningJobSupersedes()
     };
     CalculationRegistry &registry = CalculationRegistry::instance();
     QVERIFY(registry.registerCalculation(probe));
-    const auto unregister = qScopeGuard([&registry] { registry.unregister(QStringLiteral("mergeprobe")); });
+    const auto unregister = qScopeGuard([&registry] {
+        registry.unregister(QStringLiteral("mergeprobe"), CalculationRegistry::Removal::Change);
+    });
     m_model->flushPendingInvalidations();
 
     const JobId first = m_queue->request("s1", QStringLiteral("mergeprobe")).job;

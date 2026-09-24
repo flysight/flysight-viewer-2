@@ -177,7 +177,7 @@ void AltitudeMarkerManager::refresh()
     QStringList removedKeys;
     for (const QString &key : std::as_const(m_registeredKeys)) {
         if (!wanted.contains(key)) {
-            registry.unregister(calculationId(key));
+            registry.unregister(calculationId(key), CalculationRegistry::Removal::Change);
             removedKeys.append(key);
         }
     }

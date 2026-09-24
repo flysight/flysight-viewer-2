@@ -14,6 +14,7 @@
 #include "dataimporter.h"
 #include "engine/calculationregistry.h"
 #include "dataexporter.h"
+#include "fileread.h"
 #include "logbookcolumn.h"
 #include "preferences/preferencesmanager.h"
 #include "preferences/preferencekeys.h"
@@ -1090,25 +1091,22 @@ CalculationRecordRead LogbookManager::readCalculationRecord(const QString &sessi
         return read;    // Missing
     }
 
-    QFile file(calculationRecordPath(stem, calculationId));
-    if (!file.exists())
+    const QString path = calculationRecordPath(stem, calculationId);
+    if (!QFileInfo::exists(path))
         return read;    // Missing, no error
 
-    if (!file.open(QIODevice::ReadOnly)) {
+    // Not opened, a read error or a short read: a transient failure (a lock,
+    // a permission, a file being replaced) is not evidence that the record is
+    // wrong, so it is Unreadable, never decoded.
+    const std::optional<QByteArray> bytes = readWholeFile(path, &read.error);
+    if (!bytes) {
         read.status = CalculationRecordStatus::Unreadable;
-        read.error = file.errorString();
-        return read;
-    }
-    const QByteArray bytes = file.readAll();
-    if (file.error() != QFileDevice::NoError) {
-        read.status = CalculationRecordStatus::Unreadable;
-        read.error = file.errorString();
         return read;
     }
 
     // Deciding what is stale (and deleting it) is the caller's job.
     CalculationRecord record;
-    read.status = decodeCalculationRecord(bytes, &record, &read.error);
+    read.status = decodeCalculationRecord(*bytes, &record, &read.error);
     if (read.status != CalculationRecordStatus::Ok)
         return read;
 

@@ -44,6 +44,7 @@
 #include "fakesessionstate.h"
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
+#include "fileread.h"
 #include "fixturebuilder.h"
 #include "logbookcolumn.h"
 #include "logbookmanager.h"
@@ -594,7 +595,7 @@ void PythonBridgeTest::pluginsNeverStartExplicitWork()
         const QStringList after = registry.registeredIds();
         for (auto it = after.crbegin(); it != after.crend(); ++it) {
             if (!before.contains(*it))
-                registry.unregister(*it);
+                registry.unregister(*it, CalculationRegistry::Removal::Change);
         }
     });
     QCOMPARE(registry.registeredIds().size(), before.size() + 5);

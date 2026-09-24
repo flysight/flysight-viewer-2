@@ -456,21 +456,21 @@ section 15.8). Main thread only.
   - `Installed` is reported for every requested install of an explicit
     calculation (a synchronous `request()`, `prepare()`'s `NothingToRun` /
     `Blocked`, a `Published` publish), whatever its status;
-  - `DroppedByInputChange` is reported for leaf notifications, preference
-    broadcasts, the cascade when an upstream calculation that a requested
-    result read as "not requested" is requested, published or restored, and a
-    registry change made while the application runs that reaches the result
-    (a registration, or a removal with `CalculationRegistry::Removal::Change`,
-    the default of `unregister()`);
+  - `Dropped` is reported for leaf notifications, preference broadcasts, the
+    cascade when an upstream calculation that a requested result read as "not
+    requested" is requested, published or restored, and a registry change made
+    while the application runs that reaches the result (a registration, or a
+    removal with `CalculationRegistry::Removal::Change`; `unregister()` has no
+    default, so every caller states which removal it makes);
   - neither is reported for `restoreResult()`'s own install, `clear()`, a
     removal with `Removal::Teardown` (an owner being destroyed at shutdown),
     or the destruction of the registry or the engine;
   - events are delivered in order at the end of the engine call, never inside
     an evaluation. The listener travels with the engine (a moved `SessionData`
     keeps it);
-  - an `Installed` can be followed in the same call by a
-    `DroppedByInputChange` for the same result; `exportResult()` then already
-    returns nothing at the `Installed` event.
+  - an `Installed` can be followed in the same call by a `Dropped` for the
+    same result; `exportResult()` then already returns nothing at the
+    `Installed` event.
 
 ## 13. Blocker inspection
 
@@ -858,7 +858,7 @@ and restore; the files are described in
   and the in-memory result untouched, and is not retried before the next `Ok`
   publish.
 - `Installed` with any other status writes nothing and deletes nothing.
-- `DroppedByInputChange` (an input change, or a registry change made while the
+- `Dropped` (an input change, or a registry change made while the
   application runs, dropped the result):
   `LogbookManager::removeCalculationRecord()`, which looks at the record's one
   path (no directory listing).
@@ -881,25 +881,31 @@ and restore; the files are described in
   files together with the ids the manager knows, so that something other than
   a file standing at a known record's path (a directory) is read, and found
   unreadable, rather than ignored.
-- Records are restored in passes until a pass restores none, so
-  explicit-on-explicit chains restore in any file order. `InputsUnavailable`
-  counts as stale only after the last pass.
+- Records are restored upstream first, in passes. A record whose resolutions
+  name another pending record of the session as a `Calculation` provider (the
+  requested result it read) waits until that one is restored or dropped, so
+  its lookups resolve as they did when it was stored: restored before its
+  upstream, a looked-up name with a second candidate would resolve to that
+  candidate and the record would be refused as `Resolutions`.
+  Explicit-on-explicit chains therefore restore in any file order. A record
+  that stays `InputsUnavailable` although it waits for nothing is retried
+  after a pass that changed something else and counts as stale only then.
 - These are deleted at a load: a file that is not a record, a damaged record,
-  a record of another format version (format 1, written by earlier versions,
-  included: no migration), a record whose stamp is not current
+  a record of another format version (such as format 1 from development
+  builds: no migration), a record whose stamp is not current
   (`CalculationRecord::stampsAreCurrent()`: the compatibility marker only), a
   record failing a stale check (`Resolutions` included), and a record of a
   calculation that is not registered as explicit. A record whose result is
   already installed (`AlreadyInstalled`) is kept.
 - A record that exists but cannot be opened or read in full
-  (`CalculationRecordStatus::Unreadable`) is skipped: neither restored nor
-  deleted, counted in `recordsSkipped`, warned once ("skipped (kept for the
-  next load)"), and marked with
-  `LogbookManager::markCalculationRecordSkipped()`, which keeps the column
-  values over it out of `index.json` until the record is written or removed
-  or the row is evicted. A record that stays `InputsUnavailable` only because
-  it reads the result of a skipped record is skipped too. The next load tries
-  again.
+  (`CalculationRecordStatus::Unreadable`: a lock, a permission, a short read,
+  a directory at its path) is skipped: neither restored nor deleted, counted
+  in `recordsSkipped`, warned once ("skipped (kept for the next load)"), and
+  marked with `LogbookManager::markCalculationRecordSkipped()`, which keeps
+  the column values over it out of `index.json` until the record is written
+  or removed or the row is evicted. A record whose resolutions name a skipped
+  record is skipped too, before it is tried, whatever its own checks would
+  say. The next load tries again.
 - The column worker's and the bulk edit's temporary loads never read a record.
 - Records are deleted with their session (`LogbookManager::removeSession`) and,
   as strays whose session file does not exist in `sessions/`, at

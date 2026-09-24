@@ -27,6 +27,7 @@
 #include "engine/calculationregistry.h"
 #include "engine/storedcalculationresult.h"
 #include "fakesessionstate.h"
+#include "storedresults.h"
 #include "testmain.h"
 #include "testutil.h"
 
@@ -150,6 +151,29 @@ CalculationDescriptor readsPX()
     d.outputs = {attr("RPX")};
     d.compute = [](const EvaluationContext &ctx) { return CalculationResult().setAttribute("RPX", ctx.attribute("PX")); };
     return d;
+}
+
+// famPX: an on-demand family accepting only PX (instance key "k", input attr
+// PA, PX = PA + 1); its instance declares `version`, so a lookup of PX
+// resolves to instance "famPX#k" with that result version.
+CalculationFamily pxFamily(const QString &version)
+{
+    CalculationFamily f;
+    f.id = QStringLiteral("famPX");
+    f.instantiate = [version](const DependencyKey &name) -> std::optional<CalculationDescriptor> {
+        if (!(name == attr("PX")))
+            return std::nullopt;
+        CalculationDescriptor d;
+        d.id = QStringLiteral("k");
+        d.inputs = {CalcInput::attribute("PA")};
+        d.outputs = {name};
+        d.resultVersion = version;
+        d.compute = [](const EvaluationContext &ctx) {
+            return CalculationResult().setAttribute("PX", ctx.attribute("PA").toInt() + 1);
+        };
+        return d;
+    };
+    return f;
 }
 
 // readsE1: Explicit; input attr E1 (of the tangle world); RE1 = E1.
@@ -310,13 +334,13 @@ QString statusText(ResultStatus status)
     return QString();
 }
 
-/// "Installed expA Ok", "DroppedByInputChange expB MissingInput"
+/// "Installed expA Ok", "Dropped expB MissingInput"
 QStringList describeEvents(const QList<Event> &events)
 {
     QStringList text;
     for (const Event &event : events) {
         const QString kind = event.kind == Event::Kind::Installed ? QStringLiteral("Installed")
-                                                                  : QStringLiteral("DroppedByInputChange");
+                                                                  : QStringLiteral("Dropped");
         text.append(kind + QLatin1Char(' ') + event.instanceId + QLatin1Char(' ') + statusText(event.status));
     }
     return text;
@@ -361,17 +385,6 @@ bool strictlyIncreasing(const QList<StoredResolution> &resolutions)
             return false;
     }
     return true;
-}
-
-StoredResolution resolution(const DependencyKey &name, StoredResolution::Provider provider,
-                            const QString &instanceId = QString(), const QString &version = QString())
-{
-    StoredResolution r;
-    r.name = name;
-    r.provider = provider;
-    r.instanceId = instanceId;
-    r.resultVersion = version;
-    return r;
 }
 
 double fromBits(quint64 bits)
@@ -1062,8 +1075,8 @@ void CalcEngineRestoreTest::restoredResultInvalidatesLikePublished()
         QVERIFY(!s->engine.exportResult("expA").has_value());
     }
     QCOMPARE(describeEvents(w.source.events),
-             QStringList({"Installed expA Ok", "DroppedByInputChange expA Ok"}));
-    QCOMPARE(describeEvents(w.target.events), QStringList({"DroppedByInputChange expA Ok"}));
+             QStringList({"Installed expA Ok", "Dropped expA Ok"}));
+    QCOMPARE(describeEvents(w.target.events), QStringList({"Dropped expA Ok"}));
 }
 
 void CalcEngineRestoreTest::restoreNaNPayloadAndSignedZero()
@@ -1214,7 +1227,7 @@ void CalcEngineRestoreTest::droppedByInputChange()
     const QStringList events = describeEvents(s.takeEvents());
     QCOMPARE(events.size(), 2);
     QCOMPARE(QSet<QString>(events.cbegin(), events.cend()),
-             QSet<QString>({"DroppedByInputChange expA Ok", "DroppedByInputChange expB Ok"}));
+             QSet<QString>({"Dropped expA Ok", "Dropped expB Ok"}));
 
     // An unrelated change drops nothing
     QCOMPARE(s.engine.request("expA").status, ResultStatus::Ok);
@@ -1235,7 +1248,7 @@ void CalcEngineRestoreTest::droppedByPreferenceAndSource()
         s.log.clear();
 
         w.reg.prefs.set(w.reg.registry, "p", 6);
-        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"DroppedByInputChange withPref Ok"}));
+        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped withPref Ok"}));
         QCOMPARE(s.log, QStringList({"names", "explicit withPref"}));
         QVERIFY(s.broadcasts.last().contains(attr("WP")));
 
@@ -1254,13 +1267,13 @@ void CalcEngineRestoreTest::droppedByPreferenceAndSource()
         s.takeEvents();
 
         s.state.setMeasurement(s.engine, "S", "m", {1.0, 2.0, 3.0, 4.0}, "u");
-        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"DroppedByInputChange measExplicit Ok"}));
+        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped measExplicit Ok"}));
 
         QCOMPARE(s.engine.request("measExplicit").status, ResultStatus::Ok);
         QCOMPARE(s.engine.attribute("MS"), QVariant(4));
         s.takeEvents();
         s.state.setUnit(s.engine, "S", "m", "v");
-        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"DroppedByInputChange measExplicit Ok"}));
+        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped measExplicit Ok"}));
     }
 }
 
@@ -1279,7 +1292,7 @@ void CalcEngineRestoreTest::droppedByRequestOfUpstream()
         QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Installed expB MissingInput"}));
         QCOMPARE(s.engine.request("expA").status, ResultStatus::Ok);
         QCOMPARE(describeEvents(s.takeEvents()),
-                 QStringList({"DroppedByInputChange expB MissingInput", "Installed expA Ok"}));
+                 QStringList({"Dropped expB MissingInput", "Installed expA Ok"}));
     }
     {
         // The same through a restore: the drop, and no Installed
@@ -1287,7 +1300,7 @@ void CalcEngineRestoreTest::droppedByRequestOfUpstream()
         QCOMPARE(s.engine.request("expB").status, ResultStatus::MissingInput);
         s.takeEvents();
         QCOMPARE(s.engine.restoreResult(*snapshot).kind, Restore::Kind::Restored);
-        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"DroppedByInputChange expB MissingInput"}));
+        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped expB MissingInput"}));
     }
 }
 
@@ -1348,9 +1361,9 @@ void CalcEngineRestoreTest::resolutionCodes()
 
     // The order: attribute names first, then the first string, then the
     // second; case-sensitive UTF-16 code units
-    const auto a = [](const char *key) { return resolution(attr(key), Provider::Nothing); };
+    const auto a = [](const char *key) { return storedResolution(attr(key), Provider::Nothing); };
     const auto m = [](const char *sensor, const char *name) {
-        return resolution(Synthetic::measKey(sensor, name), Provider::Nothing);
+        return storedResolution(Synthetic::measKey(sensor, name), Provider::Nothing);
     };
     QVERIFY(storedResolutionLess(a("ZZZ"), m("A", "a")));
     QVERIFY(!storedResolutionLess(m("A", "a"), a("ZZZ")));
@@ -1361,16 +1374,16 @@ void CalcEngineRestoreTest::resolutionCodes()
     QVERIFY(!storedResolutionLess(a("K"), a("K")));
     QVERIFY(!storedResolutionLess(m("S", "a"), m("S", "a")));
     // Only the name orders: the provider does not
-    QVERIFY(!storedResolutionLess(resolution(attr("K"), Provider::Nothing),
-                                  resolution(attr("K"), Provider::Calculation, "c", "v")));
+    QVERIFY(!storedResolutionLess(storedResolution(attr("K"), Provider::Nothing),
+                                  storedResolution(attr("K"), Provider::Calculation, "c", "v")));
 
     // sameContent() compares the resolutions, result versions included
     const auto snapshot = [](const QString &version) {
         StoredCalculationResult s;
         s.calculationId = QStringLiteral("calc");
         s.bundle.setAttribute("A", 1);
-        s.resolutions = {resolution(attr("EA_IN"), StoredResolution::Provider::SessionData),
-                         resolution(attr("X"), StoredResolution::Provider::Calculation, "constX", version)};
+        s.resolutions = {storedResolution(attr("EA_IN"), StoredResolution::Provider::SessionData),
+                         storedResolution(attr("X"), StoredResolution::Provider::Calculation, "constX", version)};
         return s;
     };
     QVERIFY(sameContent(snapshot("v1"), snapshot("v1")));
@@ -1461,7 +1474,6 @@ void CalcEngineRestoreTest::ringIsNeverStored()
         QCOMPARE(outcome.status, ResultStatus::NotRequested);
         QVERIFY(isNotRun(target.engine.resultStatus("readsE1")));
         QCOMPARE(target.engine.runCount("readsE1"), 0);
-        QVERIFY(target.events.isEmpty());
         QVERIFY(!target.engine.isAvailable(attr("RE1")));
         QVERIFY(target.events.isEmpty());
     }
@@ -1477,6 +1489,7 @@ void CalcEngineRestoreTest::restoreAcrossRegistries_data()
     const int restored = int(Restore::Kind::Restored);
     const int stale = int(Restore::Kind::Stale);
     const int none = int(StaleCheck::None);
+    const int inputsUnavailable = int(StaleCheck::InputsUnavailable);
     const int resolutions = int(StaleCheck::Resolutions);
 
     QTest::newRow("same registrations") << "same" << "expA" << restored << none;
@@ -1486,6 +1499,11 @@ void CalcEngineRestoreTest::restoreAcrossRegistries_data()
     QTest::newRow("provider result version") << "providerVersion" << "readsPX" << stale << resolutions;
     QTest::newRow("source conversion registered") << "sourceConversion" << "measExplicit" << stale << resolutions;
     QTest::newRow("resolutions and leaves differ") << "resolutionsAndLeaves" << "readsX" << stale << resolutions;
+    QTest::newRow("family instance provider") << "familyInstance" << "readsPX" << restored << none;
+    QTest::newRow("family instance result version") << "familyInstanceVersion" << "readsPX" << stale << resolutions;
+    QTest::newRow("provider removed, another candidate") << "providerRemoved" << "readsPX" << stale << resolutions;
+    QTest::newRow("provider removed, no candidate") << "providerRemovedNoCandidate" << "readsPX" << stale
+                                                    << inputsUnavailable;
 }
 
 // The cross-run case: a snapshot published under one registry, restored under
@@ -1504,6 +1522,16 @@ void CalcEngineRestoreTest::restoreAcrossRegistries()
         r.registerCalculation(readsPX());
         r.registerCalculation(readsX());
     };
+    // PX from a family instance instead of px1
+    const auto withFamily = [](const QString &version) {
+        return [version](CalculationRegistry &r) {
+            registerStandard(r);
+            r.registerFamily(pxFamily(version));
+            r.registerCalculation(readsPX());
+            r.registerCalculation(readsX());
+        };
+    };
+    Registrar sourceRegistrar = asSource;
     Registrar targetRegistrar = asSource;
     if (row == QStringLiteral("unrelatedFirst")) {
         targetRegistrar = [asSource](CalculationRegistry &r) {
@@ -1537,9 +1565,27 @@ void CalcEngineRestoreTest::restoreAcrossRegistries()
             r.registerCalculation(constantX("x0"));
             asSource(r);
         };
+    } else if (row == QStringLiteral("familyInstance")) {
+        sourceRegistrar = withFamily(QStringLiteral("fv1"));
+        targetRegistrar = withFamily(QStringLiteral("fv1"));
+    } else if (row == QStringLiteral("familyInstanceVersion")) {
+        sourceRegistrar = withFamily(QStringLiteral("fv1"));
+        targetRegistrar = withFamily(QStringLiteral("fv2"));
+    } else if (row == QStringLiteral("providerRemoved")) {
+        // px0, tried first, provided PX; the next run registers px1 only
+        sourceRegistrar = [asSource](CalculationRegistry &r) {
+            r.registerCalculation(pxFrom("px0", "v1"));
+            asSource(r);
+        };
+    } else if (row == QStringLiteral("providerRemovedNoCandidate")) {
+        targetRegistrar = [](CalculationRegistry &r) {
+            registerStandard(r);
+            r.registerCalculation(readsPX());
+            r.registerCalculation(readsX());
+        };
     }
 
-    Registry sourceRegistry(asSource);
+    Registry sourceRegistry(sourceRegistrar);
     Registry targetRegistry(targetRegistrar);
     Session source(sourceRegistry);
     Session target(targetRegistry);
@@ -1553,6 +1599,15 @@ void CalcEngineRestoreTest::restoreAcrossRegistries()
     const std::optional<StoredCalculationResult> snapshot = source.engine.exportResult(id);
     QVERIFY(snapshot.has_value());
     const DependencyKey output = snapshot->bundle.setOutputs().first();
+    if (row.startsWith(QStringLiteral("familyInstance"))) {
+        // A family instance is named "<family>#<key>", with the result version
+        // its descriptor declares
+        QCOMPARE(describeResolutions(snapshot->resolutions),
+                 QStringList({"PA SessionData", "PX Calculation famPX#k fv1"}));
+    } else if (row == QStringLiteral("providerRemoved")) {
+        QCOMPARE(describeResolutions(snapshot->resolutions),
+                 QStringList({"PA SessionData", "PX Calculation px0 v1"}));
+    }
 
     const Restore outcome = target.engine.restoreResult(*snapshot);
     QCOMPARE(int(outcome.kind), kind);
@@ -1578,6 +1633,11 @@ void CalcEngineRestoreTest::restoreAcrossRegistries()
     QVERIFY(target.events.isEmpty());
 
     // What a fresh request under the target registry records
+    if (outcome.staleCheck == StaleCheck::InputsUnavailable) {
+        QCOMPARE(outcome.status, ResultStatus::MissingInput);
+        QCOMPARE(probe.engine.request(id).status, ResultStatus::MissingInput);
+        return;
+    }
     QCOMPARE(probe.engine.request(id).status, ResultStatus::Ok);
     const std::optional<StoredCalculationResult> fresh = probe.engine.exportResult(id);
     QVERIFY(fresh.has_value());
@@ -1609,7 +1669,7 @@ void CalcEngineRestoreTest::droppedByRegistryChange()
         s.takeEvents();
         s.log.clear();
         QVERIFY(registry.registerCalculation(altIn()));
-        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"DroppedByInputChange expA Ok"}));
+        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped expA Ok"}));
         QCOMPARE(s.log, QStringList({"names", "explicit expA"}));
         QVERIFY(!s.engine.resultStatus("expA").has_value());
         QVERIFY(!s.engine.exportResult("expA").has_value());
@@ -1618,18 +1678,18 @@ void CalcEngineRestoreTest::droppedByRegistryChange()
         QCOMPARE(s.engine.request("expA").status, ResultStatus::Ok);
         QCOMPARE(s.engine.attribute("EA1"), QVariant(5));      // the stored EA_IN still wins
         s.takeEvents();
-        QVERIFY(registry.unregister("altIn"));
-        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"DroppedByInputChange expA Ok"}));
+        QVERIFY(registry.unregister("altIn", CalculationRegistry::Removal::Change));
+        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped expA Ok"}));
 
         // (c) a family that accepts a looked-up name, and its removal
         QCOMPARE(s.engine.request("expA").status, ResultStatus::Ok);
         s.takeEvents();
         QVERIFY(registry.registerFamily(familyForEaIn()));
-        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"DroppedByInputChange expA Ok"}));
+        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped expA Ok"}));
         QCOMPARE(s.engine.request("expA").status, ResultStatus::Ok);
         s.takeEvents();
-        QVERIFY(registry.unregister("famEA"));
-        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"DroppedByInputChange expA Ok"}));
+        QVERIFY(registry.unregister("famEA", CalculationRegistry::Removal::Change));
+        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped expA Ok"}));
 
         // (d) a source conversion under a measurement input
         Session &t = w.target;
@@ -1638,7 +1698,7 @@ void CalcEngineRestoreTest::droppedByRegistryChange()
         QCOMPARE(t.engine.attribute("MS"), QVariant(3));
         t.takeEvents();
         QVERIFY(registry.registerSourceConversion(passConversion()));
-        QCOMPARE(describeEvents(t.takeEvents()), QStringList({"DroppedByInputChange measExplicit Ok"}));
+        QCOMPARE(describeEvents(t.takeEvents()), QStringList({"Dropped measExplicit Ok"}));
         QVERIFY(s.events.isEmpty());
     }
     {
@@ -1649,11 +1709,11 @@ void CalcEngineRestoreTest::droppedByRegistryChange()
         QCOMPARE(s.engine.request("expA").status, ResultStatus::Ok);
         QCOMPARE(s.engine.request("expB").status, ResultStatus::Ok);
         s.takeEvents();
-        QVERIFY(w.reg.registry.unregister("expA"));
+        QVERIFY(w.reg.registry.unregister("expA", CalculationRegistry::Removal::Change));
         const QStringList events = describeEvents(s.takeEvents());
         QCOMPARE(events.size(), 2);
         QCOMPARE(QSet<QString>(events.cbegin(), events.cend()),
-                 QSet<QString>({"DroppedByInputChange expA Ok", "DroppedByInputChange expB Ok"}));
+                 QSet<QString>({"Dropped expA Ok", "Dropped expB Ok"}));
     }
     {
         // (f) names the result never looked up: nothing is dropped or reported
@@ -1663,7 +1723,7 @@ void CalcEngineRestoreTest::droppedByRegistryChange()
         s.takeEvents();
         s.log.clear();
         QVERIFY(w.reg.registry.registerCalculation(unrelated()));
-        QVERIFY(w.reg.registry.unregister("unrelated"));
+        QVERIFY(w.reg.registry.unregister("unrelated", CalculationRegistry::Removal::Change));
         QVERIFY(s.events.isEmpty());
         QVERIFY(s.log.isEmpty());
         QCOMPARE(s.engine.resultStatus("expA"), std::optional<ResultStatus>(ResultStatus::Ok));

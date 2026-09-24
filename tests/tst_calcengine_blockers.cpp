@@ -472,7 +472,7 @@ void CalcEngineBlockersTest::explicitFamilyInstance()
     // Unregistering the family between prepare and publish refuses, too.
     Prepare other = w.engine.prepare("xneg", attr("xneg:EB_IN"));
     QCOMPARE(other.kind, Prepare::Kind::Ready);
-    QVERIFY(w.registry.unregister("xneg"));
+    QVERIFY(w.registry.unregister("xneg", CalculationRegistry::Removal::Change));
     QCOMPARE(other.ticket->publish(other.ticket->compute()).reason,
              PublishOutcome::Reason::RegistrationRemoved);
 }

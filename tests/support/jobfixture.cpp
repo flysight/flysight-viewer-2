@@ -190,7 +190,7 @@ JobWorld::~JobWorld()
 {
     CalculationRegistry &registry = CalculationRegistry::instance();
     for (auto it = m_ids.crbegin(); it != m_ids.crend(); ++it)
-        registry.unregister(*it);
+        registry.unregister(*it, CalculationRegistry::Removal::Change);
 }
 
 QList<SessionData> JobWorld::sessions(const QStringList &ids)
@@ -207,7 +207,7 @@ ExtraRegistrations::~ExtraRegistrations()
 {
     CalculationRegistry &registry = CalculationRegistry::instance();
     for (auto it = m_ids.crbegin(); it != m_ids.crend(); ++it)
-        registry.unregister(*it);
+        registry.unregister(*it, CalculationRegistry::Removal::Change);
 }
 
 bool ExtraRegistrations::add(const CalculationDescriptor &d)

@@ -238,8 +238,11 @@ bool UnreadableFile::release()
 QByteArray asFormatOne(const QByteArray &formatTwo)
 {
     constexpr int kMagicSize = 8;
+    constexpr int kVersionSize = 4;         // quint32 format version
+    constexpr int kCompatibilitySize = 4;   // qint32 calculation compatibility
     constexpr int kChecksumSize = 32;
-    if (formatTwo.size() < kMagicSize + 4 + 4 + kChecksumSize
+    constexpr int kStampsEnd = kMagicSize + kVersionSize + kCompatibilitySize;
+    if (formatTwo.size() < kStampsEnd + kChecksumSize
         || qFromLittleEndian<quint32>(formatTwo.constData() + kMagicSize) != 2u)
         return QByteArray();
 
@@ -252,12 +255,12 @@ QByteArray asFormatOne(const QByteArray &formatTwo)
     }
 
     QByteArray one = formatTwo.first(kMagicSize);
-    char version[4];
+    char version[kVersionSize];
     qToLittleEndian<quint32>(1u, version);
-    one.append(version, 4);
-    one.append(formatTwo.mid(kMagicSize + 4, 4));           // the compatibility stamp
+    one.append(version, kVersionSize);
+    one.append(formatTwo.mid(kMagicSize + kVersionSize, kCompatibilitySize));
     one.append(environment);
-    one.append(formatTwo.mid(16, formatTwo.size() - 16 - kChecksumSize));
+    one.append(formatTwo.mid(kStampsEnd, formatTwo.size() - kStampsEnd - kChecksumSize));
     one.append(QCryptographicHash::hash(one, QCryptographicHash::Sha256));
     return one;
 }

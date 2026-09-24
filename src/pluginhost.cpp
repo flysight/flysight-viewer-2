@@ -9,6 +9,7 @@
 /* Qt headers – compile with _DEBUG still defined */
 #include <QCoreApplication>
 #include <QDir>
+#include <QStringList>
 #include <QVariant>
 #include <QDebug>
 
@@ -38,6 +39,7 @@
 #include "pluginhost.h"
 #include "pluginadapters.h"
 #include "plugincodeidentity.h"
+#include "fileread.h"
 #include "engine/calculationdescriptor.h"
 #include "engine/calculationregistry.h"
 #include "plotregistry.h"
@@ -119,7 +121,9 @@ RegistrationCount registerEach(py::handle sdkList, const QString &resultVersion,
 // before any plugin is imported. `sdk` is the imported SDK module: its
 // __file__ is what was actually imported, wherever sys.path found it. Any
 // ingredient that cannot be read is left empty / nullopt, which the digest
-// encodes distinctly.
+// encodes distinctly, and one warning names every such ingredient: an
+// identity that silently covers less than the plug-ins would be hard to
+// explain when stored results go stale.
 PluginCodeIngredients readCodeIngredients(const QString &pluginDir, const py::module_ &sdk)
 {
     PluginCodeIngredients ingredients;
@@ -145,6 +149,22 @@ PluginCodeIngredients readCodeIngredients(const QString &pluginDir, const py::mo
             py::module_::import("numpy").attr("__version__").cast<std::string>());
     } catch (const py::error_already_set &) {
     } catch (const std::exception &) {
+    }
+
+    QStringList unreadable;
+    if (ingredients.pythonVersion.isEmpty())
+        unreadable << QStringLiteral("the Python version (recorded as \"%1\")").arg(PluginCodeIdentityUnknownVersion);
+    if (ingredients.numpyVersion.isEmpty())
+        unreadable << QStringLiteral("the numpy version (recorded as \"%1\")").arg(PluginCodeIdentityUnknownVersion);
+    if (!ingredients.sdk)
+        unreadable << QStringLiteral("the SDK file (recorded as unreadable)");
+    for (const PluginSourceFile &file : std::as_const(ingredients.files)) {
+        if (!file.bytes)
+            unreadable << QStringLiteral("%1 (recorded as unreadable)").arg(file.name);
+    }
+    if (!unreadable.isEmpty()) {
+        qWarning().noquote() << "[PluginHost] Plug-in code identity: could not read"
+                             << unreadable.join(QStringLiteral(", "));
     }
     return ingredients;
 }

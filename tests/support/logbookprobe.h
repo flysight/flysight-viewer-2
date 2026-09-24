@@ -87,8 +87,8 @@ private:
     bool m_applied = false;
 };
 
-/// The same record in the layout of format version 1 as Phase 1 of
-/// stored-results-validity wrote it: version field 1 and the environment
+/// The same record in the layout of format version 1 with its resolutions
+/// section, as development builds wrote it: version field 1 and the environment
 /// fingerprint string (40 '0' characters, QDataStream form pinned to Qt_6_0
 /// little-endian) after the compatibility stamp, with a fresh SHA-256 trailer;
 /// an empty array unless `formatTwo` holds at least 48 bytes with version

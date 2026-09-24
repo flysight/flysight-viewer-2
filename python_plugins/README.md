@@ -204,22 +204,41 @@ At startup, before any plugin is imported, FlySight Viewer computes one digest,
 the *plug-in code identity*, over:
 
 * every `*.py` file in the plugin folder and its subfolders (its path relative
-  to the folder and its bytes), except files in `__pycache__` and in hidden
-  folders (names that start with `.`); `examples/` counts although nothing in
-  it is imported;
-* the SDK file;
+  to the folder and its bytes), hidden files included, except files in
+  `__pycache__` and in hidden folders (names that start with `.`, or folders
+  the file system marks hidden); a linked folder (a symbolic link, or a
+  junction on Windows) is read through under its own name, and a link back to
+  a folder above it is not followed again; `examples/` counts although
+  nothing in it is imported;
+* the SDK file (counted a second time as one of the files, since it lives in
+  the plugin folder);
 * the Python version and the NumPy version (`none` if one cannot be read).
 
 The log shows it:
-`[PluginHost] Plug-in code identity: plugins-sha256:... (3 files)`.
+`[PluginHost] Plug-in code identity: plugins-sha256:... (3 files)`. An
+ingredient that cannot be read (the NumPy version, the SDK file, a locked
+`.py` file) is named in one warning,
+`[PluginHost] Plug-in code identity: could not read ...`.
+
+That is all it covers. Data files a plugin reads (a `.json` table, a model
+file), compiled modules (`.pyd`, `.so`) and packages installed elsewhere that a
+plugin imports are not part of it: if a plugin's results depend on one of
+them, changing it does not change the identity. Rename the plugin's
+calculation, or edit one of its `.py` files, after changing such a file. The
+walk reads every `.py` file under the folder at every start, so keep large
+trees out of it: a virtual environment in a folder whose name does not start
+with `.` (`venv/` rather than `.venv/`) is read and hashed each time.
 
 Every attribute, measurement and calculation a plugin registers declares it as
 its result version. So editing, adding, removing or renaming any file in the
 folder (not only the plugin you changed), or upgrading Python or NumPy, changes
 it for all plugins at once. The digest is over the files' raw bytes: the same
 plugin checked out with different line endings (by git's `autocrlf`, for
-example) has a different identity on another machine. That is harmless,
-because stored results and the logbook's `index.json` belong to one machine.
+example) has a different identity on another machine. A logbook is meant for
+one machine: a logbook folder synced between machines whose plugins or NumPy
+versions differ has a different identity on each, so each machine discards the
+other's stored results that went through a plugin and the whole column cache
+of `index.json` at its next start, and recomputes them.
 
 * The logbook column values cached for sessions that are not loaded are then
   discarded at the next start and recomputed in the background: a column over

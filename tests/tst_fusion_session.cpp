@@ -33,6 +33,7 @@
 #include "fusiongolden.h"
 #include "fusionsessions.h"
 #include "sessiondata.h"
+#include "storedresults.h"
 #include "testenvironment.h"
 #include "testmain.h"
 #include "testutil.h"
@@ -140,13 +141,13 @@ QString reportText(const BlockerReport &report)
     return text.join(QStringLiteral("; "));
 }
 
-/// "Installed 0" (the status as its number), "DroppedByInputChange 0"
+/// "Installed 0" (the status as its number), "Dropped 0"
 QStringList eventTexts(const QList<ExplicitEvent> &events)
 {
     QStringList text;
     for (const ExplicitEvent &event : events) {
         text.append((event.kind == ExplicitEvent::Kind::Installed ? QStringLiteral("Installed ")
-                                                                  : QStringLiteral("DroppedByInputChange "))
+                                                                  : QStringLiteral("Dropped "))
                     + event.instanceId + QLatin1Char(' ') + QString::number(int(event.status)));
     }
     return text;
@@ -998,11 +999,7 @@ void FusionSessionTest::restoredFitIsIndistinguishable()
     for (qsizetype i = 1; i < snapshot->resolutions.size(); ++i)
         QVERIFY(storedResolutionLess(snapshot->resolutions.at(i - 1), snapshot->resolutions.at(i)));
     const auto calculated = [](const DependencyKey &name, const QString &instanceId) {
-        StoredResolution r;
-        r.name = name;
-        r.provider = StoredResolution::Provider::Calculation;
-        r.instanceId = instanceId;
-        return r;
+        return storedResolution(name, StoredResolution::Provider::Calculation, instanceId);
     };
     // The fixture recorded the Local channels as source data, so the
     // conversion layer provides them, as it does the IMU channels. az is not
@@ -1090,8 +1087,8 @@ void FusionSessionTest::restoredFitIsIndistinguishable()
 
     const QString ok = QString::number(int(ResultStatus::Ok));
     QCOMPARE(eventTexts(eventsA), QStringList({QStringLiteral("Installed ") + kFit + QLatin1Char(' ') + ok,
-                                               QStringLiteral("DroppedByInputChange ") + kFit + QLatin1Char(' ') + ok}));
-    QCOMPARE(eventTexts(eventsB), QStringList({QStringLiteral("DroppedByInputChange ") + kFit + QLatin1Char(' ') + ok}));
+                                               QStringLiteral("Dropped ") + kFit + QLatin1Char(' ') + ok}));
+    QCOMPARE(eventTexts(eventsB), QStringList({QStringLiteral("Dropped ") + kFit + QLatin1Char(' ') + ok}));
     QVERIFY(!engineA.exportResult(kFit).has_value());
     QVERIFY(!engineB.exportResult(kFit).has_value());
 

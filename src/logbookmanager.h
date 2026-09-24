@@ -154,9 +154,9 @@ public:
 
     // Reads and decodes one record. Missing when the session is unknown or has
     // no such file; Unreadable when the file, or whatever stands at its path,
-    // cannot be opened / read; the codec's status otherwise; Corrupt when the
-    // record names a different calculation id.
-    // Never deletes anything.
+    // cannot be opened or read in full (readWholeFile(), a short read
+    // included); the codec's status otherwise; Corrupt when the record names
+    // a different calculation id. Never deletes anything.
     CalculationRecordRead readCalculationRecord(const QString &sessionId, const QString &calculationId) const;
 
     // Calculation ids of the session's record files, sorted. Names only: no

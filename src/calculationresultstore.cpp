@@ -1,7 +1,10 @@
 #include "calculationresultstore.h"
 
+#include <utility>
+
 #include <QElapsedTimer>
 #include <QList>
+#include <QSet>
 #include <QtDebug>
 
 #include "logbookmanager.h"
@@ -38,6 +41,18 @@ private:
     QElapsedTimer m_timer;
 };
 
+// True when `record` names, as a Calculation provider of a looked-up name,
+// one of `ids` other than itself.
+bool namesRecordIn(const CalculationRecord &record, const QSet<QString> &ids)
+{
+    for (const StoredResolution &r : record.result.resolutions) {
+        if (r.provider == StoredResolution::Provider::Calculation && r.instanceId != record.result.calculationId
+            && ids.contains(r.instanceId))
+            return true;
+    }
+    return false;
+}
+
 } // namespace
 
 void CalculationResultStore::onExplicitResultEvent(const QString &sessionId, const CalculationEngine &engine,
@@ -61,7 +76,7 @@ void CalculationResultStore::onExplicitResultEvent(const QString &sessionId, con
         ScopedNanoseconds timing(m_stats.writeNanoseconds);
 
         // nullopt when a deferred invalidation of the same engine call has
-        // already dropped the result; its DroppedByInputChange event follows.
+        // already dropped the result; its Dropped event follows.
         const std::optional<StoredCalculationResult> snapshot = engine.exportResult(event.instanceId);
         if (!snapshot)
             return;
@@ -79,10 +94,10 @@ void CalculationResultStore::onExplicitResultEvent(const QString &sessionId, con
         return;
     }
 
-    // DroppedByInputChange, whatever its status: an input of the result or a
-    // registry change reaching it dropped it; a record, if any, no longer
-    // describes it. No listing: the removal looks at the one path, and tells
-    // whether a file was there.
+    // Dropped, whatever its status: an input of the result, or a registry
+    // change made while the application runs, reached it; a record, if any,
+    // no longer describes it. No listing: the removal looks at the one path,
+    // and tells whether a file was there.
     if (deleteRecord(sessionId, event.instanceId, "an input or the registry changed"))
         ++m_stats.droppedRecordsDeleted;
 }
@@ -167,22 +182,60 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
         }
     }
 
-    // 3. Restore in passes. A record whose inputs are unavailable may depend
-    //    on another explicit result that a later record of this pass (or of
-    //    the next one) restores, so it waits; it is stale only after a pass
-    //    that restored nothing. Each pass that continues restores at least
-    //    one record, so there are at most as many passes as records.
+    // 3. Restore in passes, upstream records first. A record's resolutions
+    //    name, as a Calculation provider, every calculation its lookups went
+    //    through, explicit results included. A record that names another
+    //    pending record waits until that one has been restored or dropped:
+    //    restored before it, the downstream result would resolve as though
+    //    its upstream were not requested (to a fallback candidate, when there
+    //    is one) and be refused as stale. A record that names a skipped
+    //    record is skipped too, whatever its own checks would say: deleting it
+    //    would destroy a good record because of another file's transient
+    //    failure. Rings are never exported, so records cannot wait for each
+    //    other in a circle; should they, the pass tries them all.
+    //    A record whose inputs are unavailable although it waits for nothing
+    //    (a dependency its resolutions do not show) waits for the next pass;
+    //    it is stale only after a pass that changed nothing else. Every pass
+    //    removes at least one record from the pending list, so there are at
+    //    most as many passes as records.
     while (!pending.isEmpty()) {
-        QList<CalculationRecord> next;
-        bool progressed = false;
-        for (const CalculationRecord &record : std::as_const(pending)) {
+        // a. Readers of a skipped record, transitively
+        bool skippedAny = true;
+        while (skippedAny) {
+            skippedAny = false;
+            QList<CalculationRecord> rest;
+            for (CalculationRecord &record : pending) {
+                if (namesRecordIn(record, skipped)) {
+                    skip(record.result.calculationId,
+                         QStringLiteral("it reads a stored result that could not be read"));
+                    skippedAny = true;
+                } else {
+                    rest.append(std::move(record));
+                }
+            }
+            pending = std::move(rest);
+        }
+
+        // b. Held back: records that name another pending record
+        QSet<QString> pendingIds;
+        for (const CalculationRecord &record : std::as_const(pending))
+            pendingIds.insert(record.result.calculationId);
+        QList<CalculationRecord> ready;
+        QList<CalculationRecord> held;
+        for (CalculationRecord &record : pending)
+            (namesRecordIn(record, pendingIds) ? held : ready).append(std::move(record));
+        if (ready.isEmpty())
+            std::swap(ready, held);     // a cycle, which export rules out
+
+        // c. The ready ones
+        QList<CalculationRecord> unavailable;
+        for (const CalculationRecord &record : std::as_const(ready)) {
             const RestoreOutcome outcome = engine.restoreResult(record.result);
             summary.invalidated.unite(outcome.invalidated);
             const QString &id = record.result.calculationId;
             switch (outcome.kind) {
             case RestoreOutcome::Kind::Restored:
                 ++summary.restored;
-                progressed = true;
                 break;
             case RestoreOutcome::Kind::AlreadyInstalled:
                 // A result installed some other way wins; its record stays.
@@ -190,7 +243,7 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
                 break;
             case RestoreOutcome::Kind::Stale:
                 if (outcome.staleCheck == RestoreOutcome::StaleCheck::InputsUnavailable)
-                    next.append(record);
+                    unavailable.append(record);
                 else
                     staleDelete(id, staleCheckName(outcome.staleCheck));
                 break;
@@ -203,41 +256,16 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
                 break;
             }
         }
-        if (!progressed) {
-            // A record whose inputs stay unavailable because it reads the
-            // result of a skipped record is skipped too: deleting it would
-            // destroy a good record because of another file's transient
-            // failure. A requested result's resolutions name every
-            // calculation reached through its lookups, explicit results
-            // included, so such a record names the skipped one directly; the
-            // scan repeats only to make the rule independent of that.
-            const auto readsSkipped = [&skipped](const CalculationRecord &record) {
-                for (const StoredResolution &r : record.result.resolutions) {
-                    if (r.provider == StoredResolution::Provider::Calculation && skipped.contains(r.instanceId))
-                        return true;
-                }
-                return false;
-            };
-            bool skippedAny = true;
-            while (skippedAny) {
-                skippedAny = false;
-                QList<CalculationRecord> rest;
-                for (const CalculationRecord &record : std::as_const(next)) {
-                    if (readsSkipped(record)) {
-                        skip(record.result.calculationId,
-                             QStringLiteral("it reads a stored result that could not be read"));
-                        skippedAny = true;
-                    } else {
-                        rest.append(record);
-                    }
-                }
-                next = std::move(rest);
-            }
-            for (const CalculationRecord &record : std::as_const(next))
+
+        // d. Nothing but unavailable inputs in this pass: nothing can make
+        //    them available any more. The held records are tried next.
+        if (unavailable.size() == ready.size()) {
+            for (const CalculationRecord &record : std::as_const(unavailable))
                 staleDelete(record.result.calculationId, "inputs unavailable");
-            break;
+            unavailable.clear();
         }
-        pending = std::move(next);
+        pending = std::move(held);
+        pending.append(std::move(unavailable));
     }
 
     // 4. The counters

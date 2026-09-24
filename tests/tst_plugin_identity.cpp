@@ -5,7 +5,10 @@
 // No Python here: the digest is a pure function of its ingredients, and the
 // folder walk is plain file I/O. tst_python_bridge proves that the real host
 // declares this function's output on every plug-in registration. Folders are
-// temporary directories; nothing is written to the source tree.
+// temporary directories; nothing is written to the source tree. The link test
+// needs a symbolic link (not Windows, where QFile::link makes a shortcut file)
+// or a junction (Windows only, made with "mklink /J"); it skips where neither
+// can be made.
 
 #include <algorithm>
 #include <optional>
@@ -16,8 +19,21 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QProcess>
 #include <QRegularExpression>
+#include <QScopeGuard>
 
+#ifdef Q_OS_WIN
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
+#include "fileread.h"
 #include "fixturebuilder.h"
 #include "plugincodeidentity.h"
 #include "testenvironment.h"
@@ -102,11 +118,13 @@ bool put(const QString &root, const QString &relative, const QByteArray &content
     return QDir().mkpath(QFileInfo(path).absolutePath()) && writeFile(path, contents);
 }
 
-// The folder of the listing criterion: four files that count, five that do not.
+// The folder of the listing criterion: five files that count (a dot-named
+// one among them), five that do not.
 bool writeTestFolder(const QString &root)
 {
     return put(root, QStringLiteral("a.py"), "a = 1\n")
         && put(root, QStringLiteral("b.py"), "b = 1\n")
+        && put(root, QStringLiteral(".dotted.py"), "dotted = 1\n")
         && put(root, QStringLiteral("notes.txt"), "notes\n")
         && put(root, QStringLiteral("sub/c.py"), "c = 1\n")
         && put(root, QStringLiteral("sub/deeper/d.py"), "d = 1\n")
@@ -135,6 +153,37 @@ QStringList names(const QList<PluginSourceFile> &files)
     return out;
 }
 
+// A link to the folder `target` at `link`: a symbolic link, or on Windows a
+// junction. Empty on success, else why it could not be made (the row skips).
+QString makeFolderLink(const QString &target, const QString &link)
+{
+#ifdef Q_OS_WIN
+    QProcess mklink;
+    mklink.setStandardOutputFile(QProcess::nullDevice());   // "Junction created for ..."
+    mklink.start(QStringLiteral("cmd"), {QStringLiteral("/c"), QStringLiteral("mklink"), QStringLiteral("/J"),
+                                         QDir::toNativeSeparators(link), QDir::toNativeSeparators(target)});
+    if (!mklink.waitForFinished() || mklink.exitStatus() != QProcess::NormalExit || mklink.exitCode() != 0
+        || !QFileInfo(link).isDir())
+        return QStringLiteral("mklink /J failed (exit code %1)").arg(mklink.exitCode());
+    return QString();
+#else
+    if (!QFile::link(target, link) || !QFileInfo(link).isSymLink())
+        return QStringLiteral("QFile::link failed");
+    return QString();
+#endif
+}
+
+// Removes a link made by makeFolderLink(), never what it leads to. Done before
+// the test environment removes its folder, which must not walk a link loop.
+void removeFolderLink(const QString &link)
+{
+#ifdef Q_OS_WIN
+    QDir().rmdir(link);         // RemoveDirectoryW removes the junction itself
+#else
+    QFile::remove(link);
+#endif
+}
+
 } // namespace
 
 class PluginIdentityTest : public QObject {
@@ -149,6 +198,8 @@ private slots:
     void readsTheFolderRecursively();
     void subfolderFileChangesIdentity();
     void pycacheAndHiddenDirectoriesAreIgnored();
+    void hiddenFilesCount();
+    void linkedFoldersAreReadThrough();
     void unreadableFileIsNotEmpty();
 };
 
@@ -253,16 +304,9 @@ void PluginIdentityTest::readsTheFolderRecursively()
     const QString root = TestEnvironment::instance().newTempDir(QStringLiteral("plugins"));
     QVERIFY(writeTestFolder(root));
 
-#ifndef Q_OS_WIN
-    // A symbolic link to a directory is not followed (on Windows QFile::link
-    // makes a shortcut file, which is no directory at all)
-    QVERIFY(QFile::link(QDir(root).filePath(QStringLiteral("sub")), QDir(root).filePath(QStringLiteral("zlink"))));
-    QVERIFY(QFileInfo(QDir(root).filePath(QStringLiteral("zlink"))).isSymLink());
-#endif
-
     const QList<PluginSourceFile> files = readPluginCodeFiles(root);
-    QCOMPARE(names(files), QStringList({"a.py", "b.py", "sub/c.py", "sub/deeper/d.py"}));
-    const QList<QByteArray> expectedBytes{"a = 1\n", "b = 1\n", "c = 1\n", "d = 1\n"};
+    QCOMPARE(names(files), QStringList({".dotted.py", "a.py", "b.py", "sub/c.py", "sub/deeper/d.py"}));
+    const QList<QByteArray> expectedBytes{"dotted = 1\n", "a = 1\n", "b = 1\n", "c = 1\n", "d = 1\n"};
     for (qsizetype i = 0; i < files.size(); ++i) {
         QVERIFY2(files[i].bytes.has_value(), qPrintable(files[i].name));
         QCOMPARE(*files[i].bytes, expectedBytes[i]);
@@ -285,6 +329,7 @@ void PluginIdentityTest::subfolderFileChangesIdentity()
     // Rewritten, one at a time; putting the bytes back restores the identity
     const QList<std::pair<QString, QByteArray>> counted{
         {QStringLiteral("a.py"), "a = 1\n"},
+        {QStringLiteral(".dotted.py"), "dotted = 1\n"},
         {QStringLiteral("sub/c.py"), "c = 1\n"},
         {QStringLiteral("sub/deeper/d.py"), "d = 1\n"}};
     for (const auto &[name, bytes] : counted) {
@@ -324,11 +369,83 @@ void PluginIdentityTest::pycacheAndHiddenDirectoriesAreIgnored()
     QCOMPARE(folderIdentity(root), original);
 }
 
+// Only hidden folders are left out: a hidden *.py file counts, whether its
+// name starts with '.' (hidden on every platform but Windows) or, on Windows,
+// the file system marks it hidden.
+void PluginIdentityTest::hiddenFilesCount()
+{
+    const QString root = TestEnvironment::instance().newTempDir(QStringLiteral("plugins"));
+    QVERIFY(writeTestFolder(root));
+    const QString original = folderIdentity(root);
+
+    QVERIFY(put(root, QStringLiteral("sub/.helper.py"), "helper = 1\n"));
+    QCOMPARE(readPluginCodeFiles(root).size(), 6);
+    const QString withDotted = folderIdentity(root);
+    QVERIFY(withDotted != original);
+    QVERIFY(put(root, QStringLiteral("sub/.helper.py"), "helper = 2\n"));
+    QVERIFY(folderIdentity(root) != withDotted);
+    QVERIFY(QFile::remove(QDir(root).filePath(QStringLiteral("sub/.helper.py"))));
+    QCOMPARE(folderIdentity(root), original);
+
+#ifdef Q_OS_WIN
+    const QString marked = QDir(root).filePath(QStringLiteral("marked.py"));
+    QVERIFY(put(root, QStringLiteral("marked.py"), "marked = 1\n"));
+    QVERIFY(SetFileAttributesW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(marked).utf16()),
+                               FILE_ATTRIBUTE_HIDDEN));
+    QVERIFY(QFileInfo(marked).isHidden());
+    QVERIFY(names(readPluginCodeFiles(root)).contains(QStringLiteral("marked.py")));
+    QVERIFY(folderIdentity(root) != original);
+    QVERIFY(SetFileAttributesW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(marked).utf16()),
+                               FILE_ATTRIBUTE_NORMAL));
+#endif
+}
+
+// A linked folder (a symbolic link, or a junction on Windows) is read through
+// under its own name, and a link back to a folder on the way down (a loop) is
+// not entered again, so the walk ends.
+void PluginIdentityTest::linkedFoldersAreReadThrough()
+{
+    const QString root = TestEnvironment::instance().newTempDir(QStringLiteral("plugins"));
+    QVERIFY(writeTestFolder(root));
+    const QString original = folderIdentity(root);
+
+    const QString zlink = QDir(root).filePath(QStringLiteral("zlink"));
+    const QString up = QDir(root).filePath(QStringLiteral("sub/deeper/up"));
+    const auto removeLinks = qScopeGuard([&] {
+        removeFolderLink(up);
+        removeFolderLink(zlink);
+    });
+    const QString skip = makeFolderLink(QDir(root).filePath(QStringLiteral("sub")), zlink);
+    if (!skip.isEmpty())
+        QSKIP(qPrintable(skip));
+    QCOMPARE(names(readPluginCodeFiles(root)),
+             QStringList({".dotted.py", "a.py", "b.py", "sub/c.py", "sub/deeper/d.py", "zlink/c.py",
+                          "zlink/deeper/d.py"}));
+    const QString linked = folderIdentity(root);
+    QVERIFY(linked != original);
+    // An edit behind the link changes the identity like any other
+    QVERIFY(put(root, QStringLiteral("sub/c.py"), "c = 2\n"));
+    QVERIFY(folderIdentity(root) != linked);
+    QVERIFY(put(root, QStringLiteral("sub/c.py"), "c = 1\n"));
+    QCOMPARE(folderIdentity(root), linked);
+
+    // A loop: sub/deeper/up leads back to the plug-in folder itself
+    const QString loopSkip = makeFolderLink(root, up);
+    if (!loopSkip.isEmpty())
+        QSKIP(qPrintable(loopSkip));
+    QCOMPARE(names(readPluginCodeFiles(root)),
+             QStringList({".dotted.py", "a.py", "b.py", "sub/c.py", "sub/deeper/d.py", "zlink/c.py",
+                          "zlink/deeper/d.py"}));
+    QCOMPARE(folderIdentity(root), linked);
+}
+
 void PluginIdentityTest::unreadableFileIsNotEmpty()
 {
     const QString root = TestEnvironment::instance().newTempDir(QStringLiteral("read"));
 
-    QVERIFY(!readWholeFile(QDir(root).filePath(QStringLiteral("missing.py"))).has_value());
+    QString error;
+    QVERIFY(!readWholeFile(QDir(root).filePath(QStringLiteral("missing.py")), &error).has_value());
+    QVERIFY(!error.isEmpty());
     QVERIFY(!readWholeFile(root).has_value());      // a directory
 
     const QString emptyPath = QDir(root).filePath(QStringLiteral("empty.py"));

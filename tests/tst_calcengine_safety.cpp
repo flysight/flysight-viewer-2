@@ -391,7 +391,7 @@ void CalcEngineSafetyTest::overlappingRingsFollowEdits()
 
         // A registry change reaches an answer through a provisional candidate:
         // without oQ, OX has nothing to fall back to.
-        QVERIFY(w.registry.unregister("oQ"));
+        QVERIFY(w.registry.unregister("oQ", CalculationRegistry::Removal::Change));
         QVERIFY(!w.engine.attribute("OX").isValid());
         QVERIFY(!w.engine.attribute("E1").isValid());
         QVERIFY(w.engine.verifyAgainstFresh(names).isEmpty());
@@ -734,7 +734,7 @@ void CalcEngineSafetyTest::foreignExceptionPublishesNothing()
     QCOMPARE(engine.totalRunCount(), 0);
 
     // The registry is not left believing an evaluation is in progress.
-    QVERIFY(registry.unregister("wAlt"));
+    QVERIFY(registry.unregister("wAlt", CalculationRegistry::Removal::Change));
     QVERIFY(registry.registerCalculation(Synthetic::wAlt()));
 
     state.throwing = false;

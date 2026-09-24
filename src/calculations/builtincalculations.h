@@ -28,9 +28,9 @@ void registerBuiltInCalculations(CalculationRegistry &registry = CalculationRegi
 /// SessionModel::computeColumnValues (what a column stores, or its unit).
 /// Do not bump for pure additions / removals / renames of registrations, or
 /// for a changed result version - the environment fingerprint below already
-/// covers those. Never reuse a value;
-/// never set it to 0 (0 is what an index without the field reads as). Not
-/// related to SCHEMA_VER, which describes recorded data, not this program.
+/// covers those. Never reuse a value; never set it to 0 (0 is what an index
+/// without the field reads as). Not related to SCHEMA_VER, which describes
+/// recorded data, not this program.
 ///
 /// Bump it, or the result version of the calculation concerned
 /// (CalculationDescriptor::resultVersion), whenever a change can alter what a

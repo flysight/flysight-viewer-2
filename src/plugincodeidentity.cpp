@@ -6,6 +6,21 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSet>
+
+#ifdef Q_OS_WIN
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#endif
+
+#include "fileread.h"
 
 namespace FlySight {
 
@@ -41,40 +56,66 @@ void addVersion(QCryptographicHash &hash, const char *label, const QString &vers
     addField(hash, label, version.isEmpty() ? QByteArray(PluginCodeIdentityUnknownVersion) : version.toUtf8());
 }
 
-// One directory level of readPluginCodeFiles(): its *.py files, then the
-// subdirectories that may be entered.
-void collectPythonFiles(const QDir &root, const QDir &dir, QList<PluginSourceFile> &out)
+// What identifies the folder at `path` on its volume, with every symbolic
+// link and junction on the way resolved: the volume serial number and file
+// index on Windows, the device and inode elsewhere. A canonical path would
+// not do: Qt resolves symbolic links in it but not junctions. Falls back to
+// the canonical path when the identity cannot be read; empty when neither can.
+QString folderKey(const QString &path)
 {
-    // The host's import listing flags: QDir::Files without QDir::Hidden.
-    const QFileInfoList files = dir.entryInfoList({QStringLiteral("*.py")}, QDir::Files);
+#ifdef Q_OS_WIN
+    const HANDLE handle = CreateFileW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(path).utf16()), 0,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                      OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle != INVALID_HANDLE_VALUE) {
+        BY_HANDLE_FILE_INFORMATION info;
+        const bool read = GetFileInformationByHandle(handle, &info) != 0;
+        CloseHandle(handle);
+        if (read) {
+            return QStringLiteral("%1:%2:%3")
+                .arg(info.dwVolumeSerialNumber)
+                .arg(info.nFileIndexHigh)
+                .arg(info.nFileIndexLow);
+        }
+    }
+#else
+    struct stat st;
+    if (::stat(QFile::encodeName(path).constData(), &st) == 0)
+        return QStringLiteral("%1:%2").arg(quint64(st.st_dev)).arg(quint64(st.st_ino));
+#endif
+    return QFileInfo(path).canonicalFilePath();
+}
+
+// One directory level of readPluginCodeFiles(): its *.py files, then the
+// subdirectories that may be entered. `ancestors` holds folderKey() of every
+// folder on the way down from the root, this one included.
+void collectPythonFiles(const QDir &root, const QDir &dir, QSet<QString> &ancestors,
+                        QList<PluginSourceFile> &out)
+{
+    // Hidden files count: only hidden folders are left out.
+    const QFileInfoList files = dir.entryInfoList({QStringLiteral("*.py")}, QDir::Files | QDir::Hidden);
     for (const QFileInfo &fi : files)
         out.append({root.relativeFilePath(fi.absoluteFilePath()), readWholeFile(fi.absoluteFilePath())});
 
-    // Pruned before descending: byte-code caches, dot-named (hidden on every
-    // platform) and file-system-hidden folders, and links, which could cycle.
+    // Pruned before descending: byte-code caches, and dot-named (hidden on
+    // every platform) and file-system-hidden folders, which the listing
+    // leaves out. A link or junction is followed unless its target is a
+    // folder on the way down, which would cycle.
     const QFileInfoList subdirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QFileInfo &fi : subdirs) {
         const QString name = fi.fileName();
-        if (name == QLatin1String("__pycache__") || name.startsWith(QLatin1Char('.'))
-            || fi.isSymLink() || fi.isJunction())
+        if (name == QLatin1String("__pycache__") || name.startsWith(QLatin1Char('.')))
             continue;
-        collectPythonFiles(root, QDir(fi.absoluteFilePath()), out);
+        const QString key = folderKey(fi.absoluteFilePath());
+        if (key.isEmpty() || ancestors.contains(key))
+            continue;
+        ancestors.insert(key);
+        collectPythonFiles(root, QDir(fi.absoluteFilePath()), ancestors, out);
+        ancestors.remove(key);
     }
 }
 
 } // namespace
-
-std::optional<QByteArray> readWholeFile(const QString &path)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return std::nullopt;
-    const qint64 expected = file.size();
-    QByteArray bytes = file.readAll();
-    if (file.error() != QFileDevice::NoError || bytes.size() < expected)
-        return std::nullopt;
-    return bytes;
-}
 
 QList<PluginSourceFile> readPluginCodeFiles(const QString &pluginDir)
 {
@@ -84,7 +125,8 @@ QList<PluginSourceFile> readPluginCodeFiles(const QString &pluginDir)
     const QDir root(pluginDir);
     if (!root.exists())
         return files;
-    collectPythonFiles(root, root, files);
+    QSet<QString> ancestors{folderKey(root.absolutePath())};
+    collectPythonFiles(root, root, ancestors, files);
     sortByName(files);
     return files;
 }

@@ -217,9 +217,9 @@ void CalcRegistryTest::reRegisteringGoesToTheEnd()
     QVERIFY(registry.registerCalculation(simple("c3", "x")));
     QCOMPARE(ids(registry.candidatesFor(attr("x"))), QStringList({"c1", "c2", "c3"}));
 
-    QVERIFY(registry.unregister("c1"));
+    QVERIFY(registry.unregister("c1", CalculationRegistry::Removal::Change));
     QVERIFY(!registry.contains("c1"));
-    QVERIFY(!registry.unregister("c1"));    // already gone
+    QVERIFY(!registry.unregister("c1", CalculationRegistry::Removal::Change));    // already gone
     QVERIFY(registry.registerCalculation(simple("c1", "x")));
     QCOMPARE(ids(registry.candidatesFor(attr("x"))), QStringList({"c2", "c3", "c1"}));
 }
@@ -247,12 +247,12 @@ void CalcRegistryTest::registeredIdsInSequenceOrder()
     QVERIFY(!registry.isFamily("missing"));
 
     // Unregistering removes the id; re-registering moves it to the end.
-    QVERIFY(registry.unregister("c1"));
+    QVERIFY(registry.unregister("c1", CalculationRegistry::Removal::Change));
     QCOMPARE(registry.registeredIds(), QStringList({"fam", "conv", "c2"}));
     QVERIFY(registry.registerCalculation(simple("c1", "x")));
     QCOMPARE(registry.registeredIds(), QStringList({"fam", "conv", "c2", "c1"}));
 
-    QVERIFY(registry.unregister("fam"));
+    QVERIFY(registry.unregister("fam", CalculationRegistry::Removal::Change));
     QVERIFY(!registry.isFamily("fam"));
     QVERIFY(registry.registerFamily(prefixFamily("fam", "k:")));
     QCOMPARE(registry.registeredIds(), QStringList({"conv", "c2", "c1", "fam"}));
@@ -419,7 +419,7 @@ void CalcRegistryTest::unregisterFamilyDropsInstances()
     QCOMPARE(ids(registry.candidatesFor(attr("k:2"))), QStringList({"fam#k:2"}));
     QCOMPARE(registry.memoizedInstanceCount("fam"), 2);
 
-    QVERIFY(registry.unregister("fam"));
+    QVERIFY(registry.unregister("fam", CalculationRegistry::Removal::Change));
     QVERIFY(!registry.contains("fam"));
     QVERIFY(registry.candidatesFor(attr("k:1")).isEmpty());
     QCOMPARE(registry.memoizedInstanceCount("fam"), 0);
@@ -536,7 +536,7 @@ void CalcRegistryTest::sourceConversionsAreSeparate()
     QVERIFY(registry.registerFamily(asFamily));
     QVERIFY(registry.candidatesFor(measKey("S", "m")).isEmpty());
 
-    QVERIFY(registry.unregister("conv"));
+    QVERIFY(registry.unregister("conv", CalculationRegistry::Removal::Change));
     QVERIFY(!registry.hasSourceConversions());
     QVERIFY(registry.sourceConversionsFor("S", "m").isEmpty());
 }
@@ -594,7 +594,7 @@ void CalcRegistryTest::registrationDuringEvaluationRejected()
     CalculationDescriptor d = simple("meddler", "x");
     d.compute = [&](const EvaluationContext &) {
         registered = registry.registerCalculation(simple("late", "y"));
-        unregistered = registry.unregister("meddler");
+        unregistered = registry.unregister("meddler", CalculationRegistry::Removal::Change);
         return CalculationResult().setAttribute("x", 1);
     };
     QVERIFY(registry.registerCalculation(d));
@@ -632,7 +632,7 @@ void CalcRegistryTest::staticDependenciesClosure()
     QCOMPARE(registry.staticDependencies(attr("W")).names, w.names);
 
     // A registry change drops the memo
-    QVERIFY(registry.unregister(QStringLiteral("wAlt")));
+    QVERIFY(registry.unregister(QStringLiteral("wAlt"), CalculationRegistry::Removal::Change));
     QCOMPARE(registry.staticDependencies(attr("W")).names,
              QSet<DependencyKey>({attr("W"), attr("X"), attr("A"), attr("B"), attr("C")}));
 
@@ -680,7 +680,7 @@ void CalcRegistryTest::dependsOnExplicit()
 
     // A registry change drops the memo: without expA nothing behind DDA is
     // explicit; DB still has expB.
-    QVERIFY(registry.unregister(QStringLiteral("expA")));
+    QVERIFY(registry.unregister(QStringLiteral("expA"), CalculationRegistry::Removal::Change));
     QVERIFY(!registry.dependsOnExplicit(attr("DDA")));
     QVERIFY(!registry.dependsOnExplicit(attr("EA_DIAG")));
     QVERIFY(registry.dependsOnExplicit(attr("DB")));
@@ -714,7 +714,7 @@ void CalcRegistryTest::explicitDependencies()
         QCOMPARE(registry.dependsOnExplicit(name), !registry.explicitDependencies(name).isEmpty());
 
     // A registry change drops the memo
-    QVERIFY(registry.unregister(expA));
+    QVERIFY(registry.unregister(expA, CalculationRegistry::Removal::Change));
     QCOMPARE(registry.explicitDependencies(attr("DDA")), QStringList());
     QCOMPARE(registry.explicitDependencies(attr("DB")), QStringList({expB}));
     for (const DependencyKey &name : names)
@@ -739,8 +739,8 @@ void CalcRegistryTest::declaredPreferenceKeys()
     QVERIFY(registry.registerCalculation(extra));
     QCOMPARE(registry.declaredPreferenceKeys(), QStringList({QStringLiteral("a/first"), QStringLiteral("p")}));
 
-    QVERIFY(registry.unregister(QStringLiteral("triple")));
-    QVERIFY(registry.unregister(QStringLiteral("extra")));
+    QVERIFY(registry.unregister(QStringLiteral("triple"), CalculationRegistry::Removal::Change));
+    QVERIFY(registry.unregister(QStringLiteral("extra"), CalculationRegistry::Removal::Change));
     QVERIFY(registry.declaredPreferenceKeys().isEmpty());
 }
 
@@ -760,18 +760,18 @@ void CalcRegistryTest::observersFire()
     QCOMPARE(calls, 2);
     QVERIFY(registry.registerSourceConversion(prefixFamily(QStringLiteral("conv"), QStringLiteral("c:"))));
     QCOMPARE(calls, 3);
-    QVERIFY(registry.unregister(QStringLiteral("fam")));
+    QVERIFY(registry.unregister(QStringLiteral("fam"), CalculationRegistry::Removal::Change));
     QCOMPARE(calls, 4);
 
     // None for a rejected registration or a failed unregister
     QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("already registered")));
     QVERIFY(!registry.registerCalculation(simple(QStringLiteral("a"), QStringLiteral("B"))));
-    QVERIFY(!registry.unregister(QStringLiteral("no-such-id")));
+    QVERIFY(!registry.unregister(QStringLiteral("no-such-id"), CalculationRegistry::Removal::Change));
     QCOMPARE(calls, 4);
 
     // None after removeObserver; the other observer keeps firing
     registry.removeObserver(token);
-    QVERIFY(registry.unregister(QStringLiteral("a")));
+    QVERIFY(registry.unregister(QStringLiteral("a"), CalculationRegistry::Removal::Change));
     QCOMPARE(calls, 4);
     QCOMPARE(otherCalls, 5);
 
@@ -906,7 +906,7 @@ void CalcRegistryTest::candidateOrderIgnoresUnrelatedOrder()
     QVERIFY(same(a.candidateOrder(), b.candidateOrder()));
 
     // Two candidates of one output swapped
-    QVERIFY(b.unregister("a1"));
+    QVERIFY(b.unregister("a1", CalculationRegistry::Removal::Change));
     QVERIFY(b.registerCalculation(simple("a1", "a")));
     QCOMPARE(outputs(b.candidateOrder()).first(), QStringLiteral("a=fam,a2,a1"));
     QVERIFY(!same(a.candidateOrder(), b.candidateOrder()));

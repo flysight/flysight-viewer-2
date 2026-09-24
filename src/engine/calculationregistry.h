@@ -100,13 +100,15 @@ public:
         Change,     ///< the application changes what is registered while it runs
         Teardown    ///< the registration's owner is being destroyed (shutdown)
     };
-    /// Removes a calculation, family, or conversion family. A Change removal
-    /// that drops a requested result in an enrolled engine is reported to its
-    /// explicit-result listener like an input change (a result store then
-    /// deletes the result's record), as is every registration that does.
+    /// Removes a calculation, family, or conversion family. The caller states
+    /// why: there is no default, so no removal is a teardown by accident or a
+    /// runtime change by omission. A Change removal that drops a requested
+    /// result in an enrolled engine is reported to its explicit-result
+    /// listener like an input change (a result store then deletes the
+    /// result's record), as is every registration that does.
     /// Teardown is for owners being destroyed: the engines drop the same
     /// entries and report nothing, so shutdown never deletes a stored result.
-    bool unregister(const CalculationId &id, Removal removal = Removal::Change);
+    bool unregister(const CalculationId &id, Removal removal);
 
     bool contains(const CalculationId &id) const;
     /// Interface text for a registration: the descriptor's title for a plain

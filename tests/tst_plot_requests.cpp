@@ -1790,8 +1790,8 @@ void PlotRequestsTest::registryChangeReclassifies()
     CalculationRegistry &registry = CalculationRegistry::instance();
     QVERIFY(registry.registerCalculation(plotRX));
     const auto unregister = qScopeGuard([&registry] {
-        registry.unregister(QStringLiteral("regX"));
-        registry.unregister(QStringLiteral("plotRX"));
+        registry.unregister(QStringLiteral("regX"), CalculationRegistry::Removal::Change);
+        registry.unregister(QStringLiteral("plotRX"), CalculationRegistry::Removal::Change);
     });
 
     QVector<PlotValue> plots = PlotFixture::plots();
@@ -1816,7 +1816,7 @@ void PlotRequestsTest::registryChangeReclassifies()
 
     QSignalSpy changedSpy(m_requests.get(), &PlotRequests::rowStateChanged);
     const Quiet quiet(*m_queue);
-    QVERIFY(registry.unregister(QStringLiteral("regX")));
+    QVERIFY(registry.unregister(QStringLiteral("regX"), CalculationRegistry::Removal::Change));
     QVERIFY(row("Syn/rx") == PlotRowState());
     QCOMPARE(changedSpy.count(), 1);
     QCOMPARE(changedSpy.at(0).at(0).toString(), QStringLiteral("Syn/rx"));

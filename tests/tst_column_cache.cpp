@@ -39,11 +39,11 @@
 #include "logbookcolumn.h"
 #include "logbookmanager.h"
 #include "logbookprobe.h"
-#include "plugincodeidentity.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
 #include "sessionmodel.h"
+#include "storedresults.h"
 #include "testenvironment.h"
 #include "testmain.h"
 #include "testutil.h"
@@ -111,17 +111,6 @@ int allRowsNotifications(const QSignalSpy &dataSpy, int rowCount)
 // interpreter twice): its result version is a real plug-in code identity.
 constexpr char kPluginId[] = "test.columncache.plugin";
 constexpr char kPluginOutput[] = "_TEST_COLUMNCACHE_PLUGIN";
-
-// The plug-in folder of the stand-in: `aPlugin` is the bytes of a_plugin.py.
-PluginCodeIngredients pluginIngredients(const QByteArray &aPlugin)
-{
-    PluginCodeIngredients i;
-    i.files = {{QStringLiteral("a_plugin.py"), aPlugin}, {QStringLiteral("helper.py"), QByteArray("y = 2\n")}};
-    i.sdk = QByteArray("sdk");
-    i.pythonVersion = QStringLiteral("3.13.3");
-    i.numpyVersion = QStringLiteral("2.2.4");
-    return i;
-}
 
 CalculationDescriptor pluginStandIn(const QString &resultVersion)
 {
@@ -229,7 +218,8 @@ void ColumnCacheTest::cleanup()
     m_altitudes.reset();
     writeAltitudes({});
     m_model.reset();
-    CalculationRegistry::instance().unregister(QString::fromLatin1(kPluginId));    // after a failed pluginEditDiscardsCachedValues
+    // After a failed pluginEditDiscardsCachedValues
+    CalculationRegistry::instance().unregister(QString::fromLatin1(kPluginId), CalculationRegistry::Removal::Change);
     LogbookColumnStore::instance().setColumns({m_d, m_g, m_e});     // altitudeMarkerRemovalDiscardsStubValues adds one
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
     QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
@@ -1325,7 +1315,7 @@ void ColumnCacheTest::explicitBackedColumnFollowsItsResult()
     // the change.
     const auto unregister = qScopeGuard([this, id] {
         m_model.reset();
-        CalculationRegistry::instance().unregister(id);
+        CalculationRegistry::instance().unregister(id, CalculationRegistry::Removal::Change);
     });
     CalculationDescriptor d;
     d.id = id;
@@ -1418,13 +1408,14 @@ void ColumnCacheTest::pluginEditDiscardsCachedValues()
 
     CalculationRegistry &registry = CalculationRegistry::instance();
     LogbookManager &logbook = LogbookManager::instance();
-    const QString unedited = pluginCodeIdentity(pluginIngredients("x = 1\n"));
-    const QString edited = pluginCodeIdentity(pluginIngredients("x = 2\n"));
+    const QString unedited = standInPluginIdentity("x = 1\n");
+    const QString edited = standInPluginIdentity("x = 2\n");
     QVERIFY(unedited != edited);
     // Plug-ins load before the logbook is initialised, as in the application
     const auto restartWithPlugin = [&](const QString &identity) {
         m_model.reset();
-        return registry.unregister(QString::fromLatin1(kPluginId)) && registry.registerCalculation(pluginStandIn(identity));
+        return registry.unregister(QString::fromLatin1(kPluginId), CalculationRegistry::Removal::Change)
+            && registry.registerCalculation(pluginStandIn(identity));
     };
 
     // 1. The first start: the environment includes the plug-in
@@ -1473,7 +1464,7 @@ void ColumnCacheTest::pluginEditDiscardsCachedValues()
     QCOMPARE(readFileBytes(csvPath), csvBytes);
 
     m_model.reset();
-    QVERIFY(registry.unregister(QString::fromLatin1(kPluginId)));
+    QVERIFY(registry.unregister(QString::fromLatin1(kPluginId), CalculationRegistry::Removal::Change));
 }
 
 FLYSIGHT_TEST_MAIN(ColumnCacheTest)

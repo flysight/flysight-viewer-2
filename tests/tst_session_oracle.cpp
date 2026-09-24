@@ -297,7 +297,8 @@ void SessionRun::restoreGlobals()
     for (int i = 0; i < 3; ++i) {
         if (m_altitudeRegistered[i]) {
             CalculationRegistry::instance().unregister(
-                AltitudeMarkerManager::calculationId(QString::fromLatin1(kAltitudes[i].key)));
+                AltitudeMarkerManager::calculationId(QString::fromLatin1(kAltitudes[i].key)),
+                CalculationRegistry::Removal::Change);
             m_altitudeRegistered[i] = false;
         }
     }
@@ -510,7 +511,7 @@ bool SessionRun::operation()
         CalculationRegistry &registry = CalculationRegistry::instance();
         if (m_altitudeRegistered[index]) {
             m_log.append(m_step, s.label, QStringLiteral("unregister %1").arg(key));
-            if (!registry.unregister(AltitudeMarkerManager::calculationId(key)))
+            if (!registry.unregister(AltitudeMarkerManager::calculationId(key), CalculationRegistry::Removal::Change))
                 return fail(QStringLiteral("unregister %1 failed").arg(key));
         } else {
             m_log.append(m_step, s.label, QStringLiteral("register %1").arg(key));

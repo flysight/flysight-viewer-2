@@ -820,7 +820,7 @@ QSet<DependencyKey> CalculationEngine::invalidate(const QList<GraphNode> &seeds,
                 const auto dropped = m_results.constFind(n);
                 if (dropped != m_results.constEnd() && isReportedExplicit(dropped.value()))
                     m_explicitEvents.append(ExplicitResultEvent{
-                        ExplicitResultEvent::Kind::DroppedByInputChange, n.a, dropped->status});
+                        ExplicitResultEvent::Kind::Dropped, n.a, dropped->status});
             }
             m_results.remove(n);
         } else if (n.kind == GraphNode::Kind::Prepared) {

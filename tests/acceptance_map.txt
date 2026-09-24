@@ -715,6 +715,7 @@
 319 tst_result_store restoreOnEveryLoadPath
 319 tst_result_store bulkEditPromotionRestores
 319 tst_result_store restoresChainInPasses
+319 tst_result_store restoresUpstreamFirst
 319 tst_result_store alreadyInstalledIsKept
 319 tst_fusion_store mergeIntoUnloadedSession
 
@@ -1020,6 +1021,8 @@
 416 tst_plugin_identity readsTheFolderRecursively
 416 tst_plugin_identity subfolderFileChangesIdentity
 416 tst_plugin_identity pycacheAndHiddenDirectoriesAreIgnored
+416 tst_plugin_identity hiddenFilesCount
+416 tst_plugin_identity linkedFoldersAreReadThrough
 416 tst_plugin_identity unreadableFileIsNotEmpty
 416 tst_python_bridge pluginRegistrationsCarryCodeIdentity
 
@@ -1049,10 +1052,14 @@
 # 421 - (7) a record that exists but cannot be opened or read in full at its session's load is skipped for that load: neither restored nor deleted; the calculation reads not requested
 421 tst_result_store unreadableRecordIsSkipped
 421 tst_result_store dependentOfSkippedRecordIsKept
+421 tst_result_store restoresUpstreamFirst
+421 tst_result_records shortReadIsUnreadable
 421 manual M22
 
 # 422 - (7) the next load tries again; a new publish for the pair replaces it; deleting the session or the stray pass at start-up removes it
 422 tst_result_store unreadableRecordIsSkipped
+422 tst_result_store skippedRecordIsReplacedByPublish
+422 tst_result_store deletingSessionWithSkippedRecord
 422 tst_result_columns skippedRecordValuesStayOutOfIndex
 422 tst_result_records writeReadReplace
 422 tst_result_records removeSessionDeletesRecords
@@ -1068,6 +1075,7 @@
 # 424 - (7) logbook column values of a session that depend on a skipped record are not cached in index.json while it stays skipped
 424 tst_result_columns skippedRecordValuesStayOutOfIndex
 424 tst_result_store unreadableRecordIsSkipped
+424 tst_result_store skippedRecordIsReplacedByPublish
 
 # 425 - (8) the record gains the resolutions and loses the environment fingerprint, and its format version increases
 425 tst_result_records layoutIsPinned
@@ -1127,6 +1135,7 @@
 # 436 - (10) test: an unreadable record (held open without sharing on Windows, a directory at its path) is kept, not restored, and restored at a later load; its dependent column values are not cached meanwhile
 436 tst_result_store unreadableRecordIsSkipped
 436 tst_result_store dependentOfSkippedRecordIsKept
+436 tst_result_store restoresUpstreamFirst
 436 tst_result_columns skippedRecordValuesStayOutOfIndex
 
 # 437 - (10) test: a record of the previous format version is deleted as stale
@@ -1156,4 +1165,6 @@
 # 442 - (12) a transient failure to read is not evidence that a record is wrong
 442 tst_result_store unreadableRecordIsSkipped
 442 tst_result_store dependentOfSkippedRecordIsKept
+442 tst_result_store restoresUpstreamFirst
+442 tst_result_records shortReadIsUnreadable
 442 manual M22

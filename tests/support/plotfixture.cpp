@@ -80,7 +80,7 @@ PlotFixture::~PlotFixture()
 {
     CalculationRegistry &registry = CalculationRegistry::instance();
     for (auto it = m_ids.crbegin(); it != m_ids.crend(); ++it)
-        registry.unregister(*it);
+        registry.unregister(*it, CalculationRegistry::Removal::Change);
 }
 
 QVector<PlotValue> PlotFixture::plots()

@@ -284,8 +284,8 @@ void CalcEngineTest::storedInvalidValueStillWins()
 void CalcEngineTest::partialResultNextCandidate()
 {
     World w;
-    QVERIFY(w.registry.unregister("sum"));
-    QVERIFY(w.registry.unregister("fallbackX"));
+    QVERIFY(w.registry.unregister("sum", CalculationRegistry::Removal::Change));
+    QVERIFY(w.registry.unregister("fallbackX", CalculationRegistry::Removal::Change));
     w.prefs.set("p", 0);
 
     // X = -1, so triple provides Y and Z but reports W unavailable; W falls to
@@ -362,8 +362,8 @@ void CalcEngineTest::overrideOneOutput()
 void CalcEngineTest::overrideFeedsDownstream()
 {
     World w;
-    QVERIFY(w.registry.unregister("sum"));
-    QVERIFY(w.registry.unregister("fallbackX"));
+    QVERIFY(w.registry.unregister("sum", CalculationRegistry::Removal::Change));
+    QVERIFY(w.registry.unregister("fallbackX", CalculationRegistry::Removal::Change));
     w.prefs.set("p", 0);
     w.state.setAttribute("Z", 50);
 
@@ -421,7 +421,7 @@ void CalcEngineTest::unregisterInvalidatesEverySession()
     state1.resetReadCount();
     state2.resetReadCount();
 
-    QVERIFY(registry.unregister("sum"));
+    QVERIFY(registry.unregister("sum", CalculationRegistry::Removal::Change));
 
     QCOMPARE(received1.size(), 1);
     QCOMPARE(received2.size(), 1);
@@ -649,7 +649,7 @@ void CalcEngineTest::unregisterFamilyInvalidatesInstances()
     QCOMPARE(w.engine.attribute("X"), QVariant(3));
     const int runs = w.engine.totalRunCount();
 
-    QVERIFY(w.registry.unregister("neg"));
+    QVERIFY(w.registry.unregister("neg", CalculationRegistry::Removal::Change));
     QCOMPARE(w.broadcasts, QList<Names>({Names({attr("neg:A"), attr("neg:missing")})}));
     QCOMPARE(w.engine.resultStatus("neg#neg:A"), std::optional<ResultStatus>());
     QCOMPARE(w.engine.cachedState(attr("X")), CalculationEngine::CachedState::Available);
@@ -718,9 +718,9 @@ void CalcEngineTest::invalidateDoesNotCompute()
     w.engine.sourceMeasurementChanged("S", "m");
     w.engine.sourceUnitChanged("S", "m");
     w.registry.notifyPreferenceChanged("p");
-    QVERIFY(w.registry.unregister("fallbackX"));
+    QVERIFY(w.registry.unregister("fallbackX", CalculationRegistry::Removal::Change));
     QVERIFY(w.registry.registerCalculation(Synthetic::fallbackX()));
-    QVERIFY(w.registry.unregister("neg"));
+    QVERIFY(w.registry.unregister("neg", CalculationRegistry::Removal::Change));
     QVERIFY(w.registry.registerFamily(Synthetic::neg()));
     w.engine.clear();
 
@@ -909,7 +909,7 @@ void CalcEngineTest::sourceConversionHook()
 
     // Removing the conversion restores the passthrough, including for T/other.
     w.broadcasts.clear();
-    QVERIFY(w.registry.unregister("conv"));
+    QVERIFY(w.registry.unregister("conv", CalculationRegistry::Removal::Change));
     QCOMPARE(w.broadcasts.size(), 1);
     QVERIFY(w.broadcasts.first().contains(measKey("S", "m")));
     QVERIFY(w.broadcasts.first().contains(measKey("T", "other")));

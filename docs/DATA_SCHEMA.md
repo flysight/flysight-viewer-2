@@ -413,11 +413,13 @@ same float), and the 8-, 16-, 32- and 64-bit signed and unsigned integers
 refused, because their width differs between Windows and Linux / macOS; a
 result holding any other type is not stored (the write fails and the result
 stays in memory). A SHA-256 of everything before it closes the file. The size
-is of the order of the session file. A record of another format version, or a
-damaged one, is treated as stale. Records written by earlier versions of
-FlySight Viewer have format version 1; they are deleted at their session's next
-load, and the calculation has to be requested again. There is no migration.
-Only a name ending exactly in `.fvresult` (lower case) is a record.
+is of the order of the session file. A damaged record, or one of another
+format version (such as format 1 from development builds), is deleted as stale
+at its session's next load, and the calculation has to be requested again.
+There is no migration.
+Only a regular file whose name ends exactly in `.fvresult` (lower case) is a
+record: a directory at a record's path is never listed, so neither the
+start-up pass nor deleting its session removes it.
 
 **Validity.** A record is used only while all of these hold:
 
@@ -451,10 +453,14 @@ would have been dropped, or when the code that computed it changed.
 measurement or calculation) declares one result version, the plug-in code
 identity: a SHA-256 digest, written `plugins-sha256:<hex>`, over every `*.py`
 file under the plugin folder, subfolders included (its path relative to the
-folder and its bytes; files in `__pycache__` and in hidden folders, whose
-names start with `.`, are left out), the plugin SDK file, and the Python and
-NumPy versions (`none` for a version that cannot be read). It is computed
-once, when the plugins are loaded at start-up, and written to the log.
+folder and its bytes; hidden files count, files in `__pycache__` and in hidden
+folders are left out, and a linked folder is read through under its own name
+without following a link back to a folder above it), the plugin SDK file, and
+the Python and NumPy versions (`none` for a version that cannot be read). It
+covers nothing else: data files, compiled modules and other packages a plugin
+uses are not part of it. It is computed once, when the plugins are loaded at
+start-up, and written to the log, with a warning naming any ingredient that
+could not be read.
 Editing, adding or removing any such file (also under `examples/`, which is
 never imported) or upgrading Python or NumPy changes it for every plugin
 registration at once, so a stored result whose lookups went through any
@@ -476,8 +482,9 @@ never stored.
 - It is never deleted by hiding a track, unloading a session, quitting, or a
   change of the registered calculations that does not reach it.
 - When a session is loaded, every valid record is restored before anything
-  reads the session. Restoring is not requesting: nothing is computed. A stale
-  or missing record leaves the calculation not computed until it is requested
+  reads the session, a record whose result read another stored result after
+  that one. Restoring is not requesting: nothing is computed. A stale or
+  missing record leaves the calculation not computed until it is requested
   again from the plot list.
 - A record that exists but cannot be opened or read in full when its session
   is loaded (another program holding the file locked, for example) is skipped
@@ -500,9 +507,13 @@ never stored.
 **Guarantees.** The session file is untouched: its bytes, its format and what
 it lists do not depend on whether a record exists. Records are derived data.
 Deleting them by hand, or the whole `cache/` folder, with Viewer closed is safe
-and only means that the calculation has to be requested again. Existing logbooks have no records and
-need no migration. Records are not meant to be shared between logbooks or
-machines; one whose stamps do not match is simply discarded.
+and only means that the calculation has to be requested again. Existing
+logbooks have no records and need no migration. Records are not meant to be
+shared between logbooks or machines; one whose stamps do not match is simply
+discarded. A logbook synced between machines whose plugins or NumPy versions
+differ sees a different plug-in code identity on each, so each machine
+discards the other's stored results that went through a plugin, and the
+cached column values, at its next start.
 
 ## 13. What Viewer never does
 

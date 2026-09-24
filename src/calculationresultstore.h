@@ -22,16 +22,19 @@ namespace FlySight {
 ///    synchronous request) is exported and written as a record. An install
 ///    with any other status writes nothing and deletes nothing.
 ///  - A result dropped by an input change, or by a registry change made while
-///    the application runs, deletes its record (both arrive as
-///    DroppedByInputChange). A teardown removal reports nothing.
+///    the application runs, deletes its record (both arrive as Dropped). A
+///    teardown removal reports nothing.
 ///  - restoreSession() installs a session's valid records into its engine
-///    and deletes the stale ones. It is not a request: it starts nothing.
-///  - A record that exists but cannot be read (Unreadable) is skipped:
-///    neither restored nor deleted; the calculation reads as not requested and
-///    the logbook manager keeps the column values over it out of index.json
-///    (LogbookManager::markCalculationRecordSkipped()). A record whose inputs
-///    stay unavailable only because it reads the result of a skipped record is
-///    skipped too. The next load tries again.
+///    and deletes the stale ones. It is not a request: it starts nothing. A
+///    record whose resolutions name another record of the session (the result
+///    it read) is restored after that one, so that its lookups resolve as
+///    they did when it was stored.
+///  - A record that exists but cannot be read in full (Unreadable) is
+///    skipped: neither restored nor deleted; the calculation reads as not
+///    requested and the logbook manager keeps the column values over it out
+///    of index.json (LogbookManager::markCalculationRecordSkipped()). A record
+///    whose resolutions name a skipped record is skipped too, whatever its
+///    own checks would say. The next load tries again.
 ///  - Explicit family instances ("<familyId>#<key>") are not stored: their
 ///    events are ignored (CalculationEngine::exportResult() refuses them).
 class CalculationResultStore {
@@ -47,7 +50,7 @@ public:
         int staleRecordsDeleted = 0;    ///< deleted by restoreSession(): not a record, damaged, another format
                                         ///< version, another compatibility marker, stale (RestoreOutcome),
                                         ///< unknown calculation
-        int recordsSkipped = 0;         ///< kept, not restored: could not be read, or read the result of one that could not
+        int recordsSkipped = 0;         ///< kept, not restored: could not be read, or names one that could not
         int droppedRecordsDeleted = 0;  ///< deleted because an input or registry change dropped the in-memory result
         qint64 restoreNanoseconds = 0;  ///< wall time inside restoreSession() (listing, reading, checks, restore)
         qint64 writeNanoseconds = 0;    ///< wall time exporting, stamping, encoding and writing records
