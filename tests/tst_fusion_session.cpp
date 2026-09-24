@@ -992,6 +992,44 @@ void FusionSessionTest::restoredFitIsIndistinguishable()
     // (never declared by the fit): an edit of it makes the record stale
     QVERIFY(snapshot->leaves.contains(GraphNode::storedAttribute("SCHEMA_VER")));
     QCOMPARE(snapshot->inputFingerprint.size(), InputFingerprintSize);
+    // What every looked-up name resolved to: sorted, unique, one entry per
+    // declared input at least, the fit itself never among the providers
+    QVERIFY(!snapshot->resolutions.isEmpty());
+    for (qsizetype i = 1; i < snapshot->resolutions.size(); ++i)
+        QVERIFY(storedResolutionLess(snapshot->resolutions.at(i - 1), snapshot->resolutions.at(i)));
+    const auto calculated = [](const DependencyKey &name, const QString &instanceId) {
+        StoredResolution r;
+        r.name = name;
+        r.provider = StoredResolution::Provider::Calculation;
+        r.instanceId = instanceId;
+        return r;
+    };
+    // The fixture recorded the Local channels as source data, so the
+    // conversion layer provides them, as it does the IMU channels. az is not
+    // schema-dependent: only the default conversion accepts it; the gyro
+    // channels go through the schema conversion.
+    QVERIFY(snapshot->resolutions.contains(calculated(DependencyKey::measurement("Local", "north"),
+                                                      QStringLiteral("builtin.conversion.default#Local/north"))));
+    QVERIFY(snapshot->resolutions.contains(calculated(DependencyKey::measurement("IMU", "az"),
+                                                      QStringLiteral("builtin.conversion.default#IMU/az"))));
+    QVERIFY(snapshot->resolutions.contains(calculated(DependencyKey::measurement("IMU", "wx"),
+                                                      QStringLiteral("builtin.conversion.schema#IMU/wx"))));
+    const std::optional<CalculationInstance> fit = CalculationRegistry::instance().instance(kFit);
+    QVERIFY(fit.has_value());
+    for (const CalcInput &input : fit->descriptor->inputs) {
+        std::optional<DependencyKey> name;
+        if (input.kind == CalcInput::Kind::Attribute)
+            name = DependencyKey::attribute(input.key);
+        else if (input.kind == CalcInput::Kind::Measurement)
+            name = DependencyKey::measurement(input.sensor, input.name);
+        if (!name)
+            continue;
+        const bool found = std::any_of(snapshot->resolutions.cbegin(), snapshot->resolutions.cend(),
+                                       [&name](const StoredResolution &r) { return r.name == *name; });
+        QVERIFY2(found, qPrintable(describe(*name)));
+    }
+    for (const StoredResolution &r : snapshot->resolutions)
+        QVERIFY(r.instanceId != kFit);
 
     // 3. B restores it
     const Restore restored = engineB.restoreResult(*snapshot);
@@ -1039,6 +1077,7 @@ void FusionSessionTest::restoredFitIsIndistinguishable()
     const std::optional<StoredCalculationResult> again = engineB.exportResult(kFit);
     QVERIFY(again.has_value());
     QVERIFY(sameContent(*again, *snapshot));
+    QVERIFY(again->resolutions == snapshot->resolutions);
 
     // 5. One sample of one declared input changes in both: the same drop
     QVector<double> az = a.getMeasurement("IMU", "az");

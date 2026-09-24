@@ -116,7 +116,19 @@ std::optional<std::pair<QString, QString>> parseRecordFileName(QStringView fileN
 //                                   attribute: QVariant (QDataStream's own form);
 //                                   measurement: quint32 count, count doubles,
 //                                   QString unit
-//   11  checksum                    32 raw bytes: SHA-256 of every preceding byte
+//   11  resolution count            quint32
+//  11a  per resolution (snapshot    quint8 name code (1 attribute, 2 measurement: the output
+//       order)                      key codes), QString first (key or sensor), QString second
+//                                   (measurement name; null for an attribute), quint8
+//                                   storedResolutionProviderCode, QString instance id,
+//                                   QString result version (both as held: empty/null unless
+//                                   Calculation)
+//   12  checksum                    32 raw bytes: SHA-256 of every preceding byte
+//
+// Section 11 was added to format version 1 together with the snapshot's
+// resolutions; a record without it decodes as Corrupt and is deleted as stale
+// at load. The version number changes once for that work, when the record
+// format is final (format 2).
 //
 // The status is not stored: only Ok results are recorded. An available
 // attribute holds one of these QMetaType types (the portable non-date types

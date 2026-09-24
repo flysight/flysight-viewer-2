@@ -27,15 +27,17 @@ constexpr int kPrefixSize = kMagicSize + 4;         // magic + quint32 format ve
 constexpr int kChecksumSize = 32;                   // SHA-256
 
 // Output key codes: the record's own stable numbers, not a cast of
-// DependencyKey::Type.
+// DependencyKey::Type. Resolution names use the same codes.
 constexpr quint8 kAttributeCode = 1;
 constexpr quint8 kMeasurementCode = 2;
 
 // Smallest possible entries, for the count checks before anything is
 // allocated: a leaf is a code and two string lengths, an output a code, two
-// string lengths and the availability byte.
+// string lengths and the availability byte, a resolution a name code, two
+// string lengths, the provider code and two more string lengths.
 constexpr qint64 kMinLeafBytes = 1 + 4 + 4;
 constexpr qint64 kMinOutputBytes = 1 + 4 + 4 + 1;
+constexpr qint64 kMinResolutionBytes = 1 + 4 + 4 + 1 + 4 + 4;
 constexpr qint64 kSampleBytes = 8;
 
 // Qt reserves 0xFFFFFFFE and 0xFFFFFFFF as size markers.
@@ -299,6 +301,16 @@ std::optional<QByteArray> encodeCalculationRecord(const CalculationRecord &recor
             }
         }
 
+        // In the snapshot's order, never re-sorted: a restore compares the list.
+        stream << quint32(result.resolutions.size());
+        for (const StoredResolution &r : result.resolutions) {
+            if (r.name.type == DependencyKey::Type::Attribute)
+                stream << kAttributeCode << r.name.attributeKey << QString();
+            else
+                stream << kMeasurementCode << r.name.measurementKey.first << r.name.measurementKey.second;
+            stream << storedResolutionProviderCode(r.provider) << r.instanceId << r.resultVersion;
+        }
+
         if (stream.status() != QDataStream::Ok)
             return fail(QStringLiteral("the record could not be encoded (stream status %1)")
                             .arg(int(stream.status())));
@@ -463,8 +475,41 @@ CalculationRecordStatus decodeCalculationRecord(const QByteArray &bytes, Calcula
         }
     }
 
+    // Resolutions. Neither sortedness nor uniqueness is checked: a restore
+    // compares the list with the one it derives, so a malformed list is stale,
+    // not misread.
+    quint32 resolutionCount = 0;
+    stream >> resolutionCount;
+    if (stream.status() != QDataStream::Ok)
+        return fail(Status::Corrupt, truncated);
+    if (resolutionCount > remaining() / kMinResolutionBytes)
+        return fail(Status::Corrupt, QStringLiteral("resolution count %1 exceeds the record").arg(resolutionCount));
+    result.resolutions.reserve(resolutionCount);
+    for (quint32 i = 0; i < resolutionCount; ++i) {
+        quint8 code = 0;
+        quint8 providerCode = 0;
+        QString first, second;
+        StoredResolution r;
+        stream >> code >> first >> second >> providerCode >> r.instanceId >> r.resultVersion;
+        if (stream.status() != QDataStream::Ok)
+            return fail(Status::Corrupt, truncated);
+
+        if (code == kAttributeCode)
+            r.name = DependencyKey::attribute(first);
+        else if (code == kMeasurementCode)
+            r.name = DependencyKey::measurement(first, second);
+        else
+            return fail(Status::Corrupt, QStringLiteral("unknown resolution name kind %1").arg(int(code)));
+
+        const std::optional<StoredResolution::Provider> provider = storedResolutionProviderFromCode(providerCode);
+        if (!provider)
+            return fail(Status::Corrupt, QStringLiteral("unknown resolution provider %1").arg(int(providerCode)));
+        r.provider = *provider;
+        result.resolutions.append(r);
+    }
+
     if (!stream.atEnd())
-        return fail(Status::Corrupt, QStringLiteral("unexpected bytes after the last output"));
+        return fail(Status::Corrupt, QStringLiteral("unexpected bytes after the last resolution"));
 
     bundle.setReason(reason);
     result.detail = reason;

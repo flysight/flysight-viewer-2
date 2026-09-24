@@ -115,6 +115,17 @@ QString stringWithNul()
     return s;
 }
 
+StoredResolution makeResolution(const DependencyKey &name, StoredResolution::Provider provider,
+                                const QString &instanceId = QString(), const QString &version = QString())
+{
+    StoredResolution r;
+    r.name = name;
+    r.provider = provider;
+    r.instanceId = instanceId;
+    r.resultVersion = version;
+    return r;
+}
+
 // Every value the bit-exact round trip covers. `scale` changes the samples of
 // the first measurement only, so two snapshots can differ.
 StoredCalculationResult sampleSnapshot(const QString &id = QString::fromLatin1(kFitId), double scale = 1.0)
@@ -127,6 +138,12 @@ StoredCalculationResult sampleSnapshot(const QString &id = QString::fromLatin1(k
                 GraphNode::sourceMeasurement(QStringLiteral("IMU"), QStringLiteral("wx")),
                 GraphNode::sourceUnit(QStringLiteral("IMU"), QStringLiteral("wx")),
                 GraphNode::preference(QStringLiteral("fusion/test"))};
+    r.resolutions = {
+        makeResolution(DependencyKey::attribute(QStringLiteral("_JUMPER_MASS")), StoredResolution::Provider::SessionData),
+        makeResolution(DependencyKey::attribute(QStringLiteral("_SCHEMA")), StoredResolution::Provider::Nothing),
+        makeResolution(DependencyKey::measurement(QStringLiteral("IMU"), QStringLiteral("wx")),
+                       StoredResolution::Provider::Calculation,
+                       QStringLiteral("builtin.conversion.default#IMU/wx"), QStringLiteral("v7"))};
 
     r.bundle.setMeasurement(QStringLiteral("Fusion"), QStringLiteral("scaled"),
                             {1.5 * scale, -2.25 * scale, 3.0 * scale}, QStringLiteral("m/s"));
@@ -232,6 +249,34 @@ QString recordDifference(const CalculationRecord &a, const CalculationRecord &b)
             return QStringLiteral("leaf %1: kind differs").arg(i);
         if (!(d = sameStringDifference(QStringLiteral("leaf %1 a").arg(i), l.a, r.a)).isEmpty()
             || !(d = sameStringDifference(QStringLiteral("leaf %1 b").arg(i), l.b, r.b)).isEmpty())
+            return d;
+    }
+
+    if (x.resolutions.size() != y.resolutions.size())
+        return QStringLiteral("resolution count %1 != %2").arg(x.resolutions.size()).arg(y.resolutions.size());
+    for (qsizetype i = 0; i < x.resolutions.size(); ++i) {
+        const StoredResolution &l = x.resolutions[i];
+        const StoredResolution &r = y.resolutions[i];
+        if (l.name.type != r.name.type)
+            return QStringLiteral("resolution %1: name type differs").arg(i);
+        const bool isAttribute = l.name.type == DependencyKey::Type::Attribute;
+        if (isAttribute) {
+            d = sameStringDifference(QStringLiteral("resolution %1 key").arg(i), l.name.attributeKey,
+                                     r.name.attributeKey);
+        } else if ((d = sameStringDifference(QStringLiteral("resolution %1 sensor").arg(i),
+                                             l.name.measurementKey.first, r.name.measurementKey.first))
+                       .isEmpty()) {
+            d = sameStringDifference(QStringLiteral("resolution %1 measurement").arg(i),
+                                     l.name.measurementKey.second, r.name.measurementKey.second);
+        }
+        if (!d.isEmpty())
+            return d;
+        if (l.provider != r.provider)
+            return QStringLiteral("resolution %1: provider differs").arg(i);
+        if (!(d = sameStringDifference(QStringLiteral("resolution %1 instance id").arg(i), l.instanceId,
+                                       r.instanceId)).isEmpty()
+            || !(d = sameStringDifference(QStringLiteral("resolution %1 result version").arg(i), l.resultVersion,
+                                          r.resultVersion)).isEmpty())
             return d;
     }
 
@@ -765,7 +810,8 @@ void ResultRecordsTest::rejectionShapedRecord()
 }
 
 // The bytes of a small record, written out by hand from the layout table of
-// the phase document (format version 1).
+// the phase document (format version 1 with the resolutions of plan
+// stored-results-validity, Phase 1).
 void ResultRecordsTest::layoutIsPinned()
 {
     StoredCalculationResult r;
@@ -773,6 +819,9 @@ void ResultRecordsTest::layoutIsPinned()
     r.resultVersion = QStringLiteral("v1");
     r.inputFingerprint = QByteArray(32, '\xAB');
     r.leaves = {GraphNode::sourceMeasurement(QStringLiteral("S"), QStringLiteral("t"))};
+    r.resolutions = {makeResolution(DependencyKey::attribute(QStringLiteral("a")), StoredResolution::Provider::SessionData),
+                     makeResolution(DependencyKey::measurement(QStringLiteral("S"), QStringLiteral("t")),
+                                    StoredResolution::Provider::Calculation, QStringLiteral("c"), QStringLiteral("v"))};
     r.bundle.setMeasurement(QStringLiteral("S"), QStringLiteral("m"), {1.0, -0.0}, QStringLiteral("u"));
     r.bundle.setUnavailable(DependencyKey::attribute(QStringLiteral("a")));
     CalculationRecord record;
@@ -801,7 +850,12 @@ void ResultRecordsTest::layoutIsPinned()
         "0000000000000080"                          //     -0.0
         "02000000" "7500"                           //     unit "u"
         "01" "02000000" "6100" "FFFFFFFF"           // 10a attribute "a", second null
-        "00");                                      //     unavailable
+        "00"                                        //     unavailable
+        "02000000"                                  // 11 two resolutions
+        "01" "02000000" "6100" "FFFFFFFF"           // 11a attribute "a", second null
+        "01" "FFFFFFFF" "FFFFFFFF"                  //     SessionData, id and version null
+        "02" "02000000" "5300" "02000000" "7400"    // 11a measurement "S" "t"
+        "02" "02000000" "6300" "02000000" "7600");  //     Calculation "c", version "v"
 
     const QByteArray bytes = encoded(record);
     QCOMPARE(bytes.size(), expectedPrefix.size() + 32);
@@ -910,12 +964,25 @@ void ResultRecordsTest::corruptInputIsRefused_data()
         s << quint32(0) << quint32(2) << quint8(1) << QStringLiteral("a") << QString() << false
           << quint8(1) << QStringLiteral("a") << QString() << false;
     }) << corrupt << QStringLiteral("appears twice");
-    QTest::newRow("bytes after the last output") << craft([&](QDataStream &s) {
-        s << quint32(0) << quint32(1) << quint8(1) << QStringLiteral("a") << QString() << false << quint8(0);
-    }) << corrupt << QStringLiteral("unexpected bytes after the last output");
+    QTest::newRow("bytes after the last resolution") << craft([&](QDataStream &s) {
+        s << quint32(0) << quint32(1) << quint8(1) << QStringLiteral("a") << QString() << false
+          << quint32(0) << quint8(0);
+    }) << corrupt << QStringLiteral("unexpected bytes after the last resolution");
     QTest::newRow("output count too large") << craft([&](QDataStream &s) {
         s << quint32(0) << quint32(1000);
     }) << corrupt << QStringLiteral("output count");
+    // Section 11: no leaves, no outputs, then the resolutions
+    QTest::newRow("unknown resolution name kind") << craft([&](QDataStream &s) {
+        s << quint32(0) << quint32(0) << quint32(1) << quint8(3) << QStringLiteral("a") << QString() << quint8(1)
+          << QString() << QString();
+    }) << corrupt << QStringLiteral("unknown resolution name kind 3");
+    QTest::newRow("unknown resolution provider") << craft([&](QDataStream &s) {
+        s << quint32(0) << quint32(0) << quint32(1) << quint8(1) << QStringLiteral("a") << QString() << quint8(7)
+          << QString() << QString();
+    }) << corrupt << QStringLiteral("unknown resolution provider 7");
+    QTest::newRow("resolution count too large") << craft([&](QDataStream &s) {
+        s << quint32(0) << quint32(0) << quint32(1000);
+    }) << corrupt << QStringLiteral("resolution count");
 }
 
 void ResultRecordsTest::corruptInputIsRefused()

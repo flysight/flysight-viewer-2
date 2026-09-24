@@ -17,7 +17,7 @@ class AltitudeMarkerManager : public QObject
 
 public:
     explicit AltitudeMarkerManager(QObject *parent = nullptr);
-    ~AltitudeMarkerManager() override;  ///< unregisters the calculations it registered
+    ~AltitudeMarkerManager() override;  ///< unregisters the calculations it registered, as teardown
 
     /// Brings registrations and marker definitions in line with preferences.
     /// Called once at startup and again, by the manager itself, whenever an

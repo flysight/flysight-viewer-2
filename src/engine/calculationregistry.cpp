@@ -159,7 +159,7 @@ bool CalculationRegistry::addFamily(const CalculationFamily &f, EntryKind kind)
     return true;
 }
 
-bool CalculationRegistry::unregister(const CalculationId &id)
+bool CalculationRegistry::unregister(const CalculationId &id, Removal removal)
 {
     if (!checkMutable("removal of", id))
         return false;
@@ -172,6 +172,7 @@ bool CalculationRegistry::unregister(const CalculationId &id)
     RegistryChange change;
     change.registrationId = id;
     change.added = false;
+    change.teardown = removal == Removal::Teardown;
     switch (it->kind) {
     case EntryKind::Calculation:
         change.kind = RegistryChange::Kind::Calculation;

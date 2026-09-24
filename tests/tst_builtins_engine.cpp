@@ -4,7 +4,9 @@
 // preference input, the interpolation family, and the altitude descriptor.
 
 #include <memory>
+#include <utility>
 
+#include <QScopeGuard>
 #include <QtTest>
 
 #include "altitudemarkerfeature.h"
@@ -95,6 +97,7 @@ private slots:
     void gyroColumnClosure();
     void fingerprintChanges();
     void fingerprintSurvivesRuntimeAltitudeMarker();
+    void altitudeMarkerTeardownReportsNothing();
 
 private:
     SessionData m_fixture;              // imported once; copied into each fake
@@ -656,6 +659,72 @@ void BuiltinsEngineTest::fingerprintSurvivesRuntimeAltitudeMarker()
     writeAltitudes({});
     QCOMPARE(registry.registeredIds(), idsBefore);
     QCOMPARE(calculationEnvironmentFingerprint(), fingerprintBefore);
+}
+
+// Removing an altitude marker while the application runs is a registry change
+// that reports the requested results it drops; destroying the manager
+// (shutdown) removes its registrations as teardown and reports nothing, even
+// while an engine still holds a result that looked the marker up.
+void BuiltinsEngineTest::altitudeMarkerTeardownReportsNothing()
+{
+    TestEnvironment::instance().registerBuiltIns();     // the application registry, as at startup
+    CalculationRegistry &registry = CalculationRegistry::instance();
+    const QStringList idsBefore = registry.registeredIds();
+
+    writeAltitudes({1000});
+    auto manager = std::make_unique<AltitudeMarkerManager>();
+    PreferencesManager::instance().setValue(PreferenceKeys::AltitudeMarkersUnits, QStringLiteral("Metric"));
+    manager->refresh();
+    QVERIFY(registry.contains(QStringLiteral("builtin.altitude._ALTITUDE_1000_M")));
+
+    const QString readerId = QStringLiteral("test.readsAltitude");
+    CalculationDescriptor reader;
+    reader.id = readerId;
+    reader.policy = EvaluationPolicy::Explicit;
+    reader.inputs = {CalcInput::attribute(QStringLiteral("_ALTITUDE_1000_M"))};
+    reader.outputs = {attr("_TEST_READS_ALTITUDE")};
+    reader.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(QStringLiteral("_TEST_READS_ALTITUDE"),
+                                                ctx.attribute(QStringLiteral("_ALTITUDE_1000_M")));
+    };
+    QVERIFY(registry.registerCalculation(reader));
+    // Declared before the engine: runs after it on every exit
+    auto unregisterReader = qScopeGuard([&registry, readerId] { registry.unregister(readerId); });
+
+    FakeSessionState state;     // empty: no GNSS data, so the altitude calculation cannot run
+    QStringList events;
+    auto engine = std::make_unique<CalculationEngine>(&state, &registry);
+    engine->setExplicitResultListener([&events](const CalculationEngine::ExplicitResultEvent &event) {
+        const QString kind = event.kind == CalculationEngine::ExplicitResultEvent::Kind::Installed
+                                 ? QStringLiteral("Installed") : QStringLiteral("DroppedByInputChange");
+        const QString status = event.status == ResultStatus::MissingInput ? QStringLiteral("MissingInput")
+                                                                          : QString::number(int(event.status));
+        events.append(kind + QLatin1Char(' ') + event.instanceId + QLatin1Char(' ') + status);
+    });
+
+    QCOMPARE(engine->request(readerId).status, ResultStatus::MissingInput);
+    QCOMPARE(std::exchange(events, {}), QStringList({"Installed test.readsAltitude MissingInput"}));
+
+    // A runtime removal (the manager refreshes): reported
+    writeAltitudes({});
+    QVERIFY(!registry.contains(QStringLiteral("builtin.altitude._ALTITUDE_1000_M")));
+    QCOMPARE(std::exchange(events, {}), QStringList({"DroppedByInputChange test.readsAltitude MissingInput"}));
+    QVERIFY(!engine->resultStatus(readerId).has_value());
+
+    // The teardown: nothing reported
+    writeAltitudes({1000});
+    QCOMPARE(engine->request(readerId).status, ResultStatus::MissingInput);
+    QCOMPARE(std::exchange(events, {}), QStringList({"Installed test.readsAltitude MissingInput"}));
+    manager.reset();
+    QVERIFY(!registry.contains(QStringLiteral("builtin.altitude._ALTITUDE_1000_M")));
+    QVERIFY(events.isEmpty());
+    QVERIFY(!engine->resultStatus(readerId).has_value());
+
+    engine.reset();
+    QVERIFY(registry.unregister(readerId));
+    unregisterReader.dismiss();
+    writeAltitudes({});
+    QCOMPARE(registry.registeredIds(), idsBefore);
 }
 
 FLYSIGHT_TEST_MAIN(BuiltinsEngineTest)

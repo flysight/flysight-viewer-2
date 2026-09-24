@@ -932,11 +932,11 @@ void CalculationEngine::deliverBroadcast(const QList<GraphNode> &seeds, Explicit
         return;
     if (!m_scopes.empty()) {
         Q_ASSERT_X(false, "CalculationEngine", "broadcast invalidation during an evaluation");
-        // Causes are never mixed: only input changes report explicit drops.
+        // Causes are never mixed: a teardown removal reports no explicit drops.
         if (report == ExplicitDrops::Report)
             m_pendingSeeds.append(seeds);
         else
-            m_pendingRegistrySeeds.append(seeds);
+            m_pendingTeardownSeeds.append(seeds);
         return;
     }
     const QSet<DependencyKey> names = invalidate(seeds, report);
@@ -950,16 +950,16 @@ void CalculationEngine::flushPending()
     if (!m_scopes.empty())
         return;
 
-    if (m_pendingClear || !m_pendingSeeds.isEmpty() || !m_pendingRegistrySeeds.isEmpty()) {
+    if (m_pendingClear || !m_pendingSeeds.isEmpty() || !m_pendingTeardownSeeds.isEmpty()) {
         QSet<DependencyKey> names;
         if (m_pendingClear) {
             m_pendingClear = false;
             names = clear();
         }
         const QList<GraphNode> seeds = std::exchange(m_pendingSeeds, {});
-        const QList<GraphNode> registrySeeds = std::exchange(m_pendingRegistrySeeds, {});
+        const QList<GraphNode> teardownSeeds = std::exchange(m_pendingTeardownSeeds, {});
         names.unite(invalidate(seeds, ExplicitDrops::Report));
-        names.unite(invalidate(registrySeeds, ExplicitDrops::Suppress));
+        names.unite(invalidate(teardownSeeds, ExplicitDrops::Suppress));
         if (!names.isEmpty() && m_listener)
             m_listener(names);
     }
@@ -1038,9 +1038,12 @@ void CalculationEngine::onRegistryChanged(const RegistryChange &change)
     }
     }
 
-    // A registry change is not an input change: whoever stores results finds
-    // them stale by the environment fingerprint instead.
-    deliverBroadcast(seeds, ExplicitDrops::Suppress);
+    // A registry change made while the application runs that drops a requested
+    // result is reported like an input change (condition 3 of "when a result
+    // in memory is dropped": the seeds above are exactly the names it
+    // resolved that the change touches). A teardown removal - its owner is
+    // being destroyed - drops the same entries and reports nothing.
+    deliverBroadcast(seeds, change.teardown ? ExplicitDrops::Suppress : ExplicitDrops::Report);
 }
 
 // =============================================================================
@@ -1357,18 +1360,25 @@ PublishOutcome CalculationEngine::publishPrepared(PreparedCalculation &ticket, C
 // stored bundle where acceptRun()'s would be. Nothing is counted as a run and
 // no ticket exists at any point.
 //
-// The leaves of a result are what its recorded edges reach. Absent leaves need
-// no special handling: resolve() and gatherInputs() note a leaf before they
-// look at it, so an absent one is an edge target like any other. A provisional
-// intermediate handed what it looked at to the nearest cached ancestor
-// (handUp), so its leaves are direct edges of that ancestor. While a result is
-// installed, everything cached below it keeps the edges it had at publish:
-// invalidating any of it would have dropped the result through the reverse
-// edges. So the closure at export is the closure at publish.
+// The leaves and resolutions of a result are what its recorded edges reach.
+// Absent leaves need no special handling: resolve() and gatherInputs() note a
+// leaf before they look at it, so an absent one is an edge target like any
+// other. Every name the result looked up, directly or through the
+// calculations and conversions its inputs resolved through, is a Resolution
+// node on the same walk, the candidates that were rejected included; its
+// cached ResolutionEntry says what provided it. A provisional intermediate
+// handed what it looked at to the nearest cached ancestor (handUp), so its
+// leaves are direct edges of that ancestor - but its own answer is cached
+// nowhere, which is why a result whose evaluation met a ring is never
+// exported. While a result is installed, everything cached below it keeps
+// the entry and the edges it had at publish: invalidating any of it would
+// have dropped the result through the reverse edges. So the closure at
+// export is the closure at publish.
 
-QList<GraphNode> CalculationEngine::leafClosure(const QSet<GraphNode> &direct) const
+CalculationEngine::Closure CalculationEngine::closureOf(const QSet<GraphNode> &direct) const
 {
     QSet<GraphNode> leaves;
+    Closure closure;
     QSet<GraphNode> visited;
     // Breadth-first with a head index: nothing is ever removed from the front
     QList<GraphNode> queue = direct.values();
@@ -1383,6 +1393,10 @@ QList<GraphNode> CalculationEngine::leafClosure(const QSet<GraphNode> &direct) c
         }
         if (n.kind != GraphNode::Kind::Resolution && n.kind != GraphNode::Kind::Result)
             continue;   // Prepared: a ticket's node, never a dependency of a result
+        // Collected before its edges are looked for: an uncached Resolution
+        // node has none, and storedResolutions() must see it to refuse it.
+        if (n.kind == GraphNode::Kind::Resolution)
+            closure.resolutions.append(n);
         // A noted but uncached node has no entry; its leaves were handed up.
         const auto edges = m_dependsOn.constFind(n);
         if (edges == m_dependsOn.constEnd())
@@ -1392,9 +1406,49 @@ QList<GraphNode> CalculationEngine::leafClosure(const QSet<GraphNode> &direct) c
                 queue.append(target);
         }
     }
-    QList<GraphNode> sorted = leaves.values();
-    std::sort(sorted.begin(), sorted.end(), storedLeafLess);
-    return sorted;
+    closure.leaves = leaves.values();
+    std::sort(closure.leaves.begin(), closure.leaves.end(), storedLeafLess);
+    return closure;
+}
+
+std::optional<QList<StoredResolution>>
+CalculationEngine::storedResolutions(const QList<GraphNode> &resolutionNodes) const
+{
+    QList<StoredResolution> out;
+    out.reserve(resolutionNodes.size());
+    for (const GraphNode &node : resolutionNodes) {
+        const auto cached = m_resolutions.constFind(node);
+        if (cached == m_resolutions.constEnd())
+            return std::nullopt;    // a provisional answer: nothing states what provided it
+
+        StoredResolution r;
+        r.name = node.publicName();
+        switch (cached->provider) {
+        case Provider::None:
+            r.provider = StoredResolution::Provider::Nothing;
+            break;
+        case Provider::Stored:
+        case Provider::Source:
+            r.provider = StoredResolution::Provider::SessionData;
+            break;
+        case Provider::Calculation: {
+            // The cached result's descriptor, not a registry lookup: it is the
+            // descriptor the answer was computed under (a family instance is
+            // not even registered by id), and a registry change of that
+            // registration would have dropped this answer with it.
+            const auto result = m_results.constFind(GraphNode::result(cached->instanceId));
+            if (result == m_results.constEnd() || !result->instance.descriptor)
+                return std::nullopt;
+            r.provider = StoredResolution::Provider::Calculation;
+            r.instanceId = cached->instanceId;
+            r.resultVersion = result->instance.descriptor->resultVersion;
+            break;
+        }
+        }
+        out.append(r);
+    }
+    std::sort(out.begin(), out.end(), storedResolutionLess);
+    return out;
 }
 
 std::optional<StoredCalculationResult> CalculationEngine::exportResult(const CalculationId &id) const
@@ -1410,6 +1464,16 @@ std::optional<StoredCalculationResult> CalculationEngine::exportResult(const Cal
     if (cached == m_results.constEnd() || !cached->requested || cached->status != ResultStatus::Ok
         || !cached->bundle)
         return std::nullopt;
+    // The evaluation met a dependency ring (a registration error, warned about
+    // on every detection): what provided a name may have been a provisional
+    // answer that no cache entry holds, so the resolutions cannot be stated.
+    if (cached->sawCycle)
+        return std::nullopt;
+
+    const Closure closure = closureOf(m_dependsOn.value(C));
+    std::optional<QList<StoredResolution>> resolutions = storedResolutions(closure.resolutions);
+    if (!resolutions)
+        return std::nullopt;    // unreachable without a ring (see above)
 
     StoredCalculationResult snapshot;
     snapshot.calculationId = instance->instanceId;
@@ -1418,7 +1482,8 @@ std::optional<StoredCalculationResult> CalculationEngine::exportResult(const Cal
     snapshot.resultVersion = cached->instance.descriptor->resultVersion;
     snapshot.detail = cached->detail;
     snapshot.bundle = *cached->bundle;
-    snapshot.leaves = leafClosure(m_dependsOn.value(C));
+    snapshot.leaves = closure.leaves;
+    snapshot.resolutions = std::move(*resolutions);
     snapshot.inputFingerprint = inputFingerprint(snapshot.leaves, *m_state, m_registry->preferenceProvider());
     return snapshot;
 }
@@ -1491,12 +1556,27 @@ CalculationEngine::RestoreOutcome CalculationEngine::restoreResult(const StoredC
     // As publishEdges() does: an edge to itself says nothing.
     QSet<GraphNode> looked = scope.looked;
     looked.remove(C);
-    const QList<GraphNode> leaves = leafClosure(looked);
-    if (leaves != snapshot.leaves) {
+    const Closure closure = closureOf(looked);
+    // The gathering repeated every lookup the result made. A ring leaves
+    // answers no cache entry holds (exportResult() refuses such a result), and
+    // any other answer for a name - another provider, instance or result
+    // version, or a name looked up on one side only - is what a registry
+    // difference or a changed stored value produces. Checked before the
+    // leaves, so that a lookup change is reported as such.
+    if (scope.sawCycle) {
+        flushPending();
+        return stale(StaleCheck::Resolutions);
+    }
+    const std::optional<QList<StoredResolution>> resolutions = storedResolutions(closure.resolutions);
+    if (!resolutions || *resolutions != snapshot.resolutions) {
+        flushPending();
+        return stale(StaleCheck::Resolutions);
+    }
+    if (closure.leaves != snapshot.leaves) {
         flushPending();
         return stale(StaleCheck::Leaves);
     }
-    if (inputFingerprint(leaves, *m_state, m_registry->preferenceProvider()) != snapshot.inputFingerprint) {
+    if (inputFingerprint(closure.leaves, *m_state, m_registry->preferenceProvider()) != snapshot.inputFingerprint) {
         flushPending();
         return stale(StaleCheck::Fingerprint);
     }

@@ -65,13 +65,16 @@ namespace FlySight {
 /// be exported as a StoredCalculationResult (exportResult) and restored into an
 /// engine over the same inputs (restoreResult). Export is an inspection that
 /// reads the state and the preferences for the input fingerprint. Restore is a
-/// publication without a run: it gathers the inputs as prepare() does and, if
-/// the snapshot is still valid, installs it through the install step of a
-/// publish, so readers, blockers, resultStatus(), dependenciesOf() and later
-/// invalidation cannot tell it from a fresh one. Both are main-thread only.
-/// Run counters count runs, and a restore is not one. An explicit-result
-/// listener hears of every requested install and of every drop by an input
-/// change, so that its owner can keep stored results in step.
+/// publication without a run: it gathers the inputs as prepare() does, which
+/// repeats every lookup the result made, and, if every name resolved as the
+/// snapshot says and the snapshot is otherwise still valid, installs it
+/// through the install step of a publish, so readers, blockers,
+/// resultStatus(), dependenciesOf() and later invalidation cannot tell it
+/// from a fresh one. Both are main-thread only. Run counters count runs, and
+/// a restore is not one. An explicit-result listener hears of every requested
+/// install and of every drop by an input change or by a registry change made
+/// while the application runs, so that its owner can keep stored results in
+/// step.
 ///
 /// Single-threaded: the engine, its registry, and its session are used from the
 /// main thread only, and the engine creates no thread and holds no lock. The one
@@ -116,7 +119,8 @@ public:
     struct ExplicitResultEvent {
         enum class Kind {
             Installed,              ///< request(), prepare() (NothingToRun / Blocked) or publish() cached a requested result
-            DroppedByInputChange    ///< an invalidation that started at an input dropped a requested result
+            DroppedByInputChange    ///< an invalidation that started at an input, or at a registry change
+                                    ///< made while the application runs, dropped a requested result
         };
         Kind kind = Kind::Installed;
         QString instanceId;                                 ///< == the calculation id for a plain calculation
@@ -128,9 +132,10 @@ public:
     /// Installed is reported for every status a request or publish installs;
     /// on-demand results are never reported. An input change counts when it
     /// is a leaf notification (attributeChanged, sourceMeasurementChanged,
-    /// sourceUnitChanged), a preference change, or a calculation being
-    /// requested, published or restored whose "not requested" answer a
-    /// requested result had used.
+    /// sourceUnitChanged), a preference change, a calculation being requested,
+    /// published or restored whose "not requested" answer a requested result
+    /// had used, or a registry change (a registration, or a removal with
+    /// CalculationRegistry::Removal::Change) that reaches the result.
     ///
     /// The listener may call exportResult() and any const inspection; it must
     /// not mutate the session. An Installed event can be followed in the same
@@ -138,8 +143,9 @@ public:
     /// invalidation flushed right after the install): at the Installed event
     /// exportResult() then already returns nullopt.
     ///
-    /// Never called for restoreResult()'s own install, clear(), a registry
-    /// change, the registry's destruction or the engine's destruction. Travels
+    /// Never called for restoreResult()'s own install, clear(), a removal with
+    /// CalculationRegistry::Removal::Teardown, the registry's destruction or
+    /// the engine's destruction. Travels
     /// with the engine (a moved SessionData keeps it), like the invalidation
     /// listener. Nothing is queued while no listener is set.
     void setExplicitResultListener(ExplicitResultListener l);
@@ -194,10 +200,14 @@ public:
 
     // ---- stored results (see storedcalculationresult.h) ---------------------
     /// The installed result of the plain explicit calculation `id` as a
-    /// snapshot, or nullopt when there is none to store: unknown id, a family
-    /// (or family instance) id, an on-demand calculation, no registry, nothing
-    /// cached, or a cached status other than Ok (NotRequested, MissingInput,
-    /// Cycle, Failed, UndeclaredRead, InvalidOutput). Const: never resolves,
+    /// snapshot - bundle, detail, leaves, the resolutions of every name it
+    /// looked up, and the input fingerprint - or nullopt when there is none to
+    /// store: unknown id, a family (or family instance) id, an on-demand
+    /// calculation, no registry, nothing cached, a cached status other than Ok
+    /// (NotRequested, MissingInput, Cycle, Failed, UndeclaredRead,
+    /// InvalidOutput), or a result whose evaluation met a dependency ring (what
+    /// provided a name may then have been a provisional answer that no cache
+    /// entry holds). Const: never resolves,
     /// never computes, never changes the cache; reads the session state and the
     /// preference provider for the fingerprint. May be called from an
     /// explicit-result listener; not from inside a compute function.
@@ -216,6 +226,8 @@ public:
             ResultVersion,      ///< snapshot.resultVersion != the descriptor's
             Bundle,             ///< an output the descriptor does not declare, or detail != bundle.reason()
             InputsUnavailable,  ///< gathering ended MissingInput or Cycle (`status`)
+            Resolutions,        ///< the gathering met a ring, or a looked-up name resolved differently (another
+                                ///< provider, instance or result version, a name looked up in only one of the two)
             Leaves,             ///< the current leaf list differs from snapshot.leaves
             Fingerprint         ///< same leaves, different input fingerprint
         };
@@ -227,12 +239,16 @@ public:
         /// Cached names dropped because they had been read while the
         /// calculation was "not requested", exactly like
         /// PublishOutcome::invalidated. Non-empty only when gathering ran
-        /// (Stale with InputsUnavailable / Leaves / Fingerprint, or Restored).
+        /// (Stale with InputsUnavailable / Resolutions / Leaves / Fingerprint,
+        /// or Restored).
         /// The caller passes them on so consumers re-read.
         QSet<DependencyKey> invalidated;
     };
     /// Installs `snapshot` as the published result of its calculation, provided
-    /// it is still valid here. Not a request: it runs no compute function
+    /// it is still valid here. The checks, in order: ResultVersion, Bundle,
+    /// then after gathering InputsUnavailable, Resolutions (the repeated
+    /// lookups must give the snapshot's answers), Leaves, Fingerprint. Not a
+    /// request: it runs no compute function
     /// (on-demand inputs are evaluated as for a fresh request, as prepare()
     /// does), counts no run, creates no ticket, and queues no Installed event.
     /// On success the edges, status, detail and bundle are those a fresh
@@ -410,13 +426,22 @@ private:
     void installRequested(const GraphNode &C, const ResultEntry &entry, const Scope &scope, InstallOrigin origin);
 
     // Stored results
-    /// Every leaf reached from `direct` through the recorded edges:
-    /// breadth-first over m_dependsOn, following Resolution and Result nodes
-    /// (explicit results included) and collecting StoredAttribute /
-    /// SourceMeasurement / SourceUnit / Preference nodes; Prepared nodes are
-    /// ignored. Sorted by storedLeafLess, unique. Const; touches the edge maps
-    /// only.
-    QList<GraphNode> leafClosure(const QSet<GraphNode> &direct) const;
+    /// Everything a result reached from `direct` through the recorded edges:
+    /// breadth-first over m_dependsOn following Resolution and Result nodes
+    /// (explicit results included); Prepared nodes are ignored.
+    struct Closure {
+        QList<GraphNode> leaves;         ///< StoredAttribute / SourceMeasurement / SourceUnit / Preference; sorted by storedLeafLess, unique
+        QList<GraphNode> resolutions;    ///< every Resolution node visited, unique, in no particular order
+    };
+    /// Const; touches the edge maps only.
+    Closure closureOf(const QSet<GraphNode> &direct) const;
+
+    /// The StoredResolution of each node, sorted by storedResolutionLess; nullopt when
+    /// one cannot be stated from the cache: a node without an m_resolutions entry, or a
+    /// Calculation provider whose Result node has no m_results entry (or no descriptor).
+    /// Neither happens for a result whose evaluation met no ring (see exportResult()).
+    /// Const; touches m_resolutions / m_results only.
+    std::optional<QList<StoredResolution>> storedResolutions(const QList<GraphNode> &resolutionNodes) const;
 
     // Asynchronous request
     void forget(PreparedCalculation *ticket);       // called by the ticket's destructor
@@ -445,8 +470,9 @@ private:
     QSet<GraphNode> knownNodes(GraphNode::Kind kind) const;
     void dropForwardEdges(const GraphNode &node);
     /// Whether an invalidation reports the requested explicit results it
-    /// drops to the explicit-result listener: Report for input changes,
-    /// Suppress for registry changes.
+    /// drops to the explicit-result listener: Report for input changes and
+    /// for registry changes made while the application runs; Suppress for
+    /// registrations removed as teardown.
     enum class ExplicitDrops { Report, Suppress };
     QSet<DependencyKey> invalidate(const QList<GraphNode> &seeds, ExplicitDrops report);
     QSet<DependencyKey> notifyLeafChanged(const GraphNode &leaf, const DependencyKey &changedName);
@@ -490,10 +516,12 @@ private:
 
     // Notifications that (wrongly) arrived during an evaluation; applied once
     // the evaluation has unwound.
-    // Input-change seeds and registry-change seeds are kept apart: only the
-    // first report dropped explicit results.
+    // m_pendingSeeds' drops are reported to the explicit-result listener (input
+    // changes and runtime registry changes); m_pendingTeardownSeeds are the
+    // seeds of an invalidation that reports no explicit drops (a teardown
+    // removal), kept apart from them.
     QList<GraphNode> m_pendingSeeds;
-    QList<GraphNode> m_pendingRegistrySeeds;
+    QList<GraphNode> m_pendingTeardownSeeds;
     bool m_pendingClear = false;
 
     InvalidationListener m_listener;

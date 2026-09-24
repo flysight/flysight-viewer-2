@@ -19,6 +19,7 @@ const char *staleCheckName(RestoreOutcome::StaleCheck check)
     case RestoreOutcome::StaleCheck::ResultVersion:     return "result version";
     case RestoreOutcome::StaleCheck::Bundle:            return "bundle";
     case RestoreOutcome::StaleCheck::InputsUnavailable: return "inputs unavailable";
+    case RestoreOutcome::StaleCheck::Resolutions:       return "resolutions";
     case RestoreOutcome::StaleCheck::Leaves:            return "leaves";
     case RestoreOutcome::StaleCheck::Fingerprint:       return "fingerprint";
     }
@@ -78,10 +79,11 @@ void CalculationResultStore::onExplicitResultEvent(const QString &sessionId, con
         return;
     }
 
-    // DroppedByInputChange, whatever its status: a record, if any, describes
-    // older inputs. No listing: the removal looks at the one path, and tells
+    // DroppedByInputChange, whatever its status: an input of the result or a
+    // registry change reaching it dropped it; a record, if any, no longer
+    // describes it. No listing: the removal looks at the one path, and tells
     // whether a file was there.
-    if (deleteRecord(sessionId, event.instanceId, "an input changed"))
+    if (deleteRecord(sessionId, event.instanceId, "an input or the registry changed"))
         ++m_stats.droppedRecordsDeleted;
 }
 

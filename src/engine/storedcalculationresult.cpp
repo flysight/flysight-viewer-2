@@ -158,6 +158,50 @@ bool storedLeafLess(const GraphNode &lhs, const GraphNode &rhs)
     return QString::compare(lhs.b, rhs.b, Qt::CaseSensitive) < 0;
 }
 
+bool operator==(const StoredResolution &a, const StoredResolution &b)
+{
+    return a.name == b.name && a.provider == b.provider && a.instanceId == b.instanceId
+        && a.resultVersion == b.resultVersion;
+}
+
+quint8 storedResolutionProviderCode(StoredResolution::Provider provider)
+{
+    switch (provider) {
+    case StoredResolution::Provider::Nothing:     return 0;
+    case StoredResolution::Provider::SessionData: return 1;
+    case StoredResolution::Provider::Calculation: return 2;
+    }
+    Q_ASSERT_X(false, "storedResolutionProviderCode", "unknown provider");
+    return 0xFF;
+}
+
+std::optional<StoredResolution::Provider> storedResolutionProviderFromCode(quint8 code)
+{
+    switch (code) {
+    case 0: return StoredResolution::Provider::Nothing;
+    case 1: return StoredResolution::Provider::SessionData;
+    case 2: return StoredResolution::Provider::Calculation;
+    default:
+        return std::nullopt;
+    }
+}
+
+bool storedResolutionLess(const StoredResolution &lhs, const StoredResolution &rhs)
+{
+    const bool lm = lhs.name.type == DependencyKey::Type::Measurement;
+    const bool rm = rhs.name.type == DependencyKey::Type::Measurement;
+    if (lm != rm)
+        return rm;      // attributes first
+    const QString &la = lm ? lhs.name.measurementKey.first : lhs.name.attributeKey;
+    const QString &ra = rm ? rhs.name.measurementKey.first : rhs.name.attributeKey;
+    if (const int c = QString::compare(la, ra, Qt::CaseSensitive))
+        return c < 0;
+    if (!lm)
+        return false;   // one attribute key: equal
+    return QString::compare(lhs.name.measurementKey.second, rhs.name.measurementKey.second,
+                            Qt::CaseSensitive) < 0;
+}
+
 QByteArray inputFingerprintEncoding(const QList<GraphNode> &leaves, const ISessionState &state,
                                     const IPreferenceProvider *preferences)
 {
@@ -226,7 +270,8 @@ QByteArray inputFingerprint(const QList<GraphNode> &leaves, const ISessionState 
 bool sameContent(const StoredCalculationResult &a, const StoredCalculationResult &b)
 {
     if (a.calculationId != b.calculationId || a.resultVersion != b.resultVersion
-        || a.detail != b.detail || a.leaves != b.leaves || a.inputFingerprint != b.inputFingerprint)
+        || a.detail != b.detail || a.leaves != b.leaves || a.resolutions != b.resolutions
+        || a.inputFingerprint != b.inputFingerprint)
         return false;
 
     const QList<DependencyKey> outputs = a.bundle.setOutputs();

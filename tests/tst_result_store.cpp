@@ -700,7 +700,8 @@ void ResultStoreTest::inputChangeDeletesRecord()
     QCOMPARE(engine("s1").resultStatus(kExpA), std::optional<ResultStatus>(ResultStatus::Ok));
 }
 
-// Eviction, a registry change and a restart never delete a record.
+// Eviction, a registry change that does not reach the result and a restart
+// never delete a record.
 void ResultStoreTest::noDeleteWithoutInputChange()
 {
     QVERIFY(setInput("s1", "EA_IN", 4));
@@ -714,7 +715,8 @@ void ResultStoreTest::noDeleteWithoutInputChange()
     QCOMPARE(evict({"s1"}), QString());
     QCOMPARE(bytesOf(path), bytes);
 
-    // (b) a registry change drops the in-memory result, not the record
+    // (b) a registry change that does not reach the result (an output expA
+    // never looks up) drops neither it nor the record
     QCOMPARE(engine("s1").resultStatus(kExpA), std::optional<ResultStatus>(ResultStatus::Ok));
     m_model->resetStoredResultStats();
     bool shadowRegistered = false;
@@ -723,9 +725,9 @@ void ResultStoreTest::noDeleteWithoutInputChange()
             CalculationRegistry::instance().unregister(kShadow);
     });
     shadowRegistered = CalculationRegistry::instance().registerCalculation(
-        constantCalculation(kShadow, QStringLiteral("EA_IN"), 0));
+        constantCalculation(kShadow, QStringLiteral("_STORE_SHADOW"), 0));
     QVERIFY(shadowRegistered);
-    QVERIFY(engine("s1").resultStatus(kExpA) != std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(engine("s1").resultStatus(kExpA), std::optional<ResultStatus>(ResultStatus::Ok));
     QVERIFY(CalculationRegistry::instance().unregister(kShadow));
     shadowRegistered = false;
     m_model->flushPendingInvalidations();

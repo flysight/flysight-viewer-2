@@ -35,10 +35,15 @@ AltitudeMarkerManager::AltitudeMarkerManager(QObject *parent)
 AltitudeMarkerManager::~AltitudeMarkerManager()
 {
     // The registrations belong to this object; each removal invalidates the
-    // attribute in every loaded session.
+    // attribute in every loaded session. The manager is destroyed at shutdown,
+    // and shutdown must never delete a stored result: the removals are marked
+    // as teardown, so no engine reports the requested results they drop. (In
+    // the application the session model, and with it every engine, is
+    // destroyed before the manager anyway.) refresh() removes markers as an
+    // ordinary runtime change.
     CalculationRegistry &registry = CalculationRegistry::instance();
     for (const QString &key : std::as_const(m_registeredKeys))
-        registry.unregister(calculationId(key));
+        registry.unregister(calculationId(key), CalculationRegistry::Removal::Teardown);
 }
 
 CalculationId AltitudeMarkerManager::calculationId(const QString &attributeKey)

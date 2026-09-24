@@ -21,7 +21,9 @@ namespace FlySight {
 ///  - An explicit result installed with status Ok (a job's publish or a
 ///    synchronous request) is exported and written as a record. An install
 ///    with any other status writes nothing and deletes nothing.
-///  - A result dropped by an input change deletes its record.
+///  - A result dropped by an input change, or by a registry change made while
+///    the application runs, deletes its record (both arrive as
+///    DroppedByInputChange). A teardown removal reports nothing.
 ///  - restoreSession() installs a session's valid records into its engine
 ///    and deletes the stale ones. It is not a request: it starts nothing.
 ///  - Explicit family instances ("<familyId>#<key>") are not stored: their
@@ -37,7 +39,7 @@ public:
         int recordsRestored = 0;        ///< ... installed into the engine
         int recordsKept = 0;            ///< ... not installed because a result was already installed (AlreadyInstalled)
         int staleRecordsDeleted = 0;    ///< deleted by restoreSession(): unreadable, stamps, stale, unknown calculation
-        int droppedRecordsDeleted = 0;  ///< deleted because an input change dropped the in-memory result
+        int droppedRecordsDeleted = 0;  ///< deleted because an input or registry change dropped the in-memory result
         qint64 restoreNanoseconds = 0;  ///< wall time inside restoreSession() (listing, reading, checks, restore)
         qint64 writeNanoseconds = 0;    ///< wall time exporting, stamping, encoding and writing records
     };

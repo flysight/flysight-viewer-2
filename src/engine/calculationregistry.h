@@ -38,6 +38,10 @@ struct RegistryChange {
     QList<DependencyKey> outputs;   ///< Calculation: its explicit output names
     /// Family / SourceConversion: the family's instantiate function
     std::function<std::optional<CalculationDescriptor>(const DependencyKey &name)> instantiate;
+    /// Removed with CalculationRegistry::Removal::Teardown (always false for a
+    /// registration). Engines drop exactly what they drop for any removal and
+    /// report no requested result to an explicit-result listener.
+    bool teardown = false;
 };
 
 /// Everything a public name can depend on according to the registrations
@@ -90,7 +94,19 @@ public:
     /// Source conversions are the ordered candidates for a measurement that has
     /// source data. `instantiate` receives DependencyKey::measurement(sensor, name).
     bool registerSourceConversion(const CalculationFamily &f);
-    bool unregister(const CalculationId &id);   ///< calculation, family, or conversion family
+
+    /// Why a registration is removed.
+    enum class Removal {
+        Change,     ///< the application changes what is registered while it runs
+        Teardown    ///< the registration's owner is being destroyed (shutdown)
+    };
+    /// Removes a calculation, family, or conversion family. A Change removal
+    /// that drops a requested result in an enrolled engine is reported to its
+    /// explicit-result listener like an input change (a result store then
+    /// deletes the result's record), as is every registration that does.
+    /// Teardown is for owners being destroyed: the engines drop the same
+    /// entries and report nothing, so shutdown never deletes a stored result.
+    bool unregister(const CalculationId &id, Removal removal = Removal::Change);
 
     bool contains(const CalculationId &id) const;
     /// Interface text for a registration: the descriptor's title for a plain

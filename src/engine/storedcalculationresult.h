@@ -13,6 +13,29 @@
 
 namespace FlySight {
 
+/// What provided one public name a result looked up.
+struct StoredResolution {
+    enum class Provider {
+        Nothing,        ///< unavailable: no stored value / source data and no candidate produced it,
+                        ///< or the name has source data and every source conversion failed
+        SessionData,    ///< the session's own data: a stored attribute (even one holding an invalid
+                        ///< value), or a source measurement read through the passthrough
+                        ///< (no source conversion registered)
+        Calculation     ///< a calculation instance produced it (a derived candidate or a source conversion)
+    };
+    /// Always built with DependencyKey::attribute() / measurement(): a
+    /// default-constructed key leaves its type unset.
+    DependencyKey name = DependencyKey::attribute(QString());
+    Provider provider = Provider::Nothing;
+    QString instanceId;     ///< Calculation: the instance id ("<familyId>#<key>" for a family instance); else empty
+    QString resultVersion;  ///< Calculation: that instance's descriptor resultVersion (may be empty); else empty
+};
+
+/// Every member equal; the name by DependencyKey ==, the strings by QString ==
+/// (so a null and an empty string are equal).
+bool operator==(const StoredResolution &a, const StoredResolution &b);
+inline bool operator!=(const StoredResolution &a, const StoredResolution &b) { return !(a == b); }
+
 /// The installed result of one plain explicit calculation, as a plain value:
 /// what CalculationEngine::exportResult() hands out and restoreResult() takes
 /// back. The engine and the record format that stores it in the logbook's
@@ -33,6 +56,12 @@ namespace FlySight {
 ///    looked at and found absent included. Sorted by storedLeafLess(), unique.
 ///    `b` is empty for attribute and preference leaves; `measurementName` is
 ///    always false.
+///  - resolutions: for every Resolution node reached through the recorded
+///    edges by the same walk as `leaves` (directly or through any number of
+///    Resolution and Result nodes, explicit results included, rejected
+///    candidates included), the public name and what provided it when the
+///    result was published. Sorted by storedResolutionLess(), one entry per
+///    name. A restore repeats the lookups and refuses any difference.
 ///  - inputFingerprint: inputFingerprint() of `leaves` over the state and
 ///    preferences at export, InputFingerprintSize raw bytes.
 ///
@@ -48,11 +77,13 @@ namespace FlySight {
 /// The code stamps (the calculation-compatibility marker and the calculation
 /// environment fingerprint) are deliberately absent: the engine layer does
 /// not depend on the built-in calculations that define them. Whoever stores a
-/// snapshot adds them.
+/// snapshot adds them. What the result's lookups resolved to is not a stamp:
+/// it is part of the snapshot (`resolutions`), and the engine checks it.
 ///
-/// Pinned. The leaf kind codes (storedLeafKindCode) and the fingerprint
-/// encoding (inputFingerprintEncoding) are part of what is stored on disk and
-/// must never change meaning. A different encoding gets a new magic
+/// Pinned. The leaf kind codes (storedLeafKindCode), the resolution provider
+/// codes (storedResolutionProviderCode) and the fingerprint encoding
+/// (inputFingerprintEncoding) are part of what is stored on disk and must
+/// never change meaning. A different encoding gets a new magic
 /// ("flysight-inputs-v2"): every stored fingerprint then mismatches, which is
 /// conservative - stored results go stale, nothing is misread.
 struct StoredCalculationResult {
@@ -61,6 +92,7 @@ struct StoredCalculationResult {
     QString            detail;
     CalculationResult  bundle;
     QList<GraphNode>   leaves;
+    QList<StoredResolution> resolutions;
     QByteArray         inputFingerprint;
 };
 
@@ -79,6 +111,19 @@ std::optional<GraphNode> storedLeafFromCode(quint8 code, const QString &a, const
 /// The order of StoredCalculationResult::leaves: by kind code, then a, then b,
 /// each compared with QString::compare (case-sensitive, UTF-16 code units).
 bool storedLeafLess(const GraphNode &lhs, const GraphNode &rhs);
+
+/// 0 Nothing, 1 SessionData, 2 Calculation. Pinned: part of the record format,
+/// and not tied to the enum's underlying values.
+quint8 storedResolutionProviderCode(StoredResolution::Provider provider);
+/// The provider for a code read back from a record; nullopt for an unknown code.
+std::optional<StoredResolution::Provider> storedResolutionProviderFromCode(quint8 code);
+/// The order of StoredCalculationResult::resolutions: attribute names before
+/// measurement names; then the attribute key or sensor, then the measurement
+/// name (empty for an attribute), each compared with QString::compare
+/// (case-sensitive, UTF-16 code units), as storedLeafLess() does. A result
+/// looks up each name at most once as a node, so names are unique in a list
+/// and the order is total.
+bool storedResolutionLess(const StoredResolution &lhs, const StoredResolution &rhs);
 
 /// The canonical byte string behind the input fingerprint (version 1), for the
 /// leaves in the order given. All integers little-endian; str(s) is a u32 byte
@@ -114,7 +159,7 @@ QByteArray inputFingerprint(const QList<GraphNode> &leaves, const ISessionState 
                             const IPreferenceProvider *preferences);
 
 /// A bit-exact content comparison. Every member equal: id, version, detail,
-/// leaves, fingerprint bytes; the bundle's setOutputs() order and reason; per
+/// leaves, resolutions, fingerprint bytes; the bundle's setOutputs() order and reason; per
 /// output availability, attribute, samples and unit. Samples compare by bit
 /// pattern (NaN == NaN with the same bits, -0 != +0). An attribute compares
 /// by metatype first (so int 1 != double 1.0), then a double or float by its
