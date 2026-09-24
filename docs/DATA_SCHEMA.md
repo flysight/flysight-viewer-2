@@ -299,25 +299,44 @@ Very old session files gain `_JUMPER_MASS`, `_PLANFORM_AREA`, `_WIND_N`, and
 ## 11. Logbook column cache
 
 `index.json` caches the logbook column values of sessions that are not loaded.
-They are derived data. Two root fields say what they are valid for:
+They are derived data. Two fields say what they are valid for:
 
-- `calculationCompatibility`, an integer
+- `calculationCompatibility`, an integer at the root
   (`FlySight::CalculationCompatibilityVersion`). It is unrelated to
-  `SCHEMA_VER`.
-- `calculationEnvironment`, a fingerprint of the registered calculation ids
-  in the order candidates are tried, the result version each registration
-  declares, and the values of the preferences that calculations declare as
-  inputs. Every Python plugin registration declares the plug-in code identity
-  (section 12) as its result version, so editing, adding or removing a plugin
-  file, or upgrading the Python or NumPy the plugins run on, changes the
-  fingerprint; so does an update that changes the sensor fusion algorithm.
+  `SCHEMA_VER`. If it is missing or different, every cached value is
+  discarded.
+- `environment`, one per column definition under `columns`: a digest of what
+  the column's value can observe of the registered calculations and the
+  preferences. It covers every name the column's value can be computed from
+  (following every candidate calculation, not only the one that would win), and
+  for each such name the calculations tried for it in their order with the
+  result version each declares, the conversion layer for a measurement, and
+  the values of the preferences those calculations declare as inputs
+  (`docs/CALCULATIONS.md` section 17). Every Python plugin registration
+  declares the plug-in code identity (section 12) as its result version, so
+  editing, adding or removing a plugin file, or upgrading the Python or NumPy
+  the plugins run on, changes the environment of the columns that can be
+  computed through a plugin calculation; an update that changes the sensor
+  fusion algorithm changes the environment of the columns over fusion outputs.
 
-If either is missing or different, all cached values are discarded and
-recomputed in the background. Session files, ids, and access times are
-untouched. Such a change discards cached column values only; it never makes a
-stored calculation result stale (section 12, "Validity"). This happened once
-on the upgrade to this version, because gyro-dependent columns changed for
-every legacy session.
+If a column's `environment` is missing or different, that column's cached
+values are discarded; the other columns keep theirs. So adding an altitude
+marker, changing a preference or editing a plugin discards only the columns
+that can depend on it (a new altitude marker, for instance, only a column that
+reads that marker). An index written before per-column environments existed
+(it has a root `calculationEnvironment` instead, which is ignored) is
+discarded once. Discarded values are recomputed in the background. Session
+files, ids, and access times are untouched. Such a change discards cached
+column values only; it never makes a stored calculation result stale (section
+12, "Validity"). A full discard happened once on the upgrade to this version,
+because gyro-dependent columns changed for every legacy session.
+
+```json
+"columns": {
+  "<id>": {"type": "SessionAttribute", "attributeKey": "_EXIT_TIME",
+           "environment": "<40 hex digits>"}
+}
+```
 
 Each session entry also has `"records"`: an object naming the requested
 calculations that have a stored result for that session (section 12), each
@@ -464,8 +483,9 @@ could not be read.
 Editing, adding or removing any such file (also under `examples/`, which is
 never imported) or upgrading Python or NumPy changes it for every plugin
 registration at once, so a stored result whose lookups went through any
-plugin calculation is stale at its session's next load, and the cached column
-values are discarded at start-up (section 11). A stored result whose lookups
+plugin calculation is stale at its session's next load, and the cached values
+of the columns that can be computed through a plugin calculation are
+discarded at start-up (section 11). A stored result whose lookups
 touched no plugin calculation is unaffected. Plugin results themselves are
 never stored.
 
@@ -517,7 +537,7 @@ shared between logbooks or machines; one whose stamps do not match is simply
 discarded. A logbook synced between machines whose plugins or NumPy versions
 differ sees a different plug-in code identity on each, so each machine
 discards the other's stored results that went through a plugin, and the
-cached column values, at its next start.
+cached values of the columns over plugin calculations, at its next start.
 
 ## 13. What Viewer never does
 

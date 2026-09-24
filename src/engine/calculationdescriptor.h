@@ -24,8 +24,8 @@ struct CalculationDescriptor {
     CalculationId        id;
     /// Human-readable name for the interface ("Sensor fusion"). Interface text
     /// only: opaque to the engine, it never affects evaluation, identity, or
-    /// the environment fingerprint. Registrars pass translated text; empty
-    /// means none (the id is shown instead).
+    /// the column environments of the logbook cache. Registrars pass
+    /// translated text; empty means none (the id is shown instead).
     QString              title;
     /// All required: the calculation runs only when every input is available.
     /// Order is the order of the availability check, which stops at the first
@@ -40,8 +40,9 @@ struct CalculationDescriptor {
     /// the version it was stored with equals this one, so change it whenever a
     /// code change can alter what the calculation produces from the same
     /// inputs. Empty means none is declared. Opaque text to the engine: it
-    /// never affects evaluation, identity or candidate order. The calculation
-    /// environment fingerprint (the logbook column cache) covers it, and every
+    /// never affects evaluation, identity or candidate order. The column
+    /// environment of every logbook column whose closure reaches the
+    /// calculation (calculationEnvironmentDigest()) covers it, and every
     /// Python plug-in registration declares the plug-in code identity. A
     /// family's `instantiate` may set it on the descriptors it returns; the
     /// registry keeps what it is given.

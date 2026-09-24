@@ -152,7 +152,7 @@
 13 tst_calcengine unregisterInvalidatesEverySession
 13 tst_session_model_engine unregisterInvalidatesEverySession
 13 tst_session_model_engine reRegisterRestores
-13 tst_column_cache altitudeMarkerChangeDiscards
+13 tst_column_cache environmentCheckDropsExactlyTheReachedColumn
 13 tst_column_cache altitudeMarkerRemovalDiscardsStubValues
 
 # 14 - explicit policy
@@ -164,7 +164,7 @@
 15 tst_builtins_engine analysisRangeFollowsPreference
 15 tst_session_engine declaredPreferenceInvalidates
 15 tst_session_model_engine preferenceBroadcastReachesModel
-15 tst_column_cache preferenceChangeDiscardsUnloadedRows
+15 tst_column_cache preferenceChangeDiscardsOnlyReadingColumns
 15 tst_calcengine snapshottedPreferenceDoesNot
 15 tst_session_engine snapshotPreferencesDoNot
 15 tst_column_cache snapshotPreferenceDoesNotDiscard
@@ -192,6 +192,7 @@
 
 # 18 - upgrade discards and recomputes cached gyro columns; an edit refreshes only affected columns
 18 tst_logbook_index missingMarkerDiscardsValues
+18 tst_logbook_index missingColumnEnvironmentsDiscardOnce
 18 tst_column_cache upgradeDiscardsAndRecomputes
 18 tst_workflow releasedLogbookUpgrade
 18 tst_column_cache editRefreshesOnlyAffectedColumn_warm
@@ -764,7 +765,7 @@
 324 tst_result_columns oldIndexWithoutStamp
 324 tst_result_columns resultVersionChangeDropsCachedValue
 324 tst_result_columns writeFailureKeepsValueOutOfIndex
-324 tst_result_columns environmentChangeDiscardsCachedValue
+324 tst_result_columns environmentChangeDiscardsReachedColumn
 324 tst_result_columns registryChangeKeepsLoadedRowConfirmed
 324 tst_result_columns managerDropsDependentValues
 324 tst_result_columns deletingSessionRemovesStamp
@@ -1016,6 +1017,8 @@
 414 tst_result_store noDeleteWithoutInputChange
 414 tst_result_columns registryChangeKeepsLoadedRowConfirmed
 414 tst_fusion_store storedFitSurvivesUnrelatedChanges
+414 tst_result_columns environmentChangeDiscardsReachedColumn
+414 tst_fusion_jobs altitudeMarkerKeepsColumnsOfUnloadedSession
 414 tst_calcengine_restore droppedByRegistryChange
 414 tst_calcengine_restore registryChangeMirrorsRestore
 
@@ -1050,12 +1053,20 @@
 419 tst_fusion_store storedFitSurvivesUnrelatedChanges
 419 manual M21
 
-# 420 - (6) the environment fingerprint of the logbook column cache also covers every registration's result version: a plug-in edit or a built-in result-version change discards cached column values; its other contents and its role are unchanged
-420 tst_builtins_engine fingerprintCoversResultVersions
-420 tst_builtins_engine fingerprintChanges
-420 tst_column_cache pluginEditDiscardsCachedValues
-420 tst_column_cache altitudeMarkerChangeDiscards
-420 tst_logbook_index differentEnvironmentDiscards
+# 420 - (6, as amended) the calculation environment of the logbook column cache also covers every registration's result version: a plug-in edit or a built-in result-version change discards cached column values; amended: one environment per column, so a change discards only the columns whose environment it changes
+420 tst_builtins_engine digestCoversResultVersions
+420 tst_builtins_engine digestChanges
+420 tst_builtins_engine digestCoversConversionLayer
+420 tst_builtins_engine digestSurvivesRuntimeAltitudeMarker
+420 tst_column_cache pluginEditDiscardsPluginColumns
+420 tst_column_cache altitudeMarkerChangeKeepsOtherColumns
+420 tst_column_cache environmentCheckDropsExactlyTheReachedColumn
+420 tst_column_cache preferenceChangeDiscardsOnlyReadingColumns
+420 tst_column_cache valueComputedBeforeCheckIsStoredUnderItsEnvironment
+420 tst_logbook_index differentColumnEnvironmentDiscardsThatColumn
+420 tst_logbook_index missingColumnEnvironmentsDiscardOnce
+420 tst_logbook_index environmentIsTheCachedOne
+420 tst_fusion_jobs altitudeMarkerKeepsColumnsOfUnloadedSession
 420 manual M21
 
 # 421 - (7) a record that exists but cannot be opened or read in full at its session's load is skipped for that load: neither restored nor deleted; the calculation reads not requested
@@ -1139,7 +1150,7 @@
 434 tst_plugin_identity absentVersionUsesFixedToken
 
 # 435 - (10) test: a plug-in edit discards cached logbook column values over plug-in calculations at the next start
-435 tst_column_cache pluginEditDiscardsCachedValues
+435 tst_column_cache pluginEditDiscardsPluginColumns
 
 # 436 - (10) test: an unreadable record (held open without sharing on Windows, a directory at its path) is kept, not restored, and restored at a later load; its dependent column values are not cached meanwhile
 436 tst_result_store unreadableRecordIsSkipped
@@ -1154,7 +1165,7 @@
 # 438 - (10) test: the existing tests of stored results pass, those that asserted environment staleness rewritten to these rules
 438 tst_result_store staleRecordDeletedOnLoad
 438 tst_fusion_store codeStampChangeDropsRecordOnLoad
-438 tst_result_columns environmentChangeDiscardsCachedValue
+438 tst_result_columns environmentChangeDiscardsReachedColumn
 438 tst_result_columns writeAfterStartupDropFlushesIndexFirst
 438 tst_result_columns registryChangeKeepsLoadedRowConfirmed
 

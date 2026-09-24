@@ -52,19 +52,27 @@ struct CalculationRecordRead {
 /// caller decides validity.
 ///
 /// index.json root: "calculationCompatibility" (integer marker,
-/// FlySight::CalculationCompatibilityVersion), "calculationEnvironment"
-/// (calculationEnvironmentFingerprint() the cached values were computed under),
-/// "columns", "sessions" (per id: "uuid", "lastAccessed", "values", and
+/// FlySight::CalculationCompatibilityVersion), "columns" (per ephemeral column
+/// id: the column definition and "environment", the column environment -
+/// logbookColumnEnvironment() - its cached values were computed under; absent
+/// for a column without one), "sessions" (per id: "uuid", "lastAccessed",
+/// "values" (per ephemeral column id), and
 /// "records", the record stamp: calculation id -> the result version the
 /// cached values over that calculation were computed under, for each known
 /// and confirmed record of the session, "" when the descriptor declares none;
 /// always written, {} when there is none).
 ///
-/// CACHE VALIDITY is decided here and nowhere else. initialize() keeps the
-/// cached "values" only when both the marker and the environment recorded in
-/// the index equal the current ones; otherwise every cached value is dropped
-/// (uuid and lastAccessed are kept, session files are never touched or even
-/// opened) and the model's idle column worker recomputes them lazily. A kept
+/// CACHE VALIDITY is decided here and nowhere else. initialize() keeps a
+/// cached value only when the marker recorded in the index equals the current
+/// one AND the environment recorded for its column equals the column's current
+/// environment; a missing or different marker drops every cached value, a
+/// missing or different column environment drops the values of that column
+/// (an index written before column environments existed has none, so it is
+/// discarded once). uuid and lastAccessed are kept, session files are never
+/// touched or even opened, and the model's idle column worker recomputes the
+/// dropped values lazily. While the application runs, a registry or
+/// preference change is applied the same way per column by
+/// checkColumnEnvironments(). A kept
 /// value of a column over explicit calculations E
 /// (logbookColumnExplicitCalculations()) must also agree with the record
 /// files: with a "records" stamp, every e in E is in the stamp exactly when
@@ -202,8 +210,8 @@ public:
     // is untouched (the file is still there). Nothing for an unknown session.
     void markCalculationRecordSkipped(const QString &sessionId, const QString &calculationId);
 
-    // Writes index.json (atomically): the marker, cacheEnvironment(), the column
-    // definitions, and per session uuid / lastAccessed / cached values (except
+    // Writes index.json (atomically): the marker, the column definitions with
+    // their columnEnvironment(), and per session uuid / lastAccessed / cached values (except
     // those of unsaved columns and those over unconfirmed records) / the
     // record stamp. Returns true when the file was committed.
     bool flushIndex();
@@ -220,22 +228,33 @@ public:
     void updateCachedValues(const QString &sessionId,
                             const QMap<LogbookColumn, QVariant> &columnValues);
 
-    // --- Cache validity (calculation-compatibility marker + environment) ---
+    // --- Cache validity (calculation-compatibility marker + column environments) ---
 
-    // The environment fingerprint the in-memory cached values are valid for.
-    // flushIndex() writes THIS, never a freshly computed fingerprint: if nobody
-    // told the manager about an environment change (discardCachedValues()), the
-    // next start sees the mismatch and discards.
-    QString cacheEnvironment() const;
+    // The column environment the in-memory cached values of the column are
+    // valid for; empty when the manager holds none for its definition.
+    // flushIndex() writes THIS, never a freshly computed digest: if nobody
+    // told the manager about an environment change (checkColumnEnvironments()),
+    // the next start sees the mismatch and drops the column's values. Set by
+    // initialize() for the index's columns, by checkColumnEnvironments(), and
+    // by setCachedValues() / updateCachedValues() for a column that has none
+    // yet (to the current environment: the values stored are computed now).
+    // A value may be stored only under the environment it was computed in:
+    // SessionModel runs a pending environment check before it stores any.
+    QString columnEnvironment(const LogbookColumn &col) const;
 
-    // True when initialize() found a missing / different marker or environment
-    // and therefore dropped every cached value.
+    // True when initialize() dropped cached values because the marker, or the
+    // environment of their column, was missing or different.
     bool cachedValuesDiscardedOnLoad() const;
 
-    // Drops the cached values of every session and adopts the current
-    // environment fingerprint. Unsaved marks are unaffected: they concern
-    // persistence, not calculation semantics.
-    void discardCachedValues();
+    // The runtime counterpart of the start-up check: for each of `columns`
+    // (by definition) whose current environment differs from
+    // columnEnvironment() - or which has none -, drops that column's cached
+    // values in every session and adopts the current environment. Returns
+    // the definition keys whose values were dropped or whose recorded
+    // environment changed (sorted); the values of every other column are
+    // kept. Unsaved marks are unaffected: they concern persistence, not
+    // calculation semantics.
+    QStringList checkColumnEnvironments(const QVector<LogbookColumn> &columns);
 
     // --- Unsaved-column tracking (see SAVE ORDERING above) ---
 
@@ -421,8 +440,15 @@ private:
     bool m_deferredScan = false;
     QStringList m_scannedUuids;
 
-    // Cache validity
-    QString m_cacheEnvironment;         // fingerprint m_cachedValues is valid for
+    // Cache validity: per column definition key, the column and the
+    // environment its values in m_cachedValues are valid for
+    struct ColumnEnvironment {
+        LogbookColumn column;
+        QString environment;
+    };
+    QMap<QString, ColumnEnvironment> m_columnEnvironments;
+    // Records the column's current environment unless it has one already
+    void adoptColumnEnvironment(const LogbookColumn &col);
     bool m_discardedOnLoad = false;
     bool m_indexNeedsFlush = false;
 

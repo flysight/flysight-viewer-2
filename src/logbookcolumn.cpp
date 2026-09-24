@@ -6,6 +6,7 @@
 #include <QSettings>
 
 #include "attributeregistry.h"
+#include "calculations/builtincalculations.h"
 #include "engine/calculationregistry.h"
 #include "markerregistry.h"
 #include "plotregistry.h"
@@ -172,6 +173,11 @@ QStringList FlySight::logbookColumnExplicitCalculations(const LogbookColumn &col
     ids.sort();
     ids.removeDuplicates();
     return ids;
+}
+
+QString FlySight::logbookColumnEnvironment(const LogbookColumn &col, const CalculationRegistry &registry)
+{
+    return calculationEnvironmentDigest(logbookColumnNames(col), registry);
 }
 
 bool FlySight::containsAnyOf(const QStringList &ids, const QSet<QString> &set)

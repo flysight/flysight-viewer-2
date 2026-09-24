@@ -237,13 +237,16 @@ plugin checked out with different line endings (by git's `autocrlf`, for
 example) has a different identity on another machine. A logbook is meant for
 one machine: a logbook folder synced between machines whose plugins or NumPy
 versions differ has a different identity on each, so each machine discards the
-other's stored results that went through a plugin and the whole column cache
-of `index.json` at its next start, and recomputes them.
+other's stored results that went through a plugin and the cached values of the
+columns over plugin calculations in `index.json` at its next start, and
+recomputes them.
 
 * The logbook column values cached for sessions that are not loaded are then
-  discarded at the next start and recomputed in the background: a column over
-  a plugin value never keeps showing what old code returned. No renaming is
-  needed.
+  discarded at the next start and recomputed in the background, for every
+  column that can be computed through a plugin calculation (a column over a
+  plugin value, or over a name a plugin provides): such a column never keeps
+  showing what old code returned. No renaming is needed. Columns that no
+  plugin calculation can reach keep their cached values.
 * Plugin results are never stored: they are recomputed when read. But a stored
   result of a requested calculation (sensor fusion today) whose inputs were
   looked up through any plugin calculation (a plugin that provides a name the

@@ -211,8 +211,8 @@ session is loaded again (section 15.8); restoring is not requesting. Explicit fa
 instances are not stored. A descriptor may declare
 `CalculationDescriptor::resultVersion`, opaque text that identifies the
 arithmetic of the calculation's results. The engine never interprets it. It is
-part of the calculation environment fingerprint of the logbook column cache
-(section 9), and a stored result records it for its own calculation and for
+part of the column environment of every logbook column whose closure reaches
+the calculation (section 9), and a stored result records it for its own calculation and for
 every calculation its lookups went through (section 12, "Export and restore");
 a stored result is used only while those are unchanged (section 9).
 `builtin.fusion.fit` declares its kernel's `Fusion::Algorithm` (section 17),
@@ -261,12 +261,71 @@ calculation whose lookups went through it; bumping the marker drops every
 stored result and every cached column value.
 
 Do not bump it for added, removed, or renamed registrations, or for a changed
-result version: the environment fingerprint
-(`calculationEnvironmentFingerprint`) covers those for the logbook column
-cache. It covers every registration's result version too, so a plugin edit
-discards cached column values at the next start. A stored result does not
-depend on the fingerprint: a registration makes it stale only by changing what
-a name it looked up resolves to. Never reuse a value, and never use 0.
+result version: the column environment covers those for the logbook column
+cache (below). It covers every registration's result version too, so a plugin
+edit discards, at the next start, the cached values of the columns that can be
+computed through a plugin calculation. A stored result does not depend on the
+column environment: a registration makes it stale only by changing what a
+name it looked up resolves to. Never reuse a value, and never use 0.
+
+**The column environment.** Each logbook column has one
+(`logbookColumnEnvironment()` = `calculationEnvironmentDigest()` over
+`logbookColumnNames()`, `src/calculations/builtincalculations.h` has the exact
+encoding), recorded in `index.json` next to the column's definition. It is a
+SHA-1 over the column's static closure C (`staticDependencies()` of every
+name the column reads: every name reachable through the declared inputs of
+every candidate and, for a measurement, of every source conversion - not only
+the ones that would win) and its preferences P: for every name of C, the
+candidates in the order they are tried (`candidatesFor()`, family instances
+included) with each one's result version; for a measurement also whether any
+source conversion is registered and the conversions accepting it in order;
+and the value of every preference of P. A cached column value is kept while
+the marker and its column's environment are unchanged, at start-up
+(`LogbookManager::initialize()`) and at run time
+(`SessionModel::checkCalculationEnvironment()` on every registry change and
+on every change of a preference some closure or calculation declares,
+`LogbookManager::checkColumnEnvironments()`); a column whose environment
+changed loses its cached values in every row and is recomputed (an
+explicit-backed column of an unloaded row goes pending again when the
+session has a record). The run-time check is queued for the next event-loop
+pass; every path that stores a column value (`fillMissingColumns`,
+`settleExplicitColumns`) runs a pending check first, so a value computed
+after a change is never stored, or flushed, under its column's previous
+environment.
+
+What "a change can affect a column" means, and why keeping the others is
+safe: evaluating the column resolves only names of C (a name is resolved by
+reading session state - a stored attribute, source data through the
+passthrough - or by trying exactly the candidates listed for it; a candidate
+is a pure function of its declared inputs, which are names of C, preferences
+of P, or the source layer). So the value is a function of the session file,
+the session's records, the code, and exactly the registry and preference
+facts the digest lists. A change that leaves the digest equal cannot alter
+what a fresh evaluation gives; one that does not leave it equal is treated as
+affecting the column, even when the value would come out the same (a new
+candidate tried after a stored attribute, say). In particular:
+
+- a registration providing a name in C, or a family accepting one, changes
+  the candidate list of that name; a registration of a name outside C (an
+  altitude marker no column reads) changes nothing for the column - only a
+  column that reads the marker, directly or through its inputs, is
+  recomputed; a registration cannot enlarge C without being a candidate for a
+  name already in it;
+- a removal is the same change in reverse;
+- a preference change reaches only the columns whose P holds the key;
+- a plug-in edit changes the result version of every plugin registration, so
+  exactly the columns whose C has a plugin candidate for some name;
+- the conversion layer: whether any source conversion is registered is part
+  of the environment of every measurement name, and the conversions accepting
+  a name of C are listed for it;
+- a column created by the change (a marker column, say) has no cached value
+  yet; a removed or disabled column is not written to the index, and a
+  re-enabled one is checked against its recorded environment before its
+  values are used (`SessionModel::rebuildColumns()`).
+
+Not covered, as before: code changes behind an unchanged id and result version
+(the marker's job), session edits (unsaved marks and `invalidateColumns`) and
+record changes (the `"records"` stamp).
 
 ## 10. Testing a calculation
 
@@ -403,7 +462,7 @@ like `RequestOutcome::invalidated`; that is what makes plots appear.
 Vocabulary that goes with it:
 
 - `CalculationDescriptor::title` - interface text ("Sensor fusion"), opaque to
-  the engine and not part of the environment fingerprint.
+  the engine and not part of any column environment.
   `CalculationRegistry::title(id)`, `PreparedCalculation::title()` and
   `CalculationBlocker::title` fall back to the id. Main thread.
 - `CalculationResult::setReason(text)` / `reason()` - why outputs are
@@ -1465,8 +1524,12 @@ records (a failed write or removal, a record skipped at the load because it
 could not be read) keep their values out of `index.json` until the row is
 evicted or the record is written or deleted again. An environment change (a
 registration, a declared preference, a changed result version such as a plugin
-edit) discards every cached value but leaves the records valid; loaded rows
-recompute from the engine and stubs with a record stay pending until loaded.
+edit) discards the cached values of the columns whose environment it changes
+(section 9), and only those, and leaves the records valid; loaded rows
+recompute those columns from the engine, and stubs with a record leave them
+pending until loaded. A Fusion/roll column keeps its cached value through an
+altitude marker added at run time or at the next start (no name of its closure
+changes), also for a session that is not loaded.
 `CalculationCompatibilityVersion` did not change for
 this: an index written before the stamp holds explicit-backed values only as
 "unavailable", and at start-up they are kept only for sessions without a
@@ -1489,5 +1552,6 @@ column rule without GTSAM in
 `tst_column_cache::explicitBackedColumnFollowsItsResult` and
 `tests/tst_result_columns.cpp` (the stamp, crash points, pending stubs), and
 with a real fit in
-`tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord`. The model, its
+`tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord` and
+`tst_fusion_jobs::altitudeMarkerKeepsColumnsOfUnloadedSession`. The model, its
 limitations and what is rejected are in [SENSOR_FUSION.md](SENSOR_FUSION.md).

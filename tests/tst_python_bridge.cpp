@@ -1084,7 +1084,8 @@ void PythonBridgeTest::pluginWorkflowThroughModel()
     QCOMPARE(model->rowCount(), 1);
     QVERIFY(near(model->sessionRef(0).getAttribute(QStringLiteral("_PY_W_MAX")).toDouble(), 71.68));
     QVERIFY(near(model->rowAt(0).cachedValues.value(0).toDouble(), 71.68));
-    const QString fingerprint = calculationEnvironmentFingerprint();
+    const QString environment = logbookColumnEnvironment(pluginColumn, CalculationRegistry::instance());
+    QCOMPARE(logbook.columnEnvironment(pluginColumn), environment);
 
     // Plugin outputs are never persisted
     const QStringList csvFiles = QDir(env.sessionsDir()).entryList({QStringLiteral("*.csv")}, QDir::Files);
@@ -1099,7 +1100,7 @@ void PythonBridgeTest::pluginWorkflowThroughModel()
     env.reopenLogbook();
     logbook.initialize();
     QVERIFY(!logbook.cachedValuesDiscardedOnLoad());
-    QCOMPARE(calculationEnvironmentFingerprint(), fingerprint);
+    QCOMPARE(logbookColumnEnvironment(pluginColumn, CalculationRegistry::instance()), environment);
 
     model = std::make_unique<SessionModel>();
     model->populateFromIndex(logbook.cachedColumnValues(LogbookColumnStore::instance().enabledColumns()),

@@ -1,8 +1,9 @@
 // The real fit through the job queue, on a real SessionModel, with the fit on
 // the queue's 64 MiB worker. Sensor-fusion-jobs acceptance 5 (model level),
 // 6, 7, 8 (first half), 9, 10 and 11; a logbook column over a fusion output
-// is cached from the stored result and follows its record; and the optional
-// real-recording check.
+// is cached from the stored result and follows its record, and keeps its
+// cached value through an environment change it cannot observe (an altitude
+// marker); and the optional real-recording check.
 //
 // DETERMINISM WITHOUT A GATE. The real compute function cannot be held by a
 // semaphore. The tests use the queue's ordering guarantee instead: progress
@@ -22,9 +23,11 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QtTest>
 
+#include "altitudemarkerfeature.h"
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
 #include "fusion/fusionregistration.h"
@@ -94,6 +97,7 @@ private slots:
     void readersNeverStartAFit();
     void columnOnFusionOutputIsCachedFromRecord();
     void columnShowsValueStraightAfterPublication();
+    void altitudeMarkerKeepsColumnsOfUnloadedSession();
     void shutdownDuringFit();
     void realRecordingCheck();
 
@@ -686,6 +690,82 @@ void FusionJobsTest::columnShowsValueStraightAfterPublication()
     QVERIFY(waitForIdle(*m_model));
     QCOMPARE(cell(row), QStringLiteral("0.3"));
     QCOMPARE(engine("a").runCount(kFit), 1);
+}
+
+// The column cache is checked per column: an altitude marker registered while
+// the application runs - and registered again at the next start - reaches
+// neither the description nor the Fusion/roll column (the marker is a name
+// neither closure holds), so an unloaded session keeps both cached values.
+// Nothing loads, nothing goes pending, no record is read, and the value comes
+// from the index again after the restart.
+void FusionJobsTest::altitudeMarkerKeepsColumnsOfUnloadedSession()
+{
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
+    const JobQueue::RequestResult result = m_queue->request("a", kFit);
+    QCOMPARE(result.kind, Kind::Created);
+    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QCOMPARE(m_queue->job(result.job).state, JobState::Succeeded);
+    QVERIFY(waitForIdle(*m_model));
+
+    restart();
+    int row = m_model->getSessionRow("a");
+    QVERIFY(row >= 0);
+    const auto rowState = [this, &row]() -> const SessionRow & { return std::as_const(*m_model).rowAt(row); };
+    QVERIFY(!rowState().isLoaded());
+    QCOMPARE(rowState().cachedValues.value(kRollColumn).typeId(), int(QMetaType::Double));
+    const double roll = rowState().cachedValues.value(kRollColumn).toDouble();
+    QVERIFY(rowState().cachedValues.contains(0));   // the description (the fixture has none: unavailable)
+    const QVariant description = rowState().cachedValues.value(0);
+
+    LogbookManager &logbook = LogbookManager::instance();
+    const QString rollEnvironment = logbook.columnEnvironment(rollColumn());
+    const QString descriptionEnvironment = logbook.columnEnvironment(descriptionColumn());
+    QVERIFY(!rollEnvironment.isEmpty());
+
+    // Every check of "kept": the row, the manager, the index, and no work
+    const auto checkKept = [&](const char *when) {
+        const QByteArray what(when);
+        QVERIFY2(!rowState().isLoaded(), what.constData());
+        QVERIFY2(rowState().pendingColumns.isEmpty(), what.constData());
+        QVERIFY2(rowState().cachedValues.value(kRollColumn).typeId() == int(QMetaType::Double), what.constData());
+        QVERIFY2(isNear(rowState().cachedValues.value(kRollColumn).toDouble(), roll), what.constData());
+        QVERIFY2(rowState().cachedValues.contains(0), what.constData());
+        QVERIFY2(rowState().cachedValues.value(0) == description, what.constData());
+        QVERIFY2(logbook.columnEnvironment(rollColumn()) == rollEnvironment, what.constData());
+        QVERIFY2(logbook.columnEnvironment(descriptionColumn()) == descriptionEnvironment, what.constData());
+        QVERIFY2(m_model->columnWorkStats().sessionsLoaded == 0, what.constData());
+        QVERIFY2(m_model->columnWorkStats().valuesComputed == 0, what.constData());
+        QVERIFY2(m_model->storedResultStats().restoreCalls == 0, what.constData());
+        QVERIFY2(logbook.flushIndex(), what.constData());
+        QVERIFY2(isNear(indexValue("a", rollColumn()).toDouble(), roll), what.constData());
+    };
+
+    // At run time
+    auto altitudes = std::make_unique<AltitudeMarkerManager>();
+    const auto removeMarkers = qScopeGuard([&altitudes] {
+        altitudes.reset();
+        writeAltitudes({});
+    });
+    m_model->resetColumnWorkStats();
+    m_model->resetStoredResultStats();
+    writeAltitudes({1000});
+    QVERIFY(CalculationRegistry::instance().contains(QStringLiteral("builtin.altitude._ALTITUDE_1000_FT")));
+    m_model->flushPendingInvalidations();
+    QVERIFY(waitForIdle(*m_model));
+    checkKept("at run time");
+    if (QTest::currentTestFailed())
+        return;
+
+    // After a restart with the marker registered again
+    restart();
+    row = m_model->getSessionRow("a");
+    QVERIFY(row >= 0);
+    QVERIFY(!logbook.cachedValuesDiscardedOnLoad());
+    m_model->resetColumnWorkStats();
+    m_model->resetStoredResultStats();
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+    checkKept("after a restart");
 }
 
 // Quitting while a fit runs: shutdown returns, nothing is published, nothing

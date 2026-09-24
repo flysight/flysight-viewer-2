@@ -12,8 +12,9 @@
 //  - crash points between a record write / delete and the index flush, an
 //    index written by an older build (no stamp), a result-version change, a
 //    failed write, a session not saved yet, environment changes (which
-//    discard cached values but never make a record stale), and a record
-//    skipped at a load (its values never cached while skipped).
+//    discard the cached values of the columns whose closure they reach, and
+//    only those, but never make a record stale), and a record skipped at a
+//    load (its values never cached while skipped).
 //
 // Calculations (registered once, before any initialize(); literals below):
 //
@@ -206,7 +207,7 @@ private slots:
     void resultVersionChangeDropsCachedValue();
     void writeFailureKeepsValueOutOfIndex();
     void recordBeforeFirstSaveIsCachedAfterSave();
-    void environmentChangeDiscardsCachedValue();
+    void environmentChangeDiscardsReachedColumn();
     void registryChangeKeepsLoadedRowConfirmed();
     void skippedRecordValuesStayOutOfIndex_data();
     void skippedRecordValuesStayOutOfIndex();
@@ -419,8 +420,9 @@ void ResultColumnsTest::stampWrittenOnFlush()
     QCOMPARE(indexRecordStamp(root, "s1"), stampOf({{kCalcY, QStringLiteral("y-v1")}}));
     QCOMPARE(indexRecordStamp(root, "s2"), QJsonValue(QJsonObject()));
     QCOMPARE(root.keys(), QStringList({QStringLiteral("calculationCompatibility"),
-                                       QStringLiteral("calculationEnvironment"),
                                        QStringLiteral("columns"), QStringLiteral("sessions")}));
+    for (const LogbookColumn &col : {descriptionColumn(), xColumn(), yColumn()})
+        QCOMPARE(indexColumnEnvironment(root, col), logbookColumnEnvironment(col, CalculationRegistry::instance()));
 }
 
 void ResultColumnsTest::publishedResultIsCached_data()
@@ -722,9 +724,10 @@ void ResultColumnsTest::writeAfterStartupDropFlushesIndexFirst_data()
 
 // index.json on disk holds a value over X with X in the stamp, which the
 // start did not keep: the record was deleted before a crash (the check drops
-// the value), or the index was written in another environment (nothing is
-// kept; the record itself stays valid and is restored at the load, then
-// dropped by the edit). The first write of X in that run still flushes the index first, so
+// the value), or the index was written in another environment of X's column
+// (a second candidate for _DESCRIPTION, which X reads: X's value is not kept;
+// the record itself stays valid - the stored _DESCRIPTION still answers - and
+// is restored at the load, then dropped by the edit). The first write of X in that run still flushes the index first, so
 // that after a crash (and back in the first environment) the value stays
 // dropped rather than being checked against the new record.
 void ResultColumnsTest::writeAfterStartupDropFlushesIndexFirst()
@@ -747,13 +750,14 @@ void ResultColumnsTest::writeAfterStartupDropFlushesIndexFirst()
         }
     });
     if (environmentChanged) {
-        // Another environment for the next run (registered with no model)
+        // Another environment of X's column for the next run (registered
+        // with no model)
         resetModel();
         CalculationDescriptor extra;
         extra.id = kExtra;
-        extra.outputs = {DependencyKey::attribute(QStringLiteral("_COLUMNS_EXTRA"))};
+        extra.outputs = {DependencyKey::attribute(QStringLiteral("_DESCRIPTION"))};
         extra.compute = [](const EvaluationContext &) {
-            return CalculationResult().setAttribute(QStringLiteral("_COLUMNS_EXTRA"), 1);
+            return CalculationResult().setAttribute(QStringLiteral("_DESCRIPTION"), QStringLiteral("extra"));
         };
         QVERIFY(CalculationRegistry::instance().registerCalculation(extra));
         extraRegistered = true;
@@ -946,40 +950,76 @@ void ResultColumnsTest::recordBeforeFirstSaveIsCachedAfterSave()
 
 // ---- Environment changes --------------------------------------------------------------
 
-// Every cached value goes; the worker settles them again: pending with a
-// record, unavailable without one, and the rest by a temporary load.
-void ResultColumnsTest::environmentChangeDiscardsCachedValue()
+// A registry change discards the cached values of exactly the columns whose
+// closure it reaches. One that reaches none (a new, unrelated name) keeps
+// everything - Y of the unloaded s1 stays cached from its record, neither
+// pending nor loaded. A provider of Y_IN (tried after the stored Y_IN) reaches
+// Y only: the worker settles Y again (pending for s1, which has a record;
+// unavailable for the loaded s2, from its engine) and D and X keep their
+// values, with no load.
+void ResultColumnsTest::environmentChangeDiscardsReachedColumn()
 {
     QVERIFY(fit("s1", kCalcY));
     QCOMPARE(evict({"s1"}), QString());
     session("s2");      // loaded (the idle saver's touch put it in the LRU, so the eviction took it too)
     QVERIFY(isLoaded("s2"));
+    LogbookManager &logbook = LogbookManager::instance();
+    CalculationRegistry &registry = CalculationRegistry::instance();
 
     const auto unregister = qScopeGuard([this] {
         resetModel();
         CalculationRegistry::instance().unregister(kExtra, CalculationRegistry::Removal::Change);
+        CalculationRegistry::instance().unregister(kShadow, CalculationRegistry::Removal::Change);
     });
+
+    // 1. Unrelated: nothing is dropped, nothing is loaded
     CalculationDescriptor extra;
     extra.id = kExtra;
     extra.outputs = {DependencyKey::attribute(QStringLiteral("_COLUMNS_EXTRA"))};
     extra.compute = [](const EvaluationContext &) {
         return CalculationResult().setAttribute(QStringLiteral("_COLUMNS_EXTRA"), 1);
     };
-    QVERIFY(CalculationRegistry::instance().registerCalculation(extra));
+    const QString yEnvironment = logbook.columnEnvironment(yColumn());
+    QVERIFY(registry.registerCalculation(extra));
+    m_model->resetColumnWorkStats();
+    m_model->flushPendingInvalidations();
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(!isLoaded("s1"));
+    QCOMPARE(pending("s1"), QSet<int>());
+    QCOMPARE(cached("s1", kY), QVariant(6.0));
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+    QCOMPARE(m_model->columnWorkStats().valuesComputed, 0);
+    QCOMPARE(logbook.columnEnvironment(yColumn()), yEnvironment);
+    QCOMPARE(indexValue("s1", yColumn()), QJsonValue(6.0));
+
+    // 2. A provider of Y_IN reaches Y's closure, and nothing else's
+    CalculationDescriptor shadow;
+    shadow.id = kShadow;
+    shadow.outputs = {DependencyKey::attribute(QStringLiteral("Y_IN"))};
+    shadow.compute = [](const EvaluationContext &) {
+        return CalculationResult().setAttribute(QStringLiteral("Y_IN"), 3.0);
+    };
+    const QString xEnvironment = logbook.columnEnvironment(xColumn());
+    QVERIFY(registry.registerCalculation(shadow));
     m_model->resetColumnWorkStats();
     m_model->flushPendingInvalidations();
     QVERIFY(waitForIdle(*m_model));
 
+    QVERIFY(logbook.columnEnvironment(yColumn()) != yEnvironment);
+    QCOMPARE(logbook.columnEnvironment(xColumn()), xEnvironment);
     QVERIFY(!isLoaded("s1"));
     QCOMPARE(pending("s1"), QSet<int>({kY}));
     QVERIFY(!isCached("s1", kY));
     QCOMPARE(cached("s1", kD), QVariant(QStringLiteral("d1")));
     QVERIFY(isCached("s1", kX));
     QVERIFY(!cached("s1", kX).isValid());
-    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+    QCOMPARE(m_model->columnWorkStats().valuesComputed, 1);     // Y of s2, from its engine
     QVERIFY(isCached("s2", kY));
     QVERIFY(!cached("s2", kY).isValid());
     QVERIFY(indexValue("s1", yColumn()).isUndefined());
+    QVERIFY(indexValue("s1", xColumn()).isNull());
+    QCOMPARE(indexValue("s1", descriptionColumn()), QJsonValue(QStringLiteral("d1")));
 
     // The record itself stays valid: the next load restores it
     m_model->resetStoredResultStats();
@@ -1039,7 +1079,7 @@ void ResultColumnsTest::registryChangeKeepsLoadedRowConfirmed()
     QCOMPARE(logbook.unconfirmedCalculationRecords("s1"), QSet<QString>());
     QCOMPARE(engine("s1").resultStatus(kCalcY), std::optional<ResultStatus>(ResultStatus::Ok));
     QCOMPARE(engine("s1").runCount(kCalcY), 1);
-    QCOMPARE(cached("s1", kY), QVariant(6.0));      // recomputed from the engine after the discard
+    QCOMPARE(cached("s1", kY), QVariant(6.0));      // kept: no column's closure reaches the new name
     QVERIFY(logbook.flushIndex());
     QCOMPARE(indexValue("s1", yColumn()), QJsonValue(6.0));
     QCOMPARE(indexRecordStamp("s1"), stampOf({{kCalcY, QStringLiteral("y-v1")}}));

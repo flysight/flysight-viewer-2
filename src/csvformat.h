@@ -12,7 +12,7 @@ namespace FlySight {
 
 /// The one place where numbers and attribute values become text in a session
 /// file, and where that text becomes a number again. DataExporter,
-/// DataImporter, and the column-cache environment fingerprint all use it, so
+/// DataImporter, and the column environments of the logbook cache all use it, so
 /// the writer and the reader cannot drift apart.
 ///
 /// Numbers. A double is written as the SHORTEST decimal text that parses back

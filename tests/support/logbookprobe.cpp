@@ -72,6 +72,45 @@ QJsonValue indexValue(const QString &sessionId, const LogbookColumn &col)
     return indexValue(readIndex(), sessionId, col);
 }
 
+QString indexColumnEnvironment(const QJsonObject &root, const LogbookColumn &col)
+{
+    const QString columnId = indexColumnId(root, col);
+    if (columnId.isEmpty())
+        return QString();
+    return root[QStringLiteral("columns")].toObject()[columnId].toObject()
+        [QStringLiteral("environment")].toString();
+}
+
+QString indexColumnEnvironment(const LogbookColumn &col)
+{
+    return indexColumnEnvironment(readIndex(), col);
+}
+
+bool setIndexColumnEnvironment(QJsonObject &root, const LogbookColumn &col, const QString &environment)
+{
+    const QString columnId = indexColumnId(root, col);
+    if (columnId.isEmpty())
+        return false;
+    QJsonObject columns = root[QStringLiteral("columns")].toObject();
+    QJsonObject def = columns[columnId].toObject();
+    def[QStringLiteral("environment")] = environment;
+    columns[columnId] = def;
+    root[QStringLiteral("columns")] = columns;
+    return true;
+}
+
+void removeColumnEnvironments(QJsonObject &root)
+{
+    QJsonObject columns = root[QStringLiteral("columns")].toObject();
+    for (auto it = columns.begin(); it != columns.end(); ++it) {
+        QJsonObject def = it.value().toObject();
+        def.remove(QStringLiteral("environment"));
+        it.value() = def;
+    }
+    root[QStringLiteral("columns")] = columns;
+    root.remove(QStringLiteral("calculationEnvironment"));
+}
+
 QJsonValue indexRecordStamp(const QJsonObject &root, const QString &sessionId)
 {
     const QJsonObject sessions = root[QStringLiteral("sessions")].toObject();

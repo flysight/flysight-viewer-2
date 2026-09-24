@@ -109,9 +109,13 @@ struct MergeResult {
 ///
 /// Changes of the calculation ENVIRONMENT (a calculation registered or
 /// unregistered, a declared preference changed) are not persistent changes:
-/// they discard the cached values of ALL rows, loaded or not, and the column
-/// worker recomputes them; nothing is marked dirty or unsaved and no session
-/// file is rewritten.
+/// they discard, in ALL rows, loaded or not, the cached values of exactly the
+/// columns whose environment (logbookColumnEnvironment(): what the column's
+/// static dependency closure can observe of the registrations and
+/// preferences) changed, and the column worker recomputes them (an
+/// explicit-backed column of an unloaded row goes pending again when the
+/// session has a record); the other columns keep their values. Nothing is
+/// marked dirty or unsaved and no session file is rewritten.
 ///
 /// ROW STABILITY. A reference to a row, or to a loaded row's session, is valid
 /// only until the next operation that appends, erases, reorders or resets rows,
@@ -291,7 +295,8 @@ public:
     /// Delivers, now, the invalidations that registry and preference changes
     /// caused in loaded sessions (dataChanged + dependencyChanged per session)
     /// and, when such a change is pending, the calculation-environment check
-    /// that discards the cached logbook columns of every row. Normally this
+    /// that discards, in every row, the cached values of the logbook columns
+    /// whose environment changed. Normally this
     /// runs by itself on the next event-loop pass; tests (and shutdown) call
     /// it directly.
     void flushPendingInvalidations();
@@ -426,8 +431,17 @@ private:
     void refreshRecordColumns();
 
     // Calculation-environment changes: coalesced with the invalidation flush.
+    // The check discards the columns whose environment changed
+    // (LogbookManager::checkColumnEnvironments()) in every row.
     void queueEnvironmentCheck();
     void checkCalculationEnvironment();
+    /// True when the static dependency closure of some column reads `key`.
+    bool columnsReadPreference(const QString &key) const;
+    /// Runs a pending environment check now. Called first by every path that
+    /// stores column values (fillMissingColumns, settleExplicitColumns), so
+    /// that a value enters the cache only under the environment of its column
+    /// it was computed in; rebuildColumns() does the check itself.
+    void applyPendingEnvironmentCheck();
     bool m_environmentCheckPending = false;
     int m_registryObserver = -1;
 

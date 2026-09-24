@@ -8,10 +8,13 @@
 //  - an interrupted save can never leave a cached column that disagrees with
 //    the session file on disk;
 //  - a calculation-environment change (declared preference, registration)
-//    discards the cached values of loaded AND unloaded rows without saving
-//    anything;
+//    discards, in loaded AND unloaded rows, the cached values of exactly the
+//    columns whose environment it changes, without saving anything; an
+//    altitude marker keeps every other column's value, at run time and across
+//    a restart;
 //  - a plug-in edit (a new plug-in code identity, the result version of its
-//    registrations) discards the cached values at the next start.
+//    registrations) discards the cached values of the columns over plug-in
+//    calculations at the next start, and only those.
 //
 // The "gyro session": TIME data with an exact fit (a = 1, b = T0), IMU/wx
 // {1, 2, 3} deg/s at IMU/time {10, 20, 30}, no SCHEMA_VER. Column G reads
@@ -27,6 +30,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
 
@@ -155,9 +159,9 @@ private slots:
     void indexFlushWhileDirtyOmitsUnsaved();
     void newSessionIsNotIndexedBeforeItIsSaved();
 
-    void preferenceChangeDiscardsUnloadedRows();
+    void preferenceChangeDiscardsOnlyReadingColumns();
     void snapshotPreferenceDoesNotDiscard();
-    void altitudeMarkerChangeDiscards();
+    void altitudeMarkerChangeKeepsOtherColumns();
     void altitudeMarkerRemovalDiscardsStubValues();
 
     void saveFailureIsReported();
@@ -172,7 +176,9 @@ private slots:
 
     void explicitBackedColumnFollowsItsResult();
 
-    void pluginEditDiscardsCachedValues();
+    void pluginEditDiscardsPluginColumns();
+    void environmentCheckDropsExactlyTheReachedColumn();
+    void valueComputedBeforeCheckIsStoredUnderItsEnvironment();
 
 private:
     // A model whose rows were merged, saved, and indexed.
@@ -218,7 +224,7 @@ void ColumnCacheTest::cleanup()
     m_altitudes.reset();
     writeAltitudes({});
     m_model.reset();
-    // After a failed pluginEditDiscardsCachedValues
+    // After a failed pluginEditDiscardsPluginColumns / environmentCheckDropsExactlyTheReachedColumn
     CalculationRegistry::instance().unregister(QString::fromLatin1(kPluginId), CalculationRegistry::Removal::Change);
     LogbookColumnStore::instance().setColumns({m_d, m_g, m_e});     // altitudeMarkerRemovalDiscardsStubValues adds one
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
@@ -263,7 +269,7 @@ void ColumnCacheTest::upgradeDiscardsAndRecomputes()
     m_model.reset();
     QJsonObject root = readIndex();
     root.remove(QStringLiteral("calculationCompatibility"));
-    root.remove(QStringLiteral("calculationEnvironment"));
+    removeColumnEnvironments(root);
     QVERIFY(setIndexValue(root, QStringLiteral("g1"), m_g, 1.5));
     QVERIFY(writeIndex(root));
 
@@ -285,7 +291,10 @@ void ColumnCacheTest::upgradeDiscardsAndRecomputes()
 
     const QJsonObject rewritten = readIndex();
     QCOMPARE(rewritten[QStringLiteral("calculationCompatibility")].toInt(), 2);
-    QCOMPARE(rewritten[QStringLiteral("calculationEnvironment")].toString(), calculationEnvironmentFingerprint());
+    for (const LogbookColumn &col : {m_d, m_g, m_e}) {
+        QCOMPARE(indexColumnEnvironment(rewritten, col), logbookColumnEnvironment(col, CalculationRegistry::instance()));
+        QCOMPARE(indexColumnEnvironment(rewritten, col), logbook.columnEnvironment(col));
+    }
     QVERIFY(isNear(indexValue(rewritten, "g1", m_g).toDouble(), 1.72032));
     QCOMPARE(indexValue(rewritten, "g1", m_d).toString(), QStringLiteral("first"));
 
@@ -787,10 +796,13 @@ void ColumnCacheTest::newSessionIsNotIndexedBeforeItIsSaved()
     QVERIFY(isNear(indexValue(readIndex(), "g1", m_g).toDouble(), 1.72032));
 }
 
-// A declared preference is part of the calculation environment. Changing it
-// discards the cached values of every row - the unloaded ones too, which no
-// engine invalidation can reach - and saves nothing.
-void ColumnCacheTest::preferenceChangeDiscardsUnloadedRows()
+// A declared preference is part of the environment of the columns whose
+// closure reads it. Changing it discards their cached values in every row -
+// the unloaded ones too, which no engine invalidation can reach -, keeps the
+// values of every other column, and saves nothing. Here the exit time reads
+// the descent pause through the analysis range; the description and the gyro
+// column do not.
+void ColumnCacheTest::preferenceChangeDiscardsOnlyReadingColumns()
 {
     LogbookManager &logbook = LogbookManager::instance();
     startWithLoadedSessions({DescentFixture::load("s1"), DescentFixture::load("s2")});
@@ -804,29 +816,49 @@ void ColumnCacheTest::preferenceChangeDiscardsUnloadedRows()
 
     const QByteArray csv1 = readFileBytes(sessionFilePath("s1"));
     const QByteArray csv2 = readFileBytes(sessionFilePath("s2"));
-    const QString oldEnvironment = logbook.cacheEnvironment();
-    QCOMPARE(oldEnvironment, calculationEnvironmentFingerprint());
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+    const QString oldExit = logbook.columnEnvironment(m_e);
+    QCOMPARE(oldExit, logbookColumnEnvironment(m_e, registry));
+    const QString description = logbook.columnEnvironment(m_d);
+    const QString gyro = logbook.columnEnvironment(m_g);
+    const QVariant d2 = cached(row2, kD);
+    const QVariant g2 = cached(row2, kG);
+    QVERIFY(d2.isValid());
+    QVERIFY(m_model->rowAt(row2).cachedValues.contains(kG));   // cached (the descent has no gyro at _M: unavailable)
     m_model->resetColumnWorkStats();
 
     PreferencesManager::instance().setValue(PreferenceKeys::ImportDescentPauseSeconds, 5.0);
     m_model->flushPendingInvalidations();
 
-    const QString newEnvironment = calculationEnvironmentFingerprint();
-    QVERIFY(newEnvironment != oldEnvironment);
-    QCOMPARE(logbook.cacheEnvironment(), newEnvironment);
-    QVERIFY(m_model->rowAt(row1).cachedValues.isEmpty());
-    QVERIFY(m_model->rowAt(row2).cachedValues.isEmpty());
-    QVERIFY(logbook.cachedValuesForSession("s2").isEmpty());
+    const QString newExit = logbookColumnEnvironment(m_e, registry);
+    QVERIFY(newExit != oldExit);
+    QCOMPARE(logbook.columnEnvironment(m_e), newExit);
+    QCOMPARE(logbook.columnEnvironment(m_d), description);
+    QCOMPARE(logbook.columnEnvironment(m_g), gyro);
+    for (int row : {row1, row2}) {
+        QVERIFY(!m_model->rowAt(row).cachedValues.contains(kE));
+        QVERIFY(m_model->rowAt(row).cachedValues.contains(kD));
+        QVERIFY(m_model->rowAt(row).cachedValues.contains(kG));
+    }
+    QStringList keptKeys = {LogbookManager::columnDefKey(m_d), LogbookManager::columnDefKey(m_g)};
+    keptKeys.sort();
+    QCOMPARE(logbook.cachedValuesForSession("s2").keys(), keptKeys);
 
     QVERIFY(waitForIdle(*m_model));
     QCOMPARE(m_model->rowAt(row1).cachedValues.size(), 3);
     QCOMPARE(m_model->rowAt(row2).cachedValues.size(), 3);
-    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);     // s2; s1 was in memory
-    QCOMPARE(m_model->columnWorkStats().valuesComputed, 6);
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);     // s2 for E; s1 was in memory
+    QCOMPARE(m_model->columnWorkStats().valuesComputed, 2);     // E of each row, nothing else
     QVERIFY(cached(row2, kE).isValid());
+    QCOMPARE(cached(row2, kD), d2);
+    QCOMPARE(cached(row2, kG), g2);
+    QVERIFY(m_model->rowAt(row2).cachedValues.contains(kG));
 
-    QCOMPARE(readIndex()[QStringLiteral("calculationEnvironment")].toString(), newEnvironment);
-    QVERIFY(indexValue(readIndex(), "s2", m_e).isDouble());
+    const QJsonObject root = readIndex();
+    QCOMPARE(indexColumnEnvironment(root, m_e), newExit);
+    QCOMPARE(indexColumnEnvironment(root, m_d), description);
+    QCOMPARE(indexColumnEnvironment(root, m_g), gyro);
+    QVERIFY(indexValue(root, "s2", m_e).isDouble());
 
     // Persistent state did not change: nothing dirty, nothing unsaved, no file rewritten
     QVERIFY(!m_model->rowAt(row1).dirty);
@@ -836,12 +868,13 @@ void ColumnCacheTest::preferenceChangeDiscardsUnloadedRows()
     QCOMPARE(readFileBytes(sessionFilePath("s1")), csv1);
     QCOMPARE(readFileBytes(sessionFilePath("s2")), csv2);
 
-    // Back again: another change of environment
+    // Back again: another change of the same column's environment
     PreferencesManager::instance().setValue(PreferenceKeys::ImportDescentPauseSeconds, 30.0);
     m_model->flushPendingInvalidations();
-    QCOMPARE(logbook.cacheEnvironment(), oldEnvironment);
+    QCOMPARE(logbook.columnEnvironment(m_e), oldExit);
     QVERIFY(waitForIdle(*m_model));
     QCOMPARE(cached(row2, kE).toDouble(), T0 + 9.0);
+    QCOMPARE(cached(row2, kD), d2);
 }
 
 // Snapshotted preferences (copied into the session at import) are not inputs
@@ -850,7 +883,10 @@ void ColumnCacheTest::snapshotPreferenceDoesNotDiscard()
 {
     startWithLoadedSessions({gyroSession()});
     restartAsStubs();
-    const QString environment = calculationEnvironmentFingerprint();
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+    QList<QString> environments;
+    for (const LogbookColumn &col : {m_d, m_g, m_e})
+        environments.append(logbookColumnEnvironment(col, registry));
     m_model->resetColumnWorkStats();
 
     PreferencesManager::instance().setValue(PreferenceKeys::AeroMass, 90.0);
@@ -859,14 +895,21 @@ void ColumnCacheTest::snapshotPreferenceDoesNotDiscard()
 
     QCOMPARE(m_model->columnWorkStats().valuesComputed, 0);
     QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
-    QCOMPARE(calculationEnvironmentFingerprint(), environment);
-    QCOMPARE(LogbookManager::instance().cacheEnvironment(), environment);
+    int i = 0;
+    for (const LogbookColumn &col : {m_d, m_g, m_e}) {
+        QCOMPARE(logbookColumnEnvironment(col, registry), environments.at(i));
+        QCOMPARE(LogbookManager::instance().columnEnvironment(col), environments.at(i));
+        ++i;
+    }
     QCOMPARE(m_model->rowAt(0).cachedValues.size(), 3);
 }
 
-// Registrations are part of the environment. One refresh of the altitude
-// markers is several registry changes and one environment check.
-void ColumnCacheTest::altitudeMarkerChangeDiscards()
+// Registrations are part of the environment of the columns whose closure
+// they reach. One refresh of the altitude markers is several registry changes
+// and one environment check; the new markers are names no column reads, so
+// every cached value stays - at run time and after a restart - and nothing is
+// loaded or computed.
+void ColumnCacheTest::altitudeMarkerChangeKeepsOtherColumns()
 {
     LogbookManager &logbook = LogbookManager::instance();
     startWithLoadedSessions({gyroSession(QStringLiteral("g1")), gyroSession(QStringLiteral("g2"))});
@@ -879,7 +922,12 @@ void ColumnCacheTest::altitudeMarkerChangeDiscards()
     m_model->flushPendingInvalidations();
     QVERIFY(waitForIdle(*m_model));
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
-    const QString oldEnvironment = logbook.cacheEnvironment();
+    const QJsonObject indexBefore = readIndex();
+    QList<QString> environments;
+    for (const LogbookColumn &col : {m_d, m_g, m_e}) {
+        environments.append(logbook.columnEnvironment(col));
+        QCOMPARE(indexColumnEnvironment(indexBefore, col), environments.last());
+    }
 
     m_model->resetColumnWorkStats();
     QSignalSpy dataSpy(m_model.get(), &SessionModel::dataChanged);
@@ -889,17 +937,44 @@ void ColumnCacheTest::altitudeMarkerChangeDiscards()
     QCOMPARE(allRowsNotifications(dataSpy, 2), 0);
 
     QCoreApplication::processEvents();      // the queued, coalesced check
-    QCOMPARE(allRowsNotifications(dataSpy, 2), 1);
-    QVERIFY(logbook.cacheEnvironment() != oldEnvironment);
-    QCOMPARE(logbook.cacheEnvironment(), calculationEnvironmentFingerprint());
+    QCOMPARE(allRowsNotifications(dataSpy, 2), 0);
+    const auto checkKept = [&] {
+        int i = 0;
+        for (const LogbookColumn &col : {m_d, m_g, m_e}) {
+            QCOMPARE(logbook.columnEnvironment(col), environments.at(i));
+            QCOMPARE(logbookColumnEnvironment(col, CalculationRegistry::instance()), environments.at(i));
+            ++i;
+        }
+        for (int row : {0, 1}) {
+            QVERIFY(!m_model->rowAt(row).isLoaded());
+            QCOMPARE(m_model->rowAt(row).cachedValues.size(), 3);
+            QVERIFY(m_model->rowAt(row).pendingColumns.isEmpty());
+            QVERIFY(isNear(cached(row, kG).toDouble(), 1.72032));
+            QCOMPARE(cached(row, kD).toString(), QStringLiteral("first"));
+        }
+    };
+    checkKept();
+    if (QTest::currentTestFailed())
+        return;
 
     QVERIFY(waitForIdle(*m_model));
-    QCOMPARE(allRowsNotifications(dataSpy, 2), 1);
-    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 2);
-    QCOMPARE(m_model->columnWorkStats().valuesComputed, 6);
-    QVERIFY(isNear(cached(0, kG).toDouble(), 1.72032));
-    QVERIFY(isNear(cached(1, kG).toDouble(), 1.72032));
-    QCOMPARE(readIndex()[QStringLiteral("calculationEnvironment")].toString(), logbook.cacheEnvironment());
+    QCOMPARE(allRowsNotifications(dataSpy, 2), 0);
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+    QCOMPARE(m_model->columnWorkStats().valuesComputed, 0);
+    checkKept();
+    if (QTest::currentTestFailed())
+        return;
+
+    // The next start with the same markers: the index is valid for every column
+    logbook.flushIndex();
+    restartAsStubs();
+    QVERIFY(!logbook.cachedValuesDiscardedOnLoad());
+    m_model->resetColumnWorkStats();
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+    QCOMPARE(m_model->columnWorkStats().valuesComputed, 0);
+    checkKept();
 }
 
 // Acceptance 13, for rows that are not loaded: when a registration is REMOVED,
@@ -940,12 +1015,18 @@ void ColumnCacheTest::altitudeMarkerRemovalDiscardsStubValues()
 
     const QByteArray csv1 = readFileBytes(sessionFilePath("s1"));
     const QByteArray csv2 = readFileBytes(sessionFilePath("s2"));
-    const QString withAltitude = logbook.cacheEnvironment();
-    QCOMPARE(withAltitude, calculationEnvironmentFingerprint());
+    const QString withAltitude = logbook.columnEnvironment(altitudeColumn);
+    QCOMPARE(withAltitude, logbookColumnEnvironment(altitudeColumn, CalculationRegistry::instance()));
+    const QString exitEnvironment = logbook.columnEnvironment(m_e);
+    const QVariant exit2 = cached(row2, kE);
 
+    m_model->resetColumnWorkStats();
     writeAltitudes({});             // the manager refreshes and unregisters
     m_model->flushPendingInvalidations();
+    QVERIFY(!m_model->rowAt(row2).cachedValues.contains(kA));
+    QCOMPARE(cached(row2, kE), exit2);      // not reached: kept
     QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(m_model->columnWorkStats().valuesComputed, 2);    // the altitude column of each row
 
     QVERIFY(!CalculationRegistry::instance().hasCandidateFor(altitudeName));
     QVERIFY(!cached(row1, kA).isValid());
@@ -960,10 +1041,12 @@ void ColumnCacheTest::altitudeMarkerRemovalDiscardsStubValues()
     QCOMPARE(readFileBytes(sessionFilePath("s1")), csv1);
     QCOMPARE(readFileBytes(sessionFilePath("s2")), csv2);
 
-    QVERIFY(logbook.cacheEnvironment() != withAltitude);
-    QCOMPARE(logbook.cacheEnvironment(), calculationEnvironmentFingerprint());
+    QVERIFY(logbook.columnEnvironment(altitudeColumn) != withAltitude);
+    QCOMPARE(logbook.columnEnvironment(altitudeColumn),
+             logbookColumnEnvironment(altitudeColumn, CalculationRegistry::instance()));
+    QCOMPARE(logbook.columnEnvironment(m_e), exitEnvironment);
 
-    // The other columns came back
+    // The other columns were never dropped
     QCOMPARE(cached(row2, kE).toDouble(), T0 + 9.0);
 }
 
@@ -1395,10 +1478,12 @@ void ColumnCacheTest::explicitBackedColumnFollowsItsResult()
 }
 
 // Spec section 6 / 10: a plug-in edit discards the cached column values over
-// plug-in calculations at the next start. The application restart is
-// restartAsStubs(); "the next start with an edited plug-in" re-registers the
-// stand-in with the identity over the edited bytes first, as the host would.
-void ColumnCacheTest::pluginEditDiscardsCachedValues()
+// plug-in calculations at the next start - and only those: the columns whose
+// closure does not reach a plug-in registration keep their values. The
+// application restart is restartAsStubs(); "the next start with an edited
+// plug-in" re-registers the stand-in with the identity over the edited bytes
+// first, as the host would.
+void ColumnCacheTest::pluginEditDiscardsPluginColumns()
 {
     constexpr int kP = 3;
     LogbookColumn pluginColumn;
@@ -1426,10 +1511,13 @@ void ColumnCacheTest::pluginEditDiscardsCachedValues()
     if (QTest::currentTestFailed())
         return;
     QCOMPARE(cached(0, kP).toDouble(), 7.0);
-    const QString firstEnvironment = calculationEnvironmentFingerprint();
+    const QString firstEnvironment = logbookColumnEnvironment(pluginColumn, registry);
+    QList<QString> otherEnvironments;
+    for (const LogbookColumn &col : {m_d, m_g, m_e})
+        otherEnvironments.append(logbookColumnEnvironment(col, registry));
     {
         const QJsonObject root = readIndex();
-        QCOMPARE(root[QStringLiteral("calculationEnvironment")].toString(), firstEnvironment);
+        QCOMPARE(indexColumnEnvironment(root, pluginColumn), firstEnvironment);
         QCOMPARE(indexValue(root, "g1", pluginColumn).toDouble(), 7.0);
     }
     const QString csvPath = sessionFilePath(QStringLiteral("g1"));
@@ -1439,7 +1527,7 @@ void ColumnCacheTest::pluginEditDiscardsCachedValues()
     QVERIFY(restartWithPlugin(unedited));
     restartAsStubs();
     QVERIFY(!logbook.cachedValuesDiscardedOnLoad());
-    QCOMPARE(calculationEnvironmentFingerprint(), firstEnvironment);
+    QCOMPARE(logbookColumnEnvironment(pluginColumn, registry), firstEnvironment);
     QCOMPARE(m_model->rowCount(), 1);
     QVERIFY(!m_model->rowAt(0).isLoaded());
     QCOMPARE(cached(0, kP).toDouble(), 7.0);
@@ -1447,24 +1535,207 @@ void ColumnCacheTest::pluginEditDiscardsCachedValues()
     QVERIFY(waitForIdle(*m_model));
     QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
 
-    // 3. A restart with the edited plug-in discards every cached value; they
-    //    are recomputed from the session file, which is not touched
+    // 3. A restart with the edited plug-in discards the plug-in column's
+    //    cached value, which is recomputed from the session file (not
+    //    touched); the other columns keep theirs
     QVERIFY(restartWithPlugin(edited));
     restartAsStubs();
     QVERIFY(logbook.cachedValuesDiscardedOnLoad());
     QCOMPARE(m_model->rowCount(), 1);
-    QVERIFY(m_model->rowAt(0).cachedValues.isEmpty());
+    QVERIFY(!m_model->rowAt(0).cachedValues.contains(kP));
+    QCOMPARE(m_model->rowAt(0).cachedValues.size(), 3);
+    QCOMPARE(cached(0, kD).toString(), QStringLiteral("first"));
+    QVERIFY(isNear(cached(0, kG).toDouble(), 1.72032));
+    m_model->resetColumnWorkStats();
     m_model->startColumnWorker();
     QVERIFY(waitForIdle(*m_model));
     QCOMPARE(cached(0, kP).toDouble(), 7.0);
     QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);
-    const QString editedEnvironment = calculationEnvironmentFingerprint();
+    QCOMPARE(m_model->columnWorkStats().valuesComputed, 1);
+    const QString editedEnvironment = logbookColumnEnvironment(pluginColumn, registry);
     QVERIFY(editedEnvironment != firstEnvironment);
-    QCOMPARE(readIndex()[QStringLiteral("calculationEnvironment")].toString(), editedEnvironment);
+    {
+        const QJsonObject root = readIndex();
+        QCOMPARE(indexColumnEnvironment(root, pluginColumn), editedEnvironment);
+        int i = 0;
+        for (const LogbookColumn &col : {m_d, m_g, m_e})
+            QCOMPARE(indexColumnEnvironment(root, col), otherEnvironments.at(i++));
+    }
     QCOMPARE(readFileBytes(csvPath), csvBytes);
 
     m_model.reset();
     QVERIFY(registry.unregister(QString::fromLatin1(kPluginId), CalculationRegistry::Removal::Change));
+}
+
+// The runtime check with synthetic registrations: a registration that reaches
+// a column's closure (here a second candidate for the stand-in's input
+// _DESCRIPTION, tried after the stored value) discards exactly the columns
+// whose closure holds the name - the description column and the plug-in
+// column that reads it -, in loaded and unloaded rows alike; the gyro and exit
+// columns keep their values. Removing it again is another change of the same
+// columns.
+void ColumnCacheTest::environmentCheckDropsExactlyTheReachedColumn()
+{
+    constexpr int kP = 3;
+    LogbookColumn pluginColumn;
+    pluginColumn.type = ColumnType::SessionAttribute;
+    pluginColumn.attributeKey = QString::fromLatin1(kPluginOutput);
+    LogbookColumnStore::instance().setColumns({m_d, m_g, m_e, pluginColumn});    // restored in cleanup()
+    CalculationRegistry &registry = CalculationRegistry::instance();
+    LogbookManager &logbook = LogbookManager::instance();
+
+    QVERIFY(registry.registerCalculation(pluginStandIn(QStringLiteral("v1"))));
+    TestEnvironment::instance().reopenLogbook();
+    logbook.initialize();
+    startWithLoadedSessions({gyroSession("g1"), gyroSession("g2")});
+    if (QTest::currentTestFailed())
+        return;
+    restartAsStubs();
+    const int loaded = m_model->getSessionRow("g1");
+    const int stub = m_model->getSessionRow("g2");
+    m_model->sessionRef(loaded);
+    QVERIFY(m_model->rowAt(loaded).isLoaded());
+    QVERIFY(!m_model->rowAt(stub).isLoaded());
+    QCOMPARE(cached(stub, kP).toDouble(), 7.0);
+
+    const QString shadowId = QStringLiteral("test.columncache.shadow");
+    const auto unregister = qScopeGuard([&] {
+        m_model.reset();
+        registry.unregister(shadowId, CalculationRegistry::Removal::Change);
+    });
+    CalculationDescriptor shadow;
+    shadow.id = shadowId;
+    shadow.outputs = {DependencyKey::attribute(QStringLiteral("_DESCRIPTION"))};
+    shadow.compute = [](const EvaluationContext &) {
+        return CalculationResult().setAttribute(QStringLiteral("_DESCRIPTION"), QStringLiteral("shadow"));
+    };
+
+    for (const bool add : {true, false}) {
+        const QMap<QString, QString> before = [&] {
+            QMap<QString, QString> environments;
+            for (const LogbookColumn &col : {m_d, m_g, m_e, pluginColumn})
+                environments.insert(LogbookManager::columnDefKey(col), logbook.columnEnvironment(col));
+            return environments;
+        }();
+        m_model->resetColumnWorkStats();
+        if (add)
+            QVERIFY(registry.registerCalculation(shadow));
+        else
+            QVERIFY(registry.unregister(shadowId, CalculationRegistry::Removal::Change));
+        m_model->flushPendingInvalidations();
+
+        for (const LogbookColumn &col : {m_d, pluginColumn})
+            QVERIFY(logbook.columnEnvironment(col) != before.value(LogbookManager::columnDefKey(col)));
+        for (const LogbookColumn &col : {m_g, m_e})
+            QCOMPARE(logbook.columnEnvironment(col), before.value(LogbookManager::columnDefKey(col)));
+        for (int row : {loaded, stub}) {
+            QVERIFY(!m_model->rowAt(row).cachedValues.contains(kD));
+            QVERIFY(!m_model->rowAt(row).cachedValues.contains(kP));
+            QVERIFY(m_model->rowAt(row).cachedValues.contains(kG));
+            QVERIFY(m_model->rowAt(row).cachedValues.contains(kE));
+        }
+        QVERIFY(!logbook.cachedValuesForSession("g2").contains(LogbookManager::columnDefKey(m_d)));
+        QVERIFY(logbook.cachedValuesForSession("g2").contains(LogbookManager::columnDefKey(m_g)));
+
+        QVERIFY(waitForIdle(*m_model));
+        QCOMPARE(m_model->columnWorkStats().valuesComputed, 4);     // D and P of each row
+        QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);     // the stub, once
+        // The stored description still wins over the new candidate
+        QCOMPARE(cached(stub, kD).toString(), QStringLiteral("first"));
+        QCOMPARE(cached(stub, kP).toDouble(), 7.0);
+        QVERIFY(!m_model->rowAt(stub).isLoaded());
+        QVERIFY(!m_model->rowAt(loaded).dirty);
+        QVERIFY(!logbook.hasUnsavedColumns("g2"));
+    }
+
+    m_model.reset();
+    QVERIFY(registry.unregister(QString::fromLatin1(kPluginId), CalculationRegistry::Removal::Change));
+}
+
+// The environment check runs on the next event-loop pass, but a value can be
+// computed before it: here an eviction completes a loaded row's missing exit
+// time right after the descent pause changed, with no pass in between. The
+// value is computed with the new preference, so it must not be stored (nor
+// flushed) under the exit column's previous environment: a crash and a start
+// in that environment would keep it. Invariant: whenever the manager or
+// index.json holds a value of a column, its recorded environment is the one
+// the value was computed in - here, the current one.
+void ColumnCacheTest::valueComputedBeforeCheckIsStoredUnderItsEnvironment()
+{
+    LogbookManager &logbook = LogbookManager::instance();
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+    startWithLoadedSessions({DescentFixture::load("s1"), DescentFixture::load("s2")});
+    if (QTest::currentTestFailed())
+        return;
+
+    // The exit time missing from the index for both sessions: the rows come
+    // up as stubs without it
+    m_model.reset();
+    {
+        QJsonObject root = readIndex();
+        const QString columnId = indexColumnId(root, m_e);
+        QVERIFY(!columnId.isEmpty());
+        QJsonObject sessions = root[QStringLiteral("sessions")].toObject();
+        for (const char *id : {"s1", "s2"}) {
+            QJsonObject entry = sessions[QString::fromLatin1(id)].toObject();
+            QJsonObject values = entry[QStringLiteral("values")].toObject();
+            values.remove(columnId);
+            entry[QStringLiteral("values")] = values;
+            sessions[QString::fromLatin1(id)] = entry;
+        }
+        root[QStringLiteral("sessions")] = sessions;
+        QVERIFY(writeIndex(root));
+    }
+    restartAsStubs();
+    const int row1 = m_model->getSessionRow("s1");
+    QVERIFY(!m_model->rowAt(row1).cachedValues.contains(kE));
+    m_model->sessionRef(row1);      // loaded; nothing computed yet (no event-loop pass)
+    QVERIFY(m_model->rowAt(row1).isLoaded());
+    QVERIFY(!m_model->rowAt(row1).cachedValues.contains(kE));
+    const QString oldExit = logbook.columnEnvironment(m_e);
+    QCOMPARE(oldExit, logbookColumnEnvironment(m_e, registry));
+
+    const auto holdsOnlyCurrentEnvironments = [&](const char *when) {
+        const QByteArray what(when);
+        const QJsonObject root = readIndex();
+        for (const LogbookColumn &col : {m_d, m_g, m_e}) {
+            const QString current = logbookColumnEnvironment(col, registry);
+            for (const char *id : {"s1", "s2"}) {
+                if (indexValue(root, QString::fromLatin1(id), col).isUndefined())
+                    continue;
+                QVERIFY2(indexColumnEnvironment(root, col) == current, what.constData());
+            }
+            for (const char *id : {"s1", "s2"}) {
+                if (!logbook.cachedValuesForSession(QString::fromLatin1(id)).contains(LogbookManager::columnDefKey(col)))
+                    continue;
+                QVERIFY2(logbook.columnEnvironment(col) == current, what.constData());
+            }
+        }
+    };
+
+    // The change, and no event-loop pass: the check is still pending
+    PreferencesManager::instance().setValue(PreferenceKeys::ImportDescentPauseSeconds, 5.0);
+    QVERIFY(logbookColumnEnvironment(m_e, registry) != oldExit);
+    QCOMPARE(logbook.columnEnvironment(m_e), oldExit);
+
+    // An eviction completes the row's missing columns, then the index is flushed
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
+    QVERIFY(!m_model->rowAt(row1).isLoaded());
+    QVERIFY(m_model->rowAt(row1).cachedValues.contains(kE));
+    QVERIFY(logbook.cachedValuesForSession("s1").contains(LogbookManager::columnDefKey(m_e)));
+    QCOMPARE(logbook.columnEnvironment(m_e), logbookColumnEnvironment(m_e, registry));
+    QVERIFY(logbook.flushIndex());
+    holdsOnlyCurrentEnvironments("after the eviction");
+    QVERIFY(indexValue(readIndex(), "s1", m_e).isDouble());
+
+    // The value in the index is the one of the new environment
+    const QVariant exitWithPause5 = m_model->rowAt(row1).cachedValues.value(kE);
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    m_model->flushPendingInvalidations();
+    QVERIFY(waitForIdle(*m_model));
+    holdsOnlyCurrentEnvironments("after the worker");
+    QCOMPARE(m_model->rowAt(row1).cachedValues.value(kE), exitWithPause5);
+    QVERIFY(m_model->rowAt(m_model->getSessionRow("s2")).cachedValues.contains(kE));
 }
 
 FLYSIGHT_TEST_MAIN(ColumnCacheTest)

@@ -591,9 +591,9 @@ expect_none("no text says requested results are not kept"
 audit_group(result-validity)
 # Allow: none expected. What else is registered never makes a record stale, so
 # neither the record format, the store nor the snapshot names the calculation
-# environment fingerprint (the column cache in logbookmanager.* and
-# sessionmodel.* does). The camelCase spelling only: a comment may still say
-# "environment fingerprint" in words.
+# environment (the logbook column cache does, per column:
+# calculationEnvironmentDigest() and logbookColumnEnvironment()). The camelCase
+# spelling only: a comment may still say "environment fingerprint" in words.
 expect_none("a record carries no environment fingerprint" "calculationEnvironment|CalculationEnvironment"
   "src/calculationrecord.*" "src/calculationresultstore.*" "src/engine/storedcalculationresult.*")
 # Allow: none expected. The digest is computed by plugincodeidentity.cpp and

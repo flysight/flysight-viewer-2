@@ -194,29 +194,37 @@ void LogbookManager::initialize()
                 const QJsonObject sessionsObj = root[QStringLiteral("sessions")].toObject();
 
                 // Cached column values are trusted only when they were computed
-                // by compatible calculation code in the same calculation
-                // environment. A released index has neither field (toInt() of
-                // a missing or non-numeric value is 0, which is never a marker).
-                const QString currentEnvironment = calculationEnvironmentFingerprint();
-                const bool valid =
-                    root[QStringLiteral("calculationCompatibility")].toInt() == CalculationCompatibilityVersion
-                    && root[QStringLiteral("calculationEnvironment")].toString() == currentEnvironment;
-                if (!valid) {
-                    // Session files are not touched; the values are recomputed
-                    // lazily and the index is rewritten with the current marker.
-                    m_discardedOnLoad = true;
-                    m_indexNeedsFlush = true;
-                }
+                // by compatible calculation code (the marker, for every
+                // column) in the same calculation environment as far as their
+                // column can observe it (per column). A released index has
+                // neither (toInt() of a missing or non-numeric value is 0,
+                // which is never a marker), and an index written before column
+                // environments has no "environment": all its values go, once.
+                const bool compatible =
+                    root[QStringLiteral("calculationCompatibility")].toInt() == CalculationCompatibilityVersion;
 
-                // Build ephemeral UUID → definition key mapping, and the
-                // columns themselves (the record-stamp check needs their E)
+                // Build ephemeral UUID → definition key mapping, the columns
+                // themselves (the record-stamp check needs their E), and which
+                // definitions' values are valid. Two ids with one definition
+                // are valid only if both are.
                 QMap<QString, QString> uuidToDefKey;
                 QMap<QString, LogbookColumn> columnsByDefKey;
+                QMap<QString, bool> validByDefKey;
+                const CalculationRegistry &registry = CalculationRegistry::instance();
                 for (auto it = columnsObj.constBegin(); it != columnsObj.constEnd(); ++it) {
-                    const LogbookColumn col = columnFromJson(it.value().toObject());
+                    const QJsonObject columnObj = it.value().toObject();
+                    const LogbookColumn col = columnFromJson(columnObj);
                     const QString defKey = columnDefinitionKey(col);
                     uuidToDefKey[it.key()] = defKey;
-                    columnsByDefKey.insert(defKey, col);
+                    if (!columnsByDefKey.contains(defKey)) {
+                        columnsByDefKey.insert(defKey, col);
+                        // The values kept below are valid for the current environment
+                        m_columnEnvironments.insert(defKey, {col, logbookColumnEnvironment(col, registry)});
+                        validByDefKey.insert(defKey, compatible);
+                    }
+                    const QString recorded = columnObj[QStringLiteral("environment")].toString();
+                    if (recorded.isEmpty() || recorded != m_columnEnvironments.value(defKey).environment)
+                        validByDefKey[defKey] = false;
                 }
 
                 // Parse sessions
@@ -242,8 +250,8 @@ void LogbookManager::initialize()
                     }
 
                     // values — translate UUID-keyed entries to definition-key-keyed.
-                    // Kept only when valid, but every one is noted: until the
-                    // next flush, the file on disk still holds it.
+                    // Kept only when valid for their column, but every one is
+                    // noted: until the next flush, the file on disk still holds it.
                     if (entry.contains(QStringLiteral("values"))) {
                         const QJsonObject valuesObj = entry[QStringLiteral("values")].toObject();
                         QMap<QString, QJsonValue> sessionValues;
@@ -254,7 +262,19 @@ void LogbookManager::initialize()
                         }
                         if (!sessionValues.isEmpty()) {
                             valuesOnDisk.insert(sessionId, sessionValues.keys());
-                            if (valid)
+                            // Session files are not touched; a dropped value is
+                            // recomputed lazily, and the index is rewritten with
+                            // the current marker and environments.
+                            for (auto vit = sessionValues.begin(); vit != sessionValues.end();) {
+                                if (validByDefKey.value(vit.key())) {
+                                    ++vit;
+                                } else {
+                                    vit = sessionValues.erase(vit);
+                                    m_discardedOnLoad = true;
+                                    m_indexNeedsFlush = true;
+                                }
+                            }
+                            if (!sessionValues.isEmpty())
                                 m_cachedValues[sessionId] = sessionValues;
                         }
                     }
@@ -277,11 +297,10 @@ void LogbookManager::initialize()
                 }
 
                 adoptCalculationRecordSet();
-                // Also when not valid (nothing is cached then): the record
-                // backing of the values on disk is noted either way
+                // The record backing of the values on disk is noted for every
+                // one of them, including those dropped above
                 validateRecordStamps(columnsByDefKey, stamps, valuesOnDisk);
 
-                m_cacheEnvironment = currentEnvironment;
                 m_hasIndexData = true;
                 return;
             } else {
@@ -295,7 +314,6 @@ void LogbookManager::initialize()
                     }
                 }
                 adoptCalculationRecordSet();
-                m_cacheEnvironment = calculationEnvironmentFingerprint();
                 return;
             }
         }
@@ -306,7 +324,6 @@ void LogbookManager::initialize()
     m_scannedUuids = scanSessionFilenames();
     m_deferredScan = true;
     adoptCalculationRecordSet();
-    m_cacheEnvironment = calculationEnvironmentFingerprint();
 }
 
 // ============================================================================
@@ -323,7 +340,7 @@ void LogbookManager::reset()
     m_scannedUuids.clear();
     m_hasIndexData = false;
     m_deferredScan = false;
-    m_cacheEnvironment.clear();
+    m_columnEnvironments.clear();
     m_discardedOnLoad = false;
     m_indexNeedsFlush = false;
     m_unsavedColumns.clear();
@@ -413,8 +430,10 @@ void LogbookManager::setCachedValues(const QString &sessionId,
                                      const QMap<LogbookColumn, QVariant> &columnValues)
 {
     QMap<QString, QJsonValue> converted;
-    for (auto it = columnValues.constBegin(); it != columnValues.constEnd(); ++it)
+    for (auto it = columnValues.constBegin(); it != columnValues.constEnd(); ++it) {
+        adoptColumnEnvironment(it.key());
         converted[columnDefinitionKey(it.key())] = variantToJson(it.value());
+    }
     m_cachedValues[sessionId] = converted;
     m_indexNeedsFlush = true;
 }
@@ -426,8 +445,10 @@ void LogbookManager::updateCachedValues(const QString &sessionId,
         return;
 
     QMap<QString, QJsonValue> &cached = m_cachedValues[sessionId];
-    for (auto it = columnValues.constBegin(); it != columnValues.constEnd(); ++it)
+    for (auto it = columnValues.constBegin(); it != columnValues.constEnd(); ++it) {
+        adoptColumnEnvironment(it.key());
         cached[columnDefinitionKey(it.key())] = variantToJson(it.value());
+    }
     m_indexNeedsFlush = true;
 }
 
@@ -435,9 +456,16 @@ void LogbookManager::updateCachedValues(const QString &sessionId,
 // Cache validity
 // ============================================================================
 
-QString LogbookManager::cacheEnvironment() const
+QString LogbookManager::columnEnvironment(const LogbookColumn &col) const
 {
-    return m_cacheEnvironment;
+    return m_columnEnvironments.value(columnDefinitionKey(col)).environment;
+}
+
+void LogbookManager::adoptColumnEnvironment(const LogbookColumn &col)
+{
+    const QString defKey = columnDefinitionKey(col);
+    if (!m_columnEnvironments.contains(defKey))
+        m_columnEnvironments.insert(defKey, {col, logbookColumnEnvironment(col, CalculationRegistry::instance())});
 }
 
 bool LogbookManager::cachedValuesDiscardedOnLoad() const
@@ -450,11 +478,37 @@ bool LogbookManager::indexNeedsFlush() const
     return m_indexNeedsFlush;
 }
 
-void LogbookManager::discardCachedValues()
+QStringList LogbookManager::checkColumnEnvironments(const QVector<LogbookColumn> &columns)
 {
-    m_cachedValues.clear();
-    m_cacheEnvironment = calculationEnvironmentFingerprint();
-    m_indexNeedsFlush = true;
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+    QSet<QString> checked;
+    QStringList changed;
+    for (const LogbookColumn &col : columns) {
+        const QString defKey = columnDefinitionKey(col);
+        if (checked.contains(defKey))
+            continue;       // a second column of the same definition
+        checked.insert(defKey);
+        const QString current = logbookColumnEnvironment(col, registry);
+        const auto recorded = m_columnEnvironments.constFind(defKey);
+        const bool hadEnvironment = recorded != m_columnEnvironments.constEnd();
+        if (hadEnvironment && recorded->environment == current)
+            continue;
+
+        // Only this column's values: no other column can observe the change
+        bool dropped = false;
+        for (auto sit = m_cachedValues.begin(); sit != m_cachedValues.end(); ++sit) {
+            if (sit->remove(defKey) > 0)
+                dropped = true;
+        }
+        m_columnEnvironments.insert(defKey, {col, current});
+        if (hadEnvironment || dropped) {
+            changed.append(defKey);
+            m_indexNeedsFlush = true;
+        }
+    }
+
+    changed.sort();
+    return changed;
 }
 
 // ============================================================================
@@ -1355,11 +1409,18 @@ bool LogbookManager::flushIndex()
     QJsonObject columnsObj;
     // Mapping: columnDefinitionKey -> ephemeral UUID (for linking to values)
     QMap<QString, QString> defKeyToEphemeralUuid;
+    // Each with the environment its in-memory values were computed under,
+    // NOT a freshly computed digest: computing it here would bless stale
+    // values after an environment change nobody told the manager about.
     for (const LogbookColumn &col : enabledCols) {
         const QString ephemeralUuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
         const QString defKey = columnDefinitionKey(col);
         defKeyToEphemeralUuid[defKey] = ephemeralUuid;
-        columnsObj[ephemeralUuid] = columnToJson(col);
+        QJsonObject columnObj = columnToJson(col);
+        const auto environment = m_columnEnvironments.constFind(defKey);
+        if (environment != m_columnEnvironments.constEnd())
+            columnObj[QStringLiteral("environment")] = environment->environment;
+        columnsObj[ephemeralUuid] = columnObj;
     }
 
     // 3. Build "sessions" object
@@ -1390,6 +1451,10 @@ bool LogbookManager::flushIndex()
                 if (unsaved.contains(defKey))
                     continue;
                 if (!defKeyToEphemeralUuid.contains(defKey))
+                    continue;
+                // Valid for no known environment (every store records one, so
+                // this does not happen): the next start would drop it anyway
+                if (!m_columnEnvironments.contains(defKey))
                     continue;
                 const QStringList ids = byDefKey.value(defKey);
                 if (containsAnyOf(ids, unconfirmed))
@@ -1427,12 +1492,8 @@ bool LogbookManager::flushIndex()
     }
 
     // 4. Write root object
-    // The environment is the one the in-memory values were computed under,
-    // NOT a freshly computed fingerprint: computing it here would bless stale
-    // values after an environment change nobody told the manager about.
     QJsonObject root;
     root[QStringLiteral("calculationCompatibility")] = CalculationCompatibilityVersion;
-    root[QStringLiteral("calculationEnvironment")] = m_cacheEnvironment;
     root[QStringLiteral("columns")] = columnsObj;
     root[QStringLiteral("sessions")] = sessionsObj;
 

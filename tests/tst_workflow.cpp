@@ -313,14 +313,14 @@ void WorkflowTest::releasedLogbookUpgrade()
     QVERIFY(logbook.flushIndex());
 
     // ... then put the released file and a released index (no marker, no
-    // environment fingerprint) in their place.
+    // column environments) in their place.
     const QString csvPath = onlySessionFile();
     QVERIFY(!csvPath.isEmpty());
     QVERIFY(writeFile(csvPath, kReleased));
     QJsonObject index = readIndex();
     QVERIFY(index.contains(QStringLiteral("calculationCompatibility")));
     index.remove(QStringLiteral("calculationCompatibility"));
-    index.remove(QStringLiteral("calculationEnvironment"));
+    removeColumnEnvironments(index);
     QVERIFY(writeFile(TestEnvironment::instance().indexPath(), QJsonDocument(index).toJson()));
     QVERIFY(readFileBytes(TestEnvironment::instance().indexPath()).contains("1.5"));
 

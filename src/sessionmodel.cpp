@@ -6,7 +6,6 @@
 #include <QTimeZone>
 
 #include "attributeregistry.h"
-#include "calculations/builtincalculations.h"
 #include "csvformat.h"
 #include "dataimporter.h"
 #include "engine/calculationengine.h"
@@ -128,8 +127,11 @@ SessionModel::SessionModel(QObject *parent)
         if (key == PreferenceKeys::LogbookCacheSize) {
             m_cacheCapacity = value.toInt();
             evictIfNeeded();
-        } else if (CalculationRegistry::instance().declaredPreferenceKeys().contains(key)) {
+        } else if (CalculationRegistry::instance().declaredPreferenceKeys().contains(key)
+                   || columnsReadPreference(key)) {
             // A declared preference is part of the calculation environment
+            // (of the columns whose closure reads it; a family instance's
+            // preference is known only through such a closure)
             queueEnvironmentCheck();
         }
     });
@@ -158,6 +160,15 @@ void SessionModel::rebuildColumns()
     beginResetModel();
     m_columns = LogbookColumnStore::instance().enabledColumns();
     rebuildColumnDependencies();
+
+    // Values of a column (re-)enabled after an environment change it has not
+    // been checked against are dropped here, before the stubs take theirs.
+    // This is everything a pending environment check would do (the rows are
+    // rebuilt below from what the manager keeps), so it is no longer pending:
+    // the values computed below are stored under the environments they are
+    // computed in.
+    LogbookManager::instance().checkColumnEnvironments(m_columns);
+    m_environmentCheckPending = false;
 
     QVector<int> allIndices;
     allIndices.reserve(m_columns.size());
@@ -1351,8 +1362,8 @@ void SessionModel::flushPendingInvalidations()
         emit modelChanged();
 
     // Every broadcast invalidation (declared preference, registration change)
-    // is by construction an environment change. The environment handler deals
-    // with the cached logbook columns of loaded AND unloaded rows in one place.
+    // may be an environment change. The environment handler deals with the
+    // cached logbook columns of loaded AND unloaded rows in one place.
     if (m_environmentCheckPending)
         checkCalculationEnvironment();
 }
@@ -1374,26 +1385,45 @@ void SessionModel::checkCalculationEnvironment()
     // Which columns a name can affect follows the registrations.
     rebuildColumnDependencies();
 
-    LogbookManager &logbook = LogbookManager::instance();
-
+    // Per column: the manager drops the values of every column whose
+    // environment changed and keeps the others (a column whose environment is
+    // unchanged cannot observe the change: see logbookColumnEnvironment()).
     // Unchanged covers A -> B -> A within one event-loop pass, and the startup
     // registrations, which are complete before LogbookManager::initialize().
-    if (calculationEnvironmentFingerprint() == logbook.cacheEnvironment())
+    const QStringList changed = LogbookManager::instance().checkColumnEnvironments(m_columns);
+    if (changed.isEmpty())
+        return;
+    const QSet<QString> changedKeys(changed.cbegin(), changed.cend());
+
+    QVector<int> columns;
+    for (int i = 0; i < m_columns.size(); ++i) {
+        if (changedKeys.contains(LogbookManager::columnDefKey(m_columns[i])))
+            columns.append(i);
+    }
+    if (columns.isEmpty())
         return;
 
-    // Coarse on purpose: every cached value of every row, loaded or not. Rows
-    // are not marked dirty or unsaved - persistent state did not change, so
-    // the values the worker recomputes are valid for the files on disk.
-    logbook.discardCachedValues();
+    // The same columns in every row, loaded or not. Rows are not marked dirty
+    // or unsaved - persistent state did not change, so the values the worker
+    // recomputes are valid for the files on disk. An explicit-backed column of
+    // a stub goes pending again when the session has a record.
     for (SessionRow &row : m_rows) {
-        row.cachedValues.clear();
-        row.pendingColumns.clear();
+        for (int i : std::as_const(columns)) {
+            row.cachedValues.remove(i);
+            row.pendingColumns.remove(i);
+        }
     }
 
-    if (!m_rows.isEmpty() && !m_columns.isEmpty())
-        emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::DisplayRole});
+    if (!m_rows.isEmpty())
+        emit dataChanged(index(0, columns.first()), index(rowCount() - 1, columns.last()), {Qt::DisplayRole});
 
     startColumnWorker();
+}
+
+bool SessionModel::columnsReadPreference(const QString &key) const
+{
+    return std::any_of(m_columnDependencies.cbegin(), m_columnDependencies.cend(),
+                       [&key](const StaticDependencies &deps) { return deps.preferences.contains(key); });
 }
 
 // ---- Cached column values: per-column refresh ---------------------------
@@ -1472,9 +1502,24 @@ void SessionModel::invalidateAllColumns(int row)
     startColumnWorker();
 }
 
+void SessionModel::applyPendingEnvironmentCheck()
+{
+    // A registry or preference change is checked on the next event-loop pass,
+    // but a worker step, a record-column refresh or an eviction may compute
+    // before that pass, with the new registrations. Their values must not be
+    // stored under the column's previous environment (a flush would write them
+    // labelled with it), so the check runs first: it drops the changed
+    // columns and records their new environments. It only removes cached and
+    // pending entries, emits dataChanged and wakes the column worker; rows are
+    // not added, removed or moved.
+    if (m_environmentCheckPending)
+        checkCalculationEnvironment();
+}
+
 void SessionModel::fillMissingColumns(int row, const SessionData &session, ColumnSource source)
 {
     Q_ASSERT(row >= 0 && row < m_rows.size());
+    applyPendingEnvironmentCheck();     // before any row state is read
     SessionRow &sr = m_rows[row];
 
     // An engine that holds no stored result says nothing about a record:
@@ -1505,6 +1550,8 @@ void SessionModel::fillMissingColumns(int row, const SessionData &session, Colum
 void SessionModel::settleExplicitColumns(int row)
 {
     Q_ASSERT(row >= 0 && row < m_rows.size());
+    // The explicit calculations of each column follow the registrations too
+    applyPendingEnvironmentCheck();
     SessionRow &sr = m_rows[row];
     LogbookManager &logbook = LogbookManager::instance();
 

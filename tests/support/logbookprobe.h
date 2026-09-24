@@ -33,6 +33,18 @@ QJsonValue indexValue(const QJsonObject &root, const QString &sessionId, const F
 /// The same, reading index.json from disk.
 QJsonValue indexValue(const QString &sessionId, const FlySight::LogbookColumn &col);
 
+/// The "environment" index.json records for a column (the column environment
+/// its values were computed under); empty when the column or its environment
+/// is absent.
+QString indexColumnEnvironment(const QJsonObject &root, const FlySight::LogbookColumn &col);
+QString indexColumnEnvironment(const FlySight::LogbookColumn &col);     // reads index.json from disk
+/// Sets the "environment" of a column; false when the index has no such column.
+bool setIndexColumnEnvironment(QJsonObject &root, const FlySight::LogbookColumn &col, const QString &environment);
+/// Removes the "environment" of every column: index.json as a build before
+/// per-column environments wrote it (it also wrote a root
+/// "calculationEnvironment", which is removed as well).
+void removeColumnEnvironments(QJsonObject &root);
+
 /// The "records" stamp index.json holds for a session: an object, or
 /// Undefined when the entry has none (older index) or there is no entry.
 QJsonValue indexRecordStamp(const QJsonObject &root, const QString &sessionId);

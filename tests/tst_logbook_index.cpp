@@ -1,8 +1,11 @@
 // LogbookManager's index.json column cache at the storage level:
 //
-//  - the calculation-compatibility marker and the environment fingerprint gate
-//    the cached values: missing or different -> every cached value is dropped,
-//    uuid / lastAccessed are kept, session files are not touched (acceptance 18);
+//  - the calculation-compatibility marker gates every cached value, and each
+//    column's environment gates the values of that column: a missing or
+//    different marker drops every cached value, a missing or different column
+//    environment the values of that column only (an index without column
+//    environments is discarded once); uuid / lastAccessed are kept, session
+//    files are not touched (acceptance 18);
 //  - unsaved-column tracking and the save ordering make it impossible for
 //    index.json on disk to hold a column value that disagrees with the session
 //    file on disk after an interrupted save;
@@ -69,7 +72,8 @@ private slots:
     void missingMarkerDiscardsValues();
     void differentMarkerDiscards_data();
     void differentMarkerDiscards();
-    void differentEnvironmentDiscards();
+    void differentColumnEnvironmentDiscardsThatColumn();
+    void missingColumnEnvironmentsDiscardOnce();
     void matchingMarkerKeepsValues();
     void environmentIsTheCachedOne();
 
@@ -149,19 +153,31 @@ void LogbookIndexTest::markerWrittenOnFlush()
     QVERIFY(logbook.indexNeedsFlush());
     QVERIFY(logbook.flushIndex());
 
+    // No value cached yet: no column has an environment to record
+    QVERIFY(indexColumnEnvironment(readIndex(), m_d).isEmpty());
+    QVERIFY(logbook.columnEnvironment(m_d).isEmpty());
+
+    // Storing a value records the column's current environment
+    logbook.setCachedValues(QStringLiteral("s1"), {{m_d, QStringLiteral("x")}, {m_g, 1.5}});
+    QVERIFY(logbook.flushIndex());
+
     const QJsonObject root = readIndex();
     QVERIFY(root[QStringLiteral("calculationCompatibility")].isDouble());
     QCOMPARE(root[QStringLiteral("calculationCompatibility")].toInt(), 2);
     QCOMPARE(CalculationCompatibilityVersion, 2);
 
-    const QString environment = root[QStringLiteral("calculationEnvironment")].toString();
-    QVERIFY(QRegularExpression(QStringLiteral("^[0-9a-f]{40}$")).match(environment).hasMatch());
-    QCOMPARE(environment, calculationEnvironmentFingerprint());
-    QCOMPARE(environment, logbook.cacheEnvironment());
+    for (const LogbookColumn &col : {m_d, m_g}) {
+        const QString environment = indexColumnEnvironment(root, col);
+        QVERIFY(QRegularExpression(QStringLiteral("^[0-9a-f]{40}$")).match(environment).hasMatch());
+        QCOMPARE(environment, logbookColumnEnvironment(col, CalculationRegistry::instance()));
+        QCOMPARE(environment, logbook.columnEnvironment(col));
+    }
+    // The closures differ, and so do the environments
+    QVERIFY(indexColumnEnvironment(root, m_d) != indexColumnEnvironment(root, m_g));
 
-    // Exactly these four root fields: no schema stamp of any kind
-    QCOMPARE(root.keys(), QStringList({"calculationCompatibility", "calculationEnvironment",
-                                       "columns", "sessions"}));
+    // Exactly these three root fields: no schema stamp of any kind, and no
+    // environment of the whole registry
+    QCOMPARE(root.keys(), QStringList({"calculationCompatibility", "columns", "sessions"}));
 }
 
 // Acceptance 18: an index.json without the compatibility marker (as every
@@ -180,8 +196,7 @@ void LogbookIndexTest::missingMarkerDiscardsValues()
     QJsonObject root = readIndex();
     QCOMPARE(indexValue(root, QStringLiteral("s1"), m_g).toDouble(), 1.5);
     root.remove(QStringLiteral("calculationCompatibility"));
-    root.remove(QStringLiteral("calculationEnvironment"));
-    QVERIFY(writeIndex(root));
+    QVERIFY(writeIndex(root));      // the column environments still match: the marker alone discards
     const QByteArray indexBytes = readFileBytes(env.indexPath());
 
     env.reopenLogbook();
@@ -240,21 +255,68 @@ void LogbookIndexTest::differentMarkerDiscards()
     QCOMPARE(logbook.lastAccessedMap().value(QStringLiteral("s1")), 1234.0);
 }
 
-void LogbookIndexTest::differentEnvironmentDiscards()
+// A column whose recorded environment differs from its current one loses its
+// values; every other column keeps its own.
+void LogbookIndexTest::differentColumnEnvironmentDiscardsThatColumn()
+{
+    TestEnvironment &env = TestEnvironment::instance();
+    LogbookManager &logbook = LogbookManager::instance();
+    prepareCachedSession();
+    const QString gyroEnvironment = logbook.columnEnvironment(m_g);
+
+    QJsonObject root = readIndex();
+    QVERIFY(setIndexColumnEnvironment(root, m_d, QString(40, QLatin1Char('0'))));
+    QVERIFY(writeIndex(root));
+
+    env.reopenLogbook();
+    logbook.initialize();
+    QVERIFY(logbook.cachedValuesDiscardedOnLoad());
+    QVERIFY(logbook.indexNeedsFlush());
+    const QMap<QString, QJsonValue> &values = logbook.cachedValuesForSession(QStringLiteral("s1"));
+    QCOMPARE(values.keys(), QStringList({LogbookManager::columnDefKey(m_g)}));
+    QCOMPARE(values.value(LogbookManager::columnDefKey(m_g)).toDouble(), 1.5);
+    QCOMPARE(logbook.columnEnvironment(m_d), logbookColumnEnvironment(m_d, CalculationRegistry::instance()));
+    QCOMPARE(logbook.columnEnvironment(m_g), gyroEnvironment);
+
+    // The rewritten index records the current environment of both
+    QVERIFY(logbook.flushIndex());
+    QCOMPARE(indexColumnEnvironment(readIndex(), m_d), logbook.columnEnvironment(m_d));
+    QVERIFY(indexValue(readIndex(), QStringLiteral("s1"), m_d).isUndefined());
+    QCOMPARE(indexValue(readIndex(), QStringLiteral("s1"), m_g).toDouble(), 1.5);
+}
+
+// An index written before column environments existed (no "environment" on
+// any column, a root "calculationEnvironment" instead) is all-mismatched: its
+// values are discarded once, and the index rewritten with the environments
+// is valid at the next start.
+void LogbookIndexTest::missingColumnEnvironmentsDiscardOnce()
 {
     TestEnvironment &env = TestEnvironment::instance();
     LogbookManager &logbook = LogbookManager::instance();
     prepareCachedSession();
 
     QJsonObject root = readIndex();
-    root[QStringLiteral("calculationEnvironment")] = QString(40, QLatin1Char('0'));
+    removeColumnEnvironments(root);
+    root[QStringLiteral("calculationEnvironment")] = QString(40, QLatin1Char('a'));
     QVERIFY(writeIndex(root));
 
     env.reopenLogbook();
     logbook.initialize();
     QVERIFY(logbook.cachedValuesDiscardedOnLoad());
     QVERIFY(logbook.cachedValuesForSession(QStringLiteral("s1")).isEmpty());
-    QCOMPARE(logbook.cacheEnvironment(), calculationEnvironmentFingerprint());
+    QCOMPARE(logbook.lastAccessedMap().value(QStringLiteral("s1")), 1234.0);
+
+    // Recomputed values are written with the environments ...
+    logbook.setCachedValues(QStringLiteral("s1"), {{m_d, QStringLiteral("x")}, {m_g, 2.5}});
+    QVERIFY(logbook.flushIndex());
+    QVERIFY(!readIndex().contains(QStringLiteral("calculationEnvironment")));
+
+    // ... and kept from then on
+    env.reopenLogbook();
+    logbook.initialize();
+    QVERIFY(!logbook.cachedValuesDiscardedOnLoad());
+    QCOMPARE(logbook.cachedValuesForSession(QStringLiteral("s1"))
+                 .value(LogbookManager::columnDefKey(m_g)).toDouble(), 2.5);
 }
 
 // The control: gating, not unconditional recomputation.
@@ -278,50 +340,66 @@ void LogbookIndexTest::matchingMarkerKeepsValues()
     QCOMPARE(byIndex.value(1), QVariant(1.5));
 }
 
-// flushIndex() records the environment the in-memory values were computed
-// under, never a fresh fingerprint: an environment change nobody reported is
-// detected at the next start.
+// flushIndex() records, per column, the environment the in-memory values
+// were computed under, never a fresh digest: an environment change nobody
+// reported is detected at the next start - for the columns it reaches only.
+// Here a second candidate for _DESCRIPTION reaches the description column
+// and not the gyro column.
 void LogbookIndexTest::environmentIsTheCachedOne()
 {
     TestEnvironment &env = TestEnvironment::instance();
     LogbookManager &logbook = LogbookManager::instance();
+    const CalculationRegistry &registry = CalculationRegistry::instance();
     prepareCachedSession();
-    const QString oldEnvironment = logbook.cacheEnvironment();
+    const QString oldDescription = logbook.columnEnvironment(m_d);
+    const QString gyro = logbook.columnEnvironment(m_g);
 
     CalculationDescriptor extra;
     extra.id = QString::fromLatin1(kExtraId);
-    extra.outputs = {DependencyKey::attribute(QStringLiteral("_TEST_LOGBOOKINDEX_EXTRA"))};
+    extra.outputs = {DependencyKey::attribute(QStringLiteral("_DESCRIPTION"))};
     extra.compute = [](const EvaluationContext &) { return CalculationResult(); };
     QVERIFY(CalculationRegistry::instance().registerCalculation(extra));
-    const QString newEnvironment = calculationEnvironmentFingerprint();
-    QVERIFY(newEnvironment != oldEnvironment);
+    const QString newDescription = logbookColumnEnvironment(m_d, registry);
+    QVERIFY(newDescription != oldDescription);
+    QCOMPARE(logbookColumnEnvironment(m_g, registry), gyro);
 
-    // Not told: the old fingerprint is written, and the next start discards.
+    // Not told: the old environment is written, and the next start discards
+    // the description; the gyro value is kept.
     QVERIFY(logbook.flushIndex());
-    QCOMPARE(readIndex()[QStringLiteral("calculationEnvironment")].toString(), oldEnvironment);
+    QCOMPARE(indexColumnEnvironment(readIndex(), m_d), oldDescription);
+    QCOMPARE(indexColumnEnvironment(readIndex(), m_g), gyro);
 
     env.reopenLogbook();
     logbook.initialize();
     QVERIFY(logbook.cachedValuesDiscardedOnLoad());
-    QVERIFY(logbook.cachedValuesForSession(QStringLiteral("s1")).isEmpty());
-    QCOMPARE(logbook.cacheEnvironment(), newEnvironment);
+    QCOMPARE(logbook.cachedValuesForSession(QStringLiteral("s1")).keys(),
+             QStringList({LogbookManager::columnDefKey(m_g)}));
+    QCOMPARE(logbook.columnEnvironment(m_d), newDescription);
 
     // Told: values recomputed under the new environment are kept.
-    logbook.discardCachedValues();
-    logbook.setCachedValues(QStringLiteral("s1"), {{m_d, QStringLiteral("x")}, {m_g, 2.5}});
+    QCOMPARE(logbook.checkColumnEnvironments({m_d, m_g}), QStringList());     // already current
+    logbook.updateCachedValues(QStringLiteral("s1"), {{m_d, QStringLiteral("y")}});
     QVERIFY(logbook.flushIndex());
-    QCOMPARE(readIndex()[QStringLiteral("calculationEnvironment")].toString(), newEnvironment);
+    QCOMPARE(indexColumnEnvironment(readIndex(), m_d), newDescription);
 
     env.reopenLogbook();
     logbook.initialize();
     QVERIFY(!logbook.cachedValuesDiscardedOnLoad());
     QCOMPARE(logbook.cachedValuesForSession(QStringLiteral("s1"))
-                 .value(LogbookManager::columnDefKey(m_g)).toDouble(), 2.5);
+                 .value(LogbookManager::columnDefKey(m_d)).toString(), QStringLiteral("y"));
+    QCOMPARE(logbook.cachedValuesForSession(QStringLiteral("s1"))
+                 .value(LogbookManager::columnDefKey(m_g)).toDouble(), 1.5);
 
-    // discardCachedValues() with values in memory
-    logbook.discardCachedValues();
-    QVERIFY(logbook.cachedValuesForSession(QStringLiteral("s1")).isEmpty());
+    // checkColumnEnvironments() with values in memory: the removal changes the
+    // description's environment again, and drops exactly its values
+    QVERIFY(CalculationRegistry::instance().unregister(extra.id, CalculationRegistry::Removal::Change));
+    QVERIFY(!logbook.indexNeedsFlush());
+    QCOMPARE(logbook.checkColumnEnvironments({m_d, m_g}), QStringList({LogbookManager::columnDefKey(m_d)}));
+    QCOMPARE(logbook.cachedValuesForSession(QStringLiteral("s1")).keys(),
+             QStringList({LogbookManager::columnDefKey(m_g)}));
+    QCOMPARE(logbook.columnEnvironment(m_d), oldDescription);
     QVERIFY(logbook.indexNeedsFlush());
+    QCOMPARE(logbook.checkColumnEnvironments({m_d, m_g}), QStringList());
 }
 
 void LogbookIndexTest::unsavedColumnsAreNotFlushed()
@@ -526,7 +604,7 @@ void LogbookIndexTest::remapAndRemoveCarryMarks()
     QVERIFY(!logbook.hasUnsavedColumns(QStringLiteral("ghost")));
     QVERIFY(!logbook.indexNeedsFlush());
     QVERIFY(!logbook.cachedValuesDiscardedOnLoad());
-    QVERIFY(logbook.cacheEnvironment().isEmpty());
+    QVERIFY(logbook.columnEnvironment(m_d).isEmpty());
     QVERIFY(logbook.lastSaveError().isEmpty());
 }
 

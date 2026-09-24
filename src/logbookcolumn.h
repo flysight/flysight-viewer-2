@@ -101,6 +101,13 @@ QList<DependencyKey> logbookColumnNames(const LogbookColumn &col);
 QStringList logbookColumnExplicitCalculations(const LogbookColumn &col,
                                               const CalculationRegistry &registry);
 
+/// The column's calculation environment:
+/// calculationEnvironmentDigest(logbookColumnNames(col), registry). A cached
+/// value of the column is valid exactly while this is unchanged (and the
+/// session, its records and the calculation-compatibility marker are); see
+/// LogbookManager, CACHE VALIDITY.
+QString logbookColumnEnvironment(const LogbookColumn &col, const CalculationRegistry &registry);
+
 /// True when some id of `ids` (a column's explicit calculations, as above) is
 /// in `set`: "does this column depend on one of these calculations".
 bool containsAnyOf(const QStringList &ids, const QSet<QString> &set);

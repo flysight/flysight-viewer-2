@@ -757,17 +757,23 @@ bool ModelRun::restart(bool crash)
     m_altitudes = std::make_unique<AltitudeMarkerManager>();
     m_altitudes->refresh();
 
-    // The index the crash left behind is valid for the environment it names.
-    // Where that is the current one, none of its values may disagree with the
-    // session file next to it.
-    if (crash && crashIndex[QStringLiteral("calculationCompatibility")].toInt() == 2
-        && crashIndex[QStringLiteral("calculationEnvironment")].toString() == calculationEnvironmentFingerprint()) {
+    // The index the crash left behind is valid, per column, for the
+    // environment it records for that column. Where that is the column's
+    // current one, none of its values may disagree with the session file
+    // next to it.
+    if (crash && crashIndex[QStringLiteral("calculationCompatibility")].toInt() == 2) {
         const QStringList keys = columnAttributeKeys();
+        const QVector<LogbookColumn> columns = LogbookColumnStore::instance().enabledColumns();
+        if (columns.size() != keys.size())
+            return fail(QStringLiteral("crash: %1 columns").arg(columns.size()));
         for (const QString &id : m_ids) {
             const std::optional<SessionData> saved = logbook.loadSession(id);
             if (!saved)
                 return fail(QStringLiteral("crash: session %1 does not load").arg(id));
             for (int column = 0; column < keys.size(); ++column) {
+                if (indexColumnEnvironment(crashIndex, columns.at(column))
+                    != logbookColumnEnvironment(columns.at(column), CalculationRegistry::instance()))
+                    continue;       // valid for another environment: not kept at a start in this one
                 const QJsonValue value = indexValue(crashIndex, id, column);
                 if (!value.isDouble() && !value.isString())
                     continue;       // nothing cached: always consistent

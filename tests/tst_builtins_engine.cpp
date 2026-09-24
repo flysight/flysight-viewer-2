@@ -94,11 +94,12 @@ private slots:
     void interpolationUnavailableIsCached();
     void altitudeDescriptor();
 
-    // Logbook column cache: static closures and the environment fingerprint
+    // Logbook column cache: static closures and the column environment digest
     void gyroColumnClosure();
-    void fingerprintChanges();
-    void fingerprintCoversResultVersions();
-    void fingerprintSurvivesRuntimeAltitudeMarker();
+    void digestChanges();
+    void digestCoversResultVersions();
+    void digestCoversConversionLayer();
+    void digestSurvivesRuntimeAltitudeMarker();
     void altitudeMarkerTeardownReportsNothing();
 
 private:
@@ -499,7 +500,7 @@ void BuiltinsEngineTest::altitudeDescriptor()
     QCOMPARE(engine.undeclaredReadCount(), 0);
 }
 
-// ─────────────────────────────── column cache: closures and fingerprint
+// ─────────────────────────────── column cache: closures and environment digests
 
 // What a logbook column "IMU/wx at marker _M" can depend on, from the
 // registrations alone. An edit of any of these names (and of nothing else)
@@ -539,28 +540,52 @@ void BuiltinsEngineTest::gyroColumnClosure()
              QStringList({QString(PreferenceKeys::ImportDescentPauseSeconds)}));
 }
 
-void BuiltinsEngineTest::fingerprintChanges()
+// The column environment digest is per set of names: a registration or a
+// preference changes the digest of exactly the names whose static closure it
+// reaches, and the order of registrations counts only where it can decide
+// which candidate wins.
+void BuiltinsEngineTest::digestChanges()
 {
     World a;
     World b;
+    const QList<DependencyKey> extraName = {attr("_TEST_EXTRA")};
+    const QList<DependencyKey> secondName = {attr("_TEST_SECOND")};
+    const QList<DependencyKey> exitName = {attr("_EXIT_TIME")};
+    const QList<DependencyKey> descriptionName = {attr("_DESCRIPTION")};
 
-    const QString base = calculationEnvironmentFingerprint(a.registry);
+    const QString base = calculationEnvironmentDigest(extraName, a.registry);
     QCOMPARE(base.size(), 40);
     QVERIFY(QRegularExpression(QStringLiteral("^[0-9a-f]{40}$")).match(base).hasMatch());
+    const QString exitBase = calculationEnvironmentDigest(exitName, a.registry);
+    QVERIFY(exitBase != base);
 
     // Two registries built the same way
-    QCOMPARE(calculationEnvironmentFingerprint(b.registry), base);
+    QCOMPARE(calculationEnvironmentDigest(extraName, b.registry), base);
+    QCOMPARE(calculationEnvironmentDigest(exitName, b.registry), exitBase);
 
-    // One extra calculation (what a plugin would be)
+    // One extra calculation (what a plugin would be): the names it provides
+    // change, a name whose closure it does not reach does not
     CalculationDescriptor extra;
     extra.id = QStringLiteral("test.extra");
     extra.outputs = {attr("_TEST_EXTRA")};
     extra.compute = [](const EvaluationContext &) { return CalculationResult().setAttribute("_TEST_EXTRA", 1); };
     QVERIFY(b.registry.registerCalculation(extra));
-    const QString withExtra = calculationEnvironmentFingerprint(b.registry);
+    const QString withExtra = calculationEnvironmentDigest(extraName, b.registry);
     QVERIFY(withExtra != base);
+    QCOMPARE(calculationEnvironmentDigest(exitName, b.registry), exitBase);
     QVERIFY(b.registry.unregister(extra.id, CalculationRegistry::Removal::Change));
-    QCOMPARE(calculationEnvironmentFingerprint(b.registry), base);
+    QCOMPARE(calculationEnvironmentDigest(extraName, b.registry), base);
+
+    // A calculation that reads _DESCRIPTION reaches the closure of its own
+    // output, never the one of _DESCRIPTION
+    CalculationDescriptor reader = extra;
+    reader.id = QStringLiteral("test.reader");
+    reader.inputs = {CalcInput::attribute(QStringLiteral("_DESCRIPTION"))};
+    const QString descriptionBase = calculationEnvironmentDigest(descriptionName, b.registry);
+    QVERIFY(b.registry.registerCalculation(reader));
+    QCOMPARE(calculationEnvironmentDigest(descriptionName, b.registry), descriptionBase);
+    QVERIFY(calculationEnvironmentDigest(extraName, b.registry) != withExtra);
+    QVERIFY(b.registry.unregister(reader.id, CalculationRegistry::Removal::Change));
 
     // Two registrations with different outputs, swapped: they are never
     // candidates for the same name, so nothing can tell the orders apart
@@ -573,13 +598,15 @@ void BuiltinsEngineTest::fingerprintChanges()
     QVERIFY(b.registry.registerCalculation(second));
     QVERIFY(b.registry.registerCalculation(extra));
     QVERIFY(a.registry.registeredIds() != b.registry.registeredIds());
-    const QString withBoth = calculationEnvironmentFingerprint(a.registry);
-    QCOMPARE(calculationEnvironmentFingerprint(b.registry), withBoth);
-    QVERIFY(withBoth != withExtra);
-    QVERIFY(withBoth != base);
+    const QList<DependencyKey> both = {attr("_TEST_EXTRA"), attr("_TEST_SECOND")};
+    const QString withBoth = calculationEnvironmentDigest(both, a.registry);
+    QCOMPARE(calculationEnvironmentDigest(both, b.registry), withBoth);
+    QCOMPARE(calculationEnvironmentDigest(extraName, a.registry), withExtra);
+    QCOMPARE(calculationEnvironmentDigest(extraName, b.registry), withExtra);
+    QCOMPARE(calculationEnvironmentDigest(secondName, a.registry), calculationEnvironmentDigest(secondName, b.registry));
 
     // Two candidates for ONE output, swapped: the first one wins, so the
-    // order is part of the environment
+    // order is part of the environment of that name (and only of that one)
     CalculationDescriptor rival = extra;
     rival.id = QStringLiteral("test.rival");
     CalculationDescriptor rival2 = extra;
@@ -588,43 +615,61 @@ void BuiltinsEngineTest::fingerprintChanges()
     QVERIFY(a.registry.registerCalculation(rival2));
     QVERIFY(b.registry.registerCalculation(rival2));
     QVERIFY(b.registry.registerCalculation(rival));
-    QVERIFY(calculationEnvironmentFingerprint(a.registry) != calculationEnvironmentFingerprint(b.registry));
-    QVERIFY(calculationEnvironmentFingerprint(a.registry) != withBoth);
+    QVERIFY(calculationEnvironmentDigest(extraName, a.registry) != calculationEnvironmentDigest(extraName, b.registry));
+    QVERIFY(calculationEnvironmentDigest(extraName, a.registry) != withExtra);
+    QCOMPARE(calculationEnvironmentDigest(secondName, a.registry), calculationEnvironmentDigest(secondName, b.registry));
     QVERIFY(b.registry.unregister(rival.id, CalculationRegistry::Removal::Change));
     QVERIFY(b.registry.unregister(rival2.id, CalculationRegistry::Removal::Change));
-    QCOMPARE(calculationEnvironmentFingerprint(b.registry), withBoth);
+    QCOMPARE(calculationEnvironmentDigest(both, b.registry), withBoth);
 
-    // Before or after a family is a difference too: a family may accept any name
+    // Before or after a family that accepts the name is a difference too: an
+    // interpolation key has the family as a candidate, and a plain
+    // calculation declaring the same key is tried before or after it
+    const QList<DependencyKey> gyroNames = logbookColumnNames(gyroColumn());
+    QCOMPARE(gyroNames.size(), 1);
+    CalculationDescriptor gyroShadow;
+    gyroShadow.id = QStringLiteral("test.gyroShadow");
+    gyroShadow.outputs = {gyroNames.first()};
+    gyroShadow.compute = [](const EvaluationContext &) { return CalculationResult(); };
     World early;
+    World late;
+    const QString gyroBase = calculationEnvironmentDigest(gyroNames, late.registry);
     QVERIFY(early.registry.unregister(QStringLiteral("builtin.interpolation"), CalculationRegistry::Removal::Change));
-    QVERIFY(early.registry.registerCalculation(extra));
-    QVERIFY(early.registry.registerCalculation(second));
+    QVERIFY(early.registry.registerCalculation(gyroShadow));
     Calculations::registerInterpolationFamily(early.registry);
-    QCOMPARE(early.registry.registeredIds().size(), a.registry.registeredIds().size() - 2);
-    QVERIFY(calculationEnvironmentFingerprint(early.registry) != withBoth);
+    QVERIFY(late.registry.registerCalculation(gyroShadow));
+    QCOMPARE(early.registry.registeredIds().size(), late.registry.registeredIds().size());
+    QVERIFY(calculationEnvironmentDigest(gyroNames, late.registry) != gyroBase);
+    QVERIFY(calculationEnvironmentDigest(gyroNames, early.registry) != calculationEnvironmentDigest(gyroNames, late.registry));
+    QCOMPARE(calculationEnvironmentDigest(exitName, early.registry), exitBase);
 
-    // The declared preference
+    // The declared preference: only the names whose closure reads it
     World c;
-    QCOMPARE(calculationEnvironmentFingerprint(c.registry), base);
+    QCOMPARE(calculationEnvironmentDigest(exitName, c.registry), exitBase);
+    const QString gyroInC = calculationEnvironmentDigest(gyroNames, c.registry);
     c.prefs.set(PreferenceKeys::ImportDescentPauseSeconds, 5.0);
-    QVERIFY(calculationEnvironmentFingerprint(c.registry) != base);
+    QVERIFY(calculationEnvironmentDigest(exitName, c.registry) != exitBase);
+    QCOMPARE(calculationEnvironmentDigest(gyroNames, c.registry), gyroInC);
+    QCOMPARE(calculationEnvironmentDigest(descriptionName, c.registry), descriptionBase);
     c.prefs.set(PreferenceKeys::ImportDescentPauseSeconds, 30.0);
-    QCOMPARE(calculationEnvironmentFingerprint(c.registry), base);
+    QCOMPARE(calculationEnvironmentDigest(exitName, c.registry), exitBase);
 
     // The same value read back as text (QSettings from an INI file) is the
     // same environment.
     c.prefs.set(PreferenceKeys::ImportDescentPauseSeconds, QStringLiteral("30"));
-    QCOMPARE(calculationEnvironmentFingerprint(c.registry), base);
+    QCOMPARE(calculationEnvironmentDigest(exitName, c.registry), exitBase);
 
     // No engine ran anything for any of this
     QCOMPARE(a.engine->totalRunCount(), 0);
     QCOMPARE(c.engine->totalRunCount(), 0);
 }
 
-// Every registration's result version is part of the environment: a changed
-// plug-in (its code identity) or a changed fit algorithm discards the cached
-// column values like a registry change. An id without one hashes as before.
-void BuiltinsEngineTest::fingerprintCoversResultVersions()
+// Every registration's result version is part of the environment of the
+// names it is a candidate for: a changed plug-in (its code identity) or a
+// changed fit algorithm discards the cached values of the columns whose
+// closure reaches it, like a registry change. An id without one hashes as
+// "#<id>".
+void BuiltinsEngineTest::digestCoversResultVersions()
 {
     const auto constantCalculation = [](const QString &id, const QString &output, const QString &version) {
         CalculationDescriptor d;
@@ -634,6 +679,7 @@ void BuiltinsEngineTest::fingerprintCoversResultVersions()
         d.compute = [output](const EvaluationContext &) { return CalculationResult().setAttribute(output, 1); };
         return d;
     };
+    const QList<DependencyKey> pinned = {attr("_TEST_PINNED")};
 
     // The encoding, on a registry of one calculation and no preference provider
     {
@@ -641,20 +687,45 @@ void BuiltinsEngineTest::fingerprintCoversResultVersions()
             return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha1).toHex());
         };
         CalculationRegistry registry;
+        QCOMPARE(calculationEnvironmentDigest(pinned, registry), sha1("attribute:_TEST_PINNED\n"));
         QVERIFY(registry.registerCalculation(constantCalculation("test.pinned", "_TEST_PINNED", QString())));
-        QCOMPARE(calculationEnvironmentFingerprint(registry),
-                 sha1("attribute:_TEST_PINNED\n#test.pinned\nfamilies\nconversions\n"));
+        QCOMPARE(calculationEnvironmentDigest(pinned, registry), sha1("attribute:_TEST_PINNED\n#test.pinned\n"));
         QVERIFY(registry.unregister(QStringLiteral("test.pinned"), CalculationRegistry::Removal::Change));
         // The version is a backslash and a line feed between letters: escaped
         QVERIFY(registry.registerCalculation(constantCalculation("test.pinned", "_TEST_PINNED", "a\\b\nc")));
-        QCOMPARE(calculationEnvironmentFingerprint(registry),
-                 sha1("attribute:_TEST_PINNED\n#test.pinned#a\\\\b\\nc\nfamilies\nconversions\n"));
+        QCOMPARE(calculationEnvironmentDigest(pinned, registry),
+                 sha1("attribute:_TEST_PINNED\n#test.pinned#a\\\\b\\nc\n"));
+
+        // Inputs are followed (sorted by name) and the declared preference
+        // closes the text, empty without a provider
+        CalculationDescriptor reader = constantCalculation("test.reader", "_TEST_READER", QString());
+        reader.inputs = {CalcInput::attribute(QStringLiteral("_TEST_PINNED")),
+                         CalcInput::measurement(QStringLiteral("S"), QStringLiteral("m")),
+                         CalcInput::preference(QStringLiteral("test.pref"))};
+        QVERIFY(registry.registerCalculation(reader));
+        QCOMPARE(calculationEnvironmentDigest({attr("_TEST_READER")}, registry),
+                 sha1("attribute:_TEST_PINNED\n#test.pinned#a\\\\b\\nc\n"
+                      "attribute:_TEST_READER\n#test.reader\n"
+                      "measurement:S/m\nno conversions\n"
+                      "pref:test.pref=\n"));
+
+        // A '/' in a sensor or measurement name is escaped, so the two fields
+        // cannot run into each other
+        const DependencyKey slashInSensor = DependencyKey::measurement(QStringLiteral("a/b"), QStringLiteral("c"));
+        const DependencyKey slashInName = DependencyKey::measurement(QStringLiteral("a"), QStringLiteral("b/c"));
+        QCOMPARE(calculationEnvironmentDigest({slashInSensor}, registry),
+                 sha1("measurement:a\\/b/c\nno conversions\n"));
+        QCOMPARE(calculationEnvironmentDigest({slashInName}, registry),
+                 sha1("measurement:a/b\\/c\nno conversions\n"));
     }
 
     // On the built-ins: declaring one differs from declaring none, and each
     // version is its own environment
     World world;
-    const QString base = calculationEnvironmentFingerprint(world.registry);
+    const QList<DependencyKey> versioned = {attr("_TEST_VERSIONED")};
+    const QList<DependencyKey> exitName = {attr("_EXIT_TIME")};
+    const QString base = calculationEnvironmentDigest(versioned, world.registry);
+    const QString exitBase = calculationEnvironmentDigest(exitName, world.registry);
     const QString extraId = QStringLiteral("test.versioned");
     const auto reRegister = [&](const QString &version) {
         if (world.registry.contains(extraId)
@@ -663,44 +734,77 @@ void BuiltinsEngineTest::fingerprintCoversResultVersions()
         return world.registry.registerCalculation(constantCalculation(extraId, "_TEST_VERSIONED", version));
     };
     QVERIFY(reRegister(QString()));
-    const QString unversioned = calculationEnvironmentFingerprint(world.registry);
+    const QString unversioned = calculationEnvironmentDigest(versioned, world.registry);
     QVERIFY(unversioned != base);
     QVERIFY(reRegister(QStringLiteral("v1")));
-    const QString v1 = calculationEnvironmentFingerprint(world.registry);
+    const QString v1 = calculationEnvironmentDigest(versioned, world.registry);
     QVERIFY(v1 != unversioned);
     QVERIFY(reRegister(QStringLiteral("v2")));
-    const QString v2 = calculationEnvironmentFingerprint(world.registry);
+    const QString v2 = calculationEnvironmentDigest(versioned, world.registry);
     QVERIFY(v2 != v1);
     QVERIFY(v2 != unversioned);
+    QCOMPARE(calculationEnvironmentDigest(exitName, world.registry), exitBase);     // not reached
     QVERIFY(reRegister(QStringLiteral("v1")));
-    QCOMPARE(calculationEnvironmentFingerprint(world.registry), v1);
+    QCOMPARE(calculationEnvironmentDigest(versioned, world.registry), v1);
     QVERIFY(world.registry.unregister(extraId, CalculationRegistry::Removal::Change));
-    QCOMPARE(calculationEnvironmentFingerprint(world.registry), base);
+    QCOMPARE(calculationEnvironmentDigest(versioned, world.registry), base);
 
     // Two candidates for one output: the version of the second (never the
     // first tried) counts too
+    const QList<DependencyKey> shared = {attr("_TEST_SHARED")};
     QVERIFY(world.registry.registerCalculation(constantCalculation("test.first", "_TEST_SHARED", "f1")));
     QVERIFY(world.registry.registerCalculation(constantCalculation("test.second", "_TEST_SHARED", "s1")));
-    const QString secondS1 = calculationEnvironmentFingerprint(world.registry);
+    const QString secondS1 = calculationEnvironmentDigest(shared, world.registry);
     QVERIFY(world.registry.unregister(QStringLiteral("test.second"), CalculationRegistry::Removal::Change));
     QVERIFY(world.registry.registerCalculation(constantCalculation("test.second", "_TEST_SHARED", "s2")));
     QCOMPARE(world.registry.candidatesFor(attr("_TEST_SHARED")).size(), 2);
     QCOMPARE(world.registry.candidatesFor(attr("_TEST_SHARED")).first().instanceId, QStringLiteral("test.first"));
-    QVERIFY(calculationEnvironmentFingerprint(world.registry) != secondS1);
+    QVERIFY(calculationEnvironmentDigest(shared, world.registry) != secondS1);
 
     // No engine ran anything for any of this
     QCOMPARE(world.engine->totalRunCount(), 0);
 }
 
+// The measurement names of a closure carry the conversion layer: the
+// conversions accepting the name, and whether any is registered at all (the
+// last one going hands every measurement with source data to the passthrough).
+void BuiltinsEngineTest::digestCoversConversionLayer()
+{
+    const QList<DependencyKey> gyroNames = logbookColumnNames(gyroColumn());
+    World world;
+    const QString base = calculationEnvironmentDigest(gyroNames, world.registry);
+    QVERIFY(world.registry.staticDependencies(gyroNames.first()).names.contains(measKey("IMU", "wx")));
+
+    // Without the default conversion family the gyro rate reads through the
+    // schema conversion alone
+    QVERIFY(world.registry.unregister(QStringLiteral("builtin.conversion.default"), CalculationRegistry::Removal::Change));
+    const QString schemaOnly = calculationEnvironmentDigest(gyroNames, world.registry);
+    QVERIFY(schemaOnly != base);
+    QVERIFY(world.registry.unregister(QStringLiteral("builtin.conversion.schema"), CalculationRegistry::Removal::Change));
+    QVERIFY(!world.registry.hasSourceConversions());
+    const QString passthrough = calculationEnvironmentDigest(gyroNames, world.registry);
+    QVERIFY(passthrough != schemaOnly);
+
+    // A name outside the conversion layer is not reached
+    QCOMPARE(calculationEnvironmentDigest({attr("_DESCRIPTION")}, world.registry),
+             calculationEnvironmentDigest({attr("_DESCRIPTION")}, World().registry));
+}
+
 // An altitude marker added while the application runs is registered after the
 // existing ones; the next start registers all of them in ascending order. Both
-// are the same environment: the index written in between stays valid.
-void BuiltinsEngineTest::fingerprintSurvivesRuntimeAltitudeMarker()
+// are the same environment for the marker's own name, and a name whose
+// closure does not reach the markers never changes: the cached values of
+// every other column stay valid throughout.
+void BuiltinsEngineTest::digestSurvivesRuntimeAltitudeMarker()
 {
     TestEnvironment::instance().registerBuiltIns();     // the application registry, as at startup
     CalculationRegistry &registry = CalculationRegistry::instance();
     const QStringList idsBefore = registry.registeredIds();
-    const QString fingerprintBefore = calculationEnvironmentFingerprint();
+    const QList<DependencyKey> marker2000 = {attr("_ALTITUDE_2000_M")};
+    const QList<DependencyKey> others = {attr("_EXIT_TIME"), attr("_DESCRIPTION"),
+                                         logbookColumnNames(gyroColumn()).first()};
+    const QString othersBefore = calculationEnvironmentDigest(others);
+    const QString markerBefore = calculationEnvironmentDigest(marker2000);
 
     const auto altitudeIds = [&]() { return registry.registeredIds().mid(idsBefore.size()); };
 
@@ -709,15 +813,17 @@ void BuiltinsEngineTest::fingerprintSurvivesRuntimeAltitudeMarker()
     PreferencesManager::instance().setValue(PreferenceKeys::AltitudeMarkersUnits, QStringLiteral("Metric"));
     manager->refresh();
     QCOMPARE(altitudeIds(), QStringList({"builtin.altitude._ALTITUDE_1000_M", "builtin.altitude._ALTITUDE_3000_M"}));
-    const QString withTwo = calculationEnvironmentFingerprint();
-    QVERIFY(withTwo != fingerprintBefore);
+    QVERIFY(calculationEnvironmentDigest({attr("_ALTITUDE_1000_M")}) != calculationEnvironmentDigest(marker2000));
+    QCOMPARE(calculationEnvironmentDigest(marker2000), markerBefore);
+    QCOMPARE(calculationEnvironmentDigest(others), othersBefore);
 
     // Added at run time (the preference change refreshes the manager): appended
     writeAltitudes({1000, 3000, 2000});
     QCOMPARE(altitudeIds(), QStringList({"builtin.altitude._ALTITUDE_1000_M", "builtin.altitude._ALTITUDE_3000_M",
                                          "builtin.altitude._ALTITUDE_2000_M"}));
-    const QString atRuntime = calculationEnvironmentFingerprint();
-    QVERIFY(atRuntime != withTwo);
+    const QString atRuntime = calculationEnvironmentDigest(marker2000);
+    QVERIFY(atRuntime != markerBefore);
+    QCOMPARE(calculationEnvironmentDigest(others), othersBefore);
 
     // The next start: a new manager registers them in ascending order
     manager.reset();
@@ -726,12 +832,13 @@ void BuiltinsEngineTest::fingerprintSurvivesRuntimeAltitudeMarker()
     manager->refresh();
     QCOMPARE(altitudeIds(), QStringList({"builtin.altitude._ALTITUDE_1000_M", "builtin.altitude._ALTITUDE_2000_M",
                                          "builtin.altitude._ALTITUDE_3000_M"}));
-    QCOMPARE(calculationEnvironmentFingerprint(), atRuntime);
+    QCOMPARE(calculationEnvironmentDigest(marker2000), atRuntime);
+    QCOMPARE(calculationEnvironmentDigest(others), othersBefore);
 
     manager.reset();
     writeAltitudes({});
     QCOMPARE(registry.registeredIds(), idsBefore);
-    QCOMPARE(calculationEnvironmentFingerprint(), fingerprintBefore);
+    QCOMPARE(calculationEnvironmentDigest(marker2000), markerBefore);
 }
 
 // Removing an altitude marker while the application runs is a registry change

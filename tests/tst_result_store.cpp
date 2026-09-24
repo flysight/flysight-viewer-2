@@ -1682,8 +1682,8 @@ void ResultStoreTest::recordSurvivesUnrelatedChanges_data()
 }
 
 // A registration of a name the result never looked up, or a declared
-// preference it never read, changes the environment fingerprint and never
-// makes the record stale: it is restored at the next load and after a
+// preference it never read, changes the calculation environment (of the names
+// it concerns) and never makes the record stale: it is restored at the next load and after a
 // restart, with the change still in effect.
 void ResultStoreTest::recordSurvivesUnrelatedChanges()
 {
@@ -1694,7 +1694,10 @@ void ResultStoreTest::recordSurvivesUnrelatedChanges()
     const QString path = recordPath("s1", QStringLiteral("exp%41"));
     const QByteArray r0 = bytesOf(path);
     QVERIFY(!r0.isEmpty());
-    const QString env0 = calculationEnvironmentFingerprint();
+    const QList<DependencyKey> concerned = change == QLatin1String("unrelatedRegistration")
+        ? QList<DependencyKey>{DependencyKey::attribute(QStringLiteral("_STORE_EXTRA"))}
+        : QList<DependencyKey>{DependencyKey::attribute(QStringLiteral("_EXIT_TIME"))};
+    const QString env0 = calculationEnvironmentDigest(concerned);
     const std::optional<CalculationRecord> record = storedRecord("s1", kExpA);
     QVERIFY(record.has_value());
     QVERIFY(!record->result.leaves.contains(GraphNode::preference(PreferenceKeys::ImportDescentPauseSeconds)));
@@ -1707,7 +1710,7 @@ void ResultStoreTest::recordSurvivesUnrelatedChanges()
     else
         QFAIL("unknown change");
     m_model->flushPendingInvalidations();
-    QVERIFY(calculationEnvironmentFingerprint() != env0);
+    QVERIFY(calculationEnvironmentDigest(concerned) != env0);
 
     for (const bool afterRestart : {false, true}) {
         if (afterRestart)

@@ -258,10 +258,11 @@ private:
     [[nodiscard]] QString rewriteRecord(const QString &id, const std::function<void(CalculationRecord &)> &mutate);
     void watchLoad(QObject *scope, const QString &id, LoadWatch *out);
     /// storedFitSurvivesUnrelatedChanges' runtime step on the loaded session
-    /// "a": `apply` changes the calculation environment and the fit stays
+    /// "a": `apply` changes the calculation environment of the `concerned`
+    /// names but not the one of the fit's outputs, and the fit stays
     /// installed, bit for bit, with its record. Empty when all of that held.
-    [[nodiscard]] QString runtimeStep(const std::function<void()> &apply, const QByteArray &r0,
-                                      const FitValues &fresh);
+    [[nodiscard]] QString runtimeStep(const std::function<void()> &apply, const QList<DependencyKey> &concerned,
+                                      const QByteArray &r0, const FitValues &fresh);
     /// Its restart check: after restart(whileClosed) the fit of "a" is
     /// restored when the row is shown, with no job. Empty when that held.
     [[nodiscard]] QString restartCheck(const std::function<void()> &whileClosed, const QByteArray &r0,
@@ -448,17 +449,21 @@ void FusionStoreTest::watchLoad(QObject *scope, const QString &id, LoadWatch *ou
     });
 }
 
-QString FusionStoreTest::runtimeStep(const std::function<void()> &apply, const QByteArray &r0,
-                                     const FitValues &fresh)
+QString FusionStoreTest::runtimeStep(const std::function<void()> &apply, const QList<DependencyKey> &concerned,
+                                     const QByteArray &r0, const FitValues &fresh)
 {
-    const QString env0 = calculationEnvironmentFingerprint();
+    const QList<DependencyKey> fitOutputs = {DependencyKey::measurement(QStringLiteral("Fusion"), QStringLiteral("roll"))};
+    const QString env0 = calculationEnvironmentDigest(concerned);
+    const QString fitEnv0 = calculationEnvironmentDigest(fitOutputs);
     const int runs = engine("a").runCount(kFit);
     m_model->resetStoredResultStats();
     const Quiet quiet(*m_queue);
     apply();
     m_model->flushPendingInvalidations();
-    if (calculationEnvironmentFingerprint() == env0)
-        return QStringLiteral("the environment fingerprint did not change");
+    if (calculationEnvironmentDigest(concerned) == env0)
+        return QStringLiteral("the environment of the concerned names did not change");
+    if (calculationEnvironmentDigest(fitOutputs) != fitEnv0)
+        return QStringLiteral("the environment of the fit's outputs changed");
     if (engine("a").resultStatus(kFit) != std::optional<ResultStatus>(ResultStatus::Ok))
         return QStringLiteral("the fit was dropped");
     if (engine("a").runCount(kFit) != runs)
@@ -1072,7 +1077,8 @@ void FusionStoreTest::storedFitSurvivesUnrelatedChanges()
 
     if (change == QLatin1String("altitudeMarker")) {
         m_altitudes = std::make_unique<AltitudeMarkerManager>();
-        QCOMPARE(runtimeStep([] { writeAltitudes({1000}); }, r0, fresh), QString());
+        const QList<DependencyKey> marker = {DependencyKey::attribute(QStringLiteral("_ALTITUDE_1000_FT"))};
+        QCOMPARE(runtimeStep([] { writeAltitudes({1000}); }, marker, r0, fresh), QString());
         QVERIFY(CalculationRegistry::instance().contains(QStringLiteral("builtin.altitude._ALTITUDE_1000_FT")));
         m_model->resetStoredResultStats();
         QCOMPARE(unloadAndReload("a"), QString());
@@ -1080,26 +1086,30 @@ void FusionStoreTest::storedFitSurvivesUnrelatedChanges()
         QCOMPARE(engine("a").runCount(kFit), 0);
         // The manager lives on: the next run registers the same marker
         QCOMPARE(restartCheck({}, r0, fresh), QString());
-        QCOMPARE(runtimeStep([] { writeAltitudes({}); }, r0, fresh), QString());
+        QCOMPARE(runtimeStep([] { writeAltitudes({}); }, marker, r0, fresh), QString());
         QVERIFY(!CalculationRegistry::instance().contains(QStringLiteral("builtin.altitude._ALTITUDE_1000_FT")));
         QCOMPARE(restartCheck({}, r0, fresh), QString());
     } else if (change == QLatin1String("unrelatedCalculation")) {
         const CalculationDescriptor extra = constantAttribute(kExtra, QStringLiteral("_STORE_EXTRA"), 1);
+        const QList<DependencyKey> name = {DependencyKey::attribute(QStringLiteral("_STORE_EXTRA"))};
         bool changed = false;
-        QCOMPARE(runtimeStep([&] { changed = m_extra->add(extra); }, r0, fresh), QString());
+        QCOMPARE(runtimeStep([&] { changed = m_extra->add(extra); }, name, r0, fresh), QString());
         QVERIFY(changed);
         QCOMPARE(restartCheck({}, r0, fresh), QString());
-        QCOMPARE(runtimeStep([&] { changed = m_extra->remove(kExtra); }, r0, fresh), QString());
+        QCOMPARE(runtimeStep([&] { changed = m_extra->remove(kExtra); }, name, r0, fresh), QString());
         QVERIFY(changed);
         QCOMPARE(restartCheck({}, r0, fresh), QString());
     } else if (change == QLatin1String("descentPause")) {
         CalculationRecord record;
         QCOMPARE(decodeCalculationRecord(r0, &record), CalculationRecordStatus::Ok);
         QVERIFY(!record.result.leaves.contains(GraphNode::preference(PreferenceKeys::ImportDescentPauseSeconds)));
-        QCOMPARE(runtimeStep([&] { prefs.setValue(PreferenceKeys::ImportDescentPauseSeconds, 45.0); }, r0, fresh),
+        const QList<DependencyKey> exitName = {DependencyKey::attribute(QStringLiteral("_EXIT_TIME"))};
+        QCOMPARE(runtimeStep([&] { prefs.setValue(PreferenceKeys::ImportDescentPauseSeconds, 45.0); }, exitName, r0,
+                             fresh),
                  QString());
         QCOMPARE(restartCheck({}, r0, fresh), QString());
-        QCOMPARE(runtimeStep([&] { prefs.setValue(PreferenceKeys::ImportDescentPauseSeconds, 30.0); }, r0, fresh),
+        QCOMPARE(runtimeStep([&] { prefs.setValue(PreferenceKeys::ImportDescentPauseSeconds, 30.0); }, exitName, r0,
+                             fresh),
                  QString());
         QCOMPARE(restartCheck({}, r0, fresh), QString());
     } else if (change == QLatin1String("unrelatedPluginSet")) {
@@ -1114,12 +1124,18 @@ void FusionStoreTest::storedFitSurvivesUnrelatedChanges()
             [&] { return m_extra->add(setA); },
             [&] { return m_extra->remove(a) && m_extra->add(setB); },
             [&] { return m_extra->remove(b); }};
+        const QList<DependencyKey> pluginNames = {DependencyKey::attribute(QStringLiteral("_TEST_PLUGIN_A")),
+                                                  DependencyKey::attribute(QStringLiteral("_TEST_PLUGIN_B"))};
+        const QList<DependencyKey> fitOutputs = {
+            DependencyKey::measurement(QStringLiteral("Fusion"), QStringLiteral("roll"))};
         for (const std::function<bool()> &nextRun : runs) {
-            const QString env0 = calculationEnvironmentFingerprint();
+            const QString env0 = calculationEnvironmentDigest(pluginNames);
+            const QString fitEnv0 = calculationEnvironmentDigest(fitOutputs);
             bool loaded = false;
             QCOMPARE(restartCheck([&] { loaded = nextRun(); }, r0, fresh), QString());
             QVERIFY(loaded);
-            QVERIFY(calculationEnvironmentFingerprint() != env0);
+            QVERIFY(calculationEnvironmentDigest(pluginNames) != env0);
+            QCOMPARE(calculationEnvironmentDigest(fitOutputs), fitEnv0);
         }
     } else {
         QFAIL("unknown change");

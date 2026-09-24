@@ -615,15 +615,16 @@ void ResultRecordsTest::stampsAreCurrent()
     other.calculationCompatibility = 3;
     QVERIFY(!other.stampsAreCurrent());
 
-    // A registration changes the environment fingerprint and never makes a
-    // record stale by itself.
-    const QString environmentBefore = calculationEnvironmentFingerprint();
+    // A registration changes the calculation environment of the names it
+    // provides and never makes a record stale by itself.
+    const QList<DependencyKey> provided = {DependencyKey::attribute(QStringLiteral("_TEST_RESULTRECORDS_EXTRA"))};
+    const QString environmentBefore = calculationEnvironmentDigest(provided);
     CalculationDescriptor extra;
     extra.id = QString::fromLatin1(kExtraId);
     extra.outputs = {DependencyKey::attribute(QStringLiteral("_TEST_RESULTRECORDS_EXTRA"))};
     extra.compute = [](const EvaluationContext &) { return CalculationResult(); };
     QVERIFY(CalculationRegistry::instance().registerCalculation(extra));
-    QVERIFY(calculationEnvironmentFingerprint() != environmentBefore);
+    QVERIFY(calculationEnvironmentDigest(provided) != environmentBefore);
     QVERIFY(record.stampsAreCurrent());
     QVERIFY(CalculationRecord::stamped(sampleSnapshot()).stampsAreCurrent());
 }

@@ -12,10 +12,12 @@
 #include "../conversion/sourceconversion.h"
 #include "../csvformat.h"
 
+#include <algorithm>
 #include <optional>
 
 #include <QCryptographicHash>
-#include <QHash>
+#include <QSet>
+#include <QStringList>
 
 namespace FlySight {
 
@@ -42,58 +44,75 @@ void registerBuiltInCalculations(CalculationRegistry &registry)
     Calculations::registerInterpolationFamily(registry);
 }
 
-QString calculationEnvironmentFingerprint(const CalculationRegistry &registry)
+QString calculationEnvironmentDigest(const QList<DependencyKey> &names, const CalculationRegistry &registry)
 {
-    QCryptographicHash hash(QCryptographicHash::Sha1);
-
-    // Registrations, as far as their order can affect a result: for every
-    // output name (sorted) the candidates in the order they are tried. The
-    // relative order of calculations that share no output is left out, so
-    // that a calculation registered at run time (appended) hashes the same as
-    // after the next start, where it may be registered between others. An id
-    // cannot contain '#', so a second '#' delimits the result version, which
-    // follows the id of every registration that declares one (families and
-    // conversions never do; an id without one hashes as it always has).
-    QHash<CalculationId, QString> versions;
-    for (const CalculationId &id : registry.registeredIds()) {
-        const std::optional<CalculationInstance> instance = registry.instance(id);   // nullopt for a family
-        if (instance && instance->descriptor && !instance->descriptor->resultVersion.isEmpty())
-            versions.insert(id, instance->descriptor->resultVersion);
+    // The closure over every candidate, not only the one that would win
+    // (which one wins depends on session state): every name an evaluation of
+    // `names` can resolve, and every preference it can read.
+    QSet<DependencyKey> closureNames;
+    QSet<QString> closurePreferences;
+    for (const DependencyKey &name : names) {
+        const StaticDependencies deps = registry.staticDependencies(name);
+        closureNames.unite(deps.names);
+        closurePreferences.unite(deps.preferences);
     }
-    const auto addList = [&hash, &versions](const QString &label, const QList<CalculationId> &ids) {
-        hash.addData((label + QLatin1Char('\n')).toUtf8());
-        for (const CalculationId &id : ids) {
-            QString line = QLatin1Char('#') + id;
-            const auto version = versions.constFind(id);
-            if (version != versions.cend()) {
-                QString escaped = *version;
-                escaped.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
-                escaped.replace(QLatin1Char('\n'), QLatin1String("\\n"));
-                line += QLatin1Char('#') + escaped;
-            }
-            hash.addData((line + QLatin1Char('\n')).toUtf8());
+    QList<DependencyKey> sortedNames(closureNames.cbegin(), closureNames.cend());
+    std::sort(sortedNames.begin(), sortedNames.end());
+    QStringList sortedPreferences(closurePreferences.cbegin(), closurePreferences.cend());
+    sortedPreferences.sort();
+
+    QCryptographicHash hash(QCryptographicHash::Sha1);
+    const auto escaped = [](QString text) {
+        text.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
+        text.replace(QLatin1Char('\n'), QLatin1String("\\n"));
+        return text;
+    };
+    const auto addLine = [&hash](const QString &line) {
+        hash.addData((line + QLatin1Char('\n')).toUtf8());
+    };
+    // An id cannot contain '#', so a second '#' delimits the result version
+    const auto addCandidates = [&](const QList<CalculationInstance> &candidates) {
+        for (const CalculationInstance &candidate : candidates) {
+            QString line = QLatin1Char('#') + escaped(candidate.instanceId);
+            if (candidate.descriptor && !candidate.descriptor->resultVersion.isEmpty())
+                line += QLatin1Char('#') + escaped(candidate.descriptor->resultVersion);
+            addLine(line);
         }
     };
-    const CandidateOrder order = registry.candidateOrder();
-    for (const auto &output : order.byOutput) {
-        const DependencyKey &name = output.first;
-        addList(name.type == DependencyKey::Type::Measurement
-                    ? QStringLiteral("measurement:") + name.measurementKey.first
-                          + QLatin1Char('/') + name.measurementKey.second
-                    : QStringLiteral("attribute:") + name.attributeKey,
-                output.second);
+
+    // A sensor or measurement name may contain '/', the separator of the two
+    const auto escapedField = [&escaped](const QString &text) {
+        QString field = escaped(text);
+        field.replace(QLatin1Char('/'), QLatin1String("\\/"));
+        return field;
+    };
+
+    // Per name, what resolution tries for it, in the order it is tried
+    for (const DependencyKey &name : std::as_const(sortedNames)) {
+        if (name.type == DependencyKey::Type::Measurement) {
+            addLine(QStringLiteral("measurement:") + escapedField(name.measurementKey.first) + QLatin1Char('/')
+                    + escapedField(name.measurementKey.second));
+        } else {
+            addLine(QStringLiteral("attribute:") + escaped(name.attributeKey));
+        }
+        addCandidates(registry.candidatesFor(name));
+        if (name.type == DependencyKey::Type::Measurement) {
+            if (registry.hasSourceConversions()) {
+                addLine(QStringLiteral("conversions"));
+                addCandidates(registry.sourceConversionsFor(name.measurementKey.first, name.measurementKey.second));
+            } else {
+                addLine(QStringLiteral("no conversions"));
+            }
+        }
     }
-    addList(QStringLiteral("families"), order.families);
-    addList(QStringLiteral("conversions"), order.sourceConversions);
 
     const IPreferenceProvider *provider = registry.preferenceProvider();
-    const QStringList keys = registry.declaredPreferenceKeys();
-    for (const QString &key : keys) {
+    for (const QString &key : std::as_const(sortedPreferences)) {
         // The same text form a session file would carry: exact for doubles,
         // and the same whether the settings store handed back a number or a string.
         const QVariant value = provider ? provider->preferenceValue(key) : QVariant();
         const QString text = CsvFormat::formatAttributeValue(value).value_or(QString());
-        hash.addData((QStringLiteral("pref:") + key + QLatin1Char('=') + text + QLatin1Char('\n')).toUtf8());
+        addLine(QStringLiteral("pref:") + escaped(key) + QLatin1Char('=') + escaped(text));
     }
 
     return QString::fromLatin1(hash.result().toHex());
