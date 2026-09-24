@@ -11,8 +11,9 @@
 //    dependency edit or an IMU merge drops it), what the fit looked up and the
 //    code stamps; nothing unrelated to what it reached (altitude markers,
 //    other registrations, the descent-pause preference, another plug-in set)
-//    makes it stale, in memory or across a restart; a registration that
-//    provides a name it looked up drops it and its record at once; a lookup
+//    makes it stale, in memory or across a restart; a registry change that
+//    changes what a name it looked up resolves to drops it and its record at
+//    once, a candidate registered behind the provider does not; a lookup
 //    that resolves differently at load deletes it;
 //  - a fit published before the session's first save is stored and restored;
 //  - the session file's bytes never depend on a record;
@@ -189,7 +190,7 @@ private slots:
     void codeStampChangeDropsRecordOnLoad();
     void storedFitSurvivesUnrelatedChanges_data();
     void storedFitSurvivesUnrelatedChanges();
-    void runtimeRegistrationDropsFitAndRecord();
+    void runtimeRegistryChangeDropsFitAndRecord();
     void lookupResolvingDifferentlyAtLoadDeletesFit();
     void sessionFileBytesUnaffectedByRecord();
     void fittedBeforeFirstSaveIsRestored_data();
@@ -1125,15 +1126,24 @@ void FusionStoreTest::storedFitSurvivesUnrelatedChanges()
     }
 }
 
-// Spec 10, second item: registering, while the application runs, a
-// calculation that provides a name the fit looked up drops the installed fit
-// and deletes its record at once; the row offers refresh and nothing starts.
-void FusionStoreTest::runtimeRegistrationDropsFitAndRecord()
+// Spec 10, second item, as the engine settles it: a registry change made
+// while the application runs drops the installed fit and deletes its record
+// at once exactly when it changes what a name the fit looked up resolves to;
+// the row then offers refresh and nothing starts. Here GNSS/sAcc, which only
+// a registered calculation (sacc1) provides: a second candidate for it,
+// registered behind sacc1, is never tried and changes nothing; removing sacc1
+// hands the name to that candidate, which drops the fit and its record.
+void FusionStoreTest::runtimeRegistryChangeDropsFitAndRecord()
 {
     const auto restoreCapacity = qScopeGuard([] {
         PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
     });
-    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
+    const QString sacc0 = QStringLiteral("test.store.sacc0");
+    const QString sacc1 = QStringLiteral("test.store.sacc1");
+    QVERIFY(m_extra->add(sAccFrom(sacc1)));
+    QCOMPARE(addSessions({fixtureSessionWithSAccStoredAs(QStringLiteral("coarse_linear"), QStringLiteral("a"),
+                                                         QStringLiteral("testSAcc"))}),
+             QString());
     show({"a"});
     check(QStringLiteral("roll"));
     QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
@@ -1144,15 +1154,22 @@ void FusionStoreTest::runtimeRegistrationDropsFitAndRecord()
     QVERIFY(!r0.isEmpty());
     CalculationRecord record;
     QCOMPARE(decodeCalculationRecord(r0, &record), CalculationRecordStatus::Ok);
-    QVERIFY(resolutionOf(record.result.resolutions, DependencyKey::attribute(QStringLiteral("_LOCAL_ORIGIN_INDEX"))));
+    const StoredResolution *sAcc = resolutionOf(record.result.resolutions,
+                                                DependencyKey::measurement(QStringLiteral("GNSS"), QStringLiteral("sAcc")));
+    QVERIFY(sAcc);
+    QCOMPARE(sAcc->instanceId, sacc1);
 
     m_model->resetStoredResultStats();
     {
         const Quiet quiet(*m_queue);
-        QVERIFY(m_extra->add(constantAttribute(QStringLiteral("test.store.originShadow"),
-                                               QStringLiteral("_LOCAL_ORIGIN_INDEX"),
-                                               QVariant::fromValue(qlonglong(0)))));
-        // No event-loop pass in between
+        // A candidate behind the provider: nothing is dropped or deleted
+        QVERIFY(m_extra->add(sAccFrom(sacc0)));
+        QCOMPARE(engine("a").resultStatus(kFit), std::optional<ResultStatus>(ResultStatus::Ok));
+        QCOMPARE(bytesOf(path), r0);
+        QCOMPARE(stats().droppedRecordsDeleted, 0);
+
+        // The provider removed: no event-loop pass in between
+        QVERIFY(m_extra->remove(sacc1));
         QVERIFY(!QFileInfo::exists(path));
         QCOMPARE(stats().droppedRecordsDeleted, 1);
         QVERIFY(isNotRequested(engine("a").resultStatus(kFit)));

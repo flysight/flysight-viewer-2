@@ -10,8 +10,9 @@
 //    format refuses) leaves the in-memory result usable and the previous
 //    record intact;
 //  - an input change deletes the record; eviction and a restart do not; a
-//    registry change made while the application runs that reaches a result
-//    deletes its record, a teardown removal does not; a registry or
+//    registry change made while the application runs that changes what a
+//    name a result looked up resolves to deletes its record, one behind the
+//    provider and a teardown removal do not; a registry or
 //    preference change that does not reach it leaves the record valid across
 //    loads and restarts; a record whose lookups resolve differently at load,
 //    or whose plug-in provider's code identity changed, is stale; an
@@ -88,7 +89,10 @@ const QString kShadow = QStringLiteral("test.store.shadow");
 const QString kExtra = QStringLiteral("test.store.extra");
 const QString kGone = QStringLiteral("test.store.gone");
 const QString kFamily = QStringLiteral("test.store.fam");
-const QString kFamilyEaIn = QStringLiteral("test.store.famEaIn");
+const QString kFamilySrc = QStringLiteral("test.store.famSrc");
+const QString kFromSrc = QStringLiteral("test.store.fromSrc");
+const QString kSrc = QStringLiteral("test.store.src");
+const QString kBehind = QStringLiteral("test.store.behind");
 const QString kReader = QStringLiteral("test.store.reader");
 const QString kPlugin = QStringLiteral("test.store.plugin");
 const QString kReadsPlugin = QStringLiteral("test.store.readsPlugin");
@@ -1556,42 +1560,54 @@ void ResultStoreTest::deletingSessionWithSkippedRecord()
 void ResultStoreTest::registryChangeDeletesRecord_data()
 {
     QTest::addColumn<QString>("change");
-    for (const char *change : {"providerRegistered", "providerUnregistered", "familyRegistered", "teardownRemoval"})
+    for (const char *change : {"providerRegistered", "familyRegistered", "providerUnregistered",
+                               "candidateBehindProviderRegistered", "teardownRemoval"})
         QTest::newRow(change) << QString::fromLatin1(change);
 }
 
-// A registry change made while the application runs that reaches a result (a
-// provider of EA_IN, which expA looked up and expB reads through expA) drops
-// it and deletes its record at once, like an input change. A teardown removal
-// drops it silently and deletes nothing: the record restores at the next load.
+// A registry change made while the application runs that changes what a name
+// a result looked up resolves to drops it and deletes its record at once, like
+// an input change. Here EA_IN, which expA looks up and expB reads through
+// expA, is provided by a calculation (test.store.shadow, EA_IN = 4) after a
+// candidate that reads the missing EA_SRC (test.store.fromSrc, passed over):
+// a calculation or a family that now provides EA_SRC hands EA_IN to fromSrc,
+// and removing shadow leaves EA_IN to nothing. A candidate registered behind
+// shadow is never tried: nothing is dropped or deleted. A teardown removal
+// drops the results silently and deletes nothing: the records restore at the
+// next load, once shadow is registered again (as at the next start).
 void ResultStoreTest::registryChangeDeletesRecord()
 {
     QFETCH(QString, change);
-    const CalculationDescriptor shadow = constantCalculation(kShadow, QStringLiteral("EA_IN"), 0);
-    CalculationFamily famEaIn;
-    famEaIn.id = kFamilyEaIn;
-    famEaIn.policy = EvaluationPolicy::OnDemand;
-    famEaIn.instantiate = [](const DependencyKey &name) -> std::optional<CalculationDescriptor> {
-        if (!(name == DependencyKey::attribute(QStringLiteral("EA_IN"))))
+    const CalculationDescriptor shadow = constantCalculation(kShadow, QStringLiteral("EA_IN"), 4);
+    CalculationDescriptor fromSrc;
+    fromSrc.id = kFromSrc;
+    fromSrc.inputs = {CalcInput::attribute(QStringLiteral("EA_SRC"))};
+    fromSrc.outputs = {attrKey("EA_IN")};
+    fromSrc.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(QStringLiteral("EA_IN"), ctx.attribute(QStringLiteral("EA_SRC")));
+    };
+    CalculationFamily famSrc;
+    famSrc.id = kFamilySrc;
+    famSrc.policy = EvaluationPolicy::OnDemand;
+    famSrc.instantiate = [](const DependencyKey &name) -> std::optional<CalculationDescriptor> {
+        if (!(name == DependencyKey::attribute(QStringLiteral("EA_SRC"))))
             return std::nullopt;
         CalculationDescriptor d;
         d.id = QStringLiteral("k");     // instance key
         d.outputs = {name};
         d.compute = [](const EvaluationContext &) {
-            return CalculationResult().setAttribute(QStringLiteral("EA_IN"), 0);
+            return CalculationResult().setAttribute(QStringLiteral("EA_SRC"), 7);
         };
         return d;
     };
 
-    if (change == QLatin1String("providerUnregistered") || change == QLatin1String("teardownRemoval")) {
-        QVERIFY(m_extra->add(shadow));
-        m_model->flushPendingInvalidations();
-    }
-    QVERIFY(setInput("s1", "EA_IN", 4));
+    QVERIFY(m_extra->add(fromSrc));
+    QVERIFY(m_extra->add(shadow));
+    m_model->flushPendingInvalidations();
     QVERIFY(setInput("s1", "EB_IN", 10));
     QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
     QCOMPARE(engine("s1").request(kExpB).status, ResultStatus::Ok);
-    QCOMPARE(session("s1").getAttribute(QStringLiteral("EA1")), QVariant(5));     // stored EA_IN wins
+    QCOMPARE(session("s1").getAttribute(QStringLiteral("EA1")), QVariant(5));     // EA_IN from shadow
     QVERIFY(waitForIdle(*m_model));
     const QString pathA = recordPath("s1", QStringLiteral("exp%41"));
     const QString pathB = recordPath("s1", QStringLiteral("exp%42"));
@@ -1601,15 +1617,18 @@ void ResultStoreTest::registryChangeDeletesRecord()
     QVERIFY(!bytesB.isEmpty());
     m_model->resetStoredResultStats();
 
-    const bool deletes = change != QLatin1String("teardownRemoval");
+    const bool keeps = change == QLatin1String("candidateBehindProviderRegistered");
+    const bool deletes = !keeps && change != QLatin1String("teardownRemoval");
     {
         const Quiet quiet(*m_queue);
         if (change == QLatin1String("providerRegistered"))
-            QVERIFY(m_extra->add(shadow));
+            QVERIFY(m_extra->add(constantCalculation(kSrc, QStringLiteral("EA_SRC"), 7)));
+        else if (change == QLatin1String("familyRegistered"))
+            QVERIFY(m_extra->addFamily(famSrc));
         else if (change == QLatin1String("providerUnregistered"))
             QVERIFY(m_extra->remove(kShadow));
-        else if (change == QLatin1String("familyRegistered"))
-            QVERIFY(m_extra->addFamily(famEaIn));
+        else if (keeps)
+            QVERIFY(m_extra->add(constantCalculation(kBehind, QStringLiteral("EA_IN"), 0)));
         else if (change == QLatin1String("teardownRemoval"))
             QVERIFY(m_extra->remove(kShadow, CalculationRegistry::Removal::Teardown));
         else
@@ -1627,12 +1646,21 @@ void ResultStoreTest::registryChangeDeletesRecord()
             QCOMPARE(bytesOf(pathB), bytesB);
             QCOMPARE(stats().droppedRecordsDeleted, 0);
         }
-        QVERIFY(loaded.resultStatus(kExpA) != std::optional<ResultStatus>(ResultStatus::Ok));
+        if (keeps) {
+            QCOMPARE(loaded.resultStatus(kExpA), std::optional<ResultStatus>(ResultStatus::Ok));
+            QCOMPARE(loaded.resultStatus(kExpB), std::optional<ResultStatus>(ResultStatus::Ok));
+        } else {
+            QVERIFY(loaded.resultStatus(kExpA) != std::optional<ResultStatus>(ResultStatus::Ok));
+        }
         QVERIFY(quiet.holds());
     }
 
     QVERIFY(waitForIdle(*m_model));
     QCOMPARE(evict({"s1"}), QString());
+    if (change == QLatin1String("teardownRemoval")) {
+        QVERIFY(m_extra->add(shadow));
+        m_model->flushPendingInvalidations();
+    }
     m_model->resetStoredResultStats();
     CalculationEngine &loaded = engine("s1");
     if (deletes) {

@@ -5,7 +5,9 @@
 // published (the lookups repeated and compared, also across registries), and
 // the explicit-result listener, including the drops a registry change made
 // while the application runs reports and the teardown paths that report
-// nothing, with synthetic calculations against a fake session state.
+// nothing, and that such a change drops a result exactly when a restore of
+// its snapshot across the same change is stale (registryChangeMirrorsRestore),
+// with synthetic calculations against a fake session state.
 //
 // Expected values are literals, except where the engine that published IS the
 // expectation: "a restored result cannot be told from a published one" is the
@@ -208,6 +210,68 @@ CalculationDescriptor constantX(const QString &id)
     return d;
 }
 
+// readsXThenMissing: Explicit; inputs attr X, attr NOPE (never provided);
+// RXN = X. Requested, it installs MissingInput after looking up X.
+CalculationDescriptor readsXThenMissing()
+{
+    CalculationDescriptor d;
+    d.id = QStringLiteral("readsXThenMissing");
+    d.policy = EvaluationPolicy::Explicit;
+    d.inputs = {CalcInput::attribute("X"), CalcInput::attribute("NOPE")};
+    d.outputs = {attr("RXN")};
+    d.compute = [](const EvaluationContext &ctx) { return CalculationResult().setAttribute("RXN", ctx.attribute("X")); };
+    return d;
+}
+
+// On demand; no inputs; `key` = `value`.
+CalculationDescriptor constantOf(const QString &id, const QString &key, int value)
+{
+    CalculationDescriptor d;
+    d.id = id;
+    d.outputs = {DependencyKey::attribute(key)};
+    d.compute = [key, value](const EvaluationContext &) { return CalculationResult().setAttribute(key, value); };
+    return d;
+}
+
+// No inputs; runs (when it may) and never provides `key`: a candidate that is
+// always passed over, having looked at nothing.
+CalculationDescriptor neverProvides(const QString &id, const QString &key,
+                                    EvaluationPolicy policy = EvaluationPolicy::OnDemand)
+{
+    CalculationDescriptor d;
+    d.id = id;
+    d.policy = policy;
+    d.outputs = {DependencyKey::attribute(key)};
+    d.compute = [](const EvaluationContext &) { return CalculationResult::unavailable(); };
+    return d;
+}
+
+// On demand; input attr `input`; `output` = input.
+CalculationDescriptor copyOf(const QString &id, const QString &input, const QString &output)
+{
+    CalculationDescriptor d;
+    d.id = id;
+    d.inputs = {CalcInput::attribute(input)};
+    d.outputs = {DependencyKey::attribute(output)};
+    d.compute = [input, output](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(output, ctx.attribute(input));
+    };
+    return d;
+}
+
+// On demand; no inputs; the measurement S/m = {9}, unit "calc". Never wins
+// over recorded S/m data.
+CalculationDescriptor smFromCalculation()
+{
+    CalculationDescriptor d;
+    d.id = QStringLiteral("smCalc");
+    d.outputs = {Synthetic::measKey("S", "m")};
+    d.compute = [](const EvaluationContext &) {
+        return CalculationResult().setMeasurement("S", "m", {9.0}, QStringLiteral("calc"));
+    };
+    return d;
+}
+
 // famEA: an on-demand family accepting only EA_IN (instance key "k", no
 // inputs, EA_IN = 0).
 CalculationFamily familyForEaIn()
@@ -227,12 +291,14 @@ CalculationFamily familyForEaIn()
 }
 
 // conv: a source conversion accepting any measurement (instance key
-// "<sensor>/<name>") that passes the samples and the unit through.
-CalculationFamily passConversion()
+// "<sensor>/<name>") that passes the samples and the unit through. With
+// `provides` false it reads the same source leaves and provides nothing: a
+// conversion that is always passed over.
+CalculationFamily passConversion(const QString &id = QStringLiteral("conv"), bool provides = true)
 {
     CalculationFamily f;
-    f.id = QStringLiteral("conv");
-    f.instantiate = [](const DependencyKey &name) -> std::optional<CalculationDescriptor> {
+    f.id = id;
+    f.instantiate = [provides](const DependencyKey &name) -> std::optional<CalculationDescriptor> {
         if (name.type != DependencyKey::Type::Measurement)
             return std::nullopt;
         const QString sensor = name.measurementKey.first;
@@ -241,7 +307,9 @@ CalculationFamily passConversion()
         d.id = sensor + QLatin1Char('/') + meas;
         d.inputs = {CalcInput::sourceMeasurement(sensor, meas), CalcInput::sourceUnit(sensor, meas)};
         d.outputs = {name};
-        d.compute = [sensor, meas](const EvaluationContext &ctx) {
+        d.compute = [sensor, meas, provides](const EvaluationContext &ctx) {
+            if (!provides)
+                return CalculationResult::unavailable();
             return CalculationResult().setMeasurement(sensor, meas, ctx.sourceMeasurement(sensor, meas),
                                                       ctx.sourceUnit(sensor, meas));
         };
@@ -426,6 +494,149 @@ struct EngineCounters {
     }
 };
 
+
+// ---- registry changes made while the application runs ----------------------
+
+/// restoreAcrossRegistries' source world: the standard registrations, px1
+/// (v1) providing PX, readsPX, readsX.
+void registerAcrossWorld(CalculationRegistry &r)
+{
+    registerStandard(r);
+    r.registerCalculation(pxFrom("px1", "v1"));
+    r.registerCalculation(readsPX());
+    r.registerCalculation(readsX());
+}
+
+/// The across world with `first` registered before it and `last` after it.
+Registrar acrossWorldWith(const Registrar &first, const Registrar &last = {})
+{
+    return [first, last](CalculationRegistry &r) {
+        if (first)
+            first(r);
+        registerAcrossWorld(r);
+        if (last)
+            last(r);
+    };
+}
+
+Registrar adding(const CalculationDescriptor &d)
+{
+    return [d](CalculationRegistry &r) { QVERIFY(r.registerCalculation(d)); };
+}
+
+Registrar removing(const QString &id)
+{
+    return [id](CalculationRegistry &r) { QVERIFY(r.unregister(id, CalculationRegistry::Removal::Change)); };
+}
+
+/// One registry change (or a short sequence) made while the application runs,
+/// against the results requested before it.
+struct RegistryChangeCase {
+    const char *row;
+    Registrar before;           ///< the registrations the results were requested under
+    Registrar change;           ///< made while the application runs
+    QStringList requests;       ///< requested in this order (upstream first) and exported
+    QStringList dropped;        ///< which of them the change drops in memory
+    /// False for the documented exception (registryChangeMirrorsRestore):
+    /// memory drops, the restore does not find the snapshot stale.
+    bool mirrors = true;
+};
+
+const QList<RegistryChangeCase> &registryChangeCases()
+{
+    const Registrar across = registerAcrossWorld;
+    const Registrar conv = [](CalculationRegistry &r) { QVERIFY(r.registerSourceConversion(passConversion())); };
+    const Registrar conv2 = [](CalculationRegistry &r) {
+        QVERIFY(r.registerSourceConversion(passConversion(QStringLiteral("conv2"))));
+    };
+    const Registrar convNone = [](CalculationRegistry &r) {
+        QVERIFY(r.registerSourceConversion(passConversion(QStringLiteral("convNone"), false)));
+    };
+    const Registrar famPX = [](CalculationRegistry &r) {
+        registerStandard(r);
+        r.registerFamily(pxFamily(QStringLiteral("fv1")));
+        r.registerCalculation(readsPX());
+        r.registerCalculation(readsX());
+    };
+    const QStringList none;
+
+    static const QList<RegistryChangeCase> cases = {
+        // Nothing the results looked up changes
+        {"no change", across, [](CalculationRegistry &) {}, {"expA", "readsPX", "readsX"}, none},
+        {"unrelated registered", across, adding(unrelated()), {"expA", "readsPX", "readsX"}, none},
+        {"unrelated removed", acrossWorldWith({}, adding(unrelated())), removing("unrelated"),
+         {"expA", "readsPX"}, none},
+        // A candidate the session's own data wins over (droppedByRegistryChange
+        // (a) to (c); restoreAcrossRegistries "losing candidate")
+        {"candidate behind a stored value registered", across, adding(altIn()), {"expA"}, none},
+        {"candidate behind a stored value removed", acrossWorldWith({}, adding(altIn())), removing("altIn"),
+         {"expA"}, none},
+        {"family behind a stored value registered", across,
+         [](CalculationRegistry &r) { QVERIFY(r.registerFamily(familyForEaIn())); }, {"expA"}, none},
+        {"family behind a stored value removed",
+         acrossWorldWith({}, [](CalculationRegistry &r) { r.registerFamily(familyForEaIn()); }), removing("famEA"),
+         {"expA"}, none},
+        {"calculation behind recorded data registered", across, adding(smFromCalculation()),
+         {"measExplicit"}, none},
+        // A candidate behind the provider: never tried
+        {"candidate after the provider registered", across, adding(pxFrom("px2", "v1")), {"readsPX"}, none},
+        {"candidate after the provider removed", acrossWorldWith({}, adding(pxFrom("px2", "v1"))),
+         removing("px2"), {"readsPX"}, none},
+        // The provider goes (restoreAcrossRegistries "provider removed")
+        {"provider removed, another candidate", acrossWorldWith(adding(pxFrom("px0", "v1"))), removing("px0"),
+         {"readsPX"}, {"readsPX"}},
+        {"provider removed, no candidate", across, removing("px1"), {"readsPX"}, {"readsPX"}},
+        {"provider registered again with another result version", across,
+         [](CalculationRegistry &r) {
+             QVERIFY(r.unregister("px1", CalculationRegistry::Removal::Change));
+             QVERIFY(r.registerCalculation(pxFrom("px1", "v2")));
+         },
+         {"readsPX"}, {"readsPX"}},
+        {"family provider removed", famPX, removing("famPX"), {"readsPX"}, {"readsPX"}},
+        {"family provider registered again with another result version", famPX,
+         [](CalculationRegistry &r) {
+             QVERIFY(r.unregister("famPX", CalculationRegistry::Removal::Change));
+             QVERIFY(r.registerFamily(pxFamily(QStringLiteral("fv2"))));
+         },
+         {"readsPX"}, {"readsPX"}},
+        {"requested provider removed", across, removing("expA"), {"expA", "expB"}, {"expA", "expB"}},
+        // A new provider for a name that resolved to nothing (C: fallbackX,
+        // passed over for readsX's X, looked it up)
+        {"provider for a name resolved to nothing registered", across, adding(constantOf("constC", "C", 2)),
+         {"readsX"}, {"readsX"}},
+        // A candidate that was tried and passed over goes
+        {"passed-over candidate removed, its lookups its own", across, removing("sum"), {"readsX"}, {"readsX"}},
+        {"passed-over candidate removed, its lookups shared", acrossWorldWith(adding(copyOf("xFromC", "C", "X"))),
+         removing("xFromC"), {"readsX"}, none},
+        {"passed-over candidate removed, no lookups", acrossWorldWith(adding(neverProvides("noX", "X"))),
+         removing("noX"), {"readsX"}, none},
+        {"passed-over explicit candidate removed",
+         acrossWorldWith(adding(neverProvides("expX", "X", EvaluationPolicy::Explicit))), removing("expX"),
+         {"readsX"}, none},
+        // The conversion layer
+        {"first conversion registered", across, conv, {"measExplicit"}, {"measExplicit"}},
+        {"conversion after the provider registered", acrossWorldWith({}, conv), conv2, {"measExplicit"}, none},
+        {"conversion after the provider removed",
+         acrossWorldWith({}, [conv, conv2](CalculationRegistry &r) { conv(r); conv2(r); }), removing("conv2"),
+         {"measExplicit"}, none},
+        {"providing conversion removed, another remains",
+         acrossWorldWith({}, [conv, conv2](CalculationRegistry &r) { conv(r); conv2(r); }), removing("conv"),
+         {"measExplicit"}, {"measExplicit"}},
+        {"passed-over conversion removed",
+         acrossWorldWith({}, [conv, convNone](CalculationRegistry &r) { convNone(r); conv(r); }),
+         removing("convNone"), {"measExplicit"}, none},
+        {"last conversion removed", acrossWorldWith({}, conv), removing("conv"), {"measExplicit"},
+         {"measExplicit"}},
+        // The documented exception: a candidate for a name that resolved to
+        // nothing, which does not provide it either and looks up nothing new
+        {"candidate for a name resolved to nothing that is passed over, registered", across,
+         adding(neverProvides("noC", "C")), {"readsX"}, {"readsX"}, false},
+        {"explicit candidate for a name resolved to nothing registered", across,
+         adding(neverProvides("expC", "C", EvaluationPolicy::Explicit)), {"readsX"}, {"readsX"}, false},
+    };
+    return cases;
+}
+
 } // namespace
 
 class CalcEngineRestoreTest : public QObject {
@@ -467,6 +678,9 @@ private slots:
     void restoreAcrossRegistries_data();
     void restoreAcrossRegistries();
     void droppedByRegistryChange();
+    void registryChangeMirrorsRestore_data();
+    void registryChangeMirrorsRestore();
+    void publishAcrossPassedOverRemovalMirrorsRestore();
     void registryDestructionReportsNothing();
 
 private:
@@ -1319,16 +1533,17 @@ void CalcEngineRestoreTest::noDropEventWithoutInputChange()
     QVERIFY(isNotRun(s.engine.resultStatus("expA")));
     QVERIFY(s.events.isEmpty());
 
-    // A removal as teardown of a calculation that declares expA's input: it
-    // drops the result and reports nothing. (Runtime registry changes report
-    // their drops: droppedByRegistryChange.)
-    QVERIFY(w.reg.registry.registerCalculation(altIn()));   // nothing installed: no event
-    QVERIFY(s.events.isEmpty());
+    // A removal as teardown of the calculation that provided expB's input EA2
+    // (expA): it drops both results and reports nothing. (Runtime registry
+    // changes report their drops: droppedByRegistryChange.)
     QCOMPARE(s.engine.request("expA").status, ResultStatus::Ok);
-    QCOMPARE(s.engine.attribute("EA1"), QVariant(5));      // the stored EA_IN still wins
+    QCOMPARE(s.engine.request("expB").status, ResultStatus::Ok);
     s.takeEvents();
-    QVERIFY(w.reg.registry.unregister("altIn", CalculationRegistry::Removal::Teardown));
+    QVERIFY(w.reg.registry.unregister("expA", CalculationRegistry::Removal::Teardown));
     QVERIFY(!s.engine.resultStatus("expA").has_value());
+    QVERIFY(!s.engine.resultStatus("expB").has_value());
+    QVERIFY(s.events.isEmpty());
+    QVERIFY(w.reg.registry.registerCalculation(Synthetic::expA()));     // nothing installed: no event
     QVERIFY(s.events.isEmpty());
 
     // The engine's destruction
@@ -1655,43 +1870,48 @@ void CalcEngineRestoreTest::restoreAcrossRegistries()
     }
 }
 
-// A registry change made while the application runs that reaches a requested
-// result reports its drop exactly like an input change.
+// A registry change made while the application runs drops a requested result
+// exactly when it alters what a name the result looked up resolves to, and
+// reports the drop like an input change. A candidate that loses (to the
+// session's own data, or to a provider tried first) changes nothing. Removing
+// a passed-over candidate drops only a result with a stored copy whose
+// lookups reached something through it alone.
 void CalcEngineRestoreTest::droppedByRegistryChange()
 {
     {
         Pair w;
         Session &s = w.source;
         CalculationRegistry &registry = w.reg.registry;
+        const auto keeps = [&s](const char *what) {
+            QVERIFY2(s.events.isEmpty(), what);
+            QVERIFY2(s.log.isEmpty(), what);
+            QVERIFY2(s.engine.resultStatus("expA") == std::optional<ResultStatus>(ResultStatus::Ok), what);
+            QVERIFY2(s.engine.exportResult("expA").has_value(), what);
+            QVERIFY2(s.engine.verifyAgainstFresh({attr("EA_IN")}).isEmpty(), what);
+        };
 
-        // (a) a registration of a candidate for a looked-up name
+        // (a) a registration of a candidate for a looked-up name that the
+        // stored EA_IN still wins over: nothing is dropped or reported
         QCOMPARE(s.engine.request("expA").status, ResultStatus::Ok);
         s.takeEvents();
         s.log.clear();
         QVERIFY(registry.registerCalculation(altIn()));
-        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped expA Ok"}));
-        QCOMPARE(s.log, QStringList({"names", "explicit expA"}));
-        QVERIFY(!s.engine.resultStatus("expA").has_value());
-        QVERIFY(!s.engine.exportResult("expA").has_value());
+        keeps("(a)");
+        QCOMPARE(s.engine.attribute("EA1"), QVariant(5));
 
         // (b) its removal
-        QCOMPARE(s.engine.request("expA").status, ResultStatus::Ok);
-        QCOMPARE(s.engine.attribute("EA1"), QVariant(5));      // the stored EA_IN still wins
-        s.takeEvents();
         QVERIFY(registry.unregister("altIn", CalculationRegistry::Removal::Change));
-        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped expA Ok"}));
+        keeps("(b)");
 
         // (c) a family that accepts a looked-up name, and its removal
-        QCOMPARE(s.engine.request("expA").status, ResultStatus::Ok);
-        s.takeEvents();
         QVERIFY(registry.registerFamily(familyForEaIn()));
-        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped expA Ok"}));
-        QCOMPARE(s.engine.request("expA").status, ResultStatus::Ok);
-        s.takeEvents();
+        keeps("(c) registered");
         QVERIFY(registry.unregister("famEA", CalculationRegistry::Removal::Change));
-        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped expA Ok"}));
+        keeps("(c) removed");
+        QCOMPARE(s.engine.runCount("expA"), 1);
 
-        // (d) a source conversion under a measurement input
+        // (d) a source conversion under a measurement input: the passthrough
+        // gives way to the conversion layer
         Session &t = w.target;
         t.state.setMeasurement("S", "m", {1.0, 2.0, 3.0}, "u");
         QCOMPARE(t.engine.request("measExplicit").status, ResultStatus::Ok);
@@ -1700,6 +1920,50 @@ void CalcEngineRestoreTest::droppedByRegistryChange()
         QVERIFY(registry.registerSourceConversion(passConversion()));
         QCOMPARE(describeEvents(t.takeEvents()), QStringList({"Dropped measExplicit Ok"}));
         QVERIFY(s.events.isEmpty());
+    }
+    {
+        // (g) a registration that provides a name looked up and resolved to
+        // nothing (C, which fallbackX, passed over for readsX's X, reads):
+        // fallbackX now wins X, and readsX goes
+        Pair w([](CalculationRegistry &r) {
+            registerStandard(r);
+            r.registerCalculation(readsX());
+        });
+        Session &s = w.source;
+        QCOMPARE(s.engine.request("readsX").status, ResultStatus::Ok);
+        QCOMPARE(s.engine.attribute("RX"), QVariant(-1));
+        s.takeEvents();
+        s.log.clear();
+        QVERIFY(w.reg.registry.registerCalculation(constantOf("constC", "C", 2)));
+        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped readsX Ok"}));
+        QCOMPARE(s.log, QStringList({"names", "explicit readsX"}));
+        QVERIFY(!s.engine.resultStatus("readsX").has_value());
+        QCOMPARE(s.engine.attribute("X"), QVariant(20));
+    }
+    {
+        // (h) the removal of a passed-over candidate through which alone the
+        // lookups reached something (sum, which looked up A): a result with a
+        // stored copy goes, so that it goes stale with that copy; a requested
+        // result without one (MissingInput) keeps its unchanged answer
+        Pair w([](CalculationRegistry &r) {
+            registerStandard(r);
+            r.registerCalculation(readsX());
+            r.registerCalculation(readsXThenMissing());
+        });
+        Session &s = w.source;
+        QCOMPARE(s.engine.request("readsX").status, ResultStatus::Ok);
+        QCOMPARE(s.engine.request("readsXThenMissing").status, ResultStatus::MissingInput);
+        QVERIFY(!s.engine.exportResult("readsXThenMissing").has_value());
+        s.takeEvents();
+        const int runs = s.engine.totalRunCount();
+        QVERIFY(w.reg.registry.unregister("sum", CalculationRegistry::Removal::Change));
+        QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Dropped readsX Ok"}));
+        QCOMPARE(s.engine.resultStatus("readsXThenMissing"),
+                 std::optional<ResultStatus>(ResultStatus::MissingInput));
+        QCOMPARE(s.engine.request("readsXThenMissing").status, ResultStatus::MissingInput);    // still installed
+        QCOMPARE(s.engine.totalRunCount(), runs);
+        QVERIFY(s.events.isEmpty());
+        QVERIFY(s.engine.verifyAgainstFresh({attr("X"), attr("A")}).isEmpty());
     }
     {
         // (e) the removal of a calculation whose result a requested result
@@ -1729,6 +1993,145 @@ void CalcEngineRestoreTest::droppedByRegistryChange()
         QCOMPARE(s.engine.resultStatus("expA"), std::optional<ResultStatus>(ResultStatus::Ok));
         QVERIFY(s.engine.exportResult("expA").has_value());
     }
+}
+
+void CalcEngineRestoreTest::registryChangeMirrorsRestore_data()
+{
+    QTest::addColumn<int>("index");
+    const QList<RegistryChangeCase> &cases = registryChangeCases();
+    for (int i = 0; i < int(cases.size()); ++i)
+        QTest::newRow(cases.at(i).row) << i;
+}
+
+// The rule a stored result lives by (the stored-results validity
+// specification, section 2): it goes stale exactly when the same result in
+// memory would be dropped. Here for registry changes: a requested result is
+// dropped by a change made while the application runs if and only if
+// restoring its snapshot from before the change into a fresh engine over the
+// registry after it is not a restore (Stale, or NotFound when the result's own
+// calculation went).
+//
+// The one exception, pinned by the rows marked so: a registration that is a
+// candidate for a looked-up name that resolved to nothing, and that turns out
+// not to provide it either, having looked up nothing the result did not reach
+// anyway (it has no inputs, or it is explicit and not requested). Whether a
+// new candidate provides the name is known only by running it, and
+// invalidation never computes, so memory drops the result; the restore runs
+// the lookups and finds them unchanged. Memory is the conservative side: a
+// result is never kept that a restore would refuse.
+void CalcEngineRestoreTest::registryChangeMirrorsRestore()
+{
+    QFETCH(int, index);
+    const RegistryChangeCase &c = registryChangeCases().at(index);
+    const auto setState = [](Session &s) {
+        s.state.setAttribute("PA", 3);
+        s.state.setMeasurement("S", "m", {1.0, 2.0, 3.0}, "u");
+    };
+
+    Registry reg(c.before);
+    Session live(reg);
+    setState(live);
+    QList<StoredCalculationResult> snapshots;
+    for (const QString &id : c.requests) {
+        QCOMPARE(live.engine.request(id).status, ResultStatus::Ok);
+        const std::optional<StoredCalculationResult> snapshot = live.engine.exportResult(id);
+        QVERIFY(snapshot.has_value());
+        snapshots.append(*snapshot);
+    }
+    live.takeEvents();
+    const int runs = live.engine.totalRunCount();
+
+    c.change(reg.registry);
+    QCOMPARE(live.engine.totalRunCount(), runs);    // a registry change computes nothing
+
+    // In memory
+    QStringList dropped;
+    for (const QString &id : c.requests) {
+        if (live.engine.resultStatus(id) != std::optional<ResultStatus>(ResultStatus::Ok))
+            dropped.append(id);
+    }
+    QCOMPARE(dropped, c.dropped);
+    QStringList expectedEvents;
+    for (const QString &id : std::as_const(dropped))
+        expectedEvents.append(QStringLiteral("Dropped ") + id + QStringLiteral(" Ok"));
+    const QStringList events = describeEvents(live.takeEvents());
+    QCOMPARE(QSet<QString>(events.cbegin(), events.cend()),
+             QSet<QString>(expectedEvents.cbegin(), expectedEvents.cend()));
+    QCOMPARE(events.size(), expectedEvents.size());
+
+    // Across a restart: the snapshots from before the change, upstream first,
+    // into a fresh engine over the registry after it
+    Session fresh(reg);
+    setState(fresh);
+    QStringList notRestored;
+    for (int i = 0; i < int(c.requests.size()); ++i) {
+        if (fresh.engine.restoreResult(snapshots.at(i)).kind != Restore::Kind::Restored)
+            notRestored.append(c.requests.at(i));
+    }
+    if (c.mirrors) {
+        QCOMPARE(notRestored, dropped);
+    } else {
+        QVERIFY(!dropped.isEmpty());
+        QCOMPARE(notRestored, QStringList());
+    }
+
+    // A result kept in memory still states exactly what its snapshot states,
+    // and what the restore installed: its record stays valid.
+    for (int i = 0; i < int(c.requests.size()); ++i) {
+        const QString &id = c.requests.at(i);
+        if (dropped.contains(id))
+            continue;
+        const std::optional<StoredCalculationResult> kept = live.engine.exportResult(id);
+        QVERIFY(kept.has_value());
+        QVERIFY2(sameContent(*kept, snapshots.at(i)), qPrintable(id));
+        const std::optional<StoredCalculationResult> restored = fresh.engine.exportResult(id);
+        QVERIFY(restored.has_value());
+        QVERIFY2(sameContent(*kept, *restored), qPrintable(id));
+    }
+
+    // And every name either session reads is what a fresh evaluation gives
+    const QList<DependencyKey> names = {attr("EA_IN"), attr("PX"), attr("X"), attr("A"), attr("C"),
+                                        Synthetic::measKey("S", "m")};
+    QVERIFY(live.engine.verifyAgainstFresh(names).isEmpty());
+    QVERIFY(fresh.engine.verifyAgainstFresh(names).isEmpty());
+}
+
+// A removal made while a ticket is outstanding: the passed-over candidate sum
+// (which alone looked up A) goes between prepare and publish. The ticket
+// depends on X's answer, which the removal leaves alone, so it publishes;
+// and what it installs states the lookups of the registry after the change -
+// its export equals a restore of it into a fresh engine under that registry.
+void CalcEngineRestoreTest::publishAcrossPassedOverRemovalMirrorsRestore()
+{
+    Pair w([](CalculationRegistry &r) {
+        registerStandard(r);
+        r.registerCalculation(readsX());
+    });
+    Session &s = w.source;
+    Prepare prepared = s.engine.prepare("readsX");
+    QCOMPARE(prepared.kind, Prepare::Kind::Ready);
+    ComputedCalculation computed = prepared.ticket->compute();
+
+    QVERIFY(w.reg.registry.unregister("sum", CalculationRegistry::Removal::Change));
+    QVERIFY(!prepared.ticket->willBeRefused());
+    const PublishOutcome published = prepared.ticket->publish(std::move(computed));
+    QCOMPARE(published.kind, PublishOutcome::Kind::Published);
+    QCOMPARE(describeEvents(s.takeEvents()), QStringList({"Installed readsX Ok"}));
+    QCOMPARE(s.engine.attribute("RX"), QVariant(-1));
+
+    const std::optional<StoredCalculationResult> exported = s.engine.exportResult("readsX");
+    QVERIFY(exported.has_value());
+    QCOMPARE(describeResolutions(exported->resolutions), QStringList({"C Nothing", "X Calculation constX "}));
+    QCOMPARE(describeLeaves(exported->leaves), describeLeaves({GraphNode::storedAttribute("C"),
+                                                               GraphNode::storedAttribute("X")}));
+
+    Session &t = w.target;
+    const Restore outcome = t.engine.restoreResult(*exported);
+    QCOMPARE(outcome.kind, Restore::Kind::Restored);
+    const std::optional<StoredCalculationResult> restored = t.engine.exportResult("readsX");
+    QVERIFY(restored.has_value());
+    QVERIFY(sameContent(*exported, *restored));
+    QVERIFY(s.engine.verifyAgainstFresh({attr("X"), attr("A"), attr("C")}).isEmpty());
 }
 
 void CalcEngineRestoreTest::registryDestructionReportsNothing()

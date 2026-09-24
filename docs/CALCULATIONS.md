@@ -135,6 +135,43 @@ restore repeats those lookups against the current registry (section 12,
 such a name therefore makes the stored result stale; a candidate registered
 after the winner, or one for names the result never looked up, does not.
 
+**Registry changes while the application runs.** A registration or removal
+made while sessions are loaded re-resolves exactly the cached names whose
+answer it can change, and drops what was computed from them. Resolution has
+three steps, and whichever applies is final:
+
+1. an attribute with a stored value: that value, even an invalid one;
+2. a measurement with source data: the source conversions in registration
+   order while any is registered, otherwise the passthrough;
+3. any other name: its candidates, plain calculations and families
+   interleaved in registration order.
+
+A candidate that is not requested (explicit), lacks an input, fails or runs
+without providing the name is passed over and the next one is tried; the
+ones after the winner are never tried. A registration always goes to the end
+of the order, so it changes only a name that resolved to nothing in the step
+it belongs to, and the first source conversion changes every passthrough. It
+never changes a name that the session's own data answers or that an earlier
+candidate provides. A removal changes a name only when the removed
+registration provided it, or when the last source conversion goes. Removing
+a candidate that was tried and passed over leaves every answer alone; a
+requested result that has a stored copy (an `Ok` result `exportResult()`
+exports) is dropped by it only when its lookups reached something solely
+through that candidate, because its stored copy lists those lookups and
+would no longer match after a restart. A requested result without a stored
+copy (`MissingInput`, `Failed`, one that met a ring) is never dropped that
+way. So a runtime change drops a
+requested result exactly when a restore of its stored copy under the changed
+registry would be stale, with one conservative exception: a registration for
+a name that resolved to nothing and that does not provide it either (an
+explicit calculation nobody requested, or one that fails having looked up
+only what the result already reached) drops the result, because whether a
+new candidate provides a name is known only by running it and invalidation
+never computes, while the restore would succeed. Answers whose evaluation met
+a dependency ring always re-resolve.
+`tst_calcengine_restore::registryChangeMirrorsRestore` checks the equivalence
+case by case.
+
 ## 6. Parameterized families
 
 `CalculationFamily::instantiate(name)` turns a public name into a calculation
@@ -155,9 +192,11 @@ are snapshotted into session attributes when a session is created (mass, area,
 fixed ground elevation) are read as attributes and do not affect existing
 sessions. Changing *which calculations exist* (the altitude markers,
 `AltitudeMarkerManager`) is done by registering and unregistering, which, in
-every loaded session, invalidates what depended on the names concerned. A
-requested result that never looked those names up stays installed, and so does
-its stored copy (15.8); one that did is dropped and its record deleted.
+every loaded session, invalidates what depended on a name whose answer the
+change alters (section 5). A requested result whose lookups the change does
+not alter (it never looked those names up, or the session's own data or an
+earlier candidate answers them) stays installed, and so does its stored copy
+(15.8); one whose lookups it alters is dropped and its record deleted.
 `AltitudeMarkerManager`'s destructor unregisters with
 `CalculationRegistry::Removal::Teardown`, which reports nothing (section 12).
 
@@ -459,8 +498,11 @@ section 15.8). Main thread only.
   - `Dropped` is reported for leaf notifications, preference broadcasts, the
     cascade when an upstream calculation that a requested result read as "not
     requested" is requested, published or restored, and a registry change made
-    while the application runs that reaches the result (a registration, or a
-    removal with `CalculationRegistry::Removal::Change`; `unregister()` has no
+    while the application runs that alters what a name the result looked up
+    resolves to, or, for a result with a stored copy, that removes a
+    passed-over candidate through which alone its lookups reached something
+    (section 5; a registration, or a removal
+    with `CalculationRegistry::Removal::Change`; `unregister()` has no
     default, so every caller states which removal it makes);
   - neither is reported for `restoreResult()`'s own install, `clear()`, a
     removal with `Removal::Teardown` (an owner being destroyed at shutdown),
@@ -910,10 +952,11 @@ and restore; the files are described in
 - Records are deleted with their session (`LogbookManager::removeSession`) and,
   as strays whose session file does not exist in `sessions/`, at
   `initialize()`; that pass deletes in `cache/` only. Eviction, unloading, a
-  registry change that does not reach a requested result, a removal as
-  teardown and the model's destruction never delete one. A registry change
-  made while the application runs that drops a requested result deletes its
-  record like an input change. `AltitudeMarkerManager`'s destructor removes
+  registry change that does not alter a requested result's lookups (section
+  5: a candidate behind the session's data or behind the provider, a name
+  never looked up), a removal as teardown and the model's destruction never
+  delete one. A registry change made while the application runs that drops a
+  requested result deletes its record like an input change. `AltitudeMarkerManager`'s destructor removes
   its registrations as teardown; the plugin host never unregisters.
 - `cache/` may be deleted while the application is closed: `initialize()` then
   knows no record, every explicit calculation reads as not requested, and the

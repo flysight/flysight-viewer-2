@@ -350,6 +350,7 @@ CalculationEngine::ResolutionEntry CalculationEngine::resolve(const DependencyKe
         note(GraphNode::storedAttribute(name.attributeKey));
         if (m_state && m_state->hasStoredAttribute(name.attributeKey)) {
             // A stored attribute always wins, even when its value is invalid.
+            entry.layer = Layer::SessionData;
             entry.provider = Provider::Stored;
             entry.attribute = m_state->storedAttribute(name.attributeKey);
             entry.available = entry.attribute.isValid();
@@ -365,9 +366,11 @@ CalculationEngine::ResolutionEntry CalculationEngine::resolve(const DependencyKe
                 // The effective value is the conversion layer's output. A name
                 // with recorded source data never falls through to derived
                 // candidates, even when its conversion is unavailable.
+                entry.layer = Layer::Conversions;
                 tryCandidates(m_registry->sourceConversionsFor(sensor, meas), name, entry);
             } else {
                 note(GraphNode::sourceUnit(sensor, meas));
+                entry.layer = Layer::SessionData;
                 entry.provider = Provider::Source;
                 entry.samples = m_state->sourceMeasurement(sensor, meas);
                 entry.unit = m_state->sourceUnit(sensor, meas);
@@ -381,8 +384,10 @@ CalculationEngine::ResolutionEntry CalculationEngine::resolve(const DependencyKe
     if (!entry.available) {
         // Normalize, so an unavailable entry never carries a value.
         const Provider provider = entry.provider;
+        const Layer layer = entry.layer;
         entry = ResolutionEntry();
         entry.provider = provider == Provider::Calculation ? Provider::None : provider;
+        entry.layer = layer;
     }
 
     // Publish last: the scope is gone, then entry and edges go in together -
@@ -974,6 +979,122 @@ void CalculationEngine::onPreferenceChanged(const QString &key)
     deliverBroadcast({GraphNode::preference(key)}, ExplicitDrops::Report);
 }
 
+namespace {
+
+/// Whether a family (or conversion family) accepts `name`: its instantiate
+/// function returns a descriptor. A throwing family never matches, as in the
+/// registry.
+bool familyAccepts(const RegistryChange &change, const DependencyKey &name)
+{
+    try {
+        return change.instantiate && change.instantiate(name).has_value();
+    } catch (...) {
+        return false;
+    }
+}
+
+} // namespace
+
+// How resolve() answers a name. The steps are final - nothing falls through
+// from one to the next - so a registry change can alter an answer only through
+// the step that gave it (ResolutionEntry::layer):
+//  1. An attribute with a stored value: that value, even an invalid one
+//     (Layer::SessionData). No registration is ever consulted.
+//  2. A measurement with source data: while any source conversion is
+//     registered, the conversions accepting it in registration order
+//     (Layer::Conversions); otherwise the passthrough (Layer::SessionData).
+//  3. Anything else: the calculations declaring the name and the families
+//     accepting it, interleaved in registration order (Layer::Candidates).
+// In steps 2 and 3 the first candidate whose result is Ok and provides the
+// name wins. A candidate that did not run (NotRequested - an explicit
+// calculation nobody requested -, MissingInput, Cycle, Failed, ...) or that
+// ran without providing the name is passed over and the next one is tried;
+// when none is left the name resolves to nothing. Every candidate tried is an
+// edge of the name's Resolution node, the passed-over ones included; the ones
+// after the winner were never tried.
+//
+// Hence, for a cached answer whose evaluation met no ring:
+//  - a registration can alter it only if it is a candidate for the name in
+//    the step that answered it and is tried before the answer's provider, or
+//    the answer is "nothing" (every candidate was passed over). A
+//    registration always goes to the end of the order, so in practice only
+//    "nothing" re-resolves. Session data is never displaced, except the
+//    passthrough by the first conversion;
+//  - a removal can alter it only if the answer's provider belongs to the
+//    removed registration, or the last conversion goes (step 2 falls back to
+//    the passthrough). A removed candidate that was passed over changes
+//    nothing: the others are tried in the same order and fail or win as
+//    before - whatever made them fail is an edge of their own and is
+//    invalidated on its own if the removal reaches it.
+// A provisional answer is cached nowhere, so nothing states what answered it,
+// and an answer whose evaluation met a ring can be turned away in another
+// context and re-evaluated provisionally, where an earlier candidate may meet
+// the ring and a later one be reached. Both always re-resolve.
+bool CalculationEngine::registryChangeCanAlter(const GraphNode &R, const RegistryChange &change) const
+{
+    const auto cached = m_resolutions.constFind(R);
+    if (cached == m_resolutions.constEnd() || cached->sawCycle)
+        return true;
+    const ResolutionEntry &entry = cached.value();
+
+    const bool conversion = change.kind == RegistryChange::Kind::SourceConversion;
+    if (entry.layer == Layer::SessionData) {
+        // A stored attribute wins over everything; the passthrough gives way
+        // to the conversion layer. (A cached passthrough and a registered
+        // conversion never coexist: the first registration re-resolved it.)
+        return conversion && entry.provider == Provider::Source;
+    }
+    if ((entry.layer == Layer::Conversions) != conversion)
+        return false;   // the other step: never tried for this name
+
+    const bool providedByChange = entry.provider == Provider::Calculation
+        && (entry.instanceId == change.registrationId
+            || entry.instanceId.startsWith(change.registrationId + QLatin1Char('#')));
+    if (!change.added) {
+        if (conversion && m_registry && !m_registry->hasSourceConversions())
+            return true;    // the last conversion went: the passthrough answers now
+        return providedByChange;
+    }
+    if (entry.provider != Provider::Calculation) {
+        // Nothing answered: the new registration is tried last, if it is a
+        // candidate at all. The caller passes only names a calculation
+        // declares or a family accepts, but every measurement name for a
+        // conversion family (for the passthrough above).
+        return !conversion || familyAccepts(change, R.publicName());
+    }
+    return triedBefore(change.registrationId, entry.instanceId);
+}
+
+bool CalculationEngine::triedBefore(const CalculationId &registrationId, const QString &instanceId) const
+{
+    // Candidates are tried in registration order, which registeredIds() is.
+    // Anything unexpected (either one unknown) counts as "before": the answer
+    // then re-resolves, which is never wrong.
+    if (!m_registry)
+        return true;
+    const CalculationId provider = instanceId.section(QLatin1Char('#'), 0, 0);
+    const QList<CalculationId> ids = m_registry->registeredIds();
+    const qsizetype changed = ids.indexOf(registrationId);
+    const qsizetype current = ids.indexOf(provider);
+    return changed < 0 || current < 0 || changed < current;
+}
+
+void CalculationEngine::detachEdge(const GraphNode &from, const GraphNode &to)
+{
+    const auto forward = m_dependsOn.find(from);
+    if (forward != m_dependsOn.end()) {
+        forward->remove(to);
+        if (forward->isEmpty())
+            m_dependsOn.erase(forward);
+    }
+    const auto reverse = m_dependents.find(to);
+    if (reverse != m_dependents.end()) {
+        reverse->remove(from);
+        if (reverse->isEmpty())
+            m_dependents.erase(reverse);
+    }
+}
+
 void CalculationEngine::onRegistryChanged(const RegistryChange &change)
 {
     QList<GraphNode> seeds;
@@ -989,6 +1110,7 @@ void CalculationEngine::onRegistryChanged(const RegistryChange &change)
         }
     }
 
+    QList<GraphNode> removedResults;
     if (!change.added) {
         // No cache entry may outlive its registration, and neither may an
         // answer that absorbed a provisional result of it. An instance id is
@@ -997,52 +1119,113 @@ void CalculationEngine::onRegistryChanged(const RegistryChange &change)
         const QSet<GraphNode> results = knownNodes(GraphNode::Kind::Result);
         for (const GraphNode &n : results) {
             if (n.a == change.registrationId || n.a.startsWith(familyPrefix))
-                seeds.append(n);
+                removedResults.append(n);
         }
     }
 
+    // The names the change concerns: those the registration is a candidate
+    // for, and for a conversion family every measurement name (whether any
+    // conversion is registered decides between the passthrough and the
+    // conversion layer for every measurement with source data).
+    QList<GraphNode> concerned;
     switch (change.kind) {
     case RegistryChange::Kind::Calculation:
-        // Added: a cached fallback or a cached "none" must re-resolve so it can
-        // pick up the new candidate. Removed: likewise for whatever it provided.
         for (const DependencyKey &out : change.outputs)
-            seeds.append(GraphNode::resolution(out));
+            concerned.append(GraphNode::resolution(out));
         break;
-
     case RegistryChange::Kind::Family: {
         const QSet<GraphNode> resolutions = knownNodes(GraphNode::Kind::Resolution);
         for (const GraphNode &n : resolutions) {
-            bool accepts = false;
-            try {
-                accepts = change.instantiate && change.instantiate(n.publicName()).has_value();
-            } catch (...) {
-                accepts = false;    // a throwing family never matches
-            }
-            if (accepts)
-                seeds.append(n);
+            if (familyAccepts(change, n.publicName()))
+                concerned.append(n);
         }
         break;
     }
-
     case RegistryChange::Kind::SourceConversion: {
-        // Whether *any* conversion is registered decides between passthrough
-        // and the conversion layer for every measurement with source data, so
-        // every cached measurement name re-resolves, not only the names this
-        // family accepts.
         const QSet<GraphNode> resolutions = knownNodes(GraphNode::Kind::Resolution);
         for (const GraphNode &n : resolutions) {
             if (n.measurementName)
-                seeds.append(n);
+                concerned.append(n);
         }
         break;
     }
     }
 
+    // Registrations are refused while an engine evaluates, so the stack is
+    // empty here. Should it not be, the cache entries may be half-built:
+    // everything concerned then re-resolves and no edge is touched.
+    const bool precise = m_scopes.empty();
+
+    // Only the answers the change can alter re-resolve (registryChangeCanAlter()).
+    for (const GraphNode &R : std::as_const(concerned)) {
+        if (!precise || registryChangeCanAlter(R, change))
+            seeds.append(R);
+    }
+
+    if (precise && !removedResults.isEmpty()) {
+        // A removed candidate that a cached name tried and passed over: the
+        // name keeps its answer, so the invalidation must not travel along
+        // that edge. The edge goes instead - a fresh evaluation no longer
+        // looks at the removed candidate - and the name keeps its other edges.
+        QList<std::pair<GraphNode, GraphNode>> passedOver;     // (Resolution, removed Result)
+        for (const GraphNode &C : std::as_const(removedResults)) {
+            const QSet<GraphNode> dependents = m_dependents.value(C);
+            for (const GraphNode &R : dependents) {
+                if (R.kind == GraphNode::Kind::Resolution && !registryChangeCanAlter(R, change))
+                    passedOver.append({R, C});
+            }
+        }
+
+        if (!passedOver.isEmpty()) {
+            // What the passed-over candidate looked up and reached is then
+            // looked up by nobody. A stored result lists every name and leaf
+            // its lookups reached, a passed-over candidate's included
+            // (closureOf()), and a restore repeats the lookups: the copy of a
+            // result that reached something only through such a candidate is
+            // stale under the new registry (StaleCheck::Resolutions). So a
+            // result that has a stored copy - one exportResult() exports: a
+            // plain explicit calculation's requested Ok result that met no
+            // ring - is dropped, its record deleted, when its closure
+            // shrinks, and it goes stale together with its stored copy. One
+            // whose closure is unchanged (the candidate looked at nothing, or
+            // at nothing the result did not also reach otherwise) stays, and
+            // so does every result without a stored copy (a requested
+            // MissingInput or Failed result, a family instance, a result that
+            // met a ring): its value is unchanged and no record can go stale.
+            struct Requested {
+                GraphNode node;
+                QList<GraphNode> leaves;
+                QSet<GraphNode> resolutions;
+            };
+            QList<Requested> requested;
+            for (auto it = m_results.constBegin(); it != m_results.constEnd(); ++it) {
+                const ResultEntry &entry = it.value();
+                const bool stored = isReportedExplicit(entry) && entry.status == ResultStatus::Ok && entry.bundle
+                    && !entry.sawCycle && entry.instance.instanceId == entry.instance.registrationId;
+                if (!stored)
+                    continue;
+                const Closure closure = closureOf(m_dependsOn.value(it.key()));
+                requested.append({it.key(), closure.leaves,
+                                  QSet<GraphNode>(closure.resolutions.cbegin(), closure.resolutions.cend())});
+            }
+            for (const auto &[R, C] : std::as_const(passedOver))
+                detachEdge(R, C);
+            for (const Requested &r : std::as_const(requested)) {
+                const Closure closure = closureOf(m_dependsOn.value(r.node));
+                if (closure.leaves != r.leaves
+                    || QSet<GraphNode>(closure.resolutions.cbegin(), closure.resolutions.cend()) != r.resolutions)
+                    seeds.append(r.node);
+            }
+        }
+    }
+    seeds.append(removedResults);
+
     // A registry change made while the application runs that drops a requested
     // result is reported like an input change (condition 3 of "when a result
-    // in memory is dropped": the seeds above are exactly the names it
-    // resolved that the change touches). A teardown removal - its owner is
-    // being destroyed - drops the same entries and reports nothing.
+    // in memory is dropped": the seeds above are the names it resolved whose
+    // answer the change alters, and the requested results whose stored copy
+    // it makes stale). A teardown removal - its owner is being destroyed -
+    // drops the same entries and reports nothing.
     deliverBroadcast(seeds, change.teardown ? ExplicitDrops::Suppress : ExplicitDrops::Report);
 }
 
@@ -1371,9 +1554,12 @@ PublishOutcome CalculationEngine::publishPrepared(PreparedCalculation &ticket, C
 // leaves are direct edges of that ancestor - but its own answer is cached
 // nowhere, which is why a result whose evaluation met a ring is never
 // exported. While a result is installed, everything cached below it keeps
-// the entry and the edges it had at publish: invalidating any of it would
-// have dropped the result through the reverse edges. So the closure at
-// export is the closure at publish.
+// the entry it had at publish: invalidating any of it would have dropped the
+// result through the reverse edges. The one edge that can go without an
+// invalidation is that of a name to a removed candidate it had passed over,
+// and a removal that changes the closure of an exportable result that way
+// drops the result (onRegistryChanged()). So the closure at export is the
+// closure at publish.
 
 CalculationEngine::Closure CalculationEngine::closureOf(const QSet<GraphNode> &direct) const
 {

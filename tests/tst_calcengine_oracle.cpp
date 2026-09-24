@@ -10,9 +10,15 @@
 //
 // randomizedExplicitSequences adds explicit calculations to the mix: blocker
 // inspection, synchronous requests, asynchronous requests (compute inline; the
-// threads are tst_calcengine_async's business), and asynchronous requests whose
-// input changes before publish. None of it may disturb the invariant, and an
+// threads are tst_calcengine_async's business), asynchronous requests whose
+// input changes before publish, and registry changes of candidates the
+// explicit calculations look up. None of it may disturb the invariant, and an
 // explicit calculation may run only in a request or publish step.
+//
+// registryChangePrecision pins, row by row, which cached answers a registry
+// change keeps (a candidate behind the provider or behind the session's own
+// data, a removed candidate that was passed over) and which it drops, and that
+// a kept answer is served without a run and equals a fresh evaluation.
 
 #include <cstdio>
 #include <limits>
@@ -81,6 +87,8 @@ private slots:
     void randomizedTopologies();
     void randomizedExplicitSequences_data();
     void randomizedExplicitSequences();
+    void registryChangePrecision_data();
+    void registryChangePrecision();
 };
 
 void CalcEngineOracleTest::sameValueSemantics()
@@ -430,6 +438,15 @@ void CalcEngineOracleTest::randomizedExplicitSequences()
     const QStringList explicitIds = {"expA", "expB"};
     const QStringList inspectedIds = {"expA", "expB", "derivA", "derivA2", "derivB", "sum", "triple"};
     const QStringList editable = {"EA_IN", "EB_IN", "A"};
+    const QStringList toggled = {"sum", "fallbackX", "neg", "altEaIn"};
+    // On demand; no inputs; EA_IN = 3. Loses to a stored EA_IN, provides it otherwise.
+    const auto altEaIn = []() {
+        CalculationDescriptor d;
+        d.id = QStringLiteral("altEaIn");
+        d.outputs = {attr("EA_IN")};
+        d.compute = [](const EvaluationContext &) { return CalculationResult().setAttribute("EA_IN", 3); };
+        return d;
+    };
     const auto explicitRuns = [&s]() { return s.engine.runCount("expA") + s.engine.runCount("expB"); };
     const auto edit = [&s, &pick](const QString &key) {
         if (pick(4) == 0)
@@ -460,8 +477,25 @@ void CalcEngineOracleTest::randomizedExplicitSequences()
             const DependencyKey name = names.at(pick(int(names.size())));
             QVERIFY2(s.engine.verifyAgainstFresh({name}).isEmpty(),
                      (where + " read of " + describe(name).toUtf8()).constData());
-        } else if (op < 50) {
+        } else if (op < 46) {
             edit(editable.at(pick(int(editable.size()))));
+        } else if (op < 50) {
+            // Unregister or re-register (to the end) a candidate for a name
+            // the explicit results look up, directly or through a passed-over
+            // candidate: it loses, wins or is never tried depending on the
+            // state, and the requested results must be dropped exactly when
+            // their answers change.
+            const QString id = toggled.at(pick(int(toggled.size())));
+            if (registry.contains(id))
+                QVERIFY2(registry.unregister(id, CalculationRegistry::Removal::Change), where.constData());
+            else if (id == QLatin1String("sum"))
+                QVERIFY2(registry.registerCalculation(Synthetic::sum()), where.constData());
+            else if (id == QLatin1String("fallbackX"))
+                QVERIFY2(registry.registerCalculation(Synthetic::fallbackX()), where.constData());
+            else if (id == QLatin1String("neg"))
+                QVERIFY2(registry.registerFamily(Synthetic::neg()), where.constData());
+            else
+                QVERIFY2(registry.registerCalculation(altEaIn()), where.constData());
         } else if (op < 72) {
             // Inspection, in any order and any number of times.
             for (int k = 0; k <= pick(3); ++k) {
@@ -541,6 +575,169 @@ void CalcEngineOracleTest::randomizedExplicitSequences()
                             .arg(seed).arg(mismatch.size())
                             .arg(mismatch.isEmpty() ? QString() : describe(mismatch.first()))));
     QCOMPARE(s.engine.undeclaredReadCount(), 0);
+    QCOMPARE(s.engine.cycleCount(), 0);
+}
+
+void CalcEngineOracleTest::registryChangePrecision_data()
+{
+    QTest::addColumn<QString>("row");
+    QTest::addColumn<QStringList>("kept");      // cached before the change and after it
+    QTest::addColumn<QStringList>("dropped");   // cached before the change, re-resolved after it
+
+    const QStringList all = {"X", "Y", "Z", "W", "neg:A", "E", "C", "S/m", "S/d"};
+    const auto allBut = [&all](const QStringList &out) {
+        QStringList rest;
+        for (const QString &n : all) {
+            if (!out.contains(n))
+                rest.append(n);
+        }
+        return rest;
+    };
+
+    QTest::newRow("candidate after the provider registered") << "afterProviderRegistered" << all << QStringList();
+    QTest::newRow("candidate after the provider removed") << "afterProviderRemoved" << all << QStringList();
+    QTest::newRow("provider removed") << "providerRemoved" << allBut({"X", "Y", "Z", "W", "S/d"})
+                                      << QStringList({"X", "Y", "Z", "W", "S/d"});
+    QTest::newRow("passed-over candidate removed") << "passedOverRemoved" << all << QStringList();
+    QTest::newRow("passed-over family removed") << "passedOverFamilyRemoved" << all << QStringList();
+    QTest::newRow("provider for a name resolved to nothing registered") << "nothingGetsProvider"
+                                                                        << allBut({"E"}) << QStringList({"E"});
+    QTest::newRow("family for a name resolved to nothing registered") << "nothingGetsFamily"
+                                                                      << allBut({"neg:A"}) << QStringList({"neg:A"});
+    QTest::newRow("stored value, candidate registered") << "storedCandidateRegistered" << all << QStringList();
+    QTest::newRow("stored value, calculation that would provide it removed") << "storedProviderRemoved" << all
+                                                                             << QStringList();
+    QTest::newRow("recorded data, candidate registered") << "recordedCandidateRegistered" << all << QStringList();
+    QTest::newRow("first conversion registered") << "firstConversion" << allBut({"S/m", "S/d"})
+                                                 << QStringList({"S/m", "S/d"});
+    QTest::newRow("conversion after the provider registered") << "conversionAfterProvider" << all << QStringList();
+    QTest::newRow("last conversion removed") << "lastConversionRemoved" << allBut({"S/m", "S/d"})
+                                             << QStringList({"S/m", "S/d"});
+    QTest::newRow("passed-over conversion removed") << "passedOverConversionRemoved" << all << QStringList();
+}
+
+// A registry change re-resolves exactly the cached names whose answer it can
+// alter (engine: registryChangeCanAlter): a candidate registered behind the
+// provider or behind the session's own data, and a removed candidate that was
+// passed over or never tried, leave the cached answer installed - served
+// again without a run, and equal to a fresh evaluation; a candidate that can
+// now answer a name that resolved to nothing, a removed provider, and a
+// change of the conversion layer under recorded data drop it.
+void CalcEngineOracleTest::registryChangePrecision()
+{
+    QFETCH(QString, row);
+    QFETCH(QStringList, kept);
+    QFETCH(QStringList, dropped);
+
+    const auto key = [](const QString &name) {
+        const qsizetype slash = name.indexOf(QLatin1Char('/'));
+        return slash < 0 ? DependencyKey::attribute(name) : DependencyKey::measurement(name.left(slash), name.mid(slash + 1));
+    };
+    // A source conversion accepting every measurement: the samples and unit
+    // passed through, or (provides = false) the same source leaves read and
+    // nothing provided.
+    const auto conversion = [](const QString &id, bool provides) {
+        CalculationFamily f;
+        f.id = id;
+        f.instantiate = [provides](const DependencyKey &name) -> std::optional<CalculationDescriptor> {
+            if (name.type != DependencyKey::Type::Measurement)
+                return std::nullopt;
+            const QString sensor = name.measurementKey.first;
+            const QString meas = name.measurementKey.second;
+            CalculationDescriptor d;
+            d.id = sensor + QLatin1Char('/') + meas;
+            d.inputs = {CalcInput::sourceMeasurement(sensor, meas), CalcInput::sourceUnit(sensor, meas)};
+            d.outputs = {name};
+            d.compute = [sensor, meas, provides](const EvaluationContext &ctx) {
+                if (!provides)
+                    return CalculationResult::unavailable();
+                return CalculationResult().setMeasurement(sensor, meas, ctx.sourceMeasurement(sensor, meas),
+                                                          ctx.sourceUnit(sensor, meas));
+            };
+            return d;
+        };
+        return f;
+    };
+    const auto constant = [](const QString &id, const DependencyKey &out) {
+        CalculationDescriptor d;
+        d.id = id;
+        d.outputs = {out};
+        d.compute = [out](const EvaluationContext &) {
+            if (out.type == DependencyKey::Type::Measurement)
+                return CalculationResult().setMeasurement(out.measurementKey.first, out.measurementKey.second,
+                                                          {9.0}, QStringLiteral("calc"));
+            return CalculationResult().setAttribute(out.attributeKey, 9);
+        };
+        return d;
+    };
+
+    CalculationRegistry registry;
+    FakePreferenceProvider prefs;
+    registry.setPreferenceProvider(&prefs);
+    Synthetic::registerSharedWorld(registry);
+    prefs.set("p", 5);
+    Session s(registry);
+
+    // The world before anything is read
+    if (row == QLatin1String("passedOverRemoved") || row == QLatin1String("passedOverFamilyRemoved"))
+        s.state.removeAttribute("A");     // sum and neg#neg:A miss A; constX provides X
+    if (row.startsWith(QLatin1String("stored")))
+        s.state.setAttribute("X", 8);
+    if (row == QLatin1String("nothingGetsFamily"))
+        QVERIFY(registry.unregister("neg", CalculationRegistry::Removal::Change));
+    if (row == QLatin1String("conversionAfterProvider") || row == QLatin1String("lastConversionRemoved"))
+        QVERIFY(registry.registerSourceConversion(conversion("conv", true)));
+    if (row == QLatin1String("passedOverConversionRemoved")) {
+        QVERIFY(registry.registerSourceConversion(conversion("convNone", false)));
+        QVERIFY(registry.registerSourceConversion(conversion("conv", true)));
+    }
+
+    for (const QString &name : kept + dropped) {
+        s.engine.isAvailable(key(name));
+        QVERIFY2(s.engine.cachedState(key(name)) != CalculationEngine::CachedState::NotCached, qPrintable(name));
+    }
+    const int runs = s.engine.totalRunCount();
+
+    if (row == QLatin1String("afterProviderRegistered") || row == QLatin1String("storedCandidateRegistered"))
+        QVERIFY(registry.registerCalculation(constant("x9", attr("X"))));
+    else if (row == QLatin1String("afterProviderRemoved"))
+        QVERIFY(registry.unregister("fallbackX", CalculationRegistry::Removal::Change));
+    else if (row == QLatin1String("providerRemoved") || row == QLatin1String("passedOverRemoved")
+             || row == QLatin1String("storedProviderRemoved"))
+        QVERIFY(registry.unregister("sum", CalculationRegistry::Removal::Change));
+    else if (row == QLatin1String("passedOverFamilyRemoved"))
+        QVERIFY(registry.unregister("neg", CalculationRegistry::Removal::Change));
+    else if (row == QLatin1String("nothingGetsProvider"))
+        QVERIFY(registry.registerCalculation(constant("constE", attr("E"))));
+    else if (row == QLatin1String("nothingGetsFamily"))
+        QVERIFY(registry.registerFamily(Synthetic::neg()));
+    else if (row == QLatin1String("recordedCandidateRegistered"))
+        QVERIFY(registry.registerCalculation(constant("smCalc", measKey("S", "m"))));
+    else if (row == QLatin1String("firstConversion") || row == QLatin1String("conversionAfterProvider"))
+        QVERIFY(registry.registerSourceConversion(conversion(row == QLatin1String("firstConversion")
+                                                                 ? QStringLiteral("conv") : QStringLiteral("conv2"),
+                                                             true)));
+    else if (row == QLatin1String("lastConversionRemoved"))
+        QVERIFY(registry.unregister("conv", CalculationRegistry::Removal::Change));
+    else if (row == QLatin1String("passedOverConversionRemoved"))
+        QVERIFY(registry.unregister("convNone", CalculationRegistry::Removal::Change));
+    else
+        QFAIL("unknown row");
+    QCOMPARE(s.engine.totalRunCount(), runs);
+
+    for (const QString &name : std::as_const(kept))
+        QVERIFY2(s.engine.cachedState(key(name)) != CalculationEngine::CachedState::NotCached, qPrintable(name));
+    for (const QString &name : std::as_const(dropped))
+        QVERIFY2(s.engine.cachedState(key(name)) == CalculationEngine::CachedState::NotCached, qPrintable(name));
+
+    // A kept answer is served as it is - nothing runs - and equals a fresh evaluation
+    for (const QString &name : std::as_const(kept))
+        QVERIFY2(s.engine.verifyAgainstFresh({key(name)}).isEmpty(), qPrintable(name));
+    QCOMPARE(s.engine.totalRunCount(), runs);
+    QList<DependencyKey> all;
+    for (const QString &name : kept + dropped)
+        all.append(key(name));
+    QVERIFY(s.engine.verifyAgainstFresh(all).isEmpty());
     QCOMPARE(s.engine.cycleCount(), 0);
 }
 

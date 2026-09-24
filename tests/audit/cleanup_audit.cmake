@@ -235,7 +235,7 @@ expect_none("pure compute functions"
 expect_none("no source-input permission" "allowSourceInputs" src tests python_plugins)
 expect_only("source inputs: conversion layer only"
   "CalcInput::source(Measurement|Unit)|Kind::Source(Measurement|Unit)|isSourceKind"
-  "^src/conversion/|^src/engine/|^tests/tst_calcregistry\\.cpp$|^tests/tst_calcengine\\.cpp$|^tests/tst_calcengine_restore\\.cpp$|^tests/tst_conversion_engine\\.cpp$"
+  "^src/conversion/|^src/engine/|^tests/tst_calcregistry\\.cpp$|^tests/tst_calcengine\\.cpp$|^tests/tst_calcengine_oracle\\.cpp$|^tests/tst_calcengine_restore\\.cpp$|^tests/tst_conversion_engine\\.cpp$"
   src tests python_plugins)
 
 # ─────────────────────────────── one mutation path, one emission path

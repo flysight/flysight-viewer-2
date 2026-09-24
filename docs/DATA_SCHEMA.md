@@ -474,13 +474,17 @@ never stored.
 - A record is written when the result is published, and replaced by the next
   publish for the same session and calculation.
 - It is deleted when an input it depends on changes, when a change of the
-  registered calculations made while the application runs drops its result (a
-  calculation registered that provides a name it looked up, for example),
+  registered calculations made while the application runs drops its result
+  (one that changes what a name it looked up resolves to: a calculation
+  registered that provides a name it looked up and found missing, or the
+  removal of the calculation that provided one, for example),
   when its session is deleted from the logbook, when it is found stale as the
   session is loaded, and at start-up when no session file with its stem exists
   in `sessions/` (that start-up pass deletes in `cache/` only).
 - It is never deleted by hiding a track, unloading a session, quitting, or a
-  change of the registered calculations that does not reach it.
+  change of the registered calculations that does not change what a name it
+  looked up resolves to (a calculation registered for such a name that the
+  session's own data or an earlier calculation still wins over, for example).
 - When a session is loaded, every valid record is restored before anything
   reads the session, a record whose result read another stored result after
   that one. Restoring is not requesting: nothing is computed. A stale or

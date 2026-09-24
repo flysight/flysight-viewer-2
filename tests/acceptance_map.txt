@@ -921,10 +921,12 @@
 
 # 401 - (2) a stored result goes stale exactly when the same result in memory would be dropped, or when the code that computed it changes; nothing unrelated to what it reached makes it stale
 401 tst_fusion_store storedFitSurvivesUnrelatedChanges
-401 tst_fusion_store runtimeRegistrationDropsFitAndRecord
+401 tst_fusion_store runtimeRegistryChangeDropsFitAndRecord
 401 tst_fusion_store codeStampChangeDropsRecordOnLoad
 401 tst_result_store recordSurvivesUnrelatedChanges
 401 tst_result_store registryChangeDeletesRecord
+401 tst_calcengine_restore registryChangeMirrorsRestore
+401 tst_calcengine_restore publishAcrossPassedOverRemovalMirrorsRestore
 
 # 402 - (3.1, 3.2) in memory a requested result is dropped when a value it reached changes (samples, unit text, a stored attribute, directly or through calculations and conversions, a missing value that appears) or a declared preference it reached changes
 402 tst_calcengine_restore droppedByInputChange
@@ -932,13 +934,17 @@
 402 tst_calcengine_restore droppedByRequestOfUpstream
 402 tst_fusion_store dependencyEditDropsRecord
 
-# 403 - (3.3) it is dropped when a registry change touches a name it resolved, directly or transitively: a calculation whose outputs include it added or removed, a calculation whose result it used removed, a family accepting it added or removed, the source-conversion layer changed
+# 403 - (3.3, as settled) it is dropped when a registry change touches a name it resolved, directly or transitively, so that its answer can change: a calculation or family that can now answer it added, the calculation whose result it used removed, the source-conversion layer changed under recorded data; a candidate behind the session's data or behind the provider, or a removed candidate that was passed over, changes nothing
 403 tst_calcengine_restore droppedByRegistryChange
+403 tst_calcengine_restore registryChangeMirrorsRestore
+403 tst_calcengine_oracle registryChangePrecision
 403 tst_builtins_engine altitudeMarkerTeardownReportsNothing
-403 tst_fusion_store runtimeRegistrationDropsFitAndRecord
+403 tst_fusion_store runtimeRegistryChangeDropsFitAndRecord
 
 # 404 - (3) everything else leaves it installed: edits to values it did not reach, registrations of names it never looked up (altitude markers, unrelated plug-in outputs), preferences it did not reach
 404 tst_calcengine_restore droppedByRegistryChange
+404 tst_calcengine_restore registryChangeMirrorsRestore
+404 tst_calcengine_oracle registryChangePrecision
 404 tst_fusion_store storedFitSurvivesUnrelatedChanges
 404 tst_fusion_store unrelatedEditKeepsRecord
 404 tst_result_store recordSurvivesUnrelatedChanges
@@ -991,8 +997,10 @@
 
 # 412 - (5) a registry change made while the application runs that drops an installed requested result also deletes its record, like an input change
 412 tst_result_store registryChangeDeletesRecord
-412 tst_fusion_store runtimeRegistrationDropsFitAndRecord
+412 tst_fusion_store runtimeRegistryChangeDropsFitAndRecord
 412 tst_calcengine_restore droppedByRegistryChange
+412 tst_calcengine_restore registryChangeMirrorsRestore
+412 tst_calcengine_restore publishAcrossPassedOverRemovalMirrorsRestore
 412 tst_result_columns registryChangeKeepsLoadedRowConfirmed
 
 # 413 - (5) tearing the registry down at shutdown, destroying or evicting a session, and replacing a session's contents without an input change delete nothing
@@ -1009,6 +1017,7 @@
 414 tst_result_columns registryChangeKeepsLoadedRowConfirmed
 414 tst_fusion_store storedFitSurvivesUnrelatedChanges
 414 tst_calcengine_restore droppedByRegistryChange
+414 tst_calcengine_restore registryChangeMirrorsRestore
 
 # 415 - (6) every calculation, measurement and attribute a plug-in registers declares a result version: the plug-in code identity
 415 tst_python_bridge pluginRegistrationsCarryCodeIdentity
@@ -1111,8 +1120,8 @@
 430 tst_result_store recordSurvivesUnrelatedChanges
 430 manual M20
 
-# 431 - (10) test: registering, while the application runs, a calculation that provides a name the fit looked up drops the installed fit and deletes its record
-431 tst_fusion_store runtimeRegistrationDropsFitAndRecord
+# 431 - (10, as settled) test: a registry change made while the application runs that changes what a name the fit looked up resolves to (registering a calculation that provides a name it looked up and found missing, removing the provider of one) drops the installed fit and deletes its record; a candidate registered behind the provider does not
+431 tst_fusion_store runtimeRegistryChangeDropsFitAndRecord
 431 tst_result_store registryChangeDeletesRecord
 
 # 432 - (10) test: a record whose lookups resolve differently at load (a new candidate with the same inputs, registered before the load) is deleted and the fit reads not requested
@@ -1154,7 +1163,7 @@
 
 # 440 - (12) a stored result is a memory of an in-memory result: stale when that one would be dropped, and when the code changes, and at no other time
 440 tst_fusion_store storedFitSurvivesUnrelatedChanges
-440 tst_fusion_store runtimeRegistrationDropsFitAndRecord
+440 tst_fusion_store runtimeRegistryChangeDropsFitAndRecord
 440 tst_fusion_store codeStampChangeDropsRecordOnLoad
 
 # 441 - (12) what a result reached decides its validity, never what else is registered

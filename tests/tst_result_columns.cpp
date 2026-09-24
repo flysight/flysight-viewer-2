@@ -999,8 +999,9 @@ void ResultColumnsTest::environmentChangeDiscardsCachedValue()
 // record alone, so a loaded row's values over it stay cacheable: nothing is
 // unconfirmed, whether the environment comes back within the pass (A -> B ->
 // A) or stays changed (the cached values are discarded and recomputed from
-// the engine). A registration that reaches Y (a provider of Y_IN) drops the
-// result and deletes its record at once.
+// the engine). A provider of Y_IN registered behind the stored Y_IN does not
+// reach Y either. A registry change that does (the removal of that provider
+// once Y reads Y_IN from it) drops the result and deletes its record at once.
 void ResultColumnsTest::registryChangeKeepsLoadedRowConfirmed()
 {
     QVERIFY(fit("s1", kCalcY));
@@ -1043,17 +1044,45 @@ void ResultColumnsTest::registryChangeKeepsLoadedRowConfirmed()
     QCOMPARE(indexValue("s1", yColumn()), QJsonValue(6.0));
     QCOMPARE(indexRecordStamp("s1"), stampOf({{kCalcY, QStringLiteral("y-v1")}}));
 
-    // A registration reaching Y
+    // A provider of Y_IN registered: the stored Y_IN still wins, so it does
+    // not reach Y either
     const QString path = recordPath("s1", kEncodedY);
-    QVERIFY(QFileInfo(path).isFile());
+    const QByteArray recordBytes = [&path] {
+        QFile file(path);
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    }();
+    QVERIFY(!recordBytes.isEmpty());
     m_model->resetStoredResultStats();
     CalculationDescriptor shadow;
     shadow.id = kShadow;
     shadow.outputs = {DependencyKey::attribute(QStringLiteral("Y_IN"))};
     shadow.compute = [](const EvaluationContext &) {
-        return CalculationResult().setAttribute(QStringLiteral("Y_IN"), 1.0);
+        return CalculationResult().setAttribute(QStringLiteral("Y_IN"), 3.0);
     };
     QVERIFY(registry.registerCalculation(shadow));
+    m_model->flushPendingInvalidations();
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(engine("s1").resultStatus(kCalcY), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(stats().droppedRecordsDeleted, 0);
+    QCOMPARE(logbook.unconfirmedCalculationRecords("s1"), QSet<QString>());
+    QVERIFY(logbook.flushIndex());
+    QCOMPARE(indexValue("s1", yColumn()), QJsonValue(6.0));
+    QFile record(path);
+    QVERIFY(record.open(QIODevice::ReadOnly));
+    QCOMPARE(record.readAll(), recordBytes);
+    record.close();
+
+    // A registry change reaching Y: once the stored Y_IN is gone, Y reads it
+    // from the provider, and removing the provider drops the result and
+    // deletes its record at once
+    QVERIFY(m_model->removeAttribute("s1", QStringLiteral("Y_IN")));
+    QVERIFY(fit("s1", kCalcY));
+    QCOMPARE(engine("s1").attribute(QStringLiteral("Y_OUT")), QVariant(6.0));
+    QVERIFY(QFileInfo(path).isFile());
+    QVERIFY(logbook.flushIndex());
+    QCOMPARE(indexValue("s1", yColumn()), QJsonValue(6.0));
+    m_model->resetStoredResultStats();
+    QVERIFY(registry.unregister(kShadow, CalculationRegistry::Removal::Change));
     QVERIFY(!QFileInfo::exists(path));
     QCOMPARE(stats().droppedRecordsDeleted, 1);
     QVERIFY(waitForIdle(*m_model));

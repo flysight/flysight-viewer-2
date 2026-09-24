@@ -738,6 +738,13 @@ void BuiltinsEngineTest::fingerprintSurvivesRuntimeAltitudeMarker()
 // that reports the requested results it drops; destroying the manager
 // (shutdown) removes its registrations as teardown and reports nothing, even
 // while an engine still holds a result that looked the marker up.
+//
+// The reader reads _TEST_ALT_OR_DEFAULT, whose first candidate copies the
+// marker and whose second is a constant. With no GNSS data the marker's
+// calculation is passed over, so the reader is Ok (-1) and its stored copy
+// lists what the marker's calculation looked up; removing the marker leaves
+// every answer alone but makes that copy stale, so the result is dropped
+// (CALCULATIONS.md, section 5).
 void BuiltinsEngineTest::altitudeMarkerTeardownReportsNothing()
 {
     TestEnvironment::instance().registerBuiltIns();     // the application registry, as at startup
@@ -750,20 +757,40 @@ void BuiltinsEngineTest::altitudeMarkerTeardownReportsNothing()
     manager->refresh();
     QVERIFY(registry.contains(QStringLiteral("builtin.altitude._ALTITUDE_1000_M")));
 
+    CalculationDescriptor copyMarker;
+    copyMarker.id = QStringLiteral("test.altitudeOrDefault.marker");
+    copyMarker.inputs = {CalcInput::attribute(QStringLiteral("_ALTITUDE_1000_M"))};
+    copyMarker.outputs = {attr("_TEST_ALT_OR_DEFAULT")};
+    copyMarker.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(QStringLiteral("_TEST_ALT_OR_DEFAULT"),
+                                                ctx.attribute(QStringLiteral("_ALTITUDE_1000_M")));
+    };
+    CalculationDescriptor fallback;
+    fallback.id = QStringLiteral("test.altitudeOrDefault.default");
+    fallback.outputs = {attr("_TEST_ALT_OR_DEFAULT")};
+    fallback.compute = [](const EvaluationContext &) {
+        return CalculationResult().setAttribute(QStringLiteral("_TEST_ALT_OR_DEFAULT"), -1);
+    };
+    const QStringList helperIds = {copyMarker.id, fallback.id};
+
     const QString readerId = QStringLiteral("test.readsAltitude");
     CalculationDescriptor reader;
     reader.id = readerId;
     reader.policy = EvaluationPolicy::Explicit;
-    reader.inputs = {CalcInput::attribute(QStringLiteral("_ALTITUDE_1000_M"))};
+    reader.inputs = {CalcInput::attribute(QStringLiteral("_TEST_ALT_OR_DEFAULT"))};
     reader.outputs = {attr("_TEST_READS_ALTITUDE")};
     reader.compute = [](const EvaluationContext &ctx) {
         return CalculationResult().setAttribute(QStringLiteral("_TEST_READS_ALTITUDE"),
-                                                ctx.attribute(QStringLiteral("_ALTITUDE_1000_M")));
+                                                ctx.attribute(QStringLiteral("_TEST_ALT_OR_DEFAULT")));
     };
+    QVERIFY(registry.registerCalculation(copyMarker));
+    QVERIFY(registry.registerCalculation(fallback));
     QVERIFY(registry.registerCalculation(reader));
     // Declared before the engine: runs after it on every exit
-    auto unregisterReader = qScopeGuard([&registry, readerId] {
+    auto unregisterReader = qScopeGuard([&registry, readerId, helperIds] {
         registry.unregister(readerId, CalculationRegistry::Removal::Change);
+        for (const QString &id : helperIds)
+            registry.unregister(id, CalculationRegistry::Removal::Change);
     });
 
     FakeSessionState state;     // empty: no GNSS data, so the altitude calculation cannot run
@@ -772,24 +799,25 @@ void BuiltinsEngineTest::altitudeMarkerTeardownReportsNothing()
     engine->setExplicitResultListener([&events](const CalculationEngine::ExplicitResultEvent &event) {
         const QString kind = event.kind == CalculationEngine::ExplicitResultEvent::Kind::Installed
                                  ? QStringLiteral("Installed") : QStringLiteral("Dropped");
-        const QString status = event.status == ResultStatus::MissingInput ? QStringLiteral("MissingInput")
-                                                                          : QString::number(int(event.status));
+        const QString status = event.status == ResultStatus::Ok ? QStringLiteral("Ok")
+                                                                : QString::number(int(event.status));
         events.append(kind + QLatin1Char(' ') + event.instanceId + QLatin1Char(' ') + status);
     });
 
-    QCOMPARE(engine->request(readerId).status, ResultStatus::MissingInput);
-    QCOMPARE(std::exchange(events, {}), QStringList({"Installed test.readsAltitude MissingInput"}));
+    QCOMPARE(engine->request(readerId).status, ResultStatus::Ok);
+    QCOMPARE(engine->attribute(QStringLiteral("_TEST_READS_ALTITUDE")), QVariant(-1));
+    QCOMPARE(std::exchange(events, {}), QStringList({"Installed test.readsAltitude Ok"}));
 
     // A runtime removal (the manager refreshes): reported
     writeAltitudes({});
     QVERIFY(!registry.contains(QStringLiteral("builtin.altitude._ALTITUDE_1000_M")));
-    QCOMPARE(std::exchange(events, {}), QStringList({"Dropped test.readsAltitude MissingInput"}));
+    QCOMPARE(std::exchange(events, {}), QStringList({"Dropped test.readsAltitude Ok"}));
     QVERIFY(!engine->resultStatus(readerId).has_value());
 
     // The teardown: nothing reported
     writeAltitudes({1000});
-    QCOMPARE(engine->request(readerId).status, ResultStatus::MissingInput);
-    QCOMPARE(std::exchange(events, {}), QStringList({"Installed test.readsAltitude MissingInput"}));
+    QCOMPARE(engine->request(readerId).status, ResultStatus::Ok);
+    QCOMPARE(std::exchange(events, {}), QStringList({"Installed test.readsAltitude Ok"}));
     manager.reset();
     QVERIFY(!registry.contains(QStringLiteral("builtin.altitude._ALTITUDE_1000_M")));
     QVERIFY(events.isEmpty());
@@ -797,6 +825,8 @@ void BuiltinsEngineTest::altitudeMarkerTeardownReportsNothing()
 
     engine.reset();
     QVERIFY(registry.unregister(readerId, CalculationRegistry::Removal::Change));
+    for (const QString &id : helperIds)
+        QVERIFY(registry.unregister(id, CalculationRegistry::Removal::Change));
     unregisterReader.dismiss();
     writeAltitudes({});
     QCOMPARE(registry.registeredIds(), idsBefore);

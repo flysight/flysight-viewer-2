@@ -35,7 +35,10 @@ namespace FlySight {
 /// Everything a resolution looked at is recorded as a dependency - the stored
 /// value's presence *or absence*, every candidate that was rejected, and the
 /// winner - so any change that could alter the choice invalidates the cached
-/// answer. Unavailable answers are cached like any other.
+/// answer. Unavailable answers are cached like any other. A registry change
+/// re-resolves only the cached names whose answer it can alter: never one the
+/// session's own data answers, nor one whose provider is tried before the new
+/// registration, nor one a removed candidate was merely passed over for.
 ///
 /// Invariant (idempotency): the value returned for a name is a pure function of
 /// the session's persistent state, the declared preferences, and the registry.
@@ -135,7 +138,11 @@ public:
     /// sourceUnitChanged), a preference change, a calculation being requested,
     /// published or restored whose "not requested" answer a requested result
     /// had used, or a registry change (a registration, or a removal with
-    /// CalculationRegistry::Removal::Change) that reaches the result.
+    /// CalculationRegistry::Removal::Change) that alters what a name the
+    /// result looked up resolves to, or - for a result exportResult() would
+    /// export - that removes a passed-over candidate through which alone its
+    /// lookups reached something (so that the result is dropped exactly when
+    /// a restore of its snapshot would be stale; onRegistryChanged()).
     ///
     /// The listener may call exportResult() and any const inspection; it must
     /// not mutate the session. An Installed event can be followed in the same
@@ -335,6 +342,15 @@ private:
 
     enum class Provider { None, Stored, Source, Calculation };
 
+    /// Which step of resolve() answered a name. Every step is final: nothing
+    /// falls through from one to the next, so a registry change can alter an
+    /// answer only through the step that gave it (onRegistryChanged()).
+    enum class Layer {
+        SessionData,    ///< a stored attribute, or source data read through the passthrough
+        Conversions,    ///< source data, while any source conversion is registered
+        Candidates      ///< no session data: the calculations and families, in registration order
+    };
+
     struct ResolutionEntry {
         Provider provider = Provider::None;
         QString instanceId;         // Provider::Calculation
@@ -343,6 +359,7 @@ private:
         QVector<double> samples;    // implicitly shared: a passthrough costs no second buffer
         QString unit;
         bool sawCycle = false;      // see Scope::sawCycle
+        Layer layer = Layer::Candidates;
     };
 
     struct ResultEntry {
@@ -382,6 +399,23 @@ private:
 
     // Registry-originated events
     void onRegistryChanged(const RegistryChange &change);
+    /// Whether `change` (already applied to the registry) can alter the answer
+    /// cached for the Resolution node `R`. True when nothing states what
+    /// answered R (no cache entry, or an evaluation that met a ring); see
+    /// onRegistryChanged() for the rules. Called for the names the change
+    /// concerns (a calculation's outputs, the names a family accepts, every
+    /// measurement name for a conversion family) and, for a removal only,
+    /// for every Resolution node that depends on a removed Result node -
+    /// whatever its name. The latter is sound because a removal's verdict
+    /// never rests on the name being one the registration is a candidate
+    /// for: only an answer provided by the removed registration, the last
+    /// conversion going, or an unknown answer counts as altered.
+    bool registryChangeCanAlter(const GraphNode &R, const RegistryChange &change) const;
+    /// Whether registration `registrationId` is tried before the registration
+    /// behind `instanceId` for any name both are candidates of.
+    bool triedBefore(const CalculationId &registrationId, const QString &instanceId) const;
+    /// Removes the one edge `from` -> `to` from both edge maps.
+    void detachEdge(const GraphNode &from, const GraphNode &to);
     void onPreferenceChanged(const QString &key);
     void registryDestroyed();
 

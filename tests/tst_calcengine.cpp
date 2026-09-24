@@ -649,17 +649,26 @@ void CalcEngineTest::unregisterFamilyInvalidatesInstances()
     QCOMPARE(w.engine.attribute("X"), QVariant(3));
     const int runs = w.engine.totalRunCount();
 
+    // neg:missing resolved to nothing, its only candidate passed over: without
+    // the family it still resolves to nothing, so only neg:A re-resolves.
     QVERIFY(w.registry.unregister("neg", CalculationRegistry::Removal::Change));
-    QCOMPARE(w.broadcasts, QList<Names>({Names({attr("neg:A"), attr("neg:missing")})}));
+    QCOMPARE(w.broadcasts, QList<Names>({Names({attr("neg:A")})}));
     QCOMPARE(w.engine.resultStatus("neg#neg:A"), std::optional<ResultStatus>());
+    QCOMPARE(w.engine.resultStatus("neg#neg:missing"), std::optional<ResultStatus>());
     QCOMPARE(w.engine.cachedState(attr("X")), CalculationEngine::CachedState::Available);
+    QCOMPARE(w.engine.cachedState(attr("neg:missing")), CalculationEngine::CachedState::Unavailable);
+    QVERIFY(w.engine.dependenciesOf(GraphNode::resolution(attr("neg:missing")))
+                .contains(GraphNode::storedAttribute("neg:missing")));
+    QVERIFY(!w.engine.dependenciesOf(GraphNode::resolution(attr("neg:missing")))
+                 .contains(GraphNode::result("neg#neg:missing")));
     QVERIFY(!w.engine.attribute("neg:A").isValid());
     QCOMPARE(w.engine.totalRunCount(), runs);
+    QVERIFY(w.engine.verifyAgainstFresh({attr("neg:A"), attr("neg:missing"), attr("X")}).isEmpty());
 
     // Registering the family again reaches the names cached as "none".
     w.broadcasts.clear();
     QVERIFY(w.registry.registerFamily(Synthetic::neg()));
-    QCOMPARE(w.broadcasts, QList<Names>({Names({attr("neg:A")})}));
+    QCOMPARE(w.broadcasts, QList<Names>({Names({attr("neg:A"), attr("neg:missing")})}));
     QCOMPARE(w.engine.attribute("neg:A"), QVariant(-1));
 }
 
