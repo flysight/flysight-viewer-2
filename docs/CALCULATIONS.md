@@ -127,6 +127,14 @@ is invalidated, although an older answer is still cached. The built-ins
 are acyclic, and `tst_session_oracle` asserts that no cycle ever occurs with
 them.
 
+What each name resolved to also matters beyond the session. A stored result
+(15.8) records, for every name it looked up, what provided it (a calculation
+instance with its result version, the session's own data, or nothing), and a
+restore repeats those lookups against the current registry (section 12,
+"Export and restore"). A registration that changes which candidate wins for
+such a name therefore makes the stored result stale; a candidate registered
+after the winner, or one for names the result never looked up, does not.
+
 ## 6. Parameterized families
 
 `CalculationFamily::instantiate(name)` turns a public name into a calculation
@@ -146,8 +154,12 @@ Changing it invalidates dependents in every loaded session. Preferences that
 are snapshotted into session attributes when a session is created (mass, area,
 fixed ground elevation) are read as attributes and do not affect existing
 sessions. Changing *which calculations exist* (the altitude markers,
-`AltitudeMarkerManager`) is done by registering and unregistering, which
-invalidates every loaded session.
+`AltitudeMarkerManager`) is done by registering and unregistering, which, in
+every loaded session, invalidates what depended on the names concerned. A
+requested result that never looked those names up stays installed, and so does
+its stored copy (15.8); one that did is dropped and its record deleted.
+`AltitudeMarkerManager`'s destructor unregisters with
+`CalculationRegistry::Removal::Teardown`, which reports nothing (section 12).
 
 ## 8. Explicit policy
 
@@ -159,12 +171,16 @@ status `Ok` is stored in the logbook's `cache/` folder and restored when the
 session is loaded again (section 15.8); restoring is not requesting. Explicit family
 instances are not stored. A descriptor may declare
 `CalculationDescriptor::resultVersion`, opaque text that identifies the
-arithmetic of the calculation's results. The engine never interprets it and it
-is not part of the environment fingerprint; a stored result is used only while
-it is unchanged (section 9). `builtin.fusion.fit` declares its kernel's
-`Fusion::Algorithm` (section 17). The same calculation can be run in the
-background (section 12), and section 13 reports which explicit calculations
-stand behind a name.
+arithmetic of the calculation's results. The engine never interprets it. It is
+part of the calculation environment fingerprint of the logbook column cache
+(section 9), and a stored result records it for its own calculation and for
+every calculation its lookups went through (section 12, "Export and restore");
+a stored result is used only while those are unchanged (section 9).
+`builtin.fusion.fit` declares its kernel's `Fusion::Algorithm` (section 17),
+and every Python plugin registration declares the plug-in code identity
+(`src/plugincodeidentity.h`; the plugin README, section 7). The same
+calculation can be run in the background (section 12), and section 13 reports
+which explicit calculations stand behind a name.
 
 An explicit calculation's outputs must have no other candidate. Only then do
 they read as unavailable whenever the calculation is not requested, and the
@@ -195,20 +211,23 @@ existing session yields for any logbook column:
 - the interpolation family;
 - `SessionModel::computeColumnValues` (what a column stores, or its unit).
 
-Bump it, or the calculation's result version
+Bump it, or the result version of the calculation concerned
 (`CalculationDescriptor::resultVersion`, section 8), whenever a change can
-alter what a requested calculation produces. A stored result is used only
-while this marker, the environment fingerprint
-and the result version it was stored with all equal the current ones (section
-15.8). Bumping a result version drops the stored results of that calculation
-only; bumping the marker drops every stored result and every cached column
-value.
+alter what a requested calculation, or anything it reads, produces. A stored
+result is used only while this marker and the result version it was stored
+with equal the current ones, and every name it looked up still resolves to the
+same provider with the same result version (15.8). Bumping a result version
+drops the stored results of that calculation and of every requested
+calculation whose lookups went through it; bumping the marker drops every
+stored result and every cached column value.
 
-Do not bump it for added, removed, or renamed registrations: the environment
-fingerprint (`calculationEnvironmentFingerprint`) covers those. Since it covers
-every registration and every declared preference value, such a change also
-makes every stored result stale at its session's next load. Never reuse a
-value, and never use 0.
+Do not bump it for added, removed, or renamed registrations, or for a changed
+result version: the environment fingerprint
+(`calculationEnvironmentFingerprint`) covers those for the logbook column
+cache. It covers every registration's result version too, so a plugin edit
+discards cached column values at the next start. A stored result does not
+depend on the fingerprint: a registration makes it stale only by changing what
+a name it looked up resolves to. Never reuse a value, and never use 0.
 
 ## 10. Testing a calculation
 
@@ -377,14 +396,25 @@ section 15.8). Main thread only.
 
 - `exportResult(id)` returns a `StoredCalculationResult`
   (`src/engine/storedcalculationresult.h`), or nothing unless a plain explicit
-  calculation (not a family) has an installed result with status `Ok`. Its
-  members:
+  calculation (not a family) has an installed result with status `Ok` whose
+  evaluation met no dependency ring (a ring is a registration error; what
+  provided a name then cannot be stated). Its members:
   - `calculationId`, `resultVersion` (the descriptor's at publish), `detail`
     (always the bundle's reason), and `bundle` (the outputs, in order);
   - `leaves`: every stored attribute, source measurement, source unit and
     declared preference the result reached through the recorded edges,
     transitively, through on-demand and explicit results alike, the ones that
     were looked at and found absent included. The list is sorted and unique;
+  - `resolutions`: for every name the result looked up, reached by the same
+    walk as the leaves (rejected candidates and explicit results included), a
+    `StoredResolution {name, provider, instanceId, resultVersion}`; provider
+    `Calculation` (the instance id, `<familyId>#<key>` for a family instance,
+    and that registration's result version), `SessionData` (a stored
+    attribute, or source data read through the passthrough) or `Nothing`.
+    Sorted by `storedResolutionLess()`, one entry per name. A source
+    conversion is a `Calculation`, so registering the first source conversion
+    changes every measurement that has source data. A preference is a leaf,
+    not a resolution;
   - `inputFingerprint`: SHA-256 over a pinned canonical encoding of the leaves
     and their current values. Attribute and preference values use the session
     file's text; samples are encoded as their bits, with every NaN as one
@@ -392,16 +422,23 @@ section 15.8). Main thread only.
     stored fingerprint then mismatches.
 
   Export is an inspection that reads the state and the preferences for the
-  fingerprint. It never computes. The code stamps are not part of the snapshot
-  (the engine does not depend on `src/calculations/`); the record adds them.
+  fingerprint. It never computes. The code stamp
+  (`CalculationCompatibilityVersion`) is not part of the snapshot (the engine
+  does not depend on `src/calculations/`); the record adds it.
 - `restoreResult(snapshot)` returns a `RestoreOutcome {kind, staleCheck,
   status, invalidated}`:
   - kinds: `NotFound`, `NotExplicit`, `AlreadyInstalled` (a result is cached,
     whatever its status: nothing changes, a cached result is never replaced),
     `Stale`, `Restored`;
   - stale checks, in order: `ResultVersion`, `Bundle` (an undeclared output, or
-    a detail that is not the bundle's reason), `InputsUnavailable`, `Leaves`,
-    `Fingerprint`;
+    a detail that is not the bundle's reason), `InputsUnavailable`,
+    `Resolutions` (the gathering met a ring, or a looked-up name resolved
+    differently: another provider, another instance or result version, or a
+    name looked up in only one of the two), `Leaves`, `Fingerprint`. A change
+    of the session or the registry that alters a lookup reports `Resolutions`,
+    also when the leaves differ as well; with the same resolutions the
+    gathering takes the same paths, so `Leaves` is in practice a check of the
+    snapshot itself;
   - it gathers the inputs exactly as `prepare()` does (on-demand intermediates
     are evaluated as for a fresh request) and never runs the compute function;
   - a stale restore caches nothing for the calculation: it still reads "not
@@ -420,10 +457,14 @@ section 15.8). Main thread only.
     calculation (a synchronous `request()`, `prepare()`'s `NothingToRun` /
     `Blocked`, a `Published` publish), whatever its status;
   - `DroppedByInputChange` is reported for leaf notifications, preference
-    broadcasts, and the cascade when an upstream calculation that a requested
-    result read as "not requested" is requested, published or restored;
+    broadcasts, the cascade when an upstream calculation that a requested
+    result read as "not requested" is requested, published or restored, and a
+    registry change made while the application runs that reaches the result
+    (a registration, or a removal with `CalculationRegistry::Removal::Change`,
+    the default of `unregister()`);
   - neither is reported for `restoreResult()`'s own install, `clear()`, a
-    registry change, or the destruction of the registry or the engine;
+    removal with `Removal::Teardown` (an owner being destroyed at shutdown),
+    or the destruction of the registry or the engine;
   - events are delivered in order at the end of the engine call, never inside
     an evaluation. The listener travels with the engine (a moved `SessionData`
     keeps it);
@@ -810,15 +851,17 @@ and restore; the files are described in
   listener, so both install paths write: the queue's publish and a synchronous
   `request()`.
 - `Installed` with status `Ok`: `exportResult()`, then
-  `CalculationRecord::stamped()` (which adds `CalculationCompatibilityVersion`
-  and the environment fingerprint, computed fresh), then
+  `CalculationRecord::stamped()` (which adds `CalculationCompatibilityVersion`),
+  then
   `LogbookManager::writeCalculationRecord()`, on the main thread. The write is
   atomic (`QSaveFile`). A failure is warned once, leaves the previous record
   and the in-memory result untouched, and is not retried before the next `Ok`
   publish.
 - `Installed` with any other status writes nothing and deletes nothing.
-- `DroppedByInputChange`: `LogbookManager::removeCalculationRecord()`, which
-  looks at the record's one path (no directory listing).
+- `DroppedByInputChange` (an input change, or a registry change made while the
+  application runs, dropped the result):
+  `LogbookManager::removeCalculationRecord()`, which looks at the record's one
+  path (no directory listing).
 - Explicit family instances (`<familyId>#<key>`) are not stored: the store
   ignores their events (`exportResult()` refuses them), so their results are
   lost on unload like on-demand ones. No built-in family is explicit.
@@ -834,21 +877,38 @@ and restore; the files are described in
 - A session the logbook manager knows no record of
   (`LogbookManager::knownCalculationRecords()`: the names seen at start-up
   plus its own writes and removals) is restored without listing
-  `cache/`. Otherwise the listing of the session's record files is the
-  source of ids.
+  `cache/`. Otherwise the ids read are the listing of the session's record
+  files together with the ids the manager knows, so that something other than
+  a file standing at a known record's path (a directory) is read, and found
+  unreadable, rather than ignored.
 - Records are restored in passes until a pass restores none, so
   explicit-on-explicit chains restore in any file order. `InputsUnavailable`
   counts as stale only after the last pass.
-- These are deleted at a load: unreadable records, records of an unsupported
-  format, records with stale stamps (`CalculationRecord::stampsAreCurrent()`),
-  records failing a stale check, and records of a calculation that is not
-  registered as explicit. A record whose result is already installed
-  (`AlreadyInstalled`) is kept.
+- These are deleted at a load: a file that is not a record, a damaged record,
+  a record of another format version (format 1, written by earlier versions,
+  included: no migration), a record whose stamp is not current
+  (`CalculationRecord::stampsAreCurrent()`: the compatibility marker only), a
+  record failing a stale check (`Resolutions` included), and a record of a
+  calculation that is not registered as explicit. A record whose result is
+  already installed (`AlreadyInstalled`) is kept.
+- A record that exists but cannot be opened or read in full
+  (`CalculationRecordStatus::Unreadable`) is skipped: neither restored nor
+  deleted, counted in `recordsSkipped`, warned once ("skipped (kept for the
+  next load)"), and marked with
+  `LogbookManager::markCalculationRecordSkipped()`, which keeps the column
+  values over it out of `index.json` until the record is written or removed
+  or the row is evicted. A record that stays `InputsUnavailable` only because
+  it reads the result of a skipped record is skipped too. The next load tries
+  again.
 - The column worker's and the bulk edit's temporary loads never read a record.
 - Records are deleted with their session (`LogbookManager::removeSession`) and,
   as strays whose session file does not exist in `sessions/`, at
   `initialize()`; that pass deletes in `cache/` only. Eviction, unloading, a
-  registry change and the model's destruction never delete one.
+  registry change that does not reach a requested result, a removal as
+  teardown and the model's destruction never delete one. A registry change
+  made while the application runs that drops a requested result deletes its
+  record like an input change. `AltitudeMarkerManager`'s destructor removes
+  its registrations as teardown; the plugin host never unregisters.
 - `cache/` may be deleted while the application is closed: `initialize()` then
   knows no record, every explicit calculation reads as not requested, and the
   start-up stamp check (DATA_SCHEMA section 11) drops each cached column value
@@ -862,10 +922,12 @@ and restore; the files are described in
 - Record format and file names: `src/calculationrecord.h` and DATA_SCHEMA
   section 12. Test seam: `SessionModel::storedResultStats()` /
   `resetStoredResultStats()` (records written, restore calls and listings,
-  records read, restored, kept and deleted, and the time spent).
+  records read, restored, kept, skipped and deleted, and the time spent).
 
 Tests: `tests/tst_calcengine_restore.cpp`, `tests/tst_result_records.cpp`,
-`tests/tst_result_store.cpp`, `tests/tst_fusion_store.cpp`.
+`tests/tst_result_store.cpp`, `tests/tst_result_columns.cpp`,
+`tests/tst_fusion_store.cpp`, `tests/tst_plugin_identity.cpp` (the plug-in
+code identity).
 
 ## 16. Plot-driven requests
 
@@ -1325,7 +1387,14 @@ The record holds the seventeen measurements and `_FUSION_DIAGNOSTICS`, or, for
 a rejection or solver failure, the diagnostics and the reason. Its leaves are
 the source data and attributes behind the 22 inputs: the IMU and GNSS source
 columns, `SCHEMA_VER`, the `TIME` sensor, the stored origin attributes. Markers
-and preferences are not among them.
+and preferences are not among them. Its resolutions name what provided each
+name the fit looked up (the conversion layer's instances for recorded
+measurements, the calculations behind derived channels such as the local frame
+and the time fit, the session's own attributes). With the built-ins, no
+altitude marker, no preference and no plugin calculation is among them, so
+adding or removing an altitude marker, changing the descent pause timeout, or
+editing a plugin keeps a stored fit; a plugin or a registration that declares
+one of the names the fit looks up, ahead of the built-in, makes it stale.
 
 **Logbook columns.** A column over names for which
 `CalculationRegistry::explicitDependencies()` is not empty
@@ -1343,9 +1412,13 @@ empty) when the logbook knows a record of it, unavailable otherwise. The
 column worker never reads a record. The ordering rule: a record write flushes
 the index first when the index on disk lists that calculation under a cached
 value, so no crash leaves a value that disagrees with the records. Unconfirmed
-records (a failed write or removal, an environment change while loaded) keep
-their values out of `index.json` until the row is evicted or the record is
-written or deleted again. `CalculationCompatibilityVersion` did not change for
+records (a failed write or removal, a record skipped at the load because it
+could not be read) keep their values out of `index.json` until the row is
+evicted or the record is written or deleted again. An environment change (a
+registration, a declared preference, a changed result version such as a plugin
+edit) discards every cached value but leaves the records valid; loaded rows
+recompute from the engine and stubs with a record stay pending until loaded.
+`CalculationCompatibilityVersion` did not change for
 this: an index written before the stamp holds explicit-backed values only as
 "unavailable", and at start-up they are kept only for sessions without a
 record. The marker's current value, 2, identifies the
@@ -1360,7 +1433,10 @@ real `SessionModel`), `tests/tst_fusion_rows.cpp` (the plot rows of section
 `tests/tst_fusion_runner.cpp` (the command-line runner against the
 application's import path) and `tests/tst_fusion_store.cpp` (the fit's stored
 result: unload, restart, rejections, invalidation, merges, the session file
-untouched); the column rule without GTSAM in
+untouched; kept across altitude markers, unrelated registrations, the descent
+pause and another plugin set; dropped at once by a registration that provides
+a name it looked up; deleted when a lookup resolves differently at load); the
+column rule without GTSAM in
 `tst_column_cache::explicitBackedColumnFollowsItsResult` and
 `tests/tst_result_columns.cpp` (the stamp, crash points, pending stubs), and
 with a real fit in

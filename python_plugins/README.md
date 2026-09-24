@@ -14,8 +14,10 @@ Set the environment variable `FLYSIGHT_PLUGINS` to use another folder (it must
 also contain `flysight_plugin_sdk.py`).
 
 At startup every `*.py` file directly inside the plugin folder is imported, in
-file-name order. Subfolders are not scanned, so nothing in `examples/` is
-loaded: to try an example, copy it one level up and restart.
+file-name order. Subfolders are not imported, so nothing in `examples/` is
+loaded: to try an example, copy it one level up and restart. (Every `*.py`
+file in the folder and its subfolders still counts for the plug-in code
+identity, section 7.)
 
 ## 2. The simple forms
 
@@ -196,14 +198,41 @@ Registration problems - an unknown key kind, a bad `outputs()` list, a missing
 `name`, a duplicate id - reject that one plugin at startup with a log line
 (`[PluginHost] Plugin ... rejected:`); the others still load.
 
-### Cached logbook columns
+### Plug-in code identity: stored results and cached columns
 
-FlySight Viewer caches the logbook column values of sessions that are not
-loaded. That cache is discarded when the *set of registered calculation ids*
-changes - a plugin added, removed, or renamed - not when a plugin's code
-changes. After changing what `compute()` returns, either rename the plugin (its
-id changes with its name) or remove the logbook column and add it again;
-otherwise unloaded sessions keep showing the old values.
+At startup, before any plugin is imported, FlySight Viewer computes one digest,
+the *plug-in code identity*, over:
+
+* every `*.py` file in the plugin folder and its subfolders (its path relative
+  to the folder and its bytes), except files in `__pycache__` and in hidden
+  folders (names that start with `.`); `examples/` counts although nothing in
+  it is imported;
+* the SDK file;
+* the Python version and the NumPy version (`none` if one cannot be read).
+
+The log shows it:
+`[PluginHost] Plug-in code identity: plugins-sha256:... (3 files)`.
+
+Every attribute, measurement and calculation a plugin registers declares it as
+its result version. So editing, adding, removing or renaming any file in the
+folder (not only the plugin you changed), or upgrading Python or NumPy, changes
+it for all plugins at once. The digest is over the files' raw bytes: the same
+plugin checked out with different line endings (by git's `autocrlf`, for
+example) has a different identity on another machine. That is harmless,
+because stored results and the logbook's `index.json` belong to one machine.
+
+* The logbook column values cached for sessions that are not loaded are then
+  discarded at the next start and recomputed in the background: a column over
+  a plugin value never keeps showing what old code returned. No renaming is
+  needed.
+* Plugin results are never stored: they are recomputed when read. But a stored
+  result of a requested calculation (sensor fusion today) whose inputs were
+  looked up through any plugin calculation (a plugin that provides a name the
+  calculation reads, section 8) is stale at its session's next load after such
+  a change, and must be requested again. A stored result that looked up no
+  plugin output is not affected.
+* Plugins are loaded once, at startup. An edit takes effect at the next start;
+  nothing watches the files.
 
 ## 8. Precedence
 
@@ -213,6 +242,11 @@ calculations; files in name order), then built-ins. A plugin that declares a
 built-in output (for example `IMU/aTotal`) therefore replaces the built-in
 whenever the plugin's inputs are available. It can never override recorded
 data or a value the user has set.
+
+A plugin that declares a name a requested calculation looks up also changes
+what that name resolves to: adding or removing such a plugin makes the stored
+results that looked the name up stale at their next load (they are requested
+again from the plot list).
 
 ## 9. What was removed
 

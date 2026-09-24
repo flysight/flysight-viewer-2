@@ -204,16 +204,20 @@ bool UnreadableFile::release()
 {
     if (!m_applied)
         return true;
-    m_applied = false;
 
     switch (m_mechanism) {
     case Mechanism::Directory:
-        // No directory when mkdir failed: only the bytes go back.
+        // No directory when mkdir failed: only the bytes go back. Still applied
+        // until both steps succeed, so that the destructor tries again.
         if (QFileInfo(m_path).isDir() && !QDir().rmdir(m_path))
             return false;
-        return writeFile(m_path, m_bytes);
+        if (!writeFile(m_path, m_bytes))
+            return false;
+        m_applied = false;
+        return true;
 
     case Mechanism::LockedWithoutSharing:
+        m_applied = false;
 #ifdef Q_OS_WIN
         if (m_handle) {
             const bool closed = CloseHandle(static_cast<HANDLE>(m_handle)) != 0;
@@ -224,6 +228,7 @@ bool UnreadableFile::release()
         return true;
 
     case Mechanism::NoReadPermission:
+        m_applied = false;
         return QFile::setPermissions(m_path, QFileDevice::ReadOwner | QFileDevice::WriteOwner
                                                  | QFileDevice::ReadUser | QFileDevice::WriteUser);
     }

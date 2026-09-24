@@ -112,11 +112,15 @@ computation.
 - **Deleting the logbook's `cache/` folder** while FlySight Viewer is closed is
   safe: the recordings are untouched, and every such track is "not computed"
   again at the next start.
+- **If a kept result cannot be read** when its track is shown (another program
+  has its file open, for example), the track is "not computed" for that time
+  only: the file is kept, and the result comes back the next time the track is
+  loaded.
 - **After an update of FlySight Viewer** that changes how such a plot is
-  computed, or after a change to calculations or to preferences that
-  calculations read (for example editing the altitude markers), kept results
-  are discarded when their track is next shown. The track is "not computed"
-  again.
+  computed, kept results are discarded when their track is next shown. The
+  track is "not computed" again.
+- **Changing settings the computation does not read** (altitude markers, other
+  preferences, Python plugins it does not use) never discards a kept result.
 - Moving markers, zooming, panning and changing display settings never discard
   a result.
 

@@ -48,10 +48,11 @@ document describes what is computed, from what, and how far to trust it.
   recording is not fitted again. Deleting `cache/` while FlySight Viewer is
   closed only means that the fits have to be requested again.
 - A stored result is dropped when an input of the fit changes (a re-import or
-  merge of different data, a changed `SCHEMA_VER`, a changed local origin),
-  after an update that changes the fit's arithmetic, and after a change of the
-  registered calculations or of a preference that calculations read. The plot
-  then shows the refresh icon again. Nothing is recomputed on its own.
+  merge of different data, a changed `SCHEMA_VER`, a changed local origin) and
+  after an update that changes the fit's arithmetic; the plot then shows the
+  refresh icon again. Adding or removing altitude markers, changing
+  preferences and installing or editing Python plugins keep it, unless a
+  plugin provides one of the fit's inputs. Nothing is recomputed on its own.
 
 ## 3. Inputs
 
@@ -383,8 +384,13 @@ recording is loaded, and the restored result is indistinguishable from a fresh
 one. Its code stamp is the algorithm string of the diagnostics
 (`batch-temperature-bias-v3`): a change that can alter what the fit returns
 changes that string, and every stored fit is then dropped at its recording's
-next load. A cancelled fit, or one that ran out of memory, stores nothing. A
-stored rejection shows the warning badge again, with its reason.
+next load. The record also states what provided each input the fit looked up,
+and a load repeats those lookups, so only a change of what the fit reads, or
+of the code that computes it, drops a stored fit. A cancelled fit, or one that
+ran out of memory, stores nothing. A stored rejection shows the warning badge
+again, with its reason. A stored fit whose file cannot be read when its
+recording is loaded (another program holding it, say) is kept: the recording
+reads as not fitted until it is loaded again.
 
 **One at a time.** Jobs run one after another in the order requested. Quitting
 cancels them and waits for the running fit to reach its next cancellation
@@ -407,10 +413,10 @@ demonstrated by tests, all labelled `fusion`:
 | --- | --- |
 | `tst_fusion_golden` | the kernel through its public API reproduces its goldens for twelve synthetic fixtures (three fits, nine rejections), the progress texts at its boundaries, cancellation at each kind of boundary (prefix, segment and full-fit iterations included), determinism and thread independence |
 | `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the two stopping rules forced through the tuning, the per-step covariance, the temperature factor's Jacobians and the three temperature cases, and the fit trace iteration by iteration against the goldens |
-| `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, a fit exported and restored into another session is indistinguishable |
+| `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
 | `tst_fusion_jobs` | the real fit through the job queue: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result |
 | `tst_fusion_rows` | the plot rows with the real fusion plots, end to end |
-| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), rejection and solver-failure badges, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted |
+| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), rejection and solver-failure badges, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registration that provides a name it looked up; deleted when a lookup resolves differently at load |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit on a recording written as `TRACK.CSV` / `SENSOR.CSV`, against a direct kernel run and against the application's own import path |
 
 The goldens live in `tests/data/fusion/`. In exact mode

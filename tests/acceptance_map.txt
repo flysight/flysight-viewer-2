@@ -1,5 +1,5 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Four specifications, four item ranges:
+# (tests/audit/cleanup_audit.cmake). Five specifications, five item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
@@ -15,6 +15,12 @@
 #             files, restore on load, validity, logbook columns over them):
 #             item = 300 + clause number. Stated in full in
 #             tests/README.md, appendix D.
+#   401-442   stored results: validity that mirrors memory (resolutions,
+#             runtime registry drops, the plug-in code identity, unreadable
+#             records, record format 2): item = 400 + clause number. Stated
+#             in full in tests/README.md, appendix E. It amends the
+#             specification of 301-350; items 310, 316, 317 and 341 are
+#             stated as amended.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -24,11 +30,11 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the four ranges; every item 1-19 needs a line;
-# every item 101-120, 201-247 or 301-350 needs at least one test or audit line
-# (manual and ci lines never stand alone). The human-readable matrices are
-# tests/README.md sections 9.1, 9.2, 9.3 and 9.4; keep them in sync with this
-# file.
+# Every item must lie in one of the five ranges; every item 1-19 needs a line;
+# every item 101-120, 201-247, 301-350 or 401-442 needs at least one test or
+# audit line (manual and ci lines never stand alone). The human-readable
+# matrices are tests/README.md sections 9.1 to 9.5; keep them in sync with
+# this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -645,13 +651,14 @@
 309 tst_calcengine_restore installedForEveryStatus
 309 tst_calcengine_restore exportOnlyInstalledOk
 
-# 310 - (3) a record is removed only when stale on load, with its session, on an input change, or replaced; never by eviction, unload, registry change, quit
+# 310 - (3, as amended) a record is removed only when stale on load, with its session, on an input change or a runtime registry change that drops its result, or replaced; never by eviction, unload, a registry change that does not reach it, a teardown removal, quit
 310 tst_result_store noDeleteWithoutInputChange
 310 tst_result_store inputChangeDeletesRecord
 310 tst_calcengine_restore droppedByInputChange
 310 tst_calcengine_restore droppedByPreferenceAndSource
 310 tst_calcengine_restore noDropEventWithoutInputChange
 310 tst_calcengine_restore droppedByRequestOfUpstream
+310 tst_result_store registryChangeDeletesRecord
 
 # 311 - (3) values round-trip bit for bit (-0, NaN, infinities; strings byte for byte)
 311 tst_result_records roundTripIsBitExact
@@ -687,15 +694,17 @@
 315 tst_calcengine_restore restoreStaleChecks
 315 manual M18
 
-# 316 - (4.2) valid only while CalculationCompatibilityVersion, the environment fingerprint and the result version match; fusion's is the algorithm string
+# 316 - (4.2, as amended) valid only while CalculationCompatibilityVersion and the result version match and every lookup resolves as it did; fusion's result version is the algorithm string
 316 tst_fusion_store codeStampChangeDropsRecordOnLoad
 316 tst_result_store staleRecordDeletedOnLoad
 316 tst_result_records stampsAreCurrent
 316 tst_fusion_session registrationShape
 316 audit stored-results
+316 tst_calcengine_restore restoreAcrossRegistries
 
-# 317 - (4.2) the bump rule gains the clause: bump it, or the calculation's result version
+# 317 - (4.2, as amended) the bump rule's clause: bump it, or the result version of the calculation concerned, whenever a change can alter what a requested calculation or anything it reads produces
 317 audit stored-results
+317 audit result-validity
 
 # 318 - (4) a record that fails any check is deleted at load; the calculation reads not requested; nothing is recomputed
 318 tst_result_store staleRecordDeletedOnLoad
@@ -858,7 +867,7 @@
 340 tst_fusion_store mergeIntoUnloadedSession
 340 tst_result_store inputChangeDeletesRecord
 
-# 341 - (8) test: bumping the compatibility version, the environment fingerprint or the result version drops the record on load
+# 341 - (8, as amended) test: bumping the compatibility version, the result version, or the result version recorded for a calculation its lookups went through drops the record on load
 341 tst_fusion_store codeStampChangeDropsRecordOnLoad
 341 tst_result_store staleRecordDeletedOnLoad
 
@@ -906,3 +915,245 @@
 350 tst_fusion_session restoredFitIsIndistinguishable
 350 tst_fusion_store restoredAfterEvictionIsBitIdentical
 350 tst_calcengine_restore restoreIntoFreshEngine
+
+# ---- Stored results: validity that mirrors memory: item = 400 + clause number ----
+
+# 401 - (2) a stored result goes stale exactly when the same result in memory would be dropped, or when the code that computed it changes; nothing unrelated to what it reached makes it stale
+401 tst_fusion_store storedFitSurvivesUnrelatedChanges
+401 tst_fusion_store runtimeRegistrationDropsFitAndRecord
+401 tst_fusion_store codeStampChangeDropsRecordOnLoad
+401 tst_result_store recordSurvivesUnrelatedChanges
+401 tst_result_store registryChangeDeletesRecord
+
+# 402 - (3.1, 3.2) in memory a requested result is dropped when a value it reached changes (samples, unit text, a stored attribute, directly or through calculations and conversions, a missing value that appears) or a declared preference it reached changes
+402 tst_calcengine_restore droppedByInputChange
+402 tst_calcengine_restore droppedByPreferenceAndSource
+402 tst_calcengine_restore droppedByRequestOfUpstream
+402 tst_fusion_store dependencyEditDropsRecord
+
+# 403 - (3.3) it is dropped when a registry change touches a name it resolved, directly or transitively: a calculation whose outputs include it added or removed, a calculation whose result it used removed, a family accepting it added or removed, the source-conversion layer changed
+403 tst_calcengine_restore droppedByRegistryChange
+403 tst_builtins_engine altitudeMarkerTeardownReportsNothing
+403 tst_fusion_store runtimeRegistrationDropsFitAndRecord
+
+# 404 - (3) everything else leaves it installed: edits to values it did not reach, registrations of names it never looked up (altitude markers, unrelated plug-in outputs), preferences it did not reach
+404 tst_calcengine_restore droppedByRegistryChange
+404 tst_fusion_store storedFitSurvivesUnrelatedChanges
+404 tst_fusion_store unrelatedEditKeepsRecord
+404 tst_result_store recordSurvivesUnrelatedChanges
+404 tst_result_store noDeleteWithoutInputChange
+404 manual M20
+
+# 405 - (4.1) inputs, unchanged: the fingerprint over every leaf the result reached, present or absent, declared preference values included, matches the session and preferences as they are now
+405 tst_calcengine_restore fingerprintKnownAnswer
+405 tst_calcengine_restore exportLeaves
+405 tst_calcengine_restore restoreStaleChecks
+405 tst_fusion_store dependencyEditDropsRecord
+
+# 406 - (4.2) the record states, for every name the result looked up directly or transitively, what provided it: a calculation (instance id and result version), the session's own data, or nothing
+406 tst_calcengine_restore resolutionCodes
+406 tst_calcengine_restore exportResolutions
+406 tst_fusion_session restoredFitIsIndistinguishable
+406 tst_result_records layoutIsPinned
+406 tst_result_records roundTripIsBitExact
+406 tst_result_records corruptInputIsRefused
+
+# 407 - (4.2) at load the same lookups are repeated against the current registry and must give the same answers
+407 tst_calcengine_restore restoreAcrossRegistries
+407 tst_calcengine_restore restoreStaleChecks
+407 tst_calcengine_restore ringIsNeverStored
+407 tst_result_store lookupResolvingDifferentlyDeletesRecord
+407 tst_fusion_store lookupResolvingDifferentlyAtLoadDeletesFit
+
+# 408 - (4.3) code: CalculationCompatibilityVersion and the calculation's own result version are unchanged
+408 tst_result_records stampsAreCurrent
+408 tst_result_store staleRecordDeletedOnLoad
+408 tst_fusion_store codeStampChangeDropsRecordOnLoad
+408 tst_calcengine_restore restoreStaleChecks
+
+# 409 - (4) the calculation environment fingerprint is no longer part of a record
+409 tst_result_records stampsAreCurrent
+409 tst_result_records layoutIsPinned
+409 tst_result_store recordSurvivesUnrelatedChanges
+409 audit result-validity
+
+# 410 - (4) the bump-rule clause reads: bump CalculationCompatibilityVersion, or the result version of the calculation concerned, whenever a change can alter what a requested calculation or anything it reads produces
+410 audit result-validity
+410 audit stored-results
+
+# 411 - (4) a record that fails any check is deleted when its session is loaded and the calculation reads not requested; nothing is recomputed
+411 tst_result_store staleRecordDeletedOnLoad
+411 tst_result_store lookupResolvingDifferentlyDeletesRecord
+411 tst_result_store pluginEditStalesRecordsThatReadIt
+411 tst_result_store formatOneRecordIsDeletedOnLoad
+411 tst_fusion_store lookupResolvingDifferentlyAtLoadDeletesFit
+
+# 412 - (5) a registry change made while the application runs that drops an installed requested result also deletes its record, like an input change
+412 tst_result_store registryChangeDeletesRecord
+412 tst_fusion_store runtimeRegistrationDropsFitAndRecord
+412 tst_calcengine_restore droppedByRegistryChange
+412 tst_result_columns registryChangeKeepsLoadedRowConfirmed
+
+# 413 - (5) tearing the registry down at shutdown, destroying or evicting a session, and replacing a session's contents without an input change delete nothing
+413 tst_calcengine_restore noDropEventWithoutInputChange
+413 tst_calcengine_restore registryDestructionReportsNothing
+413 tst_builtins_engine altitudeMarkerTeardownReportsNothing
+413 tst_result_store registryChangeDeletesRecord
+413 tst_result_store noDeleteWithoutInputChange
+413 audit result-validity
+
+# 414 - (5) a registry change that does not touch a result leaves the installed result and its record alone, and column values over that record remain cacheable
+414 tst_result_store recordSurvivesUnrelatedChanges
+414 tst_result_store noDeleteWithoutInputChange
+414 tst_result_columns registryChangeKeepsLoadedRowConfirmed
+414 tst_fusion_store storedFitSurvivesUnrelatedChanges
+414 tst_calcengine_restore droppedByRegistryChange
+
+# 415 - (6) every calculation, measurement and attribute a plug-in registers declares a result version: the plug-in code identity
+415 tst_python_bridge pluginRegistrationsCarryCodeIdentity
+415 audit result-validity
+
+# 416 - (6, as settled) the identity is one digest over every .py file under the plug-in folder, subfolders included (relative name and bytes, in name order; __pycache__ and hidden folders left out), the SDK file, and the Python and numpy versions
+416 tst_plugin_identity encodingIsPinned
+416 tst_plugin_identity eachIngredientChangesIdentity
+416 tst_plugin_identity absentVersionUsesFixedToken
+416 tst_plugin_identity readsTheFolderRecursively
+416 tst_plugin_identity subfolderFileChangesIdentity
+416 tst_plugin_identity pycacheAndHiddenDirectoriesAreIgnored
+416 tst_plugin_identity unreadableFileIsNotEmpty
+416 tst_python_bridge pluginRegistrationsCarryCodeIdentity
+
+# 417 - (6) it is computed once, when the plug-ins are loaded
+417 tst_python_bridge pluginRegistrationsCarryCodeIdentity
+417 tst_python_bridge secondInitialiseIsNoOp
+417 audit result-validity
+
+# 418 - (6) editing any plug-in file, adding or removing one, or upgrading Python or numpy changes it, so a stored result whose lookups went through any plug-in calculation goes stale at its next load
+418 tst_result_store pluginEditStalesRecordsThatReadIt
+418 tst_plugin_identity eachIngredientChangesIdentity
+418 tst_plugin_identity subfolderFileChangesIdentity
+
+# 419 - (6) a stored result whose lookups touched no plug-in calculation is unaffected by plug-in changes
+419 tst_result_store pluginEditStalesRecordsThatReadIt
+419 tst_fusion_store storedFitSurvivesUnrelatedChanges
+419 manual M21
+
+# 420 - (6) the environment fingerprint of the logbook column cache also covers every registration's result version: a plug-in edit or a built-in result-version change discards cached column values; its other contents and its role are unchanged
+420 tst_builtins_engine fingerprintCoversResultVersions
+420 tst_builtins_engine fingerprintChanges
+420 tst_column_cache pluginEditDiscardsCachedValues
+420 tst_column_cache altitudeMarkerChangeDiscards
+420 tst_logbook_index differentEnvironmentDiscards
+420 manual M21
+
+# 421 - (7) a record that exists but cannot be opened or read in full at its session's load is skipped for that load: neither restored nor deleted; the calculation reads not requested
+421 tst_result_store unreadableRecordIsSkipped
+421 tst_result_store dependentOfSkippedRecordIsKept
+421 manual M22
+
+# 422 - (7) the next load tries again; a new publish for the pair replaces it; deleting the session or the stray pass at start-up removes it
+422 tst_result_store unreadableRecordIsSkipped
+422 tst_result_columns skippedRecordValuesStayOutOfIndex
+422 tst_result_records writeReadReplace
+422 tst_result_records removeSessionDeletesRecords
+422 tst_result_records strayRecordsRemovedAtScan
+422 manual M22
+
+# 423 - (7) a record that was read but is not a record, is damaged, or has a format version this build does not read is deleted as stale
+423 tst_result_store staleRecordDeletedOnLoad
+423 tst_result_store formatOneRecordIsDeletedOnLoad
+423 tst_result_records readStatuses
+423 tst_result_records corruptInputIsRefused
+
+# 424 - (7) logbook column values of a session that depend on a skipped record are not cached in index.json while it stays skipped
+424 tst_result_columns skippedRecordValuesStayOutOfIndex
+424 tst_result_store unreadableRecordIsSkipped
+
+# 425 - (8) the record gains the resolutions and loses the environment fingerprint, and its format version increases
+425 tst_result_records layoutIsPinned
+425 tst_result_records futureVersionIsRefused
+425 tst_result_records formatOneIsRefused
+425 tst_result_records stampsAreCurrent
+
+# 426 - (8) a record of an earlier format version is deleted as stale when its session loads; no migration
+426 tst_result_store formatOneRecordIsDeletedOnLoad
+426 tst_result_records formatOneIsRefused
+
+# 427 - (9) the amended specification still holds where not amended: restoring is not requesting, publishing writes the record, records are read only for a session being loaded, the session file is untouched, a restored result is bit-identical
+427 tst_calcengine_restore restoreIsNotAnInstall
+427 tst_result_store restoreOnEveryLoadPath
+427 tst_result_store temporaryLoadsNeverRestore
+427 tst_fusion_store sessionFileBytesUnaffectedByRecord
+427 tst_fusion_store restoredAfterRestartIsBitIdentical
+427 audit stored-results
+
+# 428 - (9) the engine keeps its threading rules; repeating the lookups at load uses the resolution of a fresh request and never runs a requested calculation
+428 tst_calcengine_restore restoreAcrossRegistries
+428 tst_calcengine_restore restoreIsNotAnInstall
+428 tst_result_store lookupResolvingDifferentlyDeletesRecord
+428 audit one-worker
+428 audit stored-results
+
+# 429 - (9) plug-in loading stays a start-up operation: nothing reloads plug-ins or watches their files
+429 tst_python_bridge secondInitialiseIsNoOp
+429 audit result-validity
+
+# 430 - (10) test: a stored fit survives, restored with no job, adding and removing an altitude marker, registering and unregistering a calculation it never looks up, the descent-pause preference, another plug-in set, and a restart after any of these
+430 tst_fusion_store storedFitSurvivesUnrelatedChanges
+430 tst_result_store recordSurvivesUnrelatedChanges
+430 manual M20
+
+# 431 - (10) test: registering, while the application runs, a calculation that provides a name the fit looked up drops the installed fit and deletes its record
+431 tst_fusion_store runtimeRegistrationDropsFitAndRecord
+431 tst_result_store registryChangeDeletesRecord
+
+# 432 - (10) test: a record whose lookups resolve differently at load (a new candidate with the same inputs, registered before the load) is deleted and the fit reads not requested
+432 tst_fusion_store lookupResolvingDifferentlyAtLoadDeletesFit
+432 tst_result_store lookupResolvingDifferentlyDeletesRecord
+432 tst_calcengine_restore restoreAcrossRegistries
+
+# 433 - (10) test: with a requested calculation that reads a plug-in output, editing any plug-in file, adding one, or changing the Python or numpy version makes its record stale; a plug-in edit does not when it reads no plug-in output
+433 tst_result_store pluginEditStalesRecordsThatReadIt
+
+# 434 - (10) test: the plug-in code identity is deterministic, and each listed ingredient changes it
+434 tst_plugin_identity identityIsDeterministic
+434 tst_plugin_identity encodingIsPinned
+434 tst_plugin_identity eachIngredientChangesIdentity
+434 tst_plugin_identity absentVersionUsesFixedToken
+
+# 435 - (10) test: a plug-in edit discards cached logbook column values over plug-in calculations at the next start
+435 tst_column_cache pluginEditDiscardsCachedValues
+
+# 436 - (10) test: an unreadable record (held open without sharing on Windows, a directory at its path) is kept, not restored, and restored at a later load; its dependent column values are not cached meanwhile
+436 tst_result_store unreadableRecordIsSkipped
+436 tst_result_store dependentOfSkippedRecordIsKept
+436 tst_result_columns skippedRecordValuesStayOutOfIndex
+
+# 437 - (10) test: a record of the previous format version is deleted as stale
+437 tst_result_store formatOneRecordIsDeletedOnLoad
+437 tst_result_records formatOneIsRefused
+
+# 438 - (10) test: the existing tests of stored results pass, those that asserted environment staleness rewritten to these rules
+438 tst_result_store staleRecordDeletedOnLoad
+438 tst_fusion_store codeStampChangeDropsRecordOnLoad
+438 tst_result_columns environmentChangeDiscardsCachedValue
+438 tst_result_columns writeAfterStartupDropFlushesIndexFirst
+438 tst_result_columns registryChangeKeepsLoadedRowConfirmed
+
+# 439 - (11) docs/ and the plug-in README describe validity, the resolutions, the format version, unreadable records, column values over skipped records, the fingerprint covering result versions, the bump rule and the plug-in code identity; no note says unrelated changes make stored results stale
+439 audit result-validity
+
+# 440 - (12) a stored result is a memory of an in-memory result: stale when that one would be dropped, and when the code changes, and at no other time
+440 tst_fusion_store storedFitSurvivesUnrelatedChanges
+440 tst_fusion_store runtimeRegistrationDropsFitAndRecord
+440 tst_fusion_store codeStampChangeDropsRecordOnLoad
+
+# 441 - (12) what a result reached decides its validity, never what else is registered
+441 tst_calcengine_restore restoreAcrossRegistries
+441 tst_result_store recordSurvivesUnrelatedChanges
+441 audit result-validity
+
+# 442 - (12) a transient failure to read is not evidence that a record is wrong
+442 tst_result_store unreadableRecordIsSkipped
+442 tst_result_store dependentOfSkippedRecordIsKept
+442 manual M22

@@ -19,7 +19,13 @@
 #   - the stored results of requested calculations live in the logbook's
 #     cache/ folder, never in the session file: they are named, written, read,
 #     restored and deleted in one place each, and the documents describe them
-#     (items 301-350).
+#     (items 301-350);
+#   - a stored result goes stale only when the same result in memory would be
+#     dropped or its code changed: a record carries no environment
+#     fingerprint, the plug-in code identity is computed in one place at
+#     start-up, only an owner destroyed at shutdown removes registrations as
+#     teardown, and no document says that unrelated changes make stored
+#     results stale (items 401-442).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -563,13 +569,85 @@ expect_only("one authority: the fusion algorithm string" "batch-temperature-bias
 # Allow: reword the sentence, never duplicate it; the count is 1 in each file.
 expect_count("the bump rule names the result version" "CalculationDescriptor::resultVersion" 1
   src/calculations/builtincalculations.h)
-expect_count("the bump rule names the result version (docs)" "Bump it, or the calculation's result version" 1
+expect_count("the bump rule names the result version (docs)" "Bump it, or the result version of the calculation concerned" 1
   docs/CALCULATIONS.md)
 # Allow: tests/README.md is excluded because its section 10 describes this rule.
 # Say what is kept instead of what used to be lost.
 expect_none("no text says requested results are not kept"
   "[Rr]esults are kept in memory only|[Rr]esults are not saved|explicit results are never saved|[Aa]n explicit result is never (persisted|saved)|cached as present and invalid|never cached for unloaded ones"
   src tests docs python_plugins README.md ":!tests/README.md")
+
+# =============================================================================
+# Stored results: validity that mirrors memory (acceptance items 401-442): a
+# stored result goes stale when the same result in memory would be dropped, and
+# when the code that computed it changes. What a result looked up is part of
+# its record; what else is registered is not. The rules below keep the
+# environment fingerprint out of the record, the plug-in code identity in one
+# place and computed once at start-up, teardown removals at shutdown only, the
+# environment check away from records, and the documents current.
+# =============================================================================
+
+# ─────────────────────────────── result-validity (items 409, 410, 413, 415, 417, 429, 439, 441)
+audit_group(result-validity)
+# Allow: none expected. What else is registered never makes a record stale, so
+# neither the record format, the store nor the snapshot names the calculation
+# environment fingerprint (the column cache in logbookmanager.* and
+# sessionmodel.* does). The camelCase spelling only: a comment may still say
+# "environment fingerprint" in words.
+expect_none("a record carries no environment fingerprint" "calculationEnvironment|CalculationEnvironment"
+  "src/calculationrecord.*" "src/calculationresultstore.*" "src/engine/storedcalculationresult.*")
+# Allow: none expected. The digest is computed by plugincodeidentity.cpp and
+# asked for by the plug-in host at start-up (tests build stand-in identities
+# with the same functions; tests are not searched).
+expect_only("one authority: the plug-in code identity" "pluginCodeIdentity\\(|readPluginCodeFiles\\("
+  "^src/plugincodeidentity\\.(cpp|h)$|^src/pluginhost\\.(cpp|h)$" src)
+# Allow: a new owner of registrations that declares a result version (a new
+# explicit built-in, say) is added to the allowed-file regex. The plug-in
+# adapters build descriptors; the host stamps every plug-in registration in
+# registerEach(). `==` comparisons do not match.
+expect_only("result versions are declared by the engine, the fusion registration and the plug-in host"
+  "[.>]resultVersion *=[^=]"
+  "^src/engine/|^src/fusion/fusionregistration\\.cpp$|^src/pluginhost\\.cpp$" src)
+# A removal marked as teardown reports no drop, so the records of the results
+# it drops survive: only an owner destroyed at shutdown uses it, today the
+# altitude-marker manager's destructor. Allow: a new owner that unregisters in
+# its destructor is added to both rules (and to docs/CALCULATIONS.md 15.8);
+# a runtime change never is.
+expect_only("teardown removals only at shutdown" "Removal::Teardown"
+  "^src/engine/|^src/altitudemarkerfeature\\.cpp$" src)
+expect_count("teardown removals only at shutdown" "Removal::Teardown" 1 src ":!src/engine")
+# Allow: none expected. Plug-in registrations live as long as the process.
+expect_none("the plug-in host never unregisters" "unregister\\("
+  "src/pluginhost.*" "src/pluginadapters.*")
+# Plug-in loading stays a start-up operation: MainWindow initialises the host
+# once, and nothing reloads plug-ins or watches their files. Allow: a file
+# watcher for something other than plug-ins gets a ":!path" exclusion in the
+# third rule.
+expect_count("plug-ins are loaded once, at start-up" "[.>]initialise\\(" 1
+  src ":!src/pluginhost.cpp" ":!src/pluginhost.h")
+expect_only("plug-ins are loaded once, at start-up" "[.>]initialise\\("
+  "^src/mainwindow\\.cpp$" src ":!src/pluginhost.cpp" ":!src/pluginhost.h")
+expect_none("nothing watches the plug-in files" "QFileSystemWatcher" src)
+# The environment check touches no record: its whole-session marking existed
+# only because records carried the environment fingerprint. A record is
+# unconfirmed only after a failed write or removal, or when the store skips it.
+# Allow: none expected.
+expect_none("the environment check touches no record" "markCalculationRecordsUnconfirmed" src tests)
+expect_only("records are skipped by the result store" "markCalculationRecordSkipped\\("
+  "^src/logbookmanager\\.(cpp|h)$|^src/calculationresultstore\\.(cpp|h)$" src)
+# The bump rule of the amended specification, in the code; the note's copy is
+# counted by the stored-results group. Allow: reword around it, never
+# duplicate it; the old wording does not come back.
+expect_count("the bump rule covers what a requested calculation reads"
+  "Bump it, or the result version of the calculation concerned" 1
+  src/calculations/builtincalculations.h)
+expect_none("the old bump-rule wording is gone" "Bump it, or the calculation's result version"
+  src docs README.md)
+# Allow: tests/README.md is excluded because its section 10 describes this rule.
+# Say what a stored result depends on instead.
+expect_none("no text says an unrelated change makes stored results stale"
+  "makes every (record|stored result) stale|of a preference that calculations read|marker, the environment fingerprint"
+  src tests docs README.md ":!tests/README.md")
 
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
@@ -578,8 +656,10 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # tests/acceptance_map.txt: items 1-19 (the schema / engine specification),
 # 101-120 (sensor fusion and plot-driven jobs, item = 100 + acceptance number),
 # 201-247 (the sensor fusion improvements, item = 200 + requirement
-# number) and 301-350 (storing requested calculation results with the session,
-# item = 300 + clause number). Four line forms; see the head of the map.
+# number), 301-350 (storing requested calculation results with the session,
+# item = 300 + clause number) and 401-442 (stored results: validity that
+# mirrors memory, item = 400 + clause number). Four line forms; see the head of
+# the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -649,8 +729,9 @@ else()
 
     list(APPEND items_seen "${item}")
     if(NOT ((item GREATER_EQUAL 1 AND item LESS_EQUAL 19) OR (item GREATER_EQUAL 101 AND item LESS_EQUAL 120)
-            OR (item GREATER_EQUAL 201 AND item LESS_EQUAL 247) OR (item GREATER_EQUAL 301 AND item LESS_EQUAL 350)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247 and 301-350: ${line}")
+            OR (item GREATER_EQUAL 201 AND item LESS_EQUAL 247) OR (item GREATER_EQUAL 301 AND item LESS_EQUAL 350)
+            OR (item GREATER_EQUAL 401 AND item LESS_EQUAL 442)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350 and 401-442: ${line}")
     endif()
   endforeach()
 
@@ -674,6 +755,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 301 350)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 401 442)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

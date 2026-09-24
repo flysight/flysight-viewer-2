@@ -42,8 +42,9 @@ struct CalculationDescriptor {
     /// inputs. Empty means none is declared. Opaque text to the engine: it
     /// never affects evaluation, identity or candidate order. The calculation
     /// environment fingerprint (the logbook column cache) covers it, and every
-    /// Python plug-in registration declares the plug-in code identity. A family's `instantiate` may set it on the descriptors it
-    /// returns; the registry keeps what it is given.
+    /// Python plug-in registration declares the plug-in code identity. A
+    /// family's `instantiate` may set it on the descriptors it returns; the
+    /// registry keeps what it is given.
     QString              resultVersion;
 };
 

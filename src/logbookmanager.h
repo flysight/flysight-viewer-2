@@ -328,10 +328,10 @@ public:
 signals:
     // A record of (sessionId, calculationId) was written, removed, skipped at a
     // load, or a write or removal of it failed. The cached values of the
-    // session that depend on the calculation have already been dropped here. Emitted synchronously, from
-    // inside the record method (so possibly from an engine listener): a receiver
-    // must only drop state and defer work. Not emitted by removeSession(), the
-    // stray pass, or initialize().
+    // session that depend on the calculation have already been dropped here.
+    // Emitted synchronously, from inside the record method (so possibly from an
+    // engine listener): a receiver must only drop state and defer work. Not
+    // emitted by removeSession(), the stray pass, or initialize().
     void calculationRecordsChanged(const QString &sessionId, const QString &calculationId);
 
 private:

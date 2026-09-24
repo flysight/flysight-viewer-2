@@ -305,12 +305,19 @@ They are derived data. Two root fields say what they are valid for:
   (`FlySight::CalculationCompatibilityVersion`). It is unrelated to
   `SCHEMA_VER`.
 - `calculationEnvironment`, a fingerprint of the registered calculation ids
-  and the values of the preferences that calculations declare as inputs.
+  in the order candidates are tried, the result version each registration
+  declares, and the values of the preferences that calculations declare as
+  inputs. Every Python plugin registration declares the plug-in code identity
+  (section 12) as its result version, so editing, adding or removing a plugin
+  file, or upgrading the Python or NumPy the plugins run on, changes the
+  fingerprint; so does an update that changes the sensor fusion algorithm.
 
 If either is missing or different, all cached values are discarded and
 recomputed in the background. Session files, ids, and access times are
-untouched. This happened once on the upgrade to this version, because
-gyro-dependent columns changed for every legacy session.
+untouched. Such a change discards cached column values only; it never makes a
+stored calculation result stale (section 12, "Validity"). This happened once
+on the upgrade to this version, because gyro-dependent columns changed for
+every legacy session.
 
 Each session entry also has `"records"`: an object naming the requested
 calculations that have a stored result for that session (section 12), each
@@ -344,11 +351,12 @@ Before a record is written whose calculation `index.json` lists as present
 under a cached value, the index is rewritten without that value, so a crash at
 any point cannot leave a cached value that disagrees with the records. A value
 whose record may disagree with the loaded session (a record write or removal
-that failed, or a change of the registered calculations or of a declared
-preference while the session was loaded) is kept out of `index.json` until the
-record is written or deleted again or the session is unloaded. An index
-written before stamps existed keeps such a value only for a session without a
-record.
+that failed, or a record that could not be read when the session was loaded,
+section 12) is kept out of `index.json` until the record is written or deleted
+again or the session is unloaded. An unloaded session whose record was skipped
+shows such a column empty (pending) until it is loaded again, when the record
+is read again. An index written before stamps existed keeps such a value only
+for a session without a record.
 
 Developers: when to change the marker is described in
 [CALCULATIONS.md](CALCULATIONS.md#9-when-to-bump-calculationcompatibilityversion).
@@ -391,58 +399,101 @@ from the plot list, and the logbook column values that came from a stored
 result are dropped (section 11) and show as unavailable.
 
 **Format.** Binary, not meant to be read by people: the magic `FVRESULT`, a
-format version (1), then the two code stamps, the calculation id, the result
-version, the reason, the input fingerprint (SHA-256), the names of the inputs
-the result depended on, and the outputs. Doubles are stored as their eight
-bytes, so a restored value is bit for bit the published one: `-0`, NaN and the
-infinities included. Strings round-trip exactly. An attribute is stored with
-its type, which must be one of: string, byte array, boolean, double, float
-(stored as a double and read back as the same float), and the 8-, 16-, 32-
-and 64-bit signed and unsigned integers (`char`, `signed char`,
-`unsigned char`, `short`, `unsigned short`, `int`, `unsigned int`,
-`qlonglong`, `qulonglong`). `long` and `unsigned long` are refused, because
-their width differs between Windows and Linux / macOS; a result holding any
-other type is not stored (the write fails and the result stays in memory). A
-SHA-256 of everything before it closes the file. The size is of the order of
-the session file. A record of another format version, or a damaged one, is
-treated as stale. Only a name ending exactly in `.fvresult` (lower case) is a
-record.
+format version (2), then the code stamp (`CalculationCompatibilityVersion`),
+the calculation id, the result version, the reason, the input fingerprint
+(SHA-256), the names of the inputs the result depended on, the outputs, and
+what provided each name the result looked up (its resolutions, see "Validity").
+Doubles are stored as their eight bytes, so a restored value is bit for bit the
+published one: `-0`, NaN and the infinities included. Strings round-trip
+exactly. An attribute is stored with its type, which must be one of: string,
+byte array, boolean, double, float (stored as a double and read back as the
+same float), and the 8-, 16-, 32- and 64-bit signed and unsigned integers
+(`char`, `signed char`, `unsigned char`, `short`, `unsigned short`, `int`,
+`unsigned int`, `qlonglong`, `qulonglong`). `long` and `unsigned long` are
+refused, because their width differs between Windows and Linux / macOS; a
+result holding any other type is not stored (the write fails and the result
+stays in memory). A SHA-256 of everything before it closes the file. The size
+is of the order of the session file. A record of another format version, or a
+damaged one, is treated as stale. Records written by earlier versions of
+FlySight Viewer have format version 1; they are deleted at their session's next
+load, and the calculation has to be requested again. There is no migration.
+Only a name ending exactly in `.fvresult` (lower case) is a record.
 
 **Validity.** A record is used only while all of these hold:
 
-- `CalculationCompatibilityVersion`, the calculation environment fingerprint
-  (both as in section 11, but computed fresh when the session is loaded) and
-  the calculation's result version equal the ones it was written with. For
-  sensor fusion the result version is the kernel's algorithm string, the
+- **Code.** `CalculationCompatibilityVersion` (section 11) and the
+  calculation's result version equal the ones it was written with. For sensor
+  fusion the result version is the kernel's algorithm string, the
   `"algorithm"` of its diagnostics.
-- The names of the inputs the result reached are the same: source
+- **Inputs.** The names of the inputs the result reached are the same (source
   measurements with their unit text, attributes and declared preferences,
   directly or through other calculations, including inputs that were looked
-  at and found absent.
-- A fingerprint over those inputs' current values equals the stored one.
+  at and found absent), and a fingerprint over their current values equals
+  the stored one.
+- **Lookups.** For every name the result looked up, directly or through other
+  calculations, the record states what provided it: a calculation (its id and
+  its result version), the session's own data (a stored attribute or recorded
+  data), or nothing. When the session is loaded the same lookups are repeated
+  against the calculations registered now, and every answer must be the same.
 
 So an edit the result does not depend on (a marker, a description) keeps the
 record, and an edit it depends on (a merge that adds or changes IMU data, a
-changed `SCHEMA_VER`, a changed local origin) makes it stale. Because the
-environment fingerprint covers every registered calculation and every declared
-preference, any change to those (editing the altitude markers, for example)
-also makes every record stale at its session's next load.
+changed `SCHEMA_VER`, a changed local origin) makes it stale. What else is
+registered, and preferences the result did not read, never matter: adding or
+removing an altitude marker, loading a set of plugins whose calculations the
+result never looked up, or changing the descent pause timeout keeps every
+stored sensor fusion result valid. A new calculation that would now provide a
+name the result looked up (a plugin that declares one of its inputs, say)
+makes it stale. In short, a record goes stale when the same result in memory
+would have been dropped, or when the code that computed it changed.
+
+**Plug-in code identity.** Each Python plugin registration (attribute,
+measurement or calculation) declares one result version, the plug-in code
+identity: a SHA-256 digest, written `plugins-sha256:<hex>`, over every `*.py`
+file under the plugin folder, subfolders included (its path relative to the
+folder and its bytes; files in `__pycache__` and in hidden folders, whose
+names start with `.`, are left out), the plugin SDK file, and the Python and
+NumPy versions (`none` for a version that cannot be read). It is computed
+once, when the plugins are loaded at start-up, and written to the log.
+Editing, adding or removing any such file (also under `examples/`, which is
+never imported) or upgrading Python or NumPy changes it for every plugin
+registration at once, so a stored result whose lookups went through any
+plugin calculation is stale at its session's next load, and the cached column
+values are discarded at start-up (section 11). A stored result whose lookups
+touched no plugin calculation is unaffected. Plugin results themselves are
+never stored.
 
 **Lifecycle.**
 
 - A record is written when the result is published, and replaced by the next
   publish for the same session and calculation.
-- It is deleted when an input it depends on changes, when its session is
-  deleted from the logbook, when it is found stale as the session is loaded,
-  and at start-up when no session file with its stem exists in `sessions/`
-  (that start-up pass deletes in `cache/` only).
+- It is deleted when an input it depends on changes, when a change of the
+  registered calculations made while the application runs drops its result (a
+  calculation registered that provides a name it looked up, for example),
+  when its session is deleted from the logbook, when it is found stale as the
+  session is loaded, and at start-up when no session file with its stem exists
+  in `sessions/` (that start-up pass deletes in `cache/` only).
 - It is never deleted by hiding a track, unloading a session, quitting, or a
-  change of the registered calculations. Such a change is checked at the next
-  load instead.
+  change of the registered calculations that does not reach it.
 - When a session is loaded, every valid record is restored before anything
   reads the session. Restoring is not requesting: nothing is computed. A stale
   or missing record leaves the calculation not computed until it is requested
   again from the plot list.
+- A record that exists but cannot be opened or read in full when its session
+  is loaded (another program holding the file locked, for example) is skipped
+  for that load: it is neither restored nor deleted, the calculation reads as
+  not requested, and a warning is logged. A record whose result reads the
+  result of a skipped record is skipped too. The next load tries again; a new
+  publish for the same session and calculation replaces the record, and
+  deleting the session, or the start-up pass for a session file that no longer
+  exists, removes it. A file that is locked without sharing (on Windows) can
+  be neither replaced nor removed while the lock lasts: such a publish fails
+  like any failed write (next item), and deleting its session then leaves the
+  record behind as a stray, which the start-up pass removes at the first start
+  at which the file can be deleted. Logbook column values that depend on a
+  skipped record are not cached in `index.json` while it stays skipped
+  (section 11). A record that was read but is not a record, is damaged, or
+  has another format version is deleted as stale.
 - A write that fails (a full disk, say) leaves the previous record, if any,
   intact and the result in memory. The next publish tries again.
 

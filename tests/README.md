@@ -20,6 +20,7 @@
 [Appendix B. The acceptance items of sensor fusion and plot-driven jobs (101-120)](#appendix-b-the-acceptance-items-of-sensor-fusion-and-plot-driven-jobs-101-120)
 [Appendix C. The acceptance items of the sensor fusion improvements (201-247)](#appendix-c-the-acceptance-items-of-the-sensor-fusion-improvements-201-247)
 [Appendix D. The acceptance items of stored requested results (301-350)](#appendix-d-the-acceptance-items-of-stored-requested-results-301-350)
+[Appendix E. The acceptance items of stored-result validity (401-442)](#appendix-e-the-acceptance-items-of-stored-result-validity-401-442)
 
 ## 1. What this is
 
@@ -38,8 +39,8 @@ The tests are not a standalone project. `tests/` is added by
 test is registered with CTest. Test executables have no install rules, so
 packages are the same whether or not the option is set.
 
-There are 47 test executables plus the audit. `ctest -N` lists 48 entries, or
-55 where the bit-exact runs of the seven fusion golden tests are registered
+There are 48 test executables plus the audit. `ctest -N` lists 49 entries, or
+56 where the bit-exact runs of the seven fusion golden tests are registered
 (`tst_fusion_*_exact`: the same executables a second time, label `exact`,
 Release only; sections 3 and 11). `solver_deploy_probe`,
 `fusion_golden_capture` and `fusion_runner` are also built, but are not tests
@@ -62,21 +63,21 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | `tst_calcengine_oracle` | Calculation engine: randomized (seeded) sequences, and randomized (seeded) topologies full of overlapping rings, compared against a fresh evaluation; the same with explicit calculations in play (blocker inspection, synchronous and asynchronous requests, requests refused because an input changed), where an explicit calculation may run only in a request or publish step |
 | `tst_calcengine_async` | Calculation engine: the asynchronous request (prepare / compute / publish) with compute inline, on a `std::thread` and on a `QThread`: identical to `request()` in every observable, captured inputs, engine-decided staleness (an input changing while compute is running, transitive changes, registration removed, engine destroyed, a synchronous request in between), `willBeRefused()` / `refusalReason()` reporting the engine's mark for every cause of a refusal that can be known before publish (false for a healthy ticket, false again once published or refused), cancellation, progress text, resource exhaustion never cached, an ordinary exception cached as `Failed`, abandoned tickets leaving nothing behind |
 | `tst_calcengine_blockers` | Calculation engine: blocker inspection: an explicit calculation reported through on-demand intermediates, missing input is never a blocker, chained explicit calculations (A then B), "ran and did not produce" with the reason or failure text, fallbacks, stored and unknown names, an explicit family instance, rings, `readiness()`; inspection never runs an explicit calculation and never changes a later read |
-| `tst_calcengine_restore` | Calculation engine: stored results. Snapshot export (the leaf closure through on-demand and explicit results, absent leaves included, the fingerprint's canonical forms and a known answer), restore into a fresh engine (identical edges, status, detail, blockers and invalidation; no run, no ticket), every stale check (result version, bundle, inputs unavailable, leaves, fingerprint), and the explicit-result listener (installed on both request paths for every status, never on restore; dropped by input changes only, never by `clear()`, a registry change or destruction) |
+| `tst_calcengine_restore` | Calculation engine: stored results. Snapshot export (the leaf closure through on-demand and explicit results, absent leaves included, the fingerprint's canonical forms and a known answer), restore into a fresh engine (identical edges, status, detail, blockers and invalidation; no run, no ticket), the resolutions (what provided each name the result looked up, their pinned codes and order; a result that met a dependency ring is never exported), every stale check (result version, bundle, inputs unavailable, resolutions, leaves, fingerprint), restore across registries (the same or unrelated registrations and a losing candidate restore; a new winning candidate with the same inputs, a provider's result version or a source conversion is stale), and the explicit-result listener (installed on both request paths for every status, never on restore; dropped by input changes and by registry changes made while the application runs that reach it (a registration, a removal, a family, a source conversion); never by unrelated registrations, a teardown removal, `clear()`, or the destruction of the registry or the engine) |
 
 **Built-in calculations and sessions on the engine**
 
 | Test | Covers |
 |------|--------|
 | `tst_builtins_golden` | Every built-in calculation read through `SessionData` on the generated descent fixture, against hand-derived golden literals |
-| `tst_builtins_engine` | The built-ins on a private registry and `FakeSessionState`: golden values, registration inventory, declared inputs only, multi-output groups, candidate order, the declared preference, interpolation family, altitude descriptor |
+| `tst_builtins_engine` | The built-ins on a private registry and `FakeSessionState`: golden values, registration inventory, declared inputs only, multi-output groups, candidate order, the declared preference, interpolation family, altitude descriptor, the environment fingerprint covering every registration's result version (`fingerprintCoversResultVersions`), and the altitude-marker manager's destructor removing its registrations as teardown, which reports no drop while a marker removed at run time does (`altitudeMarkerTeardownReportsNothing`) |
 | `tst_time_fit` | The system-time-to-UTC fit: microsecond-level conversion of an exact synthetic clock at high device uptime (the regression test of the centered sums), invalidation through the TIME sensor, GPS week rollover, degenerate clocks |
 | `tst_local_coordinates` | The recording-wide `Local` frame: origin gates, analytically known displacements and velocity rotation on WGS84, NaN at the index of an invalid sample only, all outputs unavailable without a qualifying fix, the shared GNSS time axes, invalidation on source changes and independence from markers on a real `SessionData` |
 | `tst_simplified_track` | The simplified map track on the shared `Local` frame: all seven outputs at the same retained sample indices, every dropped sample within 0.5 m of the path and the strictly-greater rule, duplicate-position endpoints, closed, degenerate and empty tracks, non-finite samples left out, one projection per recording, unavailable without a local origin and back after a source correction, siblings invalidated together |
 | `tst_session_engine` | `SessionData` on the engine with the real built-ins: run-once, invalidation, candidate replacement, overrides, preferences, the fresh-evaluation oracle, copy/move semantics; an explicit-policy calculation and a throwing / nested / cyclic set of calculations registered temporarily on the global registry (acceptance 14, 12); an asynchronous request against real session ownership (published, session moved, destroyed, move- and copy-assigned over, declared input edited) |
 | `tst_session_model_engine` | `SessionModel` + `AltitudeMarkerManager`: registry and preference broadcasts reaching `dependencyChanged`, coalescing, merges, rows surviving sort, the read-only `DEVICE_ID` column, a marker only for an altitude whose calculation registered; the job queue's hooks: counted session pins that defer LRU eviction (and nothing else), and immediate publication of engine-returned invalidations without any persistent effect |
-| `tst_result_store` | Stored results of explicit calculations on a real model and logbook (synthetic calculations): written on an Ok install (also before a new session's first save), deleted on an input change, restored on every load path in passes (a session without a known record is not listed), stale records deleted; temporary loads never read one; write failures; an explicit family instance is not stored |
-| `tst_result_columns` | Logbook columns over explicit results: cached from the restored or published result with a record stamp in index.json, dropped when a record is written or deleted, pending for unloaded sessions with a record, crash points, old indexes, write failures, and a `cache/` folder deleted while the application was closed (no record, nothing requested, the values over it dropped at start-up, nothing run) |
+| `tst_result_store` | Stored results of explicit calculations on a real model and logbook (synthetic calculations): written on an Ok install (also before a new session's first save), deleted on an input change, restored on every load path in passes (a session without a known record is not listed), stale records deleted; temporary loads never read one; write failures; an explicit family instance is not stored; a registry change made while the application runs that reaches a result deletes its record, a teardown removal does not; unrelated registrations and the descent-pause preference keep it valid across loads and restarts; a lookup that resolves differently, or a changed plug-in code identity of a calculation the result read, makes it stale; an unreadable record (a directory at its path, a Windows lock, POSIX permissions; rows skip where the platform does not honour them) is skipped and restored at a later load, and a record that reads it is kept; a format-1 record is deleted |
+| `tst_result_columns` | Logbook columns over explicit results: cached from the restored or published result with a record stamp in index.json, dropped when a record is written or deleted, pending for unloaded sessions with a record, crash points, old indexes, write failures, and a `cache/` folder deleted while the application was closed (no record, nothing requested, the values over it dropped at start-up, nothing run); values over a record skipped at a load never cached while it is skipped; a registry change that does not reach a result keeps its row confirmed (`registryChangeKeepsLoadedRowConfirmed`); an environment change discards cached values while the record restores |
 | `tst_session_oracle` | The session-level idempotency oracle (section 7): randomized, seeded sequences of reads, edits, merges, preference and registry changes on real `SessionData` objects (part A) and on the real `SessionModel` / `LogbookManager` through the application's import path, with restarts, simulated crashes and a persisted-state check (part B), compared against a fresh evaluation |
 
 **Jobs and plot rows** (synthetic explicit calculations; no GTSAM)
@@ -105,8 +106,8 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | `tst_csvformat` | `CsvFormat`, the one definition of the on-disk text forms: shortest round-trip doubles (a 200 000-value bit-pattern sweep), `-0`, `nan` / `inf` / `-inf`, attribute values by `QVariant` type, line-break flattening, valid names and units |
 | `tst_persistence_roundtrip` | Save / reload on the real importer, exporter and logbook: acceptance 5 (bit-identical samples, units and header attributes preserved, `SCHEMA_VER` only if recorded, effective values unchanged, second cycle byte-identical, independent of any cache) and acceptance 6 (a released logbook file is not rescaled, relabelled or stamped by a save; the `loadSession` backfill is additive and idempotent); non-finite samples, ragged sensors, unrepresentable text; the file writer and the in-memory writer agree (also across the 4 MB flush boundary); an unsupported stored `SCHEMA_VER` is never written |
 | `tst_logbook_index` | `LogbookManager`'s `index.json` column cache: the calculation-compatibility marker and environment fingerprint gate the cached values (acceptance 18 at the storage level), unsaved-column tracking and save ordering (an interrupted save never leaves a cached column that disagrees with the session file), orphan session files adopted, marks follow remap / remove / reset; the raw load with its failure reason, the legacy backfill as a separate step, identity-entry queries, a legacy flat index coming up as stubs without rewriting a session file |
-| `tst_result_records` | Stored requested-calculation results: the record file name (percent-encoded calculation id, canonical, dot-free, distinct under case folding; the parse of a name), the code stamps computed fresh, the binary record format (bit-exact round trip of `-0`, NaN payloads, infinities and subnormals, null / empty / non-ASCII strings and unavailable outputs; a round trip of every accepted attribute type; the pinned byte layout; other format versions, damaged and crafted payloads refused without allocating; every other attribute type, `long` and `unsigned long` included, refused at encode; size), and `LogbookManager`'s record files in the logbook's `cache/` folder: write, read, replace, list, remove, the folder created by the first write only (a missing folder holds no record), write failures leaving the previous record intact (a `cache/` that cannot be created included), removal with the session (dotted identity stems), stray records removed from `cache/` by `initialize()` in all three index branches, `sessions/` untouched (a name spelling the extension in another case is not a record: neither listed nor removed), orphan adoption, remap, and a session save that never depends on records |
-| `tst_column_cache` | The same through `SessionModel`: upgrade discards and lazily recomputes (acceptance 18), an edit refreshes only the affected columns with a warm and a cold engine, merges and bulk edits, interrupted saves, environment changes (declared preference, altitude-marker registrations) discarding loaded and unloaded rows without saving, save failures (the row stays dirty and loaded, is skipped by the idle saver and the LRU, stays out of the index, and is saved by a later edit or the shutdown flush), line breaks flattened at edit, a column over an explicit result cached from the result the session has and following its record, shown by a stub after a restart without a load (`explicitBackedColumnFollowsItsResult`) |
+| `tst_result_records` | Stored requested-calculation results: the record file name (percent-encoded calculation id, canonical, dot-free, distinct under case folding; the parse of a name), the code stamp (the compatibility marker) computed fresh, never made stale by a registration, the binary record format (bit-exact round trip of `-0`, NaN payloads, infinities and subnormals, null / empty / non-ASCII strings and unavailable outputs; a round trip of every accepted attribute type; the pinned byte layout of format version 2, the resolutions included; other format versions (format 1, in both of its layouts, included), damaged and crafted payloads refused without allocating; every other attribute type, `long` and `unsigned long` included, refused at encode; size), and `LogbookManager`'s record files in the logbook's `cache/` folder: write, read, replace, list, remove, the folder created by the first write only (a missing folder holds no record), write failures leaving the previous record intact (a `cache/` that cannot be created included), removal with the session (dotted identity stems), stray records removed from `cache/` by `initialize()` in all three index branches, `sessions/` untouched (a name spelling the extension in another case is not a record: neither listed nor removed), orphan adoption, remap, and a session save that never depends on records |
+| `tst_column_cache` | The same through `SessionModel`: upgrade discards and lazily recomputes (acceptance 18), an edit refreshes only the affected columns with a warm and a cold engine, merges and bulk edits, interrupted saves, environment changes (declared preference, altitude-marker registrations) discarding loaded and unloaded rows without saving, save failures (the row stays dirty and loaded, is skipped by the idle saver and the LRU, stays out of the index, and is saved by a later edit or the shutdown flush), line breaks flattened at edit, a column over an explicit result cached from the result the session has and following its record, shown by a stub after a restart without a load (`explicitBackedColumnFollowsItsResult`), a plug-in edit (a changed plug-in code identity) discarding the cached values at the next start (`pluginEditDiscardsCachedValues`) |
 
 **Import and merge, workflows**
 
@@ -118,11 +119,12 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | `tst_workflow` | End-to-end workflows on the application's own code path (acceptance 19): import through `SessionImport::importFiles`, rows and columns, marker and attribute edits, save, reopen as stubs served from `index.json`; the model's warm save equals a cold export (acceptance 5); a released session file together with a released `index.json` (acceptance 6, 18) |
 | `tst_map_models` | `TrackMapModel` and `MapCursorDotModel` on a real `SessionModel`: a recording without a local-frame origin has no track and no cursor dot and is left out of the bounds, the bounds are cleared when no track remains, and all of it returns after a source correction through `mergeSessions`; hidden recordings and the plot-range filter on a recovered track. It compiles the two map models and their helpers (`plotrangemodel.cpp`, `plotutils.cpp`) directly and needs no Widgets or WebEngine |
 
-**Python plugin bridge**
+**Python plugins**
 
 | Test | Covers |
 |------|--------|
-| `tst_python_bridge` | The Python plugin bridge through the real embedded interpreter and the real `flysight_cpp_bridge` module (acceptance 17, plugin half): effective reads in single-output plugins, declared-read diagnostics (`UndeclaredInputError`), effective values and units matching C++, no source access (a `source` key is an unknown kind; the view has no source methods), the multi-output form running once, exceptions and malformed output giving a clean unavailable result with negative caching, returned arrays copied, explicit key decoding with per-plugin rejection, plugin-before-built-in precedence, the bundled `imu_tilt.py` example; plugins never start explicit work (`pluginsNeverStartExplicitWork`, on the synthetic explicit calculation `expA`: a plugin that declares its output, one that declares an on-demand value derived from it, and one whose Python code reaches for both undeclared all stay unavailable with a run count of 0 until the calculation is requested, and the first two show the value afterwards). See "The embedded-Python bridge test" below. `pluginWorkflowThroughModel`: a plugin-fed logbook column through import, save and restart (acceptance 17 / 19) |
+| `tst_python_bridge` | The Python plugin bridge through the real embedded interpreter and the real `flysight_cpp_bridge` module (acceptance 17, plugin half): effective reads in single-output plugins, declared-read diagnostics (`UndeclaredInputError`), effective values and units matching C++, no source access (a `source` key is an unknown kind; the view has no source methods), the multi-output form running once, exceptions and malformed output giving a clean unavailable result with negative caching, returned arrays copied, explicit key decoding with per-plugin rejection, plugin-before-built-in precedence, the bundled `imu_tilt.py` example; plugins never start explicit work (`pluginsNeverStartExplicitWork`, on the synthetic explicit calculation `expA`: a plugin that declares its output, one that declares an on-demand value derived from it, and one whose Python code reaches for both undeclared all stay unavailable with a run count of 0 until the calculation is requested, and the first two show the value afterwards). See "The embedded-Python bridge test" below. `pluginWorkflowThroughModel`: a plugin-fed logbook column through import, save and restart (acceptance 17 / 19); every plugin registration declares the plug-in code identity as its result version, equal to the digest recomputed from the folder, the SDK and the versions read independently (`pluginRegistrationsCarryCodeIdentity`) |
+| `tst_plugin_identity` | The plug-in code identity (`src/plugincodeidentity.h`) without Python (label `core` only): the pinned encoding (a hand-built byte string for `a.py` and `pkg/helper.py` passed out of order), determinism and independence of the order files are passed in, each ingredient changing it (a file's bytes, a rename, a helper module added or removed, the SDK's bytes or readability, a file's readability, the Python and NumPy versions, bytes moved between files), the token `none` for a version that cannot be read, and the folder walk: every `*.py` under the folder, subfolders included, in name order with `/` names, `__pycache__` and hidden folders left out |
 
 **Solver and sensor fusion** (label `fusion`; `FLYSIGHT_BUILD_FUSION_TESTS`)
 
@@ -131,12 +133,12 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | `tst_solver_smoke` | GTSAM's exported CMake target compiles, links and runs in a test: the install is the shipped configuration (`4.3a0`, TBB on, bundled Eigen 3.4, built without Boost: `GTSAM_ENABLE_BOOST_SERIALIZATION` and `GTSAM_USE_BOOST_FEATURES` are `0`), a small pose graph optimizes to its analytic answer (Eigen, METIS, TBB, library loading), and the main thread really has the 64 MiB stack of `flysight_solver_stack()` (the test uses 48 MiB of it; with a default stack it crashes). Label `fusion`. Nothing from the fusion model is involved |
 | `tst_fusion_golden` | The fusion kernel (`flysight_fusion`) through its public API, `src/fusion/fusion.h`, only. What it reaches: `Fusion::run()` on the twelve committed synthetic fixtures and nothing internal. In spec order: the initializer's prefix and segment fits are boundaries of the same kinds as the full fit's, so cancellation at each kind of boundary (`Starting fit`, graph construction, a prefix fit iteration, a segment fit iteration, a full fit iteration) leaves an empty result and no state behind, and preparation has no boundary of its own (the first is `Starting fit`); the progress texts at the kernel's boundaries, prefix and segment texts included, are the golden's; two runs are bit-identical with TBB on, a 64 MiB worker thread matches the main thread, and nothing depends on the caller's data. The golden comparison: for every fixture the fit reproduces the goldens captured from the kernel by `fusion_golden_capture` (three successes: seventeen channels and the diagnostics with their `initializer`, `stopping`, `quality` and `model` objects; nine rejections: the exact reason), the channel writer of the capture tool is the inverse of the loader on the committed files (and the hex sample form round-trips signed zero, a NaN and a subnormal by bit pattern), and the comparator holds its bounds (sensor-fusion-jobs acceptance 4; section 11). Label `fusion` |
 | `tst_fusion_kernel` | The kernel's internals through the seams of `src/fusion/` (the only test that includes those headers), with the literal expectations of the reference's self-test: the shared unwrap rule, preintegration across exact boundaries, every validation defect, backward attitude propagation, heading freedom, dense reconstruction timing and endpoint correction, an exact constant-velocity fit, TBB really on. In spec order: the segmented initializer (segment cutting on fixes and the merge of a short final piece, a window shorter than one segment, the smallest-sAcc anchor and the carried-back start, prefix growth on the marginal yaw sigma about the vertical, the growth stop when a doubling gains nothing, the prefix budget of one pass and 50 iterations and starts that end on the limit, the fallback when every prefix start fails, its progress texts and diagnostics keys, the four synthetic initializer recordings of the specification and `coarse_maneuver`); the stopping rule (the bias-settled cost test, the slow tail accepted and refused on each bound, non-convergence and a never-settling bias as solver failures with their failure shapes); the per-step IMU noise term (the density covariance exactly without a signal change, the specified covariance for a known change, the `dt` scaling, the constants in `model.per_step`); the temperature-dependent gyro bias (the custom IMU factor's six Jacobians against finite differences and its equivalence with `ImuFactor` at zero slope, the graph shape with `T_ref` and the slope prior last, the reconstruction at each interval's own bias, a recording without the temperature channel rejected by name, a constant temperature leaving `b1` at its prior and agreeing with the constant-bias fit, the drifting-bias recording recovering `b1` within 20 % in at most 30 iterations). The golden comparison: the fit trace (the segment account and the cost before and after every optimizer iteration) against the goldens, which localizes a golden failure to a stage, and the chosen prefix fit's iteration count against the golden's (acceptance 4; section 11). Label `fusion` |
-| `tst_fusion_session` | Sensor fusion as a registered calculation (`src/fusion/fusionregistration.cpp`) on real `SessionData` engines bound to the global registry, with the real fit on the test's main thread. What it reaches: the engine's request, prepare / compute / publish and blocker paths on fixture sessions whose effective inputs are bit-identical to the kernel's fixtures, and a natural session through the real input chain. The registration's shape: three registrations, the fit with 22 inputs (all required, `IMU/temperature` the last measurement) and 18 outputs, explicit, title "Sensor fusion". In spec order: cancellation at each kind of boundary through the engine's facility publishes and caches nothing (sensor-fusion-jobs acceptance 10); a session with the temperature column carries it to the kernel bit for bit and matches the kernel's direct run, and a session without `IMU/temperature` is `MissingInput` / `NotApplicable` like one without IMU data, a local origin or a time fit (11). The lifecycle: reads of every fusion value, `accH`, the system-time axis, the diagnostics and an interpolated logbook value never run the fit, in any order, nor does the exporter (5); a request runs once, publishes all outputs together, and brings `accH` and `_system_time` with it (6); prepare / compute / publish equals `request()` bit for bit (7); an input change after publication drops everything while markers do not (8); a rejection is a cached result with its reason, `NotProduced` for inspection, and requestable again after an input change (9); blocker inspection reports the fit through on-demand intermediates and never starts it (12); two sessions are independent. The fit declares its kernel's algorithm string as its result version, no output of an explicit built-in has another candidate (`explicitOutputsHaveOneCandidate`), and a fit exported from one session and restored into another is indistinguishable from the fresh one: every channel bit for bit, the diagnostics byte for byte, status, detail, dependency edges (`SCHEMA_VER` among its leaves), blockers and invalidation (`restoredFitIsIndistinguishable`). The golden comparison: every published result equals the kernel's goldens. Label `fusion` |
+| `tst_fusion_session` | Sensor fusion as a registered calculation (`src/fusion/fusionregistration.cpp`) on real `SessionData` engines bound to the global registry, with the real fit on the test's main thread. What it reaches: the engine's request, prepare / compute / publish and blocker paths on fixture sessions whose effective inputs are bit-identical to the kernel's fixtures, and a natural session through the real input chain. The registration's shape: three registrations, the fit with 22 inputs (all required, `IMU/temperature` the last measurement) and 18 outputs, explicit, title "Sensor fusion". In spec order: cancellation at each kind of boundary through the engine's facility publishes and caches nothing (sensor-fusion-jobs acceptance 10); a session with the temperature column carries it to the kernel bit for bit and matches the kernel's direct run, and a session without `IMU/temperature` is `MissingInput` / `NotApplicable` like one without IMU data, a local origin or a time fit (11). The lifecycle: reads of every fusion value, `accH`, the system-time axis, the diagnostics and an interpolated logbook value never run the fit, in any order, nor does the exporter (5); a request runs once, publishes all outputs together, and brings `accH` and `_system_time` with it (6); prepare / compute / publish equals `request()` bit for bit (7); an input change after publication drops everything while markers do not (8); a rejection is a cached result with its reason, `NotProduced` for inspection, and requestable again after an input change (9); blocker inspection reports the fit through on-demand intermediates and never starts it (12); two sessions are independent. The fit declares its kernel's algorithm string as its result version, no output of an explicit built-in has another candidate (`explicitOutputsHaveOneCandidate`), and a fit exported from one session and restored into another is indistinguishable from the fresh one: every channel bit for bit, the diagnostics byte for byte, status, detail, dependency edges (`SCHEMA_VER` among its leaves), blockers and invalidation, and the fit's snapshot lists what provided each name it looked up (`restoredFitIsIndistinguishable`). The golden comparison: every published result equals the kernel's goldens. Label `fusion` |
 | `tst_fusion_jobs` | The real fit through `JobQueue` on a real `SessionModel`, on the queue's 64 MiB worker: one job publishes all outputs together and announces them through the session model (acceptance 6); the queue gives the bits a synchronous request gives (7); an input edit during the fit asks the fit to stop at once, ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job (11); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before the fit, from the published result after it (with the `"records"` stamp in `index.json`), shown by the unloaded row after a restart without a load, and dropped with the record by an input change (`columnOnFusionOutputIsCachedFromRecord`), while the loaded row's cell shows the golden's number the moment the job publishes (`dataChanged` for that row only, and the number already there when the view is told); shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the queue delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 11 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit, driven as a child process on fixtures written out as `TRACK.CSV` / `SENSOR.CSV`: its diagnostics equal a direct `Fusion::run()` on the fixture and equal the application's own import-and-fit path (`SessionImport` on a `SessionModel`); the CSV output reloads bit for bit; `--dump-inputs` shows the effective inputs, including the legacy gyro scale of a file without `SCHEMA_VER`; a rejection exits 1 with the failure JSON and writes no CSV; usage and import failures exit 64 and 3; no calculation on the fit's input path declares a preference (the premise of the model-free import); and the seventeen output channels of `fitOutputChannels()` are the golden's columns in order. Label `fusion` |
 | `tst_fusion_golden_exact`, `tst_fusion_kernel_exact`, `tst_fusion_session_exact`, `tst_fusion_jobs_exact`, `tst_fusion_rows_exact`, `tst_fusion_store_exact`, `tst_fusion_runner_exact` | Not executables: the seven tests above that compare with the goldens, run a second time with `FLYSIGHT_FUSION_EXACT=1` and otherwise the same environment, so that every golden comparison is bit equality (section 11, "Tolerance policy"). Registered only where that is a fair demand, the compiler the goldens were captured with (`FLYSIGHT_FUSION_EXACT_TESTS`, section 3). The first two decide bit-identity; the next four show that the bits survive the engine, the queue's worker thread, the plot rows and a stored and restored record; the last is bit identity across the process boundary (the runner's output against an in-process run). Labels `fusion` and `exact` |
 | `tst_fusion_rows` | The plot-row script with the **real** fusion plots: `PlotModel` + `PlotRequests` + `JobQueue` + `SessionModel` + the fusion registration, with real fits on the queue's 64 MiB worker and the seventeen plots of `fusionPlots()` (`tests/fusion/fusionsessions.h`, which mirrors `MainWindow::registerBuiltInPlots()`; `audit_cleanup` pins the application's list at seventeen rows). All seventeen plots are explicit-backed and the six local-frame plots are not; the row script of acceptance 15 on three real tracks (three jobs, the count falling as each publishes, unchecking mid-way removes the queued job and lets the running one finish, cancel leaves the plot checked and the track missing with nothing published, a fourth track is missing with a count of one and starts nothing, refresh computes it), with every published track held to the kernel's goldens and the job history as a literal; roll, pitch and yaw share one job and one progress text; `accH` is blocked by the fit and never has a job of its own; a session without IMU data is in no count, list or tooltip of any of the seventeen rows before, during and after a fit (11); a rejected recording shows the warning badge with the reason, offers no retry, and becomes refreshable when its input changes (9); sessions are edited, tracks hidden and shown and other values read while a real fit runs, without disturbing it (19, the half that needs no widget). Steered by the first progress text of a job and by `jobFinished`: no gate, no sleeps. Label `fusion` |
-| `tst_fusion_store` | The fit's stored result: bit-identical after unload and restart (also when fitted before the first save), rejection / solver failure badge, dependency (a declared input, `SCHEMA_VER`) and code-stamp invalidation, merges, session file untouched, not requested (refresh offered, nothing run) after the `cache/` folder was deleted while closed; also run as `_exact` |
+| `tst_fusion_store` | The fit's stored result: bit-identical after unload and restart (also when fitted before the first save), rejection / solver failure badge, dependency (a declared input, `SCHEMA_VER`) and code-stamp invalidation, merges, session file untouched, not requested (refresh offered, nothing run) after the `cache/` folder was deleted while closed; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registration that provides a name it looked up; deleted when a lookup resolves differently at load; a provider's result version in the record; also run as `_exact` |
 
 Three executables are built with these but are not tests and are not counted
 above. `solver_deploy_probe` is a plain executable (no Qt) around the same
@@ -163,7 +165,7 @@ comparison (section 12.2).
 
 | Test | Covers |
 |------|--------|
-| `audit_cleanup` | No old mechanism remains, each fact has one authority, none of the mechanisms of `sensor-fusion-clean-port` that have no successor exists, the structural rules of background work hold (one worker, no locks, GTSAM confined, gestures from the row delegate only, a widget-free core), stored results live in the logbook's `cache/` folder, never in the session file, and are named, written, read, restored and deleted in one place each, and every line of `tests/acceptance_map.txt` resolves (section 10) |
+| `audit_cleanup` | No old mechanism remains, each fact has one authority, none of the mechanisms of `sensor-fusion-clean-port` that have no successor exists, the structural rules of background work hold (one worker, no locks, GTSAM confined, gestures from the row delegate only, a widget-free core), stored results live in the logbook's `cache/` folder, never in the session file, and are named, written, read, restored and deleted in one place each, and a stored result goes stale only when its in-memory twin would be dropped or its code changed (no environment fingerprint in a record, the plug-in code identity computed in one place, teardown removals at shutdown only), and every line of `tests/acceptance_map.txt` resolves (section 10) |
 
 The `tst_calc*` tests drive `src/engine/` with synthetic calculations against
 `FakeSessionState` / `FakePreferenceProvider` (`support/fakesessionstate.h`).
@@ -175,8 +177,9 @@ The built-in calculations are pinned by one golden table
 three-row sensor file; `goldenValues()` holds literals only). Rows marked
 "captured" were recorded from the v2026.04.1 engine before the migration; all
 others were derived by hand. `tst_builtins_engine` uses private registries
-(except `fingerprintSurvivesRuntimeAltitudeMarker`, which drives the real
-`AltitudeMarkerManager` on the process-wide one and removes what it added);
+(except `fingerprintSurvivesRuntimeAltitudeMarker` and
+`altitudeMarkerTeardownReportsNothing`, which drive the real
+`AltitudeMarkerManager` on the process-wide one and remove what they added);
 `tst_builtins_golden`, `tst_session_engine` and `tst_session_model_engine` use
 the process-wide registry through `TestEnvironment::registerBuiltIns()`, and
 must leave it as they found it (altitude-marker registrations are removed in
@@ -198,12 +201,15 @@ Tests that use `LogbookManager::initialize()` together with cached column
 values must call `TestEnvironment::registerBuiltIns()` first, as the
 application does: the calculation-environment fingerprint captured at
 `initialize()` is compared with the one of the next start, and registering in
-between would make every reopen discard the cache. Stored results follow the
-same rule: a record is valid only while the environment fingerprint it was
-written with is current, so a test that registers a calculation between
-writing a record and loading its session sees the record deleted as stale.
-`tst_result_store` and `tst_fusion_store` use exactly that to simulate an
-environment change. For the same reason set the
+between would make every reopen discard the cache. Stored results do not
+follow that rule. A record carries no environment fingerprint, so registering
+a calculation between writing a record and loading its session keeps the
+record valid unless the registration changes what a name the result looked up
+resolves to. To make a record stale on purpose, change a resolution (register
+a winning candidate for a looked-up name, as
+`tst_result_store::lookupResolvingDifferentlyDeletesRecord` does) or rewrite
+the record (`rewriteRecord` in `tst_result_store` and `tst_fusion_store`).
+Because of the cache rule above, set the
 logbook columns (`LogbookColumnStore::setColumns`, which flushes the index)
 before planting a hand-edited `index.json`. `tst_logbook_index` and
 `tst_column_cache` remove whatever they register globally in `cleanup()`.
@@ -345,7 +351,10 @@ environment variables. CTest sets all of them (see the block at the end of
 | `PYTHONDONTWRITEBYTECODE` | `1` | nothing is written outside the test's temporary directory |
 
 The plugin files are copied into a temporary directory first, because
-`PluginHost` imports every `*.py` in the plugin folder.
+`PluginHost` imports every `*.py` in the plugin folder and digests every
+`*.py` under it, subfolders included, for the plug-in code identity; the
+test's folder holds top-level files only, so the imported and the digested
+files are the same.
 
 **NumPy is required** in the build-time interpreter (the SDK imports it). If
 `python -c "import numpy"` fails at configure time (or CMake is older than
@@ -533,7 +542,12 @@ missing invalidation in the code under test.
   `sessionCsvFiles`, `calculationRecordFiles` (the `*.fvresult` names in
   `cache/`, none when it does not exist), `sessionFileStem` (the stem of a session's file, empty before
   its first save) and `indexRecordStamp` (a session's `"records"` stamp in
-  `index.json`)), the shared logbook columns (`descriptionColumn`,
+  `index.json`)), `UnreadableFile` (makes an existing file unreadable while
+  it lives and puts it back on `release()`: `Directory` on every platform,
+  `LockedWithoutSharing` on Windows, `NoReadPermission` elsewhere;
+  `skipReason()` is non-empty where the mechanism is not honoured and the row
+  `QSKIP`s), `asFormatOne` (a format-2 record's bytes in the format-1
+  layout), the shared logbook columns (`descriptionColumn`,
   `gyroColumn`, `exitTimeColumn`), `writeAltitudes`, and the
   `dependencyChanged` spy checks (`spyHasAttribute`, `spyHasMeasurement`).
   `Synthetic::attr` / `Synthetic::measKey` (`fakesessionstate.h`) are the
@@ -548,7 +562,10 @@ missing invalidation in the code under test.
   whatever sits on top of it: a test holds the queue's worker inside a compute
   function (`Gate::waitEntered`), then releases (`Gate::open`) or cancels it,
   without sleeps; construct the `JobWorld` before the `SessionModel` and
-  destroy it after the `JobQueue` and the model. `Quiet` is "nothing started
+  destroy it after the `JobQueue` and the model. `ExtraRegistrations` holds
+  calculations one test function adds to the global registry; destroyed after
+  the queue and the model, it unregisters them newest first, as runtime
+  changes. `Quiet` is "nothing started
   since" (no `jobQueued`, no new job row); `onFirstProgress` acts on the main
   thread while a job that no gate can hold (a real fit) is still running.
   `plotfixture.h` (`PlotFixture`) adds synthetic plots (`Syn/...`) over those
@@ -561,11 +578,16 @@ missing invalidation in the code under test.
   sessions"), which only the `fusion` tests link: the support library stays
   free of GTSAM, `flysight_fusion` and Qt Widgets.
 - Stored results. `SessionModel::storedResultStats()` /
-  `resetStoredResultStats()` count the records written, read, restored, kept
-  and deleted, and the time spent restoring and writing. Provoke a write
+  `resetStoredResultStats()` count the records written, read, restored, kept,
+  skipped and deleted, and the time spent restoring and writing. Provoke a write
   failure portably, with a directory at the record's path or an output
   attribute type a record refuses; never with permission bits (Windows ignores
-  the read-only attribute on directories). Expected record names are literals
+  the read-only attribute on directories). Make a record unreadable with
+  `UnreadableFile`. A directory at a record's path is never listed, so the
+  store reaches it only through the ids the logbook manager knows: within a
+  run, not after a restart; restart rows use the lock or the permissions.
+  Make a record stale by rewriting it or by changing a resolution; a
+  registration alone does not. Expected record names are literals
   (`<stem> + ".builtin%2Efusion%2Efit.fvresult"`). Never call
   `verifyAgainstFresh()` / `evaluateFresh()` on a session with a fit
   installed: the oracle replays requested calculations and would fit again.
@@ -614,14 +636,18 @@ missing invalidation in the code under test.
 - Tests that register on the global registry, or change preferences, restore
   both in `cleanup()`: snapshot `CalculationRegistry::instance().registeredIds()`
   in `init()` and compare. Destroy a `SessionModel` before unregistering test
-  calculations (a live model schedules a calculation-environment check).
+  calculations (a live model schedules a calculation-environment check), and
+  a runtime removal that reaches a requested result deletes its record.
+  `ExtraRegistrations` and `JobWorld` are destroyed after the model for that
+  reason. Never switch a fixture to `CalculationRegistry::Removal::Teardown`
+  to get around the order: it is for owners destroyed at shutdown.
 - When a test function demonstrates an acceptance clause, add it to
   `tests/acceptance_map.txt` and to the matrix in section 9.
 
 ## 9. Acceptance traceability
 
-Four specifications, four ranges of items in `tests/acceptance_map.txt`, the
-machine-checked form of the four tables below (section 10); keep them in sync.
+Five specifications, five ranges of items in `tests/acceptance_map.txt`, the
+machine-checked form of the five tables below (section 10); keep them in sync.
 
 ### 9.1 Schema and calculation engine (items 1-19)
 
@@ -821,7 +847,9 @@ with the session", stated in full in
 In the map, item = 300 + the clause number; the same four line forms as 9.2,
 and every item has at least one test or audit line. "Section" is the section
 of the specification. Clauses 37-45 are its section 8 tests, one per bullet,
-and clauses 47-50 its principles.
+and clauses 47-50 its principles. Clauses 10, 16, 17 and 41 are stated as
+amended by the specification "Stored results: validity that mirrors memory"
+(9.5).
 
 | # | Section | Clause | Evidence |
 |---|---|---|---|
@@ -834,21 +862,21 @@ and clauses 47-50 its principles.
 | 307 | 3 | at most one record per (session, calculation), written at the install on the main thread, replaced by the next publish | `tst_result_store::writesOnOkInstall`; `tst_result_records::writeReadReplace`; `tst_calcengine_restore::installedOnSyncAndAsync` |
 | 308 | 3 | a record holds the id, the outcome, every installed output (measurements with unit, attributes with the diagnostics) and the validity stamp | `tst_result_records::roundTripIsBitExact`, `rejectionShapedRecord`, `unavailableAndEmptyOutputs`; `tst_result_store::rejectionIsWritten` |
 | 309 | 3 | nothing stored for a result not installed (cancelled, out of memory, refused) or not Ok; such a run deletes nothing | `tst_result_store::nonOkInstallWritesAndDeletesNothing`; `tst_jobmodel::nothingIsPersisted`; `tst_calcengine_restore::installedForEveryStatus`, `exportOnlyInstalledOk` |
-| 310 | 3 | a record is removed only when stale on load, with its session, on an input change, or replaced; never by eviction, unload, registry change, quit | `tst_result_store::noDeleteWithoutInputChange`, `inputChangeDeletesRecord`; `tst_calcengine_restore::droppedByInputChange`, `droppedByPreferenceAndSource`, `noDropEventWithoutInputChange`, `droppedByRequestOfUpstream` |
+| 310 | 3, as amended | a record is removed only when stale on load, with its session, on an input change or a runtime registry change that drops its result, or replaced; never by eviction, unload, a registry change that does not reach it, a teardown removal, quit | `tst_result_store::noDeleteWithoutInputChange`, `inputChangeDeletesRecord`, `registryChangeDeletesRecord`; `tst_calcengine_restore::droppedByInputChange`, `droppedByPreferenceAndSource`, `noDropEventWithoutInputChange`, `droppedByRequestOfUpstream` |
 | 311 | 3 | values round-trip bit for bit (-0, NaN, infinities; strings byte for byte) | `tst_result_records::roundTripIsBitExact`, `attributeTypesRoundTrip`, `layoutIsPinned`; `tst_calcengine_restore::restoreNaNPayloadAndSignedZero`, `sameContentBitExactAttributes`; `tst_fusion_session::restoredFitIsIndistinguishable` |
 | 312 | 3 | the golden tests cannot tell a restored fusion result from a fresh one | `tst_fusion_store::restoredAfterEvictionIsBitIdentical`, `restoredAfterRestartIsBitIdentical`; `tst_fusion_session::restoredFitIsIndistinguishable` |
 | 313 | 4.1 | the input fingerprint covers the values the result depended on, transitively, absent ones included; the record lists their names | `tst_calcengine_restore::fingerprintKnownAnswer`, `fingerprintCanonicalForms`, `leafKindCodes`, `exportLeaves`, `restoreChain` |
 | 314 | 4.1 | an edit the result does not depend on keeps the record valid | `tst_fusion_store::unrelatedEditKeepsRecord`, `mergeIntoUnloadedSession`; `tst_result_store::inputChangeDeletesRecord`; `tst_calcengine_restore::restoreIgnoresAttributeType` |
 | 315 | 4.1 | an edit it depends on (IMU merge, SCHEMA_VER, any dependency) invalidates it | `tst_fusion_store::dependencyEditDropsRecord` (a declared input and `SCHEMA_VER`), `mergeIntoLoadedSessionDropsRecord`, `mergeIntoUnloadedSession`; `tst_fusion_session::restoredFitIsIndistinguishable` (`SCHEMA_VER` is a leaf of the fit); `tst_calcengine_restore::restoreStaleChecks`; `manual M18` |
-| 316 | 4.2 | valid only while CalculationCompatibilityVersion, the environment fingerprint and the result version match; fusion's is the algorithm string | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_result_store::staleRecordDeletedOnLoad`; `tst_result_records::stampsAreCurrent`; `tst_fusion_session::registrationShape`; `audit stored-results` |
-| 317 | 4.2 | the bump rule gains the clause: bump it, or the calculation's result version | `audit stored-results` |
+| 316 | 4.2, as amended | valid only while CalculationCompatibilityVersion and the result version match and every lookup resolves as it did; fusion's result version is the algorithm string | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_result_store::staleRecordDeletedOnLoad`; `tst_result_records::stampsAreCurrent`; `tst_fusion_session::registrationShape`; `tst_calcengine_restore::restoreAcrossRegistries`; `audit stored-results` |
+| 317 | 4.2, as amended | the bump rule's clause: bump it, or the result version of the calculation concerned, whenever a change can alter what a requested calculation or anything it reads produces | `audit stored-results`, `audit result-validity` |
 | 318 | 4 | a record that fails any check is deleted at load; the calculation reads not requested; nothing is recomputed | `tst_result_store::staleRecordDeletedOnLoad`, `upstreamMissingAfterLastPassDeletes`; `tst_fusion_store::codeStampChangeDropsRecordOnLoad` |
 | 319 | 5 | every load path installs the valid records before any reader asks | `tst_result_store::restoreOnEveryLoadPath`, `bulkEditPromotionRestores`, `restoresChainInPasses`, `alreadyInstalledIsKept`; `tst_fusion_store::mergeIntoUnloadedSession` |
 | 320 | 5 | same outputs, status, detail and dependency edges as a fresh publish; later invalidation identical | `tst_calcengine_restore::restoreIntoFreshEngine`, `restoredResultInvalidatesLikePublished`, `restoreBeatsOutstandingTicket`, `restoreNeverReplaces`; `tst_fusion_session::restoredFitIsIndistinguishable` |
 | 321 | 5 | plot rows count a restored result as computed: no refresh count, no job; stale or absent as today | `tst_fusion_store::restoredAfterEvictionIsBitIdentical`, `restoredAfterRestartIsBitIdentical`, `dependencyEditDropsRecord`; `manual M1`, `M16` |
 | 322 | 5 | blocker inspection reports a restored result as a published one, NotProduced with its detail | `tst_calcengine_restore::restoreRejection`; `tst_fusion_store::restoredRejectionShowsBadge`, `restoredSolverFailureShowsBadge` |
 | 323 | 5 | logbook columns over a requested calculation: computed from the restored or published result, cached with the record stamp; unavailable without a record | `tst_result_columns::columnExplicitCalculations`, `unrequestedIsCachedUnavailable`, `stampWrittenOnFlush`, `publishedResultIsCached`, `restartShowsCachedValueWithoutLoading`, `noRecordStaysUnavailableAfterRestart`, `recordBeforeFirstSaveIsCachedAfterSave`; `tst_calcregistry::explicitDependencies`; `tst_column_cache::explicitBackedColumnFollowsItsResult`; `tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord`; `tst_fusion_session::explicitOutputsHaveOneCandidate`; `manual M17` |
-| 324 | 5 | dropping or writing a record drops the values stamped with it: crashes, old indexes, failed writes, environment changes | `tst_result_columns::inputChangeDropsCachedValue`, `onlyDependentColumnsDrop`, `staleRecordOnLoadDropsCachedValue`, `workerLeavesPendingWithRecord`, `crashAfterRecordWrite`, `crashAfterRecordDelete`, `rewriteAfterDropFlushesIndexFirst`, `writeAfterStartupDropFlushesIndexFirst`, `oldIndexWithoutStamp`, `resultVersionChangeDropsCachedValue`, `writeFailureKeepsValueOutOfIndex`, `environmentChangeDiscardsCachedValue`, `environmentChangeUnconfirmsLoadedRows`, `managerDropsDependentValues`, `deletingSessionRemovesStamp` |
+| 324 | 5 | dropping or writing a record drops the values stamped with it: crashes, old indexes, failed writes, environment changes | `tst_result_columns::inputChangeDropsCachedValue`, `onlyDependentColumnsDrop`, `staleRecordOnLoadDropsCachedValue`, `workerLeavesPendingWithRecord`, `crashAfterRecordWrite`, `crashAfterRecordDelete`, `rewriteAfterDropFlushesIndexFirst`, `writeAfterStartupDropFlushesIndexFirst`, `oldIndexWithoutStamp`, `resultVersionChangeDropsCachedValue`, `writeFailureKeepsValueOutOfIndex`, `environmentChangeDiscardsCachedValue`, `registryChangeKeepsLoadedRowConfirmed`, `managerDropsDependentValues`, `deletingSessionRemovesStamp` |
 | 325 | 5 | unloading (eviction, hide beyond the cache capacity, quit) loses nothing | `tst_result_store::noDeleteWithoutInputChange`; `tst_fusion_store::restoredAfterEvictionIsBitIdentical`; `manual M16`, `M17` |
 | 326 | 5 | publishing writes the record, nothing else does: a restore never rewrites it | `tst_result_store::restoreOnEveryLoadPath`; `tst_calcengine_restore::restoreIsNotAnInstall`; `audit stored-results` |
 | 327 | 5 | written through the logbook manager atomically; a failed write leaves the previous record and the in-memory result; tried again at the next publish | `tst_result_store::writeFailureLeavesResultUsable`, `writeFailureKeepsPreviousRecord`; `tst_result_records::writeFailureRefusedEncoding`, `writeFailureDirectoryAtPath`, `writeFailureCacheFolderNotCreated`, `writeForUnknownSession`; `audit stored-results` |
@@ -865,7 +893,7 @@ and clauses 47-50 its principles.
 | 338 | 8 | the same after an application restart | `tst_fusion_store::restoredAfterRestartIsBitIdentical` |
 | 339 | 8 | a rejection and a solver failure restored with their reason; the warning as today; no job | `tst_fusion_store::restoredRejectionShowsBadge`, `restoredSolverFailureShowsBadge` |
 | 340 | 8 | an unrelated edit keeps the record; merging IMU data or changing any dependency drops it, reads not requested, the file is gone | `tst_fusion_store::unrelatedEditKeepsRecord`, `dependencyEditDropsRecord`, `mergeIntoLoadedSessionDropsRecord`, `mergeIntoUnloadedSession`; `tst_result_store::inputChangeDeletesRecord` |
-| 341 | 8 | bumping the compatibility version, the environment fingerprint or the result version drops the record on load | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_result_store::staleRecordDeletedOnLoad` |
+| 341 | 8, as amended | test: bumping the compatibility version, the result version, or the result version recorded for a calculation its lookups went through drops the record on load | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_result_store::staleRecordDeletedOnLoad` |
 | 342 | 8 | a failed write leaves the in-memory result usable and the previous record intact | `tst_result_store::writeFailureLeavesResultUsable`, `writeFailureKeepsPreviousRecord` |
 | 343 | 8 | deleting a session removes its records; a stray record is ignored and removed by the next scan | `tst_result_store::deletingSessionRemovesRecords`, `strayRecordRemovedAtRestart`; `tst_result_records::removeSessionDeletesRecords`, `strayRecordsRemovedAtScan` |
 | 344 | 8 | a logbook column over Fusion/roll is cached from a valid record, unavailable without one, invalidated when the record is dropped | `tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord`; `tst_result_columns::publishedResultIsCached`, `unrequestedIsCachedUnavailable`, `inputChangeDropsCachedValue`, `staleRecordOnLoadDropsCachedValue`, `deletingSessionRemovesStamp` |
@@ -875,6 +903,62 @@ and clauses 47-50 its principles.
 | 348 | 10 | the session file is the recording; derived data lives beside it, never in it | `tst_fusion_store::sessionFileBytesUnaffectedByRecord`; `audit stored-results` |
 | 349 | 10 | restoring is not requesting: nothing starts on its own | `tst_calcengine_restore::restoreIsNotAnInstall`; `tst_result_store::restoreOnEveryLoadPath`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`; `audit stored-results`; `manual M17` |
 | 350 | 10 | a restored result is indistinguishable from a fresh one, to the bit | `tst_fusion_session::restoredFitIsIndistinguishable`; `tst_fusion_store::restoredAfterEvictionIsBitIdentical`; `tst_calcengine_restore::restoreIntoFreshEngine` |
+
+### 9.5 Stored results: validity that mirrors memory (items 401-442)
+
+The forty-two clauses of the specification "Stored results: validity that
+mirrors memory", stated in full in
+[appendix E](#appendix-e-the-acceptance-items-of-stored-result-validity-401-442).
+In the map, item = 400 + the clause number; the same four line forms as 9.2,
+and every item has at least one test or audit line. "Section" is the section
+of the specification; its section 1 (motivation) has no item. Clauses 30-38
+are its section 10 tests, one per bullet, and clauses 40-42 its principles.
+The specification amends the one of 9.4.
+
+| # | Section | Clause | Evidence |
+|---|---|---|---|
+| 401 | 2 | a stored result goes stale exactly when the same result in memory would be dropped, or when the code that computed it changes; nothing unrelated to what it reached makes it stale | `tst_fusion_store::storedFitSurvivesUnrelatedChanges`, `runtimeRegistrationDropsFitAndRecord`, `codeStampChangeDropsRecordOnLoad`; `tst_result_store::recordSurvivesUnrelatedChanges`, `registryChangeDeletesRecord` |
+| 402 | 3.1, 3.2 | in memory a requested result is dropped when a value it reached changes (samples, unit text, a stored attribute, directly or through calculations and conversions, a missing value that appears) or a declared preference it reached changes | `tst_calcengine_restore::droppedByInputChange`, `droppedByPreferenceAndSource`, `droppedByRequestOfUpstream`; `tst_fusion_store::dependencyEditDropsRecord` |
+| 403 | 3.3 | it is dropped when a registry change touches a name it resolved, directly or transitively: a calculation whose outputs include it added or removed, a calculation whose result it used removed, a family accepting it added or removed, the source-conversion layer changed | `tst_calcengine_restore::droppedByRegistryChange`; `tst_builtins_engine::altitudeMarkerTeardownReportsNothing`; `tst_fusion_store::runtimeRegistrationDropsFitAndRecord` |
+| 404 | 3 | everything else leaves it installed: edits to values it did not reach, registrations of names it never looked up (altitude markers, unrelated plug-in outputs), preferences it did not reach | `tst_calcengine_restore::droppedByRegistryChange`; `tst_fusion_store::storedFitSurvivesUnrelatedChanges`, `unrelatedEditKeepsRecord`; `tst_result_store::recordSurvivesUnrelatedChanges`, `noDeleteWithoutInputChange`; `manual M20` |
+| 405 | 4.1 | inputs, unchanged: the fingerprint over every leaf the result reached, present or absent, declared preference values included, matches the session and preferences as they are now | `tst_calcengine_restore::fingerprintKnownAnswer`, `exportLeaves`, `restoreStaleChecks`; `tst_fusion_store::dependencyEditDropsRecord` |
+| 406 | 4.2 | the record states, for every name the result looked up directly or transitively, what provided it: a calculation (instance id and result version), the session's own data, or nothing | `tst_calcengine_restore::resolutionCodes`, `exportResolutions`; `tst_fusion_session::restoredFitIsIndistinguishable`; `tst_result_records::layoutIsPinned`, `roundTripIsBitExact`, `corruptInputIsRefused` |
+| 407 | 4.2 | at load the same lookups are repeated against the current registry and must give the same answers | `tst_calcengine_restore::restoreAcrossRegistries`, `restoreStaleChecks`, `ringIsNeverStored`; `tst_result_store::lookupResolvingDifferentlyDeletesRecord`; `tst_fusion_store::lookupResolvingDifferentlyAtLoadDeletesFit` |
+| 408 | 4.3 | code: CalculationCompatibilityVersion and the calculation's own result version are unchanged | `tst_result_records::stampsAreCurrent`; `tst_result_store::staleRecordDeletedOnLoad`; `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_calcengine_restore::restoreStaleChecks` |
+| 409 | 4 | the calculation environment fingerprint is no longer part of a record | `tst_result_records::stampsAreCurrent`, `layoutIsPinned`; `tst_result_store::recordSurvivesUnrelatedChanges`; `audit result-validity` |
+| 410 | 4 | the bump-rule clause reads: bump CalculationCompatibilityVersion, or the result version of the calculation concerned, whenever a change can alter what a requested calculation or anything it reads produces | `audit result-validity`, `audit stored-results` |
+| 411 | 4 | a record that fails any check is deleted when its session is loaded and the calculation reads not requested; nothing is recomputed | `tst_result_store::staleRecordDeletedOnLoad`, `lookupResolvingDifferentlyDeletesRecord`, `pluginEditStalesRecordsThatReadIt`, `formatOneRecordIsDeletedOnLoad`; `tst_fusion_store::lookupResolvingDifferentlyAtLoadDeletesFit` |
+| 412 | 5 | a registry change made while the application runs that drops an installed requested result also deletes its record, like an input change | `tst_result_store::registryChangeDeletesRecord`; `tst_fusion_store::runtimeRegistrationDropsFitAndRecord`; `tst_calcengine_restore::droppedByRegistryChange`; `tst_result_columns::registryChangeKeepsLoadedRowConfirmed` |
+| 413 | 5 | tearing the registry down at shutdown, destroying or evicting a session, and replacing a session's contents without an input change delete nothing | `tst_calcengine_restore::noDropEventWithoutInputChange`, `registryDestructionReportsNothing`; `tst_builtins_engine::altitudeMarkerTeardownReportsNothing`; `tst_result_store::registryChangeDeletesRecord`, `noDeleteWithoutInputChange`; `audit result-validity` |
+| 414 | 5 | a registry change that does not touch a result leaves the installed result and its record alone, and column values over that record remain cacheable | `tst_result_store::recordSurvivesUnrelatedChanges`, `noDeleteWithoutInputChange`; `tst_result_columns::registryChangeKeepsLoadedRowConfirmed`; `tst_fusion_store::storedFitSurvivesUnrelatedChanges`; `tst_calcengine_restore::droppedByRegistryChange` |
+| 415 | 6 | every calculation, measurement and attribute a plug-in registers declares a result version: the plug-in code identity | `tst_python_bridge::pluginRegistrationsCarryCodeIdentity`; `audit result-validity` |
+| 416 | 6, as settled | the identity is one digest over every `.py` file under the plug-in folder, subfolders included (relative name and bytes, in name order; `__pycache__` and hidden folders left out), the SDK file, and the Python and numpy versions | `tst_plugin_identity::encodingIsPinned`, `eachIngredientChangesIdentity`, `absentVersionUsesFixedToken`, `readsTheFolderRecursively`, `subfolderFileChangesIdentity`, `pycacheAndHiddenDirectoriesAreIgnored`, `unreadableFileIsNotEmpty`; `tst_python_bridge::pluginRegistrationsCarryCodeIdentity` |
+| 417 | 6 | it is computed once, when the plug-ins are loaded | `tst_python_bridge::pluginRegistrationsCarryCodeIdentity`, `secondInitialiseIsNoOp`; `audit result-validity` |
+| 418 | 6 | editing any plug-in file, adding or removing one, or upgrading Python or numpy changes it, so a stored result whose lookups went through any plug-in calculation goes stale at its next load | `tst_result_store::pluginEditStalesRecordsThatReadIt`; `tst_plugin_identity::eachIngredientChangesIdentity`, `subfolderFileChangesIdentity` |
+| 419 | 6 | a stored result whose lookups touched no plug-in calculation is unaffected by plug-in changes | `tst_result_store::pluginEditStalesRecordsThatReadIt`; `tst_fusion_store::storedFitSurvivesUnrelatedChanges`; `manual M21` |
+| 420 | 6 | the environment fingerprint of the logbook column cache also covers every registration's result version: a plug-in edit or a built-in result-version change discards cached column values; its other contents and its role are unchanged | `tst_builtins_engine::fingerprintCoversResultVersions`, `fingerprintChanges`; `tst_column_cache::pluginEditDiscardsCachedValues`, `altitudeMarkerChangeDiscards`; `tst_logbook_index::differentEnvironmentDiscards`; `manual M21` |
+| 421 | 7 | a record that exists but cannot be opened or read in full at its session's load is skipped for that load: neither restored nor deleted; the calculation reads not requested | `tst_result_store::unreadableRecordIsSkipped`, `dependentOfSkippedRecordIsKept`; `manual M22` |
+| 422 | 7 | the next load tries again; a new publish for the pair replaces it; deleting the session or the stray pass at start-up removes it | `tst_result_store::unreadableRecordIsSkipped`; `tst_result_columns::skippedRecordValuesStayOutOfIndex`; `tst_result_records::writeReadReplace`, `removeSessionDeletesRecords`, `strayRecordsRemovedAtScan`; `manual M22` |
+| 423 | 7 | a record that was read but is not a record, is damaged, or has a format version this build does not read is deleted as stale | `tst_result_store::staleRecordDeletedOnLoad`, `formatOneRecordIsDeletedOnLoad`; `tst_result_records::readStatuses`, `corruptInputIsRefused` |
+| 424 | 7 | logbook column values of a session that depend on a skipped record are not cached in index.json while it stays skipped | `tst_result_columns::skippedRecordValuesStayOutOfIndex`; `tst_result_store::unreadableRecordIsSkipped` |
+| 425 | 8 | the record gains the resolutions and loses the environment fingerprint, and its format version increases | `tst_result_records::layoutIsPinned`, `futureVersionIsRefused`, `formatOneIsRefused`, `stampsAreCurrent` |
+| 426 | 8 | a record of an earlier format version is deleted as stale when its session loads; no migration | `tst_result_store::formatOneRecordIsDeletedOnLoad`; `tst_result_records::formatOneIsRefused` |
+| 427 | 9 | the amended specification still holds where not amended: restoring is not requesting, publishing writes the record, records are read only for a session being loaded, the session file is untouched, a restored result is bit-identical | `tst_calcengine_restore::restoreIsNotAnInstall`; `tst_result_store::restoreOnEveryLoadPath`, `temporaryLoadsNeverRestore`; `tst_fusion_store::sessionFileBytesUnaffectedByRecord`, `restoredAfterRestartIsBitIdentical`; `audit stored-results` |
+| 428 | 9 | the engine keeps its threading rules; repeating the lookups at load uses the resolution of a fresh request and never runs a requested calculation | `tst_calcengine_restore::restoreAcrossRegistries`, `restoreIsNotAnInstall`; `tst_result_store::lookupResolvingDifferentlyDeletesRecord`; `audit one-worker`, `audit stored-results` |
+| 429 | 9 | plug-in loading stays a start-up operation: nothing reloads plug-ins or watches their files | `tst_python_bridge::secondInitialiseIsNoOp`; `audit result-validity` |
+| 430 | 10 | test: a stored fit survives, restored with no job, adding and removing an altitude marker, registering and unregistering a calculation it never looks up, the descent-pause preference, another plug-in set, and a restart after any of these | `tst_fusion_store::storedFitSurvivesUnrelatedChanges`; `tst_result_store::recordSurvivesUnrelatedChanges`; `manual M20` |
+| 431 | 10 | test: registering, while the application runs, a calculation that provides a name the fit looked up drops the installed fit and deletes its record | `tst_fusion_store::runtimeRegistrationDropsFitAndRecord`; `tst_result_store::registryChangeDeletesRecord` |
+| 432 | 10 | test: a record whose lookups resolve differently at load (a new candidate with the same inputs, registered before the load) is deleted and the fit reads not requested | `tst_fusion_store::lookupResolvingDifferentlyAtLoadDeletesFit`; `tst_result_store::lookupResolvingDifferentlyDeletesRecord`; `tst_calcengine_restore::restoreAcrossRegistries` |
+| 433 | 10 | test: with a requested calculation that reads a plug-in output, editing any plug-in file, adding one, or changing the Python or numpy version makes its record stale; a plug-in edit does not when it reads no plug-in output | `tst_result_store::pluginEditStalesRecordsThatReadIt` |
+| 434 | 10 | test: the plug-in code identity is deterministic, and each listed ingredient changes it | `tst_plugin_identity::identityIsDeterministic`, `encodingIsPinned`, `eachIngredientChangesIdentity`, `absentVersionUsesFixedToken` |
+| 435 | 10 | test: a plug-in edit discards cached logbook column values over plug-in calculations at the next start | `tst_column_cache::pluginEditDiscardsCachedValues` |
+| 436 | 10 | test: an unreadable record (held open without sharing on Windows, a directory at its path) is kept, not restored, and restored at a later load; its dependent column values are not cached meanwhile | `tst_result_store::unreadableRecordIsSkipped`, `dependentOfSkippedRecordIsKept`; `tst_result_columns::skippedRecordValuesStayOutOfIndex` |
+| 437 | 10 | test: a record of the previous format version is deleted as stale | `tst_result_store::formatOneRecordIsDeletedOnLoad`; `tst_result_records::formatOneIsRefused` |
+| 438 | 10 | test: the existing tests of stored results pass, those that asserted environment staleness rewritten to these rules | `tst_result_store::staleRecordDeletedOnLoad`; `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_result_columns::environmentChangeDiscardsCachedValue`, `writeAfterStartupDropFlushesIndexFirst`, `registryChangeKeepsLoadedRowConfirmed` |
+| 439 | 11 | docs/ and the plug-in README describe validity, the resolutions, the format version, unreadable records, column values over skipped records, the fingerprint covering result versions, the bump rule and the plug-in code identity; no note says unrelated changes make stored results stale | `audit result-validity` |
+| 440 | 12 | a stored result is a memory of an in-memory result: stale when that one would be dropped, and when the code changes, and at no other time | `tst_fusion_store::storedFitSurvivesUnrelatedChanges`, `runtimeRegistrationDropsFitAndRecord`, `codeStampChangeDropsRecordOnLoad` |
+| 441 | 12 | what a result reached decides its validity, never what else is registered | `tst_calcengine_restore::restoreAcrossRegistries`; `tst_result_store::recordSurvivesUnrelatedChanges`; `audit result-validity` |
+| 442 | 12 | a transient failure to read is not evidence that a record is wrong | `tst_result_store::unreadableRecordIsSkipped`, `dependentOfSkippedRecordIsKept`; `manual M22` |
 
 ## 10. Cleanup audit
 
@@ -994,11 +1078,29 @@ takes about a second. It fails, listing **all** violations, when
   below the store knows nothing above it); or any text outside this file says
   that requested results are kept in memory only or are not saved. This file
   is excluded from the last rule because this section describes it;
+- **group `result-validity`** (items 409, 410, 413, 415, 417, 429, 439, 441):
+  the record format, the result store or the snapshot names the calculation
+  environment fingerprint (`calculationEnvironment...`); the plug-in code
+  identity is computed, or the plug-in folder read for it, outside
+  `plugincodeidentity.*` and the plug-in host; a result version is assigned
+  outside the engine, the fusion registration and the plug-in host; a
+  registration is removed as teardown (`Removal::Teardown`) anywhere but the
+  altitude-marker manager's destructor; the plug-in host or its adapters
+  unregister anything; the plug-in host is initialised anywhere but once in
+  `MainWindow`, or anything in `src` watches files; the removed whole-session
+  marking of records as unconfirmed on an environment change reappears
+  anywhere in `src` or `tests`, or anything but the result store marks a
+  record skipped; the new bump-rule sentence is not in
+  `builtincalculations.h` exactly once, or the old one ("Bump it, or the
+  calculation's result version") appears in `src`, `docs` or `README.md`; or
+  any text outside this file says that a change of registrations or
+  preferences makes every stored result stale. This file is excluded from the
+  last rule because this section describes it;
 - a line of `tests/acceptance_map.txt` is malformed, names a test function, a
   manual step (`**M<k> ` in this file), a CI token or an audit group that does
-  not exist, or an item outside 1-19, 101-120, 201-247 and 301-350; an item
-  1-19 has no line; or an item 101-120, 201-247 or 301-350 has no test or
-  audit line.
+  not exist, or an item outside 1-19, 101-120, 201-247, 301-350 and 401-442;
+  an item 1-19 has no line; or an item 101-120, 201-247, 301-350 or 401-442
+  has no test or audit line.
 
 Whether a target **links** GTSAM is not a text question (link items come from
 variables and from other targets' link interfaces). That half of the
@@ -1443,7 +1545,10 @@ also holds what those tests share: `fixtureSession()` (a fixture session with
 an exit marker inside the fit, `kFixtureExitTime`), `fusionKey()`,
 `goldenDifference()` (a session's published channels against a golden) and
 `addSessions()` (sessions into an empty `SessionModel` as the application adds
-them, waited for until idle; empty text on success).
+them, waited for until idle; empty text on success) and
+`fixtureSessionWithSAccStoredAs()` (a fixture session whose `GNSS/sAcc` source
+data is stored under another name, so that only a registered calculation can
+provide `GNSS/sAcc`: `tst_fusion_store`'s lookup test).
 `registerFusionOnce()` registers the fusion calculations on the global registry
 after `TestEnvironment::registerBuiltIns()`, as the application does;
 `TestEnvironment` itself stays GTSAM-free. The real fit is never run on
@@ -1608,7 +1713,9 @@ specification is Michael's call.
 ### 12.3 Stored results
 
 What the automated tests cannot show: the real application hiding, showing and
-restarting with stored results, and the files it leaves in the logbook. Use
+restarting with stored results, the files it leaves in the logbook, and the
+settings changes, plugin edits and file locks that must not cost a stored fit.
+Use
 the preamble of 12.1 (a COPY of a logbook, never the real one), the same
 recordings, and a file browser open on
 `<scratch>/FlySight Viewer/logbook/`: the recordings are in `sessions/`, the
@@ -1621,6 +1728,12 @@ stored results in `cache/`, which the first fit creates.
 **M18 Change an input (315).** Edit the description of one fitted track: its roll stays drawn and its record file keeps its modification time. Then re-import a copy of that track's `SENSOR.CSV` in which the `az` value of one `$IMU` row was changed (the header, `SESSION_ID` included, unchanged). The track's roll disappears, the row shows the refresh control with 1, the record file is gone, the logbook cell of the column of M17 becomes empty, and nothing starts until refresh is pressed. Refresh fits it again, and a record file appears again.
 
 **M19 Delete (329, 330).** Delete one fitted track from the logbook: its `.csv` in `sessions/` and its `.fvresult` files in `cache/` are gone. With the application closed, copy another track's record file within `cache/` to a name whose `<uuid>` part matches no `.csv` (change one character). Start the application: the copy is gone, no extra track appears, and no dialog is shown. Quit, delete the whole `cache/` folder, and start again: every track is still in the logbook, the cells of the column of M17 are empty, showing a track draws no roll and its row shows the refresh control, nothing starts until refresh is pressed, and no `cache/` folder appears until a fit finishes.
+
+**M20 Unrelated changes keep a fit (404, 430).** With the three tracks of M16 fitted and shown, open Preferences > Altitude Markers, add the altitude 1000 and close the dialog. Roll stays drawn for the three tracks, the row stays plain, no job starts, and the three record files in `cache/` keep their modification times. In Preferences > Import set "Descent pause timeout" to 45: the same. The logbook column of M17 is recomputed; a hidden track's cell may stay empty until the track is shown (records are read only when a recording is loaded). Quit and start again, show the three tracks: roll is drawn at once, the row is plain, no job starts, the files keep their modification times, and the column shows the three numbers. Remove the altitude and set the timeout back: the same, also after another restart.
+
+**M21 Editing a plugin (419, 420).** Quit. Copy the repository's `python_plugins/` folder to a scratch folder, copy `examples/imu_tilt.py` from the copy into its top level, and start the application with the environment variable `FLYSIGHT_PLUGINS` set to the scratch folder. The debug output shows `[PluginHost] Plug-in code identity: plugins-sha256:` followed by 64 hex digits and `(3 files)`. Add a logbook column over `_IMU_PEAK_ACCEL` and let it fill. Quit and start again without edits (the interpreter has written `__pycache__/` into the folder): the identity is the same, and the column shows its values for hidden tracks without loading them. Quit, add a comment line to the top-level `imu_tilt.py`, start: the identity differs, the column's values are recomputed in the background and are the same numbers, and showing the three fitted tracks draws roll at once with no job, their record files keeping their modification times (the fit looks up no plugin output). Quit, undo the edit and add a comment line to `examples/imu_tilt.py` instead (never imported), start: the identity differs from both earlier ones. Remove the scratch folder and unset `FLYSIGHT_PLUGINS`.
+
+**M22 A record that cannot be read (421, 422, 442).** Windows only. Quit. In PowerShell, hold one fitted track's record open without sharing: `$f = [IO.File]::Open('<scratch>\FlySight Viewer\logbook\cache\<uuid>.builtin%2Efusion%2Efit.fvresult', 'Open', 'Read', 'None')`. Start the application and show that track: its roll is not drawn, the row shows the refresh control with 1, the debug output has one line containing "skipped (kept for the next load)", the file is still in `cache/` with its modification time, and that track's cell in the column of M17 is empty. Do not press refresh. Quit, run `$f.Close()`, start again: the cell stays empty until the track is shown; show it: roll is drawn at once, the row is plain, no job starts, and the cell shows its number.
 
 Pass / fail and a note per step go in the phase report. A step that fails is
 reported as it failed, not adjusted.
@@ -1918,7 +2031,8 @@ front. These are items 301-350 of `tests/acceptance_map.txt` (item = 300 + the
 number below) and the rows of section 9.4. Two sentences of the
 specification's scope have no item, because no test can show them: stored
 results are not shared between logbooks or machines, and a record need not be
-readable by people.
+readable by people. Clauses 10, 16, 17 and 41 are stated as amended by the
+specification "Stored results: validity that mirrors memory" (appendix E).
 
 1. (2) The result of every explicitly requested calculation that ended as a
    function of its inputs is stored on disk, in the logbook's cache: a
@@ -1946,10 +2060,12 @@ readable by people.
 9. (3) Nothing is stored for a result the engine did not install (`Cancelled`,
    `ResourceExhausted`, a refused publish) or for an `UndeclaredRead` or
    `InvalidOutput` status, and such a run deletes nothing.
-10. (3) A record is removed only when it is found stale on load, when its
-    session is deleted, when an input it depends on changes, or when the next
-    publish for the same pair replaces it; never by eviction, unloading, a
-    registry change or quitting.
+10. (3, as amended) A record is removed only when it is found stale on load,
+    when its session is deleted, when an input it depends on changes or a
+    registry change made while the application runs drops its result, or when
+    the next publish for the same pair replaces it; never by eviction,
+    unloading, a registry change that does not reach it, a teardown, or
+    quitting.
 11. (3) Values round-trip bit for bit: every double of a restored measurement
     equals the published one, `-0`, NaN and the infinities included, and a
     restored attribute string is byte-identical.
@@ -1964,13 +2080,15 @@ readable by people.
     description) leaves the record valid.
 15. (4.1) An edit it depends on (a merge that adds IMU data, a changed
     `SCHEMA_VER`, any other dependency) invalidates it.
-16. (4.2) A record is valid only while `CalculationCompatibilityVersion`, the
-    calculation environment fingerprint and the calculation's result version
-    equal the current ones; for sensor fusion the result version is the
-    kernel's algorithm string.
-17. (4.2) The compatibility-version rule gains the clause: bump it, or the
-    calculation's result version, whenever a change can alter what a requested
-    calculation produces.
+16. (4.2, as amended) A record is valid only while
+    `CalculationCompatibilityVersion` and the calculation's result version
+    equal the current ones and every name it looked up resolves as it did
+    (appendix E, clauses 6-8); for sensor fusion the result version is the
+    kernel's algorithm string. The environment fingerprint is no longer part
+    of a record.
+17. (4.2, as amended) The compatibility-version rule gains the clause: bump
+    it, or the result version of the calculation concerned, whenever a change
+    can alter what a requested calculation or anything it reads produces.
 18. (4) A record that fails any check is deleted when the session is loaded,
     and the calculation reads as not requested; nothing is recomputed on its
     own.
@@ -2034,8 +2152,9 @@ readable by people.
 40. (8) Test: editing an attribute the result does not depend on keeps the
     record; merging IMU data, or changing any dependency, drops it, the
     calculation reads not requested, and the file is gone.
-41. (8) Test: bumping `CalculationCompatibilityVersion`, the environment
-    fingerprint or the calculation's result version drops the record on load.
+41. (8, as amended) Test: bumping `CalculationCompatibilityVersion`, the
+    calculation's result version, or the result version recorded for a
+    calculation its lookups went through drops the record on load.
 42. (8) Test: a record whose write fails leaves the in-memory result usable
     and the previous record intact.
 43. (8) Test: deleting a session removes its records; a stray record whose
@@ -2056,3 +2175,151 @@ readable by people.
     never in it.
 49. (10) Restoring is not requesting: nothing starts on its own.
 50. (10) A restored result is indistinguishable from a fresh one, to the bit.
+
+## Appendix E. The acceptance items of stored-result validity (401-442)
+
+The clauses of the specification "Stored results: validity that mirrors
+memory", which amends "Storing requested calculation results with the
+session" (appendix D), one sentence each, with the specification's section
+number in front. These are items 401-442 of `tests/acceptance_map.txt`
+(item = 400 + the number below) and the rows of section 9.5. The
+specification's section 1 (motivation) has no item. Clause 16 is stated as
+settled when it was implemented: subfolders are included.
+
+1. (2) A stored result goes stale under exactly the conditions that would
+   drop the same result in memory, plus a change of the code that computed
+   it; nothing unrelated to what the result reached makes it stale.
+2. (3.1, 3.2) In memory, an installed requested result is dropped when a
+   value it reached changes on its session (the samples or unit text of a
+   source measurement, or a stored attribute, reached directly or through
+   the calculations and conversions its inputs resolved through, a value it
+   looked for and did not find that later appears included), or when a
+   declared preference it reached changes.
+3. (3.3) It is dropped when a registry change touches a name it resolved,
+   directly or transitively: a calculation whose outputs include such a
+   name is added or removed, a calculation whose result it used is
+   removed, a family that accepts such a name is added or removed, or the
+   source-conversion layer changes.
+4. (3) Everything else leaves it installed: edits to values it did not
+   reach (markers, description, wind), registrations of names it never
+   looked up (altitude markers, unrelated plug-in outputs), and preferences
+   it did not reach.
+5. (4.1) Inputs, unchanged: the fingerprint over the values of every leaf
+   the result reached, directly or transitively, present or absent,
+   declared preference values included, matches the session and the
+   preferences as they are now.
+6. (4.2) Resolutions: for every name the result looked up while its inputs
+   were gathered, directly or transitively, the record states what
+   provided it: a calculation (its instance id and result version), the
+   session's own data, or nothing.
+7. (4.2) At load the same lookups are repeated against the current
+   registry and must give the same answers.
+8. (4.3) Code: `CalculationCompatibilityVersion` and the calculation's own
+   result version are unchanged.
+9. (4) The calculation environment fingerprint is no longer part of a
+   record.
+10. (4) The bump-rule clause reads: bump `CalculationCompatibilityVersion`,
+    or the result version of the calculation concerned, whenever a change
+    can alter what a requested calculation or anything it reads produces.
+11. (4) A record that fails any check is deleted when its session is
+    loaded, and the calculation reads as not requested; nothing is
+    recomputed on its own.
+12. (5) A registry change made while the application runs that drops an
+    installed requested result also deletes that result's record, exactly
+    like an input change.
+13. (5) Tearing the registry down at shutdown, destroying or evicting a
+    session, and replacing a session's contents without an input change
+    delete nothing.
+14. (5) A registry change that does not touch a result leaves both the
+    installed result and its record alone, and logbook column values over
+    that record remain cacheable.
+15. (6) Every calculation, measurement and attribute a Python plug-in
+    registers declares a result version: the plug-in code identity.
+16. (6, as settled) The plug-in code identity is one digest over every
+    `.py` file under the plug-in folder, subfolders included (its name
+    relative to the folder and its bytes, in name order; `__pycache__` and
+    hidden folders left out), the plug-in SDK file, and the Python and
+    numpy versions the plug-ins run on.
+17. (6) It is computed once, when the plug-ins are loaded.
+18. (6) Editing any plug-in file, adding or removing one, or upgrading
+    Python or numpy changes it, so a stored result whose lookups went
+    through any plug-in calculation goes stale at its next load.
+19. (6) A stored result whose lookups touched no plug-in calculation is
+    unaffected by plug-in changes.
+20. (6) The calculation environment fingerprint that stamps the logbook
+    column cache in `index.json` also covers every registration's result
+    version, so a plug-in edit or a built-in result-version change discards
+    cached column values as a registry change does; its other contents and
+    its role are unchanged.
+21. (7) A record file that exists but cannot be opened or read in full
+    when its session loads is skipped for that load: it is neither
+    restored nor deleted, and the calculation reads as not requested for
+    that load.
+22. (7) The next load of the session tries again; a new publish for the
+    same pair replaces it; deleting the session or the stray pass at
+    start-up removes it.
+23. (7) A record that was read but is not a record, is damaged, or has a
+    format version this build does not read is deleted as stale, as
+    before.
+24. (7) Logbook column values of a session that depend on a skipped record
+    are not cached in `index.json` for as long as the record stays
+    skipped.
+25. (8) The record gains the resolutions and loses the environment
+    fingerprint, so its format version increases.
+26. (8) A record of an earlier format version is deleted as stale when its
+    session loads; there is no migration.
+27. (9) Everything in "Storing requested calculation results with the
+    session" not amended still holds: restoring is not requesting,
+    publishing writes the record and nothing else does (except the
+    deletions listed there and in clause 12), records are read only for a
+    session being loaded, the session file is untouched, and a restored
+    result is bit-identical to a fresh one.
+28. (9) The engine keeps its threading rules; repeating the lookups at load
+    uses the same resolution the engine uses for a fresh request and never
+    runs a requested calculation.
+29. (9) Plug-in loading stays a start-up operation: nothing reloads
+    plug-ins or watches their files.
+30. (10) Test: a stored fit survives each of these and is restored with no
+    job: adding and removing an altitude marker; registering and
+    unregistering a calculation whose outputs the fit never looks up;
+    changing the descent-pause preference; a different plug-in set whose
+    calculations the fit never looks up; an application restart after any
+    of these.
+31. (10) Test: registering, while the application runs, a calculation that
+    provides a name the fit looked up drops the installed fit and deletes
+    its record.
+32. (10) Test: a record whose lookups resolve differently at load (a new
+    candidate for a looked-up name, one that computes from the same inputs,
+    registered before the load) is deleted and the fit reads not
+    requested.
+33. (10) Test: with a synthetic requested calculation that reads a plug-in
+    calculation's output, editing any plug-in file, adding one, or changing
+    the recorded Python or numpy version between runs makes its record
+    stale; editing a plug-in file when the requested calculation reads no
+    plug-in output does not.
+34. (10) Test: the plug-in code identity is deterministic: the same files
+    and versions give the same digest, and each listed ingredient changes
+    it.
+35. (10) Test: a plug-in edit discards cached logbook column values over
+    plug-in calculations at the next start.
+36. (10) Test: a record that cannot be read at load (held open without
+    sharing on Windows, or a directory at its path) is kept, not restored,
+    and restored at a later load once readable; its session's dependent
+    column values are not cached while it is skipped.
+37. (10) Test: a record of the previous format version is deleted as
+    stale.
+38. (10) Test: the existing tests of stored results pass, with the tests
+    that asserted environment-change staleness rewritten to these rules.
+39. (11) `docs/` and the plug-in README describe validity (the record's
+    resolutions, the format version, unreadable records), the column values
+    over skipped records, the environment fingerprint covering result
+    versions, the bump rule and the plug-in code identity, and no
+    user-facing note says any longer that unrelated settings changes make
+    stored results stale.
+40. (12) A stored result is a memory of an in-memory result: it goes stale
+    when the in-memory one would be dropped, and when the code changes, and
+    at no other time.
+41. (12) What a result reached decides its validity, never what else is
+    registered.
+42. (12) A transient failure to read is not evidence that a record is
+    wrong.

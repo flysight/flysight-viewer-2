@@ -76,8 +76,9 @@ inline bool operator!=(const StoredResolution &a, const StoredResolution &b) { r
 ///
 /// The code stamp (the calculation-compatibility marker) is deliberately
 /// absent: the engine layer does not depend on the built-in calculations that
-/// define it. Whoever stores a snapshot adds it. What the result's lookups resolved to is not a stamp:
-/// it is part of the snapshot (`resolutions`), and the engine checks it.
+/// define it. Whoever stores a snapshot adds it. What the result's lookups
+/// resolved to is not a stamp: it is part of the snapshot (`resolutions`), and
+/// the engine checks it.
 ///
 /// Pinned. The leaf kind codes (storedLeafKindCode), the resolution provider
 /// codes (storedResolutionProviderCode) and the fingerprint encoding
