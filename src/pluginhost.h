@@ -44,6 +44,13 @@ public:
     // order; then the SDK's lists are registered in a fixed order: attributes,
     // measurements, calculations, plots, markers. A plugin whose declaration is
     // invalid is rejected alone (see report()); the others still load.
+    //
+    // Before any plugin is imported, the plug-in code identity
+    // (plugincodeidentity.h) is computed over every *.py file under `pluginDir`
+    // (subfolders included, although only the top-level files are imported),
+    // the SDK file actually imported, and the Python and numpy versions; it is
+    // the result version of every attribute, measurement and calculation it
+    // registers. Empty when plugin loading did not run.
     void initialise(const QString& pluginDir);
 
     // True iff the interpreter booted, the bridge module imported, and the SDK
@@ -52,11 +59,15 @@ public:
 
     const PluginLoadReport& report() const { return m_report; }
 
+    // The plug-in code identity (see initialise()); empty until computed.
+    const QString& codeIdentity() const { return m_codeIdentity; }
+
 private:
     PluginHost() = default;
     std::unique_ptr<pybind11::scoped_interpreter> m_interp;
     bool m_ready = false;
     PluginLoadReport m_report;
+    QString m_codeIdentity;
 };
 
 #endif // PLUGINHOST_H

@@ -12,7 +12,10 @@
 #include "../conversion/sourceconversion.h"
 #include "../csvformat.h"
 
+#include <optional>
+
 #include <QCryptographicHash>
+#include <QHash>
 
 namespace FlySight {
 
@@ -48,11 +51,28 @@ QString calculationEnvironmentFingerprint(const CalculationRegistry &registry)
     // relative order of calculations that share no output is left out, so
     // that a calculation registered at run time (appended) hashes the same as
     // after the next start, where it may be registered between others. An id
-    // cannot contain '#'.
-    const auto addList = [&hash](const QString &label, const QList<CalculationId> &ids) {
+    // cannot contain '#', so a second '#' delimits the result version, which
+    // follows the id of every registration that declares one (families and
+    // conversions never do; an id without one hashes as it always has).
+    QHash<CalculationId, QString> versions;
+    for (const CalculationId &id : registry.registeredIds()) {
+        const std::optional<CalculationInstance> instance = registry.instance(id);   // nullopt for a family
+        if (instance && instance->descriptor && !instance->descriptor->resultVersion.isEmpty())
+            versions.insert(id, instance->descriptor->resultVersion);
+    }
+    const auto addList = [&hash, &versions](const QString &label, const QList<CalculationId> &ids) {
         hash.addData((label + QLatin1Char('\n')).toUtf8());
-        for (const CalculationId &id : ids)
-            hash.addData((QLatin1Char('#') + id + QLatin1Char('\n')).toUtf8());
+        for (const CalculationId &id : ids) {
+            QString line = QLatin1Char('#') + id;
+            const auto version = versions.constFind(id);
+            if (version != versions.cend()) {
+                QString escaped = *version;
+                escaped.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
+                escaped.replace(QLatin1Char('\n'), QLatin1String("\\n"));
+                line += QLatin1Char('#') + escaped;
+            }
+            hash.addData((line + QLatin1Char('\n')).toUtf8());
+        }
     };
     const CandidateOrder order = registry.candidateOrder();
     for (const auto &output : order.byOutput) {

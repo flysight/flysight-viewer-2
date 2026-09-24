@@ -9,7 +9,9 @@
 //    the session file on disk;
 //  - a calculation-environment change (declared preference, registration)
 //    discards the cached values of loaded AND unloaded rows without saving
-//    anything.
+//    anything;
+//  - a plug-in edit (a new plug-in code identity, the result version of its
+//    registrations) discards the cached values at the next start.
 //
 // The "gyro session": TIME data with an exact fit (a = 1, b = T0), IMU/wx
 // {1, 2, 3} deg/s at IMU/time {10, 20, 30}, no SCHEMA_VER. Column G reads
@@ -37,6 +39,7 @@
 #include "logbookcolumn.h"
 #include "logbookmanager.h"
 #include "logbookprobe.h"
+#include "plugincodeidentity.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
@@ -104,6 +107,35 @@ int allRowsNotifications(const QSignalSpy &dataSpy, int rowCount)
     return count;
 }
 
+// A stand-in for a Python plug-in registration (one process cannot boot the
+// interpreter twice): its result version is a real plug-in code identity.
+constexpr char kPluginId[] = "test.columncache.plugin";
+constexpr char kPluginOutput[] = "_TEST_COLUMNCACHE_PLUGIN";
+
+// The plug-in folder of the stand-in: `aPlugin` is the bytes of a_plugin.py.
+PluginCodeIngredients pluginIngredients(const QByteArray &aPlugin)
+{
+    PluginCodeIngredients i;
+    i.files = {{QStringLiteral("a_plugin.py"), aPlugin}, {QStringLiteral("helper.py"), QByteArray("y = 2\n")}};
+    i.sdk = QByteArray("sdk");
+    i.pythonVersion = QStringLiteral("3.13.3");
+    i.numpyVersion = QStringLiteral("2.2.4");
+    return i;
+}
+
+CalculationDescriptor pluginStandIn(const QString &resultVersion)
+{
+    CalculationDescriptor d;
+    d.id = QString::fromLatin1(kPluginId);
+    d.inputs = {CalcInput::attribute(QStringLiteral("_DESCRIPTION"))};
+    d.outputs = {DependencyKey::attribute(QString::fromLatin1(kPluginOutput))};
+    d.resultVersion = resultVersion;
+    d.compute = [](const EvaluationContext &) {
+        return CalculationResult().setAttribute(QString::fromLatin1(kPluginOutput), 7.0);
+    };
+    return d;
+}
+
 } // namespace
 
 class ColumnCacheTest : public QObject {
@@ -151,6 +183,8 @@ private slots:
 
     void explicitBackedColumnFollowsItsResult();
 
+    void pluginEditDiscardsCachedValues();
+
 private:
     // A model whose rows were merged, saved, and indexed.
     void startWithLoadedSessions(const QList<SessionData> &sessions);
@@ -195,6 +229,7 @@ void ColumnCacheTest::cleanup()
     m_altitudes.reset();
     writeAltitudes({});
     m_model.reset();
+    CalculationRegistry::instance().unregister(QString::fromLatin1(kPluginId));    // after a failed pluginEditDiscardsCachedValues
     LogbookColumnStore::instance().setColumns({m_d, m_g, m_e});     // altitudeMarkerRemovalDiscardsStubValues adds one
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
     QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
@@ -1367,6 +1402,78 @@ void ColumnCacheTest::explicitBackedColumnFollowsItsResult()
     QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
     QCOMPARE(m_model->columnWorkStats().valuesComputed, 0);
     QVERIFY(!m_model->rowAt(0).isLoaded());
+}
+
+// Spec section 6 / 10: a plug-in edit discards the cached column values over
+// plug-in calculations at the next start. The application restart is
+// restartAsStubs(); "the next start with an edited plug-in" re-registers the
+// stand-in with the identity over the edited bytes first, as the host would.
+void ColumnCacheTest::pluginEditDiscardsCachedValues()
+{
+    constexpr int kP = 3;
+    LogbookColumn pluginColumn;
+    pluginColumn.type = ColumnType::SessionAttribute;
+    pluginColumn.attributeKey = QString::fromLatin1(kPluginOutput);
+    LogbookColumnStore::instance().setColumns({m_d, m_g, m_e, pluginColumn});    // restored in cleanup()
+
+    CalculationRegistry &registry = CalculationRegistry::instance();
+    LogbookManager &logbook = LogbookManager::instance();
+    const QString unedited = pluginCodeIdentity(pluginIngredients("x = 1\n"));
+    const QString edited = pluginCodeIdentity(pluginIngredients("x = 2\n"));
+    QVERIFY(unedited != edited);
+    // Plug-ins load before the logbook is initialised, as in the application
+    const auto restartWithPlugin = [&](const QString &identity) {
+        m_model.reset();
+        return registry.unregister(QString::fromLatin1(kPluginId)) && registry.registerCalculation(pluginStandIn(identity));
+    };
+
+    // 1. The first start: the environment includes the plug-in
+    QVERIFY(registry.registerCalculation(pluginStandIn(unedited)));
+    TestEnvironment::instance().reopenLogbook();
+    logbook.initialize();
+    startWithLoadedSessions({gyroSession()});
+    if (QTest::currentTestFailed())
+        return;
+    QCOMPARE(cached(0, kP).toDouble(), 7.0);
+    const QString firstEnvironment = calculationEnvironmentFingerprint();
+    {
+        const QJsonObject root = readIndex();
+        QCOMPARE(root[QStringLiteral("calculationEnvironment")].toString(), firstEnvironment);
+        QCOMPARE(indexValue(root, "g1", pluginColumn).toDouble(), 7.0);
+    }
+    const QString csvPath = sessionFilePath(QStringLiteral("g1"));
+    const QByteArray csvBytes = readFileBytes(csvPath);
+
+    // 2. Control: a restart with the unedited plug-in serves the value from the index
+    QVERIFY(restartWithPlugin(unedited));
+    restartAsStubs();
+    QVERIFY(!logbook.cachedValuesDiscardedOnLoad());
+    QCOMPARE(calculationEnvironmentFingerprint(), firstEnvironment);
+    QCOMPARE(m_model->rowCount(), 1);
+    QVERIFY(!m_model->rowAt(0).isLoaded());
+    QCOMPARE(cached(0, kP).toDouble(), 7.0);
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+
+    // 3. A restart with the edited plug-in discards every cached value; they
+    //    are recomputed from the session file, which is not touched
+    QVERIFY(restartWithPlugin(edited));
+    restartAsStubs();
+    QVERIFY(logbook.cachedValuesDiscardedOnLoad());
+    QCOMPARE(m_model->rowCount(), 1);
+    QVERIFY(m_model->rowAt(0).cachedValues.isEmpty());
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(cached(0, kP).toDouble(), 7.0);
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);
+    const QString editedEnvironment = calculationEnvironmentFingerprint();
+    QVERIFY(editedEnvironment != firstEnvironment);
+    QCOMPARE(readIndex()[QStringLiteral("calculationEnvironment")].toString(), editedEnvironment);
+    QCOMPARE(readFileBytes(csvPath), csvBytes);
+
+    m_model.reset();
+    QVERIFY(registry.unregister(QString::fromLatin1(kPluginId)));
 }
 
 FLYSIGHT_TEST_MAIN(ColumnCacheTest)

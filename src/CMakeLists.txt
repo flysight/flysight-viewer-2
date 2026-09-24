@@ -300,6 +300,8 @@ add_library(flysight_core STATIC
   plotrequests.cpp           plotrequests.h
   momentmodel.cpp            momentmodel.h
   altitudemarkerfeature.cpp  altitudemarkerfeature.h
+  # Plug-in code identity: the result version of every plug-in registration (no Python)
+  plugincodeidentity.cpp     plugincodeidentity.h
   # Header-only Q_OBJECT singleton: must be listed in exactly one target so
   # AUTOMOC generates its meta-object once.
   preferences/preferencesmanager.h

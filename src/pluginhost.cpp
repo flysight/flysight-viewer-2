@@ -37,6 +37,7 @@
 /* FlySight headers */
 #include "pluginhost.h"
 #include "pluginadapters.h"
+#include "plugincodeidentity.h"
 #include "engine/calculationdescriptor.h"
 #include "engine/calculationregistry.h"
 #include "plotregistry.h"
@@ -72,9 +73,12 @@ struct RegistrationCount {
 
 // `makeAdapter(index, plugin)` builds the descriptor. The index is the position
 // in the SDK list, so a rejected plugin still consumes its index and the ids of
-// the others do not depend on it.
+// the others do not depend on it. Every registration declares `resultVersion`
+// (the plug-in code identity): the adapters build descriptors, the host
+// decides their version.
 template <typename Fn>
-RegistrationCount registerEach(py::handle sdkList, PluginLoadReport &report, Fn makeAdapter)
+RegistrationCount registerEach(py::handle sdkList, const QString &resultVersion,
+                               PluginLoadReport &report, Fn makeAdapter)
 {
     RegistrationCount count;
     CalculationRegistry &registry = CalculationRegistry::instance();
@@ -86,7 +90,8 @@ RegistrationCount registerEach(py::handle sdkList, PluginLoadReport &report, Fn 
 
         QString reason;
         try {
-            const CalculationDescriptor d = makeAdapter(index, plugin);
+            CalculationDescriptor d = makeAdapter(index, plugin);
+            d.resultVersion = resultVersion;
             if (!registry.registerCalculation(d))
                 throw PluginBridge::PluginError(
                     "registration refused by the calculation registry (see previous warning)");
@@ -108,6 +113,40 @@ RegistrationCount registerEach(py::handle sdkList, PluginLoadReport &report, Fn 
         ++index;
     }
     return count;
+}
+
+// The ingredients of the plug-in code identity (plugincodeidentity.h), read
+// before any plugin is imported. `sdk` is the imported SDK module: its
+// __file__ is what was actually imported, wherever sys.path found it. Any
+// ingredient that cannot be read is left empty / nullopt, which the digest
+// encodes distinctly.
+PluginCodeIngredients readCodeIngredients(const QString &pluginDir, const py::module_ &sdk)
+{
+    PluginCodeIngredients ingredients;
+    ingredients.files = readPluginCodeFiles(pluginDir);
+
+    try {
+        if (py::hasattr(sdk, "__file__")) {
+            const py::object file = sdk.attr("__file__");
+            if (py::isinstance<py::str>(file))
+                ingredients.sdk = readWholeFile(QString::fromStdString(file.cast<std::string>()));
+        }
+    } catch (const py::error_already_set &) {
+    } catch (const std::exception &) {
+    }
+
+    // "3.13.3 (tags/v3.13.3:..., ...) [MSC ...]": the part before the first
+    // space, which is what platform.python_version() reports.
+    const QString version = QString::fromUtf8(Py_GetVersion());
+    ingredients.pythonVersion = version.section(QLatin1Char(' '), 0, 0);
+
+    try {
+        ingredients.numpyVersion = QString::fromStdString(
+            py::module_::import("numpy").attr("__version__").cast<std::string>());
+    } catch (const py::error_already_set &) {
+    } catch (const std::exception &) {
+    }
+    return ingredients;
 }
 
 } // namespace
@@ -317,6 +356,16 @@ void PluginHost::initialise(const QString& pluginDir)
     // The interpreter, the bridge and the SDK are up: plugin loading runs.
     m_ready = true;
 
+    // The plug-in code identity, from the bytes on disk before any plugin code
+    // runs. The digest covers every *.py under the folder (subfolders too);
+    // step 3 still imports the top-level files only.
+    {
+        const PluginCodeIngredients ingredients = readCodeIngredients(pluginDir, sdk);
+        m_codeIdentity = pluginCodeIdentity(ingredients);
+        qInfo().noquote() << "[PluginHost] Plug-in code identity:" << m_codeIdentity
+                          << QStringLiteral("(%1 files)").arg(ingredients.files.size());
+    }
+
     /* ------------------------------------------------------------------ */
     /* 3.  Import every .py file in the plug-in directory (name order)    */
     /* ------------------------------------------------------------------ */
@@ -340,11 +389,11 @@ void PluginHost::initialise(const QString& pluginDir)
     // output is tried first (recorded data still beats both).
     RegistrationCount attributes, measurements, calculations;
     try {
-        attributes = registerEach(sdk.attr("_attributes"), m_report,
+        attributes = registerEach(sdk.attr("_attributes"), m_codeIdentity, m_report,
                                   &PluginBridge::makeAttributeAdapter);
-        measurements = registerEach(sdk.attr("_measurements"), m_report,
+        measurements = registerEach(sdk.attr("_measurements"), m_codeIdentity, m_report,
                                     &PluginBridge::makeMeasurementAdapter);
-        calculations = registerEach(sdk.attr("_calculations"), m_report,
+        calculations = registerEach(sdk.attr("_calculations"), m_codeIdentity, m_report,
                                     &PluginBridge::makeCalculationAdapter);
     } catch (const py::error_already_set& e) {
         qCritical().noquote() << "[PluginHost] The SDK's plugin lists could not be read:" << e.what();

@@ -6,6 +6,7 @@
 #include <memory>
 #include <utility>
 
+#include <QCryptographicHash>
 #include <QScopeGuard>
 #include <QtTest>
 
@@ -96,6 +97,7 @@ private slots:
     // Logbook column cache: static closures and the environment fingerprint
     void gyroColumnClosure();
     void fingerprintChanges();
+    void fingerprintCoversResultVersions();
     void fingerprintSurvivesRuntimeAltitudeMarker();
     void altitudeMarkerTeardownReportsNothing();
 
@@ -617,6 +619,76 @@ void BuiltinsEngineTest::fingerprintChanges()
     // No engine ran anything for any of this
     QCOMPARE(a.engine->totalRunCount(), 0);
     QCOMPARE(c.engine->totalRunCount(), 0);
+}
+
+// Every registration's result version is part of the environment: a changed
+// plug-in (its code identity) or a changed fit algorithm discards the cached
+// column values like a registry change. An id without one hashes as before.
+void BuiltinsEngineTest::fingerprintCoversResultVersions()
+{
+    const auto constantCalculation = [](const QString &id, const QString &output, const QString &version) {
+        CalculationDescriptor d;
+        d.id = id;
+        d.outputs = {DependencyKey::attribute(output)};
+        d.resultVersion = version;
+        d.compute = [output](const EvaluationContext &) { return CalculationResult().setAttribute(output, 1); };
+        return d;
+    };
+
+    // The encoding, on a registry of one calculation and no preference provider
+    {
+        const auto sha1 = [](const QByteArray &bytes) {
+            return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha1).toHex());
+        };
+        CalculationRegistry registry;
+        QVERIFY(registry.registerCalculation(constantCalculation("test.pinned", "_TEST_PINNED", QString())));
+        QCOMPARE(calculationEnvironmentFingerprint(registry),
+                 sha1("attribute:_TEST_PINNED\n#test.pinned\nfamilies\nconversions\n"));
+        QVERIFY(registry.unregister(QStringLiteral("test.pinned")));
+        // The version is a backslash and a line feed between letters: escaped
+        QVERIFY(registry.registerCalculation(constantCalculation("test.pinned", "_TEST_PINNED", "a\\b\nc")));
+        QCOMPARE(calculationEnvironmentFingerprint(registry),
+                 sha1("attribute:_TEST_PINNED\n#test.pinned#a\\\\b\\nc\nfamilies\nconversions\n"));
+    }
+
+    // On the built-ins: declaring one differs from declaring none, and each
+    // version is its own environment
+    World world;
+    const QString base = calculationEnvironmentFingerprint(world.registry);
+    const QString extraId = QStringLiteral("test.versioned");
+    const auto reRegister = [&](const QString &version) {
+        if (world.registry.contains(extraId) && !world.registry.unregister(extraId))
+            return false;
+        return world.registry.registerCalculation(constantCalculation(extraId, "_TEST_VERSIONED", version));
+    };
+    QVERIFY(reRegister(QString()));
+    const QString unversioned = calculationEnvironmentFingerprint(world.registry);
+    QVERIFY(unversioned != base);
+    QVERIFY(reRegister(QStringLiteral("v1")));
+    const QString v1 = calculationEnvironmentFingerprint(world.registry);
+    QVERIFY(v1 != unversioned);
+    QVERIFY(reRegister(QStringLiteral("v2")));
+    const QString v2 = calculationEnvironmentFingerprint(world.registry);
+    QVERIFY(v2 != v1);
+    QVERIFY(v2 != unversioned);
+    QVERIFY(reRegister(QStringLiteral("v1")));
+    QCOMPARE(calculationEnvironmentFingerprint(world.registry), v1);
+    QVERIFY(world.registry.unregister(extraId));
+    QCOMPARE(calculationEnvironmentFingerprint(world.registry), base);
+
+    // Two candidates for one output: the version of the second (never the
+    // first tried) counts too
+    QVERIFY(world.registry.registerCalculation(constantCalculation("test.first", "_TEST_SHARED", "f1")));
+    QVERIFY(world.registry.registerCalculation(constantCalculation("test.second", "_TEST_SHARED", "s1")));
+    const QString secondS1 = calculationEnvironmentFingerprint(world.registry);
+    QVERIFY(world.registry.unregister(QStringLiteral("test.second")));
+    QVERIFY(world.registry.registerCalculation(constantCalculation("test.second", "_TEST_SHARED", "s2")));
+    QCOMPARE(world.registry.candidatesFor(attr("_TEST_SHARED")).size(), 2);
+    QCOMPARE(world.registry.candidatesFor(attr("_TEST_SHARED")).first().instanceId, QStringLiteral("test.first"));
+    QVERIFY(calculationEnvironmentFingerprint(world.registry) != secondS1);
+
+    // No engine ran anything for any of this
+    QCOMPARE(world.engine->totalRunCount(), 0);
 }
 
 // An altitude marker added while the application runs is registered after the

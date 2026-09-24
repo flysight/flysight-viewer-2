@@ -34,6 +34,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSet>
 #include <QtTest>
 
@@ -48,6 +49,7 @@
 #include "logbookmanager.h"
 #include "markerregistry.h"
 #include "plotregistry.h"
+#include "plugincodeidentity.h"
 #include "pluginhost.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
@@ -136,6 +138,7 @@ private slots:
     void singleOutputPluginsReadEffectiveValues();
     void pluginOutputsAreNotEnumerated();
     void plotAndMarkerRegistrationUnaffected();
+    void pluginRegistrationsCarryCodeIdentity();
     void secondInitialiseIsNoOp();
 
     // plugin registration: rejection and order
@@ -362,8 +365,63 @@ void PythonBridgeTest::plotAndMarkerRegistrationUnaffected()
     QVERIFY(markerFound);
 }
 
+// Every attribute, measurement and calculation the host registered declares
+// the plug-in code identity as its result version, and the identity is the
+// digest of the ingredients read here by an independent path. This folder
+// holds top-level files only, so the digested and the imported files coincide.
+void PythonBridgeTest::pluginRegistrationsCarryCodeIdentity()
+{
+    const QString identity = PluginHost::instance().codeIdentity();
+    QVERIFY2(QRegularExpression(QStringLiteral("^plugins-sha256:[0-9a-f]{64}$")).match(identity).hasMatch(),
+             qPrintable(identity));
+
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+    const QStringList ids = PluginHost::instance().report().registeredIds;
+    QSet<QString> kinds;
+    for (const QString &id : ids) {
+        const std::optional<CalculationInstance> instance = registry.instance(id);
+        QVERIFY2(instance && instance->descriptor, qPrintable(id));
+        QVERIFY2(instance->descriptor->resultVersion == identity, qPrintable(id));
+        kinds.insert(id.section(QLatin1Char('.'), 0, 1));
+    }
+    QCOMPARE(kinds, QSet<QString>({QStringLiteral("plugin.attr"), QStringLiteral("plugin.meas"),
+                                   QStringLiteral("plugin.calc")}));
+
+    // The ingredients, read independently of the host
+    PluginCodeIngredients ingredients;
+    ingredients.files = readPluginCodeFiles(m_pluginDir);
+    QString sdkPath;
+    {
+        py::gil_scoped_acquire gil;
+        sdkPath = QString::fromStdString(
+            py::module_::import("flysight_plugin_sdk").attr("__file__").cast<std::string>());
+        ingredients.pythonVersion = QString::fromStdString(
+            py::module_::import("platform").attr("python_version")().cast<std::string>());
+        ingredients.numpyVersion = QString::fromStdString(
+            py::module_::import("numpy").attr("__version__").cast<std::string>());
+    }
+    ingredients.sdk = readWholeFile(sdkPath);
+    QVERIFY2(ingredients.sdk.has_value() && !ingredients.sdk->isEmpty(), qPrintable(sdkPath));
+    QVERIFY(!ingredients.pythonVersion.isEmpty());
+    QVERIFY(!ingredients.numpyVersion.isEmpty());
+    QCOMPARE(pluginCodeIdentity(ingredients), identity);
+
+    QStringList digested;
+    for (const PluginSourceFile &file : std::as_const(ingredients.files))
+        digested << file.name;
+    QCOMPARE(digested, QDir(m_pluginDir).entryList({QStringLiteral("*.py")}, QDir::Files, QDir::Name));
+    QVERIFY(digested.contains(QStringLiteral("flysight_plugin_sdk.py")));
+    QVERIFY(digested.contains(QStringLiteral("imu_tilt.py")));
+
+    // A built-in, registered after the plugins, declares none
+    const std::optional<CalculationInstance> builtin = registry.instance(QStringLiteral("builtin.attr.exitTime"));
+    QVERIFY(builtin && builtin->descriptor);
+    QVERIFY(builtin->descriptor->resultVersion.isEmpty());
+}
+
 void PythonBridgeTest::secondInitialiseIsNoOp()
 {
+    const QString identityBefore = PluginHost::instance().codeIdentity();
     const QStringList idsBefore = PluginHost::instance().report().registeredIds;
     const QStringList rejectedBefore = PluginHost::instance().report().rejected;
     const QList<CalculationId> registryBefore = CalculationRegistry::instance().registeredIds();
@@ -376,6 +434,8 @@ void PythonBridgeTest::secondInitialiseIsNoOp()
     QCOMPARE(PluginHost::instance().report().rejected, rejectedBefore);
     QCOMPARE(CalculationRegistry::instance().registeredIds(), registryBefore);
     QCOMPARE(PlotRegistry::instance().allPlots().size(), plotsBefore);
+    QVERIFY(!identityBefore.isEmpty());
+    QCOMPARE(PluginHost::instance().codeIdentity(), identityBefore);
 }
 
 // ------------------------------ plugin registration: rejection and order

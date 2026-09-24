@@ -26,8 +26,9 @@ void registerBuiltInCalculations(CalculationRegistry &registry = CalculationRegi
 /// or candidate order; the schema table or the unit-normalization table
 /// (src/conversion, src/units/unitconversion.h); the interpolation family;
 /// SessionModel::computeColumnValues (what a column stores, or its unit).
-/// Do not bump for pure additions / removals / renames of registrations - the
-/// environment fingerprint below already covers those. Never reuse a value;
+/// Do not bump for pure additions / removals / renames of registrations, or
+/// for a changed result version - the environment fingerprint below already
+/// covers those. Never reuse a value;
 /// never set it to 0 (0 is what an index without the field reads as). Not
 /// related to SCHEMA_VER, which describes recorded data, not this program.
 ///
@@ -47,13 +48,14 @@ constexpr int CalculationCompatibilityVersion = 2;
 
 /// The second half of cache validity (index.json field
 /// "calculationEnvironment"): which calculations are registered, the order in
-/// which candidates for one name are tried, and the values of the preferences
-/// the calculations declare as inputs.
+/// which candidates for one name are tried, the result versions they declare,
+/// and the values of the preferences the calculations declare as inputs.
 ///
 /// SHA-1 (lower-case hex, 40 characters) over registry.candidateOrder() and
 /// the preferences, in this order (each list is a label line followed by one
-/// "#<id>\n" line per id):
+/// id line per id):
 ///   "attribute:<key>\n" / "measurement:<sensor>/<name>\n" + candidate ids,
+///        each with its result version,
 ///        for every output name a plain calculation declares          (sorted by name)
 ///   "families\n" + family ids                                         (registration order)
 ///   "conversions\n" + source-conversion family ids                    (registration order)
@@ -65,8 +67,16 @@ constexpr int CalculationCompatibilityVersion = 2;
 /// first for some name.
 /// A registry without a preference provider contributes empty texts.
 ///
-/// Not covered: a registration whose id is unchanged but whose code changed
-/// (for the built-ins that is what CalculationCompatibilityVersion is for).
+/// Each id line is "#<id>\n", or "#<id>#<version>\n" when the registration
+/// declares a result version (backslash and line feed escaped as "\\" and
+/// "\n"); family and conversion ids never carry one. A result version is
+/// declared by every Python plug-in registration (the plug-in code identity,
+/// plugincodeidentity.h) and by the sensor fusion fit (its algorithm string);
+/// built-ins declare none.
+///
+/// Not covered: a registration whose code changed while its id and result
+/// version did not; for the built-ins, that is what
+/// CalculationCompatibilityVersion is for.
 QString calculationEnvironmentFingerprint(const CalculationRegistry &registry = CalculationRegistry::instance());
 
 /// WS-P / SP marker groups and AttributeRegistry entries (UI metadata that

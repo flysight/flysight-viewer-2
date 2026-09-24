@@ -136,6 +136,9 @@ flysight_add_test(tst_time_fit SOURCES tst_time_fit.cpp)
 flysight_add_test(tst_local_coordinates SOURCES tst_local_coordinates.cpp)
 flysight_add_test(tst_simplified_track SOURCES tst_simplified_track.cpp)
 
+# Plug-in code identity: the digest over the plug-in folder, the SDK and the versions (no Python)
+flysight_add_test(tst_plugin_identity SOURCES tst_plugin_identity.cpp)
+
 # SessionData / SessionModel on the engine (real built-ins, global registry), and the stored results of explicit calculations
 flysight_add_test(tst_session_engine       SOURCES tst_session_engine.cpp)
 flysight_add_test(tst_session_model_engine SOURCES tst_session_model_engine.cpp)
