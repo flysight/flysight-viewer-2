@@ -1,5 +1,6 @@
-// The geometry of a plot-list row's control cluster (PlotRowLayout.h): a pure
-// function of integers. No widgets, no font, no GUI application.
+// The geometry of a plot-list row's indicator cluster (PlotRowLayout.h): a
+// pure function of integers. No widgets, no font, no GUI application. What is
+// shown is CalculationDemand's; where it goes is this function's.
 // Sensor-fusion-jobs spec 9.2 (the view half).
 
 #include <QtTest>
@@ -16,8 +17,8 @@ const PlotRowMetrics kMetrics{16, 4, 4};
 
 QList<QRect> rectsOf(const PlotRowGeometry &geometry)
 {
-    return {geometry.warningIcon, geometry.warningCount, geometry.controlLabel,
-            geometry.controlIcon, geometry.controlHit};
+    return {geometry.warningIcon, geometry.warningCount, geometry.progressLabel,
+            geometry.indicatorIcon};
 }
 
 QRect mirrored(const QRect &rect, const QRect &item)
@@ -34,34 +35,33 @@ class PlotRowLayoutTest : public QObject {
     Q_OBJECT
 
 private slots:
-    void controlOnly();
-    void controlAndWarning();
+    void indicatorOnly();
+    void indicatorAndWarning();
     void warningOnly();
     void nothingShown();
     void emptyLabelOmitsItsSpacing();
     void rightToLeftIsMirrorImage_data();
     void rightToLeftIsMirrorImage();
-    void hitRectSpansRowHeightToRightEdge();
 };
 
-void PlotRowLayoutTest::controlOnly()
+void PlotRowLayoutTest::indicatorOnly()
 {
     const PlotRowGeometry g = layoutPlotRow(kItem, kMetrics, false, 0, true, 7, Qt::LeftToRight);
-    QCOMPARE(g.controlIcon, QRect(200, 102, 16, 16));
-    QCOMPARE(g.controlLabel, QRect(189, 100, 7, 20));
-    QCOMPARE(g.controlHit, QRect(198, 100, 22, 20));
+    QCOMPARE(g.indicatorIcon, QRect(200, 102, 16, 16));
+    QCOMPARE(g.progressLabel, QRect(189, 100, 7, 20));
     QCOMPARE(g.clusterWidth, 31);
     QVERIFY(g.warningIcon.isNull());
     QVERIFY(g.warningCount.isNull());
 }
 
-void PlotRowLayoutTest::controlAndWarning()
+// The delegate never shows both (the badge replaces the indicator), but the
+// function lays out both.
+void PlotRowLayoutTest::indicatorAndWarning()
 {
     const PlotRowGeometry g = layoutPlotRow(kItem, kMetrics, true, 7, true, 7, Qt::LeftToRight);
-    // The control group does not move when a warning appears
-    QCOMPARE(g.controlIcon, QRect(200, 102, 16, 16));
-    QCOMPARE(g.controlLabel, QRect(189, 100, 7, 20));
-    QCOMPARE(g.controlHit, QRect(198, 100, 22, 20));
+    // The indicator group does not move when a warning appears
+    QCOMPARE(g.indicatorIcon, QRect(200, 102, 16, 16));
+    QCOMPARE(g.progressLabel, QRect(189, 100, 7, 20));
     QCOMPARE(g.warningCount, QRect(174, 100, 7, 20));
     QCOMPARE(g.warningIcon, QRect(154, 102, 16, 16));
     QCOMPARE(g.clusterWidth, 66);
@@ -74,11 +74,10 @@ void PlotRowLayoutTest::warningOnly()
     QCOMPARE(g.warningCount, QRect(209, 100, 7, 20));
     QCOMPARE(g.warningIcon, QRect(189, 102, 16, 16));
     QCOMPARE(g.clusterWidth, 31);
-    QVERIFY(g.controlHit.isNull());
-    QVERIFY(g.controlIcon.isNull());
-    QVERIFY(g.controlLabel.isNull());
+    QVERIFY(g.indicatorIcon.isNull());
+    QVERIFY(g.progressLabel.isNull());
 
-    // A label width without a control is ignored
+    // A label width without an indicator is ignored
     const PlotRowGeometry ignored = layoutPlotRow(kItem, kMetrics, true, 7, false, 9, Qt::LeftToRight);
     QCOMPARE(rectsOf(ignored), rectsOf(g));
     QCOMPARE(ignored.clusterWidth, g.clusterWidth);
@@ -97,8 +96,8 @@ void PlotRowLayoutTest::nothingShown()
 void PlotRowLayoutTest::emptyLabelOmitsItsSpacing()
 {
     const PlotRowGeometry g = layoutPlotRow(kItem, kMetrics, false, 0, true, 0, Qt::LeftToRight);
-    QCOMPARE(g.controlIcon, QRect(200, 102, 16, 16));
-    QVERIFY(g.controlLabel.isNull());
+    QCOMPARE(g.indicatorIcon, QRect(200, 102, 16, 16));
+    QVERIFY(g.progressLabel.isNull());
     QCOMPARE(g.clusterWidth, 20);       // margin + icon; no spacing for a label that is not there
 
     // ... so a warning sits two spacings from the icon
@@ -113,10 +112,10 @@ void PlotRowLayoutTest::rightToLeftIsMirrorImage_data()
     QTest::addColumn<QRect>("item");
     QTest::addColumn<bool>("warning");
     QTest::addColumn<int>("countWidth");
-    QTest::addColumn<bool>("control");
+    QTest::addColumn<bool>("indicator");
     QTest::addColumn<int>("labelWidth");
 
-    QTest::newRow("control") << kItem << false << 0 << true << 7;
+    QTest::newRow("indicator") << kItem << false << 0 << true << 7;
     QTest::newRow("both") << kItem << true << 7 << true << 7;
     QTest::newRow("warning") << kItem << true << 13 << false << 0;
     QTest::newRow("progress") << QRect(0, 0, 301, 23) << true << 8 << true << 41;
@@ -129,11 +128,11 @@ void PlotRowLayoutTest::rightToLeftIsMirrorImage()
     QFETCH(QRect, item);
     QFETCH(bool, warning);
     QFETCH(int, countWidth);
-    QFETCH(bool, control);
+    QFETCH(bool, indicator);
     QFETCH(int, labelWidth);
 
-    const PlotRowGeometry ltr = layoutPlotRow(item, kMetrics, warning, countWidth, control, labelWidth, Qt::LeftToRight);
-    const PlotRowGeometry rtl = layoutPlotRow(item, kMetrics, warning, countWidth, control, labelWidth, Qt::RightToLeft);
+    const PlotRowGeometry ltr = layoutPlotRow(item, kMetrics, warning, countWidth, indicator, labelWidth, Qt::LeftToRight);
+    const PlotRowGeometry rtl = layoutPlotRow(item, kMetrics, warning, countWidth, indicator, labelWidth, Qt::RightToLeft);
 
     QCOMPARE(rtl.clusterWidth, ltr.clusterWidth);
     const QList<QRect> left = rectsOf(ltr);
@@ -151,32 +150,6 @@ void PlotRowLayoutTest::rightToLeftIsMirrorImage()
         QVERIFY2(rect.left() >= item.left() && rect.right() <= item.right(),
                  qPrintable(QStringLiteral("%1..%2").arg(rect.left()).arg(rect.right())));
     }
-
-    // In right-to-left the hit rectangle starts at the item's left edge
-    if (control) {
-        QCOMPARE(rtl.controlHit.left(), item.left());
-        QCOMPARE(ltr.controlHit.right(), item.right());
-    }
-}
-
-void PlotRowLayoutTest::hitRectSpansRowHeightToRightEdge()
-{
-    const PlotRowGeometry g = layoutPlotRow(kItem, kMetrics, true, 7, true, 7, Qt::LeftToRight);
-    QCOMPARE(g.controlHit.top(), kItem.top());
-    QCOMPARE(g.controlHit.bottom(), kItem.bottom());
-    QCOMPARE(g.controlHit.right(), kItem.right());
-    QCOMPARE(g.controlHit.left(), g.controlIcon.left() - kMetrics.spacing / 2);
-
-    // The icon's column counts, above and below the glyph and out to the edge ...
-    QVERIFY(g.controlHit.contains(QPoint(g.controlIcon.center().x(), kItem.top())));
-    QVERIFY(g.controlHit.contains(QPoint(g.controlIcon.center().x(), kItem.bottom())));
-    QVERIFY(g.controlHit.contains(QPoint(kItem.right(), g.controlIcon.center().y())));
-    // ... the label and the warning group do not
-    QVERIFY(!g.controlHit.contains(g.controlLabel.center()));
-    QVERIFY(!g.controlHit.intersects(g.controlLabel));
-    QVERIFY(!g.controlHit.intersects(g.warningCount));
-    QVERIFY(!g.controlHit.intersects(g.warningIcon));
-    QVERIFY(!g.controlHit.contains(QPoint(kItem.right() + 1, g.controlIcon.center().y())));
 }
 
 FLYSIGHT_TEST_MAIN(PlotRowLayoutTest)

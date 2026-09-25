@@ -241,6 +241,12 @@ bool waitIdle(JobQueue &queue, int timeoutMs)
     return QTest::qWaitFor([&queue] { return queue.isIdle(); }, timeoutMs);
 }
 
+bool waitStarted(JobQueue &executor, JobId job, int timeoutMs)
+{
+    return QTest::qWaitFor([&executor, job] { return executor.job(job).state != JobState::Queued; },
+                           timeoutMs);
+}
+
 void onFirstProgress(JobQueue &queue, QObject *context, JobId job, std::function<void()> action)
 {
     auto connection = std::make_shared<QMetaObject::Connection>();

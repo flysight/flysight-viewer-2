@@ -47,7 +47,7 @@ private:
     JobQueue *const m_queue;
     const JobId m_jobId;
     // The cancellation request of the facility: written by the main thread,
-    // read by the worker. The only atomic of the queue; it guards nothing.
+    // read by the worker. The only atomic of the executor; it guards nothing.
     std::atomic<bool> m_cancelled{false};
 };
 
@@ -88,6 +88,10 @@ struct JobQueue::Run {
     // published.
     std::optional<PendingEnd> pendingEnd;
 };
+
+// The implementation has one Run slot (m_run); raising the bound means turning
+// it into a list of runs.
+static_assert(JobQueue::kMaxRunningJobs == 1, "JobQueue implements exactly one running job");
 
 namespace {
 
@@ -159,24 +163,26 @@ JobQueue::~JobQueue()
     shutdown();
 }
 
-// ---- Request ----------------------------------------------------------------
+// ---- Offer ------------------------------------------------------------------
 
-JobQueue::RequestResult JobQueue::request(const QString &sessionId, const CalculationId &plainCalculationId)
+JobQueue::OfferResult JobQueue::offer(const QString &sessionId, const CalculationId &plainCalculationId)
 {
     CalculationBlocker calculation;
     calculation.registrationId = plainCalculationId;
     calculation.instanceId = plainCalculationId;
     calculation.title = CalculationRegistry::instance().title(plainCalculationId);
-    return request(sessionId, calculation);
+    return offer(sessionId, calculation);
 }
 
-JobQueue::RequestResult JobQueue::request(const QString &sessionId, const CalculationBlocker &calculation)
+JobQueue::OfferResult JobQueue::offer(const QString &sessionId, const CalculationBlocker &calculation)
 {
-    using Kind = RequestResult::Kind;
+    using Kind = OfferResult::Kind;
 
     if (m_shutDown)
         return {Kind::ShuttingDown, 0};
 
+    // Equal to the chosen next job, or to the running job that was not asked
+    // to stop: nothing changes, not even a chosen next job of another key
     if (const JobId existing = activeJob(sessionId, calculation.instanceId))
         return {Kind::AlreadyActive, existing};
 
@@ -194,6 +200,7 @@ JobQueue::RequestResult JobQueue::request(const QString &sessionId, const Calcul
             sessionName = session->getAttribute(SessionKeys::Description).toString();
         }
     }
+    // A refusal changes nothing, the chosen next job included
     if (!loaded)
         return {Kind::SessionNotLoaded, 0};
 
@@ -203,6 +210,19 @@ JobQueue::RequestResult JobQueue::request(const QString &sessionId, const Calcul
     case CalculationReadiness::State::Blocked:      return {Kind::Blocked, 0};
     case CalculationReadiness::State::Done:         return {Kind::NothingToDo, 0};
     case CalculationReadiness::State::Ready:        break;
+    }
+
+    // Replace the chosen next job. Its end skips step (6), so that neither
+    // idle() nor a start falls between it and the new one. Slots of the end
+    // may shut down or offer: validate again after every end.
+    while (const JobId previous = chosenNextJob()) {
+        endJob(previous, JobState::Cancelled, tr("No longer needed"), std::nullopt, {}, AfterEnd::Nothing);
+        if (m_shutDown) {
+            announceIdleIfIdle();       // the step (6) that was skipped
+            return {Kind::ShuttingDown, 0};
+        }
+        if (const JobId existing = activeJob(sessionId, calculation.instanceId))
+            return {Kind::AlreadyActive, existing};
     }
 
     JobRecord record;
@@ -237,6 +257,15 @@ JobQueue::RequestResult JobQueue::request(const QString &sessionId, const Calcul
     return {Kind::Created, id};
 }
 
+bool JobQueue::withdrawChosenNext()
+{
+    const JobId id = chosenNextJob();
+    if (id == 0)
+        return false;
+    endJob(id, JobState::Cancelled, tr("No longer needed"));
+    return true;
+}
+
 // ---- Queries ------------------------------------------------------------------
 
 JobId JobQueue::activeJob(const QString &sessionId, const QString &instanceId) const
@@ -251,18 +280,30 @@ JobId JobQueue::activeJob(const QString &sessionId, const QString &instanceId) c
 
 QList<JobId> JobQueue::activeJobs() const
 {
-    // Request order; the running job is older than every queued one
     QList<JobId> ids;
-    for (const JobRecord &job : m_model->records()) {
-        if (job.isActive())
-            ids.append(job.id);
-    }
+    if (const JobId running = runningJob())
+        ids.append(running);
+    if (const JobId next = chosenNextJob())
+        ids.append(next);
     return ids;
 }
 
 JobId JobQueue::runningJob() const
 {
     return m_run ? m_run->jobId : 0;
+}
+
+JobId JobQueue::chosenNextJob() const
+{
+    // Derived from the store: by construction at most one record is Queued
+    JobId found = 0;
+    for (const JobRecord &job : m_model->records()) {
+        if (job.state != JobState::Queued)
+            continue;
+        Q_ASSERT_X(found == 0, "JobQueue", "more than one chosen next job");
+        found = job.id;
+    }
+    return found;
 }
 
 JobRecord JobQueue::job(JobId id) const
@@ -272,22 +313,7 @@ JobRecord JobQueue::job(JobId id) const
 
 bool JobQueue::isIdle() const
 {
-    if (m_run)
-        return false;
-    for (const JobRecord &job : m_model->records()) {
-        if (job.isActive())
-            return false;
-    }
-    return true;
-}
-
-JobId JobQueue::oldestQueued() const
-{
-    for (const JobRecord &job : m_model->records()) {
-        if (job.state == JobState::Queued)
-            return job.id;
-    }
-    return 0;
+    return !m_run && chosenNextJob() == 0;
 }
 
 bool JobQueue::isSessionLoaded(const QString &sessionId) const
@@ -312,15 +338,15 @@ void JobQueue::startNext()
 {
     m_startQueued = false;
 
-    // `!m_run` is the ordering guarantee: the slot is cleared only in
+    // The running count is the ordering guarantee: the slot is cleared only in
     // finishRun(), after the worker has been joined.
-    while (!m_shutDown && !m_run) {
-        const JobId id = oldestQueued();
+    while (!m_shutDown && runningCount() < kMaxRunningJobs) {
+        const JobId id = chosenNextJob();
         if (id == 0)
             return;
         const JobRecord record = m_model->record(id);
 
-        // Inputs are captured now, not at request(). The guard covers the
+        // Inputs are captured now, not at offer(). The guard covers the
         // session pointer only and is gone before anything is emitted.
         bool loaded = false;
         CalculationEngine::PrepareOutcome outcome;
@@ -348,7 +374,7 @@ void JobQueue::startNext()
             endJob(id, JobState::Superseded, tr("Result is already available"));
             continue;
         case Kind::NothingToRun:
-            // prepare() cached "nothing to run" as request() would; the names
+            // prepare() cached "nothing to run" as readiness() would; the names
             // it dropped are ours to pass on.
             endJob(id, JobState::Superseded, tr("Inputs changed: nothing to compute"),
                    std::nullopt, outcome.invalidated);
@@ -375,7 +401,7 @@ void JobQueue::startNext()
         emit jobStarted(id);
         emit jobsChanged();
 
-        // A slot may have shut the queue down (the run is consumed) or
+        // A slot may have shut the executor down (the run is consumed) or
         // cancelled the job (an end is pending): then no thread is needed.
         if (!m_run || m_run->jobId != id)
             continue;
@@ -388,7 +414,9 @@ void JobQueue::startNext()
         if (m_failWorkerStarts > 0) {
             --m_failWorkerStarts;
         } else {
-            m_run->worker->start();
+            // Below normal: the user interface stays responsive and the
+            // machine usable while a long calculation runs
+            m_run->worker->start(QThread::LowPriority);
             // A thread that could not be created is neither running nor finished
             started = m_run->worker->isRunning() || m_run->worker->isFinished();
         }
@@ -488,15 +516,19 @@ void JobQueue::finishRun()
 }
 
 void JobQueue::endJob(JobId id, JobState state, const QString &reason,
-                      std::optional<ResultStatus> resultStatus, const QSet<DependencyKey> &invalidated)
+                      std::optional<ResultStatus> resultStatus, const QSet<DependencyKey> &invalidated,
+                      AfterEnd afterEnd)
 {
     // A copy: a slot may remove the finished row
     const QString sessionId = m_model->record(id).sessionId;
 
     m_model->markFinished(id, state, reason, resultStatus, QDateTime::currentDateTimeUtc());
 
-    if (m_sessionModel && !invalidated.isEmpty())
+    if (m_sessionModel && !invalidated.isEmpty()) {
+        m_publishingJob = id;
         m_sessionModel->publishCalculationInvalidation(sessionId, invalidated);
+        m_publishingJob = 0;
+    }
 
     emit jobFinished(id, state);
     emit jobsChanged();
@@ -506,10 +538,18 @@ void JobQueue::endJob(JobId id, JobState state, const QString &reason,
 
     m_model->trimFinished();
 
-    if (!isIdle()) {
+    if (afterEnd == AfterEnd::Nothing)
+        return;     // a replaced chosen next job: its replacement follows at once
+    if (!isIdle())
         scheduleStart();
-    } else if (!m_idleAnnounced) {
-        m_idleAnnounced = true;     // once per busy period, whatever slots did above
+    else
+        announceIdleIfIdle();
+}
+
+void JobQueue::announceIdleIfIdle()
+{
+    if (isIdle() && !m_idleAnnounced) {
+        m_idleAnnounced = true;     // once per busy period, whatever slots did before
         emit idle();
     }
 }
@@ -539,7 +579,7 @@ bool JobQueue::cancel(JobId id)
         return false;
 
     if (record.state == JobState::Queued) {
-        // "Removed" from the queue; the record stays as a finished entry
+        // No longer the chosen next job; the record stays as a finished entry
         endJob(id, JobState::Cancelled, tr("Cancelled"));
         return true;
     }
@@ -549,50 +589,6 @@ bool JobQueue::cancel(JobId id)
     return true;
 }
 
-int JobQueue::cancelSession(const QString &sessionId)
-{
-    // Snapshot, then re-check each: slots connected to jobFinished may act
-    int cancelled = 0;
-    const QList<JobId> ids = activeJobs();
-    for (const JobId id : ids) {
-        const JobRecord record = m_model->record(id);
-        // A running job that was asked already is not cancelled a second time
-        if (record.sessionId == sessionId && !record.cancelRequested && cancel(id))
-            ++cancelled;
-    }
-    return cancelled;
-}
-
-int JobQueue::cancelAll()
-{
-    int cancelled = 0;
-    const QList<JobId> ids = activeJobs();
-    for (const JobId id : ids) {
-        if (!m_model->record(id).cancelRequested && cancel(id))
-            ++cancelled;
-    }
-    return cancelled;
-}
-
-int JobQueue::cancelUnwantedQueued(const std::function<bool(const JobRecord &)> &isWanted)
-{
-    // Decide first, end afterwards: ending emits
-    QList<JobId> unwanted;
-    for (const JobRecord &job : m_model->records()) {
-        if (job.state == JobState::Queued && !isWanted(job))
-            unwanted.append(job.id);
-    }
-
-    int cancelled = 0;
-    for (const JobId id : std::as_const(unwanted)) {
-        if (m_model->record(id).state != JobState::Queued)
-            continue;
-        endJob(id, JobState::Cancelled, tr("No longer needed"));
-        ++cancelled;
-    }
-    return cancelled;
-}
-
 // The engine marks a ticket the moment its result can no longer be installed;
 // the worker cannot see that and would compute to the end - minutes, for a fit
 // - only to be refused. Asked here, on the main thread, whenever something
@@ -600,7 +596,7 @@ int JobQueue::cancelUnwantedQueued(const std::function<bool(const JobRecord &)> 
 // verdict and publishes nothing. The pending end is what publish() would have
 // reported, so the job ends Superseded with the same reason, only sooner; and
 // from now on it is "a running job that was asked to cancel" for activeJob(),
-// so a new request for the same calculation queues behind it. A staleness no
+// so a new offer of the same calculation becomes the chosen next job behind it. A staleness no
 // signal announces, and a compute function that ignores the request, end
 // Superseded at publish as before.
 void JobQueue::stopRunIfRefused()
@@ -615,7 +611,7 @@ void JobQueue::stopRunIfRefused()
 
 void JobQueue::onSessionRowsChanged()
 {
-    // Queued jobs whose session is gone end now; nothing promised to load it
+    // A chosen next job whose session is gone ends now; nothing promised to load it
     QList<JobId> orphaned;
     for (const JobRecord &job : m_model->records()) {
         if (job.state == JobState::Queued && !isSessionLoaded(job.sessionId))
@@ -627,7 +623,7 @@ void JobQueue::onSessionRowsChanged()
     }
 
     // The running job is abandoned, so that a long fit for a deleted session
-    // does not hold the queue. What happened is still "superseded".
+    // does not hold the executor. What happened is still "superseded".
     if (m_run && !isSessionLoaded(m_model->record(m_run->jobId).sessionId))
         requestStop({JobState::Superseded, tr("Session removed or unloaded")});
 

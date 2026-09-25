@@ -5,19 +5,22 @@
 #include <QRect>
 #include <Qt>
 
-// Geometry of the control cluster of a plot-list row, as a pure function of
+// Geometry of the indicator cluster of a plot-list row, as a pure function of
 // integers: no font, no style, no widget, so that it is testable without a GUI
 // application. Left to right (mirrored as a whole in a right-to-left layout):
 //
-//   [check] plot name (elided) ........ [warn][failedCount]   [label][control] |
+//   [check] plot name (elided) ... [warn][failedCount] [label][indicator] |
 //
-// The control icon (refresh or cancel) occupies the right-most slot, so the two
-// appear in the same place and the cluster does not jump when the state flips.
-// The warning group is to its left and present only when a warning is shown.
+// The indicator occupies the right-most slot. The warning group is to its left
+// and present only when a warning is shown. Nothing in the cluster is
+// clickable.
 //
-// This file decides geometry only. WHAT is shown - which control, which
-// counts, whether there is a warning - is decided by PlotRowState
-// (plotrequests.h), and painted by PlotRowDelegate.
+// This file decides geometry only. WHAT is shown - the working indicator and
+// its progress label, or the warning badge and its count - is decided by
+// DemandState (calculationdemand.h), and painted by PlotRowDelegate. The
+// delegate never shows the warning group and the indicator together (spec
+// section 10: the badge replaces the indicator), but this function lays out
+// both.
 
 namespace FlySight {
 
@@ -29,11 +32,7 @@ struct PlotRowMetrics {
 
 struct PlotRowGeometry {
     QRect warningIcon, warningCount;    ///< null when no warning is shown
-    QRect controlLabel, controlIcon;    ///< null when no control is shown (the label also when it is empty)
-    /// What counts as "on the control": the icon's column over the full row
-    /// height, extended to the item rect's edge. Null when no control is shown.
-    /// The label and the warning group are not clickable.
-    QRect controlHit;
+    QRect progressLabel, indicatorIcon; ///< null when no indicator is shown (the label also when it is empty)
     /// From the outer edge of the left-most present element to the item rect's
     /// right edge (left edge, in right-to-left). 0 when nothing is shown.
     int clusterWidth = 0;
@@ -41,13 +40,14 @@ struct PlotRowGeometry {
 
 /// Text widths are passed in (the caller measures them with its font metrics).
 /// Rects use Qt's conventions: x() / width() are exact, right() is inclusive.
+/// A label width without an indicator is ignored.
 inline PlotRowGeometry layoutPlotRow(const QRect &itemRect, const PlotRowMetrics &metrics,
                                      bool showsWarning, int warningCountWidth,
-                                     bool showsControl, int controlLabelWidth,
+                                     bool showsIndicator, int progressLabelWidth,
                                      Qt::LayoutDirection direction)
 {
     PlotRowGeometry geometry;
-    if (!showsWarning && !showsControl)
+    if (!showsWarning && !showsIndicator)
         return geometry;
 
     const int edge = itemRect.x() + itemRect.width();   // exclusive right edge
@@ -64,18 +64,16 @@ inline PlotRowGeometry layoutPlotRow(const QRect &itemRect, const PlotRowMetrics
         return QRect(cursor, itemRect.y(), width, itemRect.height());
     };
 
-    if (showsControl) {
-        geometry.controlIcon = takeIcon();
-        const int hitLeft = geometry.controlIcon.x() - metrics.spacing / 2;
-        geometry.controlHit = QRect(hitLeft, itemRect.y(), edge - hitLeft, itemRect.height());
-        if (controlLabelWidth > 0) {
+    if (showsIndicator) {
+        geometry.indicatorIcon = takeIcon();
+        if (progressLabelWidth > 0) {
             cursor -= metrics.spacing;
-            geometry.controlLabel = takeText(controlLabelWidth);
+            geometry.progressLabel = takeText(progressLabelWidth);
         }
     }
 
     if (showsWarning) {
-        if (showsControl)
+        if (showsIndicator)
             cursor -= 2 * metrics.spacing;
         if (warningCountWidth > 0) {
             geometry.warningCount = takeText(warningCountWidth);
@@ -94,9 +92,8 @@ inline PlotRowGeometry layoutPlotRow(const QRect &itemRect, const PlotRowMetrics
         };
         mirror(geometry.warningIcon);
         mirror(geometry.warningCount);
-        mirror(geometry.controlLabel);
-        mirror(geometry.controlIcon);
-        mirror(geometry.controlHit);
+        mirror(geometry.progressLabel);
+        mirror(geometry.indicatorIcon);
     }
 
     return geometry;

@@ -1,11 +1,12 @@
 // Stored fusion results end to end (store-requested-calculations, spec section
-// 8 except the logbook-column item): SessionModel + JobQueue + PlotModel +
-// PlotRequests + Fusion::registerFusionCalculations on a real temporary
-// logbook, with real fits.
+// 8 except the logbook-column item): SessionModel + the executor + PlotModel +
+// CalculationDemand + Fusion::registerFusionCalculations on a real temporary
+// logbook, with real fits. Where the roll plot is checked for a visible
+// session, the demand layer starts the fit; restoring is not requesting.
 //
 //  - a fit survives unload and restart bit for bit (the seventeen channels,
 //    the derived values, the diagnostics and the detail equal the fresh
-//    publish, and the goldens), with no job, no run and no refresh count;
+//    publish, and the goldens), with no job, no run and a plain row;
 //  - a rejection and a solver failure come back with their reason and badge;
 //  - validity follows the inputs (an unrelated edit keeps the record, a
 //    dependency edit or an IMU merge drops it), what the fit looked up and the
@@ -18,7 +19,8 @@
 //  - a fit published before the session's first save is stored and restored;
 //  - the session file's bytes never depend on a record;
 //  - the logbook's cache/ folder deleted while the application is closed: the
-//    fit reads not requested at the next start, and nothing runs.
+//    fit reads not requested at the next start, and nothing runs until the
+//    demand layer offers it.
 //
 // The oracle (verifyAgainstFresh / evaluateFresh) is never used on a session
 // with the fit installed: it would run the fit again. Expected values are
@@ -39,6 +41,7 @@
 #include <QtTest>
 
 #include "altitudemarkerfeature.h"
+#include "calculationdemand.h"
 #include "calculationrecord.h"
 #include "calculations/builtincalculations.h"
 #include "engine/calculationengine.h"
@@ -55,7 +58,6 @@
 #include "logbookprobe.h"
 #include "plotfixture.h"
 #include "plotmodel.h"
-#include "plotrequests.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
@@ -68,8 +70,7 @@
 using namespace FlySight;
 using namespace FlySightTest;
 
-using Kind = JobQueue::RequestResult::Kind;
-using Control = PlotRowState::Control;
+using Kind = JobQueue::OfferResult::Kind;
 
 Q_DECLARE_METATYPE(FlySight::DependencyKey)
 
@@ -222,16 +223,17 @@ private:
         return r >= 0 && std::as_const(*m_model).rowAt(r).isLoaded();
     }
     void show(const QStringList &ids, bool visible = true) { PlotFixture::show(*m_model, ids, visible); }
-    /// A programmatic check: never a gesture.
+    /// A programmatic check: the same demand as a click, the Plots menu or a
+    /// profile.
     void check(const QString &measurement, bool enabled = true)
     {
         m_plots->setPlotEnabled(QStringLiteral("Fusion"), measurement, enabled);
     }
-    /// The current row state: a pending pass runs first.
-    PlotRowState row(const QString &plotId)
+    /// The current plot state: a pending pass runs first.
+    DemandState row(const QString &plotId)
     {
-        m_requests->flush();
-        return m_requests->rowState(plotId);
+        m_demand->flush();
+        return m_demand->plotState(plotId);
     }
     const CalculationResultStore::Stats &stats() const { return m_model->storedResultStats(); }
 
@@ -251,7 +253,7 @@ private:
     /// again. Empty when all of that held.
     [[nodiscard]] QString unloadAndReload(const QString &id);
     /// A simulated application restart: new logbook state, a model of stubs
-    /// from the index, a new queue, plot model (unchecked) and request component.
+    /// from the index, a new executor, plot model (unchecked) and demand layer.
     /// `whileClosed` runs after the old objects are gone and before initialize().
     void restart(const std::function<void()> &whileClosed = {});
     /// Reads the record, applies `mutate`, writes it back. Empty on success.
@@ -269,11 +271,18 @@ private:
                                        const FitValues &fresh);
     /// Empty when the blocker reports agree in state, blockers and notes.
     static QString reportDifference(const BlockerReport &got, const BlockerReport &expected);
+    /// For a visible track whose fit has just become missing while roll is
+    /// checked: the roll row waits on it, and exactly one job has been offered
+    /// since `queued` (a jobQueued spy) was made, when the executor held
+    /// `jobsBefore` records - the fit of `id`, still Queued. Unchecking roll
+    /// ends it Cancelled ("No longer needed") at once, before it ever started,
+    /// and nothing else is offered. Empty when all of that held.
+    [[nodiscard]] QString offeredFitIsDroppedByUncheck(const QString &id, const QSignalSpy &queued, int jobsBefore);
 
     std::unique_ptr<SessionModel> m_model;
     std::unique_ptr<JobQueue> m_queue;
     std::unique_ptr<PlotModel> m_plots;
-    std::unique_ptr<PlotRequests> m_requests;
+    std::unique_ptr<CalculationDemand> m_demand;
     std::unique_ptr<ExtraRegistrations> m_extra;
     std::unique_ptr<AltitudeMarkerManager> m_altitudes;
     QStringList m_registryBefore;
@@ -306,7 +315,7 @@ void FusionStoreTest::init()
     m_queue = std::make_unique<JobQueue>(m_model.get());
     m_plots = std::make_unique<PlotModel>();
     m_plots->setPlots(fusionPlots());
-    m_requests = std::make_unique<PlotRequests>(m_model.get(), m_plots.get(), m_queue.get());
+    m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
 }
 
 // Note what is to be checked, tear everything down, and only then check (see tst_jobqueue).
@@ -323,8 +332,8 @@ void FusionStoreTest::cleanup()
         }
     }
 
-    // Reverse order of construction
-    m_requests.reset();
+    // Reverse order of construction: the demand layer before the executor
+    m_demand.reset();
     m_plots.reset();
     m_queue.reset();
     m_model.reset();
@@ -402,7 +411,7 @@ void FusionStoreTest::restart(const std::function<void()> &whileClosed)
 {
     if (m_queue)
         m_queue->shutdown();
-    m_requests.reset();
+    m_demand.reset();
     m_plots.reset();
     m_queue.reset();
     m_model.reset();
@@ -419,7 +428,7 @@ void FusionStoreTest::restart(const std::function<void()> &whileClosed)
     m_queue = std::make_unique<JobQueue>(m_model.get());
     m_plots = std::make_unique<PlotModel>();
     m_plots->setPlots(fusionPlots());
-    m_requests = std::make_unique<PlotRequests>(m_model.get(), m_plots.get(), m_queue.get());
+    m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
 }
 
 QString FusionStoreTest::rewriteRecord(const QString &id, const std::function<void(CalculationRecord &)> &mutate)
@@ -475,6 +484,8 @@ QString FusionStoreTest::runtimeStep(const std::function<void()> &apply, const Q
     const QString difference = differenceFrom(fresh, "a");
     if (!difference.isEmpty())
         return difference;
+    // Whatever the demand layer was going to start by itself has started
+    PlotFixture::spin(m_demand.get());
     if (!quiet.holds())
         return QStringLiteral("a job started");
     return QString();
@@ -500,6 +511,8 @@ QString FusionStoreTest::restartCheck(const std::function<void()> &whileClosed, 
     const QString difference = differenceFrom(fresh, "a");
     if (!difference.isEmpty())
         return difference;
+    // Restoring is not requesting: the demand layer, too, finds nothing to start
+    PlotFixture::spin(m_demand.get());
     if (m_queue->model()->rowCount() != 0)
         return QStringLiteral("a job was created");
     if (!quiet.holds())
@@ -529,9 +542,42 @@ QString FusionStoreTest::reportDifference(const BlockerReport &got, const Blocke
     return QString();
 }
 
+QString FusionStoreTest::offeredFitIsDroppedByUncheck(const QString &id, const QSignalSpy &queued, int jobsBefore)
+{
+    const DemandState state = row(kRoll);
+    if (state.waitingCount != 1 || state.runningCount != 0)
+        return QStringLiteral("the row waits on %1 and runs %2 tracks").arg(state.waitingCount).arg(state.runningCount);
+    if (queued.count() != 1 || m_queue->model()->rowCount() != jobsBefore + 1)
+        return QStringLiteral("%1 jobs were offered, %2 created")
+            .arg(queued.count()).arg(m_queue->model()->rowCount() - jobsBefore);
+    const JobRecord offered = m_queue->model()->record(jobsBefore);
+    if (offered.sessionId != id || offered.calculationId != kFit || offered.state != JobState::Queued)
+        return QStringLiteral("the offered job is not the queued fit of ") + id;
+    if (m_queue->chosenNextJob() != offered.id || state.waiting.at(0).job != offered.id)
+        return QStringLiteral("the offered job is not the chosen next job the row waits on");
+
+    check(QStringLiteral("roll"), false);
+    const JobRecord dropped = m_queue->job(offered.id);     // at once, before any event-loop turn
+    if (dropped.state != JobState::Cancelled || dropped.reason != QStringLiteral("No longer needed"))
+        return QStringLiteral("unchecking left the job %1 (%2)").arg(int(dropped.state)).arg(dropped.reason);
+    if (dropped.startedAt.isValid())
+        return QStringLiteral("the dropped job had started");
+
+    PlotFixture::spin(m_demand.get());
+    if (queued.count() != 1 || m_queue->model()->rowCount() != jobsBefore + 1)
+        return QStringLiteral("another job was offered");
+    if (!m_queue->isIdle())
+        return QStringLiteral("the executor is not idle");
+    if (engine(id).runCount(kFit) != 0)
+        return QStringLiteral("the fit ran");
+    if (row(kRoll) != DemandState())
+        return QStringLiteral("the unchecked row is not plain");
+    return QString();
+}
+
 // ---- Bit-identical restores ------------------------------------------------------------
 
-// Spec 8: fitted, saved, unloaded, reloaded: the goldens, no job, no refresh count.
+// Spec 8: fitted, saved, unloaded, reloaded: the goldens, no job, a plain row.
 void FusionStoreTest::restoredAfterEvictionIsBitIdentical()
 {
     const auto restoreCapacity = qScopeGuard([] {
@@ -539,9 +585,8 @@ void FusionStoreTest::restoredAfterEvictionIsBitIdentical()
     });
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a"))}), QString());
     show({"a"});
-    check(QStringLiteral("roll"));
-    QCOMPARE(m_requests->plotCheckedByUser(kRoll), 1);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
     QVERIFY(waitForIdle(*m_model));
@@ -582,13 +627,15 @@ void FusionStoreTest::restoredAfterEvictionIsBitIdentical()
     QCOMPARE(engine("a").runCount(kFit), 0);
     QCOMPARE(engine("a").preparedCount(), 0);
     QCOMPARE(engine("a").readiness(kFit).state, CalculationReadiness::State::Done);
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::NothingToDo);
+    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::NothingToDo);
     QCOMPARE(m_queue->model()->rowCount(), 1);      // only the first job
     QVERIFY(quiet.holds());
 
-    const PlotRowState state = row(kRoll);
+    const DemandState state = row(kRoll);
     QVERIFY(state.isPlain());
-    QCOMPARE(state.controlCount(), 0);
+    PlotFixture::spin(m_demand.get());
+    QVERIFY(quiet.holds());
+    QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(engine("a").blockers(fusionKey(QStringLiteral("roll"))).state, BlockerReport::State::Available);
     QCOMPARE(engine("a").dependenciesOf(GraphNode::result(kFit)), dependencies);
 
@@ -612,7 +659,7 @@ void FusionStoreTest::restoredAfterEvictionIsBitIdentical()
 void FusionStoreTest::restoredAfterRestartIsBitIdentical()
 {
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("a"))}), QString());
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
+    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
     QVERIFY(waitForIdle(*m_model));
@@ -648,13 +695,16 @@ void FusionStoreTest::restoredAfterRestartIsBitIdentical()
     QCOMPARE(engine("a").runCount(kFit), 0);
     QCOMPARE(engine("a").preparedCount(), 0);
     QCOMPARE(engine("a").readiness(kFit).state, CalculationReadiness::State::Done);
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::NothingToDo);
+    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::NothingToDo);
     QCOMPARE(m_queue->model()->rowCount(), 0);
     QVERIFY(quiet.holds());
 
-    const PlotRowState state = row(kRoll);
+    const DemandState state = row(kRoll);
     QVERIFY(state.isPlain());
-    QCOMPARE(state.controlCount(), 0);
+    QCOMPARE(state.doneCount, 1);
+    PlotFixture::spin(m_demand.get());
+    QCOMPARE(m_queue->model()->rowCount(), 0);
+    QVERIFY(quiet.holds());
     QCOMPARE(engine("a").blockers(fusionKey(QStringLiteral("roll"))).state, BlockerReport::State::Available);
     QCOMPARE(engine("a").dependenciesOf(GraphNode::result(kFit)), dependencies);
 
@@ -668,7 +718,7 @@ void FusionStoreTest::restoredAfterRestartIsBitIdentical()
 // ---- Failures keep their badge -----------------------------------------------------------
 
 // Spec 8: a rejection is restored with its reason; the row shows the warning
-// as today; no job runs.
+// badge; no job runs.
 void FusionStoreTest::restoredRejectionShowsBadge()
 {
     const auto restoreCapacity = qScopeGuard([] {
@@ -677,9 +727,9 @@ void FusionStoreTest::restoredRejectionShowsBadge()
     QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("reject_origin")), QStringLiteral("r1"))}),
              QString());
     show({"r1"});
-    check(QStringLiteral("roll"));
-    QCOMPARE(m_requests->plotCheckedByUser(kRoll), 1);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);    // a rejection is a result
     QVERIFY(waitForIdle(*m_model));
     QVERIFY(QFileInfo(recordPath("r1")).isFile());
@@ -687,12 +737,14 @@ void FusionStoreTest::restoredRejectionShowsBadge()
     const QString freshDiagnostics = session("r1").getAttribute(kDiagnostics).toString();
     QVERIFY(!freshDiagnostics.isEmpty());
 
+    const Quiet quiet(*m_queue);
     QCOMPARE(unloadAndReload("r1"), QString());
 
-    const PlotRowState state = row(kRoll);
+    const DemandState state = row(kRoll);
     QCOMPARE(state.failedCount, 1);
     QVERIFY(state.showsWarning());
-    QCOMPARE(state.control(), Control::None);
+    QVERIFY(!state.isWorking());
+    QVERIFY(!state.failed.at(0).jobFailure);
     QCOMPARE(state.failed.at(0).reason,
              QStringLiteral("Sensor fusion: Local origin index outside GNSS samples"));
 
@@ -707,12 +759,11 @@ void FusionStoreTest::restoredRejectionShowsBadge()
     for (const QString &name : fusionMeasurementNames())
         QVERIFY2(fusion("r1", name).isEmpty(), qPrintable(name));
 
-    {
-        const Quiet quiet(*m_queue);
-        QCOMPARE(m_requests->refreshPressed(kRoll), 0);
-        QCOMPARE(m_requests->plotCheckedByUser(kRoll), 0);
-        QVERIFY(quiet.holds());
-    }
+    // No rerun: the same inputs give the same answer
+    for (int i = 0; i < 3; ++i)
+        PlotFixture::spin(m_demand.get());
+    QVERIFY(quiet.holds());
+    QVERIFY(row(kRoll).showsWarning());
     QCOMPARE(engine("r1").runCount(kFit), 0);
     QCOMPARE(stats().recordsRestored, 1);
 }
@@ -729,9 +780,9 @@ void FusionStoreTest::restoredSolverFailureShowsBadge()
     QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("reject_origin")), QStringLiteral("r1"))}),
              QString());
     show({"r1"});
-    check(QStringLiteral("roll"));
-    QCOMPARE(m_requests->plotCheckedByUser(kRoll), 1);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
     QVERIFY(waitForIdle(*m_model));
     QVERIFY(QFileInfo(recordPath("r1")).isFile());
 
@@ -746,9 +797,10 @@ void FusionStoreTest::restoredSolverFailureShowsBadge()
     const Quiet quiet(*m_queue);
     QCOMPARE(unloadAndReload("r1"), QString());
 
-    const PlotRowState state = row(kRoll);
+    const DemandState state = row(kRoll);
     QCOMPARE(state.failedCount, 1);
     QVERIFY(state.showsWarning());
+    QVERIFY(!state.failed.at(0).jobFailure);
     QCOMPARE(state.failed.at(0).reason, QStringLiteral("Sensor fusion: ") + kSolverFailureReason);
 
     const BlockerReport blockers = engine("r1").blockers(fusionKey(QStringLiteral("roll")));
@@ -757,6 +809,10 @@ void FusionStoreTest::restoredSolverFailureShowsBadge()
     QCOMPARE(blockers.notProduced.at(0).detail, kSolverFailureReason);
 
     QCOMPARE(session("r1").getAttribute(kDiagnostics).toString().toUtf8(), kSolverFailureDiagnostics.toUtf8());
+    // No rerun: a stored failure is a result
+    for (int i = 0; i < 3; ++i)
+        PlotFixture::spin(m_demand.get());
+    QVERIFY(row(kRoll).showsWarning());
     QCOMPARE(engine("r1").runCount(kFit), 0);
     QVERIFY(quiet.holds());
 }
@@ -770,7 +826,7 @@ void FusionStoreTest::unrelatedEditKeepsRecord()
         PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
     });
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
+    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QVERIFY(waitForIdle(*m_model));
     const QString path = recordPath("a");
@@ -812,8 +868,8 @@ void FusionStoreTest::dependencyEditDropsRecord_data()
 
 // Spec 8: changing a dependency (a declared input, or SCHEMA_VER, which the
 // fit reaches through the gyro's schema conversion) drops the record at once;
-// the calculation reads not requested and the row is refreshable exactly as
-// today.
+// the calculation reads not requested, and the row waits for the inputs to
+// settle (nothing starts during the wait).
 void FusionStoreTest::dependencyEditDropsRecord()
 {
     QFETCH(QString, key);
@@ -823,14 +879,16 @@ void FusionStoreTest::dependencyEditDropsRecord()
     });
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a"))}), QString());
     show({"a"});
-    check(QStringLiteral("roll"));
-    QCOMPARE(m_requests->plotCheckedByUser(kRoll), 1);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
     QVERIFY(waitForIdle(*m_model));
     const QString path = recordPath("a");
     QVERIFY(QFileInfo(path).isFile());
     m_model->resetStoredResultStats();
 
+    m_demand->setInputSettleDelay(60000);
+    const Quiet quiet(*m_queue);
     QVERIFY(session("a").getAttribute(key) != value);
     QVERIFY(m_model->updateAttribute("a", key, value));
     // No event-loop pass in between
@@ -839,15 +897,19 @@ void FusionStoreTest::dependencyEditDropsRecord()
     QVERIFY(isNotRequested(engine("a").resultStatus(kFit)));
     QVERIFY2(availableIn("a").isEmpty(), qPrintable(availableIn("a")));
 
-    const PlotRowState state = row(kRoll);
-    QCOMPARE(state.missingCount, 1);
-    QCOMPARE(state.control(), Control::Refresh);
-    QCOMPARE(state.controlCount(), 1);
-    {
-        const Quiet quiet(*m_queue);
-        PlotFixture::spin(m_requests.get());
-        QVERIFY(quiet.holds());
-    }
+    const DemandState state = row(kRoll);
+    QCOMPARE(state.waitingCount, 1);
+    QCOMPARE(state.runningCount, 0);
+    QVERIFY(state.waiting.at(0).settling);
+    QCOMPARE(state.waiting.at(0).job, JobId(0));
+    QVERIFY(m_demand->isSettling(QStringLiteral("a")));
+    PlotFixture::spin(m_demand.get());
+    QVERIFY(quiet.holds());
+
+    // Unchecked: nothing to drop (nothing was offered)
+    check(QStringLiteral("roll"), false);
+    QVERIFY(row(kRoll) == DemandState());
+    QVERIFY(quiet.holds());
 
     QVERIFY(waitForIdle(*m_model));
     m_model->resetStoredResultStats();
@@ -861,7 +923,7 @@ void FusionStoreTest::dependencyEditDropsRecord()
 void FusionStoreTest::mergeIntoLoadedSessionDropsRecord()
 {
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
+    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QVERIFY(waitForIdle(*m_model));
     const QString path = recordPath("a");
@@ -902,7 +964,7 @@ void FusionStoreTest::mergeIntoUnloadedSession()
         PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
     });
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
+    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QVERIFY(waitForIdle(*m_model));
     const QString path = recordPath("a");
@@ -990,9 +1052,9 @@ void FusionStoreTest::codeStampChangeDropsRecordOnLoad()
 
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
     show({"a"});
-    check(QStringLiteral("roll"));
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
     QVERIFY(waitForIdle(*m_model));
     const QString path = recordPath("a");
     QVERIFY(QFileInfo(path).isFile());
@@ -1029,7 +1091,7 @@ void FusionStoreTest::codeStampChangeDropsRecordOnLoad()
     m_model->resetStoredResultStats();
 
     const int jobs = m_queue->model()->rowCount();
-    const Quiet quiet(*m_queue);
+    const QSignalSpy queued(m_queue.get(), &JobQueue::jobQueued);
     show({"a"});
     QVERIFY(isLoaded("a"));
 
@@ -1039,11 +1101,8 @@ void FusionStoreTest::codeStampChangeDropsRecordOnLoad()
     QCOMPARE(engine("a").readiness(kFit).state, CalculationReadiness::State::Ready);
     QVERIFY2(availableIn("a").isEmpty(), qPrintable(availableIn("a")));
     QCOMPARE(engine("a").runCount(kFit), 0);
-    const PlotRowState state = row(kRoll);
-    QCOMPARE(state.missingCount, 1);
-    QCOMPARE(state.control(), Control::Refresh);
-    QCOMPARE(m_queue->model()->rowCount(), jobs);
-    QVERIFY(quiet.holds());
+    // The stale record is gone, so the checked plot wants the fit again
+    QCOMPARE(offeredFitIsDroppedByUncheck("a", queued, jobs), QString());
 }
 
 void FusionStoreTest::storedFitSurvivesUnrelatedChanges_data()
@@ -1066,9 +1125,9 @@ void FusionStoreTest::storedFitSurvivesUnrelatedChanges()
     });
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
     show({"a"});
-    check(QStringLiteral("roll"));
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
     QVERIFY(waitForIdle(*m_model));
     const QByteArray r0 = bytesOf(recordPath("a"));
     QVERIFY(!r0.isEmpty());
@@ -1145,8 +1204,8 @@ void FusionStoreTest::storedFitSurvivesUnrelatedChanges()
 // Spec 10, second item, as the engine settles it: a registry change made
 // while the application runs drops the installed fit and deletes its record
 // at once exactly when it changes what a name the fit looked up resolves to;
-// the row then offers refresh and nothing starts. Here GNSS/sAcc, which only
-// a registered calculation (sacc1) provides: a second candidate for it,
+// the row then waits on the fit again. Here GNSS/sAcc, which only a
+// registered calculation (sacc1) provides: a second candidate for it,
 // registered behind sacc1, is never tried and changes nothing; removing sacc1
 // hands the name to that candidate, which drops the fit and its record.
 void FusionStoreTest::runtimeRegistryChangeDropsFitAndRecord()
@@ -1161,9 +1220,10 @@ void FusionStoreTest::runtimeRegistryChangeDropsFitAndRecord()
                                                          QStringLiteral("testSAcc"))}),
              QString());
     show({"a"});
-    check(QStringLiteral("roll"));
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
     QVERIFY(waitForIdle(*m_model));
     const QString path = recordPath("a");
     const QByteArray r0 = bytesOf(path);
@@ -1178,25 +1238,43 @@ void FusionStoreTest::runtimeRegistryChangeDropsFitAndRecord()
     m_model->resetStoredResultStats();
     {
         const Quiet quiet(*m_queue);
-        // A candidate behind the provider: nothing is dropped or deleted
+        // A candidate behind the provider: nothing is dropped or deleted, and
+        // the demand layer finds nothing to start
         QVERIFY(m_extra->add(sAccFrom(sacc0)));
         QCOMPARE(engine("a").resultStatus(kFit), std::optional<ResultStatus>(ResultStatus::Ok));
         QCOMPARE(bytesOf(path), r0);
         QCOMPARE(stats().droppedRecordsDeleted, 0);
-
-        // The provider removed: no event-loop pass in between
-        QVERIFY(m_extra->remove(sacc1));
-        QVERIFY(!QFileInfo::exists(path));
-        QCOMPARE(stats().droppedRecordsDeleted, 1);
-        QVERIFY(isNotRequested(engine("a").resultStatus(kFit)));
-        QVERIFY2(availableIn("a").isEmpty(), qPrintable(availableIn("a")));
-
-        const PlotRowState state = row(kRoll);
-        QCOMPARE(state.missingCount, 1);
-        QCOMPARE(state.control(), Control::Refresh);
-        PlotFixture::spin(m_requests.get());
+        QVERIFY(row(kRoll).isPlain());
+        PlotFixture::spin(m_demand.get());
         QVERIFY(quiet.holds());
     }
+
+    // The provider removed: no event-loop pass in between
+    const int jobs = m_queue->model()->rowCount();
+    QVERIFY(m_extra->remove(sacc1));
+    QVERIFY(!QFileInfo::exists(path));
+    QCOMPARE(stats().droppedRecordsDeleted, 1);
+    QVERIFY(isNotRequested(engine("a").resultStatus(kFit)));
+    QVERIFY2(availableIn("a").isEmpty(), qPrintable(availableIn("a")));
+
+    // The checked plot wants the fit again; unchecking drops whatever was
+    // offered for it before it can start
+    const DemandState state = row(kRoll);
+    QCOMPARE(state.waitingCount, 1);
+    QCOMPARE(state.runningCount, 0);
+    QCOMPARE(state.waiting.at(0).sessionId, QStringLiteral("a"));
+    check(QStringLiteral("roll"), false);
+    PlotFixture::spin(m_demand.get());
+    QVERIFY(m_queue->isIdle());
+    QVERIFY(m_queue->model()->rowCount() <= jobs + 1);
+    for (int r = jobs; r < m_queue->model()->rowCount(); ++r) {
+        const JobRecord dropped = m_queue->model()->record(r);
+        QCOMPARE(dropped.sessionId, QStringLiteral("a"));
+        QCOMPARE(dropped.state, JobState::Cancelled);
+        QCOMPARE(dropped.reason, QStringLiteral("No longer needed"));
+        QVERIFY(!dropped.startedAt.isValid());
+    }
+    QCOMPARE(engine("a").runCount(kFit), 1);        // the first fit only
 
     QVERIFY(waitForIdle(*m_model));
     m_model->resetStoredResultStats();
@@ -1218,7 +1296,7 @@ void FusionStoreTest::lookupResolvingDifferentlyAtLoadDeletesFit()
     QCOMPARE(addSessions({fixtureSessionWithSAccStoredAs(QStringLiteral("coarse_linear"), QStringLiteral("a"),
                                                          QStringLiteral("testSAcc"))}),
              QString());
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
+    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
     QCOMPARE(engine("a").resultStatus(kFit), std::optional<ResultStatus>(ResultStatus::Ok));
@@ -1240,7 +1318,7 @@ void FusionStoreTest::lookupResolvingDifferentlyAtLoadDeletesFit()
     restart([&] { reordered = m_extra->add(sAccFrom(sacc0)) && m_extra->remove(sacc1) && m_extra->add(sAccFrom(sacc1)); });
     QVERIFY(reordered);
     check(QStringLiteral("roll"));
-    const Quiet quiet(*m_queue);
+    const QSignalSpy queued(m_queue.get(), &JobQueue::jobQueued);
     show({"a"});
     QVERIFY(isLoaded("a"));
 
@@ -1248,8 +1326,8 @@ void FusionStoreTest::lookupResolvingDifferentlyAtLoadDeletesFit()
     QCOMPARE(stats().staleRecordsDeleted, 1);
     QVERIFY(isNotRequested(engine("a").resultStatus(kFit)));
     QCOMPARE(engine("a").runCount(kFit), 0);
-    QCOMPARE(row(kRoll).control(), Control::Refresh);
-    QVERIFY(quiet.holds());
+    // The stale record is gone, so the checked plot wants the fit again
+    QCOMPARE(offeredFitIsDroppedByUncheck("a", queued, 0), QString());
 
     // Which check failed
     const CalculationEngine::RestoreOutcome outcome = engine("a").restoreResult(record.result);
@@ -1346,14 +1424,14 @@ void FusionStoreTest::fittedBeforeFirstSaveIsRestored()
 // ---- The cache folder ----------------------------------------------------------------------
 
 // Spec 6: everything in cache/ is derived. Deleted while the application is
-// closed, the fit reads not requested at the next start: the plot row offers
-// refresh, no job starts, nothing is read or written, and the recording is
-// untouched.
+// closed, the fit reads not requested at the next start: the checked plot wants
+// it again (and unchecked, nothing ever starts), nothing is read or written,
+// and the recording is untouched.
 void FusionStoreTest::deletedCacheFolderReadsNotRequested()
 {
     TestEnvironment &env = TestEnvironment::instance();
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("a"))}), QString());
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::Created);
+    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
     QVERIFY(waitForIdle(*m_model));
@@ -1368,7 +1446,7 @@ void FusionStoreTest::deletedCacheFolderReadsNotRequested()
     QVERIFY(LogbookManager::instance().knownCalculationRecords("a").isEmpty());
 
     check(QStringLiteral("roll"));
-    const Quiet quiet(*m_queue);
+    const QSignalSpy queued(m_queue.get(), &JobQueue::jobQueued);
     show({"a"});
     QVERIFY(isLoaded("a"));
 
@@ -1376,13 +1454,8 @@ void FusionStoreTest::deletedCacheFolderReadsNotRequested()
     QVERIFY2(availableIn("a").isEmpty(), qPrintable(availableIn("a")));
     QCOMPARE(engine("a").runCount(kFit), 0);
     QCOMPARE(engine("a").preparedCount(), 0);
-    const PlotRowState state = row(kRoll);
-    QCOMPARE(state.missingCount, 1);
-    QCOMPARE(state.control(), Control::Refresh);
-    QCOMPARE(state.controlCount(), 1);
-    PlotFixture::spin(m_requests.get());
-    QCOMPARE(m_queue->model()->rowCount(), 0);
-    QVERIFY(quiet.holds());
+    QCOMPARE(offeredFitIsDroppedByUncheck("a", queued, 0), QString());
+    QCOMPARE(engine("a").preparedCount(), 0);
 
     QCOMPARE(stats().recordListings, 0);
     QCOMPARE(stats().recordsRead, 0);

@@ -1,22 +1,22 @@
-// The real fit through the job queue, on a real SessionModel, with the fit on
-// the queue's 64 MiB worker. Sensor-fusion-jobs acceptance 5 (model level),
+// The real fit through the executor, on a real SessionModel, with the fit on
+// the executor's 64 MiB worker. Sensor-fusion-jobs acceptance 5 (model level),
 // 6, 7, 8 (first half), 9, 10 and 11; a logbook column over a fusion output
 // is cached from the stored result and follows its record, keeps its cached
 // value through an environment change it cannot observe (an altitude marker),
 // and is refilled by the column worker from the stored fit of an unloaded
-// session once its cached value is gone; and the optional real-recording
-// check.
+// session once its cached value is gone; the solver's helper threads run at
+// the worker's below-normal priority; and the optional real-recording check.
 //
 // DETERMINISM WITHOUT A GATE. The real compute function cannot be held by a
-// semaphore. The tests use the queue's ordering guarantee instead: progress
+// semaphore. The tests use the executor's ordering guarantee instead: progress
 // posts reach the main thread in order and BEFORE the end of the same job is
 // processed. A slot that acts on the first progress text of a job ("Starting
-// fit") therefore runs while the queue still considers the job Running - even
+// fit") therefore runs while the executor still considers the job Running - even
 // if the worker has returned meanwhile - and what it does (edit an input,
 // cancel, shut down) is seen by the job's end. There are no sleeps.
 //
 // Expected values are the committed goldens and literals; the one computed
-// comparison is "the queue gives what a synchronous request gives".
+// comparison is "the executor gives what a synchronous request gives".
 
 #include <functional>
 #include <memory>
@@ -34,6 +34,7 @@
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
 #include "fusion/fusionregistration.h"
+#include "fusion/solverthreads.h"
 #include "fusionfixtures.h"
 #include "fusiongolden.h"
 #include "fusionsessions.h"
@@ -52,10 +53,20 @@
 #include "testmain.h"
 #include "testutil.h"
 
+#ifdef Q_OS_WIN
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#endif
+
 using namespace FlySight;
 using namespace FlySightTest;
 
-using Kind = JobQueue::RequestResult::Kind;
+using Kind = JobQueue::OfferResult::Kind;
 using BlockerState = BlockerReport::State;
 using ReadyState = CalculationReadiness::State;
 
@@ -93,6 +104,7 @@ private slots:
 
     void jobPublishesAllOutputsTogether();
     void queueMatchesSynchronousRequest();
+    void solverThreadsRunAtWorkerPriority();
     void inputChangeDuringFitSupersedes();
     void rejectedRecordingIsSucceededJob();
     void cancelDuringFitThenNextJobStarts();
@@ -135,9 +147,9 @@ private:
     }
     /// Empty when nothing of the fit was published in the session; else what was found.
     QString publishedTrace(const QSignalSpy &dependencySpy, const QString &id);
-    /// A simulated application restart: queue and model go (in that order), the
-    /// logbook is reopened and initialized, and a new model of stubs and a new
-    /// queue come up.
+    /// A simulated application restart: executor and model go (in that order),
+    /// the logbook is reopened and initialized, and a new model of stubs and a
+    /// new executor come up.
     void restart();
 
     std::unique_ptr<SessionModel> m_model;
@@ -186,7 +198,7 @@ void FusionJobsTest::cleanup()
         }
     }
 
-    // Queue, then model
+    // Executor, then model
     m_queue.reset();
     m_model.reset();
 
@@ -254,11 +266,11 @@ void FusionJobsTest::jobPublishesAllOutputsTogether()
     QVERIFY2(availableIn("b").isEmpty(), qPrintable(availableIn("b")));
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
 
-    const JobQueue::RequestResult result = m_queue->request("a", kFit);
+    const JobQueue::OfferResult result = m_queue->offer("a", kFit);
     QCOMPARE(result.kind, Kind::Created);
     QCOMPARE(m_queue->job(result.job).state, JobState::Queued);
     QCOMPARE(m_queue->job(result.job).calculationTitle, QStringLiteral("Sensor fusion"));
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::AlreadyActive);
+    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::AlreadyActive);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
 
     const JobRecord job = m_queue->job(result.job);
@@ -294,7 +306,7 @@ void FusionJobsTest::jobPublishesAllOutputsTogether()
     QCOMPARE(fusion("a", "_system_time").size(), length);
     QVERIFY(session("a").getAttribute(fusionRollAtExit()).isValid());
 
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::NothingToDo);
+    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::NothingToDo);
     QCOMPARE(engine("a").runCount(kFit), 1);
     QCOMPARE(engine("a").undeclaredReadCount(), 0);
     QCOMPARE(m_queue->model()->rowCount(), 1);
@@ -304,14 +316,14 @@ void FusionJobsTest::jobPublishesAllOutputsTogether()
     QCOMPARE(engine("b").runCount(kFit), 0);
 }
 
-// Acceptance 7: the queue's worker and a synchronous request on the main
+// Acceptance 7: the executor's worker and a synchronous request on the main
 // thread give the same bits.
 void FusionJobsTest::queueMatchesSynchronousRequest()
 {
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("a")),
                           fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("b"))}), QString());
 
-    const JobQueue::RequestResult result = m_queue->request("a", kFit);
+    const JobQueue::OfferResult result = m_queue->offer("a", kFit);
     QCOMPARE(result.kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QCOMPARE(m_queue->job(result.job).state, JobState::Succeeded);
@@ -329,6 +341,33 @@ void FusionJobsTest::queueMatchesSynchronousRequest()
     QCOMPARE(engine("a").resultDetail(kFit), engine("b").resultDetail(kFit));
 }
 
+// Spec 11: the whole fit runs below normal, its parallel part included. The
+// solver's helper threads (oneTBB's workers, which GTSAM's elimination runs on)
+// take the priority of the executor's worker while they help it; at normal
+// priority they would starve it under load (priority inversion). The record
+// is what the system reported for each helper once it had joined the fit.
+void FusionJobsTest::solverThreadsRunAtWorkerPriority()
+{
+    if (QThread::idealThreadCount() < 2)
+        QSKIP("One hardware thread: oneTBB starts no worker threads");
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a"))}), QString());
+
+    Fusion::resetSolverThreadRecord();
+    const JobQueue::OfferResult result = m_queue->offer("a", kFit);
+    QCOMPARE(result.kind, Kind::Created);
+    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QCOMPARE(m_queue->job(result.job).state, JobState::Succeeded);
+
+    const Fusion::SolverThreadRecord record = Fusion::solverThreadRecord();
+    qInfo() << "helper entries:" << record.entries;
+    QVERIFY(record.entries > 0);                // the fit had helpers
+    QCOMPARE(record.atOtherPriority, qint64(0));
+#ifdef Q_OS_WIN
+    // QThread::LowPriority
+    QCOMPARE(record.highestPriority, int(THREAD_PRIORITY_BELOW_NORMAL));
+#endif
+}
+
 // Acceptance 8, first half: a declared input changes while the fit runs. The
 // job ends Superseded, nothing is published, and the fit can be asked again.
 void FusionJobsTest::inputChangeDuringFitSupersedes()
@@ -336,7 +375,7 @@ void FusionJobsTest::inputChangeDuringFitSupersedes()
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a"))}), QString());
     QVERIFY2(availableIn("a").isEmpty(), qPrintable(availableIn("a")));
 
-    const JobQueue::RequestResult result = m_queue->request("a", kFit);
+    const JobQueue::OfferResult result = m_queue->offer("a", kFit);
     QCOMPARE(result.kind, Kind::Created);
     bool edited = false;
     bool askedToStop = false;
@@ -345,10 +384,10 @@ void FusionJobsTest::inputChangeDuringFitSupersedes()
         // The origin moves from fix 3 to fix 4 (both under 10 m)
         edited = m_queue->job(job).state == JobState::Running
             && m_model->updateAttribute("a", "_LOCAL_ORIGIN_INDEX", QVariant::fromValue(qlonglong(4)));
-        // With the edit the queue asks the fit to stop (it ends at its next
+        // With the edit the executor asks the fit to stop (it ends at its next
         // solver boundary instead of running to the end: the boundary stop is
         // proven in tst_fusion_session::cancelStopsAtNextBoundary), and the
-        // fit is requestable again while the old one winds down
+        // fit can be offered again while the old one winds down
         askedToStop = m_queue->job(job).cancelRequested && m_queue->activeJob("a", kFit) == 0;
     });
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
@@ -367,9 +406,9 @@ void FusionJobsTest::inputChangeDuringFitSupersedes()
     QCOMPARE(engine("a").preparedCount(), 0);
     QVERIFY(engine("a").readiness(kFit).state == ReadyState::Ready);
 
-    // The queue does not ask again; whoever wants the result does
+    // The executor does not offer again; whoever wants the result does
     QVERIFY(m_queue->isIdle());
-    const JobQueue::RequestResult again = m_queue->request("a", kFit);
+    const JobQueue::OfferResult again = m_queue->offer("a", kFit);
     QCOMPARE(again.kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QCOMPARE(m_queue->job(again.job).state, JobState::Succeeded);
@@ -388,7 +427,7 @@ void FusionJobsTest::rejectedRecordingIsSucceededJob()
     QCOMPARE(loadFusionGolden(QStringLiteral("reject_origin")).diagnostics.value(QStringLiteral("failure")).toString(),
              failure);
 
-    const JobQueue::RequestResult result = m_queue->request("a", kFit);
+    const JobQueue::OfferResult result = m_queue->offer("a", kFit);
     QCOMPARE(result.kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
 
@@ -404,14 +443,14 @@ void FusionJobsTest::rejectedRecordingIsSucceededJob()
     QVERIFY(fusion("a", "accH").isEmpty());
     QVERIFY(engine("a").blockers(fusionKey(QStringLiteral("roll"))).state == BlockerState::NotProduced);
 
-    QCOMPARE(m_queue->request("a", kFit).kind, Kind::NothingToDo);
+    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::NothingToDo);
     QCOMPARE(engine("a").runCount(kFit), 1);
     QCOMPARE(m_queue->model()->rowCount(), 1);
 
     // The input changes: reject_origin is coarse_linear with origin index 9
     QVERIFY(m_model->updateAttribute("a", "_LOCAL_ORIGIN_INDEX", QVariant::fromValue(qlonglong(0))));
     QVERIFY(!session("a").getAttribute(kDiagnostics).isValid());
-    const JobQueue::RequestResult again = m_queue->request("a", kFit);
+    const JobQueue::OfferResult again = m_queue->offer("a", kFit);
     QCOMPARE(again.kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QCOMPARE(m_queue->job(again.job).state, JobState::Succeeded);
@@ -430,15 +469,20 @@ void FusionJobsTest::cancelDuringFitThenNextJobStarts()
     QVERIFY2(availableIn("s1").isEmpty(), qPrintable(availableIn("s1")));
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
 
-    const JobId job1 = m_queue->request("s1", kFit).job;
-    const JobId job2 = m_queue->request("s2", kFit).job;
-    QVERIFY(job1 != 0 && job2 != 0);
+    const JobId job1 = m_queue->offer("s1", kFit).job;
+    QVERIFY(job1 != 0);
 
+    // The second job exists only as the chosen next job, offered while the
+    // first runs (a second offer before the start would replace the first)
+    JobId job2 = 0;
     QElapsedTimer sinceCancel;
     qint64 cancelToEndMs = -1;
     bool cancelled = false;
     QObject scope;      // owns the connection: it cannot outlive what the slot captures
     onFirstProgress(*m_queue, &scope, job1, [&] {
+        const JobQueue::OfferResult next = m_queue->offer("s2", kFit);
+        if (next.created() && m_queue->chosenNextJob() == next.job)
+            job2 = next.job;
         sinceCancel.start();
         cancelled = m_queue->cancel(job1);
     });
@@ -447,6 +491,7 @@ void FusionJobsTest::cancelDuringFitThenNextJobStarts()
             cancelToEndMs = sinceCancel.elapsed();
     });
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QVERIFY(job2 != 0);
     QVERIFY(cancelled);
 
     const JobRecord first = m_queue->job(job1);
@@ -471,7 +516,7 @@ void FusionJobsTest::cancelDuringFitThenNextJobStarts()
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
 
     // Asked again, it runs to the end
-    const JobQueue::RequestResult again = m_queue->request("s1", kFit);
+    const JobQueue::OfferResult again = m_queue->offer("s1", kFit);
     QCOMPARE(again.kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QCOMPARE(m_queue->job(again.job).state, JobState::Succeeded);
@@ -485,7 +530,7 @@ void FusionJobsTest::noImuSessionCannotHaveAJob()
     QCOMPARE(addSessions({sessionWithoutImu(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("a"))}),
              QString());
 
-    const JobQueue::RequestResult result = m_queue->request("a", kFit);
+    const JobQueue::OfferResult result = m_queue->offer("a", kFit);
     QCOMPARE(result.kind, Kind::MissingInput);
     QCOMPARE(result.job, JobId(0));
     QCOMPARE(m_queue->model()->rowCount(), 0);
@@ -558,7 +603,7 @@ void FusionJobsTest::columnOnFusionOutputIsCachedFromRecord()
     QCOMPARE(indexRecordStamp("a"), QJsonValue(QJsonObject()));
 
     // 2. One fit: the published number is cached and stamped
-    const JobQueue::RequestResult result = m_queue->request("a", kFit);
+    const JobQueue::OfferResult result = m_queue->offer("a", kFit);
     QCOMPARE(result.kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QCOMPARE(m_queue->job(result.job).state, JobState::Succeeded);
@@ -671,9 +716,9 @@ void FusionJobsTest::columnShowsValueStraightAfterPublication()
             });
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
 
-    const JobQueue::RequestResult result = m_queue->request("a", kFit);
+    const JobQueue::OfferResult result = m_queue->offer("a", kFit);
     QCOMPARE(result.kind, Kind::Created);
-    QCOMPARE(shownOnChange, QStringList());             // requesting is not publishing
+    QCOMPARE(shownOnChange, QStringList());             // offering is not publishing
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QCOMPARE(m_queue->job(result.job).state, JobState::Succeeded);
 
@@ -706,7 +751,7 @@ void FusionJobsTest::columnShowsValueStraightAfterPublication()
 void FusionJobsTest::altitudeMarkerKeepsColumnsOfUnloadedSession()
 {
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
-    const JobQueue::RequestResult result = m_queue->request("a", kFit);
+    const JobQueue::OfferResult result = m_queue->offer("a", kFit);
     QCOMPARE(result.kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QCOMPARE(m_queue->job(result.job).state, JobState::Succeeded);
@@ -800,7 +845,7 @@ void FusionJobsTest::workerRefillsColumnFromStoredFit()
     };
 
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
-    const JobQueue::RequestResult result = m_queue->request("a", kFit);
+    const JobQueue::OfferResult result = m_queue->offer("a", kFit);
     QCOMPARE(result.kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QCOMPARE(m_queue->job(result.job).state, JobState::Succeeded);
@@ -899,7 +944,7 @@ void FusionJobsTest::workerRefillsColumnFromStoredFit()
 }
 
 // Quitting while a fit runs: shutdown returns, nothing is published, nothing
-// crashes when the queue and then the model go away.
+// crashes when the executor and then the model go away.
 void FusionJobsTest::shutdownDuringFit()
 {
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("s1")),
@@ -908,23 +953,28 @@ void FusionJobsTest::shutdownDuringFit()
     QVERIFY2(availableIn("s2").isEmpty(), qPrintable(availableIn("s2")));
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
 
-    const JobId running = m_queue->request("s1", kFit).job;
-    const JobId queued = m_queue->request("s2", kFit).job;
-    QVERIFY(running != 0 && queued != 0);
+    const JobId running = m_queue->offer("s1", kFit).job;
+    QVERIFY(running != 0);
 
-    // The fit is running when its first progress text arrives
+    // The fit is running when its first progress text arrives; the second job
+    // is offered then, as the chosen next job, and shut down with it
+    JobId queued = 0;
     bool wasRunning = false;
     QElapsedTimer timer;
     qint64 shutdownMs = -1;
     QObject scope;      // owns the connection: it cannot outlive what the slot captures
     onFirstProgress(*m_queue, &scope, running, [&] {
         wasRunning = m_queue->job(running).state == JobState::Running;
+        const JobQueue::OfferResult next = m_queue->offer("s2", kFit);
+        if (next.created() && m_queue->chosenNextJob() == next.job)
+            queued = next.job;
         timer.start();
         m_queue->shutdown();
         shutdownMs = timer.elapsed();
     });
     QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
     QVERIFY(wasRunning);
+    QVERIFY(queued != 0);
     QVERIFY(m_queue->isShutDown());
     qInfo() << "shutdown during the fit returned after" << shutdownMs << "ms";
 
@@ -933,7 +983,7 @@ void FusionJobsTest::shutdownDuringFit()
         QCOMPARE(m_queue->job(id).reason, QStringLiteral("Application closing"));
     }
     QVERIFY(!m_queue->job(queued).startedAt.isValid());
-    QCOMPARE(m_queue->request("s1", kFit).kind, Kind::ShuttingDown);
+    QCOMPARE(m_queue->offer("s1", kFit).kind, Kind::ShuttingDown);
 
     // Late queued events (progress posts, the worker's end) find nothing
     QCoreApplication::processEvents();
@@ -968,7 +1018,7 @@ void FusionJobsTest::realRecordingCheck()
 
     QElapsedTimer timer;
     timer.start();
-    const JobQueue::RequestResult result = m_queue->request(id, kFit);
+    const JobQueue::OfferResult result = m_queue->offer(id, kFit);
     QCOMPARE(result.kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue, 30 * 60 * 1000));
     const JobRecord job = m_queue->job(result.job);

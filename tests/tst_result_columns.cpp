@@ -455,7 +455,7 @@ void ResultColumnsTest::publishedResultIsCached()
     QObject scope;      // owns the connection
     if (queued) {
         connect(m_queue.get(), &JobQueue::jobFinished, &scope, [&check](JobId, JobState) { check(); });
-        QCOMPARE(m_queue->request("s1", kCalcY).kind, JobQueue::RequestResult::Kind::Created);
+        QCOMPARE(m_queue->offer("s1", kCalcY).kind, JobQueue::OfferResult::Kind::Created);
         QVERIFY(waitIdle(*m_queue));
         QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
     } else {

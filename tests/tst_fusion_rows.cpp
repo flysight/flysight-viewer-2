@@ -1,15 +1,20 @@
-// The plot-row script with the REAL fusion plots: PlotModel + PlotRequests +
-// JobQueue + SessionModel + Fusion::registerFusionCalculations, with real fits
-// on the queue's 64 MiB worker. Sensor-fusion-jobs acceptance 15 end to end,
-// and the real-plot halves of 9, 11 and 19. No widgets.
+// The plot-row script with the REAL fusion plots: PlotModel + CalculationDemand +
+// the executor + SessionModel + Fusion::registerFusionCalculations, with real
+// fits on the executor's 64 MiB worker. Sensor-fusion-jobs acceptance 15 end to
+// end, and the real-plot halves of 9, 11 and 19. No widgets.
+//
+// Work follows demand: a checked fusion plot with visible sessions starts their
+// fits, one after the other, with no other call.
 //
 // DETERMINISM WITHOUT A GATE (as in tst_fusion_jobs). A real fit cannot be held
 // by a semaphore. Progress posts reach the main thread in order and BEFORE the
 // end of the same job is processed, so a slot that acts on the FIRST progress
-// text of a job runs while the queue still considers that job Running, whatever
-// the worker has done meanwhile. A slot on jobFinished that flushes the request
-// component observes each publication before the next job starts (the queue
-// starts the next job from a queued call). There are no sleeps.
+// text of a job runs while the executor still considers that job Running,
+// whatever the worker has done meanwhile. The demand layer's pass on jobFinished
+// runs synchronously, before the executor starts the next job (from a queued
+// call), so a slot on jobFinished connected after the demand layer sees each
+// publication in the state. waitDemandIdle() waits until everything the demand
+// layer wanted has run. There are no sleeps.
 //
 // Expected values are literals and the committed goldens of the kernel.
 
@@ -19,6 +24,7 @@
 #include <QSignalSpy>
 #include <QtTest>
 
+#include "calculationdemand.h"
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
 #include "fusion/fusionregistration.h"
@@ -33,7 +39,6 @@
 #include "logbookprobe.h"
 #include "plotfixture.h"
 #include "plotmodel.h"
-#include "plotrequests.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
@@ -45,8 +50,7 @@
 using namespace FlySight;
 using namespace FlySightTest;
 
-using Kind = JobQueue::RequestResult::Kind;
-using Control = PlotRowState::Control;
+using Kind = JobQueue::OfferResult::Kind;
 
 Q_DECLARE_METATYPE(FlySight::DependencyKey)
 
@@ -106,7 +110,8 @@ private:
         return session(id).getMeasurement(QStringLiteral("Fusion"), name);
     }
     void show(const QStringList &ids, bool visible = true) { PlotFixture::show(*m_model, ids, visible); }
-    /// A programmatic check: never a gesture.
+    /// A programmatic check: the same demand as a click, the Plots menu or a
+    /// profile.
     void check(const QString &measurement, bool enabled = true)
     {
         m_plots->setPlotEnabled(QStringLiteral("Fusion"), measurement, enabled);
@@ -116,11 +121,11 @@ private:
         for (const PlotValue &plot : fusionPlots())
             check(plot.measurementID);
     }
-    /// The current row state: a pending pass runs first.
-    PlotRowState row(const QString &plotId)
+    /// The current plot state: a pending pass runs first.
+    DemandState row(const QString &plotId)
     {
-        m_requests->flush();
-        return m_requests->rowState(plotId);
+        m_demand->flush();
+        return m_demand->plotState(plotId);
     }
     /// The newest fit job of a session; a default record (id 0) when none.
     JobRecord fitJobOf(const QString &sessionId) const
@@ -133,6 +138,14 @@ private:
         }
         return JobRecord();
     }
+    /// The states of every job in the job model, in creation order.
+    QList<JobState> history() const
+    {
+        QList<JobState> states;
+        for (int r = 0; r < m_queue->model()->rowCount(); ++r)
+            states.append(m_queue->model()->record(r).state);
+        return states;
+    }
     /// Empty when Fusion/<every channel> of the session matches the golden.
     QString goldenDifference(const QString &id, const QString &goldenName);
     /// Empty when the session `absent` is in no list of any fusion row and no
@@ -142,7 +155,7 @@ private:
     std::unique_ptr<SessionModel> m_model;
     std::unique_ptr<JobQueue> m_queue;
     std::unique_ptr<PlotModel> m_plots;
-    std::unique_ptr<PlotRequests> m_requests;
+    std::unique_ptr<CalculationDemand> m_demand;
     QStringList m_registryBefore;
 };
 
@@ -172,7 +185,7 @@ void FusionRowsTest::init()
     m_queue = std::make_unique<JobQueue>(m_model.get());
     m_plots = std::make_unique<PlotModel>();
     m_plots->setPlots(fusionPlots() + localFramePlots());
-    m_requests = std::make_unique<PlotRequests>(m_model.get(), m_plots.get(), m_queue.get());
+    m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
 }
 
 // Note what is to be checked, tear everything down, and only then check: a
@@ -191,8 +204,8 @@ void FusionRowsTest::cleanup()
         }
     }
 
-    // Reverse order of construction
-    m_requests.reset();
+    // Reverse order of construction: the demand layer before the executor
+    m_demand.reset();
     m_plots.reset();
     m_queue.reset();
     m_model.reset();
@@ -210,23 +223,24 @@ QString FusionRowsTest::goldenDifference(const QString &id, const QString &golde
 QString FusionRowsTest::offenceInRows(const QString &absent)
 {
     for (const PlotValue &plot : fusionPlots()) {
-        const QString id = PlotRequests::plotId(plot);
-        const PlotRowState state = row(id);
-        const QStringList listed = sessionIdsOf(state.pending) + sessionIdsOf(state.missing)
+        const QString id = CalculationDemand::plotId(plot);
+        const DemandState state = row(id);
+        const QStringList listed = sessionIdsOf(state.running) + sessionIdsOf(state.waiting)
             + sessionIdsOf(state.failed);
         if (listed.contains(absent))
             return id + QStringLiteral(" lists ") + absent;
         if (state.toolTip.contains(absent))
             return id + QStringLiteral(" names it in the tooltip");
-        if (state.pendingCount > 1 || state.missingCount > 1 || state.failedCount > 1
-            || state.waitingTotal > 1)
+        if (state.wantedCount > 1 || state.doneCount > 1 || state.waitingCount > 1
+            || state.runningCount > 1 || state.failedCount > 1)
             return id + QStringLiteral(" counts more than one track");
     }
     return QString();
 }
 
-// Every real fusion plot is explicit-backed; the local-frame plots are
-// ordinary. Checking any of them programmatically starts nothing.
+// Every real fusion plot is requested; the local-frame plots are ordinary.
+// Checking all of them with one visible session starts ONE fit, which every
+// fusion row waits on and then shows running; the ordinary rows stay plain.
 void FusionRowsTest::allSeventeenFusionPlotsAreExplicitBacked()
 {
     QCOMPARE(fusionPlots().size(), 17);
@@ -234,35 +248,77 @@ void FusionRowsTest::allSeventeenFusionPlotsAreExplicitBacked()
              QString());
     show({"s2"});
 
-    const Quiet quiet(*m_queue);
     checkAllFusionPlots();
     for (const PlotValue &plot : localFramePlots())
         m_plots->setPlotEnabled(plot.sensorID, plot.measurementID, true);
 
+    // The first pass chose the fit; it starts from the event loop
+    m_demand->flush();
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    const JobId job = fitJobOf("s2").id;
+    QVERIFY(job != 0);
+    QCOMPARE(m_queue->chosenNextJob(), job);
+    QCOMPARE(m_queue->job(job).calculationTitle, kTitle);
+
     for (const PlotValue &plot : fusionPlots()) {
-        const QString id = PlotRequests::plotId(plot);
-        const PlotRowState state = row(id);
-        QVERIFY2(state.explicitBacked, qPrintable(id));
-        QCOMPARE(state.plotId, id);
-        QCOMPARE(state.missingCount, 1);
-        QCOMPARE(state.pendingCount, 0);
+        const QString id = CalculationDemand::plotId(plot);
+        const DemandState state = row(id);
+        QVERIFY2(state.requested, qPrintable(id));
+        QCOMPARE(state.sourceId, id);
+        QCOMPARE(state.wantedCount, 1);
+        QCOMPARE(state.doneCount, 0);
+        QCOMPARE(state.waitingCount, 1);
+        QCOMPARE(state.runningCount, 0);
         QCOMPARE(state.failedCount, 0);
-        QCOMPARE(state.control(), Control::Refresh);
-        QCOMPARE(state.missing.at(0).calculationTitles, QStringList({kTitle}));
+        QVERIFY(state.isWorking());
+        QCOMPARE(state.progressLabel, QStringLiteral("0 of 1"));
+        QCOMPARE(state.waiting.at(0).sessionId, QStringLiteral("s2"));
+        QCOMPARE(state.waiting.at(0).job, job);
+        QCOMPARE(state.waiting.at(0).calculationTitles, QStringList({kTitle}));
     }
     for (const PlotValue &plot : localFramePlots()) {
-        const QString id = PlotRequests::plotId(plot);
-        QVERIFY2(row(id) == PlotRowState(), qPrintable(id));
+        const QString id = CalculationDemand::plotId(plot);
+        QVERIFY2(row(id) == DemandState(), qPrintable(id));
     }
-    // The ordinary plots still read normally, next to the unrequested fit
+    // The ordinary plots still read normally, next to the fit that has not run
     QVERIFY(!session("s2").getMeasurement(QStringLiteral("Local"), QStringLiteral("north")).isEmpty());
 
-    QVERIFY(quiet.holds());
-    QVERIFY(m_queue->isIdle());
-    QCOMPARE(engine("s2").runCount(kFit), 0);
+    // While the fit runs, every fusion row shows it running: the same job
+    QString offenceDuring = QStringLiteral("the job reported no progress");
+    QObject scope;      // owns the connection: it cannot outlive what the slot captures
+    onFirstProgress(*m_queue, &scope, job, [&] {
+        offenceDuring.clear();
+        for (const PlotValue &plot : fusionPlots()) {
+            const QString id = CalculationDemand::plotId(plot);
+            const DemandState state = row(id);
+            if (state.runningCount != 1 || state.waitingCount != 0 || state.running.at(0).job != job) {
+                offenceDuring = id + QStringLiteral(" is not running the fit");
+                return;
+            }
+        }
+    });
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QVERIFY2(offenceDuring.isEmpty(), qPrintable(offenceDuring));
+
+    QCOMPARE(m_queue->job(job).state, JobState::Succeeded);
+    for (const PlotValue &plot : fusionPlots()) {
+        const QString id = CalculationDemand::plotId(plot);
+        const DemandState state = row(id);
+        QVERIFY2(state.isPlain(), qPrintable(id));
+        QVERIFY2(state.requested && state.wantedCount == 1 && state.doneCount == 1, qPrintable(id));
+    }
+    for (const PlotValue &plot : localFramePlots()) {
+        const QString id = CalculationDemand::plotId(plot);
+        QVERIFY2(row(id) == DemandState(), qPrintable(id));
+    }
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(engine("s2").runCount(kFit), 1);
 }
 
-// Acceptance 15, on the real names with real fits.
+// Acceptance 15, on the real names with real fits: checking the plot computes
+// every visible track, one after the other, with no other call; unchecking
+// drops the waiting track and lets the running one finish; checking again and
+// showing another track compute what is missing.
 void FusionRowsTest::realRowScript()
 {
     QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_maneuver")), QStringLiteral("s1")),
@@ -271,155 +327,157 @@ void FusionRowsTest::realRowScript()
                           sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s4"))}),
              QString());
 
-    // 1. Three visible fusable tracks, the plot checked programmatically:
-    //    nothing starts by itself
-    show({"s1", "s2", "s3"});
-    {
-        const Quiet quiet(*m_queue);
-        check(QStringLiteral("roll"));
-        const PlotRowState state = row(kRoll);
-        QVERIFY(state.explicitBacked);
-        QCOMPARE(state.missingCount, 3);
-        QCOMPARE(state.control(), Control::Refresh);
-        QCOMPARE(state.controlCount(), 3);
-        QVERIFY(quiet.holds());
-    }
-
-    // Records, on every job end, what the row shows at that moment
-    struct Seen { JobId job; int pendingCount; QString progressLabel; };
+    // Records, on every job end, what the row shows at that moment (the
+    // demand layer's synchronous pass on jobFinished has run: it was
+    // connected first)
+    struct Seen { JobId job; JobState state; DemandState row; };
     QList<Seen> seen;
     QObject seenScope;      // owns the connection: it cannot outlive `seen`
-    connect(m_queue.get(), &JobQueue::jobFinished, &seenScope, [this, &seen](JobId id, JobState) {
-        m_requests->flush();
-        const PlotRowState state = m_requests->rowState(kRoll);
-        seen.append({id, state.pendingCount, state.progressLabel});
+    connect(m_queue.get(), &JobQueue::jobFinished, &seenScope, [this, &seen](JobId id, JobState state) {
+        seen.append({id, state, m_demand->plotState(kRoll)});
     });
 
-    // 2. The gesture queues three jobs
-    QCOMPARE(m_requests->plotCheckedByUser(kRoll), 3);
-    QCOMPARE(m_queue->model()->rowCount(), 3);
-    const JobId job1 = fitJobOf("s1").id;
-    const JobId job2 = fitJobOf("s2").id;
-    const JobId job3 = fitJobOf("s3").id;
-    QVERIFY(job1 != 0 && job2 != 0 && job3 != 0);
-    for (JobId id : {job1, job2, job3}) {
-        const JobRecord record = m_queue->job(id);
-        QVERIFY(record.isActive());
-        QCOMPARE(record.calculationId, kFit);
-        QCOMPARE(record.calculationTitle, kTitle);
-    }
-    PlotRowState state = m_requests->rowState(kRoll);
-    QCOMPARE(state.pendingCount, 3);
+    // 1. Three visible fusable tracks, the plot checked programmatically: the
+    //    first track's fit is the chosen next job at once, and the row works
+    show({"s1", "s2", "s3"});
+    check(QStringLiteral("roll"));
+    DemandState state = row(kRoll);
+    QVERIFY(state.requested);
+    QCOMPARE(state.wantedCount, 3);
+    QCOMPARE(state.doneCount, 0);
+    QCOMPARE(state.waitingCount, 3);
+    QCOMPARE(state.runningCount, 0);
     QCOMPARE(state.progressLabel, QStringLiteral("0 of 3"));
-    QCOMPARE(state.control(), Control::Cancel);
+    QCOMPARE(sessionIdsOf(state.waiting), QStringList({"s1", "s2", "s3"}));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    const JobId job1 = fitJobOf("s1").id;
+    QVERIFY(job1 != 0);
+    QCOMPARE(m_queue->chosenNextJob(), job1);
+    QCOMPARE(m_queue->job(job1).calculationTitle, kTitle);
 
-    // 4 (armed now, acts later). On the first progress text of s2's job the
-    //    plot is unchecked: s3's queued job goes, s2's running job stays.
+    // 2 (armed now, acts later). On the first progress text of s2's fit the
+    //    plot is unchecked: s3's chosen next job goes at once, s2's running
+    //    job stays. A pending pass runs first, so that s3's job is the chosen
+    //    next job whichever event came first after s2's start.
     bool uncheckedWhileRunning = false;
-    JobState job3AfterUncheck = JobState::Queued;
-    QString job3Reason;
+    JobId job2 = 0;
+    JobId job3 = 0;
+    JobRecord job3AfterUncheck;
     bool job2CancelRequested = true;
+    DemandState afterUncheck;
     QObject job2Scope;      // owns the connection: it cannot outlive what the slot captures
-    onFirstProgress(*m_queue, &job2Scope, job2, [&] {
-        uncheckedWhileRunning = m_queue->job(job2).state == JobState::Running;
+    connect(m_queue.get(), &JobQueue::jobProgress, &job2Scope, [&](JobId id, const QString &) {
+        if (job2 != 0 || m_queue->job(id).sessionId != QStringLiteral("s2"))
+            return;
+        job2 = id;
+        m_demand->flush();
+        job3 = m_queue->chosenNextJob();
+        uncheckedWhileRunning = m_queue->job(job2).state == JobState::Running
+            && m_queue->job(job3).sessionId == QStringLiteral("s3");
         check(QStringLiteral("roll"), false);
-        job3AfterUncheck = m_queue->job(job3).state;
-        job3Reason = m_queue->job(job3).reason;
+        job3AfterUncheck = m_queue->job(job3);          // at once, before any event-loop turn
         job2CancelRequested = m_queue->job(job2).cancelRequested;
+        afterUncheck = m_demand->plotState(kRoll);
         uncheckedWhileRunning = uncheckedWhileRunning && m_queue->job(job2).state == JobState::Running;
     });
 
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
 
-    // 3. The count fell when s1's job published, before the next job started
-    QVERIFY(!seen.isEmpty());
-    QCOMPARE(seen.at(0).job, job1);
-    QCOMPARE(seen.at(0).pendingCount, 2);
-    QCOMPARE(seen.at(0).progressLabel, QStringLiteral("1 of 3"));
+    // s1 and then s2 ran with no call
     QCOMPARE(m_queue->job(job1).state, JobState::Succeeded);
     QString difference = goldenDifference("s1", QStringLiteral("coarse_maneuver"));
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
 
-    // 4. Unchecking mid-way removed the queued job and let the running one finish
+    // Unchecking mid-way dropped the chosen next job and let the running one finish
+    QVERIFY(job2 != 0 && job3 != 0);
     QVERIFY(uncheckedWhileRunning);
-    QCOMPARE(job3AfterUncheck, JobState::Cancelled);
-    QCOMPARE(job3Reason, QStringLiteral("No longer needed"));
+    QCOMPARE(job3AfterUncheck.state, JobState::Cancelled);
+    QCOMPARE(job3AfterUncheck.reason, QStringLiteral("No longer needed"));
+    QVERIFY(!job3AfterUncheck.startedAt.isValid());
     QVERIFY(!job2CancelRequested);
+    QVERIFY(afterUncheck == DemandState());
     QCOMPARE(m_queue->job(job2).state, JobState::Succeeded);
     difference = goldenDifference("s2", QStringLiteral("coarse_linear"));
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
     QVERIFY(fusion("s3", QStringLiteral("roll")).isEmpty());
     QCOMPARE(engine("s3").runCount(kFit), 0);
-    QVERIFY(row(kRoll) == PlotRowState());
+    QVERIFY(row(kRoll) == DemandState());
 
-    // 5. Checked again by the user: only s3 is missing. Cancel leaves the plot
-    //    checked and the track missing, and publishes nothing.
-    QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
+    // 3. Checked again: only s3 is missing, and its fit is chosen at once
     check(QStringLiteral("roll"));
-    QCOMPARE(m_requests->plotCheckedByUser(kRoll), 1);
+    state = row(kRoll);
+    QCOMPARE(state.wantedCount, 3);
+    QCOMPARE(state.doneCount, 2);
+    QCOMPARE(state.waitingCount, 1);
+    QCOMPARE(state.progressLabel, QStringLiteral("2 of 3"));
     const JobId job4 = fitJobOf("s3").id;
-    QVERIFY(job4 != job3);
-    int cancelled = -1;
-    bool checkedAfterCancel = false;
-    PlotRowState afterCancel;
+    QVERIFY(job4 != 0 && job4 != job3);
+    QCOMPARE(m_queue->chosenNextJob(), job4);
+    QCOMPARE(state.waiting.at(0).job, job4);
+
+    // 4. A fourth track shown while s3's fit runs becomes the chosen next job
+    //    with no other call
+    JobId job5 = 0;
+    DemandState whileS3Runs;
     QObject job4Scope;      // owns the connection: it cannot outlive what the slot captures
     onFirstProgress(*m_queue, &job4Scope, job4, [&] {
-        cancelled = m_requests->cancelPressed(kRoll);
-        checkedAfterCancel = m_plots->isPlotEnabled(QStringLiteral("Fusion"), QStringLiteral("roll"));
-        afterCancel = m_requests->rowState(kRoll);      // at once
+        show({"s4"});
+        whileS3Runs = row(kRoll);
+        job5 = m_queue->chosenNextJob();
     });
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
-    QCOMPARE(cancelled, 1);
-    QVERIFY(checkedAfterCancel);
-    QCOMPARE(afterCancel.pendingCount, 0);
-    QCOMPARE(afterCancel.missingCount, 1);
-    QCOMPARE(afterCancel.control(), Control::Refresh);
-    QCOMPARE(m_queue->job(job4).state, JobState::Cancelled);
-    QVERIFY(fusion("s3", QStringLiteral("roll")).isEmpty());
-    QCOMPARE(engine("s3").runCount(kFit), 0);
-    for (const QString &name : fusionMeasurementNames())
-        QVERIFY2(!spyHasMeasurement(dependencySpy, "s3", QStringLiteral("Fusion"), name), qPrintable(name));
-    QVERIFY(!spyHasAttribute(dependencySpy, "s3", QStringLiteral("_FUSION_DIAGNOSTICS")));
-    QVERIFY(m_plots->isPlotEnabled(QStringLiteral("Fusion"), QStringLiteral("roll")));
-    QCOMPARE(row(kRoll).missingCount, 1);
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QVERIFY(job5 != 0);
+    QCOMPARE(m_queue->job(job5).sessionId, QStringLiteral("s4"));
+    QCOMPARE(whileS3Runs.wantedCount, 4);
+    QCOMPARE(whileS3Runs.doneCount, 2);
+    QCOMPARE(whileS3Runs.runningCount, 1);
+    QCOMPARE(whileS3Runs.waitingCount, 1);
+    QCOMPARE(whileS3Runs.progressLabel, QStringLiteral("2 of 4"));
+    QCOMPARE(whileS3Runs.running.at(0).sessionId, QStringLiteral("s3"));
+    QCOMPARE(whileS3Runs.running.at(0).job, job4);
+    QCOMPARE(whileS3Runs.waiting.at(0).sessionId, QStringLiteral("s4"));
+    QCOMPARE(whileS3Runs.waiting.at(0).job, job5);
+    QCOMPARE(whileS3Runs.waiting.at(0).calculationTitles, QStringList({kTitle}));
 
-    // 6. Refresh computes it
-    QCOMPARE(m_requests->refreshPressed(kRoll), 1);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QCOMPARE(m_queue->job(job4).state, JobState::Succeeded);
+    QCOMPARE(m_queue->job(job5).state, JobState::Succeeded);
     QVERIFY(row(kRoll).isPlain());
+    QCOMPARE(row(kRoll).wantedCount, 4);
+    QCOMPARE(row(kRoll).doneCount, 4);
     difference = goldenDifference("s3", QStringLiteral("coarse_linear"));
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
-
-    // 7. A fourth track shown afterwards is missing, with a count of one, and
-    //    starts nothing
-    {
-        const Quiet quiet(*m_queue);
-        show({"s4"});
-        state = row(kRoll);
-        QCOMPARE(state.missingCount, 1);
-        QCOMPARE(state.control(), Control::Refresh);
-        QCOMPARE(state.missing.at(0).sessionId, QStringLiteral("s4"));
-        QCOMPARE(state.missing.at(0).calculationTitles, QStringList({kTitle}));
-        PlotFixture::spin(m_requests.get());
-        QVERIFY(quiet.holds());
-        QVERIFY(m_queue->isIdle());
-        QCOMPARE(row(kRoll).missingCount, 1);
-        QCOMPARE(engine("s4").runCount(kFit), 0);
-    }
-
-    // 8. Pressing refresh computes it
-    QCOMPARE(m_requests->refreshPressed(kRoll), 1);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
-    QVERIFY(row(kRoll).isPlain());
     difference = goldenDifference("s4", QStringLiteral("coarse_linear"));
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
 
+    // What the row showed at each end: the done count rose with every
+    // publication, before the next job started (unchecked in between)
+    QCOMPARE(seen.size(), 5);
+    QCOMPARE(seen.at(0).job, job1);
+    QCOMPARE(seen.at(0).state, JobState::Succeeded);
+    QCOMPARE(seen.at(0).row.doneCount, 1);
+    QCOMPARE(seen.at(0).row.wantedCount, 3);
+    QCOMPARE(seen.at(0).row.progressLabel, QStringLiteral("1 of 3"));
+    QCOMPARE(seen.at(1).job, job3);
+    QCOMPARE(seen.at(1).state, JobState::Cancelled);
+    QCOMPARE(seen.at(2).job, job2);
+    QCOMPARE(seen.at(2).state, JobState::Succeeded);
+    QVERIFY(seen.at(2).row == DemandState());           // unchecked
+    QCOMPARE(seen.at(3).job, job4);
+    QCOMPARE(seen.at(3).state, JobState::Succeeded);
+    QCOMPARE(seen.at(3).row.doneCount, 3);
+    QCOMPARE(seen.at(3).row.wantedCount, 4);
+    QCOMPARE(seen.at(3).row.progressLabel, QStringLiteral("3 of 4"));
+    QCOMPARE(seen.at(4).job, job5);
+    QCOMPARE(seen.at(4).state, JobState::Succeeded);
+    QCOMPARE(seen.at(4).row.doneCount, 4);
+    QCOMPARE(seen.at(4).row.wantedCount, 4);
+    QVERIFY(seen.at(4).row.isPlain());
+
     // The whole history, from the job model alone
-    QList<JobState> history;
-    for (int r = 0; r < m_queue->model()->rowCount(); ++r)
-        history.append(m_queue->model()->record(r).state);
-    QCOMPARE(history, QList<JobState>({JobState::Succeeded, JobState::Succeeded, JobState::Cancelled,
-                                       JobState::Cancelled, JobState::Succeeded, JobState::Succeeded}));
+    QCOMPARE(history(), QList<JobState>({JobState::Succeeded, JobState::Succeeded, JobState::Cancelled,
+                                         JobState::Succeeded, JobState::Succeeded}));
+    for (const QString &id : {QStringLiteral("s1"), QStringLiteral("s2"), QStringLiteral("s3"), QStringLiteral("s4")})
+        QCOMPARE(engine(id).runCount(kFit), 1);
 }
 
 // Three rows, one fit: roll, pitch and yaw wait on the same job and show the
@@ -433,30 +491,32 @@ void FusionRowsTest::rollPitchYawShareOneJob()
     check(QStringLiteral("roll"));
     check(QStringLiteral("pitch"));
     check(QStringLiteral("yaw"));
-    QCOMPARE(row(kRoll).missingCount, 1);
+    QCOMPARE(row(kRoll).waitingCount, 1);
 
-    QCOMPARE(m_requests->plotCheckedByUser(QStringLiteral("Fusion/pitch")), 1);
-    QCOMPARE(m_requests->plotCheckedByUser(QStringLiteral("Fusion/yaw")), 0);     // the job exists
     QCOMPARE(m_queue->model()->rowCount(), 1);
     const JobId job = fitJobOf("s2").id;
     QVERIFY(job != 0);
+    for (const QString &id : rows)
+        QCOMPARE(row(id).waiting.at(0).job, job);
 
-    QList<PlotRowState> during;
+    QList<DemandState> during;
     QObject scope;      // owns the connection: it cannot outlive what the slot captures
     onFirstProgress(*m_queue, &scope, job, [&] {
-        m_requests->flush();
+        m_demand->flush();
         for (const QString &id : rows)
-            during.append(m_requests->rowState(id));
+            during.append(m_demand->plotState(id));
     });
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
 
     QCOMPARE(during.size(), 3);
-    for (const PlotRowState &state : std::as_const(during)) {
-        QCOMPARE(state.pendingCount, 1);
-        QCOMPARE(state.control(), Control::Cancel);
-        QCOMPARE(state.pending.at(0).job, job);
-        QVERIFY(!state.jobProgressText.isEmpty());
-        QCOMPARE(state.jobProgressText, during.at(0).jobProgressText);
+    for (const DemandState &state : std::as_const(during)) {
+        QCOMPARE(state.runningCount, 1);
+        QCOMPARE(state.waitingCount, 0);
+        QCOMPARE(state.progressLabel, QStringLiteral("0 of 1"));
+        QCOMPARE(state.running.at(0).job, job);
+        QVERIFY(!state.running.at(0).progressText.isEmpty());
+        QCOMPARE(state.running.at(0).progressText, during.at(0).running.at(0).progressText);
+        QCOMPARE(state.toolTip, during.at(0).toolTip);
     }
 
     QCOMPARE(m_queue->job(job).state, JobState::Succeeded);
@@ -466,7 +526,7 @@ void FusionRowsTest::rollPitchYawShareOneJob()
     QCOMPARE(engine("s2").runCount(kFit), 1);
 }
 
-// Fusion/accH is on demand; the row sees through it and asks for the fit.
+// Fusion/accH is on demand; the row sees through it and the fit is started.
 void FusionRowsTest::accHRowIsBlockedByFusion()
 {
     QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2"))}),
@@ -475,19 +535,20 @@ void FusionRowsTest::accHRowIsBlockedByFusion()
     const QString accH = QStringLiteral("Fusion/accH");
     check(QStringLiteral("accH"));
 
-    PlotRowState state = row(accH);
-    QVERIFY(state.explicitBacked);
-    QCOMPARE(state.missingCount, 1);
-    QCOMPARE(state.missing.at(0).calculationTitles, QStringList({kTitle}));
+    const DemandState state = row(accH);
+    QVERIFY(state.requested);
+    QCOMPARE(state.wantedCount, 1);
+    QCOMPARE(state.waitingCount, 1);
+    QCOMPARE(state.waiting.at(0).calculationTitles, QStringList({kTitle}));
 
-    QCOMPARE(m_requests->plotCheckedByUser(accH), 1);
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(m_queue->model()->record(0).calculationId, kFit);
-    // An on-demand calculation can never be a job
-    QVERIFY(!m_queue->request("s2", kAccH).created());
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
+    // An on-demand calculation can never be a job
+    QVERIFY(!m_queue->offer("s2", kAccH).created());
+    QCOMPARE(m_queue->model()->rowCount(), 1);
 
     QVERIFY(row(accH).isPlain());
     const QVector<double> values = fusion("s2", QStringLiteral("accH"));
@@ -498,7 +559,7 @@ void FusionRowsTest::accHRowIsBlockedByFusion()
 }
 
 // Acceptance 11 on all seventeen real rows: a session without IMU data is
-// never missing, pending or failed, and cannot have a job.
+// never waiting, running or failed, is never counted, and cannot have a job.
 void FusionRowsTest::noImuSessionIsNeverCounted()
 {
     QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2")),
@@ -510,10 +571,11 @@ void FusionRowsTest::noImuSessionIsNeverCounted()
     // Before
     QString offence = offenceInRows(QStringLiteral("n1"));
     QVERIFY2(offence.isEmpty(), qPrintable(offence));
-    QCOMPARE(row(kRoll).missingCount, 1);
-    QCOMPARE(row(kRoll).missing.at(0).sessionId, QStringLiteral("s2"));
+    QCOMPARE(row(kRoll).wantedCount, 1);
+    QCOMPARE(row(kRoll).waitingCount, 1);
+    QCOMPARE(row(kRoll).waiting.at(0).sessionId, QStringLiteral("s2"));
 
-    QCOMPARE(m_requests->plotCheckedByUser(kRoll), 1);
+    // s2's fit is started by demand; n1 has none
     QCOMPARE(m_queue->model()->rowCount(), 1);
     const JobId job = fitJobOf("s2").id;
     QVERIFY(job != 0);
@@ -521,75 +583,90 @@ void FusionRowsTest::noImuSessionIsNeverCounted()
 
     // During
     QString offenceDuring = QStringLiteral("the job reported no progress");
-    int pendingDuring = -1;
+    int runningDuring = -1;
     QObject scope;      // owns the connection: it cannot outlive what the slot captures
     onFirstProgress(*m_queue, &scope, job, [&] {
         offenceDuring = offenceInRows(QStringLiteral("n1"));
-        pendingDuring = m_requests->rowState(QStringLiteral("Fusion/qw")).pendingCount;
+        runningDuring = row(QStringLiteral("Fusion/qw")).runningCount;
     });
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
     QVERIFY2(offenceDuring.isEmpty(), qPrintable(offenceDuring));
-    QCOMPARE(pendingDuring, 1);             // every row waits on the one job of s2
+    QCOMPARE(runningDuring, 1);             // every row waits on the one job of s2
 
     // After
     offence = offenceInRows(QStringLiteral("n1"));
     QVERIFY2(offence.isEmpty(), qPrintable(offence));
     for (const PlotValue &plot : fusionPlots())
-        QVERIFY2(row(PlotRequests::plotId(plot)).isPlain(), qPrintable(plot.measurementID));
+        QVERIFY2(row(CalculationDemand::plotId(plot)).isPlain(), qPrintable(plot.measurementID));
 
-    QCOMPARE(m_queue->request("n1", kFit).kind, Kind::MissingInput);
+    QCOMPARE(m_queue->offer("n1", kFit).kind, Kind::MissingInput);
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(engine("n1").runCount(kFit), 0);
 }
 
 // Acceptance 9 seen from the row: a recording the model rejects shows the
-// warning badge with the reason, offers no retry, and becomes refreshable when
-// its inputs change.
+// warning badge with the reason and is not run again; when its inputs change
+// it waits for them to settle and is then computed.
 void FusionRowsTest::rejectedTrackShowsBadge()
 {
     QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("reject_origin")), QStringLiteral("r1"))}),
              QString());
     show({"r1"});
     check(QStringLiteral("roll"));
-    QCOMPARE(m_requests->plotCheckedByUser(kRoll), 1);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(fitJobOf("r1").state, JobState::Succeeded);        // a rejection is a result
 
-    PlotRowState state = row(kRoll);
+    DemandState state = row(kRoll);
     QCOMPARE(state.failedCount, 1);
+    QVERIFY(!state.isWorking());
     QVERIFY(state.showsWarning());
-    QCOMPARE(state.control(), Control::None);
     QCOMPARE(state.failed.at(0).sessionId, QStringLiteral("r1"));
+    QVERIFY(!state.failed.at(0).jobFailure);
     QCOMPARE(state.failed.at(0).reason,
              QStringLiteral("Sensor fusion: Local origin index outside GNSS samples"));
     QCOMPARE(state.toolTip, QStringLiteral("Could not be computed:\n"
                                            "  r1 - Sensor fusion: Local origin index outside GNSS samples"));
 
-    // No retry: the same inputs give the same answer
+    // No rerun: the same inputs give the same answer
     {
         const Quiet quiet(*m_queue);
-        QCOMPARE(m_requests->refreshPressed(kRoll), 0);
-        QCOMPARE(m_requests->plotCheckedByUser(kRoll), 0);
+        for (int i = 0; i < 3; ++i)
+            PlotFixture::spin(m_demand.get());
         QVERIFY(quiet.holds());
+        QVERIFY(row(kRoll).showsWarning());
     }
 
     // reject_origin is coarse_linear with origin index 9: a valid index makes
-    // the track missing, and therefore refreshable
-    QVERIFY(m_model->updateAttribute("r1", "_LOCAL_ORIGIN_INDEX", QVariant::fromValue(qlonglong(0))));
-    state = row(kRoll);
-    QCOMPARE(state.failedCount, 0);
-    QCOMPARE(state.missingCount, 1);
-    QCOMPARE(state.control(), Control::Refresh);
-    QCOMPARE(m_requests->refreshPressed(kRoll), 1);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    // the track wait (settling) at once, and nothing starts during the wait
+    m_demand->setInputSettleDelay(60000);
+    {
+        const Quiet quiet(*m_queue);
+        QVERIFY(m_model->updateAttribute("r1", "_LOCAL_ORIGIN_INDEX", QVariant::fromValue(qlonglong(0))));
+        state = row(kRoll);
+        QCOMPARE(state.failedCount, 0);
+        QCOMPARE(state.waitingCount, 1);
+        QVERIFY(state.waiting.at(0).settling);
+        QVERIFY(state.isWorking());
+        PlotFixture::spin(m_demand.get());
+        QVERIFY(quiet.holds());
+    }
+
+    // Once the inputs have settled, the fit runs again with no other call
+    m_demand->endInputSettleWaits();
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 2);
+    QCOMPARE(fitJobOf("r1").state, JobState::Succeeded);
     QVERIFY(row(kRoll).isPlain());
     const QString difference = goldenDifference("r1", QStringLiteral("coarse_linear"));
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
+    QCOMPARE(engine("r1").runCount(kFit), 2);
 }
 
 // Acceptance 19, the half that needs no widget: while a real fit runs, other
 // sessions are edited, tracks are hidden and shown, and other values are read,
-// all from the main thread; the fit is not disturbed.
+// all from the main thread; the fit is not disturbed, and the other tracks are
+// computed after it with no other action.
 void FusionRowsTest::editsAndVisibilityDuringFit()
 {
     QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_maneuver")), QStringLiteral("s1")),
@@ -598,52 +675,66 @@ void FusionRowsTest::editsAndVisibilityDuringFit()
              QString());
     show({"s1"});
     check(QStringLiteral("roll"));
-    QCOMPARE(m_requests->plotCheckedByUser(kRoll), 1);
+    QCOMPARE(row(kRoll).waitingCount, 1);
     const JobId job = fitJobOf("s1").id;
     QVERIFY(job != 0);
+    QCOMPARE(m_queue->chosenNextJob(), job);
 
-    // Showing more tracks starts nothing for them
-    {
-        const Quiet quiet(*m_queue);
-        show({"s2", "s3"});
-        QCOMPARE(row(kRoll).missingCount, 2);
-        QVERIFY(quiet.holds());
-    }
+    // More tracks shown before the fit starts wait behind it: s1 stays chosen
+    show({"s2", "s3"});
+    QCOMPARE(row(kRoll).wantedCount, 3);
+    QCOMPARE(row(kRoll).waitingCount, 3);
+    QCOMPARE(m_queue->chosenNextJob(), job);
+    QCOMPARE(m_queue->model()->rowCount(), 1);
 
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
-    bool running = false, edited = false, hidden = false, shownAgain = false;
+    bool running = false, edited = false, settling = true, hidden = false, shownAgain = false;
     qsizetype northSamples = 0;
-    int missingWhileHidden = -1;
+    int wantedWhileHidden = -1;
+    int wantedShownAgain = -1;
     QObject scope;      // owns the connection: it cannot outlive what the slot captures
     onFirstProgress(*m_queue, &scope, job, [&] {
         running = m_queue->job(job).state == JobState::Running;
         edited = m_model->updateAttribute("s2", QString::fromLatin1(SessionKeys::Description),
                                           QStringLiteral("edited"));
+        m_model->flushPendingInvalidations();
+        settling = m_demand->isSettling(QStringLiteral("s2"));     // an irrelevant name: no wait
         show({"s3"}, false);
         hidden = !session("s3").isVisible();
-        missingWhileHidden = row(kRoll).missingCount;
+        wantedWhileHidden = row(kRoll).wantedCount;
         show({"s3"});
         shownAgain = session("s3").isVisible();
+        wantedShownAgain = row(kRoll).wantedCount;
         northSamples = session("s2").getMeasurement(QStringLiteral("Local"), QStringLiteral("north")).size();
     });
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
 
     QVERIFY(running);
     QVERIFY(edited);
+    QVERIFY(!settling);
     QVERIFY(hidden);
-    QCOMPARE(missingWhileHidden, 1);        // s2 only, while s3 was hidden
+    QCOMPARE(wantedWhileHidden, 2);         // s1 and s2, while s3 was hidden
     QVERIFY(shownAgain);
+    QCOMPARE(wantedShownAgain, 3);
     QCOMPARE(northSamples, qsizetype(9));   // coarse_linear: nine GNSS fixes
-    m_model->flushPendingInvalidations();
     QVERIFY(spyHasAttribute(dependencySpy, "s2", QString::fromLatin1(SessionKeys::Description)));
 
     // Unrelated edits do not supersede: the fit of s1 ends well and is right
     QCOMPARE(m_queue->job(job).state, JobState::Succeeded);
     QVERIFY2(m_queue->job(job).reason.isEmpty(), qPrintable(m_queue->job(job).reason));
-    const QString difference = goldenDifference("s1", QStringLiteral("coarse_maneuver"));
+    QString difference = goldenDifference("s1", QStringLiteral("coarse_maneuver"));
     QVERIFY2(difference.isEmpty(), qPrintable(difference));
-    QCOMPARE(m_queue->model()->rowCount(), 1);      // nothing else ever started
-    QCOMPARE(row(kRoll).missingCount, 2);
+
+    // The other tracks were computed after it with no other action
+    QCOMPARE(history(), QList<JobState>({JobState::Succeeded, JobState::Succeeded, JobState::Succeeded}));
+    QCOMPARE(m_queue->job(fitJobOf("s2").id).state, JobState::Succeeded);
+    QCOMPARE(m_queue->job(fitJobOf("s3").id).state, JobState::Succeeded);
+    difference = goldenDifference("s2", QStringLiteral("coarse_linear"));
+    QVERIFY2(difference.isEmpty(), qPrintable(difference));
+    difference = goldenDifference("s3", QStringLiteral("coarse_linear"));
+    QVERIFY2(difference.isEmpty(), qPrintable(difference));
+    QVERIFY(row(kRoll).isPlain());
+    QCOMPARE(row(kRoll).doneCount, 3);
 
     // The edit was saved by the ordinary idle saver
     QVERIFY(waitForIdle(*m_model));

@@ -287,17 +287,19 @@ add_library(flysight_core STATIC
   logbookcolumn.cpp          logbookcolumn.h
   sessionmodel.cpp           sessionmodel.h
   idlescheduler.cpp          idlescheduler.h
-  # Background jobs: the one-at-a-time queue of explicit calculations (owns the
-  # application's only worker thread) and the item model of its records
+  # Background jobs: the executor of requested calculations: the running job and
+  # one chosen next job (owns the application's only worker thread) and the
+  # item model of its records
   jobmodel.cpp               jobmodel.h
   jobqueue.cpp               jobqueue.h
   attributeregistry.cpp      attributeregistry.h
   markerregistry.cpp         markerregistry.h
   plotregistry.cpp           plotregistry.h
-  # Plot check state (widget-free) and the logic behind the plot list's rows:
-  # row state, the two gestures, chained continuation, cancel, pruning
+  # Plot check state (widget-free) and the demand layer: what requested
+  # calculations the checked plots need for the visible sessions, which runs
+  # next, the per-plot state
   plotmodel.cpp              plotmodel.h
-  plotrequests.cpp           plotrequests.h
+  calculationdemand.cpp      calculationdemand.h
   momentmodel.cpp            momentmodel.h
   altitudemarkerfeature.cpp  altitudemarkerfeature.h
   # Plug-in code identity: the result version of every plug-in registration (no Python)
@@ -358,9 +360,13 @@ add_library(flysight_fusion STATIC
   fusion/temperatureimufactor.cpp      fusion/temperatureimufactor.h
   fusion/trajectoryreconstruction.cpp  fusion/trajectoryreconstruction.h
   fusion/fusionoutput.cpp              fusion/fusionoutput.h
+  # The solver's oneTBB helper threads at the priority of the thread that runs
+  # the fit (the executor's worker is below normal)
+  fusion/solverthreads.cpp             fusion/solverthreads.h
 )
 target_include_directories(flysight_fusion PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(flysight_fusion PUBLIC flysight_model Qt${QT_VERSION_MAJOR}::Core PRIVATE gtsam)
+# TBB::tbb comes with gtsam; named here because solverthreads.cpp uses it directly
+target_link_libraries(flysight_fusion PUBLIC flysight_model Qt${QT_VERSION_MAJOR}::Core PRIVATE gtsam TBB::tbb)
 set_target_properties(flysight_fusion PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
 if(MSVC)
   target_compile_options(flysight_fusion PRIVATE /EHsc /bigobj)

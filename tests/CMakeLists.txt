@@ -146,12 +146,12 @@ flysight_add_test(tst_session_model_engine SOURCES tst_session_model_engine.cpp)
 flysight_add_test(tst_result_store SOURCES tst_result_store.cpp)
 flysight_add_test(tst_result_columns SOURCES tst_result_columns.cpp)
 
-# Job queue and job model (synthetic explicit calculations; no GTSAM)
+# Executor (job queue) and job model (synthetic explicit calculations; no GTSAM)
 flysight_add_test(tst_jobqueue SOURCES tst_jobqueue.cpp)
 flysight_add_test(tst_jobmodel SOURCES tst_jobmodel.cpp)
 
-# Plot request logic (row state, gestures, continuation, cancel, pruning; no widgets)
-flysight_add_test(tst_plot_requests SOURCES tst_plot_requests.cpp)
+# Demand layer (plot demand, priority, the input-settle wait, failure memory, per-plot state; no widgets)
+flysight_add_test(tst_calculation_demand SOURCES tst_calculation_demand.cpp)
 
 # Plot-list rows: pure geometry (no widgets) ...
 flysight_add_test(tst_plot_row_layout SOURCES tst_plot_row_layout.cpp)

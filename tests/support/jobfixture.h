@@ -18,10 +18,10 @@
 #include "jobqueue.h"
 #include "sessiondata.h"
 
-// Controllable explicit calculations on real sessions, for tests of the job
-// queue, the job model, and whatever sits on top of them. A test can hold the
-// queue's worker inside a compute function, observe it there, and release or
-// cancel it - without GTSAM and without sleeps.
+// Controllable explicit calculations on real sessions, for tests of the
+// executor, the job model, and whatever sits on top of them. A test can hold
+// the executor's worker inside a compute function, observe it there, and
+// release or cancel it - without GTSAM and without sleeps.
 //
 // The synchronization in this file (semaphores, a mutex, atomics) belongs to
 // the tests. The "no locks" rule is about the library.
@@ -125,9 +125,13 @@ private:
     QStringList m_ids;
 };
 
-/// Spins the event loop until the queue has nothing queued and nothing
+/// Spins the event loop until the executor has no chosen next job and nothing
 /// running. False if that does not happen within timeoutMs.
 bool waitIdle(FlySight::JobQueue &queue, int timeoutMs = 5000);
+
+/// Spins the event loop until `job` is no longer Queued (it started, or ended
+/// without starting): for tests without a gate. False on timeout.
+bool waitStarted(FlySight::JobQueue &executor, FlySight::JobId job, int timeoutMs = 5000);
 
 /// "Nothing started" since this object was created: no jobQueued signal and no
 /// new row in the job model.

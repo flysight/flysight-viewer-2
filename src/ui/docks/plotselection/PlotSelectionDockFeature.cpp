@@ -24,9 +24,10 @@ PlotSelectionDockFeature::PlotSelectionDockFeature(const AppContext& ctx, QObjec
     m_treeView->setHeaderHidden(true);
     m_treeView->setEditTriggers(QAbstractItemView::NoEditTriggers);
 
-    // Rows of plots that wait for a background calculation show a refresh or
-    // cancel control; the delegate forwards the clicks (null requests: plain rows)
-    m_treeView->setItemDelegate(new PlotRowDelegate(ctx.plotRequests, m_treeView));
+    // Rows of plots over requested calculations show a working indicator and
+    // progress while their demand is computed, and a warning badge for sessions
+    // that could not be computed (null demand layer: plain rows)
+    m_treeView->setItemDelegate(new PlotRowDelegate(ctx.calculationDemand, m_treeView));
 
     // Preserve tree expansion state across model resets
     connect(m_plotModel, &QAbstractItemModel::modelAboutToBeReset,

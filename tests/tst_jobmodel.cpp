@@ -1,8 +1,10 @@
 // The job model's contract (sensor-fusion-jobs acceptance 18): every
 // transition arrives through model signals, finished jobs are retained with
 // state, timing and reason, and a view can render the whole history from the
-// model alone. Driven by a real JobQueue with the synthetic calculations of
-// jobfixture.h; a QAbstractItemModelTester watches every function.
+// model alone. Driven by the executor (a real JobQueue) with the synthetic
+// calculations of jobfixture.h; a QAbstractItemModelTester watches every
+// function. The executor holds at most the running job and one chosen next
+// job, so a second active job is always offered after the first has started.
 
 #include <memory>
 
@@ -187,14 +189,16 @@ private:
     {
         return m_sessions->updateAttribute(sessionId, QString::fromLatin1(key), value);
     }
-    JobId request(const QString &sessionId, const char *calculationId)
+    JobId offer(const QString &sessionId, const char *calculationId)
     {
-        return m_queue->request(sessionId, QString::fromLatin1(calculationId)).job;
+        return m_queue->offer(sessionId, QString::fromLatin1(calculationId)).job;
     }
-    /// request() and cancel() while it is still queued: a finished row at once.
+    /// offer() and cancel() while it is still the chosen next job: a finished
+    /// row at once. Only called when no chosen next job is pending (the offer
+    /// would replace it).
     JobId cancelledJob(const QString &sessionId, const char *calculationId)
     {
-        const JobId id = request(sessionId, calculationId);
+        const JobId id = offer(sessionId, calculationId);
         m_queue->cancel(id);
         return id;
     }
@@ -317,7 +321,7 @@ void JobModelTest::rolesAndColumns()
     // A queued job: every role on every column
     QVERIFY(m_sessions->updateAttribute("s1", "_DESCRIPTION", QStringLiteral("First jump")));
     QVERIFY(setInput("s1", "EA_IN", -1));
-    const JobId id = request("s1", "expA");
+    const JobId id = offer("s1", "expA");
     QCOMPARE(id, JobId(1));
     QCOMPARE(model()->rowCount(), 1);
     QCOMPARE(model()->rowOf(id), 0);
@@ -391,48 +395,51 @@ void JobModelTest::historyFromSignalsAlone()
     QVERIFY(setInput("s3", "EA_IN", 4));
 
     // 1. success, with two progress texts
-    const JobId success = request("s1", "gated");
+    const JobId success = offer("s1", "gated");
     QVERIFY(gate().waitEntered());
     gate().open(1);
     QVERIFY(waitIdle(*m_queue));
 
     // 2. rejection   3. exception (a published failure)
-    const JobId rejection = request("s2", "expA");
+    const JobId rejection = offer("s2", "expA");
+    QVERIFY(waitIdle(*m_queue));
     QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("synthetic failure")));
-    const JobId exception = request("s1", "thrower");
+    const JobId exception = offer("s1", "thrower");
     QVERIFY(waitIdle(*m_queue));
 
     // 4. cancel while running
-    const JobId cancelRunning = request("s2", "gated");
+    const JobId cancelRunning = offer("s2", "gated");
     QVERIFY(gate().waitEntered());
     QVERIFY(m_queue->cancel(cancelRunning));
     QVERIFY(waitIdle(*m_queue));
 
     // 5. cancel while queued   6. superseded by an input change while running
-    const JobId supersededRunning = request("s3", "gated");
+    const JobId supersededRunning = offer("s3", "gated");
     QVERIFY(gate().waitEntered());
-    const JobId cancelQueued = request("s3", "expA");
+    const JobId cancelQueued = offer("s3", "expA");
     QVERIFY(m_queue->cancel(cancelQueued));
     QVERIFY(setInput("s3", "G_IN", 5));
     gate().open(1);
     QVERIFY(waitIdle(*m_queue));
 
     // 7. superseded at start: its input goes away while it waits
-    const JobId holder = request("s3", "gated");
+    // 10. replaced: the chosen next job offered first is replaced by 7's
+    const JobId holder = offer("s3", "gated");
     QVERIFY(gate().waitEntered());
-    const JobId supersededAtStart = request("s3", "expA");
+    const JobId replaced = offer("s2", "gated");
+    const JobId supersededAtStart = offer("s3", "expA");
     QVERIFY(m_sessions->removeAttribute("s3", "EA_IN"));
     gate().open(1);
     QVERIFY(waitIdle(*m_queue));
 
     // 8. failed: out of memory   9. failed: the worker could not start
-    const JobId exhausted = request("s1", "exhausted");
+    const JobId exhausted = offer("s1", "exhausted");
     QVERIFY(waitIdle(*m_queue));
     m_queue->failNextWorkerStarts(1);
-    const JobId noWorker = request("s1", "expA");
+    const JobId noWorker = offer("s1", "expA");
     QVERIFY(waitIdle(*m_queue));
 
-    QCOMPARE(model()->rowCount(), 10);
+    QCOMPARE(model()->rowCount(), 11);
 
     // The state sequences, as separate signals
     QCOMPARE(m_view->states(success), QList<int>({Q, R, kSucceeded}));
@@ -445,6 +452,7 @@ void JobModelTest::historyFromSignalsAlone()
     QCOMPARE(m_view->states(supersededAtStart), QList<int>({Q, kSuperseded}));
     QCOMPARE(m_view->states(exhausted), QList<int>({Q, R, kFailed}));
     QCOMPARE(m_view->states(noWorker), QList<int>({Q, R, kFailed}));
+    QCOMPARE(m_view->states(replaced), QList<int>({Q, kCancelled}));
     QCOMPARE(m_view->progressTexts(success), QStringList({"step 1", "step 2"}));
     QCOMPARE(m_view->progressTexts(rejection), QStringList());
     QCOMPARE(m_view->maxRunningRows(), 1);
@@ -463,12 +471,13 @@ void JobModelTest::historyFromSignalsAlone()
     QCOMPARE(outcome(supersededAtStart), QStringList({"Superseded", "Inputs changed: nothing to compute"}));
     QCOMPARE(outcome(exhausted), QStringList({"Failed", "Out of memory"}));
     QCOMPARE(outcome(noWorker), QStringList({"Failed", "The worker thread could not be started"}));
+    QCOMPARE(outcome(replaced), QStringList({"Cancelled", "No longer needed"}));
     QCOMPARE(m_view->rowOfJob(exception).value(JobModel::ResultStatusRole), QVariant(int(ResultStatus::Failed)));
     QCOMPARE(m_view->rowOfJob(success).value(JobModel::ResultStatusRole), QVariant(int(ResultStatus::Ok)));
     QCOMPARE(HistoryView::text(m_view->rowOfJob(success), JobModel::ProgressColumn), QStringLiteral("step 2"));
     QCOMPARE(HistoryView::text(m_view->rowOfJob(success), JobModel::CalculationColumn), QStringLiteral("Gated"));
 
-    // The mirror, built from signals alone, equals the queue's records
+    // The mirror, built from signals alone, equals the executor's records
     QCOMPARE(m_view->rowCount(), model()->rowCount());
     for (int i = 0; i < m_view->rowCount(); ++i) {
         const HistoryView::Row r = m_view->row(i);
@@ -501,11 +510,13 @@ void JobModelTest::neverMoreThanOneRunningRow()
     QVERIFY(setInput("s1", "G_IN", 1));
     QVERIFY(setInput("s2", "G_IN", 2));
     QVERIFY(setInput("s3", "G_IN", 3));
-    request("s1", "gated");
-    request("s2", "gated");
-    request("s3", "gated");
-    for (int i = 0; i < 3; ++i) {
+    // Each next job is offered once the one before it has started
+    const QList<const char *> sessions = {"s1", "s2", "s3"};
+    offer(sessions.at(0), "gated");
+    for (int i = 0; i < sessions.size(); ++i) {
         QVERIFY(gate().waitEntered());
+        if (i + 1 < sessions.size())
+            offer(sessions.at(i + 1), "gated");
         gate().open(1);
     }
     QVERIFY(waitIdle(*m_queue));
@@ -520,10 +531,10 @@ void JobModelTest::timestampsAreOrdered()
     QVERIFY(setInput("s1", "G_IN", 4));
     QVERIFY(setInput("s2", "EA_IN", 4));
     QVERIFY(setInput("s3", "EA_IN", 4));
-    const JobId first = request("s1", "gated");
-    const JobId second = request("s2", "expA");
-    const JobId neverRan = cancelledJob("s3", "expA");
+    const JobId first = offer("s1", "gated");
     QVERIFY(gate().waitEntered());
+    const JobId neverRan = cancelledJob("s3", "expA");
+    const JobId second = offer("s2", "expA");
     gate().open(1);
     QVERIFY(waitIdle(*m_queue));
 
@@ -549,7 +560,7 @@ void JobModelTest::progressIsItsOwnSignal()
     QVERIFY(setInput("s1", "G_IN", 4));
     QSignalSpy dataSpy(model(), &QAbstractItemModel::dataChanged);
     QSignalSpy progressSpy(m_queue.get(), &JobQueue::jobProgress);
-    const JobId id = request("s1", "gated");
+    const JobId id = offer("s1", "gated");
     QVERIFY(gate().waitEntered());
     QTRY_COMPARE(m_queue->job(id).progressText, QStringLiteral("step 1"));
 
@@ -582,7 +593,7 @@ void JobModelTest::progressIsItsOwnSignal()
 void JobModelTest::cancelRequestedIsVisible()
 {
     QVERIFY(setInput("s1", "G_IN", 4));
-    const JobId id = request("s1", "gated");
+    const JobId id = offer("s1", "gated");
     QVERIFY(gate().waitEntered());
 
     QSignalSpy dataSpy(model(), &QAbstractItemModel::dataChanged);
@@ -612,12 +623,12 @@ void JobModelTest::removeFinishedAndClear()
     QVERIFY(setInput("s2", "EA_IN", 4));
     QVERIFY(setInput("s3", "EA_IN", 4));
     const JobId a = cancelledJob("s2", "expA");
-    const JobId active = request("s1", "gated");
+    const JobId active = offer("s1", "gated");
+    QVERIFY(gate().waitEntered());
     const JobId b = cancelledJob("s2", "expA");
     const JobId c = cancelledJob("s3", "expA");
-    const JobId queued = request("s3", "expA");
     const JobId d = cancelledJob("s2", "expA");
-    QVERIFY(gate().waitEntered());
+    const JobId queued = offer("s3", "expA");
     QCOMPARE(model()->rowCount(), 6);
 
     QSignalSpy removedSpy(model(), &QAbstractItemModel::rowsRemoved);
@@ -635,8 +646,8 @@ void JobModelTest::removeFinishedAndClear()
     QCOMPARE(model()->rowOf(a), 0);
     QCOMPARE(model()->rowOf(active), 1);
     QCOMPARE(model()->rowOf(c), 2);
-    QCOMPARE(model()->rowOf(queued), 3);
-    QCOMPARE(model()->rowOf(d), 4);
+    QCOMPARE(model()->rowOf(d), 3);
+    QCOMPARE(model()->rowOf(queued), 4);
     QCOMPARE(m_queue->job(b).id, JobId(0));
 
     // Every finished row goes; the active ones stay, in order
@@ -648,7 +659,7 @@ void JobModelTest::removeFinishedAndClear()
     QCOMPARE(m_view->rowCount(), 2);
     QCOMPARE(m_view->row(0).value(JobModel::JobIdRole).toULongLong(), qulonglong(active));
 
-    // The queue still finds its jobs after the rows moved
+    // The executor still finds its jobs after the rows moved
     gate().open(1);
     QVERIFY(waitIdle(*m_queue));
     QCOMPARE(m_queue->job(active).state, JobState::Succeeded);
@@ -665,9 +676,9 @@ void JobModelTest::removeRowsRefusesActive()
     QVERIFY(setInput("s3", "EA_IN", 4));
     const JobId a = cancelledJob("s2", "expA");
     const JobId b = cancelledJob("s2", "expA");
-    const JobId active = request("s1", "gated");
-    const JobId queued = request("s3", "expA");
+    const JobId active = offer("s1", "gated");
     QVERIFY(gate().waitEntered());
+    const JobId queued = offer("s3", "expA");
 
     QVERIFY(!model()->removeRows(1, 2));        // finished + running
     QVERIFY(!model()->removeRows(2, 1));        // running
@@ -700,7 +711,7 @@ void JobModelTest::retentionBound()
 
     QVERIFY(setInput("s1", "G_IN", 4));
     QVERIFY(setInput("s2", "EA_IN", 4));
-    const JobId active = request("s1", "gated");        // older than every finished job
+    const JobId active = offer("s1", "gated");        // older than every finished job
     QVERIFY(gate().waitEntered());
     const JobId f1 = cancelledJob("s2", "expA");
     const JobId f2 = cancelledJob("s2", "expA");
@@ -771,13 +782,17 @@ void JobModelTest::nothingIsPersisted()
     QVERIFY(!stem1.isEmpty());
     QVERIFY(!stem2.isEmpty());
 
-    const JobId success = request("s1", "gated");
-    const JobId rejection = request("s2", "expA");
-    const JobId failure = request("s1", "exhausted");
-    const JobId cancelled = request("s3", "gated");
+    // One after another: success, rejection, failure, cancelled
+    const JobId success = offer("s1", "gated");
     QVERIFY(gate().waitEntered());
     gate().open(1);
-    QTRY_COMPARE(m_queue->job(failure).state, JobState::Failed);
+    QVERIFY(waitIdle(*m_queue));
+    const JobId rejection = offer("s2", "expA");
+    QVERIFY(waitIdle(*m_queue));
+    const JobId failure = offer("s1", "exhausted");
+    QVERIFY(waitIdle(*m_queue));
+    QCOMPARE(m_queue->job(failure).state, JobState::Failed);
+    const JobId cancelled = offer("s3", "gated");
     QVERIFY(gate().waitEntered());
     QVERIFY(m_queue->cancel(cancelled));
     QVERIFY(waitIdle(*m_queue));

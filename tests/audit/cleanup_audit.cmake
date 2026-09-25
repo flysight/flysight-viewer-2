@@ -11,8 +11,8 @@
 #   - the mechanisms of sensor-fusion-clean-port that have no successor stay
 #     absent (acceptance 120), and the structure that replaced them stays in
 #     place: one worker thread and no locks, GTSAM confined to the fusion
-#     kernel, gestures only from the plot list's row delegate, a widget-free
-#     core; the stationary-window initializer, its silent poll and the
+#     kernel, work started only by the demand layer, through the executor, a
+#     widget-free core; the stationary-window initializer, its silent poll and the
 #     constant-bias algorithm strings retired by the sensor fusion improvements
 #     stay absent, and the fusion tools stay isolated (items 212, 218, 231,
 #     233, 234, 247);
@@ -261,9 +261,9 @@ expect_none("exporter and merge read stored state only"
 # structure that replaced them in place.
 # =============================================================================
 
-# The logic of background work: the job queue, its model, the plot request
-# component, and the fusion library.
-set(FUSION_CORE "src/jobqueue.*" "src/jobmodel.*" "src/plotrequests.*" src/fusion)
+# The logic of background work: the executor, its model, the demand layer, and
+# the fusion library.
+set(FUSION_CORE "src/jobqueue.*" "src/jobmodel.*" "src/calculationdemand.*" src/fusion)
 
 # ─────────────────────────────── branch-mechanisms (acceptance 120)
 # The branch ran the fit inside a getter, behind an application-modal progress
@@ -286,7 +286,10 @@ expect_none("no re-entrancy guard, no 'a calculation is running' flag"
 # ever must, that is a design change to discuss, not an exclusion to add.
 expect_none("the idle scheduler is never paused for a calculation"
   "[Ff]usion|[Jj]ob[Qq]ueue|calculations/|IsRunning" src/idlescheduler.cpp src/idlescheduler.h)
-expect_none("jobs never touch the idle scheduler" "[Ii]dle[Ss]cheduler" ${FUSION_CORE})
+# The executor and the kernel never touch the idle scheduler. (The demand
+# layer is not in this rule: its column fill is a scheduler task.)
+expect_none("jobs never touch the idle scheduler" "[Ii]dle[Ss]cheduler"
+  "src/jobqueue.*" "src/jobmodel.*" src/fusion)
 # m_pendingRebuildLevel is master's own and is not part of this rule.
 expect_none("no plot rebuild guard" "m_rebuildingPlot|QScopedValueRollback" src/ui/docks/plot)
 # Allow: none expected. A calculation outcome is reported by the plot row
@@ -332,13 +335,13 @@ expect_none("public and registration files are GTSAM-free" "#include <(gtsam|Eig
   src/fusion/fusion.h src/fusion/fusionregistration.h src/fusion/fusionregistration.cpp)
 # Allow: only the registration adapter may see the engine and the session keys.
 expect_none("the kernel is pure"
-  "#include [<\"](sessiondata|sessionmodel|engine/|jobqueue|plotrequests|preferences/|QApplication|QWidget|QtWidgets|QtGui)"
+  "#include [<\"](sessiondata|sessionmodel|engine/|jobqueue|calculationdemand|preferences/|QApplication|QWidget|QtWidgets|QtGui)"
   src/fusion ":!src/fusion/fusionregistration.cpp" ":!src/fusion/fusionregistration.h")
 expect_none("the kernel does not log" "qWarning|qInfo|qDebug|qCritical" src/fusion)
 # flysight_core never references the fusion library; the application calls its
 # one entry point next to the built-in registration.
 expect_none("nobody but the application references the fusion library" "fusion/|Fusion::"
-  src/calculations src/engine "src/sessionmodel.*" "src/jobqueue.*" "src/jobmodel.*" "src/plotrequests.*")
+  src/calculations src/engine "src/sessionmodel.*" "src/jobqueue.*" "src/jobmodel.*" "src/calculationdemand.*")
 # Narrow and case-sensitive on purpose: the GTSAM_..._BOOST_... option and
 # macro names and the "Boost::" test of the Boost-free guard in
 # cmake/SolverDependencies.cmake must not match.
@@ -359,37 +362,42 @@ expect_none("no locks"
 expect_only("one atomic: the cancel flag" "std::atomic|QAtomic" "^src/jobqueue\\.cpp$" src)
 
 # ─────────────────────────────── gestures (acceptance 116)
-# Only a gesture starts expensive work, and a gesture is an explicit call from
-# the plot list's row delegate. MainWindow cannot be constructed in the test
-# harness, so that nothing in it (start-up restore, profiles, the Plots menu)
-# calls these is a text rule.
+# Only the demand layer starts requested calculations, and it derives what to
+# start from what is switched on; nothing is a gesture. MainWindow cannot be
+# constructed in the test harness, so that nothing in it (start-up restore,
+# profiles, the Plots menu) offers or cancels work is a text rule.
 audit_group(gestures)
-expect_only("gestures come from the row delegate only" "plotCheckedByUser|refreshPressed|cancelPressed"
-  "^src/plotrequests\\.(h|cpp)$|^src/ui/docks/plotselection/PlotRowDelegate\\.(h|cpp)$" src)
+expect_none("no gesture entry points" "plotCheckedByUser|refreshPressed|cancelPressed"
+  src tests ":!tests/README.md")
 # The opening parenthesis directly after the name keeps publishInvalidation(,
 # publishEdges( and publishCalculationInvalidation( out of this rule.
 expect_only("explicit work is prepared and published in one place" "[.>]prepare\\(|[.>]publish\\("
   "^src/jobqueue\\.cpp$|^src/engine/" src)
-expect_only("no reader requests" "[.>]request\\("
-  "^src/plotrequests\\.cpp$|^src/jobqueue\\.(cpp|h)$|^src/engine/" src)
+expect_only("no reader requests" "[.>]request\\(" "^src/engine/" src)
 # CalculationEngine::request() is the SYNCHRONOUS request: it runs the explicit
 # calculation on the calling thread, which in the application is the GUI
 # thread. Product code never calls it (tests do, and the engine's own files
-# name it); explicit work runs only as a job, through JobQueue::request().
-# The first rule names the ways src spells a session's engine
-# (calculationEngine().request(, engine.request(, m_engine->request( ...) and
-# does not match m_jobQueue->request(. The second closes the door on an alias
-# (`auto &e = session.calculationEngine(); e.request(`): outside src/engine
-# exactly one line calls any request( through an object, the job request in
-# PlotRequests::requestTracks().
-# Allow: none expected for the first rule. The count changes only when a second
-# legitimate caller of JobQueue::request() appears, which is itself a design
-# change (plotrequests.h: "the only caller").
+# name it); explicit work runs only as a job, through JobQueue::offer() from
+# CalculationDemand, which keeps the executor's chosen next job equal to what
+# the checked plots need for the visible sessions. The first rule names the
+# ways src spells a session's engine (calculationEngine().request(,
+# engine.request(, m_engine->request( ...); together with "no reader requests"
+# it closes the door on an alias (`auto &e = session.calculationEngine();
+# e.request(`). The offer is made on exactly one line of product code, and
+# only the demand layer withdraws the chosen next job; no product code cancels
+# a job (JobQueue::cancel() is kept for a later jobs view).
+# Allow: none expected. The count changes only when a second legitimate caller
+# of JobQueue::offer() appears, which is itself a design change
+# (calculationdemand.h: "the only caller"). A comment that quotes these calls
+# names them without the member-access prefix.
 expect_none("no synchronous explicit request in product code"
   "[Ee]ngine(\\(\\))? *(\\.|->) *request\\(" src ":!src/engine")
-expect_count("one call of request( in product code: the job request" "[.>]request\\(" 1 src ":!src/engine")
-expect_only("one call of request( in product code: the job request" "[.>]request\\("
-  "^src/plotrequests\\.cpp$" src ":!src/engine")
+expect_count("one call of offer( in product code: the demand layer" "[.>]offer\\(" 1 src)
+expect_only("one call of offer( in product code: the demand layer" "[.>]offer\\("
+  "^src/calculationdemand\\.cpp$" src)
+expect_only("the chosen next job is withdrawn by the demand layer only" "[.>]withdrawChosenNext\\("
+  "^src/calculationdemand\\.cpp$" src)
+expect_none("no product code cancels a job" "([Jj]ob[Qq]ueue|m_queue|executor)(->|\\.)cancel\\(" src)
 # Allow: a future jobs dock is a pure view of JobQueue::model() and is added to
 # the regex when it exists. Until then AppContext only carries the pointer.
 expect_only("no jobs window, no view of the queue" "[Jj]ob[Qq]ueue|JobModel"
@@ -407,7 +415,7 @@ expect_only("one authority: explicit-backed" "EvaluationPolicy::Explicit"
 audit_group(widget-free-core)
 expect_none("the logic components see no widget"
   "QtWidgets|#include <Q(Widget|TreeView|AbstractItemView|StyledItemDelegate|Application|ToolTip)>"
-  "src/jobqueue.*" "src/jobmodel.*" "src/plotrequests.*" "src/plotmodel.*"
+  "src/jobqueue.*" "src/jobmodel.*" "src/calculationdemand.*" "src/plotmodel.*"
   src/ui/docks/plotselection/PlotRowLayout.h)
 
 # =============================================================================
@@ -553,7 +561,7 @@ expect_count("the column worker's copy is restored from its step only" "restoreF
   src/sessionmodel.cpp)
 # Restoring is not requesting. Allow: none expected; a comment that names the
 # queue is reworded.
-expect_none("restoring is not requesting" "JobQueue|PlotRequests|[.>](request|prepare|publish)\\("
+expect_none("restoring is not requesting" "JobQueue|CalculationDemand|[.>](request|offer|prepare|publish)\\("
   "src/calculationresultstore.*")
 # The session file is the recording: nothing on its path knows a record exists.
 # Allow: none expected.

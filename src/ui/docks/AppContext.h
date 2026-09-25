@@ -13,7 +13,7 @@ class PlotRangeModel;
 class PlotViewSettingsModel;
 class MeasureModel;
 class JobQueue;
-class PlotRequests;
+class CalculationDemand;
 
 /**
  * Bundles all shared services that dock features may need.
@@ -29,7 +29,7 @@ struct AppContext {
     PlotViewSettingsModel* plotViewSettings = nullptr;
     MeasureModel* measureModel = nullptr;
     JobQueue* jobQueue = nullptr;             // background calculation jobs; JobQueue::model() is what a jobs view would show
-    PlotRequests* plotRequests = nullptr;     // plot-list row state and gestures (may be null: rows are then plain)
+    CalculationDemand* calculationDemand = nullptr; // plot-list row state (may be null: rows are then plain)
     QSettings* settings = nullptr;
 };
 

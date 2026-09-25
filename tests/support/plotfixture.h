@@ -6,15 +6,16 @@
 #include <QVector>
 
 #include "plotregistry.h"
-#include "plotrequests.h"
+#include "calculationdemand.h"
 
 // Synthetic plots over the explicit calculations of jobfixture.h, for tests of
-// the plot request logic. Plots need measurement names; JobWorld's calculations
+// the demand layer. Plots need measurement names; JobWorld's calculations
 // produce attributes. On-demand "bridge" calculations turn one into the other,
 // which also makes every row test exercise "sees through on-demand
 // intermediates".
 
 namespace FlySight {
+class JobQueue;
 class SessionModel;
 }
 
@@ -36,12 +37,14 @@ namespace FlySightTest {
 ///  | plotT     | T_OUT           | Syn/t     | {T_OUT}      | thrower ("synthetic failure")                  |
 ///  | plotPlain | P_IN (stored)   | Syn/plain | {P_IN}       | nothing explicit                               |
 ///  | plotH     | H_OUT           | Syn/h     | {H_OUT}      | afterG <- gated (first link holds in the gate) |
+///  | plotX     | X_OUT           | Syn/x     | {X_OUT}      | exhausted (out of memory on its first run)     |
 ///
 /// plus one EXPLICIT calculation of the fixture: afterG (title "After G"),
 /// input attribute G_OUT, output attribute H_OUT = G_OUT + 1, pure, no gate.
 ///
 /// Literals for G_IN = 4: Syn/g {5}, Syn/g2 {10}, Syn/h {6}; for EA_IN = 4,
-/// EB_IN = 10: Syn/db {19}, Syn/ea {5}.
+/// EB_IN = 10: Syn/db {19}, Syn/ea {5}; for X_IN = 4, on the second run:
+/// Syn/x {5}.
 class PlotFixture {
 public:
     PlotFixture();
@@ -52,7 +55,7 @@ public:
     /// Every id this fixture registered, in registration order.
     QStringList registeredIds() const { return m_ids; }
 
-    /// The seven plots of the table, in table order: category "Synthetic",
+    /// The eight plots of the table, in table order: category "Synthetic",
     /// plotName = the measurement id, role Dependent. For PlotModel::setPlots().
     static QVector<FlySight::PlotValue> plots();
 
@@ -62,16 +65,22 @@ public:
     /// Stores an input attribute through SessionModel::updateAttribute(), the
     /// application's edit path. False when the model refused.
     static bool giveInput(FlySight::SessionModel &model, const QString &id, const QString &key, double value);
-    /// Two turns of the event loop and a flush of `requests` (which may be
+    /// Two turns of the event loop and a flush of `demand` (which may be
     /// null): whatever was going to start by itself has started.
-    static void spin(FlySight::PlotRequests *requests);
+    static void spin(FlySight::CalculationDemand *demand);
 
 private:
     QStringList m_ids;
 };
 
-/// The session ids of a row's track list, in list order.
-QStringList sessionIdsOf(const QList<FlySight::PlotTrackState> &tracks);
+/// The session ids of a state's track list, in list order.
+QStringList sessionIdsOf(const QList<FlySight::DemandTrack> &tracks);
+
+/// Spins the event loop, flushing `demand` on every poll, until the executor
+/// is idle, no pass is pending and no session is settling: everything the
+/// demand layer wanted has run. False on timeout.
+bool waitDemandIdle(FlySight::JobQueue &executor, FlySight::CalculationDemand &demand,
+                    int timeoutMs = 5000);
 
 } // namespace FlySightTest
 

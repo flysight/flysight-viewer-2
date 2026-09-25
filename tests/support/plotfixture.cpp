@@ -7,6 +7,7 @@
 #include "engine/calculationregistry.h"
 #include "engine/calculationresult.h"
 #include "engine/evaluationcontext.h"
+#include "jobqueue.h"
 #include "sessionmodel.h"
 
 using namespace FlySight;
@@ -67,6 +68,7 @@ PlotFixture::PlotFixture()
     registry.registerCalculation(bridge("plotT", "T_OUT", "t"));
     registry.registerCalculation(bridge("plotPlain", "P_IN", "plain"));
     registry.registerCalculation(bridge("plotH", "H_OUT", "h"));
+    registry.registerCalculation(bridge("plotX", "X_OUT", "x"));
 
     // What was added, not what was asked for (see JobWorld)
     const QStringList after = registry.registeredIds();
@@ -86,7 +88,7 @@ PlotFixture::~PlotFixture()
 QVector<PlotValue> PlotFixture::plots()
 {
     QVector<PlotValue> result;
-    for (const char *measurement : {"g", "g2", "db", "ea", "t", "plain", "h"}) {
+    for (const char *measurement : {"g", "g2", "db", "ea", "t", "plain", "h", "x"}) {
         PlotValue plot;
         plot.category = QStringLiteral("Synthetic");
         plot.plotName = QString::fromLatin1(measurement);
@@ -114,20 +116,28 @@ bool PlotFixture::giveInput(SessionModel &model, const QString &id, const QStrin
     return model.updateAttribute(id, key, value);
 }
 
-void PlotFixture::spin(PlotRequests *requests)
+void PlotFixture::spin(CalculationDemand *demand)
 {
     QTest::qWait(0);
     QTest::qWait(0);
-    if (requests)
-        requests->flush();
+    if (demand)
+        demand->flush();
 }
 
-QStringList sessionIdsOf(const QList<PlotTrackState> &tracks)
+QStringList sessionIdsOf(const QList<DemandTrack> &tracks)
 {
     QStringList ids;
-    for (const PlotTrackState &track : tracks)
+    for (const DemandTrack &track : tracks)
         ids.append(track.sessionId);
     return ids;
+}
+
+bool waitDemandIdle(JobQueue &executor, CalculationDemand &demand, int timeoutMs)
+{
+    return QTest::qWaitFor([&executor, &demand] {
+        demand.flush();
+        return executor.isIdle() && !demand.hasPendingUpdate() && !demand.hasSettlingSessions();
+    }, timeoutMs);
 }
 
 } // namespace FlySightTest

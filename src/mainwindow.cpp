@@ -46,7 +46,7 @@
 #include "plotrangemodel.h"
 #include "measuremodel.h"
 #include "jobqueue.h"
-#include "plotrequests.h"
+#include "calculationdemand.h"
 #include "units/unitconverter.h"
 #include "calculations/builtincalculations.h"
 #include "fusion/fusionregistration.h"
@@ -202,15 +202,15 @@ MainWindow::MainWindow(QWidget *parent)
     // Create measure model for measure tool data
     m_measureModel = new MeasureModel(this);
 
-    // The job queue for background (explicit) calculations, then the component
-    // that turns plot-list gestures into jobs - in that order, and here: the
-    // session model is populated and every calculation is registered, and no
-    // dock exists yet. Nothing at start-up is a gesture: the checked plots
-    // restored by setPlots() below and a first-launch applyProfile() reach
-    // PlotRequests as ordinary model changes, so starting the application
-    // starts no job.
+    // The executor for requested calculations, then the demand layer that
+    // decides what it runs, in that order and here: the session model is
+    // populated, every calculation is registered, and no dock exists yet. Work
+    // follows what is switched on: the checked plots restored by setPlots()
+    // below and a first-launch applyProfile() create demand the same way a
+    // click does, but every session starts hidden, so starting the application
+    // starts no job; work starts when a session is shown.
     m_jobQueue = new JobQueue(model, this);
-    m_plotRequests = new PlotRequests(model, m_plotModel, m_jobQueue, this);
+    m_calculationDemand = new CalculationDemand(model, m_plotModel, m_jobQueue, this);
 
     // Create all docks via registry
     AppContext ctx;
@@ -222,7 +222,7 @@ MainWindow::MainWindow(QWidget *parent)
     ctx.plotViewSettings = m_plotViewSettingsModel;
     ctx.measureModel = m_measureModel;
     ctx.jobQueue = m_jobQueue;
-    ctx.plotRequests = m_plotRequests;
+    ctx.calculationDemand = m_calculationDemand;
     ctx.settings = m_settings;
 
     m_features = DockRegistry::createAll(ctx, this);
@@ -340,11 +340,12 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     // QObject deletes children in creation order, which would destroy the
-    // session model (created first) under a queue that may still hold a worker.
-    // So: the request component, then the queue (its destructor shuts it down
-    // and joins the worker), then everything else - also when closeEvent() never ran.
-    delete m_plotRequests;
-    m_plotRequests = nullptr;
+    // session model (created first) under an executor that may still hold a
+    // worker. So: the demand layer, then the executor (its destructor shuts it
+    // down and joins the worker), then everything else - also when closeEvent()
+    // never ran.
+    delete m_calculationDemand;
+    m_calculationDemand = nullptr;
     delete m_jobQueue;
     m_jobQueue = nullptr;
 
@@ -353,15 +354,15 @@ MainWindow::~MainWindow()
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    // First of all: cancel every background job and wait for the worker to
+    // First of all: stop the executor and wait for the worker to
     // stop, before anything it could touch is saved or torn down. The wait
     // lasts until the running fit reaches its next cancellation boundary: one
     // solver step (an optimizer iteration, or 256 states of graph
     // construction), or during preparation one candidate window of the
     // initialization scan; the rest of preparation is a few linear passes
     // over the recording. Nothing below can veto the close; a future veto
-    // must be decided BEFORE this call, because a queue that has been shut
-    // down refuses every later request.
+    // must be decided BEFORE this call, because an executor that has been shut
+    // down refuses every later offer.
     if (m_jobQueue) {
         const bool busy = !m_jobQueue->isIdle();
         if (busy)

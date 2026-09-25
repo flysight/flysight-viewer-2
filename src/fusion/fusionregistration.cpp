@@ -10,6 +10,7 @@
 #include "calculations/timefithelper.h"
 #include "engine/calculationprogress.h"
 #include "fusion/fusion.h"
+#include "fusion/solverthreads.h"
 #include "sessiondata.h"
 
 // Sensor fusion as registered calculations: a thin adapter between the engine
@@ -181,10 +182,15 @@ CalculationResult computeFit(const EvaluationContext &ctx)
     // path it is CalculationProgress::none(): text is dropped and cancellation
     // never happens, so both paths run the same fit on the same values.
     CalculationProgress &facility = ctx.progress();
-    const Fusion::Result fit = Fusion::run(
-        channels,
-        [&facility](const QString &text) { facility.report(text); },
-        [&facility] { return facility.isCancelled(); });
+    // On the executor's below-normal worker the solver's helper threads must
+    // run below normal too, or they starve it (solverthreads.h)
+    Fusion::Result fit;
+    Fusion::runWithSolverThreadsAtCallerPriority([&] {
+        fit = Fusion::run(
+            channels,
+            [&facility](const QString &text) { facility.report(text); },
+            [&facility] { return facility.isCancelled(); });
+    });
 
     // Abandoned at a boundary: the engine's cancellation, so nothing is published
     if (fit.outcome == Fusion::Outcome::Cancelled)

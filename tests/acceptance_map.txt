@@ -277,8 +277,8 @@
 108 tst_jobqueue inputChangeWhileRunningSupersedes
 108 tst_calcengine_async willBeRefusedReportsTheEnginesMarks
 108 tst_jobqueue staleRunningJobIsStoppedAtOnce
-108 tst_jobqueue requestWhileStaleJobWindsDown
-108 tst_plot_requests staleRunningJobShowsRefreshAtOnce
+108 tst_jobqueue offerWhileStaleJobWindsDown
+108 tst_calculation_demand staleRunningJobIsWaitingAtOnce
 108 tst_fusion_jobs inputChangeDuringFitSupersedes
 108 tst_calcengine_async changeAfterPublicationDropsDependents
 108 tst_fusion_session changeAfterPublicationDropsEverything
@@ -298,7 +298,7 @@
 
 # 111 - a session without IMU data is never missing, pending or failed; no job can be created for it
 111 tst_jobqueue refusesMissingInput
-111 tst_plot_requests sessionWithoutInputIsNeverListed
+111 tst_calculation_demand sessionWithoutInputIsNeverListed
 111 tst_fusion_session missingInputsAreNotApplicable
 111 tst_fusion_jobs noImuSessionCannotHaveAJob
 111 tst_fusion_rows noImuSessionIsNeverCounted
@@ -310,14 +310,14 @@
 
 # 113 - B consumes A: one gesture on a plot of B's output runs A then B
 113 tst_calcengine_blockers chainedBlockers
-113 tst_plot_requests chainedBlockersContinue
+113 tst_calculation_demand chainedBlockersContinue
 
 # 114 - never more than one job at a time; duplicate requests create no duplicate jobs
-114 tst_jobqueue oneAtATimeInRequestOrder
-114 tst_jobqueue duplicateRequestsCreateNoDuplicates
+114 tst_jobqueue oneAtATimeInOfferOrder
+114 tst_jobqueue duplicateOffersCreateNoDuplicates
 
 # 115 - row behaviour without widgets: synthetic, then with the real fusion plots; what the user sees
-115 tst_plot_requests rowScript
+115 tst_calculation_demand rowScript
 115 tst_fusion_rows realRowScript
 115 tst_fusion_rows rollPitchYawShareOneJob
 115 tst_fusion_rows accHRowIsBlockedByFusion
@@ -329,13 +329,13 @@
 115 manual M7
 
 # 116 - start-up restore and applying a profile start no job; only a direct check is a gesture
-116 tst_plot_requests startupRestoreStartsNothing
-116 tst_plot_requests profileStyleApplyStartsNothing
-116 tst_plot_requests programmaticCheckStartsNothing
-116 tst_plot_row_delegate programmaticCheckStartsNothingWithViewAttached
-116 tst_plot_row_delegate startupStyleRestoreStartsNothingWithViewAttached
-116 tst_plot_row_delegate checkBoxClickIsGesture
-116 tst_plot_requests merelyUncomputedIsNotWorthAWarning
+116 tst_calculation_demand startupRestoreWithHiddenSessionsStartsNothing
+116 tst_calculation_demand profileStyleApplyCreatesDemand
+116 tst_calculation_demand programmaticCheckCreatesDemand
+116 tst_plot_row_delegate programmaticCheckIsTheSameAsAClick
+116 tst_plot_row_delegate startupRestoreWithHiddenSessionsStartsNothingWithViewAttached
+116 tst_plot_row_delegate checkBoxClickChecksThroughTheModel
+116 tst_calculation_demand merelyUncomputedIsNotWorthAWarning
 116 audit gestures
 116 manual M1
 116 manual M2
@@ -633,7 +633,7 @@
 
 # 306 - (2) kernel, job queue gestures and plot-row semantics unchanged beyond counting a restored result as computed
 306 tst_fusion_golden successFixturesMatchGolden
-306 tst_plot_requests rowScript
+306 tst_calculation_demand rowScript
 306 tst_fusion_rows realRowScript
 306 audit gestures
 

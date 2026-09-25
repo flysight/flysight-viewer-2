@@ -1,20 +1,26 @@
 // The plot list's row delegate (PlotRowDelegate) in an offscreen QTreeView, on
-// a real PlotRequests, PlotModel, JobQueue and SessionModel, with the synthetic
-// plots of plotfixture.h, driven by synthesized mouse and key events. This is
-// the only test that links Qt Widgets (FLYSIGHT_BUILD_WIDGET_TESTS).
-// Sensor-fusion-jobs spec 9.2-9.4 (the view half); acceptance 16 (wiring half):
-// the view adds no path from a model change to a request, and a check made by
-// direct interaction with the row is the one thing it reports.
+// a real CalculationDemand, PlotModel, executor (JobQueue) and SessionModel,
+// with the synthetic plots of plotfixture.h, driven by synthesized mouse and
+// key events. This is the only test that links Qt Widgets
+// (FLYSIGHT_BUILD_WIDGET_TESTS).
+// Sensor-fusion-jobs spec 9.2-9.4 (the view half); acceptance 116 (wiring
+// half): the view adds no path of its own from the user to work. Checking a
+// row is the base class's write to PlotModel, which the demand layer observes
+// like every other check change; nothing in the row is clickable beyond what
+// QStyledItemDelegate makes clickable.
 //
 // What is proved here is what the view owns: plain rows are the base
-// delegate's, hit-testing, the check gesture, the tooltip, the repaint. State,
-// counts and what is requested are PlotRequests' (tst_plot_requests).
+// delegate's, the working indicator and the warning badge are painted, a
+// click anywhere is the base delegate's click, the tooltip, the repaint.
+// State, counts and what is computed are CalculationDemand's
+// (tst_calculation_demand).
 //
 // Synchronization: Gate::waitEntered() proves the worker is inside a compute
-// function; QTRY_* and waitIdle() spin the event loop; PlotRequests::flush()
-// runs a pending pass before a row state is read or an image is grabbed. There
-// are no sleeps.
+// function; QTRY_*, waitIdle() and waitDemandIdle() spin the event loop;
+// CalculationDemand::flush() runs a pending pass before a row state is read or
+// an image is grabbed. There are no sleeps.
 
+#include <functional>
 #include <memory>
 
 #include <QApplication>
@@ -30,6 +36,7 @@
 #include <QTreeView>
 #include <QtTest>
 
+#include "calculationdemand.h"
 #include "engine/calculationregistry.h"
 #include "jobfixture.h"
 #include "jobmodel.h"
@@ -38,7 +45,6 @@
 #include "logbookprobe.h"
 #include "plotfixture.h"
 #include "plotmodel.h"
-#include "plotrequests.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
@@ -49,8 +55,6 @@
 
 using namespace FlySight;
 using namespace FlySightTest;
-
-using Control = PlotRowState::Control;
 
 namespace {
 
@@ -77,6 +81,15 @@ QImage cut(const QImage &image, const QRect &rect)
                             qRound(rect.width() * ratio), qRound(rect.height() * ratio)));
 }
 
+/// The kinds of click compared with the base delegate's.
+enum class Click { Left, Right, Middle, Double };
+
+/// Where a click left the view.
+struct ClickOutcome {
+    QModelIndex current;
+    QModelIndexList selected;
+};
+
 } // namespace
 
 class PlotRowDelegateTest : public QObject {
@@ -88,53 +101,61 @@ private slots:
     void cleanup();
 
     void plainRowsAreIdenticalToBaseDelegate();
-    void missingRowPaintsControl();
+    void workingRowPaintsIndicator();
     void longNameIsElidedNotTheCluster();
-    void checkBoxClickIsGesture();
-    void spaceKeyIsGesture();
-    void uncheckIsNotAGesture();
-    void programmaticCheckStartsNothingWithViewAttached();
-    void startupStyleRestoreStartsNothingWithViewAttached();
-    void refreshClickRequests();
-    void cancelClickCancelsAndLeavesChecked();
-    void controlClickDoesNotToggleOrSelect();
-    void pressInsideReleaseOutsideDoesNothing();
-    void pressOutsideReleaseInsideDoesNothing();
-    void clickOnLabelOrBadgeDoesNothing();
-    void rightClickDoesNothing();
-    void doubleClickOnRefreshRequestsOnceAndCancelsNothing();
-    void toolTipComesFromRowState();
-    void rowStateChangeRepaintsRow();
-    void survivesRequestsDestroyedFirst();
+    void checkBoxClickChecksThroughTheModel();
+    void spaceKeyChecksThroughTheModel();
+    void uncheckByClickDropsWaitingWork();
+    void programmaticCheckIsTheSameAsAClick();
+    void startupRestoreWithHiddenSessionsStartsNothingWithViewAttached();
+    void clickOnClusterIsAClickOnTheRow();
+    void toolTipComesFromPlotState();
+    void plotStateChangeRepaintsRow();
+    void survivesDemandDestroyedFirst();
 
 private:
     Gate &gate() { return m_world->gate(); }
 
-    /// PlotModel, PlotRequests, the view and the delegate, as the application
-    /// builds them: the component before the view. `plots` go into the model
-    /// at once unless `plotsLater`. False when the view was never exposed (the
-    /// rest is then not built); check it with QVERIFY in the test function.
+    /// PlotModel, CalculationDemand, the view and the delegate, as the
+    /// application builds them: the component before the view. `plots` go into
+    /// the model at once unless `plotsLater`. False when the view was never
+    /// exposed (the rest is then not built); check it with QVERIFY in the test
+    /// function.
     [[nodiscard]] bool buildUi(const QVector<PlotValue> &plots, QSettings *settings = nullptr, bool plotsLater = false);
     void destroyUi();
 
-    /// A programmatic check: never a gesture.
+    /// A programmatic check, not through the view: PlotModel::setPlotEnabled(),
+    /// as applyProfile() and the Plots menu's model calls do.
     void check(const char *measurement, bool enabled = true)
     {
         m_plots->setPlotEnabled(QStringLiteral("Syn"), QString::fromLatin1(measurement), enabled);
     }
     bool isChecked(const QModelIndex &index) const { return index.data(Qt::CheckStateRole).toInt() == Qt::Checked; }
-    /// The current row state: a pending pass runs first.
-    PlotRowState row(const char *plotId)
+    /// The current plot state: a pending pass runs first.
+    DemandState row(const char *plotId)
     {
-        m_requests->flush();
-        return m_requests->rowState(QString::fromLatin1(plotId));
+        m_demand->flush();
+        return m_demand->plotState(QString::fromLatin1(plotId));
     }
     /// Two turns of the event loop and a flush: whatever was going to start by
     /// itself has started, and whatever was going to be painted is painted.
     void spin()
     {
-        PlotFixture::spin(m_requests.get());
+        PlotFixture::spin(m_demand.get());
         QApplication::processEvents();
+    }
+    /// "<session> <calculation> <state>" of every job from row `from` of the
+    /// job model on, in offer order.
+    QStringList jobsFrom(int from) const
+    {
+        QStringList jobs;
+        const JobModel *model = m_queue->model();
+        for (int r = from; r < model->rowCount(); ++r) {
+            const JobRecord record = model->record(r);
+            jobs.append(record.sessionId + QLatin1Char(' ') + record.calculationId + QLatin1Char(' ')
+                        + JobModel::stateText(record.state));
+        }
+        return jobs;
     }
 
     /// The same lookup the delegate uses.
@@ -180,6 +201,35 @@ private:
         m_view->setCurrentIndex(index);
         QTest::keyClick(m_view.get(), Qt::Key_Space);
     }
+    /// With `delegate` installed: make `start` the current and only selected
+    /// row, click at `point`, and report where that left the view. The
+    /// delegate under test is installed again afterwards.
+    ClickOutcome clickWith(QAbstractItemDelegate *delegate, const QModelIndex &start, const QPoint &point, Click kind)
+    {
+        m_view->setItemDelegate(delegate);
+        m_view->selectionModel()->setCurrentIndex(start, QItemSelectionModel::ClearAndSelect);
+        switch (kind) {
+        case Click::Left:
+            click(point);
+            break;
+        case Click::Right:
+            click(point, Qt::RightButton);
+            break;
+        case Click::Middle:
+            click(point, Qt::MiddleButton);
+            break;
+        case Click::Double:
+            // What a widget receives for a double click: press, release, double
+            // click, release. (QTest::mouseDClick() on a widget sends the third only.)
+            QTest::mouseClick(m_view->viewport(), Qt::LeftButton, {}, point);
+            QTest::mouseDClick(m_view->viewport(), Qt::LeftButton, {}, point);
+            QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, point);
+            break;
+        }
+        const ClickOutcome outcome{m_view->currentIndex(), m_view->selectionModel()->selectedIndexes()};
+        m_view->setItemDelegate(m_delegate);
+        return outcome;
+    }
 
     /// The viewport as painted now, with the delegate under test ...
     QImage grabViewport()
@@ -201,12 +251,24 @@ private:
         return image;
     }
 
-    /// Syn/g checked from code with s1 and s2 missing: the row shows refresh, 2.
-    QModelIndex makeRefreshRow()
+    /// Syn/g checked from code with s1 and s2 visible: the demand layer starts
+    /// s1 (held in the gate, its progress text delivered) and chooses s2 next.
+    /// The row is working, "0 of 2". Invalid on any other outcome.
+    QModelIndex makeWorkingRow()
     {
         check("g");
-        const PlotRowState state = row("Syn/g");
-        if (state.control() != Control::Refresh || state.controlCount() != 2)
+        if (!gate().waitEntered())
+            return QModelIndex();
+        // The progress text arrives after the entry: wait for it, so that no
+        // later change of the state is left pending
+        if (!QTest::qWaitFor([this] {
+                return row("Syn/g").running.value(0).progressText == QStringLiteral("step 1");
+            }))
+            return QModelIndex();
+        const DemandState state = row("Syn/g");
+        if (!state.isWorking() || state.progressLabel != QStringLiteral("0 of 2")
+            || sessionIdsOf(state.running) != QStringList({"s1"})
+            || sessionIdsOf(state.waiting) != QStringList({"s2"}))
             return QModelIndex();
         spin();
         return indexOf("Syn/g");
@@ -217,7 +279,7 @@ private:
     std::unique_ptr<SessionModel> m_model;
     std::unique_ptr<JobQueue> m_queue;
     std::unique_ptr<PlotModel> m_plots;
-    std::unique_ptr<PlotRequests> m_requests;
+    std::unique_ptr<CalculationDemand> m_demand;
     std::unique_ptr<QTreeView> m_view;
     PlotRowDelegate *m_delegate = nullptr;      // a child of the view
     QStringList m_registryBefore;
@@ -264,7 +326,7 @@ bool PlotRowDelegateTest::buildUi(const QVector<PlotValue> &plots, QSettings *se
     m_plots->setSettings(settings);
     if (!plotsLater)
         m_plots->setPlots(plots);
-    m_requests = std::make_unique<PlotRequests>(m_model.get(), m_plots.get(), m_queue.get());
+    m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
 
     // As PlotSelectionDockFeature configures its view
     m_view = std::make_unique<QTreeView>();
@@ -272,7 +334,7 @@ bool PlotRowDelegateTest::buildUi(const QVector<PlotValue> &plots, QSettings *se
     m_view->setHeaderHidden(true);
     m_view->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_view->resize(300, 300);
-    m_delegate = new PlotRowDelegate(m_requests.get(), m_view.get());
+    m_delegate = new PlotRowDelegate(m_demand.get(), m_view.get());
     m_view->setItemDelegate(m_delegate);
     m_view->expandAll();
     m_view->show();
@@ -292,7 +354,7 @@ void PlotRowDelegateTest::destroyUi()
     QToolTip::hideText();
     m_delegate = nullptr;
     m_view.reset();
-    m_requests.reset();
+    m_demand.reset();
     m_plots.reset();
 }
 
@@ -302,12 +364,13 @@ void PlotRowDelegateTest::destroyUi()
 void PlotRowDelegateTest::cleanup()
 {
     // Release whatever a test left in the gate, then let nothing linger
-    // inside a compute function
+    // inside a compute function: whatever the demand layer still wanted runs
+    // to its end first
     if (m_world)
         gate().open(8);
     bool becameIdle = true;
     if (m_queue) {
-        becameIdle = waitIdle(*m_queue);
+        becameIdle = m_demand ? waitDemandIdle(*m_queue, *m_demand) : waitIdle(*m_queue);
         m_queue->shutdown();
     }
     QStringList stillPinned;
@@ -342,9 +405,9 @@ void PlotRowDelegateTest::cleanup()
 
 // ---- Painting -------------------------------------------------------------------------
 
-// Spec 9.2, last bullet: a row with nothing pending, missing or failed, every
-// row of a plot that is not backed by an explicit calculation, and every
-// unchecked row look exactly as they do today - pixel for pixel.
+// Spec 9.2, last bullet: a row with nothing waiting, running or failed, every
+// row of a plot that is not over a requested calculation, and every unchecked
+// row look exactly as they do today - pixel for pixel.
 void PlotRowDelegateTest::plainRowsAreIdenticalToBaseDelegate()
 {
     // Nothing checked
@@ -365,9 +428,10 @@ void PlotRowDelegateTest::plainRowsAreIdenticalToBaseDelegate()
     QVERIFY(row("Syn/plain").isPlain());
     with = grabViewport();
     QCOMPARE(with, grabViewportWithBaseDelegate());
-    QCOMPARE(m_delegate->controlRect(indexOf("Syn/plain")), QRect());
+    QCOMPARE(m_delegate->clusterRect(indexOf("Syn/plain")), QRect());
 
-    // Without a component every row is plain, whatever is checked
+    // Without a component every row is plain, whatever is checked. (Checking
+    // Syn/g starts s1 in the gate; cleanup() opens it.)
     check("g");
     QVERIFY(!row("Syn/g").isPlain());
     PlotRowDelegate inert(nullptr, m_view.get());
@@ -376,26 +440,31 @@ void PlotRowDelegateTest::plainRowsAreIdenticalToBaseDelegate()
     const QImage withInert = m_view->viewport()->grab().toImage();
     m_view->setItemDelegate(m_delegate);
     QCOMPARE(withInert, grabViewportWithBaseDelegate());
-    QCOMPARE(inert.controlRect(indexOf("Syn/g")), QRect());
+    QCOMPARE(inert.clusterRect(indexOf("Syn/g")), QRect());
     QVERIFY(inert.toolTipFor(indexOf("Syn/g")).isEmpty());
 }
 
-void PlotRowDelegateTest::missingRowPaintsControl()
+void PlotRowDelegateTest::workingRowPaintsIndicator()
 {
     const int plainHeight = m_view->visualRect(indexOf("Syn/g")).height();
-    const QModelIndex index = makeRefreshRow();
+    const QModelIndex index = makeWorkingRow();
     QVERIFY(index.isValid());
 
-    const QRect control = m_delegate->controlRect(index);
-    QVERIFY(!control.isNull());
+    // The cluster sits inside the row, right-aligned, clear of the check box
+    const QRect cluster = m_delegate->clusterRect(index);
+    QVERIFY(!cluster.isNull());
     const QRect rowRect = m_view->visualRect(index);
-    QVERIFY(rowRect.contains(control));
-    QCOMPARE(control.right(), rowRect.right());
-    QCOMPARE(control.height(), rowRect.height());
+    QVERIFY(rowRect.contains(cluster));
+    QVERIFY(cluster.left() > checkBoxRect(index).right());
+    QVERIFY(cluster.center().x() > rowRect.center().x());
 
     const QImage with = grabViewport();
     const QImage base = grabViewportWithBaseDelegate();
-    QVERIFY(cut(with, control) != cut(base, control));                              // the refresh glyph
+    QVERIFY(cut(with, cluster) != cut(base, cluster));                              // label and indicator
+    // The indicator is the right-most element: the arc's right-hand side
+    const int side = qMax(2, cluster.height() / 4);
+    const QRect indicatorEdge(cluster.right() - side + 1, cluster.top(), side, cluster.height());
+    QVERIFY(cut(with, indicatorEdge) != cut(base, indicatorEdge));
     QCOMPARE(cut(with, checkBoxRect(index)), cut(base, checkBoxRect(index)));       // the check box is the style's
     // Every other row is untouched
     const QRect other = m_view->visualRect(indexOf("Syn/g2"));
@@ -414,31 +483,34 @@ void PlotRowDelegateTest::longNameIsElidedNotTheCluster()
     plots[0].plotName = QStringLiteral("A plot with a name that certainly does not fit in this narrow view");
     destroyUi();
     QVERIFY(buildUi(plots));
-    m_view->resize(120, 300);
+    // Room for the check box, the cluster ("0 of 2" and the indicator) and a
+    // little of the name, which is far longer
+    m_view->resize(220, 300);
     spin();
 
+    // Both rows over the same jobs: s1 running, s2 chosen next
     check("g");
     check("g2");
-    QCOMPARE(row("Syn/g").controlCount(), 2);
-    QCOMPARE(row("Syn/g2").controlCount(), 2);
+    QVERIFY(gate().waitEntered());
+    const DemandState g = row("Syn/g");
+    QCOMPARE(g.progressLabel, QStringLiteral("0 of 2"));
+    QCOMPARE(row("Syn/g2").progressLabel, g.progressLabel);
+    QCOMPARE(row("Syn/g2").wantedCount, 2);
     const QModelIndex longRow = indexOf("Syn/g");
     const QModelIndex shortRow = indexOf("Syn/g2");
 
     // The cluster is fully visible
     const QRect viewport = m_view->viewport()->rect();
-    const QRect control = m_delegate->controlRect(longRow);
-    QVERIFY(!control.isNull());
-    QVERIFY(viewport.contains(control));
+    const QRect cluster = m_delegate->clusterRect(longRow);
+    QVERIFY(!cluster.isNull());
+    QVERIFY(viewport.contains(cluster));
+    QVERIFY(cluster.left() > checkBoxRect(longRow).right());
     QCOMPARE(m_view->visualRect(longRow).right(), viewport.right());
 
-    // A band over the label and the control of each row (same x, other y)
-    const int labelWidth = m_view->fontMetrics().horizontalAdvance(QStringLiteral("2"));
-    const auto clusterBand = [&](const QModelIndex &index) {
-        QRect band = m_delegate->controlRect(index);
-        band.setLeft(band.left() - labelWidth - 3);
-        return band;
-    };
+    // The band over the label and the indicator of each row (same x, other y)
+    const auto clusterBand = [&](const QModelIndex &index) { return m_delegate->clusterRect(index); };
     QCOMPARE(clusterBand(longRow).left(), clusterBand(shortRow).left());
+    QCOMPARE(clusterBand(longRow).width(), clusterBand(shortRow).width());
 
     const QImage with = grabViewport();
     const QImage base = grabViewportWithBaseDelegate();
@@ -463,100 +535,201 @@ void PlotRowDelegateTest::longNameIsElidedNotTheCluster()
     QVERIFY(painted);
 }
 
-// ---- The check gesture ------------------------------------------------------------------
+// ---- Checking goes through the model ------------------------------------------------------
 
-void PlotRowDelegateTest::checkBoxClickIsGesture()
+// Acceptance 116: a click on the check box is the base class's write to
+// PlotModel; the demand layer, observing the model, starts the work. A
+// programmatic check of another row has the same effect: the delegate adds no
+// path of its own.
+void PlotRowDelegateTest::checkBoxClickChecksThroughTheModel()
 {
+    // Explicit A's input for the second half. No plot is checked yet, so the
+    // edit is nobody's input and starts no settle wait.
+    for (const char *id : {"s1", "s2"})
+        QVERIFY(PlotFixture::giveInput(*m_model, QString::fromLatin1(id), QStringLiteral("EA_IN"), 4));
+    m_model->flushPendingInvalidations();
+    QVERIFY(!m_demand->hasSettlingSessions());
+
     const QModelIndex index = indexOf("Syn/g");
     QVERIFY(!isChecked(index));
     QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
 
     click(checkBoxCentre(index));
     QVERIFY(isChecked(index));
-    QCOMPARE(queuedSpy.count(), 2);             // s1 and s2; s3 is hidden
+    QCOMPARE(m_plots->data(index, Qt::CheckStateRole).toInt(), int(Qt::Checked));
+
+    // s1 runs and s2 is chosen next, with no other call; s3 is hidden
     QVERIFY(gate().waitEntered());
-
-    const PlotRowState state = row("Syn/g");
-    QCOMPARE(state.control(), Control::Cancel);
+    const DemandState state = row("Syn/g");
+    QVERIFY(state.isWorking());
     QCOMPARE(state.progressLabel, QStringLiteral("0 of 2"));
+    QCOMPARE(sessionIdsOf(state.running), QStringList({"s1"}));
+    QCOMPARE(sessionIdsOf(state.waiting), QStringList({"s2"}));
+    QCOMPARE(queuedSpy.count(), 2);
 
-    gate().open(2);
-    QVERIFY(waitIdle(*m_queue));
+    gate().open();
+    QVERIFY(gate().waitEntered());
+    gate().open();
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand));
     QVERIFY(row("Syn/g").isPlain());
     QCOMPARE(queuedSpy.count(), 2);
+    QCOMPARE(jobsFrom(0), QStringList({"s1 gated Succeeded", "s2 gated Succeeded"}));
+
+    // A programmatic check of another row: the same sessions, started the same way
+    const int from = m_queue->model()->rowCount();
+    check("ea");
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand));
+    QCOMPARE(jobsFrom(from), QStringList({"s1 expA Succeeded", "s2 expA Succeeded"}));
+    QVERIFY(row("Syn/ea").isPlain());
+    QCOMPARE(row("Syn/ea").wantedCount, 2);
 }
 
-void PlotRowDelegateTest::spaceKeyIsGesture()
+void PlotRowDelegateTest::spaceKeyChecksThroughTheModel()
 {
     const QModelIndex index = indexOf("Syn/g");
     QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
 
     pressSpaceOn(index);
     QVERIFY(isChecked(index));
+
+    QVERIFY(gate().waitEntered());
+    const DemandState state = row("Syn/g");
+    QVERIFY(state.isWorking());
+    QCOMPARE(state.progressLabel, QStringLiteral("0 of 2"));
     QCOMPARE(queuedSpy.count(), 2);
 
-    gate().open(2);
-    QVERIFY(waitIdle(*m_queue));
+    gate().open();
+    QVERIFY(gate().waitEntered());
+    gate().open();
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand));
     QVERIFY(row("Syn/g").isPlain());
+    QCOMPARE(jobsFrom(0), QStringList({"s1 gated Succeeded", "s2 gated Succeeded"}));
 }
 
-void PlotRowDelegateTest::uncheckIsNotAGesture()
+// Unchecking by the check box (or Space) drops the waiting pair at once - before
+// any turn of the event loop - and lets the running job finish.
+void PlotRowDelegateTest::uncheckByClickDropsWaitingWork()
 {
-    const QModelIndex index = makeRefreshRow();
+    const QModelIndex index = makeWorkingRow();
     QVERIFY(index.isValid());
-    const Quiet quiet(*m_queue);
+    const JobId running = m_queue->runningJob();
+    const JobId waiting = m_queue->chosenNextJob();
+    QCOMPARE(m_queue->job(running).sessionId, QStringLiteral("s1"));
+    QCOMPARE(m_queue->job(waiting).sessionId, QStringLiteral("s2"));
+    QSignalSpy cancelSpy(m_queue.get(), &JobQueue::jobCancelRequested);
 
     click(checkBoxCentre(index));
     QVERIFY(!isChecked(index));
-    spin();
+    JobRecord dropped = m_queue->job(waiting);
+    QCOMPARE(dropped.state, JobState::Cancelled);
+    QCOMPARE(dropped.reason, QStringLiteral("No longer needed"));
+    QVERIFY(!dropped.startedAt.isValid());
+    QCOMPARE(m_queue->chosenNextJob(), JobId(0));
+    QCOMPARE(m_queue->job(running).state, JobState::Running);
+    QVERIFY(!m_queue->job(running).cancelRequested);
     QVERIFY(row("Syn/g").isPlain());
-    QVERIFY(quiet.holds());
+    QCOMPARE(m_delegate->clusterRect(index), QRect());
 
+    // Checked again, s2 is chosen next again; Space drops it the same way
     check("g");
+    spin();
+    const JobId again = m_queue->chosenNextJob();
+    QVERIFY(again != 0);
+    QVERIFY(again != waiting);
+    QCOMPARE(m_queue->job(again).sessionId, QStringLiteral("s2"));
     pressSpaceOn(index);
     QVERIFY(!isChecked(index));
-    spin();
-    QVERIFY(quiet.holds());
-    QVERIFY(m_queue->isIdle());
-}
+    dropped = m_queue->job(again);
+    QCOMPARE(dropped.state, JobState::Cancelled);
+    QCOMPARE(dropped.reason, QStringLiteral("No longer needed"));
+    QVERIFY(!dropped.startedAt.isValid());
+    QVERIFY(row("Syn/g").isPlain());
 
-// The wiring half of acceptance 16: with the view and the delegate attached,
-// no way of checking a plot from code starts anything.
-void PlotRowDelegateTest::programmaticCheckStartsNothingWithViewAttached()
-{
+    // The running job was never asked to stop: it finishes, and nothing follows
     const Quiet quiet(*m_queue);
-    const QModelIndex index = indexOf("Syn/g");
-
-    // setPlotEnabled: applyProfile() and restored settings
-    m_plots->setPlotEnabled(QStringLiteral("Syn"), QStringLiteral("g"), true);
-    spin();
-    QCOMPARE(row("Syn/g").control(), Control::Refresh);
-    QCOMPARE(row("Syn/g").controlCount(), 2);
-    m_plots->setPlotEnabled(QStringLiteral("Syn"), QStringLiteral("g"), false);
-
-    // togglePlot: the Plots menu and its shortcuts
-    QVERIFY(m_plots->togglePlot(QStringLiteral("Syn"), QStringLiteral("g")));
-    spin();
-    QCOMPARE(row("Syn/g").controlCount(), 2);
-    QVERIFY(!m_plots->togglePlot(QStringLiteral("Syn"), QStringLiteral("g")));
-
-    // setData(CheckStateRole): what the check box writes. The write is not the
-    // gesture; the delegate's explicit call is.
-    QVERIFY(m_plots->setData(index, Qt::Checked, Qt::CheckStateRole));
-    spin();
-    QVERIFY(isChecked(index));
-    QCOMPARE(row("Syn/g").control(), Control::Refresh);
-    QCOMPARE(row("Syn/g").controlCount(), 2);
-    QVERIFY(!m_delegate->controlRect(index).isNull());
-
+    gate().open();
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand));
+    QCOMPARE(m_queue->job(running).state, JobState::Succeeded);
+    QCOMPARE(cancelSpy.count(), 0);
     QVERIFY(quiet.holds());
-    QVERIFY(m_queue->isIdle());
+    QVERIFY(row("Syn/g").isPlain());
+    QCOMPARE(jobsFrom(0), QStringList({"s1 gated Succeeded", "s2 gated Cancelled", "s2 gated Cancelled"}));
 }
 
-// Plots restored as checked from the settings come up through modelReset, after
-// the view and the delegate exist - as in MainWindow's constructor.
-void PlotRowDelegateTest::startupStyleRestoreStartsNothingWithViewAttached()
+// Acceptance 116, with the view and the delegate attached: every way of
+// checking a plot from code creates exactly the demand a click creates.
+void PlotRowDelegateTest::programmaticCheckIsTheSameAsAClick()
 {
+    const QModelIndex index = indexOf("Syn/g");
+    struct Path {
+        const char *name;
+        std::function<void(bool)> set;
+    };
+    const QList<Path> paths = {
+        // The check box: the base class's write to the model
+        {"click", [&](bool on) {
+            if (isChecked(index) != on)
+                click(checkBoxCentre(index));
+        }},
+        // setPlotEnabled: applyProfile() and restored settings
+        {"setPlotEnabled", [&](bool on) {
+            m_plots->setPlotEnabled(QStringLiteral("Syn"), QStringLiteral("g"), on);
+        }},
+        // togglePlot: the Plots menu and its shortcuts
+        {"togglePlot", [&](bool on) {
+            if (isChecked(index) != on)
+                m_plots->togglePlot(QStringLiteral("Syn"), QStringLiteral("g"));
+        }},
+        // setData(CheckStateRole): what the check box writes, without the view
+        {"setData", [&](bool on) {
+            m_plots->setData(index, on ? Qt::Checked : Qt::Unchecked, Qt::CheckStateRole);
+        }},
+    };
+
+    QList<int> expectedOrder;
+    for (int round = 0; round < paths.size(); ++round) {
+        const Path &path = paths.at(round);
+        const int from = m_queue->model()->rowCount();
+        expectedOrder << (round == 0 ? 4 : 10 * round + 1) << (round == 0 ? 4 : 10 * round + 2);
+
+        path.set(true);
+        QVERIFY2(isChecked(index), path.name);
+        QVERIFY2(gate().waitEntered(), path.name);                      // s1
+        const DemandState state = row("Syn/g");
+        QVERIFY2(state.isWorking(), path.name);
+        QCOMPARE(state.progressLabel, QStringLiteral("0 of 2"));
+        QVERIFY2(!m_delegate->clusterRect(index).isNull(), path.name);
+        gate().open();
+        QVERIFY2(gate().waitEntered(), path.name);                      // s2
+        gate().open();
+        QVERIFY2(waitDemandIdle(*m_queue, *m_demand), path.name);
+        QVERIFY2(row("Syn/g").isPlain(), path.name);
+        QCOMPARE(jobsFrom(from), QStringList({"s1 gated Succeeded", "s2 gated Succeeded"}));
+
+        path.set(false);
+        QVERIFY2(!isChecked(index), path.name);
+        // New inputs, so that the next path finds both results missing again.
+        // The plot is unchecked: the edits are nobody's input, no wait starts.
+        for (int i = 1; i <= 2; ++i) {
+            QVERIFY(PlotFixture::giveInput(*m_model, QStringLiteral("s%1").arg(i), QStringLiteral("G_IN"),
+                                           10 * (round + 1) + i));
+        }
+        m_model->flushPendingInvalidations();
+        QVERIFY2(!m_demand->hasSettlingSessions(), path.name);
+        spin();
+        QVERIFY2(m_queue->isIdle(), path.name);
+    }
+    // Each round computed that round's inputs
+    QCOMPARE(gate().startOrder(), expectedOrder);
+}
+
+// Plots restored as checked from the settings come up through modelReset,
+// after the view and the delegate exist - as in MainWindow's constructor -
+// while every session is hidden: nothing is started and the row is plain.
+// Showing a session is what starts its work.
+void PlotRowDelegateTest::startupRestoreWithHiddenSessionsStartsNothingWithViewAttached()
+{
+    PlotFixture::show(*m_model, {"s1", "s2"}, false);
     const Quiet quiet(*m_queue);
 
     const QString path = TestEnvironment::instance().newTempDir(QStringLiteral("plots")) + QStringLiteral("/plots.ini");
@@ -574,268 +747,121 @@ void PlotRowDelegateTest::startupStyleRestoreStartsNothingWithViewAttached()
     const QModelIndex index = indexOf("Syn/g");
     QVERIFY(index.isValid());
     QVERIFY(isChecked(index));
-    const PlotRowState state = row("Syn/g");
-    QCOMPARE(state.control(), Control::Refresh);
-    QCOMPARE(state.controlCount(), 2);
-    QVERIFY(!m_delegate->controlRect(index).isNull());
+    const DemandState state = row("Syn/g");
+    QVERIFY(state.isPlain());
+    QCOMPARE(state.wantedCount, 0);
+    QCOMPARE(m_delegate->clusterRect(index), QRect());
     spin();
     QVERIFY(quiet.holds());
     QVERIFY(m_queue->isIdle());
+    QCOMPARE(grabViewport(), grabViewportWithBaseDelegate());
+
+    // Showing s1 starts it with no other call
+    PlotFixture::show(*m_model, {"s1"});
+    QVERIFY(gate().waitEntered());
+    const DemandState working = row("Syn/g");
+    QVERIFY(working.isWorking());
+    QCOMPARE(working.progressLabel, QStringLiteral("0 of 1"));
+    QCOMPARE(sessionIdsOf(working.running), QStringList({"s1"}));
+    QVERIFY(!m_delegate->clusterRect(index).isNull());
+    gate().open();
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand));
+    QVERIFY(row("Syn/g").isPlain());
+    QCOMPARE(jobsFrom(0), QStringList({"s1 gated Succeeded"}));
 
     // The settings object must outlive the model that writes to it
     destroyUi();
 }
 
-// ---- The control ------------------------------------------------------------------------
+// ---- Nothing in the row is clickable ------------------------------------------------------
 
-void PlotRowDelegateTest::refreshClickRequests()
+// Left, right, middle and double clicks over the working indicator and its
+// label, and over the warning badge and its count, out to the row's edge: no
+// job is created or cancelled, no check is toggled, and the current index and
+// the selection are exactly what the base delegate leaves for the same clicks.
+void PlotRowDelegateTest::clickOnClusterIsAClickOnTheRow()
 {
-    const QModelIndex index = makeRefreshRow();
-    QVERIFY(index.isValid());
-    QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
+    // Syn/ea badged: s1 rejects EA_IN = -1 (s2 has no EA_IN, s3 is hidden)
+    QVERIFY(PlotFixture::giveInput(*m_model, QStringLiteral("s1"), QStringLiteral("EA_IN"), -1));
+    m_model->flushPendingInvalidations();
+    check("ea");
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand));
+    const QModelIndex badgeRow = indexOf("Syn/ea");
+    const DemandState badged = row("Syn/ea");
+    QCOMPARE(badged.failedCount, 1);
+    QVERIFY(badged.showsWarning());
 
-    click(m_delegate->controlRect(index).center());
-    QCOMPARE(queuedSpy.count(), 2);
-    QVERIFY(isChecked(index));
-    QVERIFY(gate().waitEntered());
-    QCOMPARE(row("Syn/g").control(), Control::Cancel);
+    // Syn/g working: s1 held in the gate, s2 chosen next
+    const QModelIndex workingRow = makeWorkingRow();
+    QVERIFY(workingRow.isValid());
+    const DemandState working = row("Syn/g");
 
-    gate().open(2);
-    QVERIFY(waitIdle(*m_queue));
-    QVERIFY(row("Syn/g").isPlain());
-    QCOMPARE(m_delegate->controlRect(index), QRect());
-}
-
-void PlotRowDelegateTest::cancelClickCancelsAndLeavesChecked()
-{
-    const QModelIndex index = makeRefreshRow();
-    QVERIFY(index.isValid());
-    click(m_delegate->controlRect(index).center());
-    QVERIFY(gate().waitEntered());
-    QCOMPARE(row("Syn/g").control(), Control::Cancel);
-    QCOMPARE(m_queue->activeJobs().size(), 2);
-    spin();
-
-    const Quiet quiet(*m_queue);
-    click(m_delegate->controlRect(index).center());
-
-    // At once: refresh is back, and the plot is still checked
-    PlotRowState state = row("Syn/g");
-    QCOMPARE(state.control(), Control::Refresh);
-    QCOMPARE(state.controlCount(), 2);
-    QVERIFY(isChecked(index));
-
-    QVERIFY(waitIdle(*m_queue));
-    const JobModel *jobs = m_queue->model();
-    QCOMPARE(jobs->rowCount(), 2);
-    for (int r = 0; r < jobs->rowCount(); ++r)
-        QCOMPARE(jobs->record(r).state, JobState::Cancelled);
-    state = row("Syn/g");
-    QCOMPARE(state.control(), Control::Refresh);
-    QVERIFY(isChecked(index));
-    QVERIFY(quiet.holds());
-}
-
-void PlotRowDelegateTest::controlClickDoesNotToggleOrSelect()
-{
-    const QModelIndex index = makeRefreshRow();
-    QVERIFY(index.isValid());
-    const QModelIndex other = indexOf("Syn/plain");
-    m_view->setCurrentIndex(other);
-    const QModelIndexList selectedBefore = m_view->selectionModel()->selectedIndexes();
-    QCOMPARE(selectedBefore, QModelIndexList({other}));
-    spin();
-
-    QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
-    click(m_delegate->controlRect(index).center());
-    QCOMPARE(queuedSpy.count(), 2);
-
-    QVERIFY(isChecked(index));
-    QCOMPARE(m_view->currentIndex(), other);
-    QCOMPARE(m_view->selectionModel()->selectedIndexes(), selectedBefore);
-
-    // The same for cancel
-    QVERIFY(gate().waitEntered());
-    QCOMPARE(row("Syn/g").control(), Control::Cancel);
-    spin();
-    click(m_delegate->controlRect(index).center());
-    QCOMPARE(row("Syn/g").control(), Control::Refresh);
-    QVERIFY(isChecked(index));
-    QCOMPARE(m_view->currentIndex(), other);
-    QCOMPARE(m_view->selectionModel()->selectedIndexes(), selectedBefore);
-    QVERIFY(waitIdle(*m_queue));
-}
-
-void PlotRowDelegateTest::pressInsideReleaseOutsideDoesNothing()
-{
-    const QModelIndex index = makeRefreshRow();
-    QVERIFY(index.isValid());
-    const Quiet quiet(*m_queue);
-    const QPoint inside = m_delegate->controlRect(index).center();
-
-    // Released on the name ...
-    QTest::mousePress(m_view->viewport(), Qt::LeftButton, {}, inside);
-    QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, namePoint(index));
-    // ... and on the check box, which a release would otherwise toggle
-    QTest::mousePress(m_view->viewport(), Qt::LeftButton, {}, inside);
-    QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, checkBoxCentre(index));
-    // ... and on another row
-    QTest::mousePress(m_view->viewport(), Qt::LeftButton, {}, inside);
-    QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, namePoint(indexOf("Syn/plain")));
-
-    spin();
-    QVERIFY(isChecked(index));
-    QCOMPARE(row("Syn/g").control(), Control::Refresh);
-    QVERIFY(quiet.holds());
-
-    // The control still works afterwards
-    QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
-    click(inside);
-    QCOMPARE(queuedSpy.count(), 2);
-}
-
-void PlotRowDelegateTest::pressOutsideReleaseInsideDoesNothing()
-{
-    const QModelIndex index = makeRefreshRow();
-    QVERIFY(index.isValid());
-    const Quiet quiet(*m_queue);
-    const QPoint inside = m_delegate->controlRect(index).center();
-
-    QTest::mousePress(m_view->viewport(), Qt::LeftButton, {}, namePoint(index));
-    QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, inside);
-    QTest::mousePress(m_view->viewport(), Qt::LeftButton, {}, checkBoxCentre(index));
-    QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, inside);
-    QTest::mousePress(m_view->viewport(), Qt::LeftButton, {}, namePoint(indexOf("Syn/plain")));
-    QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, inside);
-
-    spin();
-    QVERIFY(isChecked(index));
-    QCOMPARE(row("Syn/g").control(), Control::Refresh);
-    QVERIFY(quiet.holds());
-}
-
-void PlotRowDelegateTest::clickOnLabelOrBadgeDoesNothing()
-{
-    // The label: just left of the control's hit rectangle
-    const QModelIndex index = makeRefreshRow();
-    QVERIFY(index.isValid());
-    const QRect control = m_delegate->controlRect(index);
+    // Both clusters are painted
     {
-        const Quiet quiet(*m_queue);
-        const int labelWidth = m_view->fontMetrics().horizontalAdvance(QStringLiteral("2"));
-        for (int x = control.left() - 1; x >= control.left() - labelWidth - 2; --x)
-            click(QPoint(x, control.center().y()));
-        spin();
-        QVERIFY(isChecked(index));
-        QCOMPARE(row("Syn/g").control(), Control::Refresh);
-        QVERIFY(quiet.holds());
+        const QImage with = grabViewport();
+        const QImage base = grabViewportWithBaseDelegate();
+        for (const QModelIndex &index : {workingRow, badgeRow}) {
+            const QRect cluster = m_delegate->clusterRect(index);
+            QVERIFY(!cluster.isNull());
+            QVERIFY(cut(with, cluster) != cut(base, cluster));
+        }
     }
 
-    // The badge: Syn/ea after its job ran and rejected EA_IN = -1
-    QVERIFY(PlotFixture::giveInput(*m_model, QStringLiteral("s1"), QStringLiteral("EA_IN"), -1));
-    const QModelIndex badgeRow = indexOf("Syn/ea");
-    click(checkBoxCentre(badgeRow));            // the gesture: one job, for s1
-    QVERIFY(waitIdle(*m_queue));
-    const PlotRowState state = row("Syn/ea");
-    QCOMPARE(state.failedCount, 1);
-    QVERIFY(state.showsWarning());
-    QCOMPARE(state.control(), Control::None);
-    QCOMPARE(m_delegate->controlRect(badgeRow), QRect());
-    spin();
-
-    // It is painted ...
-    const QRect rowRect = m_view->visualRect(badgeRow);
-    const QRect cluster(rowRect.right() - 39, rowRect.top(), 40, rowRect.height());
-    QVERIFY(cut(grabViewport(), cluster) != cut(grabViewportWithBaseDelegate(), cluster));
-
-    // ... and inert, all the way to the row's edge
     const Quiet quiet(*m_queue);
-    for (int x = rowRect.right(); x > rowRect.right() - 40; x -= 3)
-        click(QPoint(x, rowRect.center().y()));
-    spin();
-    QVERIFY(isChecked(badgeRow));
-    QVERIFY(row("Syn/ea") == state);
-    QVERIFY(quiet.holds());
-}
-
-void PlotRowDelegateTest::rightClickDoesNothing()
-{
-    const QModelIndex index = makeRefreshRow();
-    QVERIFY(index.isValid());
-    const Quiet quiet(*m_queue);
-
-    click(m_delegate->controlRect(index).center(), Qt::RightButton);
-    click(m_delegate->controlRect(index).center(), Qt::MiddleButton);
-    spin();
-    QVERIFY(isChecked(index));
-    QCOMPARE(row("Syn/g").control(), Control::Refresh);
-    QVERIFY(quiet.holds());
-
-    // A right press does not arm the control, and it disarms a left press
-    const QPoint inside = m_delegate->controlRect(index).center();
-    QTest::mousePress(m_view->viewport(), Qt::RightButton, {}, inside);
-    QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, inside);
-    QTest::mousePress(m_view->viewport(), Qt::LeftButton, {}, inside);
-    QTest::mousePress(m_view->viewport(), Qt::RightButton, {}, inside);
-    QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, inside);
-    spin();
-    QVERIFY(quiet.holds());
-}
-
-// The first click requests; the second half of the double click must not land
-// on the cancel control that replaced the refresh control.
-void PlotRowDelegateTest::doubleClickOnRefreshRequestsOnceAndCancelsNothing()
-{
-    const QModelIndex index = makeRefreshRow();
-    QVERIFY(index.isValid());
-    QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
     QSignalSpy cancelSpy(m_queue.get(), &JobQueue::jobCancelRequested);
     QSignalSpy finishedSpy(m_queue.get(), &JobQueue::jobFinished);
+    const QModelIndex start = indexOf("Syn/plain");
+    QStyledItemDelegate base;
 
-    // What a widget receives for a double click: press, release, double
-    // click, release. (QTest::mouseDClick() on a widget sends the third only.)
-    const QPoint inside = m_delegate->controlRect(index).center();
-    QTest::mouseClick(m_view->viewport(), Qt::LeftButton, {}, inside);
-    QCOMPARE(queuedSpy.count(), 2);
-    QTest::mouseDClick(m_view->viewport(), Qt::LeftButton, {}, inside);
-    QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, inside);
+    for (const QModelIndex &index : {workingRow, badgeRow}) {
+        const QRect cluster = m_delegate->clusterRect(index);
+        const QRect rowRect = m_view->visualRect(index);
+        const int y = cluster.center().y();
+        const QList<QPoint> points = {cluster.center(), QPoint(cluster.left(), y), QPoint(cluster.right(), y),
+                                      QPoint(cluster.right(), cluster.top()), QPoint(rowRect.right(), y)};
+        for (const QPoint &point : points) {
+            for (const Click kind : {Click::Left, Click::Right, Click::Middle, Click::Double}) {
+                const QByteArray what = QByteArray::number(int(kind)) + " at "
+                    + QByteArray::number(point.x()) + "," + QByteArray::number(point.y());
+                const ClickOutcome withDelegate = clickWith(m_delegate, start, point, kind);
+                const ClickOutcome withBase = clickWith(&base, start, point, kind);
+                QVERIFY2(withDelegate.current == withBase.current, what.constData());
+                QVERIFY2(withDelegate.selected == withBase.selected, what.constData());
+                QVERIFY2(isChecked(workingRow), what.constData());
+                QVERIFY2(isChecked(badgeRow), what.constData());
+            }
+        }
+    }
 
-    QCOMPARE(queuedSpy.count(), 2);
-    QVERIFY(gate().waitEntered());
+    spin();
+    QVERIFY(quiet.holds());
     QCOMPARE(cancelSpy.count(), 0);
     QCOMPARE(finishedSpy.count(), 0);
-    QCOMPARE(m_queue->activeJobs().size(), 2);
-    QCOMPARE(row("Syn/g").control(), Control::Cancel);
-    QVERIFY(isChecked(index));
-
-    gate().open(2);
-    QVERIFY(waitIdle(*m_queue));
-    QCOMPARE(queuedSpy.count(), 2);
-    const JobModel *jobs = m_queue->model();
-    for (int r = 0; r < jobs->rowCount(); ++r)
-        QCOMPARE(jobs->record(r).state, JobState::Succeeded);
+    QVERIFY(row("Syn/g") == working);
+    QVERIFY(row("Syn/ea") == badged);
 }
 
 // ---- Tooltip ----------------------------------------------------------------------------
 
-void PlotRowDelegateTest::toolTipComesFromRowState()
+void PlotRowDelegateTest::toolTipComesFromPlotState()
 {
-    // A missing row
-    const QModelIndex missingRow = makeRefreshRow();
-    QVERIFY(missingRow.isValid());
-    const QString missingText = row("Syn/g").toolTip;
-    QVERIFY(missingText.contains(QStringLiteral("Jump 1")));
-    QVERIFY(missingText.contains(QStringLiteral("Jump 2")));
-    QCOMPARE(m_delegate->toolTipFor(missingRow), missingText);
-
-    // A failed row
+    // A failed row: s1 rejects EA_IN = -1 (s2 has no EA_IN, s3 is hidden)
     QVERIFY(PlotFixture::giveInput(*m_model, QStringLiteral("s1"), QStringLiteral("EA_IN"), -1));
+    m_model->flushPendingInvalidations();
+    check("ea");
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand));
     const QModelIndex failedRow = indexOf("Syn/ea");
-    click(checkBoxCentre(failedRow));
-    QVERIFY(waitIdle(*m_queue));
     const QString failedText = row("Syn/ea").toolTip;
     QVERIFY(failedText.contains(QStringLiteral("Explicit A: negative input")));
     QCOMPARE(m_delegate->toolTipFor(failedRow), failedText);
+
+    // A working row
+    const QModelIndex workingRow = makeWorkingRow();
+    QVERIFY(workingRow.isValid());
+    const QString workingText = row("Syn/g").toolTip;
+    QVERIFY(workingText.contains(QStringLiteral("Computing: 0 of 2 done")));
+    QVERIFY(workingText.contains(QStringLiteral("Jump 1 - Gated: step 1")));
+    QCOMPARE(m_delegate->toolTipFor(workingRow), workingText);
 
     // A plain row, a category, no index
     check("plain");
@@ -854,8 +880,8 @@ void PlotRowDelegateTest::toolTipComesFromRowState()
         QHelpEvent event(QEvent::ToolTip, position, m_view->viewport()->mapToGlobal(position));
         return m_delegate->helpEvent(&event, m_view.get(), opt, index);
     };
-    QVERIFY(help(missingRow));
-    QCOMPARE(QToolTip::text(), missingText);
+    QVERIFY(help(workingRow));
+    QCOMPARE(QToolTip::text(), workingText);
     QVERIFY(help(failedRow));
     QCOMPARE(QToolTip::text(), failedText);
     QVERIFY(!help(plainRow));
@@ -865,9 +891,9 @@ void PlotRowDelegateTest::toolTipComesFromRowState()
 
 // ---- Repaint ----------------------------------------------------------------------------
 
-void PlotRowDelegateTest::rowStateChangeRepaintsRow()
+void PlotRowDelegateTest::plotStateChangeRepaintsRow()
 {
-    const QModelIndex index = makeRefreshRow();
+    const QModelIndex index = makeWorkingRow();
     QVERIFY(index.isValid());
     auto *paints = new PaintCounter(m_view->viewport());
     spin();
@@ -875,37 +901,39 @@ void PlotRowDelegateTest::rowStateChangeRepaintsRow()
 
     // Nothing the view listens to changes: the plot model is untouched
     QSignalSpy plotModelSpy(m_plots.get(), &QAbstractItemModel::dataChanged);
-    QSignalSpy changedSpy(m_requests.get(), &PlotRequests::rowStateChanged);
+    QSignalSpy changedSpy(m_demand.get(), &CalculationDemand::plotStateChanged);
     const int before = paints->count;
     PlotFixture::show(*m_model, {"s3"});
-    m_requests->flush();
+    m_demand->flush();
     QCOMPARE(changedSpy.count(), 1);
-    QCOMPARE(row("Syn/g").controlCount(), 3);
+    QCOMPARE(changedSpy.at(0).at(0).toString(), QStringLiteral("Syn/g"));
+    QCOMPARE(row("Syn/g").wantedCount, 3);
+    QCOMPARE(row("Syn/g").progressLabel, QStringLiteral("0 of 3"));
     QTRY_VERIFY(paints->count > before);
     QCOMPARE(plotModelSpy.count(), 0);
 
     // An id that is not in the model is harmless
-    emit m_requests->rowStateChanged(QStringLiteral("Syn/nothing"));
+    emit m_demand->plotStateChanged(QStringLiteral("Syn/nothing"));
 }
 
 // ---- Lifetime ---------------------------------------------------------------------------
 
 // MainWindow deletes the component before the docks: the delegate then is the
 // base delegate.
-void PlotRowDelegateTest::survivesRequestsDestroyedFirst()
+void PlotRowDelegateTest::survivesDemandDestroyedFirst()
 {
-    const QModelIndex index = makeRefreshRow();
+    const QModelIndex index = makeWorkingRow();
     QVERIFY(index.isValid());
-    const QPoint control = m_delegate->controlRect(index).center();
+    const QPoint inCluster = m_delegate->clusterRect(index).center();
     const Quiet quiet(*m_queue);
 
-    m_requests.reset();
+    m_demand.reset();
 
-    QCOMPARE(m_delegate->controlRect(index), QRect());
+    QCOMPARE(m_delegate->clusterRect(index), QRect());
     QVERIFY(m_delegate->toolTipFor(index).isEmpty());
-    click(control);
-    QTest::mouseDClick(m_view->viewport(), Qt::LeftButton, {}, control);
-    QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, control);
+    click(inCluster);
+    QTest::mouseDClick(m_view->viewport(), Qt::LeftButton, {}, inCluster);
+    QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, inCluster);
     QVERIFY(isChecked(index));
 
     click(checkBoxCentre(index));               // the check box still works
@@ -918,7 +946,7 @@ void PlotRowDelegateTest::survivesRequestsDestroyedFirst()
     QVERIFY(isChecked(index));
 
     const QStyleOptionViewItem opt = optionFor(index);
-    QHelpEvent event(QEvent::ToolTip, control, m_view->viewport()->mapToGlobal(control));
+    QHelpEvent event(QEvent::ToolTip, inCluster, m_view->viewport()->mapToGlobal(inCluster));
     QVERIFY(!m_delegate->helpEvent(&event, m_view.get(), opt, index));
 
     QApplication::processEvents();

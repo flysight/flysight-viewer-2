@@ -3,7 +3,6 @@
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QHelpEvent>
-#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QStyle>
@@ -16,8 +15,6 @@ namespace FlySight {
 
 namespace {
 
-using Control = PlotRowState::Control;
-
 QPen glyphPen(const QColor &color, qreal width)
 {
     return QPen(color, width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
@@ -26,65 +23,6 @@ QPen glyphPen(const QColor &color, qreal width)
 qreal glyphPenWidth(const QRectF &rect)
 {
     return qMax(1.0, rect.width() / 9.0);
-}
-
-/// A point of the ellipse inscribed in `rect`, at a Qt angle (degrees,
-/// counter-clockwise from three o'clock).
-QPointF pointOnArc(const QRectF &rect, qreal degrees)
-{
-    const qreal radians = qDegreesToRadians(degrees);
-    return QPointF(rect.center().x() + rect.width() / 2.0 * qCos(radians),
-                   rect.center().y() - rect.height() / 2.0 * qSin(radians));
-}
-
-/// Circular arrows: two arcs of 140 degrees, each ending in a filled arrowhead
-/// tangent to the arc.
-void drawRefreshGlyph(QPainter *painter, const QRectF &rect, const QColor &color)
-{
-    const qreal penWidth = glyphPenWidth(rect);
-    const QRectF circle = rect.adjusted(penWidth, penWidth, -penWidth, -penWidth);
-    const qreal headLength = rect.width() * 0.28;
-    const qreal sweep = 140.0;
-
-    for (const qreal start : {20.0, 200.0}) {
-        QPainterPath arc;
-        arc.arcMoveTo(circle, start);
-        arc.arcTo(circle, start, sweep);
-        painter->setPen(glyphPen(color, penWidth));
-        painter->setBrush(Qt::NoBrush);
-        painter->drawPath(arc);
-
-        // The head continues the arc: its base is centred on the arc's end,
-        // across the arc; its tip lies ahead, along the tangent.
-        const qreal end = qDegreesToRadians(start + sweep);
-        const QPointF base = pointOnArc(circle, start + sweep);
-        const QPointF tangent(-qSin(end), -qCos(end));      // counter-clockwise, in screen coordinates
-        const QPointF radial(qCos(end), -qSin(end));
-        QPainterPath head;
-        head.moveTo(base + tangent * headLength);
-        head.lineTo(base + radial * (headLength * 0.6));
-        head.lineTo(base - radial * (headLength * 0.6));
-        head.closeSubpath();
-        painter->setPen(Qt::NoPen);
-        painter->setBrush(color);
-        painter->drawPath(head);
-    }
-}
-
-/// A circled x.
-void drawCancelGlyph(QPainter *painter, const QRectF &rect, const QColor &color)
-{
-    const qreal penWidth = glyphPenWidth(rect);
-    painter->setPen(glyphPen(color, penWidth));
-    painter->setBrush(Qt::NoBrush);
-    painter->drawEllipse(rect.adjusted(penWidth, penWidth, -penWidth, -penWidth));
-
-    // The diagonals span the middle 40% of the rect
-    const QPointF centre = rect.center();
-    const qreal dx = rect.width() * 0.2;
-    const qreal dy = rect.height() * 0.2;
-    painter->drawLine(centre + QPointF(-dx, -dy), centre + QPointF(dx, dy));
-    painter->drawLine(centre + QPointF(-dx, dy), centre + QPointF(dx, -dy));
 }
 
 /// A filled amber triangle with a dark exclamation mark. The colours are fixed:
@@ -123,41 +61,43 @@ QColor glyphColor(const QStyleOptionViewItem &opt)
     return opt.palette.color(group, selected ? QPalette::HighlightedText : QPalette::Text);
 }
 
-bool isLeftButtonMouseEvent(const QEvent *event)
+} // namespace
+
+PlotRowDelegate::PlotRowDelegate(CalculationDemand *demand, QAbstractItemView *view)
+    : QStyledItemDelegate(view)
+    , m_demand(demand)
+    , m_view(view)
 {
-    switch (event->type()) {
-    case QEvent::MouseButtonPress:
-    case QEvent::MouseButtonRelease:
-    case QEvent::MouseButtonDblClick:
-        return static_cast<const QMouseEvent *>(event)->button() == Qt::LeftButton;
-    default:
-        return false;
+    if (m_demand && m_view) {
+        connect(m_demand, &CalculationDemand::plotStateChanged,
+                this, &PlotRowDelegate::onPlotStateChanged);
     }
 }
 
-} // namespace
-
-PlotRowDelegate::PlotRowDelegate(PlotRequests *requests, QAbstractItemView *view)
-    : QStyledItemDelegate(view)
-    , m_requests(requests)
-    , m_view(view)
+void PlotRowDelegate::drawWorkingGlyph(QPainter *painter, const QRectF &rect, const QColor &color,
+                                       qreal rotationDegrees)
 {
-    if (m_requests && m_view) {
-        connect(m_requests, &PlotRequests::rowStateChanged,
-                this, &PlotRowDelegate::onRowStateChanged);
-    }
+    const qreal penWidth = glyphPenWidth(rect);
+    const QRectF circle = rect.adjusted(penWidth, penWidth, -penWidth, -penWidth);
+    painter->setPen(glyphPen(color, penWidth));
+    painter->setBrush(Qt::NoBrush);
+    // Qt angles: sixteenths of a degree, counter-clockwise from three o'clock.
+    // The gap of 90 degrees starts at twelve o'clock, turned clockwise by the
+    // rotation.
+    const int start = qRound((90.0 - rotationDegrees) * 16.0);
+    painter->drawArc(circle, start, -270 * 16);
 }
 
 // ---- State and geometry ---------------------------------------------------------
 
-PlotRowState PlotRowDelegate::stateFor(const QModelIndex &index) const
+DemandState PlotRowDelegate::stateFor(const QModelIndex &index) const
 {
-    if (!m_requests)
-        return PlotRowState();
+    if (!m_demand)
+        return DemandState();
     const QString id = index.data(PlotModel::PlotValueIdRole).toString();
     if (id.isEmpty())
-        return PlotRowState();      // a category
-    return m_requests->rowState(id);
+        return DemandState();       // a category
+    return m_demand->plotState(id);
 }
 
 PlotRowMetrics PlotRowDelegate::metricsFor(const QStyleOptionViewItem &opt)
@@ -169,42 +109,45 @@ PlotRowMetrics PlotRowDelegate::metricsFor(const QStyleOptionViewItem &opt)
     return metrics;
 }
 
-QString PlotRowDelegate::controlLabelFor(const PlotRowState &state)
+// The badge and the indicator are exclusive (spec section 10): while working,
+// failures appear in the tooltip only.
+PlotRowGeometry PlotRowDelegate::geometryFor(const QStyleOptionViewItem &opt, const DemandState &state) const
 {
-    switch (state.control()) {
-    case Control::Refresh: return QString::number(state.controlCount());
-    case Control::Cancel:  return state.progressLabel;
-    case Control::None:    break;
-    }
-    return QString();
-}
-
-PlotRowGeometry PlotRowDelegate::geometryFor(const QStyleOptionViewItem &opt, const PlotRowState &state) const
-{
-    const bool showsControl = state.control() != Control::None;
-    const int labelWidth = showsControl ? opt.fontMetrics.horizontalAdvance(controlLabelFor(state)) : 0;
-    const int countWidth = state.showsWarning()
+    const bool showsIndicator = state.isWorking();
+    const bool showsWarning = state.showsWarning();
+    const int labelWidth = showsIndicator ? opt.fontMetrics.horizontalAdvance(state.progressLabel) : 0;
+    const int countWidth = showsWarning
         ? opt.fontMetrics.horizontalAdvance(QString::number(state.failedCount)) : 0;
-    return layoutPlotRow(opt.rect, metricsFor(opt), state.showsWarning(), countWidth,
-                         showsControl, labelWidth, opt.direction);
+    return layoutPlotRow(opt.rect, metricsFor(opt), showsWarning, countWidth,
+                         showsIndicator, labelWidth, opt.direction);
 }
 
-QRect PlotRowDelegate::controlRect(const QModelIndex &index) const
+QRect PlotRowDelegate::clusterRect(const QModelIndex &index) const
 {
     if (!m_view || !index.isValid())
+        return QRect();
+    const DemandState state = stateFor(index);
+    if (state.isPlain())
         return QRect();
     QStyleOptionViewItem opt;
     opt.initFrom(m_view);
     opt.rect = m_view->visualRect(index);
     initStyleOption(&opt, index);
-    return geometryFor(opt, stateFor(index)).controlHit;
+    const PlotRowGeometry geometry = geometryFor(opt, state);
+    QRect cluster;
+    for (const QRect &rect : {geometry.warningIcon, geometry.warningCount,
+                              geometry.progressLabel, geometry.indicatorIcon}) {
+        if (!rect.isNull())
+            cluster = cluster.united(rect);
+    }
+    return cluster;
 }
 
 // ---- Painting -------------------------------------------------------------------
 
 void PlotRowDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
-    const PlotRowState state = stateFor(index);
+    const DemandState state = stateFor(index);
     if (state.isPlain()) {
         // Exactly today's row
         QStyledItemDelegate::paint(painter, option, index);
@@ -235,101 +178,20 @@ void PlotRowDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
 
     const QColor color = glyphColor(opt);
 
-    if (state.showsWarning()) {
+    if (state.isWorking()) {
+        drawWorkingGlyph(painter, QRectF(geometry.indicatorIcon), color, 0.0);
+        if (!geometry.progressLabel.isNull()) {
+            painter->setPen(color);
+            painter->drawText(geometry.progressLabel, Qt::AlignVCenter | Qt::AlignRight, state.progressLabel);
+        }
+    } else if (state.showsWarning()) {
         drawWarningGlyph(painter, QRectF(geometry.warningIcon));
         painter->setPen(color);
         painter->drawText(geometry.warningCount, Qt::AlignVCenter | Qt::AlignLeft,
                           QString::number(state.failedCount));
     }
 
-    switch (state.control()) {
-    case Control::Refresh:
-        drawRefreshGlyph(painter, QRectF(geometry.controlIcon), color);
-        break;
-    case Control::Cancel:
-        drawCancelGlyph(painter, QRectF(geometry.controlIcon), color);
-        break;
-    case Control::None:
-        break;
-    }
-    if (!geometry.controlLabel.isNull()) {
-        painter->setPen(color);
-        painter->drawText(geometry.controlLabel, Qt::AlignVCenter | Qt::AlignRight, controlLabelFor(state));
-    }
-
     painter->restore();
-}
-
-// ---- Gestures -------------------------------------------------------------------
-
-bool PlotRowDelegate::editorEvent(QEvent *event, QAbstractItemModel *model, const QStyleOptionViewItem &option,
-                                  const QModelIndex &index)
-{
-    const QString id = index.data(PlotModel::PlotValueIdRole).toString();
-    if (!m_requests || id.isEmpty())
-        return QStyledItemDelegate::editorEvent(event, model, option, index);
-
-    // 1. The control: press and release, both inside, same row, same control
-    if (isLeftButtonMouseEvent(event)) {
-        const PlotRowState state = m_requests->rowState(id);
-        bool inside = false;
-        if (state.control() != Control::None) {
-            QStyleOptionViewItem opt = option;
-            initStyleOption(&opt, index);
-            const QPoint position = static_cast<const QMouseEvent *>(event)->position().toPoint();
-            inside = geometryFor(opt, state).controlHit.contains(position);
-        }
-
-        // Whatever this event is, it ends a press that was waiting
-        const bool wasArmed = m_pressedIndex.isValid() && m_pressedIndex == index;
-        const Control pressedControl = m_pressedControl;
-        m_pressedIndex = QPersistentModelIndex();
-        m_pressedControl = Control::None;
-
-        switch (event->type()) {
-        case QEvent::MouseButtonPress:
-            if (inside) {
-                m_pressedIndex = QPersistentModelIndex(index);
-                m_pressedControl = state.control();
-                return true;        // like a press on the check box: the row is not selected
-            }
-            break;
-        case QEvent::MouseButtonDblClick:
-            if (inside)
-                return true;        // the press is forgotten; no release follows a double click
-            break;
-        case QEvent::MouseButtonRelease:
-            if (wasArmed) {
-                if (inside && state.control() == pressedControl) {
-                    if (pressedControl == Control::Refresh)
-                        m_requests->refreshPressed(id);
-                    else if (pressedControl == Control::Cancel)
-                        m_requests->cancelPressed(id);
-                }
-                // A press on the control released elsewhere in the row does
-                // nothing at all, not even a check toggle
-                return true;
-            }
-            break;
-        default:
-            break;
-        }
-    } else if (event->type() == QEvent::MouseButtonPress) {
-        // Any other press forgets a press that was waiting
-        m_pressedIndex = QPersistentModelIndex();
-        m_pressedControl = Control::None;
-    }
-
-    // 2. The check gesture: the base class writes the check state, inside this
-    // call, only for a click on the check box and for Space / Select on the
-    // current row. Its return value says nothing about a toggle (a press on
-    // the indicator is consumed without one), so the model is compared.
-    const bool wasChecked = index.data(Qt::CheckStateRole).toInt() == Qt::Checked;
-    const bool handled = QStyledItemDelegate::editorEvent(event, model, option, index);
-    const bool isChecked = index.data(Qt::CheckStateRole).toInt() == Qt::Checked;
-    if (!wasChecked && isChecked && m_requests)
-        m_requests->plotCheckedByUser(id);
-    return handled;
 }
 
 // ---- Tooltip --------------------------------------------------------------------
@@ -343,7 +205,7 @@ bool PlotRowDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view, cons
                                 const QModelIndex &index)
 {
     if (event && event->type() == QEvent::ToolTip && view) {
-        // Plain text as PlotRequests built it: the whole row shows it
+        // Plain text as CalculationDemand built it: the whole row shows it
         const QString text = toolTipFor(index);
         if (!text.isEmpty()) {
             QToolTip::showText(event->globalPos(), text, view->viewport(), option.rect);
@@ -355,7 +217,7 @@ bool PlotRowDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view, cons
 
 // ---- Repaint --------------------------------------------------------------------
 
-void PlotRowDelegate::onRowStateChanged(const QString &plotId)
+void PlotRowDelegate::onPlotStateChanged(const QString &plotId)
 {
     if (!m_view || !m_view->model())
         return;

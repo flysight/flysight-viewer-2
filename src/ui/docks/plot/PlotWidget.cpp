@@ -30,7 +30,7 @@
 #include "plottool/setcoursetool.h"
 #include "plottool/measuretool.h"
 #include "plotutils.h"
-#include "plotrequests.h"
+#include "calculationdemand.h"
 #include "calculations/timecalculations.h"
 #include "engine/calculationregistry.h"
 
@@ -531,11 +531,11 @@ void PlotWidget::updatePlot()
                 yData = session.getMeasurement(sensorID, measurementID);
                 if (yData.isEmpty()) {
                     // Silently absent when it is merely uncomputed: waiting on
-                    // an explicit calculation, or rejected by one. The plot
-                    // list's row reports both (refresh control, warning
+                    // a requested calculation, or rejected by one. The plot
+                    // list's row reports both (working indicator, warning
                     // badge), so a log line would only repeat it; a recording
                     // that lacks the sensor still gets the warning.
-                    if (!PlotRequests::isMerelyUncomputed(session, sensorID, measurementID))
+                    if (!CalculationDemand::isMerelyUncomputed(session, sensorID, measurementID))
                         qWarning() << "No data available for plot:" << plotName << "in session:" << session.getAttribute(SessionKeys::SessionId);
                     continue;
                 }

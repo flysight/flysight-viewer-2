@@ -75,7 +75,7 @@
 using namespace FlySight;
 using namespace FlySightTest;
 
-using Kind = JobQueue::RequestResult::Kind;
+using Kind = JobQueue::OfferResult::Kind;
 
 Q_DECLARE_METATYPE(FlySight::DependencyKey)
 
@@ -520,7 +520,7 @@ void ResultStoreTest::writesOnOkInstall()
         connect(m_queue.get(), &JobQueue::jobFinished, &scope, [&existedAtInstall, path](JobId, JobState) {
             existedAtInstall = QFileInfo(path).isFile();
         });
-        QCOMPARE(m_queue->request("s1", kExpA).kind, Kind::Created);
+        QCOMPARE(m_queue->offer("s1", kExpA).kind, Kind::Created);
         QVERIFY(waitIdle(*m_queue));
         QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
     } else {
@@ -585,7 +585,7 @@ void ResultStoreTest::nonOkInstallWritesAndDeletesNothing()
     QVERIFY(!expABytes.isEmpty());
     m_model->resetStoredResultStats();
 
-    const JobQueue::RequestResult job = m_queue->request("s1", kThrower);
+    const JobQueue::OfferResult job = m_queue->offer("s1", kThrower);
     QCOMPARE(job.kind, Kind::Created);
     QVERIFY(waitIdle(*m_queue));
     QCOMPARE(m_queue->job(job.job).state, JobState::Succeeded);
