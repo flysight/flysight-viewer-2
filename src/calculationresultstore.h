@@ -25,7 +25,9 @@ namespace FlySight {
 ///    the application runs, deletes its record (both arrive as Dropped). A
 ///    teardown removal reports nothing.
 ///  - restoreSession() installs a session's valid records into its engine
-///    and deletes the stale ones. It is not a request: it starts nothing. A
+///    (a session being loaded into a model row, or the column worker's
+///    temporary copy of an unloaded one) and deletes the stale ones. It is
+///    not a request: it starts nothing. A
 ///    record whose resolutions name another record of the session (the result
 ///    it read) is restored after that one, so that its lookups resolve as
 ///    they did when it was stored.
@@ -70,10 +72,14 @@ public:
                                const CalculationEngine::ExplicitResultEvent &event);
 
     /// Installs every valid record of `sessionId` into `engine` and deletes
-    /// the stale ones. Call it once, when the session has just been installed
-    /// into a model row and before the row is published to readers. Never
-    /// from inside an evaluation or an engine callback, never for a temporary
-    /// load. Starts nothing.
+    /// the stale ones. Call it once per engine: when the session has just
+    /// been installed into a model row, before the row is published to
+    /// readers; or on the column worker's temporary copy of an unloaded
+    /// session (SessionModel::restoreForColumnWorker()), whose engine has no
+    /// explicit-result listener, so that nothing it does afterwards writes or
+    /// deletes a record. That copy counts as a load for reading, never for
+    /// writing. Never from inside an evaluation or an engine callback, never
+    /// for the bulk edit's temporary load. Starts nothing.
     RestoreSummary restoreSession(const QString &sessionId, CalculationEngine &engine);
 
     const Stats &stats() const { return m_stats; }

@@ -1,9 +1,11 @@
 // The real fit through the job queue, on a real SessionModel, with the fit on
 // the queue's 64 MiB worker. Sensor-fusion-jobs acceptance 5 (model level),
 // 6, 7, 8 (first half), 9, 10 and 11; a logbook column over a fusion output
-// is cached from the stored result and follows its record, and keeps its
-// cached value through an environment change it cannot observe (an altitude
-// marker); and the optional real-recording check.
+// is cached from the stored result and follows its record, keeps its cached
+// value through an environment change it cannot observe (an altitude marker),
+// and is refilled by the column worker from the stored fit of an unloaded
+// session once its cached value is gone; and the optional real-recording
+// check.
 //
 // DETERMINISM WITHOUT A GATE. The real compute function cannot be held by a
 // semaphore. The tests use the queue's ordering guarantee instead: progress
@@ -20,6 +22,7 @@
 #include <memory>
 
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -98,6 +101,8 @@ private slots:
     void columnOnFusionOutputIsCachedFromRecord();
     void columnShowsValueStraightAfterPublication();
     void altitudeMarkerKeepsColumnsOfUnloadedSession();
+    void workerRefillsColumnFromStoredFit_data();
+    void workerRefillsColumnFromStoredFit();
     void shutdownDuringFit();
     void realRecordingCheck();
 
@@ -766,6 +771,131 @@ void FusionJobsTest::altitudeMarkerKeepsColumnsOfUnloadedSession()
     m_model->startColumnWorker();
     QVERIFY(waitForIdle(*m_model));
     checkKept("after a restart");
+}
+
+void FusionJobsTest::workerRefillsColumnFromStoredFit_data()
+{
+    QTest::addColumn<bool>("moveMarker");
+    QTest::newRow("column value cleared") << false;
+    QTest::newRow("exit marker moved") << true;
+}
+
+// Stored-results validity 9.1: a column over a requested calculation's output
+// is the same function of the session's stored result whether or not the
+// session is loaded. The Fusion/roll value of an unloaded session is gone
+// from index.json - cleared, or dropped because the exit marker it reads was
+// moved while the session was not loaded - and after a restart the column
+// worker refills it from the stored fit, restored into its temporary copy of
+// the session: the roll at the marker's time, bit-identical to what the
+// loaded session gives, with no load of the row, no job, no fit and no record
+// written.
+void FusionJobsTest::workerRefillsColumnFromStoredFit()
+{
+    QFETCH(bool, moveMarker);
+    const LogbookColumn column = rollColumn();
+    const double movedExitTime = kFixtureExitTime + .25;
+    const auto bytesOf = [](const QString &path) {
+        QFile file(path);
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    };
+
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
+    const JobQueue::RequestResult result = m_queue->request("a", kFit);
+    QCOMPARE(result.kind, Kind::Created);
+    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QCOMPARE(m_queue->job(result.job).state, JobState::Succeeded);
+    QVERIFY(waitForIdle(*m_model));
+    const QVariant fitted = std::as_const(*m_model).rowAt(m_model->getSessionRow("a")).cachedValues.value(kRollColumn);
+    QCOMPARE(fitted.typeId(), int(QMetaType::Double));
+    const QJsonObject stamp{{kFit, QStringLiteral("batch-temperature-bias-v3")}};
+    QCOMPARE(indexRecordStamp("a"), QJsonValue(stamp));
+    const QString recordPath = TestEnvironment::instance().cacheDir() + QLatin1Char('/')
+        + sessionFileStem("a") + QStringLiteral(".builtin%2Efusion%2Efit.fvresult");
+    const QByteArray recordBytes = bytesOf(recordPath);
+    QVERIFY(!recordBytes.isEmpty());
+
+    // The application closes; the value goes from index.json
+    m_queue->shutdown();
+    m_queue.reset();
+    m_model.reset();
+    LogbookManager &logbook = LogbookManager::instance();
+    if (moveMarker) {
+        // The exit time is not bulk-editable (a read-only DateTime attribute:
+        // startBulkEdit() refuses its column), so no gesture edits it on an
+        // unloaded session. The bulk edit's stub path is taken with the same
+        // manager calls: a temporary load, the column marked unsaved (its
+        // value goes), the save (whose pre-save flush writes index.json
+        // without it). The fit does not read the marker: its record stays valid.
+        std::optional<SessionData> copy = logbook.loadSession(QStringLiteral("a"));
+        QVERIFY(copy.has_value());
+        copy->setAttribute(QString::fromLatin1(SessionKeys::ExitTime), movedExitTime);
+        logbook.markColumnsUnsaved(QStringLiteral("a"), {column});
+        QVERIFY(logbook.saveSession(*copy));
+    } else {
+        QJsonObject root = readIndex();
+        const QString columnId = indexColumnId(root, column);
+        QVERIFY(!columnId.isEmpty());
+        QJsonObject sessions = root[QStringLiteral("sessions")].toObject();
+        QJsonObject entry = sessions[QStringLiteral("a")].toObject();
+        QJsonObject values = entry[QStringLiteral("values")].toObject();
+        QVERIFY(values.contains(columnId));
+        values.remove(columnId);
+        entry[QStringLiteral("values")] = values;
+        sessions[QStringLiteral("a")] = entry;
+        root[QStringLiteral("sessions")] = sessions;
+        QVERIFY(writeIndex(root));
+    }
+    QVERIFY(indexValue("a", column).isUndefined());
+    QCOMPARE(indexRecordStamp("a"), QJsonValue(stamp));
+    QCOMPARE(bytesOf(recordPath), recordBytes);
+
+    // The next start: the stub has no value, and the worker refills it
+    restart();
+    const int row = m_model->getSessionRow("a");
+    QVERIFY(row >= 0);
+    const auto rowState = [this, row]() -> const SessionRow & { return std::as_const(*m_model).rowAt(row); };
+    QVERIFY(!rowState().isLoaded());
+    QVERIFY(!rowState().cachedValues.contains(kRollColumn));
+    m_model->resetColumnWorkStats();
+    m_model->resetStoredResultStats();
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+
+    const QVariant refilled = rowState().cachedValues.value(kRollColumn);
+    QCOMPARE(refilled.typeId(), int(QMetaType::Double));
+    QVERIFY(!rowState().isLoaded());
+    QVERIFY(rowState().pendingColumns.isEmpty());
+    QCOMPARE(loadedSpy.count(), 0);
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);     // the worker's temporary copy
+    const CalculationResultStore::Stats &stats = m_model->storedResultStats();
+    QCOMPARE(stats.restoreCalls, 1);
+    QCOMPARE(stats.recordsRead, 1);
+    QCOMPARE(stats.recordsRestored, 1);
+    QCOMPARE(stats.staleRecordsDeleted, 0);
+    QCOMPARE(stats.recordsSkipped, 0);
+    QCOMPARE(stats.recordsWritten, 0);
+    QCOMPARE(m_queue->model()->rowCount(), 0);
+    QCOMPARE(bytesOf(recordPath), recordBytes);
+    QVERIFY(indexValue("a", column).isDouble());
+    QVERIFY(indexValue("a", column).toDouble() == refilled.toDouble());
+    QCOMPARE(indexRecordStamp("a"), QJsonValue(stamp));
+    if (moveMarker)
+        QVERIFY2(refilled.toDouble() != fitted.toDouble(), "the roll at the moved marker");
+    else
+        QVERIFY2(refilled.toDouble() == fitted.toDouble(), "the roll the published fit gave");
+
+    // What the loaded session computes: the same bits, from the restored fit
+    const QVariant live = session("a").getAttribute(fusionRollAtExit());
+    QCOMPARE(session("a").getAttribute(QString::fromLatin1(SessionKeys::ExitTime)).toDouble(),
+             moveMarker ? movedExitTime : kFixtureExitTime);
+    QCOMPARE(engine("a").resultStatus(kFit), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(engine("a").runCount(kFit), 0);
+    QCOMPARE(live.typeId(), int(QMetaType::Double));
+    QVERIFY2(live.toDouble() == refilled.toDouble(), qPrintable(QStringLiteral("%1 != %2")
+                 .arg(live.toDouble(), 0, 'g', 17).arg(refilled.toDouble(), 0, 'g', 17)));
+    QCOMPARE(m_queue->model()->rowCount(), 0);
+    QCOMPARE(bytesOf(recordPath), recordBytes);
 }
 
 // Quitting while a fit runs: shutdown returns, nothing is published, nothing

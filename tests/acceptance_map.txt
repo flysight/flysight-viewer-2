@@ -19,8 +19,10 @@
 #             runtime registry drops, the plug-in code identity, unreadable
 #             records, record format 2): item = 400 + clause number. Stated
 #             in full in tests/README.md, appendix E. It amends the
-#             specification of 301-350; items 310, 316, 317 and 341 are
-#             stated as amended.
+#             specification of 301-350; items 310, 316, 317, 334 and 341 are
+#             stated as amended. Item 427 is stated as amended by its own
+#             section 9.1 (logbook columns over stored results), under which
+#             the section 10 test of that clause is filed as well.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -750,6 +752,8 @@
 323 tst_calcregistry explicitDependencies
 323 tst_column_cache explicitBackedColumnFollowsItsResult
 323 tst_fusion_jobs columnOnFusionOutputIsCachedFromRecord
+323 tst_result_columns workerRestoresStoredResult
+323 tst_fusion_jobs workerRefillsColumnFromStoredFit
 323 tst_fusion_session explicitOutputsHaveOneCandidate
 323 manual M17
 
@@ -757,7 +761,7 @@
 324 tst_result_columns inputChangeDropsCachedValue
 324 tst_result_columns onlyDependentColumnsDrop
 324 tst_result_columns staleRecordOnLoadDropsCachedValue
-324 tst_result_columns workerLeavesPendingWithRecord
+324 tst_result_columns workerRestoresStoredResult
 324 tst_result_columns crashAfterRecordWrite
 324 tst_result_columns crashAfterRecordDelete
 324 tst_result_columns rewriteAfterDropFlushesIndexFirst
@@ -837,10 +841,12 @@
 333 audit one-worker
 333 audit stored-results
 
-# 334 - (7) the store never reads a record for a session not being loaded, and never starts a calculation
-334 tst_result_store temporaryLoadsNeverRestore
-334 tst_result_columns workerLeavesPendingWithRecord
+# 334 - (7, as amended) the store reads a record only for a session being loaded, or for the column worker's temporary copy of an unloaded session when a missing column needs it (a load for reading, never for writing), and never starts a calculation
+334 tst_result_store temporaryLoadsReadRecordsOnlyForColumns
+334 tst_result_columns workerRestoresStoredResult
+334 tst_result_columns onDemandColumnsReadNoRecord
 334 tst_result_columns restartShowsCachedValueWithoutLoading
+334 tst_fusion_jobs workerRefillsColumnFromStoredFit
 334 audit stored-results
 
 # 335 - (7) purity: with or without a record, every reader sees the same value
@@ -995,6 +1001,8 @@
 411 tst_result_store pluginEditStalesRecordsThatReadIt
 411 tst_result_store formatOneRecordIsDeletedOnLoad
 411 tst_fusion_store lookupResolvingDifferentlyAtLoadDeletesFit
+411 tst_result_columns staleRecordOnLoadDropsCachedValue
+411 tst_result_store temporaryLoadsReadRecordsOnlyForColumns
 
 # 412 - (5) a registry change made while the application runs that drops an installed requested result also deletes its record, like an input change
 412 tst_result_store registryChangeDeletesRecord
@@ -1081,6 +1089,7 @@
 422 tst_result_store skippedRecordIsReplacedByPublish
 422 tst_result_store deletingSessionWithSkippedRecord
 422 tst_result_columns skippedRecordValuesStayOutOfIndex
+422 tst_result_columns workerSkipsUnreadableRecord
 422 tst_result_records writeReadReplace
 422 tst_result_records removeSessionDeletesRecords
 422 tst_result_records strayRecordsRemovedAtScan
@@ -1094,6 +1103,7 @@
 
 # 424 - (7) logbook column values of a session that depend on a skipped record are not cached in index.json while it stays skipped
 424 tst_result_columns skippedRecordValuesStayOutOfIndex
+424 tst_result_columns workerSkipsUnreadableRecord
 424 tst_result_store unreadableRecordIsSkipped
 424 tst_result_store skippedRecordIsReplacedByPublish
 
@@ -1107,10 +1117,15 @@
 426 tst_result_store formatOneRecordIsDeletedOnLoad
 426 tst_result_records formatOneIsRefused
 
-# 427 - (9) the amended specification still holds where not amended: restoring is not requesting, publishing writes the record, records are read only for a session being loaded, the session file is untouched, a restored result is bit-identical
+# 427 - (9, as amended by 9.1) the amended specification still holds where not amended: restoring is not requesting, publishing writes the record, records are read only for a session being loaded or for the column worker's temporary copy (which counts as a load for reading, never for writing, and never requests or runs a requested calculation), the session file is untouched, a restored result is bit-identical; a logbook column's value is the same function of the session's valid stored results whether or not it is loaded (section 10: refilled by the worker from the stored result after its cached value is discarded, with no load of the row and no job)
 427 tst_calcengine_restore restoreIsNotAnInstall
 427 tst_result_store restoreOnEveryLoadPath
-427 tst_result_store temporaryLoadsNeverRestore
+427 tst_result_store temporaryLoadsReadRecordsOnlyForColumns
+427 tst_result_columns workerRestoresStoredResult
+427 tst_result_columns staleRecordOnLoadDropsCachedValue
+427 tst_result_columns workerSkipsUnreadableRecord
+427 tst_result_columns onDemandColumnsReadNoRecord
+427 tst_fusion_jobs workerRefillsColumnFromStoredFit
 427 tst_fusion_store sessionFileBytesUnaffectedByRecord
 427 tst_fusion_store restoredAfterRestartIsBitIdentical
 427 audit stored-results
@@ -1157,6 +1172,7 @@
 436 tst_result_store dependentOfSkippedRecordIsKept
 436 tst_result_store restoresUpstreamFirst
 436 tst_result_columns skippedRecordValuesStayOutOfIndex
+436 tst_result_columns workerSkipsUnreadableRecord
 
 # 437 - (10) test: a record of the previous format version is deleted as stale
 437 tst_result_store formatOneRecordIsDeletedOnLoad

@@ -36,8 +36,11 @@ struct SessionRow {
     // row to a stub so that a later access retries the load.
     bool loadFailed = false;
     // Explicit-backed columns of a row that is not loaded, left uncached
-    // because the session has a record that only a load may read (see CACHED
-    // COLUMN VALUES). Never holds an index that cachedValues holds. Empty for a
+    // because the column worker could not vouch for a record they depend on
+    // (it was skipped: see CACHED COLUMN VALUES), or because the session file
+    // could not be loaded (a failed-load placeholder, a stub whose temporary
+    // load failed). The worker passes them over; the next load of the session
+    // fills them. Never holds an index that cachedValues holds. Empty for a
     // loaded row (except a failed-load placeholder).
     QSet<int> pendingColumns;
 
@@ -82,11 +85,19 @@ struct MergeResult {
 /// it whenever a record of one of those calculations is written or deleted
 /// (calculationRecordsChanged). The row then loses it at once and gets it
 /// back on the next event-loop pass (refreshRecordColumns, which emits
-/// nothing: loaded cells are live). A row that is NOT loaded has no stored
-/// result in any engine, so its value is never computed from a temporary
-/// load. Without a record it is cached as unavailable. With one it stays
-/// PENDING (SessionRow::pendingColumns: not cached, shown empty) until the
-/// session is loaded. The column worker never reads a record.
+/// nothing: loaded cells are live). For a row that is NOT loaded the value is
+/// the same function of the session's valid stored results: without a record
+/// it is cached as unavailable, with no load. With one, the column worker
+/// restores the session's stored results into its temporary copy of the
+/// session (restoreForColumnWorker(): the checks of a load, a stale record
+/// deleted, an unreadable one skipped) and computes the value from that
+/// engine, exactly as for a loaded row. A value over a record the copy could
+/// not vouch for (skipped) stays PENDING (SessionRow::pendingColumns: not
+/// cached, shown empty) until the session is loaded. The worker's copy counts
+/// as a load for reading and never for writing: it has no explicit-result
+/// listener, so it writes and rewrites no record, and it never requests,
+/// prepares or runs a requested calculation. The bulk edit's temporary load
+/// reads no record: it leaves such values missing for the worker.
 ///
 /// RULE for every code path that mutates a row's PERSISTENT state
 /// (SessionData::setAttribute / removeAttribute / mergeSourceData /
@@ -113,8 +124,8 @@ struct MergeResult {
 /// columns whose environment (logbookColumnEnvironment(): what the column's
 /// static dependency closure can observe of the registrations and
 /// preferences) changed, and the column worker recomputes them (an
-/// explicit-backed column of an unloaded row goes pending again when the
-/// session has a record); the other columns keep their values. Nothing is
+/// explicit-backed column of an unloaded row from the session's stored
+/// results, as above); the other columns keep their values. Nothing is
 /// marked dirty or unsaved and no session file is rewritten.
 ///
 /// ROW STABILITY. A reference to a row, or to a loaded row's session, is valid
@@ -151,8 +162,11 @@ struct MergeResult {
 /// row is published (before sessionLoaded, dataChanged or any plot pass) and
 /// deletes the stale ones; a record that cannot be read is skipped (kept for
 /// the next load, its column values never cached meanwhile). Restoring is not
-/// requesting: it starts nothing. Temporary loads (column worker, bulk edit on
-/// a stub) never read a record. Eviction, unloading, a registration removed as
+/// requesting: it starts nothing. The column worker's temporary copy of an
+/// unloaded session is restored the same way when a missing column needs a
+/// record (see CACHED COLUMN VALUES); it is never installed into the row, and
+/// no sessionLoaded is emitted for it. The bulk edit's temporary load never
+/// reads a record. Eviction, unloading, a registration removed as
 /// teardown, the model's destruction and removeSessions() never delete one
 /// (LogbookManager::removeSession does, with the session file).
 class SessionModel : public QAbstractTableModel
@@ -398,29 +412,52 @@ private:
     void invalidateAllColumns(int row);                                         // new / replaced session
     enum class ColumnSource {
         LoadedRow,      ///< the row's own session: its engine holds the restored / published results
-        TemporaryLoad   ///< a session loaded for this computation only: no stored result was restored
+        TemporaryLoad,  ///< the bulk edit's temporary load: no stored result was restored
+        WorkerCopy      ///< the column worker's temporary copy: restoreForColumnWorker() ran on it
     };
     /// Computes ONLY the missing indices (neither cached nor pending). For a
     /// TemporaryLoad, and for a failed-load placeholder, the explicit-backed
-    /// ones are settled first (settleExplicitColumns).
+    /// ones are settled first (settleExplicitColumns), and a TemporaryLoad
+    /// leaves those with a record missing for the column worker. For a
+    /// WorkerCopy, a missing column over a record the copy could not vouch for
+    /// (LogbookManager::unconfirmedCalculationRecords(): skipped, or a removal
+    /// that failed) goes pending instead of being computed.
     void fillMissingColumns(int row, const SessionData &session, ColumnSource source);
+    /// What settleExplicitColumns() does with a column over a known record.
+    enum class RecordColumns {
+        LeaveMissing,   ///< for the column worker, which restores the record into its copy
+        Pend            ///< the session file cannot be loaded: wait for the next load
+    };
     /// For each missing explicit-backed column of a row whose engine holds no
     /// stored result (a stub, a temporary load, a failed-load placeholder):
-    /// PENDING when LogbookManager knows a record of the session for any
-    /// calculation the column depends on, else cached as unavailable (row and
-    /// LogbookManager::updateCachedValues). Loads nothing and reads no record:
-    /// the record set comes from knownCalculationRecords(). "No record, so
-    /// unavailable" holds only while an Explicit calculation's outputs have no
-    /// other candidate (docs/CALCULATIONS.md section 8).
-    void settleExplicitColumns(int row);
+    /// cached as unavailable (row and LogbookManager::updateCachedValues) when
+    /// LogbookManager knows no record of the session for any calculation the
+    /// column depends on; otherwise left missing or made pending, as
+    /// `recordColumns` says. Loads nothing and reads no record: the record set
+    /// comes from knownCalculationRecords(). "No record, so unavailable" holds
+    /// only while an Explicit calculation's outputs have no other candidate
+    /// (docs/CALCULATIONS.md section 8).
+    void settleExplicitColumns(int row, RecordColumns recordColumns);
+    /// The column worker's read of a stub's stored results: when some missing
+    /// column of the row depends on a calculation LogbookManager knows a
+    /// record of, restores the session's records into `copy`'s engine through
+    /// the result store's restore of a load (the same checks: a stale
+    /// record deleted, an unreadable one skipped) and returns true; otherwise
+    /// (and always for a row that is loaded) reads nothing and returns false.
+    /// `copy` is the worker's temporary copy
+    /// of the row's session: it has no listener, so the restore writes no
+    /// record, and nothing is requested, prepared or run. Called once per
+    /// worker step, only from processNextDirtyColumn().
+    bool restoreForColumnWorker(int row, SessionData &copy);
     ColumnWorkStats m_columnWorkStats;
 
     /// A record of (sessionId, calculationId) changed (LogbookManager has
     /// dropped its copies). Removes the row's cached and pending values of every
     /// column over that calculation; a loaded row is recomputed on the next
-    /// event-loop pass (queueRecordColumnRefresh), a stub is settled by the
+    /// event-loop pass (queueRecordColumnRefresh), a stub is filled by the
     /// column worker. Runs inside record methods, which the result store calls
-    /// from an engine listener and from a load: it only drops state and defers.
+    /// from an engine listener and from a restore (a load, or the column
+    /// worker's copy): it only drops state and defers.
     void onCalculationRecordsChanged(const QString &sessionId, const QString &calculationId);
     QSet<QString> m_recordColumnRefresh;        // loaded rows whose explicit-backed values are to be recomputed
     bool m_recordColumnRefreshQueued = false;
@@ -438,7 +475,8 @@ private:
     /// True when the static dependency closure of some column reads `key`.
     bool columnsReadPreference(const QString &key) const;
     /// Runs a pending environment check now. Called first by every path that
-    /// stores column values (fillMissingColumns, settleExplicitColumns), so
+    /// stores column values (fillMissingColumns, settleExplicitColumns,
+    /// restoreForColumnWorker), so
     /// that a value enters the cache only under the environment of its column
     /// it was computed in; rebuildColumns() does the check itself.
     void applyPendingEnvironmentCheck();

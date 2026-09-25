@@ -361,10 +361,14 @@ value at a marker, for example) is computed, while the session is loaded, from
 the restored or just-published result, and cached like any other column. At
 start-up such a cached value is kept only while the session's `"records"`
 stamp matches the record files on disk and the calculations' current result
-versions; writing or deleting a record drops it. For a session that is not
-loaded and has no cached value, the column is unavailable when the session has
-no stored result. When it has one, the column stays empty (pending) until the
-session is loaded, because records are read only when a session is loaded.
+versions; writing or deleting a record drops it. A column's value is the same
+whether or not its session is loaded. For a session that is not loaded and has
+no cached value, the column is unavailable when the session has no stored
+result. When it has one, the logbook's background worker reads the session's
+stored results into a temporary copy of the session, with the same checks as a
+load (a stale record is deleted, an unreadable one skipped), computes the
+value from them and caches it with the stamp. The session is not loaded for
+this, nothing is computed again, and no record is written.
 
 Before a record is written whose calculation `index.json` lists as present
 under a cached value, the index is rewritten without that value, so a crash at
@@ -373,9 +377,10 @@ whose record may disagree with the loaded session (a record write or removal
 that failed, or a record that could not be read when the session was loaded,
 section 12) is kept out of `index.json` until the record is written or deleted
 again or the session is unloaded. An unloaded session whose record was skipped
-shows such a column empty (pending) until it is loaded again, when the record
-is read again. An index written before stamps existed keeps such a value only
-for a session without a record.
+(when it was loaded, or by the background worker) shows such a column empty
+(pending) until it is loaded again, when the record is read again. An index
+written before stamps existed keeps such a value only for a session without a
+record.
 
 Developers: when to change the marker is described in
 [CALCULATIONS.md](CALCULATIONS.md#9-when-to-bump-calculationcompatibilityversion).
@@ -499,8 +504,9 @@ never stored.
   registered that provides a name it looked up and found missing, or the
   removal of the calculation that provided one, for example),
   when its session is deleted from the logbook, when it is found stale as the
-  session is loaded, and at start-up when no session file with its stem exists
-  in `sessions/` (that start-up pass deletes in `cache/` only).
+  session is loaded (or as the logbook's background worker reads it for a
+  column value, below), and at start-up when no session file with its stem
+  exists in `sessions/` (that start-up pass deletes in `cache/` only).
 - It is never deleted by hiding a track, unloading a session, quitting, or a
   change of the registered calculations that does not change what a name it
   looked up resolves to (a calculation registered for such a name that the
@@ -510,11 +516,19 @@ never stored.
   that one. Restoring is not requesting: nothing is computed. A stale or
   missing record leaves the calculation not computed until it is requested
   again from the plot list.
+- Records are also read, never written, when the logbook's background worker
+  fills a missing column value of a session that is not loaded (section 11):
+  it restores them into a temporary copy of the session with the same checks
+  as a load, deletes a stale one and skips an unreadable one, and computes the
+  value from them. The session is not loaded, nothing is requested or
+  computed again, and the copy is discarded. Records are read only when a
+  missing column needs one.
 - A record that exists but cannot be opened or read in full when its session
-  is loaded (another program holding the file locked, for example) is skipped
-  for that load: it is neither restored nor deleted, the calculation reads as
-  not requested, and a warning is logged. A record whose result reads the
-  result of a skipped record is skipped too. The next load tries again; a new
+  is loaded or the background worker reads it (another program holding the
+  file locked, for example) is skipped for that load: it is neither restored
+  nor deleted, the calculation reads as not requested, and a warning is
+  logged. A record whose result reads the result of a skipped record is
+  skipped too. The next load tries again; a new
   publish for the same session and calculation replaces the record, and
   deleting the session, or the start-up pass for a session file that no longer
   exists, removes it. A file that is locked without sharing (on Windows) can

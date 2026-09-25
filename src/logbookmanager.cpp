@@ -1017,13 +1017,14 @@ int LogbookManager::removeStrayCalculationRecords()
 //   crash after                          index.json on disk     record e   next start
 //                                        (V / stamp for e)      on disk
 //   a write, the stamp on disk listing   V computed without e   present    stamp != disk: V dropped,
-//     e absent (first fit)                 / absent                          pending until loaded
+//     e absent (first fit)                 / absent                          the worker restores e
 //   a delete (input change, stale on     V / present            absent     stamp != disk: V dropped,
 //     load)                                                                  the worker caches unavailable
-//   delete, then write again before      no V, e absent         present    V missing: pending until loaded
-//     any flush                            (step d flushed first)
-//   a write before any flush of a run    no V, e absent         present    V missing: pending until loaded
-//     whose start dropped V (or found      (step d flushed first)
+//   delete, then write again before      no V, e absent         present    V missing: the worker
+//     any flush                            (step d flushed first)             restores e, or deletes it
+//                                                                              when stale
+//   a write before any flush of a run    no V, e absent         present    V missing: the worker
+//     whose start dropped V (or found      (step d flushed first)             restores e
 //     the index not valid)
 //   step d's flush failed                V / present            absent     stamp != disk: V dropped
 //                                                               (deleted before)
@@ -1032,11 +1033,18 @@ int LogbookManager::removeStrayCalculationRecords()
 //                                          (unconfirmed)
 //   a record skipped at a load           as last flushed before  present    V agrees with the record
 //     (unreadable)                         the load, or no V and            (it was computed from it),
-//                                          e absent (a flush while          or V missing: pending
-//                                          skipped: unconfirmed)            until loaded
+//                                          e absent (a flush while          or V missing: the worker
+//                                          skipped: unconfirmed)            restores e (pending while
+//                                                                           it cannot be read)
 //   the model's refresh flush            V1 / present, current  present    valid: the stub shows V1
-//   a result-version bump (upgrade)      V / present, old       present    version != current: V dropped,
-//                                          version              (stale)    pending; the load deletes the record
+//   a result-version bump (upgrade)      V / present, old       present    version != current: V dropped;
+//                                          version              (stale)    the worker's restore deletes
+//                                                                           e and caches unavailable
+//
+// "The worker restores e": the column worker restores the session's records
+// into its temporary copy of the unloaded session with the checks of a load
+// and computes V from it (SessionModel::restoreForColumnWorker()); it never
+// writes a record.
 //
 // The only sequence the stamp cannot see (present -> deleted -> written again
 // with no flush in between, possibly across a restart) is the one step d
@@ -1473,14 +1481,16 @@ bool LogbookManager::flushIndex()
         // record on disk was written with: the stamp says which version the
         // cached values over the calculation were computed under. That is
         // safe because a value over an explicit calculation is computed only
-        // for a loaded row, from its engine, and the load deleted every
-        // record whose result version was not current before any value could
-        // be computed (the result store's restore; a publish writes the
-        // current version).
+        // from an engine the session's records were restored into (a loaded
+        // row, or the column worker's temporary copy of an unloaded session),
+        // and that restore deleted every record whose result version was not
+        // current before any value could be computed (the result store's
+        // restore; a publish writes the current version).
         // A confirmed record of an unloaded session may still be of an older
         // version (an upgrade): no value over it is kept (initialize()
-        // dropped it, the worker leaves it pending), so the stamp's version
-        // vouches for nothing until the load that deletes the record.
+        // dropped it), so the stamp's version vouches for nothing until the
+        // restore that deletes the record (the worker's, when it fills the
+        // value, or a load).
         QJsonObject recordsObj;
         for (const QString &id : confirmed)
             recordsObj[id] = currentResultVersion(id);

@@ -7,8 +7,13 @@
 //    session's record set ("records": calculation id -> result version);
 //  - writing or deleting a record drops the values over it at once (only
 //    those), and the next event-loop pass computes them again;
-//  - an unloaded row is settled without reading a record: PENDING when the
-//    session has one, unavailable when it has none;
+//  - an unloaded row without a record is settled as unavailable with no
+//    load; with one, the column worker restores the session's records into
+//    its temporary copy (the checks of a load: a stale record deleted, an
+//    unreadable one skipped and its values PENDING) and caches the value
+//    computed from it - the row is never loaded, no record is written,
+//    nothing is run; a copy whose missing columns are all on demand reads no
+//    record;
 //  - crash points between a record write / delete and the index flush, an
 //    index written by an older build (no stamp), a result-version change, a
 //    failed write, a session not saved yet, environment changes (which
@@ -196,7 +201,10 @@ private slots:
     void inputChangeDropsCachedValue();
     void onlyDependentColumnsDrop();
     void staleRecordOnLoadDropsCachedValue();
-    void workerLeavesPendingWithRecord();
+    void workerRestoresStoredResult();
+    void workerSkipsUnreadableRecord_data();
+    void workerSkipsUnreadableRecord();
+    void onDemandColumnsReadNoRecord();
     void crashAfterRecordWrite();
     void crashAfterRecordDelete();
     void rewriteAfterDropFlushesIndexFirst();
@@ -545,9 +553,10 @@ void ResultColumnsTest::onlyDependentColumnsDrop()
 }
 
 // A bulk edit on a stub changes an input of X with a temporary session, which
-// has no listener: the record stays, stale. The column is left pending, never
-// computed from the record's presence; the load that deletes the record
-// caches unavailable.
+// reads no record and has no listener: the record stays, stale, and X is left
+// missing - never computed from the record's presence, never pending. The
+// column worker's temporary copy reads the record with the checks of a load,
+// deletes it as stale and caches unavailable; the row is never loaded.
 void ResultColumnsTest::staleRecordOnLoadDropsCachedValue()
 {
     QCOMPARE(engine("s1").request(kCalcX).status, ResultStatus::Ok);
@@ -555,57 +564,107 @@ void ResultColumnsTest::staleRecordOnLoadDropsCachedValue()
     QCOMPARE(cached("s1", kX), QVariant(QStringLiteral("x:d1")));
     QCOMPARE(evict({"s1"}), QString());
     const QString path = recordPath("s1", kEncodedX);
+    QVERIFY(QFileInfo(path).isFile());
     m_model->resetStoredResultStats();
+    m_model->resetColumnWorkStats();
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
 
+    // The bulk edit alone (the worker gets no idle pass before the check):
+    // nothing is read, and X waits for the worker
+    QObject scope;
+    bool seen = false;
+    bool readAtBulkEdit = true;
+    bool leftMissing = false;
+    connect(&m_model->scheduler(), &IdleScheduler::activeTaskChanged, &scope, [&](int task, bool) {
+        if (task != SessionModel::ColumnTask || seen)
+            return;
+        seen = true;    // before the worker's first step
+        readAtBulkEdit = stats().recordsRead != 0;
+        leftMissing = !isCached("s1", kX) && !pending("s1").contains(kX) && QFileInfo(path).isFile();
+    });
     m_model->startBulkEdit({row("s1")}, kD, QStringLiteral("bulk"));
     QVERIFY(waitForIdle(*m_model));
-    QVERIFY(!isLoaded("s1"));
-    QVERIFY(!isCached("s1", kX));
-    QCOMPARE(pending("s1"), QSet<int>({kX}));
-    QCOMPARE(cached("s1", kD), QVariant(QStringLiteral("bulk")));
-    QVERIFY(QFileInfo(path).isFile());
-    QCOMPARE(stats().restoreCalls, 0);
-    QCOMPARE(stats().recordsRead, 0);
-    QVERIFY(indexValue("s1", xColumn()).isUndefined());
+    QVERIFY(seen);
+    QVERIFY(!readAtBulkEdit);
+    QVERIFY(leftMissing);
 
-    session("s1");
-    QCOMPARE(stats().staleRecordsDeleted, 1);
-    QVERIFY(!QFileInfo::exists(path));
-    QVERIFY(waitForIdle(*m_model));
+    // The worker's copy found it stale
+    QVERIFY(!isLoaded("s1"));
+    QCOMPARE(loadedSpy.count(), 0);
+    QCOMPARE(cached("s1", kD), QVariant(QStringLiteral("bulk")));
     QVERIFY(isCached("s1", kX));
     QVERIFY(!cached("s1", kX).isValid());
     QCOMPARE(pending("s1"), QSet<int>());
+    QVERIFY(!QFileInfo::exists(path));
+    QCOMPARE(stats().restoreCalls, 1);
+    QCOMPARE(stats().recordsRead, 1);
+    QCOMPARE(stats().staleRecordsDeleted, 1);
+    QCOMPARE(stats().recordsRestored, 0);
+    QCOMPARE(stats().recordsWritten, 0);
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 2);    // the bulk edit's, the worker's
     QVERIFY(indexValue("s1", xColumn()).isNull());
+    QCOMPARE(indexRecordStamp("s1"), QJsonValue(QJsonObject()));
+
+    // A load finds nothing left to restore, and agrees
+    session("s1");
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(stats().staleRecordsDeleted, 1);
+    QVERIFY(engine("s1").resultStatus(kCalcX) != std::optional<ResultStatus>(ResultStatus::Ok));
+    QVERIFY(isCached("s1", kX));
+    QVERIFY(!cached("s1", kX).isValid());
 }
 
-// A stub with a record and no valid value: the worker leaves the column
-// pending without loading (and without spinning); a load fills it.
-void ResultColumnsTest::workerLeavesPendingWithRecord()
+// A stub with a record and no value over it: the column worker restores the
+// session's records into its temporary copy (the checks of a load) and caches
+// the value computed from it, stamped, exactly what the loaded row gives. The
+// row is never loaded, nothing runs, no job is created and no record is
+// written. With another missing column too: still one copy and one restore.
+void ResultColumnsTest::workerRestoresStoredResult()
 {
     QCOMPARE(engine("s1").request(kCalcX).status, ResultStatus::Ok);
     QVERIFY(waitForIdle(*m_model));
+    const QString path = recordPath("s1", kEncodedX);
+    const QByteArray recordBytes = bytesOf(path);
+    QVERIFY(!recordBytes.isEmpty());
     resetModel();
     QVERIFY(editIndex([](QJsonObject &root) { removeIndexValue(root, "s1", xColumn()); }));
     restart();
+    QVERIFY(!isCached("s1", kX));
+    QCOMPARE(pending("s1"), QSet<int>());
 
     m_model->resetColumnWorkStats();
     m_model->resetStoredResultStats();
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
     m_model->startColumnWorker();
     QVERIFY(waitForIdle(*m_model));
-    QCOMPARE(pending("s1"), QSet<int>({kX}));
-    QVERIFY(!isCached("s1", kX));
-    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
-    QCOMPARE(stats().restoreCalls, 0);
-    QCOMPARE(cell("s1", kX), QString());
+    QCOMPARE(cached("s1", kX), QVariant(QStringLiteral("x:d1")));
+    QCOMPARE(cell("s1", kX), QStringLiteral("x:d1"));
+    QCOMPARE(pending("s1"), QSet<int>());
+    QVERIFY(!isLoaded("s1"));
+    QCOMPARE(loadedSpy.count(), 0);
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);
+    QCOMPARE(m_model->columnWorkStats().valuesComputed, 1);
+    QCOMPARE(m_model->columnWorkStats().calculationRuns, 0);
+    QCOMPARE(stats().restoreCalls, 1);
+    QCOMPARE(stats().recordsRead, 1);
+    QCOMPARE(stats().recordsRestored, 1);
+    QCOMPARE(stats().staleRecordsDeleted, 0);
+    QCOMPARE(stats().recordsWritten, 0);
+    QCOMPARE(m_queue->model()->rowCount(), 0);
+    QCOMPARE(bytesOf(path), recordBytes);
+    QCOMPARE(LogbookManager::instance().unconfirmedCalculationRecords("s1"), QSet<QString>());
+    QCOMPARE(indexValue("s1", xColumn()), QJsonValue(QStringLiteral("x:d1")));
+    QCOMPARE(indexRecordStamp("s1"), stampOf({{kCalcX, QString()}}));
 
+    // A load restores the same result: the loaded row agrees
     session("s1");
     QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(engine("s1").runCount(kCalcX), 0);
+    QCOMPARE(engine("s1").attribute(QStringLiteral("X_OUT")), QVariant(QStringLiteral("x:d1")));
     QCOMPARE(cached("s1", kX), QVariant(QStringLiteral("x:d1")));
-    QCOMPARE(indexValue("s1", xColumn()), QJsonValue(QStringLiteral("x:d1")));
-    QCOMPARE(pending("s1"), QSet<int>());
 
-    // A stub with a record and another missing column: one temporary load,
-    // which computes the other column and leaves the explicit one pending
+    // A stub with a record and another missing column: one temporary copy and
+    // one restore, which fill both
     resetModel();
     QVERIFY(editIndex([](QJsonObject &root) {
         removeIndexValue(root, "s1", xColumn());
@@ -617,17 +676,115 @@ void ResultColumnsTest::workerLeavesPendingWithRecord()
     m_model->startColumnWorker();
     QVERIFY(waitForIdle(*m_model));
     QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);
+    QCOMPARE(stats().restoreCalls, 1);
+    QCOMPARE(stats().recordsRestored, 1);
     QCOMPARE(cached("s1", kD), QVariant(QStringLiteral("d1")));
-    QCOMPARE(pending("s1"), QSet<int>({kX}));
-    QVERIFY(!isCached("s1", kX));
+    QCOMPARE(cached("s1", kX), QVariant(QStringLiteral("x:d1")));
+    QCOMPARE(pending("s1"), QSet<int>());
+    QVERIFY(!isLoaded("s1"));
+    QCOMPARE(bytesOf(path), recordBytes);
+}
+
+void ResultColumnsTest::workerSkipsUnreadableRecord_data()
+{
+    QTest::addColumn<int>("mechanism");
+    QTest::newRow("locked without sharing") << int(UnreadableFile::Mechanism::LockedWithoutSharing);
+    QTest::newRow("no read permission") << int(UnreadableFile::Mechanism::NoReadPermission);
+}
+
+// A record the worker's copy cannot read is skipped with the checks of a
+// load: kept, neither restored nor deleted. The value over it is not cached
+// (in the row or index.json) but pending, without loading the row; the
+// worker does not come back to it, and the copy's mark goes with the copy.
+// Once readable, a load restores it.
+void ResultColumnsTest::workerSkipsUnreadableRecord()
+{
+    QFETCH(int, mechanism);
+    LogbookManager &logbook = LogbookManager::instance();
+
+    QVERIFY(fit("s1", kCalcY));
+    const QString path = recordPath("s1", kEncodedY);
+    resetModel();
+    QVERIFY(editIndex([](QJsonObject &root) { removeIndexValue(root, "s1", yColumn()); }));
+    UnreadableFile unreadable(path, UnreadableFile::Mechanism(mechanism));
+    if (!unreadable.skipReason().isEmpty())
+        QSKIP(qPrintable(unreadable.skipReason()));
+    restart();
+    QVERIFY(!isCached("s1", kY));
+
+    m_model->resetColumnWorkStats();
+    m_model->resetStoredResultStats();
+    {
+        WarningCapture warnings;    // the skip warns
+        m_model->startColumnWorker();
+        QVERIFY(waitForIdle(*m_model));
+        QCOMPARE(warnings.count(QStringLiteral("skipped (kept for the next load)")), 1);
+    }
+    QCOMPARE(pending("s1"), QSet<int>({kY}));
+    QVERIFY(!isCached("s1", kY));
+    QCOMPARE(cell("s1", kY), QString());
+    QVERIFY(!isLoaded("s1"));
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);
+    QCOMPARE(stats().restoreCalls, 1);
+    QCOMPARE(stats().recordsSkipped, 1);
+    QCOMPARE(stats().recordsRestored, 0);
+    QCOMPARE(stats().staleRecordsDeleted, 0);
+    QCOMPARE(logbook.unconfirmedCalculationRecords("s1"), QSet<QString>());
+    QVERIFY(logbook.flushIndex());
+    QVERIFY(indexValue("s1", yColumn()).isUndefined());
+    QCOMPARE(indexValue("s1", descriptionColumn()), QJsonValue(QStringLiteral("d1")));
+    QVERIFY(indexValue("s2", yColumn()).isNull());
+
+    // The worker passes the pending value over
+    m_model->resetColumnWorkStats();
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+
+    // Readable again: the next load restores it
+    QVERIFY(unreadable.release());
+    session("s1");
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(engine("s1").resultStatus(kCalcY), std::optional<ResultStatus>(ResultStatus::Ok));
+    QCOMPARE(engine("s1").runCount(kCalcY), 0);
+    QCOMPARE(pending("s1"), QSet<int>());
+    QCOMPARE(cached("s1", kY), QVariant(6.0));
+    QVERIFY(logbook.flushIndex());
+    QCOMPARE(indexValue("s1", yColumn()), QJsonValue(6.0));
+    QCOMPARE(indexRecordStamp("s1"), stampOf({{kCalcY, QStringLiteral("y-v1")}}));
+}
+
+// A stub whose missing columns are all on demand: one temporary copy computes
+// them, and no record is read although the session has one.
+void ResultColumnsTest::onDemandColumnsReadNoRecord()
+{
+    QCOMPARE(engine("s1").request(kCalcX).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+    resetModel();
+    QVERIFY(editIndex([](QJsonObject &root) { removeIndexValue(root, "s1", descriptionColumn()); }));
+    restart();
+    QVERIFY(!isCached("s1", kD));
+    QCOMPARE(cached("s1", kX), QVariant(QStringLiteral("x:d1")));
+    QCOMPARE(LogbookManager::instance().knownCalculationRecords("s1"), QSet<QString>({kCalcX}));
+
+    m_model->resetColumnWorkStats();
+    m_model->resetStoredResultStats();
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(cached("s1", kD), QVariant(QStringLiteral("d1")));
+    QCOMPARE(cached("s1", kX), QVariant(QStringLiteral("x:d1")));
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);
     QCOMPARE(stats().restoreCalls, 0);
+    QCOMPARE(stats().recordListings, 0);
+    QCOMPARE(stats().recordsRead, 0);
     QVERIFY(!isLoaded("s1"));
 }
 
 // ---- Crash points ---------------------------------------------------------------------
 
 // The stamp on disk does not list X: the write needs no flush first, and the
-// start-up check drops the value the index still holds.
+// start-up check drops the value the index still holds. The column worker
+// fills it from the record, without loading the row.
 void ResultColumnsTest::crashAfterRecordWrite()
 {
     const QByteArray indexBytes = bytesOf(TestEnvironment::instance().indexPath());
@@ -641,10 +798,16 @@ void ResultColumnsTest::crashAfterRecordWrite()
     QVERIFY(LogbookManager::instance().cachedValuesForSession("s2").value(xKey).isNull());
 
     m_model->resetColumnWorkStats();
+    m_model->resetStoredResultStats();
     m_model->startColumnWorker();
     QVERIFY(waitForIdle(*m_model));
-    QCOMPARE(pending("s1"), QSet<int>({kX}));
-    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+    QCOMPARE(pending("s1"), QSet<int>());
+    QCOMPARE(cached("s1", kX), QVariant(QStringLiteral("x:d1")));
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);
+    QCOMPARE(stats().recordsRestored, 1);
+    QVERIFY(!isLoaded("s1"));
+    QCOMPARE(indexValue("s1", xColumn()), QJsonValue(QStringLiteral("x:d1")));
+    QCOMPARE(indexRecordStamp("s1"), stampOf({{kCalcX, QString()}}));
 
     session("s1");
     QVERIFY(waitForIdle(*m_model));
@@ -700,17 +863,25 @@ void ResultColumnsTest::rewriteAfterDropFlushesIndexFirst()
     QVERIFY(!indexRecordStamp(root, "s1").toObject().contains(kCalcX));
     QVERIFY(QFileInfo(path).isFile());
 
+    // The record describes _DESCRIPTION "e", which was never saved: the
+    // worker's copy finds it stale, deletes it and caches unavailable
     crash();
+    m_model->resetStoredResultStats();
     m_model->startColumnWorker();
     QVERIFY(waitForIdle(*m_model));
-    QCOMPARE(pending("s1"), QSet<int>({kX}));
     QVERIFY(bytesOf(csv).contains("_DESCRIPTION,d1\n"));      // the edit was not saved
-
-    m_model->resetStoredResultStats();
-    session("s1");
     QCOMPARE(stats().staleRecordsDeleted, 1);
     QVERIFY(!QFileInfo::exists(path));
+    QCOMPARE(pending("s1"), QSet<int>());
+    QVERIFY(isCached("s1", kX));
+    QVERIFY(!cached("s1", kX).isValid());
+    QVERIFY(!isLoaded("s1"));
+
+    // What a load gives agrees
+    session("s1");
     QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(stats().staleRecordsDeleted, 1);
+    QVERIFY(engine("s1").resultStatus(kCalcX) != std::optional<ResultStatus>(ResultStatus::Ok));
     QVERIFY(isCached("s1", kX));
     QVERIFY(!cached("s1", kX).isValid());
 }
@@ -838,11 +1009,14 @@ void ResultColumnsTest::oldIndexWithoutStamp()
 
     m_model->resetColumnWorkStats();
     if (withRecord) {
+        // Dropped: the worker fills it from the record, without loading the row
         QVERIFY(!isCached("s1", kX));
         m_model->startColumnWorker();
         QVERIFY(waitForIdle(*m_model));
-        QCOMPARE(pending("s1"), QSet<int>({kX}));
-        QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+        QCOMPARE(pending("s1"), QSet<int>());
+        QCOMPARE(cached("s1", kX), QVariant(QStringLiteral("x:d1")));
+        QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);
+        QVERIFY(!isLoaded("s1"));
         session("s1");
         QVERIFY(waitForIdle(*m_model));
         QCOMPARE(cached("s1", kX), QVariant(QStringLiteral("x:d1")));
@@ -861,7 +1035,8 @@ void ResultColumnsTest::oldIndexWithoutStamp()
 }
 
 // A stamp whose result version is not the current one: the value goes; the
-// record itself carries the current version and restores.
+// record itself carries the current version and restores (into the worker's
+// copy, which fills the value, and at a load).
 void ResultColumnsTest::resultVersionChangeDropsCachedValue()
 {
     QVERIFY(fit("s1", kCalcY));
@@ -872,9 +1047,14 @@ void ResultColumnsTest::resultVersionChangeDropsCachedValue()
     restart();
 
     QVERIFY(!isCached("s1", kY));
+    m_model->resetStoredResultStats();
     m_model->startColumnWorker();
     QVERIFY(waitForIdle(*m_model));
-    QCOMPARE(pending("s1"), QSet<int>({kY}));
+    QCOMPARE(pending("s1"), QSet<int>());
+    QCOMPARE(cached("s1", kY), QVariant(6.0));
+    QCOMPARE(stats().recordsRestored, 1);
+    QVERIFY(!isLoaded("s1"));
+    QCOMPARE(indexRecordStamp("s1"), stampOf({{kCalcY, QStringLiteral("y-v1")}}));
     QVERIFY(isCached("s2", kY));
     QVERIFY(!cached("s2", kY).isValid());
 
@@ -954,9 +1134,9 @@ void ResultColumnsTest::recordBeforeFirstSaveIsCachedAfterSave()
 // closure it reaches. One that reaches none (a new, unrelated name) keeps
 // everything - Y of the unloaded s1 stays cached from its record, neither
 // pending nor loaded. A provider of Y_IN (tried after the stored Y_IN) reaches
-// Y only: the worker settles Y again (pending for s1, which has a record;
-// unavailable for the loaded s2, from its engine) and D and X keep their
-// values, with no load.
+// Y only: the worker computes Y again (for s1, which has a record, from its
+// stored result restored into a temporary copy - the row stays unloaded; for
+// the loaded s2, unavailable from its engine) and D and X keep their values.
 void ResultColumnsTest::environmentChangeDiscardsReachedColumn()
 {
     QVERIFY(fit("s1", kCalcY));
@@ -1002,22 +1182,26 @@ void ResultColumnsTest::environmentChangeDiscardsReachedColumn()
     const QString xEnvironment = logbook.columnEnvironment(xColumn());
     QVERIFY(registry.registerCalculation(shadow));
     m_model->resetColumnWorkStats();
+    m_model->resetStoredResultStats();
     m_model->flushPendingInvalidations();
     QVERIFY(waitForIdle(*m_model));
 
     QVERIFY(logbook.columnEnvironment(yColumn()) != yEnvironment);
     QCOMPARE(logbook.columnEnvironment(xColumn()), xEnvironment);
     QVERIFY(!isLoaded("s1"));
-    QCOMPARE(pending("s1"), QSet<int>({kY}));
-    QVERIFY(!isCached("s1", kY));
+    QCOMPARE(pending("s1"), QSet<int>());
+    QCOMPARE(cached("s1", kY), QVariant(6.0));
     QCOMPARE(cached("s1", kD), QVariant(QStringLiteral("d1")));
     QVERIFY(isCached("s1", kX));
     QVERIFY(!cached("s1", kX).isValid());
-    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
-    QCOMPARE(m_model->columnWorkStats().valuesComputed, 1);     // Y of s2, from its engine
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);     // s1's copy
+    QCOMPARE(m_model->columnWorkStats().valuesComputed, 2);     // Y of s1 from the copy, Y of s2 from its engine
+    QCOMPARE(stats().recordsRestored, 1);
+    QCOMPARE(stats().staleRecordsDeleted, 0);
     QVERIFY(isCached("s2", kY));
     QVERIFY(!cached("s2", kY).isValid());
-    QVERIFY(indexValue("s1", yColumn()).isUndefined());
+    QCOMPARE(indexValue("s1", yColumn()), QJsonValue(6.0));
+    QCOMPARE(indexColumnEnvironment(yColumn()), logbook.columnEnvironment(yColumn()));
     QVERIFY(indexValue("s1", xColumn()).isNull());
     QCOMPARE(indexValue("s1", descriptionColumn()), QJsonValue(QStringLiteral("d1")));
 
@@ -1145,8 +1329,9 @@ void ResultColumnsTest::skippedRecordValuesStayOutOfIndex_data()
 
 // A record skipped at a load (it cannot be read): the loaded row's value over
 // it is unavailable and never reaches index.json, nor does the calculation
-// reach the stamp; eviction leaves the column pending; once readable, the
-// next load restores it and the value is cached again.
+// reach the stamp; after eviction the column worker's copy skips it again
+// and leaves the column pending; once readable, the next load restores it and
+// the value is cached again.
 void ResultColumnsTest::skippedRecordValuesStayOutOfIndex()
 {
     QFETCH(int, mechanism);
@@ -1193,14 +1378,22 @@ void ResultColumnsTest::skippedRecordValuesStayOutOfIndex()
         QCOMPARE(indexRecordStamp(root, "s2"), QJsonValue(QJsonObject()));
     }
 
-    // Eviction: the mark goes with the engine, the column waits for a load
+    // Eviction: the mark goes with the engine; the worker's copy skips the
+    // record again, and the column waits for a load
     m_model->resetColumnWorkStats();
-    QCOMPARE(evict({"s1"}), QString());
-    QVERIFY(waitForIdle(*m_model));
+    m_model->resetStoredResultStats();
+    {
+        WarningCapture warnings;
+        QCOMPARE(evict({"s1"}), QString());
+        QVERIFY(waitForIdle(*m_model));
+    }
     QCOMPARE(logbook.unconfirmedCalculationRecords("s1"), QSet<QString>());
     QCOMPARE(pending("s1"), QSet<int>({kY}));
     QVERIFY(!isCached("s1", kY));
-    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 0);
+    QVERIFY(!isLoaded("s1"));
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, 1);
+    QCOMPARE(stats().recordsSkipped, 1);
+    QCOMPARE(stats().staleRecordsDeleted, 0);
     QVERIFY(logbook.flushIndex());
     QVERIFY(indexValue("s1", yColumn()).isUndefined());
 

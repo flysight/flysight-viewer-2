@@ -85,8 +85,11 @@ struct CalculationRecordRead {
 /// session (knownCalculationRecords(): one names-only listing at initialize(),
 /// then its own writes and removals; no record is opened). Ids whose record
 /// may disagree with the loaded session's engine (a failed write or removal, a
-/// record skipped at the session's load) are UNCONFIRMED: flushIndex() leaves
-/// them out of the stamp and omits the values over them. Writing or removing
+/// record skipped at the session's load or at the column worker's restore
+/// into its temporary copy of an unloaded session) are UNCONFIRMED:
+/// flushIndex() leaves them out of the stamp and omits the values over them.
+/// Records are read for a session being loaded and for that copy, which is
+/// never written from. Writing or removing
 /// a record drops the session's cached values over that calculation and emits
 /// calculationRecordsChanged(). Ordering rule: a write whose calculation
 /// index.json on disk lists as present under a value flushes the index first;
@@ -196,15 +199,17 @@ public:
     // Ids whose record may disagree with the loaded session's engine. Values
     // that depend on them are never written to index.json.
     QSet<QString> unconfirmedCalculationRecords(const QString &sessionId) const;
-    // The session's in-memory results are being discarded (eviction): drops
+    // The session's in-memory results are being discarded (eviction, or the
+    // column worker's temporary copy going away): drops
     // the cached values that depend on its unconfirmed records, forgets the
     // marks, and returns the ids. From now on the records on disk are the truth.
     QStringList discardUnconfirmedCalculationRecords(const QString &sessionId);
     // A record of the session exists but was not restored at the session's load
-    // for a reason that may pass (the result store: it could not be read,
-    // or it reads the result of one that could not). The loaded engine does not
-    // hold what the record holds, so the pair is UNCONFIRMED until the record is
-    // written or removed, or the row is evicted: values over it stay out of
+    // (or into the column worker's temporary copy) for a reason that may pass
+    // (the result store: it could not be read, or it reads the result of one
+    // that could not). The engine does not hold what the record holds, so the
+    // pair is UNCONFIRMED until the record is written or removed, or the row is
+    // evicted (the copy discarded): values over it stay out of
     // index.json and the stamp leaves it out. Drops the session's cached values
     // over the calculation and emits calculationRecordsChanged(). The known set
     // is untouched (the file is still there). Nothing for an unknown session.

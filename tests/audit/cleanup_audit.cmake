@@ -537,8 +537,20 @@ expect_only("only the result store exports and restores results" "exportResult\\
   "^src/engine/|^src/calculationresultstore\\.(cpp|h)$" src)
 expect_only("one explicit-result listener, installed by the session model" "setExplicitResultListener\\("
   "^src/engine/|^src/sessionmodel\\.cpp$" src)
-expect_only("stored results are restored at a load only" "restoreSession\\("
+# Records are read for a session being loaded into a row and, since
+# stored-results validity 9.1, for the column worker's temporary copy of an
+# unloaded session - nowhere else (not the bulk edit's temporary load). The
+# session model has exactly two call sites: restoreStoredResults() (every path
+# that installs a session into a row) and restoreForColumnWorker(), which only
+# processNextDirtyColumn() calls (its definition and that call: two lines).
+# Allow: none expected. A new reader of records is a change of the
+# specification, not of this rule.
+expect_only("stored results are restored at a load or by the column worker only" "restoreSession\\("
   "^src/calculationresultstore\\.(cpp|h)$|^src/sessionmodel\\.cpp$" src)
+expect_count("two restore call sites: a row's load and the column worker's copy"
+  "m_resultStore\\.restoreSession\\(" 2 src)
+expect_count("the column worker's copy is restored from its step only" "restoreForColumnWorker\\(" 2
+  src/sessionmodel.cpp)
 # Restoring is not requesting. Allow: none expected; a comment that names the
 # queue is reworded.
 expect_none("restoring is not requesting" "JobQueue|PlotRequests|[.>](request|prepare|publish)\\("

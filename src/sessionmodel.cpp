@@ -189,19 +189,20 @@ void SessionModel::rebuildColumns()
     };
     for (int rowIndex = 0; rowIndex < m_rows.size(); ++rowIndex) {
         SessionRow &row = m_rows[rowIndex];
-        // Indices change: the worker settles stubs again (without a load when
-        // only those columns are missing)
+        // Indices change: the worker fills stubs again (without a load when
+        // only explicit-backed columns without a record are missing)
         row.pendingColumns.clear();
         if (row.isLoaded() && row.loadFailed) {
-            // A failed-load placeholder's engine holds no stored result: its
-            // explicit-backed columns are settled like a stub's
+            // A failed-load placeholder's engine holds no stored result, and
+            // none can be restored into it: its explicit-backed columns are
+            // settled from the record set, those over a record pending
             QVector<int> indices;
             for (int i : std::as_const(allIndices)) {
                 if (!isExplicitBacked(i))
                     indices.append(i);
             }
             computeRow(row, indices);
-            settleExplicitColumns(rowIndex);
+            settleExplicitColumns(rowIndex, RecordColumns::Pend);
         } else if (row.isLoaded()) {
             // A row with unsaved changes: the marks name the columns that were
             // enabled when the change was made, and a column enabled since may
@@ -1406,7 +1407,8 @@ void SessionModel::checkCalculationEnvironment()
     // The same columns in every row, loaded or not. Rows are not marked dirty
     // or unsaved - persistent state did not change, so the values the worker
     // recomputes are valid for the files on disk. An explicit-backed column of
-    // a stub goes pending again when the session has a record.
+    // a stub is recomputed from the session's stored results
+    // (restoreForColumnWorker).
     for (SessionRow &row : m_rows) {
         for (int i : std::as_const(columns)) {
             row.cachedValues.remove(i);
@@ -1523,14 +1525,32 @@ void SessionModel::fillMissingColumns(int row, const SessionData &session, Colum
     SessionRow &sr = m_rows[row];
 
     // An engine that holds no stored result says nothing about a record:
-    // explicit-backed columns are settled from the record set instead.
+    // explicit-backed columns are settled from the record set instead. Those
+    // over a record are left to the column worker, which restores it into its
+    // copy (a failed-load placeholder, which nothing can restore into, pends
+    // them).
     if (source == ColumnSource::TemporaryLoad || sr.loadFailed)
-        settleExplicitColumns(row);
+        settleExplicitColumns(row, sr.loadFailed ? RecordColumns::Pend : RecordColumns::LeaveMissing);
+
+    // The worker's copy holds every record it restored; a value over one it
+    // could not vouch for (skipped, or a stale one whose removal failed) is
+    // not computed from it: it waits for the next load.
+    QSet<QString> unconfirmed;
+    if (source == ColumnSource::WorkerCopy)
+        unconfirmed = LogbookManager::instance().unconfirmedCalculationRecords(sr.sessionId);
 
     QVector<int> missing;
     for (int i = 0; i < m_columns.size(); ++i) {
-        if (!sr.cachedValues.contains(i) && !sr.pendingColumns.contains(i))
-            missing.append(i);
+        if (sr.cachedValues.contains(i) || sr.pendingColumns.contains(i))
+            continue;
+        if (source == ColumnSource::TemporaryLoad && isExplicitBacked(i))
+            continue;       // over a record: the column worker's
+        if (!unconfirmed.isEmpty() && isExplicitBacked(i)
+            && containsAnyOf(m_columnExplicitCalculations[i], unconfirmed)) {
+            sr.pendingColumns.insert(i);
+            continue;
+        }
+        missing.append(i);
     }
 
     // Nothing to do: do not even ask for the engine, which would create it.
@@ -1547,7 +1567,7 @@ void SessionModel::fillMissingColumns(int row, const SessionData &session, Colum
         sr.cachedValues[i] = values.value(m_columns[i]);
 }
 
-void SessionModel::settleExplicitColumns(int row)
+void SessionModel::settleExplicitColumns(int row, RecordColumns recordColumns)
 {
     Q_ASSERT(row >= 0 && row < m_rows.size());
     // The explicit calculations of each column follow the registrations too
@@ -1573,7 +1593,9 @@ void SessionModel::settleExplicitColumns(int row)
         if (sr.cachedValues.contains(i) || sr.pendingColumns.contains(i) || !isExplicitBacked(i))
             continue;
         if (containsAnyOf(m_columnExplicitCalculations[i], known)) {
-            sr.pendingColumns.insert(i);        // only a load may read it
+            // Only an engine the record is restored into can say what it gives
+            if (recordColumns == RecordColumns::Pend)
+                sr.pendingColumns.insert(i);
         } else {
             sr.cachedValues[i] = QVariant();
             unavailable[m_columns[i]] = QVariant();
@@ -1581,6 +1603,51 @@ void SessionModel::settleExplicitColumns(int row)
         }
     }
     logbook.updateCachedValues(sr.sessionId, unavailable);
+}
+
+bool SessionModel::restoreForColumnWorker(int row, SessionData &copy)
+{
+    Q_ASSERT(row >= 0 && row < m_rows.size());
+    // The explicit calculations of each column follow the registrations
+    applyPendingEnvironmentCheck();
+    const SessionRow &sr = m_rows[row];
+    // Only for a stub. Should the row have been loaded meanwhile (a slot of a
+    // signal emitted during the step), its own engine holds its restored
+    // results and its unconfirmed marks, and the copy must not touch either.
+    if (sr.isLoaded())
+        return false;
+
+    // Records are read only when a missing column needs one: a row whose
+    // missing columns are all on demand (or over calculations without a
+    // record) is computed from the copy as it was loaded.
+    const QString sessionId = sr.sessionId;
+    const QSet<QString> known = LogbookManager::instance().knownCalculationRecords(sessionId);
+    if (known.isEmpty())
+        return false;
+    bool needed = false;
+    for (int i = 0; i < m_columns.size() && i < m_columnExplicitCalculations.size() && !needed; ++i) {
+        if (!sr.cachedValues.contains(i) && !sr.pendingColumns.contains(i))
+            needed = containsAnyOf(m_columnExplicitCalculations[i], known);
+    }
+    if (!needed)
+        return false;
+
+    // The path and checks of a load (see STORED RESULTS): valid records are
+    // restored in passes, stale ones deleted, unreadable ones skipped (and
+    // marked, so the values over them stay out of index.json). The copy has
+    // no explicit-result listener: a restore reports no install anyway, and
+    // no later event of this engine can write or delete a record. Nothing is
+    // published: nobody else reads the copy, and its invalidation names go
+    // nowhere. A deletion or a skip drops the row's values over that
+    // calculation (onCalculationRecordsChanged), which the caller then
+    // computes from the copy.
+    // Without a listener, a result restored earlier in this same restore that
+    // a later record drops (dropNotRequested: it had read the later one as not
+    // requested) is dropped in the copy only; its record stays on disk until
+    // the next real load, which deletes it through the listener. The column
+    // values computed from the copy are the ones that load gives.
+    m_resultStore.restoreSession(sessionId, copy.calculationEngine());
+    return true;
 }
 
 void SessionModel::onCalculationRecordsChanged(const QString &sessionId, const QString &calculationId)
@@ -1971,7 +2038,7 @@ bool SessionModel::evictSession(const QString &sessionId)
 
     // Values over records the engine could not vouch for (a failed write or
     // removal, a record skipped at the load) go with the engine; the worker
-    // settles them against the records on disk.
+    // computes them again from the records on disk.
     const QStringList unconfirmedIds =
         LogbookManager::instance().discardUnconfirmedCalculationRecords(sessionId);
     const QSet<QString> unconfirmed(unconfirmedIds.cbegin(), unconfirmedIds.cend());
@@ -2039,29 +2106,45 @@ void SessionModel::processNextDirtyColumn()
         // Session is already loaded; compute from in-memory data
         fillMissingColumns(dirtyIdx, row.session.value(), ColumnSource::LoadedRow);
     } else {
-        // Stub session. Explicit-backed columns are settled from the record
-        // set first: a stub whose only missing values are those is settled
-        // without any load.
-        settleExplicitColumns(dirtyIdx);
+        // Stub session. Explicit-backed columns without a record are settled
+        // first: a stub whose only missing values are those is settled
+        // without any load. Those over a record stay missing for the copy.
+        settleExplicitColumns(dirtyIdx, RecordColumns::LeaveMissing);
         if (!needsColumnWork(row)) {
             m_columnWorkerRemaining--;
             emit dataChanged(index(dirtyIdx, 0), index(dirtyIdx, columnCount() - 1), {Qt::DisplayRole});
             return;
         }
 
-        // Load temporarily via LogbookManager::loadSession(). A temporary
-        // load: stored results are never read here (see STORED RESULTS);
-        // explicit-backed columns are settled from the record set instead.
+        // A temporary copy via LogbookManager::loadSession(). It is never
+        // installed into the row (no sessionLoaded, no LRU, no listener).
         auto loaded = logbook.loadSession(row.sessionId);
         if (loaded.has_value()) {
-            // Remap UUID-based session ID to real SESSION_ID if needed
+            // Remap UUID-based session ID to real SESSION_ID if needed (the
+            // manager moves the known records with the id)
             const QString realId = loaded->getAttribute(SessionKeys::SessionId).toString();
             if (!realId.isEmpty() && realId != row.sessionId)
                 setRowSessionId(row, realId);
             m_columnWorkStats.sessionsLoaded++;
-            fillMissingColumns(dirtyIdx, loaded.value(), ColumnSource::TemporaryLoad);
+
+            // At most one restore per step: the session's stored results go
+            // into the copy when a missing column needs them, and the missing
+            // values are computed from it like a loaded row's (see CACHED
+            // COLUMN VALUES).
+            const bool restored = restoreForColumnWorker(dirtyIdx, loaded.value());
+            fillMissingColumns(dirtyIdx, loaded.value(), ColumnSource::WorkerCopy);
+
+            // The copy goes now, like an evicted row's engine: the records on
+            // disk are the truth again. The values over the ones it could not
+            // vouch for were never stored (they are pending).
+            // Never for a row that got loaded during the step: its marks are
+            // its own engine's.
+            if (restored && !m_rows[dirtyIdx].isLoaded())
+                logbook.discardUnconfirmedCalculationRecords(m_rows[dirtyIdx].sessionId);
         } else {
-            // Load failed; skip this session
+            // Load failed; skip this session. Nothing can be restored: the
+            // values over a record wait for a load that succeeds.
+            settleExplicitColumns(dirtyIdx, RecordColumns::Pend);
             m_columnWorkerRemaining--;
             return;
         }
@@ -2195,7 +2278,9 @@ void SessionModel::processNextBulkEdit()
             m_saveRemaining--;
     } else {
         // --- STUB PATH (avoids LRU/eviction) ---
-        // A temporary load: stored results are never read here (see STORED RESULTS)
+        // A temporary load: stored results are never read here (see STORED
+        // RESULTS). The values over a record that the edit removed are left
+        // to the column worker, which restores the record into its own copy.
         auto loaded = logbook.loadSession(sr.sessionId);
         if (loaded.has_value()) {
             // UUID remap (same pattern as column worker)
@@ -2211,7 +2296,8 @@ void SessionModel::processNextBulkEdit()
 
             // Save
             if (logbook.saveSession(loaded.value())) {
-                // Recompute only what the edit removed
+                // Recompute only what the edit removed (not what depends on
+                // a record: see above)
                 fillMissingColumns(row, loaded.value(), ColumnSource::TemporaryLoad);
                 // loaded goes out of scope: the session stays a stub
             } else {

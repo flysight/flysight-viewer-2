@@ -286,10 +286,11 @@ the marker and its column's environment are unchanged, at start-up
 on every change of a preference some closure or calculation declares,
 `LogbookManager::checkColumnEnvironments()`); a column whose environment
 changed loses its cached values in every row and is recomputed (an
-explicit-backed column of an unloaded row goes pending again when the
-session has a record). The run-time check is queued for the next event-loop
-pass; every path that stores a column value (`fillMissingColumns`,
-`settleExplicitColumns`) runs a pending check first, so a value computed
+explicit-backed column of an unloaded row from the session's stored results,
+which the column worker restores into its temporary copy: section 17). The
+run-time check is queued for the next event-loop pass; every path that stores
+a column value (`fillMissingColumns`, `settleExplicitColumns`,
+`restoreForColumnWorker`) runs a pending check first, so a value computed
 after a change is never stored, or flushed, under its column's previous
 environment.
 
@@ -991,7 +992,8 @@ and restore; the files are described in
   Explicit-on-explicit chains therefore restore in any file order. A record
   that stays `InputsUnavailable` although it waits for nothing is retried
   after a pass that changed something else and counts as stale only then.
-- These are deleted at a load: a file that is not a record, a damaged record,
+- These are deleted at a load (or at the column worker's restore, below): a
+  file that is not a record, a damaged record,
   a record of another format version (such as format 1 from development
   builds: no migration), a record whose stamp is not current
   (`CalculationRecord::stampsAreCurrent()`: the compatibility marker only), a
@@ -1007,7 +1009,19 @@ and restore; the files are described in
   or removed or the row is evicted. A record whose resolutions name a skipped
   record is skipped too, before it is tried, whatever its own checks would
   say. The next load tries again.
-- The column worker's and the bulk edit's temporary loads never read a record.
+- The column worker's temporary copy of an unloaded session
+  (`SessionModel::restoreForColumnWorker()`, once per worker step) is restored
+  through the same `restoreSession()` path and checks when a missing logbook
+  column of the row depends on a calculation the manager knows a record of
+  (section 17); otherwise it reads no record. The copy counts as a load for
+  reading, never for writing: it has no explicit-result listener (a restore
+  reports no install anyway), so nothing it does writes, rewrites or deletes
+  a record beyond the restore's own stale deletions; it is never installed
+  into the row, emits no `sessionLoaded`, and nothing is requested, prepared
+  or run in it. A record it skips is marked like one skipped at a load, and
+  the mark is discarded with the copy
+  (`LogbookManager::discardUnconfirmedCalculationRecords()`, as at eviction).
+- The bulk edit's temporary load never reads a record.
 - Records are deleted with their session (`LogbookManager::removeSession`) and,
   as strays whose session file does not exist in `sessions/`, at
   `initialize()`; that pass deletes in `cache/` only. Eviction, unloading, a
@@ -1515,9 +1529,17 @@ result version of each record in `cache/`). Writing or deleting a record drops t
 values over that calculation at once
 (`LogbookManager::calculationRecordsChanged`); a loaded row recomputes them on
 the next event-loop pass (`refreshRecordColumns`, which emits nothing: loaded
-cells are live). A stub is settled without a load: pending (not cached, shown
-empty) when the logbook knows a record of it, unavailable otherwise. The
-column worker never reads a record. The ordering rule: a record write flushes
+cells are live). For a stub the value is the same function of the session's
+valid stored results: unavailable, without a load, when the logbook knows no
+record of it; otherwise the column worker loads a temporary copy, restores
+the session's records into it with the checks of a load (15.8: a stale record
+deleted, an unreadable one skipped) and caches the value computed from it with
+the stamp, exactly as for a loaded row. A value over a record the copy skipped
+stays pending (not cached, shown empty) until the session is loaded; the
+worker does not come back to it. The copy never writes a record and never
+requests or runs a calculation, and the row is not loaded. A bulk edit on a
+stub reads no record: it leaves such values missing for the worker. The
+ordering rule: a record write flushes
 the index first when the index on disk lists that calculation under a cached
 value, so no crash leaves a value that disagrees with the records. Unconfirmed
 records (a failed write or removal, a record skipped at the load because it
@@ -1526,10 +1548,10 @@ evicted or the record is written or deleted again. An environment change (a
 registration, a declared preference, a changed result version such as a plugin
 edit) discards the cached values of the columns whose environment it changes
 (section 9), and only those, and leaves the records valid; loaded rows
-recompute those columns from the engine, and stubs with a record leave them
-pending until loaded. A Fusion/roll column keeps its cached value through an
-altitude marker added at run time or at the next start (no name of its closure
-changes), also for a session that is not loaded.
+recompute those columns from the engine, and the column worker recomputes a
+stub's from its stored results. A Fusion/roll column keeps its cached value
+through an altitude marker added at run time or at the next start (no name of
+its closure changes), also for a session that is not loaded.
 `CalculationCompatibilityVersion` did not change for
 this: an index written before the stamp holds explicit-backed values only as
 "unavailable", and at start-up they are kept only for sessions without a
@@ -1550,8 +1572,9 @@ pause and another plugin set; dropped at once by a registration that provides
 a name it looked up; deleted when a lookup resolves differently at load); the
 column rule without GTSAM in
 `tst_column_cache::explicitBackedColumnFollowsItsResult` and
-`tests/tst_result_columns.cpp` (the stamp, crash points, pending stubs), and
-with a real fit in
-`tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord` and
-`tst_fusion_jobs::altitudeMarkerKeepsColumnsOfUnloadedSession`. The model, its
+`tests/tst_result_columns.cpp` (the stamp, crash points, stubs filled from
+their stored results by the column worker), and with a real fit in
+`tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord`,
+`tst_fusion_jobs::altitudeMarkerKeepsColumnsOfUnloadedSession` and
+`tst_fusion_jobs::workerRefillsColumnFromStoredFit`. The model, its
 limitations and what is rejected are in [SENSOR_FUSION.md](SENSOR_FUSION.md).

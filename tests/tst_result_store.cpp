@@ -26,7 +26,9 @@
 //    (explicit-on-explicit chains, a fallback candidate included), and deletes
 //    the stale ones; a result already installed wins; a
 //    session the logbook knows no record of is not listed;
-//  - the column worker's and the bulk edit's temporary loads never read one;
+//  - the bulk edit's temporary load never reads one; the column worker's
+//    copy of an unloaded session reads them (with the checks of a load) only
+//    when a missing column needs one;
 //  - deleting a session removes its records, and a stray is removed at the
 //    next start.
 //
@@ -317,7 +319,7 @@ private slots:
     void pluginEditStalesRecordsThatReadIt_data();
     void pluginEditStalesRecordsThatReadIt();
     void alreadyInstalledIsKept();
-    void temporaryLoadsNeverRestore();
+    void temporaryLoadsReadRecordsOnlyForColumns();
     void deletingSessionRemovesRecords();
     void strayRecordRemovedAtRestart();
 
@@ -1915,9 +1917,13 @@ void ResultStoreTest::alreadyInstalledIsKept()
     QCOMPARE(store.stats().restoreCalls, 2);
 }
 
-// The column worker's and the bulk edit's temporary loads never read a
-// record: even a stale one stays until a real load.
-void ResultStoreTest::temporaryLoadsNeverRestore()
+// Temporary loads. The bulk edit's never reads a record, and neither does the
+// column worker's copy of an unloaded session while its missing columns are
+// all on demand: even a stale record stays. Once a missing column needs the
+// record, the worker's copy reads it with the checks of a load (stored-results
+// validity 9.1) and deletes it as stale - without loading the row, writing a
+// record or creating a job.
+void ResultStoreTest::temporaryLoadsReadRecordsOnlyForColumns()
 {
     QVERIFY(setInput("s1", "EA_IN", 4));
     QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
@@ -1929,9 +1935,10 @@ void ResultStoreTest::temporaryLoadsNeverRestore()
     QCOMPARE(evict({"s1"}), QString());
     m_model->resetStoredResultStats();
     m_model->resetColumnWorkStats();
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
 
-    // The column worker
-    LogbookColumnStore::instance().setColumns({descriptionColumn(), exitTimeColumn()});
+    // The column worker, over on-demand columns only: its copy reads nothing
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), exitTimeColumn()});    // cleanup() restores
     QVERIFY(waitForIdle(*m_model));
     QVERIFY(m_model->columnWorkStats().sessionsLoaded >= 1);
     QVERIFY(!isLoaded("s1"));
@@ -1945,10 +1952,31 @@ void ResultStoreTest::temporaryLoadsNeverRestore()
     QCOMPARE(stats().recordsRead, 0);
     QCOMPARE(bytesOf(path), bytes);
 
-    // A real load reads it, and finds it stale
+    // The column worker, over a column that needs the record: its copy reads
+    // it with the checks of a load and finds it stale. The row stays a stub;
+    // nothing is written, no job is created.
+    LogbookColumn ea1Column;
+    ea1Column.type = ColumnType::SessionAttribute;
+    ea1Column.attributeKey = QStringLiteral("EA1");
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), exitTimeColumn(), ea1Column});
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(!isLoaded("s1"));
+    QCOMPARE(loadedSpy.count(), 0);
+    QCOMPARE(stats().restoreCalls, 1);      // s1 only: no other session has a record
+    QCOMPARE(stats().recordsRead, 1);
+    QCOMPARE(stats().staleRecordsDeleted, 1);
+    QCOMPARE(stats().recordsRestored, 0);
+    QCOMPARE(stats().recordsWritten, 0);
+    QVERIFY(!QFileInfo::exists(path));
+    QCOMPARE(m_queue->model()->rowCount(), 0);
+    const SessionRow &stub = std::as_const(*m_model).rowAt(row("s1"));
+    QVERIFY(stub.cachedValues.contains(2));
+    QVERIFY(!stub.cachedValues.value(2).isValid());
+
+    // A real load finds nothing left to read
     session("s1");
     QCOMPARE(stats().staleRecordsDeleted, 1);
-    QVERIFY(!QFileInfo::exists(path));
+    QVERIFY(engine("s1").resultStatus(kExpA) != std::optional<ResultStatus>(ResultStatus::Ok));
 }
 
 // The main window's delete sequence removes the session's records, and only its own.
