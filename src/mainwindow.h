@@ -133,7 +133,7 @@ private:
     PlotModel *m_plotModel;
     MarkerModel *m_markerModel = nullptr;
     JobQueue *m_jobQueue = nullptr;             // the executor of requested calculations
-    CalculationDemand *m_calculationDemand = nullptr; // the demand layer: plot demand and row state; destroyed before the executor
+    CalculationDemand *m_calculationDemand = nullptr; // the demand layer: plot and column demand, their state; destroyed before the executor
 
     // Pointer to QActionGroup for tools
     QActionGroup *toolActionGroup;

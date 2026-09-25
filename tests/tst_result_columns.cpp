@@ -19,7 +19,10 @@
 //    failed write, a session not saved yet, environment changes (which
 //    discard the cached values of the columns whose closure they reach, and
 //    only those, but never make a record stale), and a record skipped at a
-//    load (its values never cached while skipped).
+//    load (its values never cached while skipped);
+//  - with column demand (a CalculationDemand), the column worker settles and
+//    computes exactly as without it, and a stale record it deletes moves the
+//    pair into demand.
 //
 // Calculations (registered once, before any initialize(); literals below):
 //
@@ -48,6 +51,7 @@
 #include <QSignalSpy>
 #include <QtTest>
 
+#include "calculationdemand.h"
 #include "calculationrecord.h"
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
@@ -58,6 +62,8 @@
 #include "logbookcolumn.h"
 #include "logbookmanager.h"
 #include "logbookprobe.h"
+#include "plotfixture.h"
+#include "plotmodel.h"
 #include "preferences/preferencekeys.h"
 #include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
@@ -223,6 +229,9 @@ private slots:
     void deletingSessionRemovesStamp();
     void removingReservedSessionForgetsIt();
     void deletedCacheFolderForgetsRequests();
+    void columnWorkerIsUnchangedByDemand_data();
+    void columnWorkerIsUnchangedByDemand();
+    void staleRecordDeletedByWorkerCreatesDemand();
 
 private:
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
@@ -1587,6 +1596,190 @@ void ResultColumnsTest::deletedCacheFolderForgetsRequests()
     QCOMPARE(sessionCsvFiles(), sessionFiles);
     QCOMPARE(bytesOf(sessionFilePath("s1")), csv1);
     QCOMPARE(bytesOf(sessionFilePath("s2")), csv2);
+}
+
+// ---- Column demand ---------------------------------------------------------------------
+
+void ResultColumnsTest::columnWorkerIsUnchangedByDemand_data()
+{
+    QTest::addColumn<bool>("withDemand");
+    QTest::newRow("without demand") << false;
+    QTest::newRow("with demand") << true;
+}
+
+// The workerRestoresStoredResult set-up (s1 has an X record and its X value is
+// gone from the index; s2 has none), with and without a demand layer: the
+// column worker settles and computes exactly the same, counts the same, and
+// the demand layer's loads come after its pass. With demand, the missing
+// result of s2 is computed afterwards; the record of s1 counts as its result.
+void ResultColumnsTest::columnWorkerIsUnchangedByDemand()
+{
+    QFETCH(bool, withDemand);
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), xColumn()});     // cleanup() restores
+
+    QCOMPARE(engine("s1").request(kCalcX).status, ResultStatus::Ok);
+    QVERIFY(waitForIdle(*m_model));
+    resetModel();
+    QVERIFY(editIndex([](QJsonObject &root) { removeIndexValue(root, "s1", xColumn()); }));
+    restart();
+    QVERIFY(!isCached("s1", kX));
+    QVERIFY(isCached("s2", kX));
+    QVERIFY(!cached("s2", kX).isValid());
+
+    m_model->resetColumnWorkStats();
+    m_model->resetStoredResultStats();
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+
+    // Destroyed before cleanup() resets the queue: demand, then plots
+    PlotModel plots;
+    std::unique_ptr<CalculationDemand> demand;
+    if (withDemand)
+        demand = std::make_unique<CalculationDemand>(m_model.get(), &plots, m_queue.get());
+
+    struct Snapshot {
+        SessionModel::ColumnWorkStats work;
+        CalculationResultStore::Stats store;
+        QVariant s1X;
+        bool s2XCachedUnavailable = false;
+        int loads = 0;
+        bool taken = false;
+    } snapshot;
+    const auto take = [&] {
+        if (snapshot.taken)
+            return;
+        snapshot.taken = true;
+        snapshot.work = m_model->columnWorkStats();
+        snapshot.store = stats();
+        snapshot.s1X = cached("s1", kX);
+        snapshot.s2XCachedUnavailable = isCached("s2", kX) && !cached("s2", kX).isValid();
+        snapshot.loads = int(loadedSpy.count());
+    };
+    QObject scope;
+    connect(&m_model->scheduler(), &IdleScheduler::activeTaskChanged, &scope, [&take](int id, bool) {
+        if (id == SessionModel::ColumnFillTask)
+            take();
+    });
+
+    m_model->startColumnWorker();
+    if (withDemand) {
+        QVERIFY(waitDemandIdle(*m_queue, *demand, 10000));
+        QVERIFY(waitForIdle(*m_model));
+    } else {
+        QVERIFY(waitForIdle(*m_model));
+        take();
+    }
+    QVERIFY(snapshot.taken);
+
+    QCOMPARE(snapshot.work.sessionsLoaded, 1);
+    QCOMPARE(snapshot.work.valuesComputed, 1);
+    QCOMPARE(snapshot.work.calculationRuns, 0);
+    QCOMPARE(snapshot.store.restoreCalls, 1);
+    QCOMPARE(snapshot.store.recordsRead, 1);
+    QCOMPARE(snapshot.store.recordsRestored, 1);
+    QCOMPARE(snapshot.store.staleRecordsDeleted, 0);
+    QCOMPARE(snapshot.store.recordsWritten, 0);
+    QCOMPARE(snapshot.s1X, QVariant(QStringLiteral("x:d1")));
+    QVERIFY(snapshot.s2XCachedUnavailable);
+    QCOMPARE(snapshot.loads, 0);
+
+    if (!withDemand) {
+        QCOMPARE(loadedSpy.count(), 0);
+        QCOMPARE(m_queue->model()->rowCount(), 0);
+        return;
+    }
+
+    // Afterwards: s2 loaded once, computed, stored and stamped; s1 never loaded
+    QCOMPARE(loadedSpy.count(), 1);
+    QCOMPARE(loadedSpy.at(0).at(0).toString(), QStringLiteral("s2"));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(m_queue->model()->record(0).sessionId, QStringLiteral("s2"));
+    QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
+    QCOMPARE(cached("s2", kX), QVariant(QStringLiteral("x:d2")));
+    QVERIFY(LogbookManager::instance().knownCalculationRecords("s2").contains(kCalcX));
+    m_model->flushDirtySessions();
+    QCOMPARE(indexValue("s2", xColumn()), QJsonValue(QStringLiteral("x:d2")));
+    QCOMPARE(indexRecordStamp("s2"), stampOf({{kCalcX, QString()}}));
+    QVERIFY(!isLoaded("s1"));
+    QCOMPARE(cached("s1", kX), QVariant(QStringLiteral("x:d1")));
+    QVERIFY(demand->columnState(CalculationDemand::columnId(xColumn())).isPlain());
+}
+
+// A bulk edit on a stub leaves its X record stale. Until the column worker's
+// copy finds it so, a known record counts as a result and nothing is in
+// demand; its deletion moves the pair into demand, the column fill loads the
+// session once, and one job writes the record again.
+void ResultColumnsTest::staleRecordDeletedByWorkerCreatesDemand()
+{
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), xColumn()});     // cleanup() restores
+    QVERIFY(fit("s1", kCalcX));
+    QVERIFY(fit("s2", kCalcX));
+    QCOMPARE(evict({"s1"}), QString());
+    const QString path = recordPath("s1", kEncodedX);
+    QVERIFY(QFileInfo(path).isFile());
+
+    PlotModel plots;
+    const auto demand = std::make_unique<CalculationDemand>(m_model.get(), &plots, m_queue.get());
+    const QString x = CalculationDemand::columnId(xColumn());
+    {
+        const Quiet quiet(*m_queue);
+        demand->flush();
+        QVERIFY(demand->columnState(x).isPlain());
+        QCOMPARE(demand->columnState(x).doneCount, 2);
+        PlotFixture::spin(demand.get());
+        QVERIFY(quiet.holds());
+    }
+
+    m_model->resetStoredResultStats();
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+    QStringList sequence;
+    bool pendingBeforeWorker = true;
+    bool workerSeen = false;
+    QObject scope;
+    connect(&m_model->scheduler(), &IdleScheduler::activeTaskChanged, &scope, [&](int id, bool) {
+        if (id != SessionModel::ColumnTask || workerSeen)
+            return;
+        workerSeen = true;          // before the first step of the worker
+        demand->flush();
+        pendingBeforeWorker = demand->isCellPending(QStringLiteral("s1"), x);
+    });
+    connect(&LogbookManager::instance(), &LogbookManager::calculationRecordsChanged, &scope,
+            [&](const QString &id, const QString &calculationId) {
+        if (id == QLatin1String("s1") && calculationId == kCalcX)
+            sequence.append(QStringLiteral("changed:loads=%1").arg(loadedSpy.count()));
+    });
+    connect(demand.get(), &CalculationDemand::columnStateChanged, &scope, [&](const QString &) {
+        if (demand->isCellPending(QStringLiteral("s1"), x) && !sequence.contains(QStringLiteral("pending")))
+            sequence.append(QStringLiteral("pending"));
+    });
+    connect(m_model.get(), &SessionModel::sessionLoaded, &scope,
+            [&](const QString &id) { sequence.append(QStringLiteral("loaded:") + id); });
+    connect(m_queue.get(), &JobQueue::jobStarted, &scope,
+            [&](JobId job) { sequence.append(QStringLiteral("job:") + m_queue->job(job).sessionId); });
+
+    m_model->startBulkEdit({row("s1")}, kD, QStringLiteral("bulk"));
+    QVERIFY(waitDemandIdle(*m_queue, *demand, 10000));
+    QVERIFY(waitForIdle(*m_model));
+
+    QVERIFY(workerSeen);
+    QVERIFY(!pendingBeforeWorker);      // a known record counts as a result
+    QCOMPARE(sequence.value(0), QStringLiteral("changed:loads=0"));   // the worker's deletion, before any load
+    QCOMPARE(stats().staleRecordsDeleted, 1);
+    const qsizetype pending = sequence.indexOf(QStringLiteral("pending"));
+    const qsizetype loaded = sequence.indexOf(QStringLiteral("loaded:s1"));
+    const qsizetype job = sequence.indexOf(QStringLiteral("job:s1"));
+    QVERIFY2(pending > 0 && loaded > pending && job > loaded, qPrintable(sequence.join(QLatin1Char(' '))));
+    QCOMPARE(loadedSpy.count(), 1);
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(m_queue->model()->record(0).calculationId, kCalcX);
+    QCOMPARE(m_queue->model()->record(0).sessionId, QStringLiteral("s1"));
+    QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
+    QVERIFY(QFileInfo(path).isFile());
+    QCOMPARE(stats().recordsWritten, 1);
+    QCOMPARE(cached("s1", kX), QVariant(QStringLiteral("x:bulk")));
+    m_model->flushDirtySessions();
+    QCOMPARE(indexValue("s1", xColumn()), QJsonValue(QStringLiteral("x:bulk")));
+    QCOMPARE(indexRecordStamp("s1"), stampOf({{kCalcX, QString()}}));
+    QVERIFY(demand->columnState(x).isPlain());
 }
 
 FLYSIGHT_TEST_MAIN(ResultColumnsTest)

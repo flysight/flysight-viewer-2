@@ -207,8 +207,10 @@ MainWindow::MainWindow(QWidget *parent)
     // populated, every calculation is registered, and no dock exists yet. Work
     // follows what is switched on: the checked plots restored by setPlots()
     // below and a first-launch applyProfile() create demand the same way a
-    // click does, but every session starts hidden, so starting the application
-    // starts no job; work starts when a session is shown.
+    // click does. Every session starts hidden, so checked plots start no job
+    // at start-up. An enabled logbook column over a requested calculation does
+    // create demand at once. Its hidden loads are the idle scheduler's
+    // lowest-priority task, so they wait for the column worker's start-up pass.
     m_jobQueue = new JobQueue(model, this);
     m_calculationDemand = new CalculationDemand(model, m_plotModel, m_jobQueue, this);
 
@@ -343,7 +345,8 @@ MainWindow::~MainWindow()
     // session model (created first) under an executor that may still hold a
     // worker. So: the demand layer, then the executor (its destructor shuts it
     // down and joins the worker), then everything else - also when closeEvent()
-    // never ran.
+    // never ran. The demand layer also goes before the session model it
+    // registered a scheduler task with (the column fill) and pinned sessions in.
     delete m_calculationDemand;
     m_calculationDemand = nullptr;
     delete m_jobQueue;

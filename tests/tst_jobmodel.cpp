@@ -12,6 +12,9 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLocale>
 #include <QMap>
 #include <QSettings>
@@ -159,6 +162,38 @@ QMap<QString, QByteArray> snapshot(const QString &root)
             files.insert(QDir(root).relativeFilePath(path), file.readAll());
     }
     return files;
+}
+
+/// index.json without the stored-result bookkeeping of its session entries
+/// (the record stamp "records" and the record outcomes "recordReasons", which
+/// a stored result legitimately changes) and with each cached value keyed by
+/// its column's definition instead of the ephemeral column id of one flush.
+QByteArray withoutRecordBookkeeping(const QByteArray &indexJson)
+{
+    QJsonObject root = QJsonDocument::fromJson(indexJson).object();
+    const QJsonObject columns = root.take(QStringLiteral("columns")).toObject();
+    QJsonArray definitions;
+    for (auto it = columns.constBegin(); it != columns.constEnd(); ++it)
+        definitions.append(it.value());
+    root.insert(QStringLiteral("columns"), definitions);
+
+    QJsonObject sessions = root.value(QStringLiteral("sessions")).toObject();
+    for (auto it = sessions.begin(); it != sessions.end(); ++it) {
+        QJsonObject entry = it.value().toObject();
+        entry.remove(QStringLiteral("records"));
+        entry.remove(QStringLiteral("recordReasons"));
+        const QJsonObject values = entry.take(QStringLiteral("values")).toObject();
+        QJsonObject byDefinition;
+        for (auto vit = values.constBegin(); vit != values.constEnd(); ++vit) {
+            const QByteArray definition =
+                QJsonDocument(columns.value(vit.key()).toObject()).toJson(QJsonDocument::Compact);
+            byDefinition.insert(QString::fromUtf8(definition), vit.value());
+        }
+        entry.insert(QStringLiteral("values"), byDefinition);
+        it.value() = entry;
+    }
+    root.insert(QStringLiteral("sessions"), sessions);
+    return QJsonDocument(root).toJson(QJsonDocument::Compact);
 }
 
 } // namespace
@@ -819,7 +854,16 @@ void JobModelTest::nothingIsPersisted()
             ++it;
         }
     }
-    QCOMPARE(logbookAfter, logbookBefore);
+    // The index learns what the stored results hold (their stamp and the
+    // rejection's reason) and may have been rewritten for it; nothing else in
+    // it changed
+    QMap<QString, QByteArray> logbookBeforeNormalized = logbookBefore;
+    for (QMap<QString, QByteArray> *files : {&logbookAfter, &logbookBeforeNormalized}) {
+        const auto index = files->find(QStringLiteral("index.json"));
+        if (index != files->end())
+            index.value() = withoutRecordBookkeeping(index.value());
+    }
+    QCOMPARE(logbookAfter, logbookBeforeNormalized);
     records.sort();
     QStringList expectedRecords = {QStringLiteral("cache/") + stem1 + QStringLiteral(".gated.fvresult"),
                                    QStringLiteral("cache/") + stem2 + QStringLiteral(".exp%41.fvresult")};

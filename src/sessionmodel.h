@@ -80,7 +80,12 @@ struct MergeResult {
 /// (logbookColumnExplicitCalculations() is not empty) is computed like any
 /// other for a LOADED row: from the engine, which holds the stored result
 /// restored at load or the one just published, and reads unavailable when
-/// the calculation is not requested. Its value is valid only with the
+/// the calculation is not requested. While such a column is enabled, the
+/// demand layer (calculationdemand.h) has the requested calculations it
+/// needs computed for every session, loading unloaded ones as hidden
+/// sessions. The column worker knows nothing of it: a record written by a
+/// job drops the values over it, and the paths below compute them again.
+/// Its value is valid only with the
 /// session's record set. LogbookManager stamps it in index.json and drops
 /// it whenever a record of one of those calculations is written or deleted
 /// (calculationRecordsChanged). The row then loses it at once and gets it
@@ -140,10 +145,12 @@ struct MergeResult {
 /// holds a guard.
 ///
 /// PINNED SESSIONS. Hidden, unfocused loaded rows live in an LRU list and are
-/// evicted (saved, turned back into stubs) beyond the cache capacity. The job
-/// queue pins the session of every queued or running job (pinSession(), counted
-/// per session id); a pinned loaded row is passed over by eviction exactly like
-/// a row whose save failed, so the cache may exceed its capacity by the number
+/// evicted (saved, turned back into stubs) beyond the cache capacity. The
+/// executor pins the session of its running job and of its chosen next job.
+/// The demand layer pins each session it loads for column demand
+/// (loadPinnedSession()) until that session has no column demand left. Pins
+/// are counted per session id. A pinned loaded row is passed over by eviction
+/// exactly like a row whose save failed, so the cache may exceed its capacity by the number
 /// of pinned rows until unpinSession() schedules the pass that brings it back.
 /// A pin prevents eviction and NOTHING else: removeSessions(), a merge, and a
 /// repopulation of the model still remove or change a pinned session. The model
@@ -177,11 +184,17 @@ public:
         IsHoveredRole = Qt::UserRole + 100
     };
 
+    /// The ids of the idle scheduler's tasks (the one namespace of them). The
+    /// model registers tasks 0-3 in its constructor; a task registered by
+    /// another component takes its id from this enum.
     enum WorkerTask {
-        SaveTask     = 0,   // priority 1 (highest)
-        LoadTask     = 1,   // priority 2
-        BulkEditTask = 2,   // priority 3
-        ColumnTask   = 3    // priority 4 (lowest)
+        SaveTask       = 0, // priority 1 (highest)
+        LoadTask       = 1, // priority 2
+        BulkEditTask   = 2, // priority 3
+        ColumnTask     = 3, // priority 4
+        ColumnFillTask = 4  // priority 5 (lowest): registered by the demand layer
+                            // (calculationdemand.h), not by the model - the column
+                            // fill, whose steps are hidden loads
     };
 
     SessionModel(QObject *parent = nullptr);
@@ -323,6 +336,20 @@ public:
     void pinSession(const QString &sessionId);
     void unpinSession(const QString &sessionId);
     bool isSessionPinned(const QString &sessionId) const;
+
+    /// Loads the session of the row with this id the way showing it would -
+    /// sessionRef(): the session-id correction, the engine attached, its
+    /// stored results restored, sessionLoaded, the LRU and its eviction pass -
+    /// without making the row visible, and pins it (pinSession()) under the
+    /// id the row has after the load, before anything can evict it. Returns
+    /// that id; the caller releases the pin with unpinSession(<returned id>).
+    /// A row that is already loaded is pinned without a load.
+    /// Returns an empty string and pins nothing when no row has `sessionId`,
+    /// or when the session file cannot be loaded (the row is then a
+    /// failed-load placeholder, as after any failed load; eviction turns it
+    /// back into a stub). Emits what sessionRef() emits. Must not be called
+    /// while a RowStabilityGuard is held.
+    QString loadPinnedSession(const QString &sessionId);
 
     /// Publishes, now, names that a session's engine reported as invalidated
     /// outside a model edit: the `invalidated` set of an asynchronous

@@ -1775,6 +1775,29 @@ bool SessionModel::isSessionPinned(const QString &sessionId) const
     return m_pinnedSessions.value(sessionId) > 0;
 }
 
+QString SessionModel::loadPinnedSession(const QString &sessionId)
+{
+    const int row = getSessionRow(sessionId);
+    if (row < 0)
+        return {};
+    assertRowsMutable("SessionModel::loadPinnedSession");
+
+    // The real load of a hidden row: the id correction, attach, restore,
+    // sessionLoaded, the LRU and its eviction pass, which keeps this session.
+    // `visible` is not touched.
+    sessionRef(row);
+
+    // Read again after the load, as sessionRef() does after its emission. The
+    // pin follows with no return to the event loop, so nothing can evict the
+    // session before it.
+    const SessionRow &sr = m_rows[row];
+    if (sr.loadFailed)
+        return {};
+    const QString id = sr.sessionId;
+    pinSession(id);
+    return id;
+}
+
 // ---- Deferred logbook persistence ------------------------------------
 
 void SessionModel::scheduleSave(const QString &sessionId)

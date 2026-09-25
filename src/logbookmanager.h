@@ -60,7 +60,10 @@ struct CalculationRecordRead {
 /// "records", the record stamp: calculation id -> the result version the
 /// cached values over that calculation were computed under, for each known
 /// and confirmed record of the session, "" when the descriptor declares none;
-/// always written, {} when there is none).
+/// always written, {} when there is none; and "recordReasons", calculation id
+/// -> the reason a record's stored result did not produce its outputs, for
+/// the records whose reason is not empty, omitted when there is none: see
+/// calculationRecordReason(). An entry without it has no reason learned yet).
 ///
 /// CACHE VALIDITY is decided here and nowhere else. initialize() keeps a
 /// cached value only when the marker recorded in the index equals the current
@@ -196,6 +199,17 @@ public:
     // removals. No record is opened. Files changed behind the application's
     // back are seen at the next initialize().
     QSet<QString> knownCalculationRecords(const QString &sessionId) const;
+    /// The reason the stored result of (session, calculation) did not produce
+    /// its outputs (a rejection, a solver failure), as this index learned it
+    /// when the record was written or last restored; empty when the result
+    /// produced its outputs, when the record's outcome has not been learned
+    /// yet (a record of an earlier build, until its next restore), and when
+    /// there is no record. Never opens a record.
+    QString calculationRecordReason(const QString &sessionId, const QString &calculationId) const;
+    /// Records what a record holds. Called by the result store with the
+    /// record it has just written or just read. Emits nothing; marks the
+    /// index for a flush when the value changed.
+    void setCalculationRecordReason(const QString &sessionId, const QString &calculationId, const QString &reason);
     // Ids whose record may disagree with the loaded session's engine. Values
     // that depend on them are never written to index.json.
     QSet<QString> unconfirmedCalculationRecords(const QString &sessionId) const;
@@ -410,6 +424,9 @@ private:
     // Fills m_knownRecords from the names of the record files: every (stem, id)
     // whose stem is the file of a session of m_sessionIdToUuid. Names only.
     void adoptCalculationRecordSet();
+    // Keeps, of the "recordReasons" read from index.json, the reasons of the
+    // records the listing found (after adoptCalculationRecordSet()).
+    void adoptRecordReasons(const QMap<QString, QMap<QString, QString>> &reasonsOnDisk);
     // Applies the start-up validity rule (class comment, CACHE VALIDITY) to the
     // cached values of explicit-backed columns, and sets m_recordBackedOnDisk
     // from every value on disk (kept, dropped, or of an index not valid).
@@ -467,6 +484,9 @@ private:
     // Record stamps (see RECORD STAMPS), keyed by SESSION_ID like
     // m_cachedValues (a reserved session by its id as well)
     QMap<QString, QSet<QString>> m_knownRecords;        // SESSION_ID -> calculation ids with a record file
+    QMap<QString, QMap<QString, QString>> m_recordReasons;  // SESSION_ID -> calculation id -> the record's
+                                                            //   reason (non-empty reasons only); see
+                                                            //   calculationRecordReason()
     QMap<QString, QSet<QString>> m_unconfirmedRecords;  // SESSION_ID -> ids whose record may disagree with the loaded engine
     QMap<QString, QSet<QString>> m_recordBackedOnDisk;  // SESSION_ID -> ids index.json on disk lists as present
                                                         //   AND on which some value it holds for the session depends

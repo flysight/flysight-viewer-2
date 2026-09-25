@@ -292,6 +292,11 @@ void LogbookView::onProgressChanged(int id, int remaining, int total)
     case SessionModel::ColumnTask:
         label = tr("Computing columns: %v / %m");
         break;
+    case SessionModel::ColumnFillTask:
+        // The same text on purpose: to the user a column fills in the
+        // background the same way whether its values are cheap or requested
+        label = tr("Computing columns: %v / %m");
+        break;
     default:
         label = tr("Working: %v / %m");
         break;

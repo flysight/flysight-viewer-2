@@ -5,6 +5,7 @@
 #include <memory>
 
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QtTest>
@@ -87,6 +88,8 @@ private slots:
     void loadedSessionIsAGuardedPlainLookup();
     void pinnedSessionIsNotEvicted();
     void calculationInvalidationIsPublished();
+    void schedulerTaskCanBeUnregistered();
+    void schedulerWaitingTaskDoesNotSpin();
 
 private:
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
@@ -746,6 +749,150 @@ void SessionModelEngineTest::calculationInvalidationIsPublished()
     QCOMPARE(dependencySpy.count(), 1);
     QCOMPARE(dataSpy.count(), 1);
     QCOMPARE(modelSpy.count(), 1);
+}
+
+// ---- The idle scheduler: generic task entry points ----------------------------------
+
+// A task can be removed, also while it is the active one; a registration
+// under a known id replaces it.
+void SessionModelEngineTest::schedulerTaskCanBeUnregistered()
+{
+    QVERIFY(waitForIdle(*m_model));
+    IdleScheduler &scheduler = m_model->scheduler();
+    const auto removeProbes = qScopeGuard([&scheduler] { scheduler.unregisterTask(90); });
+
+    int remaining = 3;
+    int steps = 0;
+    const auto probe = [&remaining, &steps](int priority) {
+        return TaskDef{priority,
+                       [&remaining, &steps] { --remaining; ++steps; },
+                       [&remaining] { return remaining > 0; },
+                       [&remaining] { return Progress{remaining, 3}; },
+                       [](bool) {},
+                       false};
+    };
+
+    // Removed while active, from a slot of its own progress report after its
+    // first step: no further step, and the scheduler goes idle
+    scheduler.registerTask(90, probe(9));
+    QSignalSpy activeSpy(&scheduler, &IdleScheduler::activeTaskChanged);
+    QSignalSpy idleSpy(&scheduler, &IdleScheduler::schedulerIdle);
+    QObject scope;
+    connect(&scheduler, &IdleScheduler::progressChanged, &scope, [&scheduler, &steps](int id, int, int) {
+        if (id == 90 && steps == 1)
+            scheduler.unregisterTask(90);
+    });
+    scheduler.wake();
+    QTRY_COMPARE(idleSpy.count(), 1);
+    QCOMPARE(activeSpy.count(), 1);
+    QCOMPARE(activeSpy.at(0).at(0).toInt(), 90);
+    QCOMPARE(steps, 1);
+    QCOMPARE(remaining, 2);
+    QTest::qWait(20);
+    QCOMPARE(steps, 1);
+    disconnect(&scheduler, nullptr, &scope, nullptr);
+
+    // Registered twice: one entry, the second definition
+    int otherSteps = 0;
+    int otherRemaining = 3;
+    scheduler.registerTask(90, TaskDef{9,
+                                       [&otherRemaining, &otherSteps] { --otherRemaining; ++otherSteps; },
+                                       [&otherRemaining] { return otherRemaining > 0; },
+                                       [&otherRemaining] { return Progress{otherRemaining, 3}; },
+                                       [](bool) {},
+                                       false});
+    remaining = 3;
+    steps = 0;
+    scheduler.registerTask(90, probe(9));
+    idleSpy.clear();
+    scheduler.wake();
+    QTRY_COMPARE(idleSpy.count(), 1);
+    QCOMPARE(steps, 3);
+    QCOMPARE(otherSteps, 0);
+
+    // An unknown id: nothing
+    activeSpy.clear();
+    idleSpy.clear();
+    scheduler.unregisterTask(12345);
+    QTest::qWait(20);
+    QCOMPARE(activeSpy.count(), 0);
+    QCOMPARE(idleSpy.count(), 0);
+}
+
+// A task with work it cannot step is reported as active, is never stepped,
+// does not make the scheduler spin or go idle, and does not keep a lower task
+// from being stepped.
+void SessionModelEngineTest::schedulerWaitingTaskDoesNotSpin()
+{
+    QVERIFY(waitForIdle(*m_model));
+    IdleScheduler &scheduler = m_model->scheduler();
+    const auto removeProbes = qScopeGuard([&scheduler] {
+        scheduler.unregisterTask(91);
+        scheduler.unregisterTask(92);
+    });
+
+    bool waitingHasWork = true;
+    bool waitingCanStep = false;
+    int waitingSteps = 0;
+    scheduler.registerTask(91, TaskDef{8,
+                                       [&waitingSteps, &waitingHasWork] { ++waitingSteps; waitingHasWork = false; },
+                                       [&waitingHasWork] { return waitingHasWork; },
+                                       [] { return Progress{1, 1}; },
+                                       [](bool) {},
+                                       false,
+                                       [&waitingCanStep] { return waitingCanStep; }});
+    int lowerRemaining = 3;
+    scheduler.registerTask(92, TaskDef{9,
+                                       [&lowerRemaining] { --lowerRemaining; },
+                                       [&lowerRemaining] { return lowerRemaining > 0; },
+                                       [&lowerRemaining] { return Progress{lowerRemaining, 3}; },
+                                       [](bool) {},
+                                       false});
+
+    QSignalSpy activeSpy(&scheduler, &IdleScheduler::activeTaskChanged);
+    QSignalSpy progressSpy(&scheduler, &IdleScheduler::progressChanged);
+    QSignalSpy idleSpy(&scheduler, &IdleScheduler::schedulerIdle);
+    const auto reportsOf = [&progressSpy](int id) {
+        int count = 0;
+        for (const QList<QVariant> &arguments : std::as_const(progressSpy)) {
+            if (arguments.at(0).toInt() == id)
+                ++count;
+        }
+        return count;
+    };
+
+    scheduler.wake();
+    QTRY_COMPARE(lowerRemaining, 0);            // the lower task is stepped meanwhile
+    QTRY_VERIFY(!scheduler.isTicking());
+    QCOMPARE(activeSpy.count(), 1);
+    QCOMPARE(activeSpy.at(0).at(0).toInt(), 91);
+    QVERIFY(reportsOf(91) > 0);
+    QCOMPARE(reportsOf(92), 0);                 // the active task's progress is what is reported
+    QCOMPARE(waitingSteps, 0);
+    QCOMPARE(idleSpy.count(), 0);
+
+    // Resting: no tick, no report, not idle
+    const int reports = int(progressSpy.count());
+    QTest::qWait(100);
+    QVERIFY(!scheduler.isTicking());
+    QCOMPARE(int(progressSpy.count()), reports);
+    QCOMPARE(idleSpy.count(), 0);
+
+    // One report per wake(), still no step
+    scheduler.wake();
+    QTRY_COMPARE(int(progressSpy.count()), reports + 1);
+    QTRY_VERIFY(!scheduler.isTicking());
+    QTest::qWait(50);
+    QCOMPARE(int(progressSpy.count()), reports + 1);
+    QCOMPARE(progressSpy.last().at(0).toInt(), 91);
+    QCOMPARE(waitingSteps, 0);
+    QCOMPARE(activeSpy.count(), 1);
+
+    // It can step now: it steps (and then has no work), and the scheduler goes idle
+    waitingCanStep = true;
+    scheduler.wake();
+    QTRY_COMPARE(idleSpy.count(), 1);
+    QCOMPARE(waitingSteps, 1);
 }
 
 FLYSIGHT_TEST_MAIN(SessionModelEngineTest)

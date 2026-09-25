@@ -19,10 +19,12 @@
 
 #include <QtTest>
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include "calculationrecord.h"
 #include "calculations/builtincalculations.h"
 #include "engine/calculationregistry.h"
 #include "fixturebuilder.h"
@@ -90,6 +92,8 @@ private slots:
     void rawLoadReportsReason();
     void identityEntries();
     void legacyFlatIndexStartsAsStubs();
+
+    void recordReasonsRoundTrip();
 
 private:
     // One saved session "s1" with D = "x" and G = 1.5 cached and flushed,
@@ -754,6 +758,88 @@ void LogbookIndexTest::legacyFlatIndexStartsAsStubs()
     QVERIFY(root.contains(QStringLiteral("columns")));
     QCOMPARE(root[QStringLiteral("calculationCompatibility")].toInt(), CalculationCompatibilityVersion);
     QCOMPARE(indexValue(root, QStringLiteral("s1"), m_d).toString(), QStringLiteral("first"));
+}
+
+// ---- Record outcomes ("recordReasons") ------------------------------------------------
+
+// The reason a stored result did not produce its outputs lives in the index
+// beside the record stamp: learned, flushed, read back while its record file
+// exists, forgotten with the record, moved with the id.
+void LogbookIndexTest::recordReasonsRoundTrip()
+{
+    LogbookManager &logbook = LogbookManager::instance();
+    const QString g1 = QStringLiteral("g1");
+    const QString g2 = QStringLiteral("g2");
+    const QString x = QStringLiteral("x");
+    QVERIFY(logbook.saveSession(makeSession(g1)));
+    QVERIFY(logbook.saveSession(makeSession(g2)));
+    QVERIFY(logbook.flushIndex());
+    QVERIFY(!logbook.indexNeedsFlush());
+    QCOMPARE(logbook.calculationRecordReason(g1, x), QString());
+
+    // Learned: marks the index for a flush; the same value again does not
+    logbook.setCalculationRecordReason(g1, x, QStringLiteral("no"));
+    QVERIFY(logbook.indexNeedsFlush());
+    QCOMPARE(logbook.calculationRecordReason(g1, x), QStringLiteral("no"));
+    QVERIFY(logbook.flushIndex());
+    logbook.setCalculationRecordReason(g1, x, QStringLiteral("no"));
+    QVERIFY(!logbook.indexNeedsFlush());
+
+    // Flushed beside "records", for the entry that has one only
+    QJsonObject root = readIndex();
+    const QJsonObject sessions = root[QStringLiteral("sessions")].toObject();
+    QCOMPARE(sessions[g1].toObject()[QStringLiteral("recordReasons")].toObject(),
+             QJsonObject({{x, QStringLiteral("no")}}));
+    QVERIFY(!sessions[g2].toObject().contains(QStringLiteral("recordReasons")));
+    QVERIFY(sessions[g1].toObject()[QStringLiteral("records")].isObject());
+
+    // Read back only while cache/ holds the record: without it, forgotten
+    logbook.reset();
+    logbook.initialize();
+    QCOMPARE(logbook.calculationRecordReason(g1, x), QString());
+
+    // A record written with a reason: the write teaches it, the restart reads it back
+    StoredCalculationResult result;
+    result.calculationId = x;
+    result.inputFingerprint = QCryptographicHash::hash("inputs", QCryptographicHash::Sha256);
+    result.bundle.setReason(QStringLiteral("no"));
+    result.detail = QStringLiteral("no");
+    QString error;
+    QVERIFY2(logbook.writeCalculationRecord(g1, CalculationRecord::stamped(result), &error), qPrintable(error));
+    QCOMPARE(logbook.calculationRecordReason(g1, x), QStringLiteral("no"));
+    QVERIFY(logbook.flushIndex());
+    logbook.reset();
+    logbook.initialize();
+    QVERIFY(logbook.knownCalculationRecords(g1).contains(x));
+    QCOMPARE(logbook.calculationRecordReason(g1, x), QStringLiteral("no"));
+
+    // A replacement without a reason replaces it
+    result.bundle.setReason(QString());
+    result.detail.clear();
+    QVERIFY(logbook.writeCalculationRecord(g1, CalculationRecord::stamped(result)));
+    QCOMPARE(logbook.calculationRecordReason(g1, x), QString());
+    result.bundle.setReason(QStringLiteral("no"));
+    result.detail = QStringLiteral("no");
+    QVERIFY(logbook.writeCalculationRecord(g1, CalculationRecord::stamped(result)));
+    QCOMPARE(logbook.calculationRecordReason(g1, x), QStringLiteral("no"));
+
+    // Removed with the record
+    QVERIFY(logbook.removeCalculationRecord(g1, x));
+    QCOMPARE(logbook.calculationRecordReason(g1, x), QString());
+    QVERIFY(logbook.flushIndex());
+    QVERIFY(!readIndex()[QStringLiteral("sessions")].toObject()[g1].toObject().contains(QStringLiteral("recordReasons")));
+
+    // Moved with the id
+    logbook.setCalculationRecordReason(g2, x, QStringLiteral("moved"));
+    QVERIFY(logbook.remapSessionId(g2, QStringLiteral("g3")));
+    QCOMPARE(logbook.calculationRecordReason(g2, x), QString());
+    QCOMPARE(logbook.calculationRecordReason(QStringLiteral("g3"), x), QStringLiteral("moved"));
+
+    // An empty reason clears it
+    QVERIFY(logbook.flushIndex());
+    logbook.setCalculationRecordReason(QStringLiteral("g3"), x, QString());
+    QVERIFY(logbook.indexNeedsFlush());
+    QCOMPARE(logbook.calculationRecordReason(QStringLiteral("g3"), x), QString());
 }
 
 FLYSIGHT_TEST_MAIN(LogbookIndexTest)

@@ -136,7 +136,8 @@ bool waitDemandIdle(JobQueue &executor, CalculationDemand &demand, int timeoutMs
 {
     return QTest::qWaitFor([&executor, &demand] {
         demand.flush();
-        return executor.isIdle() && !demand.hasPendingUpdate() && !demand.hasSettlingSessions();
+        return executor.isIdle() && !demand.hasPendingUpdate() && !demand.hasSettlingSessions()
+            && !demand.hasFillWork();
     }, timeoutMs);
 }
 

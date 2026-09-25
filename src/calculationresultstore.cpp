@@ -3,6 +3,7 @@
 #include <utility>
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QList>
 #include <QSet>
 #include <QtDebug>
@@ -87,10 +88,15 @@ void CalculationResultStore::onExplicitResultEvent(const QString &sessionId, con
         // (if any) is intact and the in-memory result untouched. Never
         // retried: the next Ok publish of the pair tries again.
         QString error;
-        if (LogbookManager::instance().writeCalculationRecord(sessionId, CalculationRecord::stamped(*snapshot), &error))
+        LogbookManager &logbook = LogbookManager::instance();
+        if (logbook.writeCalculationRecord(sessionId, CalculationRecord::stamped(*snapshot), &error)) {
             ++m_stats.recordsWritten;
-        else
+            // The index notes what the record holds: a rejection or a solver
+            // failure is an Ok result with a reason
+            logbook.setCalculationRecordReason(sessionId, event.instanceId, snapshot->detail);
+        } else {
             ++m_stats.writeFailures;
+        }
         return;
     }
 
@@ -138,8 +144,14 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
     QStringList ids(idSet.cbegin(), idSet.cend());
     ids.sort();
 
+    // The reasons of the records read in full, by id: what the index learns
+    // at the end for every one of them that is not deleted (a deleted
+    // record's reason goes with it)
+    QHash<QString, QString> readReasons;
+
     const auto staleDelete = [&](const QString &calculationId, const char *why) {
         deleteRecord(sessionId, calculationId, why);
+        readReasons.remove(calculationId);
         ++summary.deleted;
     };
 
@@ -164,6 +176,7 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
         case CalculationRecordStatus::Missing:
             break;      // vanished since the listing, or a known id with nothing at its path
         case CalculationRecordStatus::Ok:
+            readReasons.insert(id, read.record->result.detail);
             if (!read.record->stampsAreCurrent())
                 staleDelete(id, "calculation compatibility changed");
             else
@@ -268,7 +281,12 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
         pending.append(std::move(unavailable));
     }
 
-    // 4. The counters
+    // 4. What the index learns of the records that stay: restored, kept, or
+    //    skipped because they read one that could not be read
+    for (auto it = readReasons.constBegin(); it != readReasons.constEnd(); ++it)
+        logbook.setCalculationRecordReason(sessionId, it.key(), it.value());
+
+    // 5. The counters
     m_stats.recordsRestored += summary.restored;
     m_stats.recordsKept += summary.kept;
     m_stats.staleRecordsDeleted += summary.deleted;

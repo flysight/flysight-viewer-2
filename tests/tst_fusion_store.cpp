@@ -1,5 +1,5 @@
 // Stored fusion results end to end (store-requested-calculations, spec section
-// 8 except the logbook-column item): SessionModel + the executor + PlotModel +
+// 8): SessionModel + the executor + PlotModel +
 // CalculationDemand + Fusion::registerFusionCalculations on a real temporary
 // logbook, with real fits. Where the roll plot is checked for a visible
 // session, the demand layer starts the fit; restoring is not requesting.
@@ -20,7 +20,10 @@
 //  - the session file's bytes never depend on a record;
 //  - the logbook's cache/ folder deleted while the application is closed: the
 //    fit reads not requested at the next start, and nothing runs until the
-//    demand layer offers it.
+//    demand layer offers it;
+//  - a logbook column over a fusion output ("roll @ exit") is filled for
+//    sessions that are not loaded, stored, and not fitted again at the next
+//    start.
 //
 // The oracle (verifyAgainstFresh / evaluateFresh) is never used on a session
 // with the fit installed: it would run the fit again. Expected values are
@@ -197,6 +200,8 @@ private slots:
     void fittedBeforeFirstSaveIsRestored_data();
     void fittedBeforeFirstSaveIsRestored();
     void deletedCacheFolderReadsNotRequested();
+    void columnOverFusionFillsUnloadedSessions();
+    void fusionColumnWithStoredFitsRunsNothing();
 
 private:
     [[nodiscard]] QString addSessions(const QList<SessionData> &sessions)
@@ -1463,6 +1468,145 @@ void FusionStoreTest::deletedCacheFolderReadsNotRequested()
     QVERIFY(!QFileInfo::exists(env.cacheDir()));
     QCOMPARE(sessionFilePath("a"), csvPath);
     QCOMPARE(bytesOf(csvPath), csv);
+}
+
+// ---- A logbook column over a fusion output -----------------------------------------------
+
+namespace {
+
+/// Fusion/roll at the exit marker, the way the column editor makes it.
+LogbookColumn rollAtExitColumn()
+{
+    LogbookColumn column;
+    column.type = ColumnType::MeasurementAtMarker;
+    column.sensorID = QStringLiteral("Fusion");
+    column.measurementID = QStringLiteral("roll");
+    for (const PlotValue &plot : fusionPlots()) {
+        if (plot.measurementID == column.measurementID)
+            column.measurementType = plot.measurementType;
+    }
+    column.markerAttributeKey = QString::fromLatin1(SessionKeys::ExitTime);
+    return column;
+}
+
+} // namespace
+
+// Enabling the column fills it for sessions that are not loaded: the session
+// with IMU data is loaded as a hidden session, fitted, stored, and its value
+// cached and indexed with the fit's stamp; the one without IMU data is not
+// applicable and gets no job. Both leave as stubs by ordinary eviction.
+void FusionStoreTest::columnOverFusionFillsUnloadedSessions()
+{
+    const auto restore = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+        LogbookColumnStore::instance().setColumns({descriptionColumn()});
+    });
+    const LogbookColumn roll = rollAtExitColumn();
+    QVERIFY(!roll.measurementType.isEmpty());
+    QCOMPARE(logbookColumnExplicitCalculations(roll, CalculationRegistry::instance()), QStringList({kFit}));
+
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a")),
+                          sessionWithoutImu(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("n1"))}),
+             QString());
+    QVERIFY(waitForIdle(*m_model));
+    session("a");
+    session("n1");                      // in the LRU list (a row never touched is not)
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
+    QVERIFY(!isLoaded("a"));
+    QVERIFY(!isLoaded("n1"));
+
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), roll});
+    const QString column = CalculationDemand::columnId(roll);
+    m_demand->flush();
+    QCOMPARE(m_demand->columnState(column).waitingCount, 2);
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QVERIFY(waitForIdle(*m_model));
+
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(m_queue->model()->record(0).sessionId, QStringLiteral("a"));
+    QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
+    QVERIFY(QFileInfo(recordPath("a")).isFile());
+    const DemandState state = m_demand->columnState(column);
+    QVERIFY(state.isPlain());
+    QCOMPARE(state.wantedCount, 1);
+    QCOMPARE(state.doneCount, 1);
+    QVERIFY(!isLoaded("a"));
+    QVERIFY(!isLoaded("n1"));
+
+    int section = -1;
+    for (int c = 0; c < m_model->columnCount(); ++c) {
+        if (CalculationDemand::columnId(m_model->column(c)) == column)
+            section = c;
+    }
+    QVERIFY(section >= 0);
+    const QVariant cachedRoll = std::as_const(*m_model).rowAt(m_model->getSessionRow("a")).cachedValues.value(section);
+    QVERIFY(cachedRoll.isValid());
+    const SessionRow &n1 = std::as_const(*m_model).rowAt(m_model->getSessionRow("n1"));
+    QVERIFY(n1.cachedValues.contains(section));
+    QVERIFY(!n1.cachedValues.value(section).isValid());
+    m_model->flushDirtySessions();
+    QCOMPARE(indexValue(QStringLiteral("a"), roll).toDouble(), cachedRoll.toDouble());
+    QVERIFY(indexRecordStamp(QStringLiteral("a")).toObject().contains(kFit));
+
+    // The value of a fresh load (compared only now: a load before the check
+    // would have been a load of its own)
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    const QVariant loadedRoll = session("a").getAttribute(fusionRollAtExit());
+    QVERIFY(loadedRoll.isValid());
+    QVERIFY(sameBits(loadedRoll.toDouble(), cachedRoll.toDouble()));
+    QCOMPARE(engine("a").runCount(kFit), 0);
+}
+
+// With every fit stored, the next start with the column enabled runs nothing
+// and loads nothing: the record set says the column is done.
+void FusionStoreTest::fusionColumnWithStoredFitsRunsNothing()
+{
+    const auto restore = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+        LogbookColumnStore::instance().setColumns({descriptionColumn()});
+    });
+    const LogbookColumn roll = rollAtExitColumn();
+    const QString column = CalculationDemand::columnId(roll);
+
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a"))}), QString());
+    QVERIFY(waitForIdle(*m_model));
+    session("a");                       // in the LRU list (a row never touched is not)
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
+    QVERIFY(!isLoaded("a"));
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), roll});
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
+    QVERIFY(QFileInfo(recordPath("a")).isFile());
+    m_model->flushDirtySessions();
+    const QJsonValue indexed = indexValue(QStringLiteral("a"), roll);
+    QVERIFY(indexed.isDouble());
+
+    restart();
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+    {
+        const Quiet quiet(*m_queue);
+        m_demand->flush();
+        const DemandState state = m_demand->columnState(column);
+        QCOMPARE(state.doneCount, 1);
+        QVERIFY(state.isPlain());
+        PlotFixture::spin(m_demand.get());
+        QVERIFY(waitForIdle(*m_model));
+        PlotFixture::spin(m_demand.get());
+        QVERIFY(quiet.holds());
+    }
+    QCOMPARE(loadedSpy.count(), 0);
+    QCOMPARE(m_demand->columnState(column).doneCount, 1);
+    QVERIFY(!m_demand->hasFillWork());
+    int section = -1;
+    for (int c = 0; c < m_model->columnCount(); ++c) {
+        if (CalculationDemand::columnId(m_model->column(c)) == column)
+            section = c;
+    }
+    QVERIFY(section >= 0);
+    QCOMPARE(std::as_const(*m_model).rowAt(m_model->getSessionRow("a")).cachedValues.value(section).toDouble(),
+             indexed.toDouble());
 }
 
 FLYSIGHT_TEST_MAIN(FusionStoreTest)

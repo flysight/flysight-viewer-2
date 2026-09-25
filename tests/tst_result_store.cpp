@@ -322,6 +322,7 @@ private slots:
     void temporaryLoadsReadRecordsOnlyForColumns();
     void deletingSessionRemovesRecords();
     void strayRecordRemovedAtRestart();
+    void recordReasonRecordedAtWriteAndRestore();
 
 private:
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
@@ -2025,6 +2026,95 @@ void ResultStoreTest::strayRecordRemovedAtRestart()
     QVERIFY(!QFileInfo::exists(record));
     for (const QString &name : calculationRecordFiles())
         QVERIFY2(!name.startsWith(stem), qPrintable(name));
+}
+
+// ---- Record outcomes in the logbook index ------------------------------------------
+
+// The index learns each record's reason where the store has the record open:
+// at the write after a publish, and at every restore that reads the record
+// and keeps it (a load, the column worker's copy). A skipped record teaches
+// nothing; a record deleted as stale takes its reason with it.
+void ResultStoreTest::recordReasonRecordedAtWriteAndRestore()
+{
+    LogbookManager &logbook = LogbookManager::instance();
+    const auto withoutReasons = [](const QString &id) {
+        return [id] {
+            QJsonObject root = readIndex();
+            QJsonObject sessions = root[QStringLiteral("sessions")].toObject();
+            QJsonObject entry = sessions[id].toObject();
+            entry.remove(QStringLiteral("recordReasons"));
+            sessions[id] = entry;
+            root[QStringLiteral("sessions")] = sessions;
+            QVERIFY(writeIndex(root));
+        };
+    };
+
+    // Written through the executor: a rejection's reason, a success's none
+    QVERIFY(setInput("s1", "EA_IN", -1));
+    QVERIFY(setInput("s2", "EA_IN", 4));
+    QCOMPARE(m_queue->offer("s1", kExpA).kind, JobQueue::OfferResult::Kind::Created);
+    QVERIFY(waitIdle(*m_queue));
+    QCOMPARE(m_queue->offer("s2", kExpA).kind, JobQueue::OfferResult::Kind::Created);
+    QVERIFY(waitIdle(*m_queue));
+    QVERIFY(logbook.knownCalculationRecords("s1").contains(kExpA));
+    QVERIFY(logbook.knownCalculationRecords("s2").contains(kExpA));
+    QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QStringLiteral("negative input"));
+    QCOMPARE(logbook.calculationRecordReason("s2", kExpA), QString());
+    QVERIFY(waitForIdle(*m_model));
+    m_model->flushDirtySessions();
+    QCOMPARE(readIndex()[QStringLiteral("sessions")].toObject()["s1"].toObject()[QStringLiteral("recordReasons")]
+                 .toObject()[kExpA].toString(),
+             QStringLiteral("negative input"));
+
+    // An older index without the reason: the restore at a load teaches it again
+    restart(withoutReasons(QStringLiteral("s1")));
+    QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QString());
+    m_model->resetStoredResultStats();
+    session("s1");
+    QCOMPARE(stats().recordsRestored, 1);
+    QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QStringLiteral("negative input"));
+
+    // ... and so does the column worker's restore into its copy of a stub
+    QVERIFY(waitForIdle(*m_model));
+    m_model->flushDirtySessions();
+    restart(withoutReasons(QStringLiteral("s1")));
+    QVERIFY(!isLoaded("s1"));
+    QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QString());
+    m_model->resetStoredResultStats();
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), attributeColumn(QStringLiteral("EA1"))});   // cleanup() restores
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(!isLoaded("s1"));
+    QVERIFY(stats().restoreCalls >= 1);
+    QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QStringLiteral("negative input"));
+
+    // A skipped (unreadable) record teaches nothing
+    m_model->flushDirtySessions();
+    restart(withoutReasons(QStringLiteral("s1")));
+    const QString path = recordPath("s1", QStringLiteral("exp%41"));
+    {
+        UnreadableFile unreadable(path, UnreadableFile::Mechanism::LockedWithoutSharing);
+        if (!unreadable.skipReason().isEmpty())
+            QSKIP(qPrintable(unreadable.skipReason()));
+        m_model->resetStoredResultStats();
+        session("s1");
+        QCOMPARE(stats().recordsSkipped, 1);
+        QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QString());
+        QVERIFY(unreadable.release());
+    }
+
+    // Readable again, loaded again: known; then made stale, and deleted at the
+    // next load with its reason
+    QCOMPARE(evict({"s1"}), QString());
+    session("s1");
+    QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QStringLiteral("negative input"));
+    QCOMPARE(rewriteRecord("s1", kExpA, [](CalculationRecord &r) { r.calculationCompatibility += 1; }), QString());
+    QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QStringLiteral("negative input"));
+    QCOMPARE(evict({"s1"}), QString());
+    m_model->resetStoredResultStats();
+    session("s1");
+    QCOMPARE(stats().staleRecordsDeleted, 1);
+    QVERIFY(!logbook.knownCalculationRecords("s1").contains(kExpA));
+    QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QString());
 }
 
 FLYSIGHT_TEST_MAIN(ResultStoreTest)

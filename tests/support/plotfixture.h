@@ -77,8 +77,11 @@ private:
 QStringList sessionIdsOf(const QList<FlySight::DemandTrack> &tracks);
 
 /// Spins the event loop, flushing `demand` on every poll, until the executor
-/// is idle, no pass is pending and no session is settling: everything the
-/// demand layer wanted has run. False on timeout.
+/// is idle, no pass is pending, no session is settling and the column fill has
+/// no work (the executor is idle between one held session's job and the next
+/// load, which must not be mistaken for the end): everything the demand layer
+/// wanted has run. False on timeout. Follow with waitForIdle(model) when
+/// column values must be filled.
 bool waitDemandIdle(FlySight::JobQueue &executor, FlySight::CalculationDemand &demand,
                     int timeoutMs = 5000);
 

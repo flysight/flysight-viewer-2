@@ -123,7 +123,8 @@ public:
     JobModel *model() const { return m_model; }
 
     /// Requested calculations that may run at once. startNext() and the demand
-    /// layer's load bound (phase 2) are written in terms of it.
+    /// layer's load bound (CalculationDemand::kMaxHeldSessions) are written in
+    /// terms of it.
     static constexpr int kMaxRunningJobs = 1;
 
     struct OfferResult {

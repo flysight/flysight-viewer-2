@@ -296,8 +296,9 @@ add_library(flysight_core STATIC
   markerregistry.cpp         markerregistry.h
   plotregistry.cpp           plotregistry.h
   # Plot check state (widget-free) and the demand layer: what requested
-  # calculations the checked plots need for the visible sessions, which runs
-  # next, the per-plot state
+  # calculations the checked plots need for the visible sessions and the
+  # enabled logbook columns for every session, which runs next, hidden loads
+  # for column demand, and the per-plot and per-column state
   plotmodel.cpp              plotmodel.h
   calculationdemand.cpp      calculationdemand.h
   momentmodel.cpp            momentmodel.h

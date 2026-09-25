@@ -312,6 +312,14 @@ LogbookColumn descriptionColumn()
     return col;
 }
 
+LogbookColumn attributeColumn(const QString &key)
+{
+    LogbookColumn col;
+    col.type = ColumnType::SessionAttribute;
+    col.attributeKey = key;
+    return col;
+}
+
 LogbookColumn exitTimeColumn()
 {
     LogbookColumn col;

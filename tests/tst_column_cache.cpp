@@ -180,6 +180,10 @@ private slots:
     void environmentCheckDropsExactlyTheReachedColumn();
     void valueComputedBeforeCheckIsStoredUnderItsEnvironment();
 
+    void loadPinnedSessionLoadsWithoutShowing();
+    void loadPinnedSessionFollowsIdentityRemap();
+    void loadPinnedSessionFailedLoadPinsNothing();
+
 private:
     // A model whose rows were merged, saved, and indexed.
     void startWithLoadedSessions(const QList<SessionData> &sessions);
@@ -1736,6 +1740,114 @@ void ColumnCacheTest::valueComputedBeforeCheckIsStoredUnderItsEnvironment()
     holdsOnlyCurrentEnvironments("after the worker");
     QCOMPARE(m_model->rowAt(row1).cachedValues.value(kE), exitWithPause5);
     QVERIFY(m_model->rowAt(m_model->getSessionRow("s2")).cachedValues.contains(kE));
+}
+
+// ---- SessionModel::loadPinnedSession ---------------------------------------------------
+
+// The demand layer's hidden load: the load of showing a session (the stored
+// results restored, sessionLoaded) without making the row visible, and a pin
+// that keeps it loaded below the cache capacity until it is released.
+void ColumnCacheTest::loadPinnedSessionLoadsWithoutShowing()
+{
+    const auto restoreCapacity = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    });
+    startWithLoadedSessions({gyroSession()});
+    restartAsStubs();
+    QVERIFY(!m_model->rowAt(0).isLoaded());
+
+    m_model->resetStoredResultStats();
+    const int workerLoads = m_model->columnWorkStats().sessionsLoaded;
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+
+    QCOMPARE(m_model->loadPinnedSession(QStringLiteral("g1")), QStringLiteral("g1"));
+    const SessionRow &row = std::as_const(*m_model).rowAt(0);
+    QVERIFY(row.isLoaded());
+    QVERIFY(!row.loadFailed);
+    QVERIFY(!row.visible);
+    QCOMPARE(m_model->data(m_model->index(0, 0), Qt::CheckStateRole).toInt(), int(Qt::Unchecked));
+    QCOMPARE(loadedSpy.count(), 1);
+    QCOMPARE(loadedSpy.at(0).at(0).toString(), QStringLiteral("g1"));
+    QCOMPARE(m_model->storedResultStats().restoreCalls, 1);
+    QVERIFY(m_model->isSessionPinned(QStringLiteral("g1")));
+
+    // Pinned: capacity 0 leaves it loaded; the release and one event-loop
+    // turn evict it
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
+    QVERIFY(m_model->rowAt(0).isLoaded());
+    m_model->unpinSession(QStringLiteral("g1"));
+    QVERIFY(!m_model->isSessionPinned(QStringLiteral("g1")));
+    QTest::qWait(0);
+    QVERIFY(!m_model->rowAt(0).isLoaded());
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+
+    // An already-loaded row is pinned without a second load
+    QCOMPARE(m_model->loadPinnedSession(QStringLiteral("g1")), QStringLiteral("g1"));
+    QCOMPARE(loadedSpy.count(), 2);
+    QCOMPARE(m_model->loadPinnedSession(QStringLiteral("g1")), QStringLiteral("g1"));
+    QCOMPARE(loadedSpy.count(), 2);
+    QCOMPARE(m_model->storedResultStats().restoreCalls, 2);
+    m_model->unpinSession(QStringLiteral("g1"));
+    QVERIFY(m_model->isSessionPinned(QStringLiteral("g1")));     // counted
+    m_model->unpinSession(QStringLiteral("g1"));
+    QVERIFY(!m_model->isSessionPinned(QStringLiteral("g1")));
+
+    // No such row: nothing
+    QCOMPARE(m_model->loadPinnedSession(QStringLiteral("nobody")), QString());
+    QVERIFY(!m_model->isSessionPinned(QStringLiteral("nobody")));
+    QCOMPARE(loadedSpy.count(), 2);
+
+    // A real load, not the column worker's
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, workerLoads);
+}
+
+// A row known by its file stem is corrected by the load and pinned under its
+// real id, never under the stem.
+void ColumnCacheTest::loadPinnedSessionFollowsIdentityRemap()
+{
+    TestEnvironment &env = TestEnvironment::instance();
+    LogbookManager &logbook = LogbookManager::instance();
+
+    startWithLoadedSessions({gyroSession()});
+    QCOMPARE(sessionCsvFiles().size(), 1);
+    const QString stem = QFileInfo(sessionCsvFiles().first()).completeBaseName();
+    QVERIFY(stem != QStringLiteral("g1"));
+    m_model.reset();
+
+    QVERIFY(QFile::remove(env.indexPath()));
+    env.reopenLogbook();
+    logbook.initialize();
+    QVERIFY(logbook.hasDeferredScan());
+
+    m_model = std::make_unique<SessionModel>();
+    m_model->populateFromUuids(logbook.scannedUuids());
+    QCOMPARE(m_model->rowAt(0).sessionId, stem);
+
+    QCOMPARE(m_model->loadPinnedSession(stem), QStringLiteral("g1"));
+    QCOMPARE(m_model->rowAt(0).sessionId, QStringLiteral("g1"));
+    QVERIFY(m_model->rowAt(0).isLoaded());
+    QVERIFY(m_model->isSessionPinned(QStringLiteral("g1")));
+    QVERIFY(!m_model->isSessionPinned(stem));
+    m_model->unpinSession(QStringLiteral("g1"));
+}
+
+// A session file that cannot be loaded leaves a failed-load placeholder and
+// pins nothing.
+void ColumnCacheTest::loadPinnedSessionFailedLoadPinsNothing()
+{
+    startWithLoadedSessions({gyroSession()});
+    const QString csvPath = sessionFilePath(QStringLiteral("g1"));
+    QVERIFY(!csvPath.isEmpty());
+    restartAsStubs();
+    QVERIFY(!m_model->rowAt(0).isLoaded());
+    QVERIFY(QFile::remove(csvPath));
+
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+    QCOMPARE(m_model->loadPinnedSession(QStringLiteral("g1")), QString());
+    QVERIFY(m_model->rowAt(0).isLoaded());
+    QVERIFY(m_model->rowAt(0).loadFailed);
+    QVERIFY(!m_model->isSessionPinned(QStringLiteral("g1")));
+    QCOMPARE(loadedSpy.count(), 1);
 }
 
 FLYSIGHT_TEST_MAIN(ColumnCacheTest)

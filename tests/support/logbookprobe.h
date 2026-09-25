@@ -110,6 +110,9 @@ QByteArray asFormatOne(const QByteArray &formatTwo);
 // ---- shared logbook columns -----------------------------------------------
 
 FlySight::LogbookColumn descriptionColumn();    ///< session attribute _DESCRIPTION
+/// A session-attribute column over `key` (an attribute a synthetic
+/// calculation outputs, say).
+FlySight::LogbookColumn attributeColumn(const QString &key);
 FlySight::LogbookColumn exitTimeColumn();       ///< session attribute _EXIT_TIME
 /// IMU/wx (rotation) at marker _M: needs IMU data, so a SENSOR merge affects it.
 FlySight::LogbookColumn gyroColumn();

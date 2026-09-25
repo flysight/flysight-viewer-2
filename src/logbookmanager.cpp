@@ -230,6 +230,7 @@ void LogbookManager::initialize()
                 // Parse sessions
                 QMap<QString, QJsonObject> stamps;      // entries that have a "records" object
                 QMap<QString, QStringList> valuesOnDisk; // definition keys of every value on disk
+                QMap<QString, QMap<QString, QString>> reasonsOnDisk;   // "recordReasons" of each entry
                 for (auto it = sessionsObj.constBegin(); it != sessionsObj.constEnd(); ++it) {
                     const QString sessionId = it.key();
                     const QJsonObject entry = it.value().toObject();
@@ -243,6 +244,15 @@ void LogbookManager::initialize()
                     // validity rule, an empty stamp and no stamp agree).
                     if (entry[QStringLiteral("records")].isObject())
                         stamps.insert(sessionId, entry[QStringLiteral("records")].toObject());
+
+                    // The outcomes of the session's records; an entry without
+                    // them (an older build) has none learned yet
+                    const QJsonObject reasonsObj = entry[QStringLiteral("recordReasons")].toObject();
+                    for (auto rit = reasonsObj.constBegin(); rit != reasonsObj.constEnd(); ++rit) {
+                        const QString reason = rit.value().toString();
+                        if (!reason.isEmpty())
+                            reasonsOnDisk[sessionId].insert(rit.key(), reason);
+                    }
 
                     // lastAccessed
                     if (entry.contains(QStringLiteral("lastAccessed"))) {
@@ -300,6 +310,8 @@ void LogbookManager::initialize()
                 // The record backing of the values on disk is noted for every
                 // one of them, including those dropped above
                 validateRecordStamps(columnsByDefKey, stamps, valuesOnDisk);
+                // A reason is kept only for a record the listing found
+                adoptRecordReasons(reasonsOnDisk);
 
                 m_hasIndexData = true;
                 return;
@@ -348,6 +360,7 @@ void LogbookManager::reset()
     m_needsFlushBeforeSave.clear();
     m_lastSaveError.clear();
     m_knownRecords.clear();
+    m_recordReasons.clear();
     m_unconfirmedRecords.clear();
     m_recordBackedOnDisk.clear();
 }
@@ -856,6 +869,8 @@ bool LogbookManager::remapSessionId(const QString &oldId, const QString &newId)
         if (records->contains(oldId))
             (*records)[newId] = records->take(oldId);
     }
+    if (m_recordReasons.contains(oldId))
+        m_recordReasons[newId] = m_recordReasons.take(oldId);
     m_indexNeedsFlush = true;
 
     return true;
@@ -886,6 +901,7 @@ bool LogbookManager::removeSession(const QString& sessionId)
         m_unsavedAll.remove(sessionId);
         m_needsFlushBeforeSave.remove(sessionId);
         m_knownRecords.remove(sessionId);
+        m_recordReasons.remove(sessionId);
         m_unconfirmedRecords.remove(sessionId);
         m_recordBackedOnDisk.remove(sessionId);
         return true;
@@ -917,6 +933,7 @@ bool LogbookManager::removeSession(const QString& sessionId)
     m_unsavedAll.remove(sessionId);
     m_needsFlushBeforeSave.remove(sessionId);
     m_knownRecords.remove(sessionId);
+    m_recordReasons.remove(sessionId);
     m_unconfirmedRecords.remove(sessionId);
     m_recordBackedOnDisk.remove(sessionId);
     m_indexNeedsFlush = true;
@@ -1135,9 +1152,11 @@ bool LogbookManager::writeCalculationRecord(const QString &sessionId, const Calc
     if (!file.commit())
         return fail(writeError(file));
 
-    // f. The disk now holds what the engine holds.
+    // f. The disk now holds what the engine holds, and the index learns the
+    //    outcome of what it holds (a replacement replaces it).
     m_knownRecords[sessionId].insert(calculationId);
     m_unconfirmedRecords[sessionId].remove(calculationId);
+    setCalculationRecordReason(sessionId, calculationId, record.result.detail);
     emit calculationRecordsChanged(sessionId, calculationId);
     return true;
 }
@@ -1219,6 +1238,7 @@ bool LogbookManager::removeCalculationRecordOfStem(const QString &sessionId, con
         dropRecordDependentValues(sessionId, {calculationId});
         m_knownRecords[sessionId].remove(calculationId);
         m_unconfirmedRecords[sessionId].remove(calculationId);
+        setCalculationRecordReason(sessionId, calculationId, QString());
         emit calculationRecordsChanged(sessionId, calculationId);
         return true;
     }
@@ -1236,6 +1256,7 @@ bool LogbookManager::removeCalculationRecordOfStem(const QString &sessionId, con
         *removedFile = true;
     m_knownRecords[sessionId].remove(calculationId);
     m_unconfirmedRecords[sessionId].remove(calculationId);
+    setCalculationRecordReason(sessionId, calculationId, QString());   // the reason goes with the record
     emit calculationRecordsChanged(sessionId, calculationId);
     return true;
 }
@@ -1271,6 +1292,47 @@ bool LogbookManager::removeCalculationRecords(const QString &sessionId)
 QSet<QString> LogbookManager::knownCalculationRecords(const QString &sessionId) const
 {
     return m_knownRecords.value(sessionId);
+}
+
+QString LogbookManager::calculationRecordReason(const QString &sessionId, const QString &calculationId) const
+{
+    const auto session = m_recordReasons.constFind(sessionId);
+    if (session == m_recordReasons.constEnd())
+        return QString();
+    return session->value(calculationId);
+}
+
+void LogbookManager::setCalculationRecordReason(const QString &sessionId, const QString &calculationId,
+                                                const QString &reason)
+{
+    // Non-empty reasons only: empty is "produced its outputs" or "not learned"
+    if (reason.isEmpty()) {
+        const auto session = m_recordReasons.find(sessionId);
+        if (session == m_recordReasons.end() || session->remove(calculationId) == 0)
+            return;
+        if (session->isEmpty())
+            m_recordReasons.erase(session);
+        m_indexNeedsFlush = true;
+        return;
+    }
+    QString &stored = m_recordReasons[sessionId][calculationId];
+    if (stored == reason)
+        return;
+    stored = reason;
+    m_indexNeedsFlush = true;
+}
+
+void LogbookManager::adoptRecordReasons(const QMap<QString, QMap<QString, QString>> &reasonsOnDisk)
+{
+    for (auto sit = reasonsOnDisk.constBegin(); sit != reasonsOnDisk.constEnd(); ++sit) {
+        const QSet<QString> known = m_knownRecords.value(sit.key());
+        for (auto rit = sit->constBegin(); rit != sit->constEnd(); ++rit) {
+            if (known.contains(rit.key()))
+                m_recordReasons[sit.key()].insert(rit.key(), rit.value());
+            else
+                m_indexNeedsFlush = true;   // the record is gone: so is its reason
+        }
+    }
 }
 
 QSet<QString> LogbookManager::unconfirmedCalculationRecords(const QString &sessionId) const
@@ -1495,6 +1557,16 @@ bool LogbookManager::flushIndex()
         for (const QString &id : confirmed)
             recordsObj[id] = currentResultVersion(id);
         entry[QStringLiteral("records")] = recordsObj;
+
+        // The outcomes of the session's records (non-empty reasons only),
+        // beside the stamp; omitted when there is none
+        const auto reasons = m_recordReasons.constFind(sessionId);
+        if (reasons != m_recordReasons.constEnd() && !reasons->isEmpty()) {
+            QJsonObject reasonsObj;
+            for (auto rit = reasons->constBegin(); rit != reasons->constEnd(); ++rit)
+                reasonsObj[rit.key()] = rit.value();
+            entry[QStringLiteral("recordReasons")] = reasonsObj;
+        }
 
         if (!backed.isEmpty())
             backedOnDisk.insert(sessionId, backed);
