@@ -12,13 +12,16 @@
 #include <QStyle>
 
 #include "attributeregistry.h"
+#include "LogbookCellDelegate.h"
+#include "LogbookHeaderView.h"
 
 namespace FlySight {
 
-LogbookView::LogbookView(SessionModel *model, QWidget *parent)
+LogbookView::LogbookView(SessionModel *model, CalculationDemand *demand, QWidget *parent)
     : QWidget(parent),
       treeView(new QTreeView(this)),
-      model(model)
+      model(model),
+      m_demand(demand)
 {
     QIcon closeIcon = style()->standardIcon(QStyle::SP_TitleBarCloseButton);
 
@@ -69,7 +72,11 @@ QList<QModelIndex> LogbookView::selectedRows() const {
 
 void LogbookView::setupView()
 {
+    // The header before the model: the tree hands it the model and its sort
+    // settings, and the lines below configure it
+    treeView->setHeader(new LogbookHeaderView(model, m_demand, treeView));
     treeView->setModel(model);
+    treeView->setItemDelegate(new LogbookCellDelegate(model, m_demand, treeView));
     treeView->setRootIsDecorated(false);
     treeView->header()->setDefaultSectionSize(100);
 

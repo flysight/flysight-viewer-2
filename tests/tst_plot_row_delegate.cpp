@@ -11,14 +11,18 @@
 //
 // What is proved here is what the view owns: plain rows are the base
 // delegate's, the working indicator and the warning badge are painted, a
-// click anywhere is the base delegate's click, the tooltip, the repaint.
+// click anywhere is the base delegate's click, the tooltip, the repaint, and
+// the working indicator's clock (DemandIndicator.h), which runs only while a
+// plot is working.
 // State, counts and what is computed are CalculationDemand's
 // (tst_calculation_demand).
 //
 // Synchronization: Gate::waitEntered() proves the worker is inside a compute
 // function; QTRY_*, waitIdle() and waitDemandIdle() spin the event loop;
 // CalculationDemand::flush() runs a pending pass before a row state is read or
-// an image is grabbed. There are no sleeps.
+// an image is grabbed. The delegate's clock is frozen at frame 0 unless a test
+// unfreezes it; the only waits are those that prove a clock ticks or stays
+// still.
 
 #include <functional>
 #include <memory>
@@ -51,6 +55,7 @@
 #include "sessionmodel.h"
 #include "testenvironment.h"
 #include "testutil.h"
+#include "ui/docks/DemandIndicator.h"
 #include "ui/docks/plotselection/PlotRowDelegate.h"
 
 using namespace FlySight;
@@ -112,6 +117,10 @@ private slots:
     void toolTipComesFromPlotState();
     void plotStateChangeRepaintsRow();
     void survivesDemandDestroyedFirst();
+    void workingAnimationClock();
+    void workingIndicatorAnimatesOnlyWhileWorking();
+    void badgeReplacesIndicatorOnceFinished();
+    void hoverDetailFollowsDemandState();
 
 private:
     Gate &gate() { return m_world->gate(); }
@@ -251,6 +260,45 @@ private:
         return image;
     }
 
+    /// The indicator's slot of a working row (the right-most glyph of its
+    /// cluster), and the label's rect left of it, as PlotRowLayout places them.
+    QRect indicatorSlot(const QModelIndex &index) const
+    {
+        const QRect cluster = m_delegate->clusterRect(index);
+        const int side = glyphSide(index);
+        return QRect(cluster.right() - side + 1, cluster.top() + (cluster.height() - side) / 2, side, side);
+    }
+    QRect labelRect(const QModelIndex &index) const
+    {
+        const QRect cluster = m_delegate->clusterRect(index);
+        const int side = glyphSide(index);
+        const int spacing = qMax(2, side / 4);
+        return QRect(cluster.left(), cluster.top(), cluster.width() - side - spacing, cluster.height());
+    }
+    /// The badge's slot of a badged row (the left-most glyph of its cluster).
+    QRect badgeSlot(const QModelIndex &index) const
+    {
+        const QRect cluster = m_delegate->clusterRect(index);
+        const int side = glyphSide(index);
+        return QRect(cluster.left(), cluster.top() + (cluster.height() - side) / 2, side, side);
+    }
+    /// PlotRowDelegate's glyph side: one text line, within the row.
+    int glyphSide(const QModelIndex &index) const
+    {
+        return qMin(m_view->visualRect(index).height() - 2, m_view->fontMetrics().height());
+    }
+    static bool hasPixel(const QImage &image, const QRect &rect, QRgb rgb)
+    {
+        const QImage part = cut(image, rect);
+        for (int y = 0; y < part.height(); ++y) {
+            for (int x = 0; x < part.width(); ++x) {
+                if ((part.pixel(x, y) & 0x00FFFFFF) == (rgb & 0x00FFFFFF))
+                    return true;
+            }
+        }
+        return false;
+    }
+
     /// Syn/g checked from code with s1 and s2 visible: the demand layer starts
     /// s1 (held in the gate, its progress text delivered) and chooses s2 next.
     /// The row is working, "0 of 2". Invalid on any other outcome.
@@ -335,6 +383,9 @@ bool PlotRowDelegateTest::buildUi(const QVector<PlotValue> &plots, QSettings *se
     m_view->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_view->resize(300, 300);
     m_delegate = new PlotRowDelegate(m_demand.get(), m_view.get());
+    // Pixel comparisons need a still indicator (frame 0, the static glyph);
+    // the animation tests unfreeze it
+    m_delegate->animation()->setFrozen(true);
     m_view->setItemDelegate(m_delegate);
     m_view->expandAll();
     m_view->show();
@@ -929,6 +980,7 @@ void PlotRowDelegateTest::survivesDemandDestroyedFirst()
 
     m_demand.reset();
 
+    QVERIFY(!m_delegate->animation()->isActive());
     QCOMPARE(m_delegate->clusterRect(index), QRect());
     QVERIFY(m_delegate->toolTipFor(index).isEmpty());
     click(inCluster);
@@ -952,6 +1004,161 @@ void PlotRowDelegateTest::survivesDemandDestroyedFirst()
     QApplication::processEvents();
     QCOMPARE(m_view->viewport()->grab().toImage(), grabViewportWithBaseDelegate());
     QVERIFY(quiet.holds());
+}
+
+// ---- The working indicator's clock ---------------------------------------------------
+
+void PlotRowDelegateTest::workingAnimationClock()
+{
+    WorkingAnimation clock;
+    QVERIFY(!clock.isActive());
+    QVERIFY(!clock.isTicking());
+    QCOMPARE(clock.frame(), 0);
+    QSignalSpy spy(&clock, &WorkingAnimation::frameAdvanced);
+
+    // Active: it ticks about every 80 ms
+    clock.setActive(true);
+    QVERIFY(clock.isActive());
+    QVERIFY(clock.isTicking());
+    QCOMPARE(clock.frame(), 0);
+    QTRY_VERIFY_WITH_TIMEOUT(spy.count() >= 2, 1000);
+
+    // Inactive: stopped, back at frame 0, and silent
+    clock.setActive(false);
+    QVERIFY(!clock.isActive());
+    QVERIFY(!clock.isTicking());
+    QCOMPARE(clock.frame(), 0);
+    int count = spy.count();
+    QTest::qWait(4 * WorkingAnimation::kFrameIntervalMs);
+    QCOMPARE(spy.count(), count);
+
+    // Frozen: active, but it never ticks by itself
+    clock.setFrozen(true);
+    clock.setActive(true);
+    QVERIFY(clock.isActive());
+    QVERIFY(!clock.isTicking());
+    count = spy.count();
+    QTest::qWait(4 * WorkingAnimation::kFrameIntervalMs);
+    QCOMPARE(spy.count(), count);
+
+    // advance(): one frame of 30 degrees, and it wraps after a turn
+    spy.clear();
+    clock.advance();
+    QCOMPARE(clock.frame(), 1);
+    QCOMPARE(clock.angle(), 30.0);
+    QCOMPARE(spy.count(), 1);
+    for (int i = 0; i < WorkingAnimation::kFramesPerTurn - 1; ++i)
+        clock.advance();
+    QCOMPARE(clock.frame(), 0);
+    QCOMPARE(clock.angle(), 0.0);
+    QCOMPARE(spy.count(), WorkingAnimation::kFramesPerTurn);
+
+    // Unfrozen while active: it ticks again
+    clock.setFrozen(false);
+    QVERIFY(clock.isTicking());
+    clock.setActive(false);
+    QVERIFY(!clock.isTicking());
+}
+
+// The arc turns while the plot works: a frame repaints the row and moves only
+// the indicator. Once nothing works the clock stops and nothing repaints.
+void PlotRowDelegateTest::workingIndicatorAnimatesOnlyWhileWorking()
+{
+    const QModelIndex index = makeWorkingRow();
+    QVERIFY(index.isValid());
+    WorkingAnimation *clock = m_delegate->animation();
+    QVERIFY(clock->isActive());
+    QVERIFY(!clock->isTicking());       // frozen by buildUi()
+
+    const QImage frame0 = grabViewport();
+    auto *paints = new PaintCounter(m_view->viewport());
+    const int before = paints->count;
+    clock->advance();
+    QTRY_VERIFY(paints->count > before);
+    const QImage frame1 = m_view->viewport()->grab().toImage();
+    QVERIFY(cut(frame1, m_delegate->clusterRect(index)) != cut(frame0, m_delegate->clusterRect(index)));
+    QVERIFY(cut(frame1, indicatorSlot(index)) != cut(frame0, indicatorSlot(index)));
+    QCOMPARE(cut(frame1, labelRect(index)), cut(frame0, labelRect(index)));        // "0 of 2"
+    QCOMPARE(cut(frame1, checkBoxRect(index)), cut(frame0, checkBoxRect(index)));
+
+    clock->setFrozen(false);
+    QVERIFY(clock->isTicking());
+    gate().open(2);
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand));
+    spin();
+    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(!clock->isActive());
+    QVERIFY(!clock->isTicking());
+    QCOMPARE(clock->frame(), 0);
+
+    // No idle repaint
+    const int settled = paints->count;
+    QTest::qWait(4 * WorkingAnimation::kFrameIntervalMs);
+    QCOMPARE(paints->count, settled);
+
+    // A plot whose demand is already done never starts the clock
+    check("g2");
+    spin();
+    QVERIFY(row("Syn/g2").isPlain());
+    QVERIFY(!clock->isActive());
+}
+
+void PlotRowDelegateTest::badgeReplacesIndicatorOnceFinished()
+{
+    QVERIFY(PlotFixture::giveInput(*m_model, QStringLiteral("s1"), QStringLiteral("EA_IN"), -1));
+    QVERIFY(PlotFixture::giveInput(*m_model, QStringLiteral("s2"), QStringLiteral("EA_IN"), 4));
+    m_model->flushPendingInvalidations();
+    check("ea");
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand));
+    const QModelIndex badgeRow = indexOf("Syn/ea");
+    const DemandState state = row("Syn/ea");
+    QVERIFY(state.showsWarning());
+    QVERIFY(!m_delegate->animation()->isActive());
+
+    const QImage badged = grabViewport();
+    const QRect cluster = m_delegate->clusterRect(badgeRow);
+    QVERIFY(!cluster.isNull());
+    QVERIFY(hasPixel(badged, cluster, qRgb(0xE6, 0x9F, 0x00)));
+
+    // The glyph slot holds the badge, not a working row's arc at frame 0
+    const QModelIndex workingRow = makeWorkingRow();
+    QVERIFY(workingRow.isValid());
+    const QImage working = grabViewport();
+    QVERIFY(!hasPixel(working, m_delegate->clusterRect(workingRow), qRgb(0xE6, 0x9F, 0x00)));
+    QVERIFY(cut(badged, badgeSlot(badgeRow)) != cut(working, indicatorSlot(workingRow)));
+
+    const QString text = QStringLiteral("Could not be computed:\n  Jump 1 - Explicit A: negative input");
+    QCOMPARE(row("Syn/ea").toolTip, text);
+    QCOMPARE(m_delegate->toolTipFor(badgeRow), text);
+}
+
+// Hover detail over the whole row, the indicator included, is the plot's
+// DemandState::toolTip, and follows it.
+void PlotRowDelegateTest::hoverDetailFollowsDemandState()
+{
+    const QModelIndex index = makeWorkingRow();
+    QVERIFY(index.isValid());
+    const QString working = QStringLiteral("Computing: 0 of 2 done\n  Jump 1 - Gated: step 1");
+    QCOMPARE(row("Syn/g").toolTip, working);
+    QCOMPARE(m_delegate->toolTipFor(index), working);
+
+    const auto helpAt = [this, &index](const QPoint &position) {
+        const QStyleOptionViewItem opt = optionFor(index);
+        QHelpEvent event(QEvent::ToolTip, position, m_view->viewport()->mapToGlobal(position));
+        return m_delegate->helpEvent(&event, m_view.get(), opt, index);
+    };
+    QVERIFY(helpAt(indicatorSlot(index).center()));
+    QCOMPARE(QToolTip::text(), working);
+
+    // s1 done, s2 running
+    gate().open();
+    QVERIFY(gate().waitEntered());
+    const QString next = QStringLiteral("Computing: 1 of 2 done\n  Jump 2 - Gated: step 1");
+    QTRY_COMPARE(row("Syn/g").toolTip, next);
+    QCOMPARE(m_delegate->toolTipFor(index), next);
+    QVERIFY(helpAt(indicatorSlot(index).center()));
+    QCOMPARE(QToolTip::text(), next);
+    QToolTip::hideText();
 }
 
 // FLYSIGHT_TEST_MAIN with a QApplication: a Widgets test writes its own main().

@@ -347,6 +347,8 @@ MainWindow::~MainWindow()
     // down and joins the worker), then everything else - also when closeEvent()
     // never ran. The demand layer also goes before the session model it
     // registered a scheduler task with (the column fill) and pinned sessions in.
+    // The plot list's delegate and the logbook's header and cell delegate hold
+    // the demand layer weakly and turn plain once it is gone.
     delete m_calculationDemand;
     m_calculationDemand = nullptr;
     delete m_jobQueue;

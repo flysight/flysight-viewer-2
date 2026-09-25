@@ -3,15 +3,14 @@
 
 #include <QPointer>
 #include <QRect>
-#include <QRectF>
 #include <QString>
 #include <QStyledItemDelegate>
 
 #include "calculationdemand.h"
+#include "ui/docks/DemandIndicator.h"
 #include "ui/docks/plotselection/PlotRowLayout.h"
 
 class QAbstractItemView;
-class QColor;
 class QPainter;
 
 namespace FlySight {
@@ -21,17 +20,18 @@ namespace FlySight {
 /// about what to compute. Every number and every string it shows comes from
 /// DemandState.
 ///
-/// PAINTING. Right-aligned in a plot row (PlotRowLayout.h): a working indicator
-/// with the progress label ("k of n") while any of the plot's demand is
-/// waiting or running; once the work is finished and some sessions could not
-/// be computed, the warning badge with the failed count instead. The two are
-/// never shown together. The plot's name is elided to make room; the cluster
-/// never is. A row whose state isPlain() - every plot that is not over a
-/// requested calculation, every unchecked row, every row with nothing waiting,
-/// running or failed, and every category - is painted by the unmodified base
-/// class. The row height never changes: sizeHint() is not overridden. The
-/// glyphs are drawn with QPainter in the row's text colour, so they follow the
-/// theme, the selection and the screen's scale without any bundled image.
+/// PAINTING. Right-aligned in a plot row (PlotRowLayout.h): a working indicator,
+/// an arc that turns about once a second, and "k of n" while any of the plot's
+/// demand is waiting or running; once the work is finished and some sessions
+/// could not be computed, the warning badge with the failed count instead. The
+/// two are never shown together. The plot's name is elided to make room; the
+/// cluster never is. A row whose state isPlain() - every plot that is not over
+/// a requested calculation, every unchecked row, every row with nothing
+/// waiting, running or failed, and every category - is painted by the
+/// unmodified base class. The row height never changes: sizeHint() is not
+/// overridden. The glyphs (DemandIndicator.h) are drawn with QPainter in the
+/// row's text colour, so they follow the theme, the selection and the screen's
+/// scale without any bundled image.
 ///
 /// NO GESTURES. The delegate handles no event of its own: editorEvent() is the
 /// base class's. Checking a row is the base class's write to PlotModel, which
@@ -41,8 +41,11 @@ namespace FlySight {
 ///
 /// TOOLTIP. helpEvent() shows DemandState::toolTip over the whole row.
 ///
-/// REPAINT. CalculationDemand::plotStateChanged(plotId) updates that row of the
-/// view. There is no timer.
+/// REPAINT. CalculationDemand::plotStateChanged(plotId) repaints that row.
+/// While any plot is working (workingPlotIds()), a WorkingAnimation repaints the
+/// working rows 12.5 times a second. It stops, and nothing is repainted, as
+/// soon as nothing is working (statesChanged()). Without a demand layer the
+/// clock never runs.
 ///
 /// The component is held weakly: without it (never given, or destroyed first)
 /// the delegate behaves exactly as QStyledItemDelegate.
@@ -64,15 +67,17 @@ public:
     /// for nothing else.
     QRect clusterRect(const QModelIndex &index) const;
 
-    /// An open arc of 270 degrees in `color`: the working indicator, turned by
-    /// `rotationDegrees` (static in this version: 0).
-    static void drawWorkingGlyph(QPainter *painter, const QRectF &rect, const QColor &color,
-                                 qreal rotationDegrees);
+    /// The clock of the working indicator. For tests and for nothing else.
+    WorkingAnimation *animation() const { return m_animation; }
 
 private slots:
     void onPlotStateChanged(const QString &plotId);
+    void syncAnimation();
+    void onAnimationFrame();
 
 private:
+    /// The row of a plot id (PlotModel::PlotValueIdRole); invalid when none.
+    QModelIndex indexForPlot(const QString &plotId) const;
     /// The default ("plain") state without a component or for a category.
     DemandState stateFor(const QModelIndex &index) const;
     static PlotRowMetrics metricsFor(const QStyleOptionViewItem &opt);
@@ -81,6 +86,7 @@ private:
 
     QPointer<CalculationDemand> m_demand;
     QPointer<QAbstractItemView> m_view;
+    WorkingAnimation *m_animation;          // a child; never null
 };
 
 } // namespace FlySight

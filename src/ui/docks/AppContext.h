@@ -29,7 +29,7 @@ struct AppContext {
     PlotViewSettingsModel* plotViewSettings = nullptr;
     MeasureModel* measureModel = nullptr;
     JobQueue* jobQueue = nullptr;             // background calculation jobs; JobQueue::model() is what a jobs view would show
-    CalculationDemand* calculationDemand = nullptr; // plot-list row state (may be null: rows are then plain)
+    CalculationDemand* calculationDemand = nullptr; // what the plot list's rows and the logbook's column headers and cells present (may be null: all plain)
     QSettings* settings = nullptr;
 };
 

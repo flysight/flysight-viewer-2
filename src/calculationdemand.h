@@ -283,6 +283,14 @@ struct DemandState {
 /// without an idle period between its links - and before the fill's load
 /// when a pass is pending. jobProgress updates texts only, without inspection.
 ///
+/// PRESENTATION. The views read plotState(), columnState(), isCellPending(),
+/// workingPlotIds() and workingColumnIds(), and repaint on plotStateChanged(),
+/// columnStateChanged() and statesChanged(). They never run a pass (flush() is
+/// a test seam), never offer, and never write. "Pending" exists only here and
+/// in the view that paints it: never in SessionModel, the cached column values
+/// or the logbook index. A tooltip lists at most kToolTipListLimit tracks per
+/// section, then how many more there are; the state's own lists stay complete.
+///
 /// THE ONLY CALLER. This is the only product caller of JobQueue::offer() and
 /// JobQueue::withdrawChosenNext(). Nothing calls back into it: it observes
 /// PlotModel, SessionModel (its column set included), the logbook manager's
@@ -304,6 +312,9 @@ public:
     /// Sessions the demand layer holds loaded for column demand at most:
     /// the running job's and the chosen next job's (spec 9, 11).
     static constexpr int kMaxHeldSessions = JobQueue::kMaxRunningJobs + 1;
+    /// Tracks listed per section of a tooltip at most (running, failed); a
+    /// longer section ends "and N more".
+    static constexpr int kToolTipListLimit = 10;
 
     CalculationDemand(SessionModel *sessionModel, PlotModel *plotModel, JobQueue *executor,
                       QObject *parent = nullptr);
@@ -330,9 +341,16 @@ public:
     /// The same by SessionModel row and column index; false out of range.
     bool isCellPending(int row, int column) const;
 
+    /// Ids of the plots / logbook columns whose state isWorking(), in no particular
+    /// order; empty when nothing is working. What the views' working-indicator
+    /// clocks follow (statesChanged() says when to ask again).
+    QStringList workingPlotIds() const;
+    QStringList workingColumnIds() const;
+
     /// The ready-made tooltip of a state: "Computing: k of n done" with the
     /// running tracks, then "Could not be computed:" with the failed tracks,
-    /// each omitted when empty. A pure function of its argument.
+    /// each omitted when empty; each list stops after kToolTipListLimit tracks
+    /// with "and N more". A pure function of its argument.
     static QString buildToolTip(const DemandState &state);
 
     /// True when a plot value that was just read as empty is absent only

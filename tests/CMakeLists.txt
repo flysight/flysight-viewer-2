@@ -13,8 +13,9 @@
 #     (FLYSIGHT_BUILD_PYTHON_TESTS).
 #   - tst_map_models: the two map models and their two helpers, which need Qt
 #     Core and Gui only, so the test needs no Widgets, WebEngine or Quick.
-#   - tst_plot_row_delegate: the plot list's row delegate. The only test that
-#     links Qt Widgets (FLYSIGHT_BUILD_WIDGET_TESTS).
+#   - tst_plot_row_delegate and tst_logbook_indicators: the plot list's row
+#     delegate, and the logbook view with its header view and cell delegate,
+#     the only tests that link Qt Widgets (FLYSIGHT_BUILD_WIDGET_TESTS).
 # The FLYSIGHT_BUILD_FUSION_TESTS block near the end of this file is the only
 # place a test may link GTSAM.
 #
@@ -156,9 +157,11 @@ flysight_add_test(tst_calculation_demand SOURCES tst_calculation_demand.cpp)
 # Plot-list rows: pure geometry (no widgets) ...
 flysight_add_test(tst_plot_row_layout SOURCES tst_plot_row_layout.cpp)
 
-# ... and the delegate in an offscreen QTreeView. The only test that links
-# Qt Widgets; it compiles the delegate from the application sources
-# (pattern: tst_python_bridge). QT_QPA_PLATFORM=offscreen is already set by
+# ... and the delegate in an offscreen QTreeView. tst_plot_row_delegate and
+# tst_logbook_indicators (below) are the only tests that link Qt Widgets; they
+# compile the plot list's row delegate, and the logbook view with its header
+# view and cell delegate, from the application sources (pattern:
+# tst_python_bridge). QT_QPA_PLATFORM=offscreen is already set by
 # flysight_add_test().
 option(FLYSIGHT_BUILD_WIDGET_TESTS "Build and run the tests that need Qt Widgets" ON)
 if(FLYSIGHT_BUILD_WIDGET_TESTS)
@@ -166,8 +169,20 @@ if(FLYSIGHT_BUILD_WIDGET_TESTS)
     SOURCES tst_plot_row_delegate.cpp
             "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowDelegate.cpp"
             "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowDelegate.h"
+            "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicator.cpp"
+            "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicator.h"
     LIBS Qt${QT_VERSION_MAJOR}::Widgets)
   set_tests_properties(tst_plot_row_delegate PROPERTIES LABELS "core;widgets")
+  # ... and the logbook's column headers (working indicator, badge, hover) and
+  # pending cells in a real LogbookView, compiled from the application sources.
+  flysight_add_test(tst_logbook_indicators
+    SOURCES tst_logbook_indicators.cpp
+            "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookView.cpp"          "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookView.h"
+            "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookHeaderView.cpp"    "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookHeaderView.h"
+            "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookCellDelegate.cpp"  "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookCellDelegate.h"
+            "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicator.cpp"              "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicator.h"
+    LIBS Qt${QT_VERSION_MAJOR}::Widgets)
+  set_tests_properties(tst_logbook_indicators PROPERTIES LABELS "core;widgets")
 endif()
 
 # Source layer and conversion layer: the schema and unit tables, the conversion

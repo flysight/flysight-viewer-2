@@ -155,6 +155,10 @@ private slots:
     void demandDestroyedReleasesHoldsAndTask();
     void passOverManyStubsReadsEachRecordSetOnce();
 
+    // Presentation (phase 3)
+    void workingIdsFollowStates();
+    void toolTipListsAtMostTenFailures();
+
 private:
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
     CalculationEngine &engine(const QString &id) { return session(id).calculationEngine(); }
@@ -3777,6 +3781,123 @@ void CalculationDemandTest::passOverManyStubsReadsEachRecordSetOnce()
     QCOMPARE(loadedSpy.count(), 0);
 
     m_demand.reset();                       // before any event-loop turn
+}
+
+// ---- Presentation -------------------------------------------------------------------
+
+// The ids the views' clocks follow: exactly the plots and columns whose state
+// is working, and statesChanged() says when they change.
+void CalculationDemandTest::workingIdsFollowStates()
+{
+    m_demand->flush();
+    QVERIFY(m_demand->workingPlotIds().isEmpty());
+    QVERIFY(m_demand->workingColumnIds().isEmpty());
+
+    // Every statesChanged(): whether anything is working then
+    QObject scope;
+    QList<bool> working;
+    connect(m_demand.get(), &CalculationDemand::statesChanged, &scope, [this, &working] {
+        working.append(!m_demand->workingPlotIds().isEmpty() || !m_demand->workingColumnIds().isEmpty());
+    });
+
+    QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
+    show({"s1", "s2"});
+    check("g");
+    QVERIFY(gate().waitEntered());
+    QVERIFY(row("Syn/g").isWorking());
+    QCOMPARE(m_demand->workingPlotIds(), QStringList({"Syn/g"}));
+    QVERIFY(m_demand->workingColumnIds().isEmpty());
+
+    enableColumns({"G_OUT"});
+    m_demand->flush();
+    QVERIFY(col("G_OUT").isWorking());
+    QCOMPARE(m_demand->workingColumnIds(), QStringList({colId("G_OUT")}));
+    QCOMPARE(m_demand->workingPlotIds(), QStringList({"Syn/g"}));
+
+    // Unchecked: at once
+    check("g", false);
+    m_demand->flush();
+    QVERIFY(m_demand->workingPlotIds().isEmpty());
+    QCOMPARE(m_demand->workingColumnIds(), QStringList({colId("G_OUT")}));
+
+    gate().open(4);
+    QVERIFY(waitDemandIdle());
+    QVERIFY(m_demand->workingPlotIds().isEmpty());
+    QVERIFY(m_demand->workingColumnIds().isEmpty());
+    QVERIFY(working.contains(true));
+    QCOMPARE(working.last(), false);
+}
+
+// A tooltip lists at most kToolTipListLimit tracks per section; the state's
+// own lists stay complete.
+void CalculationDemandTest::toolTipListsAtMostTenFailures()
+{
+    QCOMPARE(CalculationDemand::kToolTipListLimit, 10);
+    const auto failures = [](int n) {
+        QList<DemandTrack> tracks;
+        for (int k = 1; k <= n; ++k) {
+            DemandTrack track;
+            track.sessionName = QStringLiteral("Jump %1").arg(k);
+            track.condition = DemandCondition::Failed;
+            track.calculationTitles = {QStringLiteral("Explicit A")};
+            track.reason = QStringLiteral("r");
+            tracks.append(track);
+        }
+        return tracks;
+    };
+    const auto finished = [&failures](int n) {
+        DemandState state;
+        state.requested = true;
+        state.failed = failures(n);
+        state.failedCount = n;
+        state.wantedCount = n;
+        state.doneCount = n;
+        return state;
+    };
+    QStringList tenLines{QStringLiteral("Could not be computed:")};
+    for (int k = 1; k <= 10; ++k)
+        tenLines.append(QStringLiteral("  Jump %1 - r").arg(k));
+
+    // Twelve: ten, then how many more
+    DemandState twelve = finished(12);
+    QVERIFY(twelve.showsWarning());
+    QCOMPARE(CalculationDemand::buildToolTip(twelve),
+             (tenLines + QStringList{QStringLiteral("  and 2 more")}).join(QLatin1Char('\n')));
+    QCOMPARE(twelve.failed.size(), 12);
+
+    // Exactly ten: no "more" line
+    QCOMPARE(CalculationDemand::buildToolTip(finished(10)), tenLines.join(QLatin1Char('\n')));
+
+    // Working with twelve failures: the "Computing" line first, then the capped section
+    DemandState working = twelve;
+    DemandTrack running;
+    running.sessionName = QStringLiteral("Noon");
+    running.condition = DemandCondition::Running;
+    running.calculationTitles = {QStringLiteral("Sensor fusion")};
+    running.progressText = QStringLiteral("iteration 3");
+    working.running = {running};
+    working.runningCount = 1;
+    working.wantedCount = 13;
+    QVERIFY(working.isWorking());
+    QCOMPARE(CalculationDemand::buildToolTip(working),
+             (QStringList{QStringLiteral("Computing: 12 of 13 done"),
+                          QStringLiteral("  Noon - Sensor fusion: iteration 3")}
+              + tenLines + QStringList{QStringLiteral("  and 2 more")})
+                 .join(QLatin1Char('\n')));
+
+    // The running list is capped the same way
+    DemandState manyRunning;
+    for (int k = 1; k <= 11; ++k) {
+        DemandTrack track = running;
+        track.sessionName = QStringLiteral("Run %1").arg(k);
+        manyRunning.running.append(track);
+    }
+    manyRunning.runningCount = 11;
+    manyRunning.wantedCount = 11;
+    const QStringList lines = CalculationDemand::buildToolTip(manyRunning).split(QLatin1Char('\n'));
+    QCOMPARE(lines.size(), 1 + 10 + 1);
+    QCOMPARE(lines.at(10), QStringLiteral("  Run 10 - Sensor fusion: iteration 3"));
+    QCOMPARE(lines.last(), QStringLiteral("  and 1 more"));
 }
 
 FLYSIGHT_TEST_MAIN(CalculationDemandTest)

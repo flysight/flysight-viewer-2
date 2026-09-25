@@ -177,6 +177,26 @@ bool CalculationDemand::isCellPending(int row, int column) const
     return isCellPending(model.rowAt(row).sessionId, columnId(model.column(column)));
 }
 
+QStringList CalculationDemand::workingPlotIds() const
+{
+    QStringList ids;
+    for (auto it = m_states.constBegin(); it != m_states.constEnd(); ++it) {
+        if (it.value().isWorking())
+            ids.append(it.key());
+    }
+    return ids;
+}
+
+QStringList CalculationDemand::workingColumnIds() const
+{
+    QStringList ids;
+    for (auto it = m_columnStates.constBegin(); it != m_columnStates.constEnd(); ++it) {
+        if (it.value().isWorking())
+            ids.append(it.key());
+    }
+    return ids;
+}
+
 bool CalculationDemand::isInert() const
 {
     return !m_sessionModel || !m_plotModel || !m_queue;
@@ -1045,19 +1065,30 @@ QString CalculationDemand::buildToolTip(const DemandState &state)
     const QString indent = QStringLiteral("  ");
     QStringList lines;
 
+    // A column over thousands of sessions must not make a tooltip taller than
+    // the screen: each list stops at the limit and says how many it left out
+    const auto moreLine = [&indent](qsizetype listed) {
+        const int remaining = int(listed) - kToolTipListLimit;
+        return indent + tr("and %n more", nullptr, remaining);
+    };
+
     if (state.isWorking()) {
         lines.append(tr("Computing: %1 of %2 done").arg(state.doneCount).arg(state.wantedCount));
-        for (const DemandTrack &track : state.running) {
+        for (const DemandTrack &track : state.running.mid(0, kToolTipListLimit)) {
             const QString progress = track.progressText.isEmpty() ? tr("running") : track.progressText;
             lines.append(indent + tr("%1 - %2: %3").arg(track.sessionName,
                                                          track.calculationTitles.join(QStringLiteral(", ")),
                                                          progress));
         }
+        if (state.running.size() > kToolTipListLimit)
+            lines.append(moreLine(state.running.size()));
     }
     if (state.failedCount > 0) {
         lines.append(tr("Could not be computed:"));
-        for (const DemandTrack &track : state.failed)
+        for (const DemandTrack &track : state.failed.mid(0, kToolTipListLimit))
             lines.append(indent + tr("%1 - %2").arg(track.sessionName, track.reason));
+        if (state.failed.size() > kToolTipListLimit)
+            lines.append(moreLine(state.failed.size()));
     }
     return lines.join(QLatin1Char('\n'));
 }

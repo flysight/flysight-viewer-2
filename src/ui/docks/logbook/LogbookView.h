@@ -10,11 +10,19 @@
 
 namespace FlySight {
 
+class CalculationDemand;
+
+/// The logbook table: the session model in a tree with a header that shows
+/// each column's working indicator or warning badge and its hover detail
+/// (LogbookHeaderView), cells that read pending while their value is being
+/// computed (LogbookCellDelegate), and the progress line of the idle
+/// scheduler's tasks. The demand layer may be null: then header and cells are
+/// plain.
 class LogbookView : public QWidget
 {
     Q_OBJECT
 public:
-    LogbookView(SessionModel *model, QWidget *parent = nullptr);
+    LogbookView(SessionModel *model, CalculationDemand *demand, QWidget *parent = nullptr);
     QList<QModelIndex> selectedRows() const;
 
 signals:
@@ -42,6 +50,7 @@ protected:
 private:
     QTreeView *treeView;
     SessionModel *model;
+    CalculationDemand *m_demand;
     QProgressBar *m_progressBar;
     QToolButton *m_cancelButton;
     int m_activeTaskId = -1;

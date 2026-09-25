@@ -12,8 +12,9 @@ LogbookDockFeature::LogbookDockFeature(const AppContext& ctx, QObject* parent)
     // Create dock widget with unique name for layout persistence
     m_dock = new KDDockWidgets::QtWidgets::DockWidget(QStringLiteral("Logbook"));
 
-    // Create LogbookView
-    m_logbookView = new LogbookView(ctx.sessionModel, m_dock);
+    // Create LogbookView; the demand layer supplies the column headers'
+    // indicators and the pending cells (null: plain)
+    m_logbookView = new LogbookView(ctx.sessionModel, ctx.calculationDemand, m_dock);
     m_dock->setWidget(m_logbookView);
 
     // Forward LogbookView signals to feature signals
