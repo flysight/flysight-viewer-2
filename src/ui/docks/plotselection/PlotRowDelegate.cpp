@@ -7,6 +7,7 @@
 #include <QStyle>
 #include <QToolTip>
 
+#include "calculationdemand.h"
 #include "plotmodel.h"
 #include "ui/docks/DemandIndicator.h"
 

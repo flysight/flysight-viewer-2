@@ -8,6 +8,7 @@
 #include <QStyleOptionHeaderV2>
 #include <QToolTip>
 
+#include "calculationdemand.h"
 #include "sessionmodel.h"
 #include "ui/docks/DemandIndicator.h"
 

@@ -284,6 +284,11 @@ private:
     /// ends it Cancelled ("No longer needed") at once, before it ever started,
     /// and nothing else is offered. Empty when all of that held.
     [[nodiscard]] QString offeredFitIsDroppedByUncheck(const QString &id, const QSignalSpy &queued, int jobsBefore);
+    /// The fit of `id` offered to the executor directly, as a store test
+    /// needs, with no demand layer alive: the demand layer is the only offerer
+    /// and withdraws a chosen next job that nothing wants. The demand layer is
+    /// made again afterwards, as after a restart. Empty on success.
+    [[nodiscard]] QString fitDirectly(const QString &id);
 
     std::unique_ptr<SessionModel> m_model;
     std::unique_ptr<JobQueue> m_queue;
@@ -548,6 +553,21 @@ QString FusionStoreTest::reportDifference(const BlockerReport &got, const Blocke
     return QString();
 }
 
+QString FusionStoreTest::fitDirectly(const QString &id)
+{
+    m_demand.reset();
+    const JobQueue::OfferResult result = m_queue->offer(id, kFit);
+    if (result.kind != Kind::Created)
+        return QStringLiteral("the fit of %1 was not created (%2)").arg(id).arg(int(result.kind));
+    if (!waitIdle(*m_queue, kFitTimeoutMs))
+        return QStringLiteral("the fit of %1 did not end").arg(id);
+    const JobRecord record = m_queue->job(result.job);
+    if (record.state != JobState::Succeeded)
+        return QStringLiteral("the fit of %1 ended %2 (%3)").arg(id).arg(int(record.state)).arg(record.reason);
+    m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
+    return {};
+}
+
 QString FusionStoreTest::offeredFitIsDroppedByUncheck(const QString &id, const QSignalSpy &queued, int jobsBefore)
 {
     const DemandState state = row(kRoll);
@@ -559,7 +579,7 @@ QString FusionStoreTest::offeredFitIsDroppedByUncheck(const QString &id, const Q
     const JobRecord offered = m_queue->model()->record(jobsBefore);
     if (offered.sessionId != id || offered.calculationId != kFit || offered.state != JobState::Queued)
         return QStringLiteral("the offered job is not the queued fit of ") + id;
-    if (m_queue->chosenNextJob() != offered.id || state.waiting.at(0).job != offered.id)
+    if (m_queue->chosenNextJob() != offered.id)
         return QStringLiteral("the offered job is not the chosen next job the row waits on");
 
     check(QStringLiteral("roll"), false);
@@ -665,8 +685,7 @@ void FusionStoreTest::restoredAfterEvictionIsBitIdentical()
 void FusionStoreTest::restoredAfterRestartIsBitIdentical()
 {
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("a"))}), QString());
-    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::Created);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QCOMPARE(fitDirectly(QStringLiteral("a")), QString());
     QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
     QVERIFY(waitForIdle(*m_model));
     const QString path = recordPath("a");
@@ -832,8 +851,7 @@ void FusionStoreTest::unrelatedEditKeepsRecord()
         PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
     });
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
-    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::Created);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QCOMPARE(fitDirectly(QStringLiteral("a")), QString());
     QVERIFY(waitForIdle(*m_model));
     const QString path = recordPath("a");
     const QByteArray r0 = bytesOf(path);
@@ -906,8 +924,7 @@ void FusionStoreTest::dependencyEditDropsRecord()
     const DemandState state = row(kRoll);
     QCOMPARE(state.waitingCount, 1);
     QCOMPARE(state.runningCount, 0);
-    QVERIFY(state.waiting.at(0).settling);
-    QCOMPARE(state.waiting.at(0).job, JobId(0));
+    QCOMPARE(m_queue->chosenNextJob(), JobId(0));
     QVERIFY(m_demand->isSettling(QStringLiteral("a")));
     PlotFixture::spin(m_demand.get());
     QVERIFY(quiet.holds());
@@ -929,8 +946,7 @@ void FusionStoreTest::dependencyEditDropsRecord()
 void FusionStoreTest::mergeIntoLoadedSessionDropsRecord()
 {
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
-    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::Created);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QCOMPARE(fitDirectly(QStringLiteral("a")), QString());
     QVERIFY(waitForIdle(*m_model));
     const QString path = recordPath("a");
     QVERIFY(QFileInfo(path).isFile());
@@ -970,8 +986,7 @@ void FusionStoreTest::mergeIntoUnloadedSession()
         PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
     });
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
-    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::Created);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QCOMPARE(fitDirectly(QStringLiteral("a")), QString());
     QVERIFY(waitForIdle(*m_model));
     const QString path = recordPath("a");
     const QByteArray r0 = bytesOf(path);
@@ -1268,7 +1283,7 @@ void FusionStoreTest::runtimeRegistryChangeDropsFitAndRecord()
     const DemandState state = row(kRoll);
     QCOMPARE(state.waitingCount, 1);
     QCOMPARE(state.runningCount, 0);
-    QCOMPARE(state.waiting.at(0).sessionId, QStringLiteral("a"));
+    QCOMPARE(state.wantedCount, 1);
     check(QStringLiteral("roll"), false);
     PlotFixture::spin(m_demand.get());
     QVERIFY(m_queue->isIdle());
@@ -1302,8 +1317,7 @@ void FusionStoreTest::lookupResolvingDifferentlyAtLoadDeletesFit()
     QCOMPARE(addSessions({fixtureSessionWithSAccStoredAs(QStringLiteral("coarse_linear"), QStringLiteral("a"),
                                                          QStringLiteral("testSAcc"))}),
              QString());
-    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::Created);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QCOMPARE(fitDirectly(QStringLiteral("a")), QString());
     QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
     QCOMPARE(engine("a").resultStatus(kFit), std::optional<ResultStatus>(ResultStatus::Ok));
     QVERIFY(waitForIdle(*m_model));
@@ -1437,8 +1451,7 @@ void FusionStoreTest::deletedCacheFolderReadsNotRequested()
 {
     TestEnvironment &env = TestEnvironment::instance();
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("stationary_spin"), QStringLiteral("a"))}), QString());
-    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::Created);
-    QVERIFY(waitIdle(*m_queue, kFitTimeoutMs));
+    QCOMPARE(fitDirectly(QStringLiteral("a")), QString());
     QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
     QVERIFY(waitForIdle(*m_model));
     QVERIFY(QFileInfo(recordPath("a")).isFile());

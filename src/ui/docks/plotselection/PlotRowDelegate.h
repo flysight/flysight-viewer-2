@@ -6,7 +6,7 @@
 #include <QString>
 #include <QStyledItemDelegate>
 
-#include "calculationdemand.h"
+#include "demandstate.h"
 #include "ui/docks/DemandIndicator.h"
 #include "ui/docks/plotselection/PlotRowLayout.h"
 
@@ -14,6 +14,8 @@ class QAbstractItemView;
 class QPainter;
 
 namespace FlySight {
+
+class CalculationDemand;
 
 /// The plot list's row delegate: it paints what CalculationDemand reports for
 /// a row and decides nothing - no state, no count, no word of text, and nothing

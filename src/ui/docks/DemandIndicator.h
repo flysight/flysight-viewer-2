@@ -3,7 +3,7 @@
 
 // Painting shared by the plot list's rows and the logbook's column headers:
 // the working indicator and the warning badge that present the demand layer's
-// state (calculationdemand.h), and the clock that turns the indicator while
+// state (demandstate.h), and the clock that turns the indicator while
 // something is working and stops when nothing is. QtCore and QtGui only.
 
 #include <QObject>

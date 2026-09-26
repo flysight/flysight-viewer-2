@@ -327,7 +327,7 @@ private:
         const DemandState state = row("Syn/g");
         if (!state.isWorking() || state.progressLabel != QStringLiteral("0 of 2")
             || sessionIdsOf(state.running) != QStringList({"s1"})
-            || sessionIdsOf(state.waiting) != QStringList({"s2"}))
+            || state.waitingCount != 1 || m_queue->job(m_queue->chosenNextJob()).sessionId != QLatin1String("s2"))
             return QModelIndex();
         spin();
         return indexOf("Syn/g");
@@ -626,7 +626,8 @@ void PlotRowDelegateTest::checkBoxClickChecksThroughTheModel()
     QVERIFY(state.isWorking());
     QCOMPARE(state.progressLabel, QStringLiteral("0 of 2"));
     QCOMPARE(sessionIdsOf(state.running), QStringList({"s1"}));
-    QCOMPARE(sessionIdsOf(state.waiting), QStringList({"s2"}));
+    QCOMPARE(state.waitingCount, 1);
+    QCOMPARE(m_queue->job(m_queue->chosenNextJob()).sessionId, QStringLiteral("s2"));
     QCOMPARE(queuedSpy.count(), 2);
 
     gate().open();

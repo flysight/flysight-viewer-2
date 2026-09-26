@@ -7,12 +7,13 @@
 #include <QSize>
 #include <QString>
 
-#include "calculationdemand.h"
+#include "demandstate.h"
 
 class QStyleOptionHeaderV2;
 
 namespace FlySight {
 
+class CalculationDemand;
 class SessionModel;
 class WorkingAnimation;
 

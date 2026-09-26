@@ -1,7 +1,6 @@
 #ifndef CALCULATIONDEMAND_H
 #define CALCULATIONDEMAND_H
 
-#include <QDeadlineTimer>
 #include <QHash>
 #include <QList>
 #include <QObject>
@@ -13,7 +12,10 @@
 #include <QTimer>
 #include <QVector>
 
+#include <memory>
+
 #include "dependencykey.h"
+#include "demandstate.h"
 #include "engine/blockerreport.h"
 #include "jobmodel.h"
 #include "jobqueue.h"
@@ -22,81 +24,12 @@
 
 namespace FlySight {
 
+class DemandFill;
+class DemandSettleClock;
 class PlotModel;
 class SessionData;
 class SessionModel;
 struct SessionRow;
-
-/// Where one track stands for one demand source: a visible, loaded session for
-/// a plot; any session of the logbook (a cell) for a column.
-enum class DemandCondition {
-    Done,           ///< the value is available (a result exists): nothing to compute
-    Waiting,        ///< in demand, not running (inside the input-settle wait, chosen next, or behind other work)
-    Running,        ///< the executor's running job, not asked to stop, is one of its calculations
-    Failed,         ///< an input-determined failure (NotProduced) or a job-level failure remembered this run
-    NotApplicable   ///< unavailable for ordinary reasons, or refused as not applicable: silently absent
-};
-
-/// One track of one demand source. A plain value.
-struct DemandTrack {
-    QString sessionId;
-    QString sessionName;            ///< SessionModel::sessionDisplayName() of the row
-    DemandCondition condition = DemandCondition::NotApplicable;
-    QStringList calculationTitles;  ///< Waiting/Running: the blockers' titles; Failed: what did not produce / what failed
-    QString reason;                 ///< Failed only; never empty
-    bool jobFailure = false;        ///< Failed only: the job failed (not stored; retried at the next start)
-    bool settling = false;          ///< Waiting only: the session is inside its input-settle wait
-    /// Running: the running job. Waiting: the chosen next job if it is this
-    /// track's, else 0 - for a plot track the chosen next job after the
-    /// pass's offers; a column track is classified before them, so it names
-    /// the chosen next job as the pass found it (column states do not list
-    /// waiting tracks).
-    JobId job = 0;
-    QString progressText;           ///< Running only: the running job's latest progress text
-
-    bool operator==(const DemandTrack &other) const
-    {
-        return sessionId == other.sessionId && sessionName == other.sessionName
-            && condition == other.condition && calculationTitles == other.calculationTitles
-            && reason == other.reason && jobFailure == other.jobFailure && settling == other.settling
-            && job == other.job && progressText == other.progressText;
-    }
-    bool operator!=(const DemandTrack &other) const { return !(*this == other); }
-};
-
-/// Everything a plot row or a column header presents. The default value is "plain".
-struct DemandState {
-    QString sourceId;               ///< plot id "<sensorID>/<measurementID>" (== PlotModel::PlotValueIdRole),
-                                    ///< or a column id (CalculationDemand::columnId())
-    bool requested = false;         ///< the source's value depends on a requested calculation; false: never inspected
-    int wantedCount = 0;            ///< tracks that are not NotApplicable
-    int doneCount = 0;              ///< ... of which nothing is left to compute: Done + Failed
-    int waitingCount = 0;
-    int runningCount = 0;           ///< 0 or 1 (JobQueue::kMaxRunningJobs)
-    int failedCount = 0;            ///< input-determined + job-level
-    QList<DemandTrack> running, failed;            ///< each in session-model row order
-    /// Each in session-model row order. Plot states only; a column state
-    /// counts its waiting tracks without listing them.
-    QList<DemandTrack> waiting;
-    QString progressLabel;          ///< "<doneCount> of <wantedCount>" while isWorking(); else empty
-    QString toolTip;                ///< buildToolTip(*this); empty when isPlain()
-
-    bool isWorking() const { return waitingCount + runningCount > 0; }
-    /// The warning badge replaces the working indicator: shown only once nothing is working.
-    bool showsWarning() const { return !isWorking() && failedCount > 0; }
-    bool isPlain() const { return !isWorking() && failedCount == 0; }
-
-    bool operator==(const DemandState &other) const
-    {
-        return sourceId == other.sourceId && requested == other.requested
-            && wantedCount == other.wantedCount && doneCount == other.doneCount
-            && waitingCount == other.waitingCount && runningCount == other.runningCount
-            && failedCount == other.failedCount && running == other.running
-            && waiting == other.waiting && failed == other.failed
-            && progressLabel == other.progressLabel && toolTip == other.toolTip;
-    }
-    bool operator!=(const DemandState &other) const { return !(*this == other); }
-};
 
 /// The demand layer: the widget-free component that derives what requested
 /// calculations are wanted from what the user has switched on, keeps the
@@ -155,8 +88,7 @@ struct DemandState {
 ///   Blocked   a blocker is the running job, not asked to stop           Running
 ///   Blocked   otherwise, a blocker has a remembered job failure         Failed (job failure)
 ///   Blocked   otherwise, every blocker is remembered not applicable     NotApplicable
-///   Blocked   otherwise                                                 Waiting (settling inside
-///                                                                       the input-settle wait)
+///   Blocked   otherwise                                                 Waiting
 ///
 /// A Blocked report's notes are ignored: Blocked wins. There is no "stale"
 /// condition - a result invalidated by an input change reports Blocked again.
@@ -213,59 +145,29 @@ struct DemandState {
 /// not a candidate while it is remembered, while it is the running job not
 /// asked to stop, or while its session is settling. A session that is not
 /// loaded is never offered: it enters tier (c) once the fill has loaded it.
-/// The first candidate the executor accepts is its chosen next job (an equal
-/// chosen next job is kept as it is); one it refuses as not applicable
-/// (missing input, nothing to do, unknown calculation) is remembered, a pass
-/// is scheduled (the column cells were classified before the offers), and the
-/// next is tried. With no candidate accepted, the chosen next job this
-/// component offered is withdrawn; one it did not offer is left alone. The
-/// running job is never stopped here: it finishes, and its result is
-/// published and stored.
+/// Each candidate is offered in turn: the first the executor creates is the
+/// chosen next job, and one it answers AlreadyActive for as the chosen next
+/// job is kept as it is; one it refuses as not applicable (missing input,
+/// nothing to do, unknown calculation) is remembered, a pass is scheduled (the
+/// column cells were classified before the offers), and the next is tried.
+/// Blocked is not expected: the candidates list upstream first. With no
+/// candidate accepted, the chosen next job is withdrawn: this component is the
+/// only offerer, so it is always its own. The running job is never stopped
+/// here: it finishes, and its result is published and stored.
 ///
-/// HIDDEN LOADS. The column fill is the idle scheduler's lowest-priority task
-/// (SessionModel::ColumnFillTask, priority 5), registered here. It has work
-/// while some session has a pending column cell, and reports the sessions
-/// that have one of the fill's high-water mark, so the logbook's progress line
-/// shows the fill for its whole duration; the scheduler completes the fill
-/// when it has no pending cell left, reporting its final progress (a fill that
-/// starts while no session had a pending cell starts its own count). Its
-/// steps are loads: it can step
-/// while fewer than kMaxHeldSessions sessions are held and a session that is
-/// not loaded, not visible (a visible stub is the visible loader's) and not
-/// settling waits, taking them in row order; otherwise the scheduler rests
-/// until a pass wakes it. A load is SessionModel::loadPinnedSession(): the
-/// real load (the session-id correction included, so every pair offered
-/// carries the row's corrected id) and a pin, the HOLD, from the load until
-/// the session has no pending cell left (so a chain of requested calculations
-/// keeps it). Sessions that were already loaded are never held; the executor
-/// pins them while their job is chosen or running. A released session stays
-/// in the pool of hidden sessions until ordinary eviction. Not cancellable: a
-/// cancel would be undone at the next tick. Cases:
-///  - a pool capacity (LogbookCacheSize) below the bound: the pool exceeds it
-///    by at most the holds, which the eviction pass after a release evicts;
-///    capacity 0 works;
-///  - a column disabled mid-load: the next pass finds no demand for the held
-///    session and releases it; a chosen next job of it is withdrawn; a running
-///    job finishes and is stored;
-///  - a held session shown: nothing changes for the hold; plot demand may move
-///    it into tier (b); released, the visible row stays loaded;
-///  - the logbook closed or repopulated, or the session removed: a model reset,
-///    then the release;
-///  - not applicable once loaded: settled, released without a job (the column
-///    worker had cached the value as unavailable, and it stays so);
-///  - a load that fails: settled failed, not held, not loaded again this run;
-///  - the executor shut down: no work, nothing more is loaded.
-/// Saves, visible loads, bulk edits and column work have a higher priority,
-/// so a load never reads a file that a bulk edit is about to rewrite.
+/// HIDDEN LOADS. The column fill (demandfill.h) loads sessions that are not
+/// loaded for column demand. The pass gives it the sessions with a pending
+/// cell and the load candidates, which are waiting, hidden, unloaded, not
+/// settling sessions in row order up to DemandFill::kMaxHeldSessions.
 ///
 /// THE INPUT-SETTLE WAIT. A change of a name in the static closure of a checked
 /// requested plot or of a requested column (SessionModel::dependencyChanged),
 /// other than the publication of a job's own result (JobQueue::publishingJob()),
 /// starts or restarts the session's wait of kInputSettleMs. The session's pairs
-/// are Waiting (settling) from the first change and are offered only once the
-/// session's inputs have been still for the whole wait, so a burst of edits
-/// runs one job. Showing, hiding, checking, enabling, applying a profile and
-/// loading start no wait.
+/// are Waiting from the first change and are offered only once the session's
+/// inputs have been still for the whole wait, so a burst of edits runs one
+/// job. Showing, hiding, checking, enabling, applying a profile and loading
+/// start no wait. The clock (demandsettleclock.h) holds the deadlines.
 ///
 /// MEMORY. Per pair, for this run only: a job that ended Failed (the worker
 /// could not start, out of memory; never stored) with its reason, and an offer
@@ -296,14 +198,25 @@ struct DemandState {
 /// columnStateChanged() and statesChanged(). They never run a pass (flush() is
 /// a test seam), never offer, and never write. "Pending" exists only here and
 /// in the view that paints it: never in SessionModel, the cached column values
-/// or the logbook index. A tooltip lists at most kToolTipListLimit tracks per
-/// section, then how many more there are; the state's own lists stay complete.
+/// or the logbook index. The values the views read, the tooltip and its
+/// limit (DemandState::kToolTipListLimit tracks per section, then how many more
+/// there are; the state's own lists stay complete) are in demandstate.h.
 ///
 /// THE ONLY CALLER. This is the only product caller of JobQueue::offer() and
 /// JobQueue::withdrawChosenNext(). Nothing calls back into it: it observes
 /// PlotModel, SessionModel (its column set, column knowledge and display names
 /// included), the logbook manager's
 /// record changes, the registry and the executor's signals.
+///
+/// PARTS. The presentation values (demandstate.h) are what the views read. The
+/// fill (demandfill.h) holds sessions loaded for column demand and runs the
+/// scheduler task. The settle clock (demandsettleclock.h) answers whether a
+/// session is settling and when the next wait ends. This file is the
+/// reconciler: the walk, the classification, the memory, the choice and the
+/// pass. The walk reads the rows under one guard, asks the clock and reads a
+/// copy of the holds. It calls neither the executor nor the fill, and it never
+/// loads or pins. After it, the pass gives the fill the pending sessions and
+/// the load candidates, offers, and announces.
 ///
 /// LIFETIME. Main thread only. No member may be called from inside a
 /// calculation or an engine callback (they inspect engines and offer to the
@@ -318,13 +231,6 @@ class CalculationDemand : public QObject
     Q_OBJECT
 public:
     static constexpr int kInputSettleMs = 1000;      ///< input-settle wait
-    /// Sessions the demand layer holds loaded for column demand at most:
-    /// the running job's and the chosen next job's (the executor's bound
-    /// plus one; see HIDDEN LOADS).
-    static constexpr int kMaxHeldSessions = JobQueue::kMaxRunningJobs + 1;
-    /// Tracks listed per section of a tooltip at most (running, failed); a
-    /// longer section ends "and N more".
-    static constexpr int kToolTipListLimit = 10;
 
     CalculationDemand(SessionModel *sessionModel, PlotModel *plotModel, JobQueue *executor,
                       QObject *parent = nullptr);
@@ -357,12 +263,6 @@ public:
     QStringList workingPlotIds() const;
     QStringList workingColumnIds() const;
 
-    /// The ready-made tooltip of a state: "Computing: k of n done" with the
-    /// running tracks, then "Could not be computed:" with the failed tracks,
-    /// each omitted when empty; each list stops after kToolTipListLimit tracks
-    /// with "and N more". A pure function of its argument.
-    static QString buildToolTip(const DemandState &state);
-
     /// True when a plot value that was just read as empty is absent only
     /// because a requested calculation has not produced it: it is waiting to be
     /// computed (BlockerReport::State::Blocked; the row shows it working) or
@@ -385,11 +285,11 @@ public:
     int  passCount() const { return m_passCount; }
     /// Affects later input changes only.
     void setInputSettleDelay(int milliseconds);
-    int  inputSettleDelay() const { return m_settleDelayMs; }
+    int  inputSettleDelay() const;
     void endInputSettleWaits();                      ///< every session's wait ends now; schedules a pass
     bool isSettling(const QString &sessionId) const;
     bool hasSettlingSessions() const;
-    QStringList heldSessionIds() const { return m_held; }   ///< sessions pinned by the load step, in load order
+    QStringList heldSessionIds() const;              ///< sessions pinned by the load step, in load order
     bool hasFillWork() const;                        ///< the column fill's hasWork
     bool canLoad() const;                            ///< the column fill can load a session now
     void runLoadStep();                              ///< the load step's step, callable directly
@@ -447,7 +347,7 @@ private:
     struct ColumnWalk {
         QList<Candidate> visibleCandidates;         // tier (c), visible sessions, row order
         QList<Candidate> hiddenCandidates;          // tier (c), hidden loaded sessions, row order
-        QStringList loadCandidates;                 // at most kMaxHeldSessions, row order
+        QStringList loadCandidates;                 // at most DemandFill::kMaxHeldSessions, row order
         QSet<QString> pendingSessions;              // sessions with a pending cell
         QVector<DemandState> states;                // parallel to m_columns (counts and listed tracks)
         QVector<QSet<QString>> pendingCells;        // parallel to m_columns
@@ -467,14 +367,16 @@ private:
     Inspections inspect(const QVector<PlotValue> &plots) const;
     /// Call under a RowStabilityGuard (inspect() holds it).
     BlockerReport inspectUnderGuard(const SessionData &session, const PlotValue &plot) const;
-    DemandTrack classify(const Track &track, const BlockerReport &report,
-                         const JobRecord &running, const JobRecord &chosen) const;
+    /// `running` is the executor's running record (a default record when
+    /// there is none).
+    DemandTrack classify(const Track &track, const BlockerReport &report, const JobRecord &running) const;
     static QString failureReason(const QList<UnproducedNote> &notes);
 
     // Column demand
     /// The one guarded read of the column demand. Writes this component's
-    /// memos and settlements only.
-    ColumnWalk walkColumns(const JobRecord &running, const JobRecord &chosen);
+    /// memos and settlements only. `running` is the executor's running record
+    /// before the offers; `held` is a copy of the fill's holds.
+    ColumnWalk walkColumns(const JobRecord &running, const QSet<QString> &held);
     /// The combined report of each requested column for a loaded session.
     /// Call under a RowStabilityGuard.
     static QVector<BlockerReport> columnReports(const SessionData &session, const QVector<ColumnInfo> &columns);
@@ -487,31 +389,26 @@ private:
     /// The manager's record set of a session, memoized with its reasons.
     const QSet<QString> &recordSet(const QString &sessionId);
     bool eraseSettlements(const QString &sessionId);    // true when one was erased
-    void releaseHolds(const QSet<QString> &pendingSessions);
-    void releaseAllHolds();
-    void registerFillTask();
+    /// The fill's hooks: a load that failed is settled failed for every
+    /// requested column; a load under a corrected id drops what was known
+    /// under the old one.
+    void onFillLoadFailed(const QString &sessionId);
+    void onFillLoaded(const QString &requestedId, const QString &heldId);
 
     // The choice
-    QList<Candidate> plotCandidates(const Inspections &inspections, const QString &focusedId) const;
+    /// `running` is the record the walk used.
+    QList<Candidate> plotCandidates(const Inspections &inspections, const QString &focusedId,
+                                    const JobRecord &running) const;
     void offerChoice(const QList<Candidate> &candidates);
-    void withdrawOwnOffer();
+    void withdrawChoice();
 
     // The pass
     void scheduleUpdate();
     void recompute();
     DemandState buildState(const QString &sourceId, const QList<DemandTrack> &tracks) const;
-    /// Adds one track to a state's counts and lists (waiting tracks listed only when `listWaiting`).
-    static void addTrack(DemandState &state, const DemandTrack &track, bool listWaiting);
-    /// Fills in the progress label and the tooltip of a state whose tracks are all added.
-    static void finishState(DemandState &state);
     void applyStates(const QStringList &order, const QHash<QString, DemandState> &states,
                      const QStringList &columnOrder, const QHash<QString, DemandState> &columnStates,
                      const QHash<QString, QSet<QString>> &pendingCells);
-
-    // The input-settle wait
-    void dropExpiredSettles();
-    void armSettleTimer();
-    void onSettleTimeout();
 
     // Slots
     void onPlotDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles);
@@ -553,18 +450,10 @@ private:
     int m_recordSetLookups = 0;
     QHash<QString, QVector<BlockerReport>> m_columnReports; // memo: loaded sessions, parallel to m_columns
 
-    // The column fill
-    QStringList m_held;                 // sessions this component pinned (loadPinnedSession), in load order
-    QStringList m_loadCandidates;       // sessions the next load may take, in row order
-    int m_fillRemaining = 0;            // sessions with a pending cell
-    int m_fillHighWater = 0;            // the fill's total; 0 between fills
-    bool m_fillTaskRegistered = false;
+    // The parts: the input-settle wait's deadlines and the column fill
+    std::unique_ptr<DemandSettleClock> m_settle;
+    std::unique_ptr<DemandFill> m_fill;
 
-    QHash<QString, QDeadlineTimer> m_settleUntil;           // sessions inside their input-settle wait
-    QTimer m_settleTimer;                                   // single shot, armed for the earliest deadline
-    int m_settleDelayMs = kInputSettleMs;
-
-    JobId m_offeredJob = 0;         // the last offer the executor accepted from this component
     bool m_reconciling = false;     // inside a pass: the executor's signals only schedule
 
     int m_registryObserver = -1;

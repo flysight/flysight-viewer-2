@@ -627,7 +627,7 @@ void LogbookIndicatorsTest::headerToolTipFollowsDemandState()
     const int g = section("G_OUT");
     DemandState state = col("G_OUT");
     QCOMPARE(header()->toolTipForSection(g), state.toolTip);
-    QCOMPARE(state.toolTip, CalculationDemand::buildToolTip(state));
+    QCOMPARE(state.toolTip, DemandState::buildToolTip(state));
     QVERIFY(state.toolTip.startsWith(QStringLiteral("Computing: 0 of 3 done")));
     QVERIFY(state.toolTip.contains(QStringLiteral("  Jump 1 - Gated: step 1")));
 

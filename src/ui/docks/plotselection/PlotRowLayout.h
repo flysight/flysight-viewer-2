@@ -17,7 +17,7 @@
 //
 // This file decides geometry only. WHAT is shown - the working indicator and
 // its progress label, or the warning badge and its count - is decided by
-// DemandState (calculationdemand.h), and painted by PlotRowDelegate. The
+// DemandState (demandstate.h), and painted by PlotRowDelegate. The
 // delegate never shows the warning group and the indicator together (the
 // badge replaces the indicator once the work is done), but this function lays
 // out both.

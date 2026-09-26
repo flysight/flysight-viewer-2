@@ -267,9 +267,13 @@ expect_none("exporter and merge read stored state only"
 # structure that replaced them in place.
 # =============================================================================
 
+# The demand layer's files: the component (the reconciler) and its parts.
+set(DEMAND_LAYER "src/calculationdemand.*" "src/demandstate.*" "src/demandfill.*" "src/demandsettleclock.*")
+set(DEMAND_FILES "(calculationdemand|demandstate|demandfill|demandsettleclock)")
+
 # The logic of background work: the executor, its model, the demand layer, and
 # the fusion library.
-set(FUSION_CORE "src/jobqueue.*" "src/jobmodel.*" "src/calculationdemand.*" src/fusion)
+set(FUSION_CORE "src/jobqueue.*" "src/jobmodel.*" ${DEMAND_LAYER} src/fusion)
 
 # ─────────────────────────────── branch-mechanisms (acceptance 120)
 # The branch ran the fit inside a getter, behind an application-modal progress
@@ -346,13 +350,13 @@ expect_none("public and registration files are GTSAM-free" "#include <(gtsam|Eig
   src/fusion/fusion.h src/fusion/fusionregistration.h src/fusion/fusionregistration.cpp)
 # Allow: only the registration adapter may see the engine and the session keys.
 expect_none("the kernel is pure"
-  "#include [<\"](sessiondata|sessionmodel|engine/|jobqueue|calculationdemand|preferences/|QApplication|QWidget|QtWidgets|QtGui)"
+  "#include [<\"](sessiondata|sessionmodel|engine/|jobqueue|${DEMAND_FILES}|preferences/|QApplication|QWidget|QtWidgets|QtGui)"
   src/fusion ":!src/fusion/fusionregistration.cpp" ":!src/fusion/fusionregistration.h")
 expect_none("the kernel does not log" "qWarning|qInfo|qDebug|qCritical" src/fusion)
 # flysight_core never references the fusion library; the application calls its
 # one entry point next to the built-in registration.
 expect_none("nobody but the application references the fusion library" "fusion/|Fusion::"
-  src/calculations src/engine "src/sessionmodel.*" "src/jobqueue.*" "src/jobmodel.*" "src/calculationdemand.*")
+  src/calculations src/engine "src/sessionmodel.*" "src/jobqueue.*" "src/jobmodel.*" ${DEMAND_LAYER})
 # Narrow and case-sensitive on purpose: the GTSAM_..._BOOST_... option and
 # macro names and the "Boost::" test of the Boost-free guard in
 # cmake/SolverDependencies.cmake must not match.
@@ -399,8 +403,9 @@ expect_only("no reader requests" "[.>]request\\(" "^src/engine/" src)
 # a job (JobQueue::cancel() is kept for a later jobs view).
 # Allow: none expected. The count changes only when a second legitimate caller
 # of JobQueue::offer() appears, which is itself a design change
-# (calculationdemand.h: "the only caller"). A comment that quotes these calls
-# names them without the member-access prefix.
+# (calculationdemand.h: "the only caller"). The choice stays in the reconciler,
+# not the fill or the settle clock. A comment that quotes these calls names
+# them without the member-access prefix.
 expect_none("no synchronous explicit request in product code"
   "[Ee]ngine(\\(\\))? *(\\.|->) *request\\(" src ":!src/engine")
 expect_count("one call of offer( in product code: the demand layer" "[.>]offer\\(" 1 src)
@@ -426,7 +431,7 @@ expect_only("one authority: explicit-backed" "EvaluationPolicy::Explicit"
 audit_group(widget-free-core)
 expect_none("the logic components see no widget"
   "QtWidgets|#include <Q(Widget|TreeView|AbstractItemView|StyledItemDelegate|Application|ToolTip|Style[A-Za-z]*|HeaderView)>"
-  "src/jobqueue.*" "src/jobmodel.*" "src/calculationdemand.*" "src/plotmodel.*"
+  "src/jobqueue.*" "src/jobmodel.*" ${DEMAND_LAYER} "src/plotmodel.*"
   src/ui/docks/plotselection/PlotRowLayout.h "src/ui/docks/DemandIndicator.*")
 
 # =============================================================================
@@ -698,11 +703,11 @@ audit_group(demand)
 # regex; nothing below the demand layer (the executor, the session model, the
 # scheduler, the logbook) ever is. Elsewhere a comment says "the demand layer".
 expect_only("only the application and its views know the demand layer" "CalculationDemand"
-  "^src/calculationdemand\\.(cpp|h)$|^src/mainwindow\\.(cpp|h)$|^src/ui/docks/AppContext\\.h$|^src/ui/docks/plotselection/(PlotRowDelegate\\.(cpp|h)|PlotSelectionDockFeature\\.cpp)$|^src/ui/docks/logbook/(LogbookView|LogbookHeaderView|LogbookCellDelegate)\\.(cpp|h)$|^src/ui/docks/logbook/LogbookDockFeature\\.cpp$|^src/ui/docks/plot/PlotWidget\\.cpp$"
+  "^src/${DEMAND_FILES}\\.(cpp|h)$|^src/mainwindow\\.(cpp|h)$|^src/ui/docks/AppContext\\.h$|^src/ui/docks/plotselection/(PlotRowDelegate\\.(cpp|h)|PlotSelectionDockFeature\\.cpp)$|^src/ui/docks/logbook/(LogbookView|LogbookHeaderView|LogbookCellDelegate)\\.(cpp|h)$|^src/ui/docks/logbook/LogbookDockFeature\\.cpp$|^src/ui/docks/plot/PlotWidget\\.cpp$"
   src)
 # Allow: none expected. The layers below the demand layer, the shared glyphs
 # and the row layout never include it (so they can use none of its types).
-expect_none("nothing below the demand layer includes it" "#include [\"<](\\.\\./)*calculationdemand\\.h"
+expect_none("nothing below the demand layer includes it" "#include [\"<](\\.\\./)*${DEMAND_FILES}\\.h"
   "src/jobqueue.*" "src/jobmodel.*" "src/sessionmodel.*" "src/idlescheduler.*" "src/logbookmanager.*"
   "src/logbookcolumn.*" "src/plotmodel.*" "src/profilestatebridge.*" "src/calculationresultstore.*"
   src/engine "src/ui/docks/DemandIndicator.*" src/ui/docks/plotselection/PlotRowLayout.h)
@@ -723,7 +728,7 @@ expect_none("the demand views handle no event of their own"
 # delegate paints it; the model, its cached values and index.json never see it.
 # Allow: none expected.
 expect_only("pending is the view's presentation of demand" "isCellPending|showsPending|pendingText\\(|pendingToolTip\\("
-  "^src/calculationdemand\\.(cpp|h)$|^src/ui/docks/logbook/LogbookCellDelegate\\.(cpp|h)$" src)
+  "^src/${DEMAND_FILES}\\.(cpp|h)$|^src/ui/docks/logbook/LogbookCellDelegate\\.(cpp|h)$" src)
 # Allow: none expected. The model knows pinned ids only; the logbook, the
 # column store, the plot model and the scheduler know nothing about jobs.
 # Comments say "the executor".
@@ -738,23 +743,37 @@ expect_none("the idle scheduler learns nothing about jobs or demand" "[Dd]emand|
 # line labels it, and the session model never registers or runs it.
 # Allow: none expected.
 expect_only("the load step is the demand layer's scheduler task" "ColumnFillTask"
-  "^src/calculationdemand\\.(cpp|h)$|^src/sessionmodel\\.h$|^src/ui/docks/logbook/LogbookView\\.cpp$" src)
+  "^src/(calculationdemand|demandfill)\\.(cpp|h)$|^src/sessionmodel\\.h$|^src/ui/docks/logbook/LogbookView\\.cpp$" src)
 # Hidden loads for column demand go through the one entry that loads without
 # showing and pins under the corrected id. Allow: none expected.
 expect_only("hidden loads go through loadPinnedSession" "loadPinnedSession\\("
-  "^src/calculationdemand\\.(cpp|h)$|^src/sessionmodel\\.(cpp|h)$" src)
+  "^src/(calculationdemand|demandfill)\\.(cpp|h)$|^src/sessionmodel\\.(cpp|h)$" src)
 # The demand layer reads record names only; loading, restoring and reading
 # records belong to the session model and the result store. Allow: reword a
 # comment that names one of these calls ("loaded the way showing it would").
 expect_none("the demand layer never loads a session or reads a record itself"
   "sessionRef\\(|loadSession\\(|readCalculationRecord|calculationRecordIds\\(|restoreSession\\(|restoreStoredResults\\("
-  "src/calculationdemand.*")
+  ${DEMAND_LAYER})
+# The walk and the pass never load or pin: the fill does, and only it.
+# Allow: none expected.
+expect_only("the demand layer loads and pins through its fill only"
+  "[.>](loadPinnedSession|pinSession|unpinSession)\\(" "^src/demandfill\\.cpp$" ${DEMAND_LAYER})
+# The fill and the settle clock never call the executor (the fill learns of
+# a shutdown through its owner's hook). Allow: none expected.
+expect_none("the fill and the settle clock never call the executor"
+  "[.>](offer|withdrawChosenNext|runningJob|chosenNextJob|publishingJob|isShutDown|isIdle|job)\\("
+  "src/demandfill.*" "src/demandsettleclock.*")
+# They expose nothing of the walk: session ids in, session ids and times out.
+# Allow: none expected.
+expect_none("the fill and the settle clock know nothing of the walk"
+  "BlockerReport|blockers\\(|DemandTrack|DemandState|DemandCondition|RowStabilityGuard|Settlement"
+  "src/demandfill.*" "src/demandsettleclock.*")
 # One bound of simultaneous jobs, and the load bound follows it: the running
 # job's session and the chosen next job's (docs/CALCULATIONS.md 16.8).
 # Allow: change the number only together with the executor's run slots.
 expect_count("one bound of simultaneous jobs" "kMaxRunningJobs *=[^=]" 1 src)
 expect_count("the load bound follows the executor's bound"
-  "kMaxHeldSessions *= *JobQueue::kMaxRunningJobs *\\+ *1" 1 src/calculationdemand.h)
+  "kMaxHeldSessions *= *JobQueue::kMaxRunningJobs *\\+ *1" 1 src/demandfill.h)
 # Allow: none expected. The worker runs below normal priority
 # (docs/CALCULATIONS.md 15.5).
 expect_count("the worker runs below normal priority" "start\\(QThread::LowPriority\\)" 1 src/jobqueue.cpp)

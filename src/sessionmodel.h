@@ -199,7 +199,7 @@ public:
         BulkEditTask   = 2, // priority 3
         ColumnTask     = 3, // priority 4
         ColumnFillTask = 4  // priority 5 (lowest): registered by the demand layer
-                            // (calculationdemand.h), not by the model - the column
+                            // (demandfill.h), not by the model - the column
                             // fill, whose steps are hidden loads
     };
 

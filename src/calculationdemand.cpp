@@ -1,14 +1,14 @@
 #include "calculationdemand.h"
 
 #include <algorithm>
-#include <limits>
-#include <tuple>
 
 #include <QDebug>
 #include <QScopedValueRollback>
 
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
+#include "demandfill.h"
+#include "demandsettleclock.h"
 #include "jobqueue.h"
 #include "logbookmanager.h"
 #include "plotmodel.h"
@@ -66,12 +66,19 @@ CalculationDemand::CalculationDemand(SessionModel *sessionModel, PlotModel *plot
     , m_plotModel(plotModel)
     , m_queue(executor)
 {
+    // The parts first: the slots below and the pass use them. Their callbacks
+    // capture this component (see the destructor).
+    m_settle = std::make_unique<DemandSettleClock>(kInputSettleMs, [this] { scheduleUpdate(); });
+    m_fill = std::make_unique<DemandFill>(m_sessionModel.data(), DemandFill::Hooks{
+        /*enabled*/        [this] { return !isInert() && !m_queue->isShutDown(); },
+        /*runPendingPass*/ [this] { if (hasPendingUpdate()) recompute(); },
+        /*runPass*/        [this] { recompute(); },
+        /*loadFailed*/     [this](const QString &id) { onFillLoadFailed(id); },
+        /*loaded*/         [this](const QString &id, const QString &held) { onFillLoaded(id, held); }});
+
     m_updateTimer.setSingleShot(true);
     m_updateTimer.setInterval(0);
     connect(&m_updateTimer, &QTimer::timeout, this, &CalculationDemand::recompute);
-
-    m_settleTimer.setSingleShot(true);
-    connect(&m_settleTimer, &QTimer::timeout, this, &CalculationDemand::onSettleTimeout);
 
     if (m_queue) {
         // After a start the chosen next slot is empty, and after a cancel
@@ -120,7 +127,7 @@ CalculationDemand::CalculationDemand(SessionModel *sessionModel, PlotModel *plot
     // The column fill: the lowest-priority task of the session model's
     // scheduler, whose steps are hidden loads
     if (!isInert())
-        registerFillTask();
+        m_fill->registerTask();
 
     // Plots restored as checked and columns enabled create demand without any
     // event (at start-up no session is visible yet, so plots offer nothing;
@@ -132,10 +139,9 @@ CalculationDemand::CalculationDemand(SessionModel *sessionModel, PlotModel *plot
 CalculationDemand::~CalculationDemand()
 {
     CalculationRegistry::instance().removeObserver(m_registryObserver);
-    // The task's functions capture this component
-    if (m_sessionModel && m_fillTaskRegistered)
-        m_sessionModel->scheduler().unregisterTask(SessionModel::ColumnFillTask);
-    releaseAllHolds();
+    // The fill's task and hooks capture this component: the task goes, then
+    // the holds, before any member does
+    m_fill->detach();
 }
 
 QString CalculationDemand::plotId(const QString &sensorId, const QString &measurementId)
@@ -427,10 +433,10 @@ QString CalculationDemand::failureReason(const QList<UnproducedNote> &notes)
     return parts.join(QStringLiteral("; "));
 }
 
-// `running` and `chosen` are the executor's running and chosen next records
-// (default records when there are none).
+// `running` is the executor's running record (a default record when there is
+// none).
 DemandTrack CalculationDemand::classify(const Track &track, const BlockerReport &report,
-                                        const JobRecord &running, const JobRecord &chosen) const
+                                        const JobRecord &running) const
 {
     DemandTrack state;
     state.sessionId = track.sessionId;
@@ -456,7 +462,6 @@ DemandTrack CalculationDemand::classify(const Track &track, const BlockerReport 
     const bool runningIsLive = running.id != 0 && !running.cancelRequested
         && running.sessionId == track.sessionId;
     bool isRunning = false;
-    bool isChosen = false;
     bool allNotApplicable = true;
     QStringList titles;             // the blockers not remembered as not applicable
     QStringList failedTitles;
@@ -465,8 +470,6 @@ DemandTrack CalculationDemand::classify(const Track &track, const BlockerReport 
         const PairKey key(track.sessionId, blocker.instanceId);
         if (runningIsLive && running.instanceId == blocker.instanceId)
             isRunning = true;
-        if (chosen.id != 0 && chosen.sessionId == track.sessionId && chosen.instanceId == blocker.instanceId)
-            isChosen = true;
 
         const auto memory = m_memory.constFind(key);
         if (memory != m_memory.constEnd() && memory->kind == Memory::Kind::JobFailed) {
@@ -482,7 +485,6 @@ DemandTrack CalculationDemand::classify(const Track &track, const BlockerReport 
     if (isRunning) {
         state.condition = DemandCondition::Running;
         state.calculationTitles = titles;
-        state.job = running.id;
         state.progressText = running.progressText;
     } else if (!failedReasons.isEmpty()) {
         // Not offered again in this run: the badge says why
@@ -496,8 +498,6 @@ DemandTrack CalculationDemand::classify(const Track &track, const BlockerReport 
     } else {
         state.condition = DemandCondition::Waiting;
         state.calculationTitles = titles;
-        state.settling = isSettling(track.sessionId);
-        state.job = isChosen ? chosen.id : 0;
     }
     return state;
 }
@@ -571,8 +571,9 @@ QVector<BlockerReport> CalculationDemand::columnReports(const SessionData &sessi
 
 // The one guarded read of column demand. It reads only: it writes this
 // component's memos and settlements, and emits, offers, pins and loads nothing.
-// `running` and `chosen` are the executor's records before the offers.
-CalculationDemand::ColumnWalk CalculationDemand::walkColumns(const JobRecord &running, const JobRecord &chosen)
+// `running` is the executor's running record before the offers; `held` is a
+// copy of the fill's holds.
+CalculationDemand::ColumnWalk CalculationDemand::walkColumns(const JobRecord &running, const QSet<QString> &held)
 {
     ColumnWalk walk;
     const int columns = int(m_columns.size());
@@ -585,7 +586,7 @@ CalculationDemand::ColumnWalk CalculationDemand::walkColumns(const JobRecord &ru
 
     // Adds one cell to the column's tallies
     const auto tally = [&walk](int column, const QString &sessionId, const DemandTrack &track) {
-        addTrack(walk.states[column], track, false);
+        walk.states[column].addTrack(track);
         if (isPending(track.condition)) {
             walk.pendingCells[column].insert(sessionId);
             walk.pendingSessions.insert(sessionId);
@@ -611,7 +612,7 @@ CalculationDemand::ColumnWalk CalculationDemand::walkColumns(const JobRecord &ru
             QString name;
             for (int c = 0; c < columns; ++c) {
                 const ColumnInfo &column = m_columns.at(c);
-                DemandTrack track = classify(Track{sessionId, QString()}, reports.at(c), running, chosen);
+                DemandTrack track = classify(Track{sessionId, QString()}, reports.at(c), running);
                 if (isListed(track.condition)) {
                     if (name.isEmpty())
                         name = model.sessionDisplayName(row);
@@ -627,7 +628,7 @@ CalculationDemand::ColumnWalk CalculationDemand::walkColumns(const JobRecord &ru
                     m_settled.remove(cell);
                 }
 
-                if (track.condition == DemandCondition::Waiting && !track.settling) {
+                if (track.condition == DemandCondition::Waiting && !m_settle->isSettling(sessionId)) {
                     for (const CalculationBlocker &blocker : reports.at(c).blockers) {
                         const PairKey key(sessionId, blocker.instanceId);
                         if (key == runningKey || m_memory.contains(key))
@@ -648,8 +649,8 @@ CalculationDemand::ColumnWalk CalculationDemand::walkColumns(const JobRecord &ru
                 tally(c, sessionId, track);
             }
             // A visible stub is the visible loader's
-            if (waiting && !sr.visible && !isSettling(sessionId) && !m_held.contains(sessionId)
-                && walk.loadCandidates.size() < kMaxHeldSessions)
+            if (waiting && !sr.visible && !m_settle->isSettling(sessionId) && !held.contains(sessionId)
+                && walk.loadCandidates.size() < DemandFill::kMaxHeldSessions)
                 walk.loadCandidates.append(sessionId);
         }
     }
@@ -747,7 +748,6 @@ DemandTrack CalculationDemand::classifyUnloaded(int row, const SessionRow &sr, c
 
     // 7. In demand: the column fill loads it
     track.condition = DemandCondition::Waiting;
-    track.settling = isSettling(sessionId);
     return track;
 }
 
@@ -791,114 +791,47 @@ bool CalculationDemand::eraseSettlements(const QString &sessionId)
     return erased;
 }
 
-// A hold ends when its row is gone or not loaded any more, or when the
-// session has no pending cell left. Outside any guard: unpinSession() only
-// queues an eviction pass.
-void CalculationDemand::releaseHolds(const QSet<QString> &pendingSessions)
+// A load that failed: not held, and not loaded again in this run; the
+// placeholder stays in the pool and is evicted as usual
+void CalculationDemand::onFillLoadFailed(const QString &sessionId)
 {
-    if (m_held.isEmpty() || !m_sessionModel)
-        return;
-    QStringList kept;
-    for (const QString &held : std::as_const(m_held)) {
-        const int row = m_sessionModel->getSessionRow(held);
-        const bool release = row < 0 || !std::as_const(*m_sessionModel).rowAt(row).isLoaded()
-            || !pendingSessions.contains(held);
-        if (release)
-            m_sessionModel->unpinSession(held);
-        else
-            kept.append(held);
+    const Settlement failed = loadFailedSettlement();
+    for (const ColumnInfo &column : std::as_const(m_columns))
+        m_settled.insert(CellKey(sessionId, column.id), failed);
+    scheduleUpdate();
+}
+
+void CalculationDemand::onFillLoaded(const QString &requestedId, const QString &heldId)
+{
+    if (heldId != requestedId) {
+        // Corrected: the row is known by `heldId` from now on, and the manager
+        // moved its records there
+        m_recordSets.remove(requestedId);
+        m_recordReasons.remove(requestedId);
+        m_columnReports.remove(requestedId);
+        eraseSettlements(requestedId);
     }
-    m_held = kept;
+    scheduleUpdate();       // sessionLoaded scheduled a pass already
 }
 
-void CalculationDemand::releaseAllHolds()
+QStringList CalculationDemand::heldSessionIds() const
 {
-    if (m_sessionModel) {
-        for (const QString &held : std::as_const(m_held))
-            m_sessionModel->unpinSession(held);
-    }
-    m_held.clear();
+    return m_fill->heldSessionIds();
 }
 
-void CalculationDemand::registerFillTask()
-{
-    m_sessionModel->scheduler().registerTask(SessionModel::ColumnFillTask, TaskDef{
-        /*priority*/    5,          // below save (1), load (2), bulk edit (3), column work (4)
-        /*step*/        [this] { runLoadStep(); },
-        /*hasWork*/     [this] { return hasFillWork(); },
-        /*progress*/    [this] { return Progress{m_fillRemaining, m_fillHighWater}; },
-        /*onComplete*/  [this](bool) {
-                            // The next fill starts its own count. A cancel()
-                            // changes nothing while sessions remain.
-                            if (m_fillRemaining == 0)
-                                m_fillHighWater = 0;
-                        },
-        /*cancellable*/ false,      // what is wanted changes only by disabling the column
-        /*canStep*/     [this] { return canLoad(); }});
-    m_fillTaskRegistered = true;
-}
-
-// O(1): the scheduler asks on every tick. The fill has work while a session
-// has a pending cell. A fill ends with a job, not with a step: the pass that
-// finds the last pending cell resolved wakes the scheduler, which reports the
-// fill's final progress and completes it.
 bool CalculationDemand::hasFillWork() const
 {
-    return !isInert() && !m_queue->isShutDown() && m_fillRemaining > 0;
+    return m_fill->hasWork();
 }
 
 bool CalculationDemand::canLoad() const
 {
-    return hasFillWork() && m_held.size() < kMaxHeldSessions && !m_loadCandidates.isEmpty();
+    return m_fill->canLoad();
 }
 
-// One hidden load: the session-id correction happens here, before any pair of
-// the session is offered.
 void CalculationDemand::runLoadStep()
 {
-    if (hasPendingUpdate())
-        recompute();        // the candidates as demand is now
-    if (!canLoad())
-        return;
-
-    const QString id = m_loadCandidates.takeFirst();
-    // The column worker or resolveIdentityStubs() may have remapped the id
-    // silently, or a slot may have loaded or shown the row: the pass knows
-    // what to do now
-    const int row = m_sessionModel->getSessionRow(id);
-    if (row < 0) {
-        recompute();
-        return;
-    }
-    {
-        const SessionRow &sr = std::as_const(*m_sessionModel).rowAt(row);
-        if ((sr.isLoaded() && !sr.loadFailed) || sr.visible) {
-            recompute();
-            return;
-        }
-    }
-
-    const QString held = m_sessionModel->loadPinnedSession(id);
-    if (held.isEmpty()) {
-        // Not held, and not loaded again in this run: the placeholder stays in
-        // the pool and is evicted as usual
-        const Settlement failed = loadFailedSettlement();
-        for (const ColumnInfo &column : std::as_const(m_columns))
-            m_settled.insert(CellKey(id, column.id), failed);
-        scheduleUpdate();
-        return;
-    }
-
-    m_held.append(held);
-    if (held != id) {
-        // Corrected: the row is known by `held` from now on, and the manager
-        // moved its records there
-        m_recordSets.remove(id);
-        m_recordReasons.remove(id);
-        m_columnReports.remove(id);
-        eraseSettlements(id);
-    }
-    scheduleUpdate();       // sessionLoaded scheduled a pass already
+    m_fill->step();
 }
 
 // ---- The choice -------------------------------------------------------------------------
@@ -906,8 +839,10 @@ void CalculationDemand::runLoadStep()
 // Tier (a), the focused track's pairs, then tier (b), the other tracks' pairs in
 // row order. Within a session: plot-model order, then the report's blocker
 // order (upstream first), each pair once.
+// `running` is the executor's running record the walk used.
 QList<CalculationDemand::Candidate> CalculationDemand::plotCandidates(const Inspections &inspections,
-                                                                      const QString &focusedId) const
+                                                                      const QString &focusedId,
+                                                                      const JobRecord &running) const
 {
     QList<Candidate> candidates;
     if (!m_queue)
@@ -931,15 +866,12 @@ QList<CalculationDemand::Candidate> CalculationDemand::plotCandidates(const Insp
     }
 
     PairKey runningKey;
-    if (const JobId runningId = m_queue->runningJob()) {
-        const JobRecord running = m_queue->job(runningId);
-        if (running.id != 0 && !running.cancelRequested)
-            runningKey = PairKey(running.sessionId, running.instanceId);
-    }
+    if (running.id != 0 && !running.cancelRequested)
+        runningKey = PairKey(running.sessionId, running.instanceId);
 
     QSet<PairKey> seen;
     for (const QString &sessionId : std::as_const(sessions)) {
-        if (isSettling(sessionId))
+        if (m_settle->isSettling(sessionId))
             continue;       // offered once its inputs have been still for the whole wait
         for (const QString &plot : std::as_const(plots)) {
             for (const Inspection &inspection : inspections.value(plot)) {
@@ -964,7 +896,8 @@ QList<CalculationDemand::Candidate> CalculationDemand::plotCandidates(const Insp
 }
 
 // Keeps the executor's chosen next job equal to the first candidate it
-// accepts. The only place that offers.
+// creates or answers AlreadyActive for as the chosen next job. The only place
+// that offers.
 void CalculationDemand::offerChoice(const QList<Candidate> &candidates)
 {
     using Kind = JobQueue::OfferResult::Kind;
@@ -973,19 +906,16 @@ void CalculationDemand::offerChoice(const QList<Candidate> &candidates)
 
     for (const Candidate &candidate : candidates) {
         const PairKey key(candidate.sessionId, candidate.calculation.instanceId);
-        if (const JobId chosen = m_queue->chosenNextJob()) {
-            const JobRecord record = m_queue->job(chosen);
-            if (PairKey(record.sessionId, record.instanceId) == key) {
-                m_offeredJob = chosen;      // already the choice: nothing changes
-                return;
-            }
-        }
-
         const JobQueue::OfferResult result = m_queue->offer(candidate.sessionId, candidate.calculation);
         switch (result.kind) {
         case Kind::Created:
-            m_offeredJob = result.job;
             return;
+        case Kind::AlreadyActive:
+            if (result.job == m_queue->chosenNextJob())
+                return;     // already the choice: nothing changes
+            // The running job not asked to stop: not a choice. The candidates
+            // exclude its pair, so this is not expected.
+            continue;
         case Kind::MissingInput:
         case Kind::NothingToDo:
         case Kind::UnknownCalculation:
@@ -998,24 +928,23 @@ void CalculationDemand::offerChoice(const QList<Candidate> &candidates)
             continue;
         case Kind::Blocked:
         case Kind::SessionNotLoaded:
-        case Kind::AlreadyActive:
+            // Blocked is not expected: the candidates list upstream first (the
+            // documentation says so); nothing is remembered
             continue;
         case Kind::ShuttingDown:
             return;
         }
     }
 
-    // Nothing to choose: demand no longer wants what this component offered
-    withdrawOwnOffer();
+    // Nothing to choose: demand no longer wants the chosen next job
+    withdrawChoice();
 }
 
-// A chosen next job this component did not offer is left alone.
-void CalculationDemand::withdrawOwnOffer()
+// This component is the only offerer (audit), so the chosen next job is always
+// its own: nothing to choose withdraws it.
+void CalculationDemand::withdrawChoice()
 {
-    if (!m_queue)
-        return;
-    const JobId chosen = m_queue->chosenNextJob();
-    if (chosen != 0 && chosen == m_offeredJob)
+    if (m_queue)
         m_queue->withdrawChosenNext();
 }
 
@@ -1039,39 +968,6 @@ bool CalculationDemand::hasPendingUpdate() const
     return m_updateTimer.isActive();
 }
 
-QString CalculationDemand::buildToolTip(const DemandState &state)
-{
-    const QString indent = QStringLiteral("  ");
-    QStringList lines;
-
-    // A column over thousands of sessions must not make a tooltip taller than
-    // the screen: each list stops at the limit and says how many it left out
-    const auto moreLine = [&indent](qsizetype listed) {
-        const int remaining = int(listed) - kToolTipListLimit;
-        return indent + tr("and %n more", nullptr, remaining);
-    };
-
-    if (state.isWorking()) {
-        lines.append(tr("Computing: %1 of %2 done").arg(state.doneCount).arg(state.wantedCount));
-        for (const DemandTrack &track : state.running.mid(0, kToolTipListLimit)) {
-            const QString progress = track.progressText.isEmpty() ? tr("running") : track.progressText;
-            lines.append(indent + tr("%1 - %2: %3").arg(track.sessionName,
-                                                         track.calculationTitles.join(QStringLiteral(", ")),
-                                                         progress));
-        }
-        if (state.running.size() > kToolTipListLimit)
-            lines.append(moreLine(state.running.size()));
-    }
-    if (state.failedCount > 0) {
-        lines.append(tr("Could not be computed:"));
-        for (const DemandTrack &track : state.failed.mid(0, kToolTipListLimit))
-            lines.append(indent + tr("%1 - %2").arg(track.sessionName, track.reason));
-        if (state.failed.size() > kToolTipListLimit)
-            lines.append(moreLine(state.failed.size()));
-    }
-    return lines.join(QLatin1Char('\n'));
-}
-
 // Aggregates one inspected source. `tracks` are in row order.
 DemandState CalculationDemand::buildState(const QString &sourceId, const QList<DemandTrack> &tracks) const
 {
@@ -1079,45 +975,9 @@ DemandState CalculationDemand::buildState(const QString &sourceId, const QList<D
     state.sourceId = sourceId;
     state.requested = true;
     for (const DemandTrack &track : tracks)
-        addTrack(state, track, true);
-    finishState(state);
+        state.addTrack(track);
+    state.finish();
     return state;
-}
-
-void CalculationDemand::addTrack(DemandState &state, const DemandTrack &track, bool listWaiting)
-{
-    switch (track.condition) {
-    case DemandCondition::Done:
-        ++state.wantedCount;
-        ++state.doneCount;
-        break;
-    case DemandCondition::Waiting:
-        ++state.wantedCount;
-        ++state.waitingCount;
-        if (listWaiting)
-            state.waiting.append(track);
-        break;
-    case DemandCondition::Running:
-        ++state.wantedCount;
-        ++state.runningCount;
-        state.running.append(track);
-        break;
-    case DemandCondition::Failed:
-        ++state.wantedCount;
-        ++state.doneCount;
-        ++state.failedCount;
-        state.failed.append(track);
-        break;
-    case DemandCondition::NotApplicable:
-        break;      // silently absent
-    }
-}
-
-void CalculationDemand::finishState(DemandState &state)
-{
-    state.progressLabel = state.isWorking()
-        ? tr("%1 of %2").arg(state.doneCount).arg(state.wantedCount) : QString();
-    state.toolTip = buildToolTip(state);
 }
 
 // Stores the new states and announces the differences. `order` lists the
@@ -1181,29 +1041,21 @@ void CalculationDemand::recompute()
     m_updateTimer.stop();
     ++m_passCount;
 
-    const auto fillSnapshot = [this] {
-        return std::make_tuple(hasFillWork(), m_fillRemaining, m_fillHighWater, m_loadCandidates,
-                               m_held.size());
-    };
-    const auto fillBefore = fillSnapshot();
-
     QStringList order;
     QHash<QString, DemandState> states;
     QStringList columnOrder;
     QHash<QString, DemandState> columnStates;
     QHash<QString, QSet<QString>> pendingCells;
-    QStringList loadCandidates;
-    int fillRemaining = 0;
     {
         // The executor's signals caused by this pass's own offer or withdrawal
         // only schedule another pass
         const QScopedValueRollback<bool> reconciling(m_reconciling, true);
-        dropExpiredSettles();
+        m_settle->dropExpired();
 
         if (isInert()) {
             // Nothing is wanted: every state is the default, and nothing is held
-            releaseAllHolds();
-            withdrawOwnOffer();
+            m_fill->update({}, {});
+            withdrawChoice();
         } else {
             syncCheckedSet();
             syncColumns();
@@ -1216,19 +1068,23 @@ void CalculationDemand::recompute()
             // Cells are classified before the offers: an offer never starts a
             // job synchronously, so Running cannot change in between, and a
             // refused offer schedules the pass that classifies with it
+            const JobRecord running = m_queue->job(m_queue->runningJob());
             ColumnWalk walk;
             if (!m_columns.isEmpty()) {
-                walk = walkColumns(m_queue->job(m_queue->runningJob()),
-                                   m_queue->job(m_queue->chosenNextJob()));
+                const QStringList held = m_fill->heldSessionIds();
+                walk = walkColumns(running, QSet<QString>(held.cbegin(), held.cend()));
             }
             // The guards are gone: from here on the session model and the
-            // executor may be called
-            releaseHolds(walk.pendingSessions);
+            // executor may be called. The fill releases its holds, takes the
+            // load candidates and wakes the scheduler when its work changed.
+            const bool shutDown = m_queue->isShutDown();
+            m_fill->update(walk.pendingSessions, shutDown ? QStringList() : walk.loadCandidates);
 
-            if (!m_queue->isShutDown()) {
+            if (!shutDown) {
                 // Tiers (a) and (b), then (c): visible sessions, then hidden
                 // loaded ones. A pair is listed in its first tier only.
-                QList<Candidate> candidates = plotCandidates(inspections, m_sessionModel->focusedSessionId());
+                QList<Candidate> candidates = plotCandidates(inspections, m_sessionModel->focusedSessionId(),
+                                                             running);
                 QSet<PairKey> listed;
                 for (const Candidate &candidate : std::as_const(candidates))
                     listed.insert(PairKey(candidate.sessionId, candidate.calculation.instanceId));
@@ -1242,19 +1098,17 @@ void CalculationDemand::recompute()
                     }
                 }
                 offerChoice(candidates);
-                loadCandidates = walk.loadCandidates;
             }
 
             // After the offers: the executor's jobs as they are now
             if (!plots.isEmpty()) {
-                const JobRecord running = m_queue->job(m_queue->runningJob());
-                const JobRecord chosen = m_queue->job(m_queue->chosenNextJob());
+                const JobRecord runningNow = m_queue->job(m_queue->runningJob());
                 for (const PlotValue &plot : plots) {
                     const QString id = plotId(plot);
                     QList<DemandTrack> tracks;
                     const QList<Inspection> inspected = inspections.value(id);
                     for (const Inspection &inspection : inspected)
-                        tracks.append(classify(inspection.track, inspection.report, running, chosen));
+                        tracks.append(classify(inspection.track, inspection.report, runningNow));
                     order.append(id);
                     states.insert(id, buildState(id, tracks));
                 }
@@ -1265,91 +1119,43 @@ void CalculationDemand::recompute()
                 DemandState state = walk.states.at(c);
                 state.sourceId = id;
                 state.requested = true;
-                finishState(state);
+                state.finish();
                 columnOrder.append(id);
                 columnStates.insert(id, state);
                 pendingCells.insert(id, walk.pendingCells.at(c));
             }
-            fillRemaining = int(walk.pendingSessions.size());
         }
     }
 
-    // The column fill's numbers: remaining = sessions with a pending cell;
-    // the total is the fill's high-water mark, reset when the scheduler
-    // completes the fill (the task's onComplete). The scheduler completes
-    // only the task it last reported active, so a fill that lost its work
-    // behind another task keeps its mark: a fill that starts while no session
-    // had a pending cell starts its own count.
-    m_loadCandidates = loadCandidates;
-    if (m_fillRemaining == 0 && fillRemaining > 0)
-        m_fillHighWater = fillRemaining;
-    else
-        m_fillHighWater = qMax(m_fillHighWater, fillRemaining);
-    m_fillRemaining = fillRemaining;
-
     applyStates(order, states, columnOrder, columnStates, pendingCells);
-
-    // The scheduler reports the active task's progress on its tick even when
-    // nothing can step, and steps the load again when it can
-    if (m_sessionModel && fillSnapshot() != fillBefore)
-        m_sessionModel->scheduler().wake();
 }
 
 // ---- The input-settle wait ------------------------------------------------------------
 
 void CalculationDemand::setInputSettleDelay(int milliseconds)
 {
-    m_settleDelayMs = qMax(0, milliseconds);
+    m_settle->setDelay(milliseconds);
+}
+
+int CalculationDemand::inputSettleDelay() const
+{
+    return m_settle->delay();
 }
 
 void CalculationDemand::endInputSettleWaits()
 {
-    m_settleUntil.clear();
-    m_settleTimer.stop();
+    m_settle->endAll();
     scheduleUpdate();
 }
 
 bool CalculationDemand::isSettling(const QString &sessionId) const
 {
-    const auto it = m_settleUntil.constFind(sessionId);
-    return it != m_settleUntil.constEnd() && !it->hasExpired();
+    return m_settle->isSettling(sessionId);
 }
 
 bool CalculationDemand::hasSettlingSessions() const
 {
-    return std::any_of(m_settleUntil.cbegin(), m_settleUntil.cend(),
-                       [](const QDeadlineTimer &deadline) { return !deadline.hasExpired(); });
-}
-
-void CalculationDemand::dropExpiredSettles()
-{
-    for (auto it = m_settleUntil.begin(); it != m_settleUntil.end();) {
-        if (it->hasExpired())
-            it = m_settleUntil.erase(it);
-        else
-            ++it;
-    }
-}
-
-void CalculationDemand::armSettleTimer()
-{
-    qint64 earliest = -1;
-    for (const QDeadlineTimer &deadline : std::as_const(m_settleUntil)) {
-        const qint64 remaining = qMax<qint64>(0, deadline.remainingTime());
-        if (earliest < 0 || remaining < earliest)
-            earliest = remaining;
-    }
-    if (earliest < 0)
-        m_settleTimer.stop();
-    else
-        m_settleTimer.start(int(qMin<qint64>(earliest, std::numeric_limits<int>::max())));
-}
-
-void CalculationDemand::onSettleTimeout()
-{
-    dropExpiredSettles();
-    armSettleTimer();
-    scheduleUpdate();
+    return m_settle->hasSettling();
 }
 
 // ---- Slots ------------------------------------------------------------------------------------
@@ -1400,8 +1206,7 @@ void CalculationDemand::onDependencyChanged(const QString &sessionId, const Depe
     // possible now, and the session waits until its inputs are still
     m_memory.removeIf([&sessionId](QHash<PairKey, Memory>::iterator it) { return it.key().first == sessionId; });
     eraseSettlements(sessionId);
-    m_settleUntil.insert(sessionId, QDeadlineTimer(m_settleDelayMs));
-    armSettleTimer();
+    m_settle->start(sessionId);
     scheduleUpdate();
 }
 
@@ -1441,10 +1246,8 @@ void CalculationDemand::onSessionModelReset()
             ids.insert(model.rowAt(row).sessionId);
 
         m_memory.removeIf([&ids](QHash<PairKey, Memory>::iterator it) { return !ids.contains(it.key().first); });
-        m_settleUntil.removeIf(
-            [&ids](QHash<QString, QDeadlineTimer>::iterator it) { return !ids.contains(it.key()); });
+        m_settle->keepOnly(ids);
         m_settled.removeIf([&ids](QHash<CellKey, Settlement>::iterator it) { return !ids.contains(it.key().first); });
-        armSettleTimer();
     }
     scheduleUpdate();
 }
@@ -1487,23 +1290,29 @@ void CalculationDemand::onJobFinished(JobId id, JobState state)
 }
 
 // Text only, without inspection: optimizer iterations can arrive many times
-// per second.
+// per second. A Running track exists only for the running job not asked to
+// stop, of which there is one, and the executor reports the progress of its
+// running job only: the running tracks of the job's session are the job's.
 void CalculationDemand::onJobProgress(JobId id, const QString &text)
 {
-    const auto update = [id, &text](QHash<QString, DemandState> &states) {
+    const JobRecord record = m_queue ? m_queue->job(id) : JobRecord();
+    if (record.id == 0 || record.state != JobState::Running)
+        return;                         // not a job any track can describe
+
+    const auto update = [&record, &text](QHash<QString, DemandState> &states) {
         QStringList changed;
         for (auto it = states.begin(); it != states.end(); ++it) {
             DemandState &state = it.value();
             bool touched = false;
             for (DemandTrack &track : state.running) {
-                if (track.job != id || track.progressText == text)
+                if (track.sessionId != record.sessionId || track.progressText == text)
                     continue;
                 track.progressText = text;
                 touched = true;
             }
             if (!touched)
                 continue;
-            state.toolTip = buildToolTip(state);
+            state.toolTip = DemandState::buildToolTip(state);
             changed.append(it.key());
         }
         std::sort(changed.begin(), changed.end());
