@@ -291,6 +291,7 @@ private slots:
     void removeBeforeFirstSave();
     void writeFailureLeavesResultUsable();
     void writeFailureKeepsPreviousRecord();
+    void writeFailureIsAnnounced();
     void inputChangeDeletesRecord();
     void noDeleteWithoutInputChange();
     void explicitFamilyIsNotStored();
@@ -776,6 +777,69 @@ void ResultStoreTest::writeFailureKeepsPreviousRecord()
     QCOMPARE(bytesOf(path), bytes);
     QCOMPARE(stats().writeFailures, 1);
     QCOMPARE(stats().recordsWritten, 0);
+}
+
+// A record that cannot be written is announced by the session model with the
+// manager's reason, after the manager's record change of the pair; a later
+// successful write of the pair is a record change and nothing more.
+void ResultStoreTest::writeFailureIsAnnounced()
+{
+    QStringList sequence;           // "changed:<session>/<calculation>", "failed:<session>/<calculation>"
+    QStringList reasons;            // of each "failed"
+    QObject scope;
+    const auto failures = [&sequence] { return int(sequence.filter(QStringLiteral("failed:")).size()); };
+
+    // A directory at the record's path
+    const QString path = recordPath("s1", QStringLiteral("exp%41"));
+    QVERIFY(QDir().mkpath(path));
+    const auto removeDirectory = qScopeGuard([path] { QDir().rmdir(path); });
+    QVERIFY(setInput("s1", "EA_IN", 4));
+    m_model->resetStoredResultStats();
+    connect(&LogbookManager::instance(), &LogbookManager::calculationRecordsChanged, &scope,
+            [&sequence](const QString &sessionId, const QString &calculationId) {
+        sequence.append(QStringLiteral("changed:%1/%2").arg(sessionId, calculationId));
+    });
+    connect(m_model.get(), &SessionModel::calculationRecordWriteFailed, &scope,
+            [&sequence, &reasons](const QString &sessionId, const QString &calculationId, const QString &reason) {
+        sequence.append(QStringLiteral("failed:%1/%2").arg(sessionId, calculationId));
+        reasons.append(reason);
+    });
+    {
+        WarningCapture warnings;
+        QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+        QCOMPARE(warnings.count(), 1);
+    }
+    QCOMPARE(sequence, QStringList({"changed:s1/" + kExpA, "failed:s1/" + kExpA}));
+    QVERIFY(reasons.at(0).startsWith(QStringLiteral("Couldn't write file")));
+    QCOMPARE(stats().writeFailures, failures());
+
+    // A record the format refuses
+    QVERIFY(setInput("s1", "LY_IN", -1));
+    QVERIFY(waitForIdle(*m_model));
+    sequence.clear();
+    reasons.clear();
+    m_model->resetStoredResultStats();
+    {
+        WarningCapture warnings;
+        QCOMPARE(engine("s1").request(kListy).status, ResultStatus::Ok);
+        QCOMPARE(warnings.count(), 1);
+    }
+    QCOMPARE(sequence, QStringList({"changed:s1/" + kListy, "failed:s1/" + kListy}));
+    QVERIFY(!reasons.at(0).isEmpty());
+    QVERIFY(reasons.at(0).contains(QStringLiteral("LY_OUT")));
+    QCOMPARE(stats().writeFailures, failures());
+
+    // The directory gone, the next Ok publish writes the record: one record
+    // change, no failure
+    QVERIFY(QDir().rmdir(path));
+    QVERIFY(setInput("s1", "EA_IN", 6));
+    sequence.clear();
+    m_model->resetStoredResultStats();
+    QCOMPARE(engine("s1").request(kExpA).status, ResultStatus::Ok);
+    QVERIFY(QFileInfo(path).isFile());
+    QCOMPARE(sequence, QStringList({"changed:s1/" + kExpA}));
+    QCOMPARE(stats().writeFailures, 0);
+    QCOMPARE(stats().recordsWritten, 1);
 }
 
 // ---- Deleting ------------------------------------------------------------------------
@@ -2066,12 +2130,36 @@ void ResultStoreTest::recordReasonRecordedAtWriteAndRestore()
                  .toObject()[kExpA].toString(),
              QStringLiteral("negative input"));
 
-    // An older index without the reason: the restore at a load teaches it again
+    // A record change of (s1, expA) in `spy`: the count
+    const auto changesOfS1 = [](const QSignalSpy &spy) {
+        int count = 0;
+        for (const QList<QVariant> &arguments : spy) {
+            if (arguments.at(0).toString() == QLatin1String("s1") && arguments.at(1).toString() == kExpA)
+                ++count;
+        }
+        return count;
+    };
+
+    // An older index without the reason: the restore at a load teaches it
+    // again, and the manager announces what it learned
     restart(withoutReasons(QStringLiteral("s1")));
     QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QString());
     m_model->resetStoredResultStats();
-    session("s1");
+    {
+        QSignalSpy recordSpy(&logbook, &LogbookManager::calculationRecordsChanged);
+        session("s1");
+        QCOMPARE(changesOfS1(recordSpy), 1);
+    }
     QCOMPARE(stats().recordsRestored, 1);
+    QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QStringLiteral("negative input"));
+
+    // A reload that finds the reason it already knows announces nothing for it
+    QCOMPARE(evict({"s1"}), QString());
+    {
+        QSignalSpy recordSpy(&logbook, &LogbookManager::calculationRecordsChanged);
+        session("s1");
+        QCOMPARE(changesOfS1(recordSpy), 0);
+    }
     QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QStringLiteral("negative input"));
 
     // ... and so does the column worker's restore into its copy of a stub
@@ -2081,8 +2169,12 @@ void ResultStoreTest::recordReasonRecordedAtWriteAndRestore()
     QVERIFY(!isLoaded("s1"));
     QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QString());
     m_model->resetStoredResultStats();
-    LogbookColumnStore::instance().setColumns({descriptionColumn(), attributeColumn(QStringLiteral("EA1"))});   // cleanup() restores
-    QVERIFY(waitForIdle(*m_model));
+    {
+        QSignalSpy recordSpy(&logbook, &LogbookManager::calculationRecordsChanged);
+        LogbookColumnStore::instance().setColumns({descriptionColumn(), attributeColumn(QStringLiteral("EA1"))});   // cleanup() restores
+        QVERIFY(waitForIdle(*m_model));
+        QVERIFY(changesOfS1(recordSpy) >= 1);
+    }
     QVERIFY(!isLoaded("s1"));
     QVERIFY(stats().restoreCalls >= 1);
     QCOMPARE(logbook.calculationRecordReason("s1", kExpA), QStringLiteral("negative input"));

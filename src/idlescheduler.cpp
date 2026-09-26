@@ -81,6 +81,28 @@ void IdleScheduler::reportProgress(TaskId id)
 
 void IdleScheduler::tick()
 {
+    // A waiting task (one registered with canStep) that was last reported
+    // active and has lost its work without a step: its final progress, then
+    // its completion, before the scan below reports the next active task or
+    // goes idle. It runs first so that the scan sees what onComplete left.
+    // m_activeTask is cleared here, so the rule fires once per report; a
+    // cancelled task was cleared by cancel(), and one that completed through
+    // its step was cleared by the step path.
+    if (m_activeTask >= 0) {
+        if (const Entry *entry = find(m_activeTask);
+            entry && entry->def.canStep && entry->def.hasWork && !entry->def.hasWork()) {
+            const TaskId gone = m_activeTask;
+            reportProgress(gone);
+            // A slot of progressChanged may have removed the task; a removed
+            // task is never completed
+            const Entry *still = find(gone);
+            const CompleteFn complete = still ? still->def.onComplete : CompleteFn();
+            m_activeTask = -1;
+            if (complete)
+                complete(false);
+        }
+    }
+
     // The active task: the highest-priority task with work. The task stepped:
     // the highest-priority task with work that can step now. Only ids are
     // kept: a slot of the signals below, or a step, may register or remove

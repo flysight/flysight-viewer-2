@@ -614,7 +614,7 @@ void PlotRowDelegateTest::checkBoxClickChecksThroughTheModel()
 
     const QModelIndex index = indexOf("Syn/g");
     QVERIFY(!isChecked(index));
-    QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
+    QSignalSpy queuedSpy(m_queue->model(), &QAbstractItemModel::rowsInserted);
 
     click(checkBoxCentre(index));
     QVERIFY(isChecked(index));
@@ -649,7 +649,7 @@ void PlotRowDelegateTest::checkBoxClickChecksThroughTheModel()
 void PlotRowDelegateTest::spaceKeyChecksThroughTheModel()
 {
     const QModelIndex index = indexOf("Syn/g");
-    QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
+    QSignalSpy queuedSpy(m_queue->model(), &QAbstractItemModel::rowsInserted);
 
     pressSpaceOn(index);
     QVERIFY(isChecked(index));

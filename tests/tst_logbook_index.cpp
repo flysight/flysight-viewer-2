@@ -23,6 +23,7 @@
 #include <QDir>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSignalSpy>
 
 #include "calculationrecord.h"
 #include "calculations/builtincalculations.h"
@@ -94,6 +95,7 @@ private slots:
     void legacyFlatIndexStartsAsStubs();
 
     void recordReasonsRoundTrip();
+    void recordReasonChangeIsAnnounced();
 
 private:
     // One saved session "s1" with D = "x" and G = 1.5 cached and flushed,
@@ -840,6 +842,62 @@ void LogbookIndexTest::recordReasonsRoundTrip()
     logbook.setCalculationRecordReason(QStringLiteral("g3"), x, QString());
     QVERIFY(logbook.indexNeedsFlush());
     QCOMPARE(logbook.calculationRecordReason(QStringLiteral("g3"), x), QString());
+}
+
+// A changed reason is announced as a record change of the pair, like a
+// write or a removal; an unchanged one is not. A write or a removal announces
+// its change once, whether or not the reason changed with it.
+void LogbookIndexTest::recordReasonChangeIsAnnounced()
+{
+    LogbookManager &logbook = LogbookManager::instance();
+    const QString g1 = QStringLiteral("g1");
+    const QString x = QStringLiteral("x");
+    QVERIFY(logbook.saveSession(makeSession(g1)));
+    QVERIFY(logbook.flushIndex());
+    QSignalSpy spy(&logbook, &LogbookManager::calculationRecordsChanged);
+    const auto isPair = [&spy, &g1, &x](int i) {
+        return spy.at(i).at(0).toString() == g1 && spy.at(i).at(1).toString() == x;
+    };
+
+    logbook.setCalculationRecordReason(g1, x, QStringLiteral("no"));
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(isPair(0));
+    QVERIFY(logbook.indexNeedsFlush());
+    QVERIFY(logbook.flushIndex());
+    logbook.setCalculationRecordReason(g1, x, QStringLiteral("no"));
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(!logbook.indexNeedsFlush());
+
+    logbook.setCalculationRecordReason(g1, x, QStringLiteral("other"));
+    QCOMPARE(spy.count(), 2);
+    QVERIFY(isPair(1));
+    logbook.setCalculationRecordReason(g1, x, QString());
+    QCOMPARE(spy.count(), 3);
+    QVERIFY(isPair(2));
+    QVERIFY(logbook.flushIndex());
+    logbook.setCalculationRecordReason(g1, x, QString());
+    QCOMPARE(spy.count(), 3);
+    QVERIFY(!logbook.indexNeedsFlush());
+
+    // A write whose reason differs from the stored one: one record change
+    StoredCalculationResult result;
+    result.calculationId = x;
+    result.inputFingerprint = QCryptographicHash::hash("inputs", QCryptographicHash::Sha256);
+    result.bundle.setReason(QStringLiteral("no"));
+    result.detail = QStringLiteral("no");
+    spy.clear();
+    QString error;
+    QVERIFY2(logbook.writeCalculationRecord(g1, CalculationRecord::stamped(result), &error), qPrintable(error));
+    QCOMPARE(logbook.calculationRecordReason(g1, x), QStringLiteral("no"));
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(isPair(0));
+
+    // A removal, which clears the reason: one record change
+    spy.clear();
+    QVERIFY(logbook.removeCalculationRecord(g1, x));
+    QCOMPARE(logbook.calculationRecordReason(g1, x), QString());
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(isPair(0));
 }
 
 FLYSIGHT_TEST_MAIN(LogbookIndexTest)

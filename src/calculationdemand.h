@@ -40,8 +40,7 @@ enum class DemandCondition {
 /// One track of one demand source. A plain value.
 struct DemandTrack {
     QString sessionId;
-    QString sessionName;            ///< a loaded row's live _DESCRIPTION; for a row that is not loaded (or
-                                    ///< failed to load) the logbook's cached description; else the session id
+    QString sessionName;            ///< SessionModel::sessionDisplayName() of the row
     DemandCondition condition = DemandCondition::NotApplicable;
     QStringList calculationTitles;  ///< Waiting/Running: the blockers' titles; Failed: what did not produce / what failed
     QString reason;                 ///< Failed only; never empty
@@ -112,7 +111,7 @@ struct DemandState {
 /// is visible, loaded, and not a failed-load placeholder, in session-model row
 /// order. (b) Column demand: every enabled logbook column whose value depends
 /// on a requested calculation (the column is REQUESTED:
-/// logbookColumnExplicitCalculations() is not empty), for every session row of
+/// SessionModel::columnRequestedCalculations() is not empty), for every session row of
 /// the logbook, loaded or not; one track per cell. A pair (session, requested
 /// calculation) is wanted while it has no result. A result counts whether it
 /// was published in this run or restored from storage (SessionModel restores
@@ -178,9 +177,8 @@ struct DemandState {
 /// Without it, a session loaded for column demand whose cell ended without a
 /// record (not applicable, an exception, a failed record write, a job-level
 /// failure, a failed load) would be loaded again after its eviction, without
-/// end. Cleared: for a session, by its relevant input change, and by a
-/// single-row display change while it is not loaded (a bulk edit, the column
-/// worker); for a cell, by a record change of one of the column's
+/// end. Cleared: for a session, by its relevant input change (a bulk edit
+/// publishes one); for a cell, by a record change of one of the column's
 /// calculations; for a column, when it leaves the enabled requested set;
 /// everything by a registry change; a reset of the session model forgets the
 /// ids that no longer have a row (a sort resets the model too). Multi-row
@@ -190,7 +188,7 @@ struct DemandState {
 /// (checked AND requested plots) x (tracks) - names the plot widget reads for
 /// the same tracks anyway - and for the requested columns of loaded sessions
 /// whose memo was dropped (an input change or publication, a load, a record
-/// change, a job's end, a single-row display change). A plot is REQUESTED when
+/// change, a job's end). A plot is REQUESTED when
 /// CalculationRegistry::dependsOnExplicit() says so for its y name: any name
 /// in the static dependency closure (which looks through source conversions)
 /// has a candidate with explicit policy. That is a pure, memoized function of
@@ -228,8 +226,10 @@ struct DemandState {
 /// (SessionModel::ColumnFillTask, priority 5), registered here. It has work
 /// while some session has a pending column cell, and reports the sessions
 /// that have one of the fill's high-water mark, so the logbook's progress line
-/// shows the fill for its whole duration; one last step, which loads nothing,
-/// reports the fill complete. Its other steps are loads: it can step
+/// shows the fill for its whole duration; the scheduler completes the fill
+/// when it has no pending cell left, reporting its final progress (a fill that
+/// starts while no session had a pending cell starts its own count). Its
+/// steps are loads: it can step
 /// while fewer than kMaxHeldSessions sessions are held and a session that is
 /// not loaded, not visible (a visible stub is the visible loader's) and not
 /// settling waits, taking them in row order; otherwise the scheduler rests
@@ -279,16 +279,16 @@ struct DemandState {
 /// WHEN A PASS RUNS. Scheduled (a zero-interval timer) by: a check change of
 /// the PlotModel and its reset; SessionModel::visibilityChanged, sessionLoaded,
 /// modelChanged, focusedSessionChanged, modelReset (which a column change
-/// causes), a relevant dependencyChanged, and a single-row display change of a
-/// session that is not loaded when it changed what this component knows of
-/// it; LogbookManager::calculationRecordsChanged; the executor's jobStarted
+/// causes), and a relevant dependencyChanged (a bulk edit publishes one);
+/// LogbookManager::calculationRecordsChanged (a record written or removed, or
+/// a changed reason the index learned); the executor's jobStarted
 /// and jobCancelRequested; a registry change; the end of a settle wait; the
 /// column fill's load; an offer the executor refused as not applicable. At
 /// once: when a plot is unchecked or a session hidden while a chosen next job
 /// exists (so that it is dropped before it can start), in jobFinished, which
-/// the executor emits before it decides between idle() and the next start -
-/// so a chain of requested calculations continues without an idle period
-/// between its links - and before the fill's load when a pass is pending.
+/// the executor emits before it schedules the next start - so a chain of
+/// requested calculations continues without an idle period between its
+/// links - and before the fill's load when a pass is pending.
 /// jobProgress updates texts only, without inspection.
 ///
 /// PRESENTATION. The views read plotState(), columnState(), isCellPending(),
@@ -301,7 +301,8 @@ struct DemandState {
 ///
 /// THE ONLY CALLER. This is the only product caller of JobQueue::offer() and
 /// JobQueue::withdrawChosenNext(). Nothing calls back into it: it observes
-/// PlotModel, SessionModel (its column set included), the logbook manager's
+/// PlotModel, SessionModel (its column set, column knowledge and display names
+/// included), the logbook manager's
 /// record changes, the registry and the executor's signals.
 ///
 /// LIFETIME. Main thread only. No member may be called from inside a
@@ -431,7 +432,7 @@ private:
     struct ColumnInfo {
         QString id;                          // columnId()
         QList<DependencyKey> names;          // logbookColumnNames(): what inspection reads
-        QStringList calculations;            // E(c) = logbookColumnExplicitCalculations(col, registry)
+        QStringList calculations;            // E(c) as SessionModel::columnRequestedCalculations() gives it
         QStringList storable;                // E(c) without explicit family instances (ids containing '#')
         QStringList storableTitles;          // parallel to storable: the registry's titles
     };
@@ -455,7 +456,9 @@ private:
     // Which plots and columns matter
     bool isRequested(const PlotValue &plot);
     bool syncCheckedSet();                          // true when a plot was unchecked or vanished
-    void rebuildRelevantNames();
+    /// In the static closure of a checked requested plot, or of a requested
+    /// column (read from the session model).
+    bool isRelevantName(const DependencyKey &key);
     QVector<PlotValue> inspectedPlots();            // checked AND requested, in plot-model order
     void syncColumns();
     bool isInert() const;
@@ -477,17 +480,16 @@ private:
     static QVector<BlockerReport> columnReports(const SessionData &session, const QVector<ColumnInfo> &columns);
     /// The rules for a session that is not loaded (see WHERE A RESULT IS
     /// LOOKED UP). Call under a RowStabilityGuard.
-    DemandTrack classifyUnloaded(const SessionRow &sr, const ColumnInfo &column);
+    /// `row` is the row of `sr` (its display name).
+    DemandTrack classifyUnloaded(int row, const SessionRow &sr, const ColumnInfo &column);
     /// The settlement of every cell of a session whose load failed.
     static Settlement loadFailedSettlement();
     /// The manager's record set of a session, memoized with its reasons.
     const QSet<QString> &recordSet(const QString &sessionId);
-    QString rowDisplayName(const SessionRow &sr) const;
     bool eraseSettlements(const QString &sessionId);    // true when one was erased
     void releaseHolds(const QSet<QString> &pendingSessions);
     void releaseAllHolds();
     void registerFillTask();
-    bool isFillEnding() const;          // the fill's last step, which only reports its end
 
     // The choice
     QList<Candidate> plotCandidates(const Inspections &inspections, const QString &focusedId) const;
@@ -518,7 +520,6 @@ private:
     void onVisibilityChanged(const QSet<QString> &shown, const QSet<QString> &hidden);
     void onSessionModelAboutToBeReset();
     void onSessionModelReset();
-    void onSessionDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles);
     void onCalculationRecordsChanged(const QString &sessionId, const QString &calculationId);
     void onJobFinished(JobId id, JobState state);
     void onJobProgress(JobId id, const QString &text);
@@ -535,15 +536,14 @@ private:
     QStringList m_checkedOrder;                             // ... in plot-model order
     QHash<QString, bool> m_requested;                       // memo, by plot id
     QHash<QString, QSet<DependencyKey>> m_staticNames;      // memo, by plot id
-    QSet<DependencyKey> m_relevantNames;                    // union over checked requested plots and requested columns
-    bool m_relevantNamesDirty = true;
 
     QHash<QString, DemandState> m_states;                   // inspected plots only
     QHash<PairKey, Memory> m_memory;                        // this run's job failures and refusals
 
     // Column demand
-    QVector<ColumnInfo> m_columns;                          // requested enabled columns, in SessionModel column order
-    bool m_columnsDirty = true;
+    // The requested enabled columns as the session model reported them at the
+    // start of the last pass, in its column order: a per-pass copy
+    QVector<ColumnInfo> m_columns;
     QHash<QString, DemandState> m_columnStates;             // requested columns only, by column id
     QHash<QString, QSet<QString>> m_pendingCells;           // column id -> sessions whose cell is pending
     bool m_hasPendingCells = false;                         // some set of m_pendingCells is not empty
@@ -558,7 +558,6 @@ private:
     QStringList m_loadCandidates;       // sessions the next load may take, in row order
     int m_fillRemaining = 0;            // sessions with a pending cell
     int m_fillHighWater = 0;            // the fill's total; 0 between fills
-    bool m_fillEnding = false;          // no pending cell left: one step reports the fill complete
     bool m_fillTaskRegistered = false;
 
     QHash<QString, QDeadlineTimer> m_settleUntil;           // sessions inside their input-settle wait

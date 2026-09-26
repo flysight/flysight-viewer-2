@@ -236,6 +236,16 @@ bool ExtraRegistrations::remove(const QString &id, CalculationRegistry::Removal 
     return true;
 }
 
+QList<JobId> activeJobIds(const JobQueue &queue)
+{
+    QList<JobId> ids;
+    for (const JobRecord &record : queue.model()->records()) {
+        if (record.isActive())
+            ids.append(record.id);
+    }
+    return ids;
+}
+
 bool waitIdle(JobQueue &queue, int timeoutMs)
 {
     return QTest::qWaitFor([&queue] { return queue.isIdle(); }, timeoutMs);

@@ -95,13 +95,11 @@ class SessionModel;
 /// dependencyChanged listeners already see the job finished, and
 /// publishingJob() names the job for exactly this step; (3) jobFinished,
 /// jobsChanged; (4) the session is unpinned; (5) the model trims its finished
-/// rows; (6) idle(), or the chosen next job, which a slot may have offered
-/// during (3), is scheduled. The next job never starts synchronously: always
-/// from the event loop. A job that ends at its start (for any of the reasons
-/// of docs/CALCULATIONS.md 15.2) ends that attempt, and the next is tried at
-/// the next turn of the event loop: one attempt per turn at most. A chosen
-/// next job that an offer replaces skips (6), so that no idle() falls between
-/// it and its replacement.
+/// rows; (6) the chosen next job, which a slot may have offered during (3),
+/// is scheduled. The next job never starts synchronously: always from the
+/// event loop. A job that ends at its start (for any of the reasons of
+/// docs/CALCULATIONS.md 15.2) ends that attempt, and the next is tried at the
+/// next turn of the event loop: one attempt per turn at most.
 ///
 /// Slots connected to the executor's signals may call offer(),
 /// withdrawChosenNext(), cancel() and shutdown().
@@ -148,15 +146,14 @@ public:
     /// Makes one explicit calculation for one loaded session the chosen next
     /// job, unless an equal job is active (see activeJob()) or the engine's
     /// readiness() says there is nothing to run. A different chosen next job is
-    /// replaced: it ends Cancelled ("No longer needed") without ever running,
-    /// and no idle() is emitted between it and the new one. A refused offer
-    /// changes nothing. Never prepares and never starts anything
+    /// replaced: it ends Cancelled ("No longer needed") without ever running.
+    /// A refused offer changes nothing. Never prepares and never starts anything
     /// synchronously: the job is Queued when this returns.
     OfferResult offer(const QString &sessionId, const CalculationBlocker &calculation);
     /// A plain (non-family) calculation by id.
     OfferResult offer(const QString &sessionId, const CalculationId &plainCalculationId);
-    /// Ends the chosen next job Cancelled ("No longer needed"); idle() follows
-    /// when nothing runs. False when there is no chosen next job.
+    /// Ends the chosen next job Cancelled ("No longer needed"). False when
+    /// there is no chosen next job.
     bool withdrawChosenNext();
 
     // ---- queries -------------------------------------------------------------
@@ -166,9 +163,6 @@ public:
     /// is winding down, and a new offer becomes the chosen next job behind it.
     /// 0 if none.
     JobId        activeJob(const QString &sessionId, const QString &instanceId) const;
-    /// The running job, if any (one winding down included), then the chosen
-    /// next job, if any: never more than two ids.
-    QList<JobId> activeJobs() const;
     JobId        runningJob() const;    ///< 0 if none
     JobId        chosenNextJob() const; ///< the one Queued job, 0 if none
     /// The job whose end is at step (2) of ORDER OF A JOB'S END (its
@@ -183,7 +177,9 @@ public:
     /// stop and ends Cancelled when its compute function returns - even if that
     /// returned a complete result: once cancellation was requested nothing is
     /// published. The next job does not start before then. False: unknown or
-    /// already finished.
+    /// already finished. No product code calls it today: it is kept for the
+    /// jobs dock, a later view of the job history (the audit rule 'no product
+    /// code cancels a job' says the same).
     bool cancel(JobId id);
     /// Cancels everything ("Application closing") and waits - without a
     /// timeout - until the worker has returned; afterwards no worker and no
@@ -197,17 +193,11 @@ public:
     void failNextWorkerStarts(int count) { m_failWorkerStarts = count; }
 
 signals:
-    /// After the model's rowsInserted for a new chosen next job. A job that a
-    /// slot connected to rowsInserted has already ended (cancel, shutdown) or
-    /// removed is not announced as queued: jobFinished was its only signal.
-    /// offer() still returns Created for it.
-    void jobQueued(FlySight::JobId id);
     void jobStarted(FlySight::JobId id);
     void jobProgress(FlySight::JobId id, const QString &text);
     void jobCancelRequested(FlySight::JobId id);    ///< the running job was asked to stop (cancel, or stale)
     void jobFinished(FlySight::JobId id, FlySight::JobState state);
     void jobsChanged();                             ///< after every one of the above except jobProgress
-    void idle();                                    ///< the last active job ended
 
 private:
     class JobProgress;      // the CalculationProgress handed to compute()
@@ -217,9 +207,6 @@ private:
         QString reason;
     };
     struct Run;             // the running job: ticket, worker, pending end
-    /// Step (6) of ORDER OF A JOB'S END: done, or skipped for a replaced
-    /// chosen next job (its replacement follows at once).
-    enum class AfterEnd { ScheduleOrIdle, Nothing };
 
     void scheduleStart();
     void startNext();
@@ -227,22 +214,19 @@ private:
     void finishRun();
     void endJob(JobId id, JobState state, const QString &reason,
                 std::optional<ResultStatus> resultStatus = std::nullopt,
-                const QSet<DependencyKey> &invalidated = {},
-                AfterEnd afterEnd = AfterEnd::ScheduleOrIdle);
+                const QSet<DependencyKey> &invalidated = {});
     void requestStop(const PendingEnd &end);
     void stopRunIfRefused();
     void onProgress(JobId id, const QString &text);
     void onSessionRowsChanged();
     bool isSessionLoaded(const QString &sessionId) const;
     int runningCount() const { return m_run ? 1 : 0; }
-    void announceIdleIfIdle();
 
     QPointer<SessionModel> m_sessionModel;
     JobModel *m_model;                  // child object
     JobId m_nextId = 1;
     bool m_shutDown = false;
     bool m_startQueued = false;         // a queued startNext() is pending
-    bool m_idleAnnounced = true;        // idle() was emitted since the last job was created
     int m_failWorkerStarts = 0;
     int m_registryObserver = 0;         // CalculationRegistry::addObserver() token
     JobId m_publishingJob = 0;          // see publishingJob()

@@ -197,7 +197,7 @@ JobQueue::OfferResult JobQueue::offer(const QString &sessionId, const Calculatio
             loaded = true;
             readiness = session->calculationEngine().readiness(calculation.registrationId,
                                                                calculation.instanceOutput);
-            sessionName = session->getAttribute(SessionKeys::Description).toString();
+            sessionName = m_sessionModel->sessionDisplayName(m_sessionModel->getSessionRow(sessionId));
         }
     }
     // A refusal changes nothing, the chosen next job included
@@ -212,15 +212,13 @@ JobQueue::OfferResult JobQueue::offer(const QString &sessionId, const Calculatio
     case CalculationReadiness::State::Ready:        break;
     }
 
-    // Replace the chosen next job. Its end skips step (6), so that neither
-    // idle() nor a start falls between it and the new one. Slots of the end
-    // may shut down or offer: validate again after every end.
+    // Replace the chosen next job. Nothing starts in between: a start is
+    // always from the event loop. Slots of the end may shut down or offer:
+    // validate again after every end.
     while (const JobId previous = chosenNextJob()) {
-        endJob(previous, JobState::Cancelled, tr("No longer needed"), std::nullopt, {}, AfterEnd::Nothing);
-        if (m_shutDown) {
-            announceIdleIfIdle();       // the step (6) that was skipped
+        endJob(previous, JobState::Cancelled, tr("No longer needed"));
+        if (m_shutDown)
             return {Kind::ShuttingDown, 0};
-        }
         if (const JobId existing = activeJob(sessionId, calculation.instanceId))
             return {Kind::AlreadyActive, existing};
     }
@@ -236,21 +234,19 @@ JobQueue::OfferResult JobQueue::offer(const QString &sessionId, const Calculatio
     record.state = JobState::Queued;
     record.queuedAt = QDateTime::currentDateTimeUtc();
 
-    // Pin and open the busy period BEFORE the row appears: append() emits
-    // rowsInserted, and a slot on it may cancel the new job at once. endJob()
-    // must then find the pin it releases and announce idle() for this period.
-    m_idleAnnounced = false;
+    // Pin BEFORE the row appears: append() emits rowsInserted, and a slot on
+    // it may cancel the new job at once. endJob() must then find the pin it
+    // releases.
     m_sessionModel->pinSession(sessionId);      // one pin per job; released in endJob()
     const JobId id = m_model->append(record);
 
     // A rowsInserted slot may have ended the job (cancel, shutdown) and even
-    // removed its row. jobFinished was emitted then, and a job is not
-    // announced as queued after it has ended.
+    // removed its row. jobFinished was emitted then, and nothing is left to
+    // schedule.
     const JobRecord appended = m_model->record(id);
     if (appended.id == 0 || appended.isFinished())
         return {Kind::Created, id};
 
-    emit jobQueued(id);
     emit jobsChanged();
     scheduleStart();
 
@@ -276,16 +272,6 @@ JobId JobQueue::activeJob(const QString &sessionId, const QString &instanceId) c
             return job.id;
     }
     return 0;
-}
-
-QList<JobId> JobQueue::activeJobs() const
-{
-    QList<JobId> ids;
-    if (const JobId running = runningJob())
-        ids.append(running);
-    if (const JobId next = chosenNextJob())
-        ids.append(next);
-    return ids;
 }
 
 JobId JobQueue::runningJob() const
@@ -520,8 +506,7 @@ void JobQueue::finishRun()
 }
 
 void JobQueue::endJob(JobId id, JobState state, const QString &reason,
-                      std::optional<ResultStatus> resultStatus, const QSet<DependencyKey> &invalidated,
-                      AfterEnd afterEnd)
+                      std::optional<ResultStatus> resultStatus, const QSet<DependencyKey> &invalidated)
 {
     // A copy: a slot may remove the finished row
     const QString sessionId = m_model->record(id).sessionId;
@@ -542,20 +527,8 @@ void JobQueue::endJob(JobId id, JobState state, const QString &reason,
 
     m_model->trimFinished();
 
-    if (afterEnd == AfterEnd::Nothing)
-        return;     // a replaced chosen next job: its replacement follows at once
     if (!isIdle())
         scheduleStart();
-    else
-        announceIdleIfIdle();
-}
-
-void JobQueue::announceIdleIfIdle()
-{
-    if (isIdle() && !m_idleAnnounced) {
-        m_idleAnnounced = true;     // once per busy period, whatever slots did before
-        emit idle();
-    }
 }
 
 // ---- Cancellation ---------------------------------------------------------------------

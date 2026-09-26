@@ -4,6 +4,7 @@
 
 #include <memory>
 
+#include <QFile>
 #include <QRegularExpression>
 #include <QScopeGuard>
 #include <QSettings>
@@ -90,6 +91,8 @@ private slots:
     void calculationInvalidationIsPublished();
     void schedulerTaskCanBeUnregistered();
     void schedulerWaitingTaskDoesNotSpin();
+    void schedulerCompletesWaitingTaskWhoseWorkIsGone();
+    void bulkEditAnnouncesADependencyChange();
 
 private:
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
@@ -893,6 +896,204 @@ void SessionModelEngineTest::schedulerWaitingTaskDoesNotSpin()
     scheduler.wake();
     QTRY_COMPARE(idleSpy.count(), 1);
     QCOMPARE(waitingSteps, 1);
+}
+
+// A task that waits (registered with canStep) and loses its work without a
+// step is completed by the next tick: its final progress, then
+// onComplete(false), before the next active task or idle, and only once. A
+// cancelled task is completed once, as cancelled. A task without canStep is
+// completed only through its step or cancel().
+void SessionModelEngineTest::schedulerCompletesWaitingTaskWhoseWorkIsGone()
+{
+    QVERIFY(waitForIdle(*m_model));
+    IdleScheduler &scheduler = m_model->scheduler();
+    const auto removeProbes = qScopeGuard([&scheduler] {
+        scheduler.unregisterTask(93);
+        scheduler.unregisterTask(94);
+        scheduler.unregisterTask(95);
+    });
+
+    QStringList events;
+    QObject scope;
+    connect(&scheduler, &IdleScheduler::activeTaskChanged, &scope,
+            [&events](int id, bool) { events.append(QStringLiteral("A%1").arg(id)); });
+    connect(&scheduler, &IdleScheduler::progressChanged, &scope, [&events](int id, int remaining, int total) {
+        events.append(QStringLiteral("P%1 %2/%3").arg(id).arg(remaining).arg(total));
+    });
+    connect(&scheduler, &IdleScheduler::schedulerIdle, &scope, [&events] { events.append(QStringLiteral("I")); });
+    const auto completion = [&events](int id) {
+        return [&events, id](bool cancelled) { events.append(QStringLiteral("C%1:%2").arg(id).arg(int(cancelled))); };
+    };
+
+    // 93 waits: it has work it can never step. A cancel takes its work away,
+    // as the real tasks' cancels do.
+    bool waitingHasWork = true;
+    int waitingRemaining = 3;
+    int waitingSteps = 0;
+    scheduler.registerTask(93, TaskDef{8,
+                                       [&waitingSteps] { ++waitingSteps; },
+                                       [&waitingHasWork] { return waitingHasWork; },
+                                       [&waitingRemaining] { return Progress{waitingRemaining, 3}; },
+                                       [&events, &waitingHasWork](bool cancelled) {
+                                           events.append(QStringLiteral("C93:%1").arg(int(cancelled)));
+                                           if (cancelled)
+                                               waitingHasWork = false;
+                                       },
+                                       false,
+                                       [] { return false; }});
+
+    // (a) Its work goes without a step: the final progress, the completion, idle
+    scheduler.wake();
+    QTRY_VERIFY(!scheduler.isTicking());
+    QCOMPARE(events, QStringList({"A93", "P93 3/3"}));
+    events.clear();
+    waitingHasWork = false;
+    waitingRemaining = 0;
+    scheduler.wake();
+    QTRY_VERIFY(events.contains(QStringLiteral("I")));
+    QCOMPARE(events, QStringList({"P93 0/3", "C93:0", "I"}));
+    QVERIFY(waitForIdle(*m_model));                     // another wake completes nothing
+    QCOMPARE(events, QStringList({"P93 0/3", "C93:0", "I"}));
+    QCOMPARE(waitingSteps, 0);
+
+    // (b) In one turn 93 loses its work and a plain task gains some: the
+    // completion comes before the next active task
+    int plainRemaining = 0;
+    scheduler.registerTask(94, TaskDef{9,
+                                       [&plainRemaining] { --plainRemaining; },
+                                       [&plainRemaining] { return plainRemaining > 0; },
+                                       [&plainRemaining] { return Progress{plainRemaining, 1}; },
+                                       completion(94),
+                                       false});
+    waitingHasWork = true;
+    waitingRemaining = 2;
+    events.clear();
+    scheduler.wake();
+    QTRY_VERIFY(!scheduler.isTicking());
+    QCOMPARE(events, QStringList({"A93", "P93 2/3"}));
+    events.clear();
+    waitingHasWork = false;
+    waitingRemaining = 0;
+    plainRemaining = 1;
+    scheduler.wake();
+    QTRY_VERIFY(events.contains(QStringLiteral("I")));
+    QCOMPARE(events, QStringList({"P93 0/3", "C93:0", "A94", "P94 1/1", "P94 0/1", "C94:0", "I"}));
+    QCOMPARE(waitingSteps, 0);
+
+    // (c) Cancelled while it waits: completed once, as cancelled
+    waitingHasWork = true;
+    waitingRemaining = 1;
+    events.clear();
+    scheduler.wake();
+    QTRY_VERIFY(!scheduler.isTicking());
+    QCOMPARE(events, QStringList({"A93", "P93 1/3"}));
+    events.clear();
+    scheduler.cancel(93);
+    QTRY_VERIFY(events.contains(QStringLiteral("I")));
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(events, QStringList({"C93:1", "I"}));
+    QCOMPARE(waitingSteps, 0);
+
+    // (d) A plain task that loses its work between two ticks, outside its
+    // step: not completed, and the scheduler goes idle (as before)
+    bool plainHasWork = true;
+    int plainSteps = 0;
+    scheduler.registerTask(95, TaskDef{9,
+                                       [&plainSteps] { ++plainSteps; },
+                                       [&plainHasWork] { return plainHasWork; },
+                                       [] { return Progress{1, 1}; },
+                                       completion(95),
+                                       false});
+    events.clear();
+    scheduler.wake();
+    QTRY_VERIFY(plainSteps >= 1);
+    plainHasWork = false;                               // between two ticks
+    QTRY_VERIFY(events.contains(QStringLiteral("I")));
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(!events.join(QLatin1Char(' ')).contains(QStringLiteral("C95")));
+    QCOMPARE(events.first(), QStringLiteral("A95"));
+    QCOMPARE(events.last(), QStringLiteral("I"));
+}
+
+// The bulk edit publishes its edit as a direct edit does: the row's display
+// change, then one dependencyChanged per changed name - the attribute's own
+// name for a stub (its temporary copy has no engine of the row), the names the
+// engine invalidated for a loaded row. An edit that applies nothing publishes
+// no name.
+void SessionModelEngineTest::bulkEditAnnouncesADependencyChange()
+{
+    QVERIFY(waitForIdle(*m_model));
+    const DependencyKey description = DependencyKey::attribute(QString::fromLatin1(SessionKeys::Description));
+    const int descriptionColumn = 0;
+    QCOMPARE(m_model->column(descriptionColumn).attributeKey, QString::fromLatin1(SessionKeys::Description));
+    const auto restoreCapacity = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    });
+
+    // What the model emits, in order: "D<row>" a publishing dataChanged,
+    // "K<id>:<key>" a dependencyChanged
+    QStringList events;
+    QObject scope;
+    connect(m_model.get(), &SessionModel::dataChanged, &scope,
+            [&events](const QModelIndex &topLeft, const QModelIndex &, const QList<int> &roles) {
+        if (roles.contains(Qt::EditRole))
+            events.append(QStringLiteral("D%1").arg(topLeft.row()));
+    });
+    connect(m_model.get(), &SessionModel::dependencyChanged, &scope,
+            [&events](const QString &sessionId, const DependencyKey &key) {
+        const QString name = key.type == DependencyKey::Type::Attribute
+            ? key.attributeKey : key.measurementKey.first + QLatin1Char('/') + key.measurementKey.second;
+        events.append(QStringLiteral("K%1:%2").arg(sessionId, name));
+    });
+    const QString descriptionEvent = QStringLiteral("Ks1:") + description.attributeKey;
+
+    // A stub
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
+    const int row1 = m_model->getSessionRow("s1");
+    QVERIFY(!m_model->rowAt(row1).isLoaded());
+    events.clear();
+    m_model->startBulkEdit({row1}, descriptionColumn, QStringLiteral("bulk stub"));
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(events.count(descriptionEvent), 1);
+    QCOMPARE(events.filter(QStringLiteral("K")).size(), 1);
+    QCOMPARE(events.count(QStringLiteral("D%1").arg(row1)), 1);
+    QVERIFY(events.indexOf(QStringLiteral("D%1").arg(row1)) < events.indexOf(descriptionEvent));
+    QVERIFY(!m_model->rowAt(row1).isLoaded());
+
+    // A loaded row: the names the engine invalidated, the attribute's own among them
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    session("s1");
+    QVERIFY(m_model->rowAt(row1).isLoaded());
+    QVERIFY(waitForIdle(*m_model));
+    QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
+    events.clear();
+    m_model->startBulkEdit({row1}, descriptionColumn, QStringLiteral("bulk loaded"));
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(session("s1").getAttribute(QString::fromLatin1(SessionKeys::Description)).toString(),
+             QStringLiteral("bulk loaded"));
+    QVERIFY(dependencySpy.count() >= 1);
+    QSet<DependencyKey> names;
+    for (const QList<QVariant> &arguments : std::as_const(dependencySpy)) {
+        QCOMPARE(arguments.at(0).toString(), QStringLiteral("s1"));
+        names.insert(arguments.at(1).value<DependencyKey>());
+    }
+    QCOMPARE(int(names.size()), int(dependencySpy.count()));     // one per name
+    QVERIFY(names.contains(description));
+    QCOMPARE(events.count(QStringLiteral("D%1").arg(row1)), 1);
+    QVERIFY(events.indexOf(QStringLiteral("D%1").arg(row1)) < events.indexOf(descriptionEvent));
+
+    // A failed-load placeholder: nothing applied, no name published
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
+    QVERIFY(!m_model->rowAt(row1).isLoaded());
+    const QString csvPath = sessionFilePath(QStringLiteral("s1"));
+    QVERIFY(!csvPath.isEmpty());
+    QVERIFY(QFile::remove(csvPath));
+    m_model->sessionRef(row1);
+    QVERIFY(m_model->rowAt(row1).loadFailed);
+    events.clear();
+    m_model->startBulkEdit({row1}, descriptionColumn, QStringLiteral("bulk placeholder"));
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(events.filter(QStringLiteral("K")).isEmpty());
 }
 
 FLYSIGHT_TEST_MAIN(SessionModelEngineTest)

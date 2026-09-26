@@ -28,7 +28,9 @@ struct TaskDef {
     bool       cancellable = false;
     /// Whether the task can take a step right now; null means always. A task
     /// whose hasWork() is true while this is false waits on something outside
-    /// the scheduler (see the class comment).
+    /// the scheduler (see the class comment). Only a task registered with this
+    /// predicate is completed when it loses its work without a step (see the
+    /// class comment).
     BoolFn     canStep = nullptr;
 };
 
@@ -47,6 +49,16 @@ using TaskId = int;
 /// (it waits on something outside the scheduler): it is reported as active
 /// with its progress, is not stepped, and the scheduler rests until woken
 /// rather than spinning. schedulerIdle is emitted only when no task has work.
+///
+/// COMPLETION. A task completes (onComplete(false)) when its hasWork() is
+/// false after its step, or as cancelled (onComplete(true)) through cancel().
+/// A task registered with canStep may also lose its work outside the
+/// scheduler, without a step: when the task last reported active is such a
+/// task and has no work any more, the next tick reports its progress one last
+/// time and calls its onComplete(false), before it reports the next active
+/// task or goes idle. Every other task is completed only through its step or
+/// through cancel(). Whoever takes a resting waiting task's work away wakes
+/// the scheduler, as for a change of its canStep.
 class IdleScheduler : public QObject
 {
     Q_OBJECT

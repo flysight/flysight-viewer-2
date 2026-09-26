@@ -104,6 +104,12 @@ struct MergeResult {
 /// prepares or runs a requested calculation. The bulk edit's temporary load
 /// reads no record: it leaves such values missing for the worker.
 ///
+/// COLUMN KNOWLEDGE. The model is the one source of each enabled column's
+/// static dependency closure (columnDependencyClosure()) and requested
+/// calculations (columnRequestedCalculations()), and of a row's display name
+/// (sessionDisplayName()); the demand layer and the executor read them and
+/// compute none of them.
+///
 /// RULE for every code path that mutates a row's PERSISTENT state
 /// (SessionData::setAttribute / removeAttribute / mergeSourceData /
 /// setSourceMeasurement, or replacing the row's session): before the next
@@ -289,6 +295,25 @@ public:
     SessionData &sessionRef(int row);
     const LogbookColumn& column(int col) const { return m_columns[col]; }
 
+    /// The requested calculations of enabled column `column` (E(c):
+    /// logbookColumnExplicitCalculations() of its definition); empty for a column
+    /// that depends on none, and for an index out of range. Current under the
+    /// registrations at the moment of the call. Indices are valid between two
+    /// column rebuilds (a column change resets the model). A plain read: nothing
+    /// is emitted, no row changes; allowed under a RowStabilityGuard. Must not be
+    /// called from inside a registry observer.
+    QStringList columnRequestedCalculations(int column) const;
+    /// The static dependency closure of the column's names (the union of
+    /// CalculationRegistry::staticDependencies() over logbookColumnNames()):
+    /// names and preferences. Same rules as columnRequestedCalculations().
+    StaticDependencies columnDependencyClosure(int column) const;
+    /// How the logbook names the session of row `row`: the loaded session's
+    /// _DESCRIPTION (SessionKeys::Description); for a row that is not loaded, or
+    /// a failed-load placeholder, the description the logbook index caches for
+    /// the row; when that is empty, the session id. Empty for a row out of
+    /// range. A plain read (allowed under a RowStabilityGuard).
+    QString sessionDisplayName(int row) const;
+
     // Populate model from cached index data (stubs only, no CSV parsing)
     void populateFromIndex(const QMap<QString, QMap<int, QVariant>> &cachedValues,
                            const QMap<QString, double> &lastAccessed);
@@ -370,7 +395,18 @@ signals:
     void sessionLoaded(const QString &sessionId);
     void hoveredSessionChanged(const QString& sessionId);
     void focusedSessionChanged(const QString& sessionId);
+    /// A name of the session's engine changed: emitted after a row's display
+    /// change for each name an edit, a merge, a publication or a registry /
+    /// preference change invalidated. A bulk edit publishes the names it
+    /// changed on both of its paths (a loaded session, and the temporary copy
+    /// of one that is not loaded), so a listener needs no other signal to
+    /// learn of it.
     void dependencyChanged(const QString &sessionId, const DependencyKey &key);
+    /// The result store could not write the record of an Ok result it was
+    /// given (CalculationResultStore::recordWriteFailed); emitted from inside
+    /// an engine callback, so a slot may only record state and schedule.
+    void calculationRecordWriteFailed(const QString &sessionId, const QString &calculationId,
+                                      const QString &reason);
     void visibilityChanged(QSet<QString> shown, QSet<QString> hidden);
 
 public:
@@ -427,9 +463,14 @@ private:
     bool m_invalidationFlushQueued = false;
 
     // Cached column values: per-column refresh (see the class comment).
-    QVector<StaticDependencies> m_columnDependencies;       // parallel to m_columns
-    QVector<QStringList> m_columnExplicitCalculations;      // parallel to m_columns: E(c)
-    void rebuildColumnDependencies();                       // union of staticDependencies() over logbookColumnNames(col)
+    // The tables are rebuilt with the columns and by the environment check,
+    // and lazily by an outside read after a registry change (the observer only
+    // marks them stale: it must not call into the registry).
+    mutable QVector<StaticDependencies> m_columnDependencies;   // parallel to m_columns
+    mutable QVector<QStringList> m_columnExplicitCalculations;  // parallel to m_columns: E(c)
+    mutable bool m_columnTablesStale = false;                   // a registration changed since the last rebuild
+    void rebuildColumnDependencies() const;                     // union of staticDependencies() over logbookColumnNames(col)
+    void ensureColumnTables() const;                            // rebuilds the tables when they are stale
     bool isExplicitBacked(int column) const;
     /// True when some column of the row is neither cached nor pending: the one
     /// "row needs column work" test (a pending column must not make the

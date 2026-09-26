@@ -101,7 +101,6 @@ CalculationDemand::CalculationDemand(SessionModel *sessionModel, PlotModel *plot
         connect(m_sessionModel, &QAbstractItemModel::modelAboutToBeReset,
                 this, &CalculationDemand::onSessionModelAboutToBeReset);
         connect(m_sessionModel, &QAbstractItemModel::modelReset, this, &CalculationDemand::onSessionModelReset);
-        connect(m_sessionModel, &QAbstractItemModel::dataChanged, this, &CalculationDemand::onSessionDataChanged);
     }
 
     // Direct: emitted from inside record methods, so the slot only drops state
@@ -248,26 +247,32 @@ bool CalculationDemand::syncCheckedSet()
         }
     }
 
-    if (order != m_checkedOrder)
-        m_relevantNamesDirty = true;
     m_checked = checked;
     m_checkedOrder = order;
     return anyUnchecked;
 }
 
-void CalculationDemand::rebuildRelevantNames()
+// A name matters when it is in the static closure of a checked requested plot
+// (computed here: the model knows nothing of plots) or of a requested column
+// (read from the session model, which is current under the registrations).
+// Ordinary columns do not count: an edit that affects no requested
+// calculation starts no settle wait.
+bool CalculationDemand::isRelevantName(const DependencyKey &key)
 {
-    m_relevantNames.clear();
     for (const QString &id : std::as_const(m_checkedOrder)) {
-        if (isRequested(m_checked.value(id)))
-            m_relevantNames.unite(m_staticNames.value(id));
+        if (isRequested(m_checked.value(id)) && m_staticNames.value(id).contains(key))
+            return true;
     }
-    const CalculationRegistry &registry = CalculationRegistry::instance();
-    for (const ColumnInfo &column : std::as_const(m_columns)) {
-        for (const DependencyKey &name : column.names)
-            m_relevantNames.unite(registry.staticDependencies(name).names);
+    if (m_sessionModel) {
+        const SessionModel &model = *m_sessionModel;
+        const int count = model.columnCount();
+        for (int i = 0; i < count; ++i) {
+            if (!model.columnRequestedCalculations(i).isEmpty()
+                && model.columnDependencyClosure(i).names.contains(key))
+                return true;
+        }
     }
-    m_relevantNamesDirty = false;
+    return false;
 }
 
 QVector<PlotValue> CalculationDemand::inspectedPlots()
@@ -281,12 +286,12 @@ QVector<PlotValue> CalculationDemand::inspectedPlots()
     return plots;
 }
 
-// Brings m_columns in line with the session model's enabled columns and the
-// registrations. logbookColumnExplicitCalculations() is the authority the
-// column cache uses: a column is requested when it is not empty.
+// Brings m_columns in line with the requested enabled columns as the session
+// model reports them now (SessionModel::columnRequestedCalculations(): a
+// column is requested when it is not empty). Runs at the start of every pass:
+// a per-pass copy, read and not computed.
 void CalculationDemand::syncColumns()
 {
-    m_columnsDirty = false;
     QVector<ColumnInfo> columns;
     if (m_sessionModel) {
         const CalculationRegistry &registry = CalculationRegistry::instance();
@@ -294,7 +299,7 @@ void CalculationDemand::syncColumns()
         const int count = model.columnCount();
         for (int i = 0; i < count; ++i) {
             const LogbookColumn &column = model.column(i);
-            const QStringList calculations = logbookColumnExplicitCalculations(column, registry);
+            const QStringList calculations = model.columnRequestedCalculations(i);
             if (calculations.isEmpty())
                 continue;
             ColumnInfo info;
@@ -321,7 +326,6 @@ void CalculationDemand::syncColumns()
         after.append(column.id);
 
     m_columns = columns;
-    m_relevantNamesDirty = true;
     if (before == after)
         return;
 
@@ -398,9 +402,7 @@ CalculationDemand::Inspections CalculationDemand::inspect(const QVector<PlotValu
         const SessionData &session = sr.session.value();
         Track track;
         track.sessionId = sr.sessionId;
-        track.sessionName = session.getAttribute(SessionKeys::Description).toString();
-        if (track.sessionName.isEmpty())
-            track.sessionName = sr.sessionId;
+        track.sessionName = model.sessionDisplayName(row);
 
         for (const PlotValue &plot : plots)
             result[plotId(plot)].append(Inspection{track, inspectUnderGuard(session, plot)});
@@ -612,7 +614,7 @@ CalculationDemand::ColumnWalk CalculationDemand::walkColumns(const JobRecord &ru
                 DemandTrack track = classify(Track{sessionId, QString()}, reports.at(c), running, chosen);
                 if (isListed(track.condition)) {
                     if (name.isEmpty())
-                        name = rowDisplayName(sr);
+                        name = model.sessionDisplayName(row);
                     track.sessionName = name;
                 }
 
@@ -640,7 +642,7 @@ CalculationDemand::ColumnWalk CalculationDemand::walkColumns(const JobRecord &ru
             m_columnReports.remove(sessionId);
             bool waiting = false;
             for (int c = 0; c < columns; ++c) {
-                const DemandTrack track = classifyUnloaded(sr, m_columns.at(c));
+                const DemandTrack track = classifyUnloaded(row, sr, m_columns.at(c));
                 if (track.condition == DemandCondition::Waiting)
                     waiting = true;
                 tally(c, sessionId, track);
@@ -656,7 +658,7 @@ CalculationDemand::ColumnWalk CalculationDemand::walkColumns(const JobRecord &ru
 
 // Call under a RowStabilityGuard. An engine that holds no stored result is
 // never asked, and no record is opened: see WHERE A RESULT IS LOOKED UP.
-DemandTrack CalculationDemand::classifyUnloaded(const SessionRow &sr, const ColumnInfo &column)
+DemandTrack CalculationDemand::classifyUnloaded(int row, const SessionRow &sr, const ColumnInfo &column)
 {
     DemandTrack track;
     track.sessionId = sr.sessionId;
@@ -677,7 +679,7 @@ DemandTrack CalculationDemand::classifyUnloaded(const SessionRow &sr, const Colu
         track.reason = settled->reason;
         track.jobFailure = settled->jobFailure;
         if (isListed(track.condition))
-            track.sessionName = rowDisplayName(sr);
+            track.sessionName = m_sessionModel->sessionDisplayName(row);
         return track;
     }
 
@@ -700,7 +702,7 @@ DemandTrack CalculationDemand::classifyUnloaded(const SessionRow &sr, const Colu
             track.condition = DemandCondition::Done;
         } else {
             track.condition = DemandCondition::Failed;
-            track.sessionName = rowDisplayName(sr);
+            track.sessionName = m_sessionModel->sessionDisplayName(row);
         }
         return track;
     }
@@ -723,7 +725,7 @@ DemandTrack CalculationDemand::classifyUnloaded(const SessionRow &sr, const Colu
         track.jobFailure = true;
         track.calculationTitles = failedTitles;
         track.reason = failedReasons.join(QStringLiteral("; "));
-        track.sessionName = rowDisplayName(sr);
+        track.sessionName = m_sessionModel->sessionDisplayName(row);
         return track;
     }
     if (allNotApplicable) {
@@ -739,7 +741,7 @@ DemandTrack CalculationDemand::classifyUnloaded(const SessionRow &sr, const Colu
         track.condition = failed.condition;
         track.reason = failed.reason;
         track.jobFailure = failed.jobFailure;
-        track.sessionName = rowDisplayName(sr);
+        track.sessionName = m_sessionModel->sessionDisplayName(row);
         return track;
     }
 
@@ -755,9 +757,9 @@ CalculationDemand::Settlement CalculationDemand::loadFailedSettlement()
     return Settlement{DemandCondition::Failed, {}, tr("The session file could not be loaded"), true};
 }
 
-// The manager is asked once per session between changes of its records
-// (calculationRecordsChanged) or of what a restore learned of them (a
-// single-row display change), and on a model reset.
+// The manager is asked once per session between changes of its records (a
+// record change, which the manager also emits when a restore teaches it a
+// record's reason), and on a model reset.
 const QSet<QString> &CalculationDemand::recordSet(const QString &sessionId)
 {
     const auto known = m_recordSets.constFind(sessionId);
@@ -775,29 +777,6 @@ const QSet<QString> &CalculationDemand::recordSet(const QString &sessionId)
     }
     m_recordReasons.insert(sessionId, reasons);
     return m_recordSets.insert(sessionId, ids).value();
-}
-
-// How the logbook names the session: the live description of a loaded row;
-// otherwise the description the logbook index holds for the row (what the
-// logbook shows for a stub, kept for a failed-load placeholder); otherwise
-// the session id. Call under a RowStabilityGuard.
-QString CalculationDemand::rowDisplayName(const SessionRow &sr) const
-{
-    QString name;
-    if (sr.isLoaded() && !sr.loadFailed) {
-        name = sr.session->getAttribute(SessionKeys::Description).toString();
-    } else {
-        static const QString descriptionKey = [] {
-            LogbookColumn description;
-            description.type = ColumnType::SessionAttribute;
-            description.attributeKey = QString::fromLatin1(SessionKeys::Description);
-            return logbookColumnDefinitionKey(description);
-        }();
-        const LogbookManager &logbook = LogbookManager::instance();
-        name = LogbookManager::jsonToVariant(logbook.cachedValuesForSession(sr.sessionId).value(descriptionKey))
-                   .toString();
-    }
-    return name.isEmpty() ? sr.sessionId : name;
 }
 
 // O(columns): settlements exist for the columns of m_columns only (syncColumns()
@@ -851,27 +830,21 @@ void CalculationDemand::registerFillTask()
         /*onComplete*/  [this](bool) {
                             // The next fill starts its own count. A cancel()
                             // changes nothing while sessions remain.
-                            if (m_fillRemaining == 0) {
+                            if (m_fillRemaining == 0)
                                 m_fillHighWater = 0;
-                                m_fillEnding = false;
-                            }
                         },
         /*cancellable*/ false,      // what is wanted changes only by disabling the column
-        /*canStep*/     [this] { return canLoad() || isFillEnding(); }});
+        /*canStep*/     [this] { return canLoad(); }});
     m_fillTaskRegistered = true;
 }
 
 // O(1): the scheduler asks on every tick. The fill has work while a session
-// has a pending cell, and for one step more once none has: the step that
-// reports "k / n" with k = n (a fill ends with a job, not with a step).
+// has a pending cell. A fill ends with a job, not with a step: the pass that
+// finds the last pending cell resolved wakes the scheduler, which reports the
+// fill's final progress and completes it.
 bool CalculationDemand::hasFillWork() const
 {
-    return !isInert() && !m_queue->isShutDown() && (m_fillRemaining > 0 || m_fillEnding);
-}
-
-bool CalculationDemand::isFillEnding() const
-{
-    return hasFillWork() && m_fillRemaining == 0;
+    return !isInert() && !m_queue->isShutDown() && m_fillRemaining > 0;
 }
 
 bool CalculationDemand::canLoad() const
@@ -885,12 +858,6 @@ void CalculationDemand::runLoadStep()
 {
     if (hasPendingUpdate())
         recompute();        // the candidates as demand is now
-    if (isFillEnding()) {
-        // The last step of a fill loads nothing: the scheduler reports the
-        // fill complete after it, and the task has no work any more
-        m_fillEnding = false;
-        return;
-    }
     if (!canLoad())
         return;
 
@@ -1239,8 +1206,7 @@ void CalculationDemand::recompute()
             withdrawOwnOffer();
         } else {
             syncCheckedSet();
-            if (m_columnsDirty)
-                syncColumns();
+            syncColumns();
 
             // Ordinary plots and columns cost nothing: sessions are not even
             // enumerated for them
@@ -1309,15 +1275,17 @@ void CalculationDemand::recompute()
     }
 
     // The column fill's numbers: remaining = sessions with a pending cell;
-    // the total is the fill's high-water mark, reset when the fill has
-    // reported its end (the task's onComplete)
+    // the total is the fill's high-water mark, reset when the scheduler
+    // completes the fill (the task's onComplete). The scheduler completes
+    // only the task it last reported active, so a fill that lost its work
+    // behind another task keeps its mark: a fill that starts while no session
+    // had a pending cell starts its own count.
     m_loadCandidates = loadCandidates;
-    if (fillRemaining == 0 && m_fillRemaining > 0)
-        m_fillEnding = true;
-    else if (fillRemaining > 0)
-        m_fillEnding = false;
+    if (m_fillRemaining == 0 && fillRemaining > 0)
+        m_fillHighWater = fillRemaining;
+    else
+        m_fillHighWater = qMax(m_fillHighWater, fillRemaining);
     m_fillRemaining = fillRemaining;
-    m_fillHighWater = qMax(m_fillHighWater, m_fillRemaining);
 
     applyStates(order, states, columnOrder, columnStates, pendingCells);
 
@@ -1405,6 +1373,8 @@ void CalculationDemand::onPlotCheckStateChanged()
         scheduleUpdate();
 }
 
+// The bulk edit publishes its edit this way too, for a loaded session and for
+// a stub: it is an input change like any other.
 void CalculationDemand::onDependencyChanged(const QString &sessionId, const DependencyKey &key)
 {
     // The session's engine state changed: its column reports are inspected again
@@ -1413,11 +1383,7 @@ void CalculationDemand::onDependencyChanged(const QString &sessionId, const Depe
     // Only the static closure of the checked requested plots and of the
     // requested columns matters: any other edit neither delays nor retries
     // anything
-    if (m_columnsDirty)
-        syncColumns();
-    if (m_relevantNamesDirty)
-        rebuildRelevantNames();
-    if (!m_relevantNames.contains(key))
+    if (!isRelevantName(key))
         return;
 
     // A job's own publication is not an input change: the synchronous pass in
@@ -1453,7 +1419,6 @@ void CalculationDemand::onVisibilityChanged(const QSet<QString> &, const QSet<QS
 // columns and rows.
 void CalculationDemand::onSessionModelAboutToBeReset()
 {
-    m_columnsDirty = true;
     m_columnReports.clear();
     m_recordSets.clear();
     m_recordReasons.clear();
@@ -1484,53 +1449,6 @@ void CalculationDemand::onSessionModelReset()
     scheduleUpdate();
 }
 
-// The bulk edit (both paths) and the column worker announce a changed row this
-// way, without dependencyChanged. Multi-row changes (visibility, the unit
-// system, the environment check) are not input changes of a session, and
-// hover changes carry other roles. The column worker emits this for every
-// stub it processes, so the slot is O(1) and schedules only when it changed
-// what this component knows of a session that is not loaded.
-void CalculationDemand::onSessionDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight,
-                                             const QList<int> &roles)
-{
-    if (!m_sessionModel || !topLeft.isValid() || topLeft.row() != bottomRight.row())
-        return;
-    if (!roles.isEmpty() && !roles.contains(Qt::DisplayRole))
-        return;
-    const SessionModel &model = *m_sessionModel;
-    const int row = topLeft.row();
-    if (row < 0 || row >= model.rowCount())
-        return;
-    const SessionRow &sr = model.rowAt(row);
-    const QString sessionId = sr.sessionId;
-
-    // A loaded row's engine may have changed (the bulk edit's loaded path
-    // publishes nothing); the next pass inspects it again
-    m_columnReports.remove(sessionId);
-    if (sr.isLoaded() && !sr.loadFailed)
-        return;
-
-    bool changed = eraseSettlements(sessionId);
-    // A restore into the column worker's copy may have taught the index a
-    // record's reason
-    const auto records = m_recordSets.constFind(sessionId);
-    if (!changed && records != m_recordSets.constEnd()) {
-        const LogbookManager &logbook = LogbookManager::instance();
-        const QHash<QString, QString> reasons = m_recordReasons.value(sessionId);
-        for (const QString &id : records.value()) {
-            if (logbook.calculationRecordReason(sessionId, id) != reasons.value(id)) {
-                changed = true;
-                break;
-            }
-        }
-    }
-    if (!changed)
-        return;
-    m_recordSets.remove(sessionId);
-    m_recordReasons.remove(sessionId);
-    scheduleUpdate();
-}
-
 // Inside a record method (a write, a removal, a skip, possibly from an engine
 // listener): only drops state and schedules.
 void CalculationDemand::onCalculationRecordsChanged(const QString &sessionId, const QString &calculationId)
@@ -1539,7 +1457,7 @@ void CalculationDemand::onCalculationRecordsChanged(const QString &sessionId, co
     m_recordReasons.remove(sessionId);
     m_columnReports.remove(sessionId);
     for (const ColumnInfo &column : std::as_const(m_columns)) {
-        if (m_columnsDirty || column.calculations.contains(calculationId))
+        if (column.calculations.contains(calculationId))
             m_settled.remove(CellKey(sessionId, column.id));
     }
     scheduleUpdate();
@@ -1563,8 +1481,8 @@ void CalculationDemand::onJobFinished(JobId id, JobState state)
         scheduleUpdate();
         return;
     }
-    // Synchronously: the executor emits jobFinished before it decides between
-    // idle() and the next start, so the next choice is in place first
+    // Synchronously: the executor emits jobFinished before it schedules the
+    // next start, so the next choice is in place first
     recompute();
 }
 
@@ -1606,11 +1524,9 @@ void CalculationDemand::onRegistryChanged()
 {
     m_requested.clear();
     m_staticNames.clear();
-    m_relevantNames.clear();
-    m_relevantNamesDirty = true;
     m_memory.clear();
-    // What a column needs follows the registrations
-    m_columnsDirty = true;
+    // What a column needs follows the registrations: the next pass reads it
+    // from the session model
     m_settled.clear();
     m_columnReports.clear();
     scheduleUpdate();

@@ -43,7 +43,7 @@ constexpr bool isEndState(JobState state)
 struct JobRecord {
     JobId          id = 0;
     QString        sessionId;
-    QString        sessionName;             ///< snapshot at request: _DESCRIPTION, else the session id
+    QString        sessionName;             ///< snapshot at the offer: the session model's display name of the row (sessionDisplayName())
     CalculationId  calculationId;           ///< registration id
     DependencyKey  instanceOutput = DependencyKey::attribute(QString());   ///< empty name: plain calculation
     QString        instanceId;              ///< == calculationId for a plain calculation

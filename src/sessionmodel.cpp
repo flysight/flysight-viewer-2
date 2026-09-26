@@ -138,7 +138,10 @@ SessionModel::SessionModel(QObject *parent)
 
     // Registrations are part of the calculation environment too. One user
     // action can cause many registry changes; the check is coalesced.
+    // The column tables are only marked stale here: an observer must not call
+    // into the registry, and an outside read rebuilds them (ensureColumnTables).
     m_registryObserver = CalculationRegistry::instance().addObserver([this]() {
+        m_columnTablesStale = true;
         queueEnvironmentCheck();
     });
 
@@ -146,6 +149,10 @@ SessionModel::SessionModel(QObject *parent)
     // COLUMN VALUES). Direct: the slot only drops state and defers.
     connect(&LogbookManager::instance(), &LogbookManager::calculationRecordsChanged,
             this, &SessionModel::onCalculationRecordsChanged);
+    // A record the store could not write is relayed as it is (direct, from
+    // inside the engine callback): consumers connect to the model
+    connect(&m_resultStore, &CalculationResultStore::recordWriteFailed,
+            this, &SessionModel::calculationRecordWriteFailed);
 
     rebuildColumns();
 }
@@ -1430,7 +1437,7 @@ bool SessionModel::columnsReadPreference(const QString &key) const
 
 // ---- Cached column values: per-column refresh ---------------------------
 
-void SessionModel::rebuildColumnDependencies()
+void SessionModel::rebuildColumnDependencies() const
 {
     const CalculationRegistry &registry = CalculationRegistry::instance();
 
@@ -1449,6 +1456,56 @@ void SessionModel::rebuildColumnDependencies()
         m_columnDependencies.append(deps);
         m_columnExplicitCalculations.append(logbookColumnExplicitCalculations(col, registry));
     }
+    m_columnTablesStale = false;
+}
+
+void SessionModel::ensureColumnTables() const
+{
+    if (m_columnTablesStale)
+        rebuildColumnDependencies();
+}
+
+// A registration changes the tables before the queued environment check runs:
+// an outside reader gets them current now. The environment check rebuilds
+// them again and discards the changed columns as before.
+QStringList SessionModel::columnRequestedCalculations(int column) const
+{
+    ensureColumnTables();
+    if (column < 0 || column >= m_columnExplicitCalculations.size())
+        return {};
+    return m_columnExplicitCalculations.at(column);
+}
+
+StaticDependencies SessionModel::columnDependencyClosure(int column) const
+{
+    ensureColumnTables();
+    if (column < 0 || column >= m_columnDependencies.size())
+        return {};
+    return m_columnDependencies.at(column);
+}
+
+// The live description wins for a loaded row; a stub and a failed-load
+// placeholder are named by what the logbook index caches for the row.
+QString SessionModel::sessionDisplayName(int row) const
+{
+    if (row < 0 || row >= m_rows.size())
+        return {};
+    const SessionRow &sr = m_rows.at(row);
+    QString name;
+    if (sr.isLoaded() && !sr.loadFailed) {
+        name = sr.session->getAttribute(SessionKeys::Description).toString();
+    } else {
+        static const QString descriptionKey = [] {
+            LogbookColumn description;
+            description.type = ColumnType::SessionAttribute;
+            description.attributeKey = QString::fromLatin1(SessionKeys::Description);
+            return logbookColumnDefinitionKey(description);
+        }();
+        name = LogbookManager::jsonToVariant(
+                   LogbookManager::instance().cachedValuesForSession(sr.sessionId).value(descriptionKey))
+                   .toString();
+    }
+    return name.isEmpty() ? sr.sessionId : name;
 }
 
 bool SessionModel::isExplicitBacked(int column) const
@@ -2281,13 +2338,17 @@ void SessionModel::processNextBulkEdit()
         return;
     }
 
+    // What the edit changed, published at the end of the step as a direct edit
+    // publishes it (dependencyChanged per name); unset when nothing was applied
+    std::optional<QSet<DependencyKey>> changedNames;
+
     if (sr.loadFailed) {
         // A failed-load placeholder is never edited or saved: skipped, like a
         // stub whose load fails below
     } else if (sr.isLoaded()) {
         // --- LOADED PATH ---
         SessionData &session = sr.session.value();
-        session.setAttribute(attributeKey, newVal);
+        changedNames = session.setAttribute(attributeKey, newVal);
         invalidateColumns(row, {DependencyKey::attribute(attributeKey)});
 
         // Save inline. A row that was already queued for the idle saver
@@ -2313,9 +2374,12 @@ void SessionModel::processNextBulkEdit()
 
             m_columnWorkStats.sessionsLoaded++;
 
-            // Apply the edit
+            // Apply the edit. No engine of the row reflects the temporary
+            // copy, so the attribute's own name is what is published: every
+            // static closure that reads the attribute contains it.
             loaded->setAttribute(attributeKey, newVal);
             invalidateColumns(row, {DependencyKey::attribute(attributeKey)});
+            changedNames = QSet<DependencyKey>{DependencyKey::attribute(attributeKey)};
 
             // Save
             if (logbook.saveSession(loaded.value())) {
@@ -2350,8 +2414,13 @@ void SessionModel::processNextBulkEdit()
         // If load failed, silently skip
     }
 
-    // Notify the view that this row has been updated
-    if (columnCount() > 0)
+    // An applied edit is published like a direct edit: the row's display
+    // change and one dependencyChanged per changed name, whether or not the
+    // save succeeded. `row` names the row's current id (setRowSessionId()
+    // may have remapped it above). Otherwise the view only repaints the row.
+    if (changedNames.has_value())
+        publishInvalidation(row, changedNames.value());
+    else if (columnCount() > 0)
         emit dataChanged(index(row, 0), index(row, columnCount() - 1), {Qt::DisplayRole});
 
     // Update progress

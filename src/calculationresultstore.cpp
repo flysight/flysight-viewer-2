@@ -56,6 +56,11 @@ bool namesRecordIn(const CalculationRecord &record, const QSet<QString> &ids)
 
 } // namespace
 
+CalculationResultStore::CalculationResultStore(QObject *parent)
+    : QObject(parent)
+{
+}
+
 void CalculationResultStore::onExplicitResultEvent(const QString &sessionId, const CalculationEngine &engine,
                                                    const CalculationEngine::ExplicitResultEvent &event)
 {
@@ -84,9 +89,10 @@ void CalculationResultStore::onExplicitResultEvent(const QString &sessionId, con
 
         // Every model row has a logbook identity (a stem the manager knows,
         // or one reserved at import), so no session-file check is made. A
-        // failure has been warned about by the manager; the previous record
-        // (if any) is intact and the in-memory result untouched. Never
-        // retried: the next Ok publish of the pair tries again.
+        // failure has been warned about by the manager and is announced
+        // here; the previous record (if any) is intact and the in-memory
+        // result untouched. Never retried: the next Ok publish of the pair
+        // tries again.
         QString error;
         LogbookManager &logbook = LogbookManager::instance();
         // The manager notes the record's reason in the index as it writes it
@@ -95,6 +101,8 @@ void CalculationResultStore::onExplicitResultEvent(const QString &sessionId, con
             ++m_stats.recordsWritten;
         } else {
             ++m_stats.writeFailures;
+            emit recordWriteFailed(sessionId, event.instanceId,
+                                   error.isEmpty() ? tr("The result could not be stored") : error);
         }
         return;
     }
@@ -281,7 +289,9 @@ CalculationResultStore::RestoreSummary CalculationResultStore::restoreSession(co
     }
 
     // 4. What the index learns of the records that stay: restored, kept, or
-    //    skipped because they read one that could not be read
+    //    skipped because they read one that could not be read. A reason that
+    //    differs from the index's is announced by the manager as a record
+    //    change, from inside this restore (as a stale deletion above is).
     for (auto it = readReasons.constBegin(); it != readReasons.constEnd(); ++it)
         logbook.setCalculationRecordReason(sessionId, it.key(), it.value());
 

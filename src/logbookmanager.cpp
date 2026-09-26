@@ -1156,7 +1156,7 @@ bool LogbookManager::writeCalculationRecord(const QString &sessionId, const Calc
     //    outcome of what it holds (a replacement replaces it).
     m_knownRecords[sessionId].insert(calculationId);
     m_unconfirmedRecords[sessionId].remove(calculationId);
-    setCalculationRecordReason(sessionId, calculationId, record.result.detail);
+    storeRecordReason(sessionId, calculationId, record.result.detail);    // announced just below
     emit calculationRecordsChanged(sessionId, calculationId);
     return true;
 }
@@ -1238,7 +1238,7 @@ bool LogbookManager::removeCalculationRecordOfStem(const QString &sessionId, con
         dropRecordDependentValues(sessionId, {calculationId});
         m_knownRecords[sessionId].remove(calculationId);
         m_unconfirmedRecords[sessionId].remove(calculationId);
-        setCalculationRecordReason(sessionId, calculationId, QString());
+        storeRecordReason(sessionId, calculationId, QString());
         emit calculationRecordsChanged(sessionId, calculationId);
         return true;
     }
@@ -1256,7 +1256,7 @@ bool LogbookManager::removeCalculationRecordOfStem(const QString &sessionId, con
         *removedFile = true;
     m_knownRecords[sessionId].remove(calculationId);
     m_unconfirmedRecords[sessionId].remove(calculationId);
-    setCalculationRecordReason(sessionId, calculationId, QString());   // the reason goes with the record
+    storeRecordReason(sessionId, calculationId, QString());   // the reason goes with the record
     emit calculationRecordsChanged(sessionId, calculationId);
     return true;
 }
@@ -1302,24 +1302,36 @@ QString LogbookManager::calculationRecordReason(const QString &sessionId, const 
     return session->value(calculationId);
 }
 
+// A changed reason is a record change: a listener drops what it knew of the
+// session's records and reports. The values over the record are then computed
+// again once, with identical values; only the first restore that learns the
+// reason does this, since a later one finds the same reason and emits nothing.
 void LogbookManager::setCalculationRecordReason(const QString &sessionId, const QString &calculationId,
                                                 const QString &reason)
+{
+    if (storeRecordReason(sessionId, calculationId, reason))
+        emit calculationRecordsChanged(sessionId, calculationId);
+}
+
+bool LogbookManager::storeRecordReason(const QString &sessionId, const QString &calculationId,
+                                       const QString &reason)
 {
     // Non-empty reasons only: empty is "produced its outputs" or "not learned"
     if (reason.isEmpty()) {
         const auto session = m_recordReasons.find(sessionId);
         if (session == m_recordReasons.end() || session->remove(calculationId) == 0)
-            return;
+            return false;
         if (session->isEmpty())
             m_recordReasons.erase(session);
         m_indexNeedsFlush = true;
-        return;
+        return true;
     }
     QString &stored = m_recordReasons[sessionId][calculationId];
     if (stored == reason)
-        return;
+        return false;
     stored = reason;
     m_indexNeedsFlush = true;
+    return true;
 }
 
 void LogbookManager::adoptRecordReasons(const QMap<QString, QMap<QString, QString>> &reasonsOnDisk)

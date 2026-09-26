@@ -198,6 +198,8 @@ private slots:
     void cleanup();
 
     void columnExplicitCalculations();
+    void sessionModelExposesColumnKnowledge();
+    void sessionDisplayNameOfEveryRowKind();
     void unrequestedIsCachedUnavailable();
     void stampWrittenOnFlush();
     void publishedResultIsCached_data();
@@ -408,6 +410,104 @@ void ResultColumnsTest::columnExplicitCalculations()
     QCOMPARE(logbookColumnExplicitCalculations(gyroColumn(), registry), QStringList());
     QCOMPARE(logbookColumnExplicitCalculations(xColumn(), registry), QStringList({kCalcX}));
     QCOMPARE(logbookColumnExplicitCalculations(yColumn(), registry), QStringList({kCalcY}));
+}
+
+// The session model is the one source of each enabled column's requested
+// calculations and static closure: its answers equal the registry-side
+// computation, and they are current right after a registration, before the
+// model's queued environment check has run.
+void ResultColumnsTest::sessionModelExposesColumnKnowledge()
+{
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+    QCOMPARE(m_model->columnRequestedCalculations(kD), QStringList());
+    QCOMPARE(m_model->columnRequestedCalculations(kX), QStringList({kCalcX}));
+    QCOMPARE(m_model->columnRequestedCalculations(kY), QStringList({kCalcY}));
+    QCOMPARE(m_model->columnRequestedCalculations(-1), QStringList());
+    QCOMPARE(m_model->columnRequestedCalculations(m_model->columnCount()), QStringList());
+    QCOMPARE(m_model->columnDependencyClosure(kX).names,
+             registry.staticDependencies(DependencyKey::attribute(QStringLiteral("X_OUT"))).names);
+    QVERIFY(m_model->columnDependencyClosure(kX).names.contains(DependencyKey::attribute(QStringLiteral("_DESCRIPTION"))));
+    QCOMPARE(m_model->columnDependencyClosure(kY).names,
+             registry.staticDependencies(DependencyKey::attribute(QStringLiteral("Y_OUT"))).names);
+    QVERIFY(m_model->columnDependencyClosure(-1).names.isEmpty());
+    QVERIFY(m_model->columnDependencyClosure(m_model->columnCount()).names.isEmpty());
+
+    // An enabled ordinary column over an output nothing produces yet
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), xColumn(), yColumn(),
+                                               attributeColumn("LATE_OUT")});     // cleanup() restores
+    const int late = 3;
+    QCOMPARE(m_model->column(late).attributeKey, QStringLiteral("LATE_OUT"));
+    QCOMPARE(m_model->columnRequestedCalculations(late), QStringList());
+    QVERIFY(!m_model->columnDependencyClosure(late).names.contains(DependencyKey::attribute(QStringLiteral("Y_IN"))));
+
+    // Registered: both answers change at once, without a turn of the event loop
+    CalculationDescriptor lateCalculation;
+    lateCalculation.id = QStringLiteral("test.columns.late");
+    lateCalculation.policy = EvaluationPolicy::Explicit;
+    lateCalculation.inputs = {CalcInput::attribute(QStringLiteral("Y_IN"))};
+    lateCalculation.outputs = {DependencyKey::attribute(QStringLiteral("LATE_OUT"))};
+    lateCalculation.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(QStringLiteral("LATE_OUT"),
+                                                ctx.attribute(QStringLiteral("Y_IN")).toDouble() + 1.0);
+    };
+    QVERIFY(CalculationRegistry::instance().registerCalculation(lateCalculation));
+    const auto unregisterLate = qScopeGuard([] {
+        CalculationRegistry::instance().unregister(QStringLiteral("test.columns.late"),
+                                                   CalculationRegistry::Removal::Change);
+    });
+    QCOMPARE(m_model->columnRequestedCalculations(late), QStringList({QStringLiteral("test.columns.late")}));
+    QCOMPARE(m_model->columnRequestedCalculations(late),
+             logbookColumnExplicitCalculations(m_model->column(late), registry));
+    QVERIFY(m_model->columnDependencyClosure(late).names.contains(DependencyKey::attribute(QStringLiteral("Y_IN"))));
+    QCOMPARE(m_model->columnRequestedCalculations(kX), QStringList({kCalcX}));
+}
+
+// The session model names a row as the logbook does: the loaded session's
+// description, else the description the index caches for the row, else the
+// session id.
+void ResultColumnsTest::sessionDisplayNameOfEveryRowKind()
+{
+    // Loaded, with and without a description
+    QCOMPARE(m_model->sessionDisplayName(row("s1")), QStringLiteral("d1"));
+    QCOMPARE(m_model->sessionDisplayName(row("s2")), QStringLiteral("d2"));
+    QCOMPARE(m_model->sessionDisplayName(-1), QString());
+    QCOMPARE(m_model->sessionDisplayName(m_model->rowCount()), QString());
+
+    // Stubs: the index's cached description; without one, the id
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(LogbookManager::instance().flushIndex());
+    resetModel();
+    QVERIFY(editIndex([](QJsonObject &root) {
+        QJsonObject sessions = root[QStringLiteral("sessions")].toObject();
+        QJsonObject entry = sessions[QStringLiteral("s2")].toObject();
+        QJsonObject values = entry[QStringLiteral("values")].toObject();
+        values.remove(indexColumnId(root, descriptionColumn()));
+        entry[QStringLiteral("values")] = values;
+        sessions[QStringLiteral("s2")] = entry;
+        root[QStringLiteral("sessions")] = sessions;
+    }));
+    restart();
+    QVERIFY(!isLoaded("s1"));
+    QVERIFY(!isLoaded("s2"));
+    QCOMPARE(m_model->sessionDisplayName(row("s1")), QStringLiteral("d1"));
+    QCOMPARE(m_model->sessionDisplayName(row("s2")), QStringLiteral("s2"));
+
+    // A failed-load placeholder: the index's cached description
+    const QString csvPath = sessionFilePath(QStringLiteral("s1"));
+    QVERIFY(!csvPath.isEmpty());
+    QVERIFY(QFile::remove(csvPath));
+    session("s1");
+    QVERIFY(rowState("s1").isLoaded());
+    QVERIFY(rowState("s1").loadFailed);
+    QCOMPARE(m_model->sessionDisplayName(row("s1")), QStringLiteral("d1"));
+
+    // Loaded: the live description wins over the index; removed, the id
+    session("s2");
+    QVERIFY(isLoaded("s2"));
+    QVERIFY(!rowState("s2").loadFailed);
+    QCOMPARE(m_model->sessionDisplayName(row("s2")), QStringLiteral("d2"));
+    QVERIFY(m_model->removeAttribute(QStringLiteral("s2"), QStringLiteral("_DESCRIPTION")));
+    QCOMPARE(m_model->sessionDisplayName(row("s2")), QStringLiteral("s2"));
 }
 
 // ---- Loaded rows ----------------------------------------------------------------------

@@ -553,7 +553,7 @@ void FusionJobsTest::noImuSessionCannotHaveAJob()
 // column worker and the saver are readers. None of them starts a fit.
 void FusionJobsTest::readersNeverStartAFit()
 {
-    QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
+    QSignalSpy queuedSpy(m_queue->model(), &QAbstractItemModel::rowsInserted);
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a")),
                           fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("b")),
                           naturalSession(QStringLiteral("c"))}), QString());

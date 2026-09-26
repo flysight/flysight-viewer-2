@@ -278,8 +278,9 @@ private:
     static QString reportDifference(const BlockerReport &got, const BlockerReport &expected);
     /// For a visible track whose fit has just become missing while roll is
     /// checked: the roll row waits on it, and exactly one job has been offered
-    /// since `queued` (a jobQueued spy) was made, when the executor held
-    /// `jobsBefore` records - the fit of `id`, still Queued. Unchecking roll
+    /// since `queued` (a spy on the job model's rowsInserted: one per created
+    /// job) was made, when the executor held `jobsBefore` records - the fit of
+    /// `id`, still Queued. Unchecking roll
     /// ends it Cancelled ("No longer needed") at once, before it ever started,
     /// and nothing else is offered. Empty when all of that held.
     [[nodiscard]] QString offeredFitIsDroppedByUncheck(const QString &id, const QSignalSpy &queued, int jobsBefore);
@@ -1096,7 +1097,7 @@ void FusionStoreTest::codeStampChangeDropsRecordOnLoad()
     m_model->resetStoredResultStats();
 
     const int jobs = m_queue->model()->rowCount();
-    const QSignalSpy queued(m_queue.get(), &JobQueue::jobQueued);
+    const QSignalSpy queued(m_queue->model(), &QAbstractItemModel::rowsInserted);
     show({"a"});
     QVERIFY(isLoaded("a"));
 
@@ -1323,7 +1324,7 @@ void FusionStoreTest::lookupResolvingDifferentlyAtLoadDeletesFit()
     restart([&] { reordered = m_extra->add(sAccFrom(sacc0)) && m_extra->remove(sacc1) && m_extra->add(sAccFrom(sacc1)); });
     QVERIFY(reordered);
     check(QStringLiteral("roll"));
-    const QSignalSpy queued(m_queue.get(), &JobQueue::jobQueued);
+    const QSignalSpy queued(m_queue->model(), &QAbstractItemModel::rowsInserted);
     show({"a"});
     QVERIFY(isLoaded("a"));
 
@@ -1451,7 +1452,7 @@ void FusionStoreTest::deletedCacheFolderReadsNotRequested()
     QVERIFY(LogbookManager::instance().knownCalculationRecords("a").isEmpty());
 
     check(QStringLiteral("roll"));
-    const QSignalSpy queued(m_queue.get(), &JobQueue::jobQueued);
+    const QSignalSpy queued(m_queue->model(), &QAbstractItemModel::rowsInserted);
     show({"a"});
     QVERIFY(isLoaded("a"));
 

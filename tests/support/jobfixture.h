@@ -133,12 +133,18 @@ bool waitIdle(FlySight::JobQueue &queue, int timeoutMs = 30000);
 /// without starting): for tests without a gate. False on timeout.
 bool waitStarted(FlySight::JobQueue &executor, FlySight::JobId job, int timeoutMs = 30000);
 
-/// "Nothing started" since this object was created: no jobQueued signal and no
-/// new row in the job model.
+/// The ids of the executor's active jobs (the running job, one winding down
+/// included, then the chosen next job): the records that are active, in model
+/// order. The running job is always older than the chosen next job.
+QList<FlySight::JobId> activeJobIds(const FlySight::JobQueue &queue);
+
+/// "Nothing started" since this object was created: no job was created (no
+/// rowsInserted of the job model) and no new row is in the job model.
 class Quiet {
 public:
     explicit Quiet(FlySight::JobQueue &queue)
-        : m_queue(queue), m_spy(&queue, &FlySight::JobQueue::jobQueued), m_rows(queue.model()->rowCount())
+        : m_queue(queue), m_spy(queue.model(), &QAbstractItemModel::rowsInserted),
+          m_rows(queue.model()->rowCount())
     {
     }
     bool holds() const { return m_spy.isEmpty() && m_queue.model()->rowCount() == m_rows; }

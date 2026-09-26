@@ -17,6 +17,7 @@
 // main-thread effects; CalculationDemand::flush() runs a pending pass before a
 // state is read; settle() ends the input-settle waits. There are no sleeps.
 
+#include <algorithm>
 #include <memory>
 
 #include <QFile>
@@ -133,7 +134,10 @@ private slots:
     void visibleSessionsFirstWithinColumnDemand();
     void chainedColumnWithUpstreamRecordIsCompleted();
     void storedRejectionIsBadgedAfterRestartWithoutLoad();
+    void recordReasonReachesDemandThroughRecordChange();
+    void columnKnowledgeComesFromTheSessionModel();
     void fillTaskReportsProgressWhileWaiting();
+    void fillEndingBehindAnotherTaskStartsNextCountFresh();
     void storedResultsCreateNoJob();
     void notApplicableSessionIsSettledWithoutAJob();
     void columnFailuresAreBadgedNotReloaded();
@@ -361,7 +365,7 @@ private:
         if (!pinnedHidden)
             return QString();
         QSet<QString> allowed(held.cbegin(), held.cend());
-        for (const JobId id : m_queue->activeJobs())
+        for (const JobId id : activeJobIds(*m_queue))
             allowed.insert(m_queue->job(id).sessionId);
         for (const QString &id : heldHidden()) {
             if (!allowed.contains(id))
@@ -416,6 +420,42 @@ private:
         LogbookManager &logbook = LogbookManager::instance();
         TestEnvironment::instance().reopenLogbook();
         logbook.initialize();
+        m_model = std::make_unique<SessionModel>();
+        m_model->populateFromIndex(logbook.cachedColumnValues(LogbookColumnStore::instance().enabledColumns()),
+                                   logbook.lastAccessedMap());
+        m_queue = std::make_unique<JobQueue>(m_model.get());
+        m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
+    }
+    /// A restart from an index without "recordReasons" (an earlier build) and
+    /// without s2's value of the column over EA1, so that the column worker's
+    /// copy restores s2's record: the index is flushed and edited, then new
+    /// logbook state, a new model of stubs from the index, a new executor and
+    /// a new demand layer. Runs no event-loop pass after the model is made, so
+    /// nothing has run the column worker yet. Check QTest::currentTestFailed().
+    void restartWithoutRecordReasons()
+    {
+        QVERIFY(waitForIdle(*m_model));
+        m_model->flushDirtySessions();
+        m_demand.reset();
+        m_queue->shutdown();
+        m_queue.reset();
+        m_model.reset();
+        QJsonObject root = readIndex();
+        QJsonObject sessions = root[QStringLiteral("sessions")].toObject();
+        QJsonObject entry = sessions[QStringLiteral("s2")].toObject();
+        QVERIFY(entry.contains(QStringLiteral("recordReasons")));
+        entry.remove(QStringLiteral("recordReasons"));
+        // ... and without the value over the record, so that the worker restores it
+        QJsonObject values = entry[QStringLiteral("values")].toObject();
+        values.remove(indexColumnId(root, attributeColumn(QStringLiteral("EA1"))));
+        entry[QStringLiteral("values")] = values;
+        sessions[QStringLiteral("s2")] = entry;
+        root[QStringLiteral("sessions")] = sessions;
+        QVERIFY(writeIndex(root));
+        TestEnvironment::instance().reopenLogbook();
+        LogbookManager &logbook = LogbookManager::instance();
+        logbook.initialize();
+        QCOMPARE(logbook.calculationRecordReason(QStringLiteral("s2"), QStringLiteral("expA")), QString());
         m_model = std::make_unique<SessionModel>();
         m_model->populateFromIndex(logbook.cachedColumnValues(LogbookColumnStore::instance().enabledColumns()),
                                    logbook.lastAccessedMap());
@@ -727,7 +767,7 @@ void CalculationDemandTest::rowScript()
     const JobId job2 = jobOf("s2", "gated").id;
     QVERIFY(job2 != 0);
     QCOMPARE(m_queue->chosenNextJob(), job2);
-    QCOMPARE(m_queue->activeJobs().size(), 2);
+    QCOMPARE(activeJobIds(*m_queue).size(), 2);
     QVERIFY(state.requested);
     QCOMPARE(state.sourceId, plot);
     QCOMPARE(state.wantedCount, 3);
@@ -821,13 +861,20 @@ void CalculationDemandTest::chainedBlockersContinue()
     QVERIFY(giveInput({"s1"}, "EB_IN", 10));
     show({"s1"});
 
-    QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
     // Every announced state until the last is working
     QList<DemandState> announced;
     QObject scope;      // owns the connection: it cannot outlive `announced`
     connect(m_demand.get(), &CalculationDemand::plotStateChanged, &scope, [&](const QString &id) {
         if (id == plot)
             announced.append(m_demand->plotState(id));
+    });
+    // At the first link's end, after the demand layer's own slot (connected
+    // before this one): the executor is not idle, the next link is chosen
+    QList<bool> idleAtEnd;
+    QList<bool> nextChosenAtEnd;
+    connect(m_queue.get(), &JobQueue::jobFinished, &scope, [&](JobId, JobState) {
+        idleAtEnd.append(m_queue->isIdle());
+        nextChosenAtEnd.append(m_queue->chosenNextJob() != 0);
     });
 
     check("db");
@@ -841,7 +888,9 @@ void CalculationDemandTest::chainedBlockersContinue()
     QCOMPARE(jobs->record(1).calculationId, QStringLiteral("expB"));
     QCOMPARE(jobs->record(1).state, JobState::Succeeded);
     // The executor was never idle between the links
-    QCOMPARE(idleSpy.count(), 1);
+    QCOMPARE(idleAtEnd.size(), 2);
+    QVERIFY(!idleAtEnd.first());
+    QVERIFY(nextChosenAtEnd.first());
 
     QCOMPARE(values("s1", "db"), QVector<double>({19.0}));
     QCOMPARE(engine("s1").runCount("expA"), 1);
@@ -862,7 +911,12 @@ void CalculationDemandTest::heldChainContinues()
 {
     QVERIFY(giveInput({"s1"}, "G_IN", 4));
     show({"s1"});
-    QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
+    // At the first link's end, after the demand layer's own slot: the next
+    // link is chosen, so the executor is never idle in between
+    QList<bool> idleAtEnd;
+    QObject scope;      // owns the connection: it cannot outlive `idleAtEnd`
+    connect(m_queue.get(), &JobQueue::jobFinished, &scope,
+            [&](JobId, JobState) { idleAtEnd.append(m_queue->isIdle()); });
 
     check("h");
     QVERIFY(gate().waitEntered());
@@ -878,7 +932,7 @@ void CalculationDemandTest::heldChainContinues()
     QCOMPARE(jobCount("gated"), 1);
     QCOMPARE(jobCount("afterG"), 1);
     QCOMPARE(jobOf("s1", "afterG").state, JobState::Succeeded);
-    QCOMPARE(idleSpy.count(), 1);
+    QCOMPARE(idleAtEnd, QList<bool>({false, true}));
     QCOMPARE(values("s1", "h"), QVector<double>({6.0}));
     QVERIFY(row("Syn/h").isPlain());
 }
@@ -1510,10 +1564,10 @@ void CalculationDemandTest::onlyRequestableCalculationsAreOffered()
     QCOMPARE(engine("s4").request(QStringLiteral("expA")).status, ResultStatus::Ok);
 
     show({"s1", "s2", "s3", "s4"});
-    QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
+    QSignalSpy createdSpy(m_queue->model(), &QAbstractItemModel::rowsInserted);
     check("ea");
     QVERIFY(waitDemandIdle());
-    QCOMPARE(queuedSpy.count(), 1);
+    QCOMPARE(createdSpy.count(), 1);
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(jobOf("s1", "expA").state, JobState::Succeeded);
 
@@ -1959,7 +2013,7 @@ void CalculationDemandTest::executorHoldsAtMostRunningAndChosenNext()
     for (int i = 0; i < 4; ++i) {
         QVERIFY(gate().waitEntered());
         m_demand->flush();
-        QVERIFY(m_queue->activeJobs().size() <= 2);
+        QVERIFY(activeJobIds(*m_queue).size() <= 2);
         gate().open(1);
     }
     QVERIFY(waitDemandIdle());
@@ -2783,43 +2837,26 @@ void CalculationDemandTest::storedRejectionIsBadgedAfterRestartWithoutLoad()
 
     // An index without "recordReasons" (an earlier build): Done until the
     // column worker's copy restores the record, after which the reason is in
-    // the index and the next pass lists s2 as failed
-    QVERIFY(waitForIdle(*m_model));
-    m_model->flushDirtySessions();
-    m_demand.reset();
-    m_queue->shutdown();
-    m_queue.reset();
-    m_model.reset();
-    QJsonObject root = readIndex();
-    QJsonObject sessions = root[QStringLiteral("sessions")].toObject();
-    QJsonObject entry = sessions[QStringLiteral("s2")].toObject();
-    QVERIFY(entry.contains(QStringLiteral("recordReasons")));
-    entry.remove(QStringLiteral("recordReasons"));
-    // ... and without the value over the record, so that the worker restores it
-    QJsonObject values = entry[QStringLiteral("values")].toObject();
-    values.remove(indexColumnId(root, attributeColumn(QStringLiteral("EA1"))));
-    entry[QStringLiteral("values")] = values;
-    sessions[QStringLiteral("s2")] = entry;
-    root[QStringLiteral("sessions")] = sessions;
-    QVERIFY(writeIndex(root));
-    TestEnvironment::instance().reopenLogbook();
+    // the index, announced as a record change, and the next pass lists s2 as
+    // failed
+    restartWithoutRecordReasons();
+    if (QTest::currentTestFailed())
+        return;
     LogbookManager &logbook = LogbookManager::instance();
-    logbook.initialize();
-    QCOMPARE(logbook.calculationRecordReason(QStringLiteral("s2"), QStringLiteral("expA")), QString());
-    m_model = std::make_unique<SessionModel>();
-    m_model->populateFromIndex(logbook.cachedColumnValues(LogbookColumnStore::instance().enabledColumns()),
-                               logbook.lastAccessedMap());
-    m_queue = std::make_unique<JobQueue>(m_model.get());
-    m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
     {
         const Quiet quiet(*m_queue);
         QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+        QSignalSpy recordSpy(&logbook, &LogbookManager::calculationRecordsChanged);
         DemandState state = col("EA1");
         QCOMPARE(state.failedCount, 0);
         QCOMPARE(state.doneCount, 1);
         m_model->startColumnWorker();
         QTRY_COMPARE(logbook.calculationRecordReason(QStringLiteral("s2"), QStringLiteral("expA")),
                      QStringLiteral("negative input"));
+        QVERIFY(std::any_of(recordSpy.cbegin(), recordSpy.cend(), [](const QList<QVariant> &arguments) {
+            return arguments.at(0).toString() == QLatin1String("s2")
+                && arguments.at(1).toString() == QLatin1String("expA");
+        }));
         QVERIFY(waitDemandIdle());
         verifyBadged();
         if (QTest::currentTestFailed())
@@ -2827,6 +2864,94 @@ void CalculationDemandTest::storedRejectionIsBadgedAfterRestartWithoutLoad()
         QCOMPARE(loadsOf(loadedSpy, "s2"), 0);
         QVERIFY(quiet.holds());
     }
+}
+
+// A reason the index learns reaches the demand layer as the manager's record
+// change, and through nothing else: the column worker's display change of the
+// stub carries no reason.
+void CalculationDemandTest::recordReasonReachesDemandThroughRecordChange()
+{
+    QVERIFY(giveInput({"s2"}, "EA_IN", -1));
+    enableColumns({"EA1"});
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(jobOf(QStringLiteral("s2"), "expA").state, JobState::Succeeded);
+    QVERIFY(stored("s2", "expA"));
+
+    restartWithoutRecordReasons();
+    if (QTest::currentTestFailed())
+        return;
+    LogbookManager &logbook = LogbookManager::instance();
+    const Quiet quiet(*m_queue);
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+    DemandState state = col("EA1");     // the record set is read now, without a reason
+    QCOMPARE(state.failedCount, 0);
+    QCOMPARE(state.doneCount, 1);
+
+    // The worker's pass with the manager's signals blocked: the reason is
+    // learned, and nothing tells the demand layer
+    {
+        const QSignalBlocker blocker(&logbook);
+        m_model->startColumnWorker();
+        QVERIFY(waitForIdle(*m_model));
+    }
+    QCOMPARE(logbook.calculationRecordReason(QStringLiteral("s2"), QStringLiteral("expA")),
+             QStringLiteral("negative input"));
+    m_demand->flush();
+    state = col("EA1");
+    QCOMPARE(state.failedCount, 0);
+
+    // The record change that the manager emits when it learns a reason
+    emit logbook.calculationRecordsChanged(QStringLiteral("s2"), QStringLiteral("expA"));
+    m_demand->flush();
+    state = col("EA1");
+    QCOMPARE(sessionIdsOf(state.failed), QStringList({"s2"}));
+    QCOMPARE(state.failed.at(0).reason, QStringLiteral("Explicit A: negative input"));
+    QCOMPARE(state.failed.at(0).sessionName, QStringLiteral("Jump 2"));
+    QVERIFY(!state.failed.at(0).jobFailure);
+    QCOMPARE(loadsOf(loadedSpy, "s2"), 0);
+    QVERIFY(quiet.holds());
+}
+
+// The demand layer reads each column's requested calculations and static
+// closure from the session model: current right after a registration, before
+// the model's queued environment check, and only requested columns make an
+// input change relevant.
+void CalculationDemandTest::columnKnowledgeComesFromTheSessionModel()
+{
+    m_demand->setInputSettleDelay(60000);
+    // (a) An ordinary column over an output nothing produces yet
+    enableColumns({"LATE_OUT", "PLAIN_ATTR"});
+    QVERIFY(giveInput({"s1"}, "LATE_IN", 1));
+    QVERIFY(giveInput({"s1"}, "PLAIN_ATTR", 1));
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(!col("LATE_OUT").requested);
+    QVERIFY(!m_demand->isSettling(QStringLiteral("s1")));
+
+    CalculationDescriptor late;
+    late.id = QStringLiteral("test.demand.late");
+    late.title = QStringLiteral("Late");
+    late.policy = EvaluationPolicy::Explicit;
+    late.inputs = {CalcInput::attribute(QStringLiteral("LATE_IN"))};
+    late.outputs = {DependencyKey::attribute(QStringLiteral("LATE_OUT"))};
+    late.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(QStringLiteral("LATE_OUT"),
+                                                ctx.attribute(QStringLiteral("LATE_IN")).toInt() + 1);
+    };
+    QVERIFY(m_extra->add(late));
+    // At once, without a turn of the event loop
+    m_demand->flush();
+    QVERIFY(m_demand->columnState(colId("LATE_OUT")).requested);
+    QVERIFY(m_demand->isCellPending(rowOf(QStringLiteral("s1")), section("LATE_OUT")));
+    QVERIFY(!m_demand->columnState(colId("PLAIN_ATTR")).requested);
+
+    // (b) An edit of an attribute only an ordinary column reads starts no
+    // wait; an edit of the requested column's input does
+    QVERIFY(isLoaded(QStringLiteral("s1")));
+    QVERIFY(!rowState(QStringLiteral("s1")).visible);
+    QVERIFY(giveInput({"s1"}, "PLAIN_ATTR", 2));
+    QVERIFY(!m_demand->isSettling(QStringLiteral("s1")));
+    QVERIFY(giveInput({"s1"}, "LATE_IN", 2));
+    QVERIFY(m_demand->isSettling(QStringLiteral("s1")));
 }
 
 // Spec 13: the progress line reports the fill for its whole duration, and the
@@ -2851,6 +2976,10 @@ void CalculationDemandTest::fillTaskReportsProgressWhileWaiting()
     connect(&scheduler, &IdleScheduler::schedulerIdle, &scope, [&] { events.append(QStringLiteral("I")); });
     connect(m_model.get(), &SessionModel::sessionLoaded, &scope,
             [&](const QString &id) { events.append(QStringLiteral("L ") + id); });
+    // At each job's end, after the demand layer's own slot (connected first)
+    QList<bool> fillWorkAtEnd;
+    connect(m_queue.get(), &JobQueue::jobFinished, &scope,
+            [&](JobId, JobState) { fillWorkAtEnd.append(m_demand->hasFillWork()); });
 
     enableColumns({"G_OUT"});
     QVERIFY(gate().waitEntered());
@@ -2883,6 +3012,10 @@ void CalculationDemandTest::fillTaskReportsProgressWhileWaiting()
 
     gate().open(3);
     QVERIFY(waitDemandIdle());
+    // The pass in the last job's end found no pending cell left: the fill had
+    // no work from then on, and the scheduler completed it
+    QCOMPARE(fillWorkAtEnd.size(), 4);
+    QVERIFY(!fillWorkAtEnd.last());
     QTRY_VERIFY(events.contains(QStringLiteral("I")));
     const int end = int(events.lastIndexOf(QStringLiteral("P 0/4")));
     QVERIFY(end >= 0);
@@ -2909,9 +3042,67 @@ void CalculationDemandTest::fillTaskReportsProgressWhileWaiting()
     QCOMPARE(fillProgress.first(), progressOf(1, 1));
     gate().open(1);
     QVERIFY(waitDemandIdle());
-    QCOMPARE(fillProgress.last(), progressOf(0, 1));
+    // waitDemandIdle() returns once the fill has no work, which may be before
+    // the scheduler's tick that reports its end
+    QTRY_COMPARE(fillProgress.last(), progressOf(0, 1));
     for (const QPair<int, int> &progress : std::as_const(fillProgress))
         QCOMPARE(progress.second, 1);
+}
+
+// A fill that loses its work while another task is active is not completed
+// by the scheduler (it completes only the task it last reported active); the
+// next fill still starts its own count.
+void CalculationDemandTest::fillEndingBehindAnotherTaskStartsNextCountFresh()
+{
+    QVERIFY(giveInput({"s1"}, "G_IN", 1));
+    QVERIFY(giveInput({"s2"}, "G_IN", 2));
+    show({"s3", "s4"});             // loaded, without the input: nothing to fill
+    QVERIFY(makeStubs({"s1", "s2"}));
+    QVERIFY(waitForIdle(*m_model));
+
+    IdleScheduler &scheduler = m_model->scheduler();
+    const auto removeProbe = qScopeGuard([&scheduler] { scheduler.unregisterTask(96); });
+    QList<QPair<int, int>> fillProgress;
+    QObject scope;
+    connect(&scheduler, &IdleScheduler::progressChanged, &scope, [&fillProgress](int id, int remaining, int total) {
+        if (id == SessionModel::ColumnFillTask)
+            fillProgress.append({remaining, total});
+    });
+
+    // Both stubs held, the fill resting on the running job
+    enableColumns({"G_OUT"});
+    QVERIFY(gate().waitEntered());
+    QTRY_COMPARE(m_demand->heldSessionIds().size(), 2);
+    QTRY_VERIFY(!scheduler.isTicking());
+    QVERIFY(fillProgress.contains(progressOf(2, 2)));
+
+    // A higher task becomes the active one while the fill's jobs end
+    bool probeHasWork = true;
+    scheduler.registerTask(96, TaskDef{0,
+                                       [] {},
+                                       [&probeHasWork] { return probeHasWork; },
+                                       [] { return Progress{1, 1}; },
+                                       [](bool) {},
+                                       false});
+    QSignalSpy activeSpy(&scheduler, &IdleScheduler::activeTaskChanged);
+    scheduler.wake();
+    QTRY_VERIFY(!activeSpy.isEmpty());
+    QCOMPARE(activeSpy.last().at(0).toInt(), 96);
+    gate().open(2);
+    QTRY_VERIFY(!m_demand->hasFillWork());
+    QCOMPARE(jobOf(QStringLiteral("s2"), "gated").state, JobState::Succeeded);
+    probeHasWork = false;
+    QVERIFY(waitForIdle(*m_model));
+    scheduler.unregisterTask(96);
+
+    // A fill of one session: its first report is its own count
+    drainEntered();
+    fillProgress.clear();
+    QVERIFY(giveInput({"s2"}, "G_IN", 20));
+    settle();
+    QTRY_VERIFY(!fillProgress.isEmpty());
+    QCOMPARE(fillProgress.first(), progressOf(1, 1));
+    QVERIFY(gate().waitEntered());
 }
 
 // Spec 13: stored results are restored, not recomputed: enabling the column on
@@ -3127,7 +3318,8 @@ void CalculationDemandTest::columnOfferRefusalIsNotLeftPending()
     QCOMPARE(state.wantedCount, 0);
     QVERIFY(state.isPlain());
     QVERIFY(!isCellPending(QStringLiteral("s1"), "PP_OUT"));
-    // The fill's last step reports it complete, and then it has no work
+    // The fill has no pending cell left: it has no work, and the scheduler
+    // completes it
     QTRY_VERIFY(!m_demand->hasFillWork());
     QVERIFY(quiet.holds());
 }
@@ -3633,8 +3825,9 @@ void CalculationDemandTest::savesAndBulkEditsPrecedeLoadStep()
             order.append(cancellable ? QStringLiteral("F!") : QStringLiteral("F"));
     });
     const QByteArray bulkLine = "$VAR,_DESCRIPTION,bulk";
-    connect(m_queue.get(), &JobQueue::jobQueued, &scope, [this, &violations, bulkLine](JobId id) {
-        const QString sessionId = m_queue->job(id).sessionId;
+    connect(m_queue->model(), &QAbstractItemModel::rowsInserted, &scope,
+            [this, &violations, bulkLine](const QModelIndex &, int first, int) {
+        const QString sessionId = m_queue->model()->record(first).sessionId;
         if (sessionId != QLatin1String("s1") && !fileHas(sessionId, bulkLine))
             violations.append(QStringLiteral("job queued for ") + sessionId + QStringLiteral(" before its bulk edit"));
     });
@@ -3674,8 +3867,10 @@ void CalculationDemandTest::savesAndBulkEditsPrecedeLoadStep()
     QVERIFY(col("DESC_OUT").isPlain());
 }
 
-// A settled session becomes applicable by a bulk edit of its stub: the
-// single-row change clears the settlement and the session is loaded again.
+// A settled session becomes applicable by a bulk edit of its stub: the edit is
+// published as an input change, which clears the settlement and starts the
+// session's settle wait, after which the session is loaded again. A bulk edit
+// of an attribute no requested column reads changes nothing.
 void CalculationDemandTest::bulkEditMakesSettledSessionApplicable()
 {
     QVERIFY(m_extra->add(descriptionCalculation()));
@@ -3685,7 +3880,8 @@ void CalculationDemandTest::bulkEditMakesSettledSessionApplicable()
     QVERIFY(waitForIdle(*m_model));
 
     QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
-    enableColumns({"DESC_OUT"});
+    const QString mass = QString::fromLatin1(SessionKeys::JumperMass);
+    enableColumns({"DESC_OUT", mass});
     QVERIFY(waitDemandIdle());
     QCOMPARE(loadsOf(loadedSpy, "s2"), 1);
     QCOMPARE(jobOf(QStringLiteral("s2"), "test.demand.desc").id, JobId(0));
@@ -3698,6 +3894,9 @@ void CalculationDemandTest::bulkEditMakesSettledSessionApplicable()
     QVERIFY(!m_demand->hasFillWork());
 
     m_model->startBulkEdit({rowOf(QStringLiteral("s2"))}, section("_DESCRIPTION"), QStringLiteral("bulk"));
+    QTRY_VERIFY(m_demand->isSettling(QStringLiteral("s2")));
+    QCOMPARE(loadsOf(loadedSpy, "s2"), 1);
+    settle();
     QTRY_COMPARE(loadsOf(loadedSpy, "s2"), 2);
     QVERIFY(waitDemandIdle());
     QVERIFY(waitForIdle(*m_model));
@@ -3705,6 +3904,21 @@ void CalculationDemandTest::bulkEditMakesSettledSessionApplicable()
     QVERIFY(stored("s2", "test.demand.desc"));
     QCOMPARE(cachedValue(QStringLiteral("s2"), "DESC_OUT").toString(), QStringLiteral("x:bulk"));
     QCOMPARE(col("DESC_OUT").wantedCount, 4);
+    QVERIFY(col("DESC_OUT").isPlain());
+
+    // A bulk edit of the stub's jumper mass, which no requested closure reads
+    QVERIFY(makeStubs());
+    QVERIFY(waitForIdle(*m_model));
+    const qsizetype loadsBefore = loadedSpy.count();
+    m_model->startBulkEdit({rowOf(QStringLiteral("s2"))}, section(qPrintable(mass)), 80.0);
+    QVERIFY(waitForIdle(*m_model));
+    for (int i = 0; i < 3; ++i)
+        spin();
+    QVERIFY(fileHas(QStringLiteral("s2"), QByteArray("$VAR,") + SessionKeys::JumperMass + ','));
+    QVERIFY(!isLoaded(QStringLiteral("s2")));
+    QCOMPARE(loadedSpy.count(), loadsBefore);
+    QVERIFY(!m_demand->isSettling(QStringLiteral("s2")));
+    QVERIFY(!m_demand->hasFillWork());
     QVERIFY(col("DESC_OUT").isPlain());
 }
 

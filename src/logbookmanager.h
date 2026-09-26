@@ -94,7 +94,8 @@ struct CalculationRecordRead {
 /// Records are read for a session being loaded and for that copy, which is
 /// never written from. Writing or removing
 /// a record drops the session's cached values over that calculation and emits
-/// calculationRecordsChanged(). Ordering rule: a write whose calculation
+/// calculationRecordsChanged(); so does learning a record reason that differs
+/// from the one the index held (setCalculationRecordReason()). Ordering rule: a write whose calculation
 /// index.json on disk lists as present under a value flushes the index first;
 /// a removal never needs to (the start-up check sees the present -> absent
 /// flip). See the crash table above writeCalculationRecord() in the .cpp.
@@ -211,8 +212,12 @@ public:
     /// record it has just read at a restore, which only the store can know.
     /// The removal paths clear it: removeCalculationRecord() and
     /// removeCalculationRecords() for each record they remove, removeSession()
-    /// for the whole session. Emits nothing; marks the index for a flush when
-    /// the value changed.
+    /// for the whole session. When the value changed (clearing a non-empty
+    /// one included) it marks the index for a flush and emits
+    /// calculationRecordsChanged(sessionId, calculationId), the same record
+    /// change a write or a removal announces; an unchanged value emits
+    /// nothing. The write and removal paths announce their change once, the
+    /// reason included.
     void setCalculationRecordReason(const QString &sessionId, const QString &calculationId, const QString &reason);
     // Ids whose record may disagree with the loaded session's engine. Values
     // that depend on them are never written to index.json.
@@ -369,7 +374,8 @@ public:
 
 signals:
     // A record of (sessionId, calculationId) was written, removed, skipped at a
-    // load, or a write or removal of it failed. The cached values of the
+    // load, or a write or removal of it failed, or the index learned a changed
+    // reason of it (setCalculationRecordReason()). The cached values of the
     // session that depend on the calculation have already been dropped here.
     // Emitted synchronously, from inside the record method (so possibly from an
     // engine listener): a receiver must only drop state and defer work. Not
@@ -445,6 +451,11 @@ private:
     // enabled. True (and m_indexNeedsFlush set) when something was removed.
     // Marks nothing unsaved: this is cache validity, not save ordering.
     bool dropRecordDependentValues(const QString &sessionId, const QStringList &calculationIds);
+    // Stores a record reason (see setCalculationRecordReason()) without
+    // announcing it; true exactly when the stored value changed (the index
+    // then needs a flush). The write and removal paths use it, and announce
+    // their own record change once.
+    bool storeRecordReason(const QString &sessionId, const QString &calculationId, const QString &reason);
     // removeCalculationRecord() for a resolved stem.
     bool removeCalculationRecordOfStem(const QString &sessionId, const QString &stem,
                                        const QString &calculationId, bool *removedFile);

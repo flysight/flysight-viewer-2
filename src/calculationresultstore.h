@@ -1,6 +1,7 @@
 #ifndef CALCULATIONRESULTSTORE_H
 #define CALCULATIONRESULTSTORE_H
 
+#include <QObject>
 #include <QSet>
 #include <QString>
 
@@ -42,11 +43,21 @@ namespace FlySight {
 ///    result produced its outputs) is noted by
 ///    LogbookManager::writeCalculationRecord() when the record is written,
 ///    and reported to LogbookManager::setCalculationRecordReason() by
-///    restoreSession() for every record it read and did not delete.
+///    restoreSession() for every record it read and did not delete. A reason
+///    that differs from what the index held is announced by the manager as a
+///    record change (LogbookManager::calculationRecordsChanged), like a
+///    record written or removed.
+///  - A record that cannot be written is announced (recordWriteFailed) with
+///    the manager's reason; the result stays installed, and nothing retries
+///    it.
 ///  - Explicit family instances ("<familyId>#<key>") are not stored: their
 ///    events are ignored (CalculationEngine::exportResult() refuses them).
-class CalculationResultStore {
+class CalculationResultStore : public QObject
+{
+    Q_OBJECT
 public:
+    explicit CalculationResultStore(QObject *parent = nullptr);
+
     struct Stats {
         int recordsWritten = 0;         ///< Ok installs whose record was committed
         int writeFailures = 0;          ///< Ok installs whose record could not be encoded or written
@@ -90,6 +101,16 @@ public:
 
     const Stats &stats() const { return m_stats; }
     void resetStats() { m_stats = Stats(); }
+
+signals:
+    /// The record of an Ok result installed for (sessionId, calculationId)
+    /// could not be encoded or written. `reason` is the manager's error text
+    /// and is never empty. Emitted from inside the engine's explicit-result
+    /// listener, so a directly connected slot may only record state and
+    /// schedule. Nothing is persisted. For a known session the manager's
+    /// calculationRecordsChanged for the pair comes first (from inside the
+    /// write); Stats::writeFailures counts the emissions.
+    void recordWriteFailed(const QString &sessionId, const QString &calculationId, const QString &reason);
 
 private:
     /// Removes the record through the manager; true when a record file was

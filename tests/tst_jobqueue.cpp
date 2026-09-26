@@ -255,10 +255,9 @@ void JobQueueTest::runsAndPublishes()
     m_model->removeAttribute("s2", "_DESCRIPTION");
     QVERIFY(setInput("s2", "EA_IN", 4));
 
-    QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
+    QSignalSpy createdSpy(m_queue->model(), &QAbstractItemModel::rowsInserted);
     QSignalSpy startedSpy(m_queue.get(), &JobQueue::jobStarted);
     QSignalSpy finishedSpy(m_queue.get(), &JobQueue::jobFinished);
-    QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
 
     const JobQueue::OfferResult result = m_queue->offer("s1", QStringLiteral("expA"));
     QCOMPARE(result.kind, Kind::Created);
@@ -278,10 +277,10 @@ void JobQueueTest::runsAndPublishes()
     QVERIFY(!m_queue->isIdle());
     QCOMPARE(m_queue->runningJob(), JobId(0));
     QCOMPARE(m_queue->chosenNextJob(), JobId(1));
-    QCOMPARE(m_queue->activeJobs(), QList<JobId>({1}));
+    QCOMPARE(activeJobIds(*m_queue), QList<JobId>({1}));
     QCOMPARE(m_queue->activeJob("s1", "expA"), JobId(1));
     QVERIFY(m_model->isSessionPinned("s1"));
-    QCOMPARE(queuedSpy.count(), 1);
+    QCOMPARE(createdSpy.count(), 1);
     QCOMPARE(startedSpy.count(), 0);
 
     QVERIFY(waitIdle(*m_queue));
@@ -295,7 +294,7 @@ void JobQueueTest::runsAndPublishes()
     QCOMPARE(finishedSpy.count(), 1);
     QCOMPARE(finishedSpy.at(0).at(0).toULongLong(), 1ULL);
     QCOMPARE(finishedSpy.at(0).at(1).value<JobState>(), JobState::Succeeded);
-    QCOMPARE(idleSpy.count(), 1);
+    QVERIFY(m_queue->isIdle());
     QVERIFY(!m_model->isSessionPinned("s1"));
     QCOMPARE(m_queue->activeJob("s1", "expA"), JobId(0));
 
@@ -313,7 +312,7 @@ void JobQueueTest::runsAndPublishes()
     QCOMPARE(m_queue->job(second.job).sessionName, QStringLiteral("s2"));
     QVERIFY(waitIdle(*m_queue));
     QCOMPARE(stateOf(second.job), JobState::Succeeded);
-    QCOMPARE(idleSpy.count(), 2);
+    QVERIFY(m_queue->isIdle());
 }
 
 // Names read while the calculation was unrequested are re-announced through
@@ -520,7 +519,7 @@ void JobQueueTest::duplicateOffersCreateNoDuplicates()
     QVERIFY(!m_queue->job(other.job).startedAt.isValid());
     QVERIFY(!m_model->isSessionPinned("s2"));
     QCOMPARE(m_queue->offer("s1", QStringLiteral("expA")).kind, Kind::AlreadyActive);
-    QCOMPARE(m_queue->activeJobs(), QList<JobId>({first.job, replacing.job}));
+    QCOMPARE(activeJobIds(*m_queue), QList<JobId>({first.job, replacing.job}));
     QCOMPARE(m_queue->model()->rowCount(), 3);
 
     gate().open(1);
@@ -556,7 +555,7 @@ void JobQueueTest::oneAtATimeInOfferOrder()
 
     QList<JobId> ids;
     ids.append(m_queue->offer(script.at(0).first, script.at(0).second).job);
-    QCOMPARE(m_queue->activeJobs(), ids);
+    QCOMPARE(activeJobIds(*m_queue), ids);
 
     for (int i = 0; i < script.size(); ++i) {
         QVERIFY(gate().waitEntered());
@@ -568,9 +567,9 @@ void JobQueueTest::oneAtATimeInOfferOrder()
             QCOMPARE(next.kind, Kind::Created);
             ids.append(next.job);
             QCOMPARE(m_queue->chosenNextJob(), next.job);
-            QCOMPARE(m_queue->activeJobs(), QList<JobId>({ids.at(i), next.job}));
+            QCOMPARE(activeJobIds(*m_queue), QList<JobId>({ids.at(i), next.job}));
         } else {
-            QCOMPARE(m_queue->activeJobs(), QList<JobId>({ids.at(i)}));
+            QCOMPARE(activeJobIds(*m_queue), QList<JobId>({ids.at(i)}));
         }
         for (int j = 0; j < ids.size(); ++j) {
             const JobState expected = j < i ? JobState::Succeeded
@@ -667,14 +666,13 @@ void JobQueueTest::holdsAtMostRunningAndChosenNext()
 
 // An offer that differs from the chosen next job replaces it: the old job
 // ends Cancelled ("No longer needed") without ever running, its session is
-// unpinned, and no idle() falls between the two.
+// unpinned, and it never started.
 void JobQueueTest::offerReplacesChosenNext()
 {
     QVERIFY(setInput("s1", "G_IN", 4));
     QVERIFY(setInput("s1", "EA_IN", 4));
     QVERIFY(setInput("s2", "EA_IN", 4));
     QVERIFY(setInput("s3", "EA_IN", 4));
-    QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
     QSignalSpy startedSpy(m_queue.get(), &JobQueue::jobStarted);
 
     // With a held running job
@@ -694,7 +692,7 @@ void JobQueueTest::offerReplacesChosenNext()
     QVERIFY(!m_model->isSessionPinned("s2"));
     QVERIFY(m_model->isSessionPinned("s3"));
     QCOMPARE(m_queue->chosenNextJob(), b.job);
-    QCOMPARE(m_queue->activeJobs(), QList<JobId>({held, b.job}));
+    QCOMPARE(activeJobIds(*m_queue), QList<JobId>({held, b.job}));
     QCOMPARE(stateOf(held), JobState::Running);
     QVERIFY(!m_queue->job(held).cancelRequested);
 
@@ -702,34 +700,26 @@ void JobQueueTest::offerReplacesChosenNext()
     QCOMPARE(bAgain.kind, Kind::AlreadyActive);
     QCOMPARE(bAgain.job, b.job);
     QCOMPARE(m_queue->model()->rowCount(), 3);
-    QCOMPARE(idleSpy.count(), 0);
+    QVERIFY(!m_queue->isIdle());
 
     gate().open(1);
     QVERIFY(waitIdle(*m_queue));
     QCOMPARE(stateOf(held), JobState::Succeeded);
     QCOMPARE(stateOf(b.job), JobState::Succeeded);
     QCOMPARE(engine("s2").runCount("expA"), 0);
-    QCOMPARE(idleSpy.count(), 1);
 
-    // With nothing running: A then B in the same event-loop turn. B runs, and
-    // idle() comes once, at the very end.
-    idleSpy.clear();
+    // With nothing running: A then B in the same event-loop turn. Only B runs.
     startedSpy.clear();
-    QList<JobState> bStateAtIdle;
-    QObject scope;      // owns the connection: it cannot outlive what the slot captures
-    JobId bId = 0;
-    connect(m_queue.get(), &JobQueue::idle, &scope, [&] { bStateAtIdle.append(stateOf(bId)); });
 
     const JobQueue::OfferResult a2 = m_queue->offer("s2", QStringLiteral("expA"));
     QCOMPARE(a2.kind, Kind::Created);
     const JobQueue::OfferResult b2 = m_queue->offer("s1", QStringLiteral("expA"));
     QCOMPARE(b2.kind, Kind::Created);
-    bId = b2.job;
     QCOMPARE(stateOf(a2.job), JobState::Cancelled);
     QCOMPARE(m_queue->job(a2.job).reason, QStringLiteral("No longer needed"));
     QCOMPARE(stateOf(b2.job), JobState::Queued);
     QCOMPARE(m_queue->chosenNextJob(), b2.job);
-    QCOMPARE(idleSpy.count(), 0);
+    QVERIFY(!m_queue->isIdle());
     QVERIFY(!m_model->isSessionPinned("s2"));
 
     QVERIFY(waitIdle(*m_queue));
@@ -737,9 +727,6 @@ void JobQueueTest::offerReplacesChosenNext()
     QVERIFY(!m_queue->job(a2.job).startedAt.isValid());
     QCOMPARE(startedSpy.count(), 1);
     QCOMPARE(startedSpy.at(0).at(0).value<JobId>(), b2.job);
-    QCOMPARE(idleSpy.count(), 1);
-    QCOMPARE(bStateAtIdle.size(), 1);
-    QCOMPARE(bStateAtIdle.first(), JobState::Succeeded);
     QCOMPARE(engine("s2").runCount("expA"), 0);
     QCOMPARE(session("s1").getAttribute("EA1"), QVariant(5));
 }
@@ -750,13 +737,12 @@ void JobQueueTest::withdrawEndsChosenNext()
 {
     QVERIFY(setInput("s1", "G_IN", 4));
     QVERIFY(setInput("s2", "EA_IN", 4));
-    QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
     QSignalSpy startedSpy(m_queue.get(), &JobQueue::jobStarted);
 
     // None
     QVERIFY(!m_queue->withdrawChosenNext());
     QCOMPARE(m_queue->model()->rowCount(), 0);
-    QCOMPARE(idleSpy.count(), 0);
+    QVERIFY(m_queue->isIdle());
 
     // One, behind a running job
     const JobId held = m_queue->offer("s1", QStringLiteral("gated")).job;
@@ -772,22 +758,20 @@ void JobQueueTest::withdrawEndsChosenNext()
     QCOMPARE(m_queue->runningJob(), held);
     QCOMPARE(stateOf(held), JobState::Running);
     QVERIFY(!m_queue->job(held).cancelRequested);
-    QCOMPARE(idleSpy.count(), 0);                       // the held job still runs
+    QVERIFY(!m_queue->isIdle());                        // the held job still runs
     QVERIFY(!m_queue->withdrawChosenNext());
 
     gate().open(1);
     QVERIFY(waitIdle(*m_queue));
     QCOMPARE(stateOf(held), JobState::Succeeded);
-    QCOMPARE(idleSpy.count(), 1);
 
-    // One, with nothing running: idle() at once
+    // One, with nothing running: idle at once
     const JobId alone = m_queue->offer("s2", QStringLiteral("expA")).job;
     QVERIFY(!m_queue->isIdle());
     QVERIFY(m_queue->withdrawChosenNext());
     QCOMPARE(stateOf(alone), JobState::Cancelled);
     QCOMPARE(m_queue->job(alone).reason, QStringLiteral("No longer needed"));
     QVERIFY(m_queue->isIdle());
-    QCOMPARE(idleSpy.count(), 2);
     QVERIFY(!m_model->isSessionPinned("s2"));
 
     // Neither withdrawn job ever ran
@@ -803,14 +787,14 @@ void JobQueueTest::withdrawEndsChosenNext()
 // Acceptance 11 (executor half): no job can be created for a session without the inputs.
 void JobQueueTest::refusesMissingInput()
 {
-    QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
+    QSignalSpy createdSpy(m_queue->model(), &QAbstractItemModel::rowsInserted);
     for (const char *id : {"gated", "expA", "deepstack"}) {
         const JobQueue::OfferResult result = m_queue->offer("s1", QString::fromLatin1(id));
         QCOMPARE(result.kind, Kind::MissingInput);
         QCOMPARE(result.job, JobId(0));
     }
     QCOMPARE(m_queue->model()->rowCount(), 0);
-    QCOMPARE(queuedSpy.count(), 0);
+    QCOMPARE(createdSpy.count(), 0);
     QVERIFY(m_queue->isIdle());
     QVERIFY(!m_model->isSessionPinned("s1"));
     QCOMPARE(engine("s1").totalRunCount(), 0);
@@ -830,7 +814,7 @@ void JobQueueTest::refusesMissingInput()
     QCOMPARE(refused.job, JobId(0));
     QCOMPARE(m_queue->chosenNextJob(), next.job);
     QCOMPARE(stateOf(next.job), JobState::Queued);
-    QCOMPARE(m_queue->activeJobs(), QList<JobId>({held, next.job}));
+    QCOMPARE(activeJobIds(*m_queue), QList<JobId>({held, next.job}));
     QCOMPARE(m_queue->model()->rowCount(), 2);
     QVERIFY(!m_model->isSessionPinned("s2"));
 
@@ -1176,7 +1160,7 @@ void JobQueueTest::offerWhileStaleJobWindsDown()
     QCOMPARE(stateOf(second.job), JobState::Queued);
     QCOMPARE(m_queue->activeJob("s1", "gated"), second.job);
     QCOMPARE(m_queue->offer("s1", QStringLiteral("gated")).kind, Kind::AlreadyActive);
-    QCOMPARE(m_queue->activeJobs(), QList<JobId>({first, second.job}));
+    QCOMPARE(activeJobIds(*m_queue), QList<JobId>({first, second.job}));
 
     QVERIFY(gate().waitEntered());                      // the new job: the old one has ended
     QCOMPARE(stateOf(first), JobState::Superseded);
@@ -1463,7 +1447,7 @@ void JobQueueTest::offerWhileCancellingCreatesNewJob()
     QCOMPARE(stateOf(second.job), JobState::Queued);
     QCOMPARE(m_queue->activeJob("s1", "gated"), second.job);
     QCOMPARE(m_queue->offer("s1", QStringLiteral("gated")).kind, Kind::AlreadyActive);
-    QCOMPARE(m_queue->activeJobs(), QList<JobId>({first, second.job}));
+    QCOMPARE(activeJobIds(*m_queue), QList<JobId>({first, second.job}));
 
     QVERIFY(gate().waitEntered());                      // the new job: the old one has ended
     QCOMPARE(stateOf(first), JobState::Cancelled);
@@ -1514,8 +1498,6 @@ void JobQueueTest::cancelFromRowsInsertedLeavesNoPin()
 {
     QVERIFY(setInput("s1", "EA_IN", 4));
     QTest::failOnWarning(QRegularExpression(QStringLiteral("unpinSession")));
-    QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
-    QSignalSpy queuedSpy(m_queue.get(), &JobQueue::jobQueued);
     QSignalSpy finishedSpy(m_queue.get(), &JobQueue::jobFinished);
 
     JobModel *jobs = m_queue->model();
@@ -1537,12 +1519,10 @@ void JobQueueTest::cancelFromRowsInsertedLeavesNoPin()
     QCOMPARE(stateOf(result.job), JobState::Cancelled);
     QVERIFY(!m_model->isSessionPinned("s1"));
     QVERIFY(m_queue->isIdle());
-    QCOMPARE(idleSpy.count(), 1);
 
-    // A job that has ended is not announced as queued afterwards
+    // The job's end was its only announcement
     QCOMPARE(finishedSpy.count(), 1);
     QCOMPARE(finishedSpy.at(0).at(0).value<JobId>(), result.job);
-    QCOMPARE(queuedSpy.count(), 0);
 
     // Nothing runs for it, and the calculation is requestable as before
     QVERIFY(waitIdle(*m_queue));
@@ -1800,12 +1780,11 @@ void JobQueueTest::shutdownWithQueuedAndRunning()
     QVERIFY(!session("s1").getAttribute("G_OUT").isValid());
     QVERIFY(!session("s2").getAttribute("EA1").isValid());
     QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
-    QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
 
     const JobId running = m_queue->offer("s1", QStringLiteral("gated")).job;
     QVERIFY(gate().waitEntered());
     const JobId queued = m_queue->offer("s2", QStringLiteral("expA")).job;
-    QCOMPARE(m_queue->activeJobs(), QList<JobId>({running, queued}));
+    QCOMPARE(activeJobIds(*m_queue), QList<JobId>({running, queued}));
 
     // Returns although the gate is never opened: the job is asked to stop and
     // the wait ends when its compute function returns.
@@ -1818,7 +1797,6 @@ void JobQueueTest::shutdownWithQueuedAndRunning()
     QVERIFY(m_queue->isShutDown());
     QVERIFY(m_queue->isIdle());
     QCOMPARE(m_queue->runningJob(), JobId(0));
-    QCOMPARE(idleSpy.count(), 1);
     QCOMPARE(gate().running.load(), 0);
 
     QCOMPARE(publishedTrace(dependencySpy, "s1", "gated", "G_OUT"), QString());
@@ -1837,14 +1815,13 @@ void JobQueueTest::shutdownWithQueuedAndRunning()
 void JobQueueTest::shutdownIsIdempotentAndRefusesOffers()
 {
     QVERIFY(setInput("s1", "EA_IN", 4));
-    QSignalSpy idleSpy(m_queue.get(), &JobQueue::idle);
 
     QVERIFY(!m_queue->isShutDown());
     m_queue->shutdown();                // with no jobs
     m_queue->shutdown();
     QVERIFY(m_queue->isShutDown());
     QVERIFY(m_queue->isIdle());
-    QCOMPARE(idleSpy.count(), 0);       // nothing had been active
+    QCOMPARE(m_queue->model()->rowCount(), 0);   // nothing had been active
 
     QCOMPARE(m_queue->offer("s1", QStringLiteral("expA")).kind, Kind::ShuttingDown);
     QCOMPARE(m_queue->model()->rowCount(), 0);
