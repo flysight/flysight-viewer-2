@@ -33,10 +33,10 @@ namespace FlySight {
 /// row's text colour, so they follow the theme, the selection and the screen's
 /// scale without any bundled image.
 ///
-/// NO GESTURES. The delegate handles no event of its own: editorEvent() is the
-/// base class's. Checking a row is the base class's write to PlotModel, which
-/// the demand layer observes like every other check change (the Plots menu, a
-/// profile, the start-up restore). Nothing in the row is clickable beyond what
+/// NO GESTURES. The delegate handles no event of its own: every click and key
+/// is the base class's. Checking a row is the base class's write to PlotModel,
+/// which the demand layer observes like every other check change (the Plots
+/// menu, a profile, the start-up restore). Nothing in the row is clickable beyond what
 /// QStyledItemDelegate makes clickable.
 ///
 /// TOOLTIP. helpEvent() shows DemandState::toolTip over the whole row.

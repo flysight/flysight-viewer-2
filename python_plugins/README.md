@@ -251,7 +251,8 @@ recomputes them.
   result of a requested calculation (sensor fusion today) whose inputs were
   looked up through any plugin calculation (a plugin that provides a name the
   calculation reads, section 8) is stale at its session's next load after such
-  a change, and must be requested again. A stored result that looked up no
+  a change, and is computed again when a checked plot or an enabled logbook
+  column needs it. A stored result that looked up no
   plugin output is not affected.
 * Plugins are loaded once, at startup. An edit takes effect at the next start;
   nothing watches the files.
@@ -267,8 +268,9 @@ data or a value the user has set.
 
 A plugin that declares a name a requested calculation looks up also changes
 what that name resolves to: adding or removing such a plugin makes the stored
-results that looked the name up stale at their next load (they are requested
-again from the plot list).
+results that looked the name up stale at their next load (they are computed
+again in the background while a checked plot or an enabled logbook column
+needs them).
 
 ## 9. What was removed
 

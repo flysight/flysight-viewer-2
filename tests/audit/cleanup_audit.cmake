@@ -25,7 +25,13 @@
 #     fingerprint, the plug-in code identity is computed in one place at
 #     start-up, only an owner destroyed at shutdown removes registrations as
 #     teardown, and no document says that unrelated changes make stored
-#     results stale (items 401-442).
+#     results stale (items 401-442);
+#   - what is switched on is the request: one widget-free demand layer is the
+#     only caller of the executor, nothing below it knows it, the views only
+#     read it, "pending" never reaches the model or the index, the executor
+#     has one bound of jobs on a below-normal worker, no default profile
+#     carries a column over a requested output, and no refresh, cancel, queue
+#     or plot-request logic remains (items 501-563).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -414,9 +420,9 @@ expect_only("one authority: explicit-backed" "EvaluationPolicy::Explicit"
 # ─────────────────────────────── widget-free-core
 audit_group(widget-free-core)
 expect_none("the logic components see no widget"
-  "QtWidgets|#include <Q(Widget|TreeView|AbstractItemView|StyledItemDelegate|Application|ToolTip)>"
+  "QtWidgets|#include <Q(Widget|TreeView|AbstractItemView|StyledItemDelegate|Application|ToolTip|Style[A-Za-z]*|HeaderView)>"
   "src/jobqueue.*" "src/jobmodel.*" "src/calculationdemand.*" "src/plotmodel.*"
-  src/ui/docks/plotselection/PlotRowLayout.h)
+  src/ui/docks/plotselection/PlotRowLayout.h "src/ui/docks/DemandIndicator.*")
 
 # =============================================================================
 # Sensor fusion improvements (acceptance items 201-247): the segmented
@@ -669,6 +675,104 @@ expect_none("no text says an unrelated change makes stored results stale"
   "makes every (record|stored result) stale|of a preference that calculations read|marker, the environment fingerprint"
   src tests docs README.md ":!tests/README.md")
 
+# =============================================================================
+# Demand-driven requested calculations (acceptance items 501-563): what is
+# switched on - checked plots for the visible sessions, enabled logbook columns
+# for every session - is the request. One widget-free demand layer derives what
+# to compute and is the only caller of the executor (group gestures). The rules
+# below keep everything below it ignorant of it, the views read-only, the
+# model, the index and the scheduler free of jobs and of "pending", one bound,
+# a below-normal worker, the default profiles free of columns over requested
+# outputs, and no refresh, cancel, queue or plot-request logic in the code or
+# the documents.
+# =============================================================================
+
+# ─────────────────────────────── demand (items 506, 508, 513, 515, 518, 527, 529, 530, 533, 534, 538, 540-544, 546, 547, 563)
+audit_group(demand)
+# Allow: a new view that presents the demand layer is added to the allowed-file
+# regex; nothing below the demand layer (the executor, the session model, the
+# scheduler, the logbook) ever is. Elsewhere a comment says "the demand layer".
+expect_only("only the application and its views know the demand layer" "CalculationDemand"
+  "^src/calculationdemand\\.(cpp|h)$|^src/mainwindow\\.(cpp|h)$|^src/ui/docks/AppContext\\.h$|^src/ui/docks/plotselection/(PlotRowDelegate\\.(cpp|h)|PlotSelectionDockFeature\\.cpp)$|^src/ui/docks/logbook/(LogbookView|LogbookHeaderView|LogbookCellDelegate)\\.(cpp|h)$|^src/ui/docks/logbook/LogbookDockFeature\\.cpp$|^src/ui/docks/plot/PlotWidget\\.cpp$"
+  src)
+# Allow: none expected. The layers below the demand layer, the shared glyphs
+# and the row layout never include it (so they can use none of its types).
+expect_none("nothing below the demand layer includes it" "#include [\"<](\\.\\./)*calculationdemand\\.h"
+  "src/jobqueue.*" "src/jobmodel.*" "src/sessionmodel.*" "src/idlescheduler.*" "src/logbookmanager.*"
+  "src/logbookcolumn.*" "src/plotmodel.*" "src/profilestatebridge.*" "src/calculationresultstore.*"
+  src/engine "src/ui/docks/DemandIndicator.*" src/ui/docks/plotselection/PlotRowLayout.h)
+# Allow: none expected. The views read plotState, columnState, isCellPending
+# and working*Ids; a pass, the load step and the settle seams belong to the
+# demand layer and to tests.
+expect_none("the views only read the demand layer" "[.>](flush|runLoadStep|endInputSettleWaits|setInputSettleDelay)\\("
+  src/ui "src/mainwindow.*")
+# Allow: none expected. Nothing the demand views paint is a control: the base
+# classes handle every click and key (tooltips come from helpEvent /
+# viewportEvent, which this rule does not name). Say "no event of its own" in
+# a comment instead of naming a handler.
+expect_none("the demand views handle no event of their own"
+  "editorEvent|mouse(Press|Release|DoubleClick|Move)Event|keyPressEvent"
+  "src/ui/docks/plotselection/PlotRowDelegate.*" "src/ui/docks/logbook/LogbookHeaderView.*"
+  "src/ui/docks/logbook/LogbookCellDelegate.*" "src/ui/docks/DemandIndicator.*")
+# Pending is a presentation of demand: the demand layer answers it and the cell
+# delegate paints it; the model, its cached values and index.json never see it.
+# Allow: none expected.
+expect_only("pending is the view's presentation of demand" "isCellPending|showsPending|pendingText\\(|pendingToolTip\\("
+  "^src/calculationdemand\\.(cpp|h)$|^src/ui/docks/logbook/LogbookCellDelegate\\.(cpp|h)$" src)
+# Allow: none expected. The model knows pinned ids only; the logbook, the
+# column store, the plot model and the scheduler know nothing about jobs.
+# Comments say "the executor".
+expect_none("the model, the logbook and the scheduler know nothing of the executor"
+  "JobQueue|JobModel|jobqueue\\.h|jobmodel\\.h"
+  "src/sessionmodel.*" "src/logbookmanager.*" "src/logbookcolumn.*" "src/idlescheduler.*" "src/plotmodel.*")
+# Allow: none expected. The idle scheduler runs the steps of registered tasks;
+# the load step is one more task and tells it nothing.
+expect_none("the idle scheduler learns nothing about jobs or demand" "[Dd]emand|[Cc]alculation|[Jj]ob|[Ee]xecutor"
+  src/idlescheduler.cpp src/idlescheduler.h)
+# The load step is the demand layer's task: the enum names it, the progress
+# line labels it, and the session model never registers or runs it.
+# Allow: none expected.
+expect_only("the load step is the demand layer's scheduler task" "ColumnFillTask"
+  "^src/calculationdemand\\.(cpp|h)$|^src/sessionmodel\\.h$|^src/ui/docks/logbook/LogbookView\\.cpp$" src)
+# Hidden loads for column demand go through the one entry that loads without
+# showing and pins under the corrected id. Allow: none expected.
+expect_only("hidden loads go through loadPinnedSession" "loadPinnedSession\\("
+  "^src/calculationdemand\\.(cpp|h)$|^src/sessionmodel\\.(cpp|h)$" src)
+# The demand layer reads record names only; loading, restoring and reading
+# records belong to the session model and the result store. Allow: reword a
+# comment that names one of these calls ("loaded the way showing it would").
+expect_none("the demand layer never loads a session or reads a record itself"
+  "sessionRef\\(|loadSession\\(|readCalculationRecord|calculationRecordIds\\(|restoreSession\\(|restoreStoredResults\\("
+  "src/calculationdemand.*")
+# One bound of simultaneous jobs, and the load bound follows it (spec 11).
+# Allow: change the number only together with the executor's run slots.
+expect_count("one bound of simultaneous jobs" "kMaxRunningJobs *=[^=]" 1 src)
+expect_count("the load bound follows the executor's bound"
+  "kMaxHeldSessions *= *JobQueue::kMaxRunningJobs *\\+ *1" 1 src/calculationdemand.h)
+# Allow: none expected. The worker runs below normal priority (spec 11).
+expect_count("the worker runs below normal priority" "start\\(QThread::LowPriority\\)" 1 src/jobqueue.cpp)
+# The executor is not a queue. Allow: none expected (tests/README.md is not
+# searched: its section 10 spells these names).
+expect_none("the executor keeps no queue" "oldestQueued|cancelUnwantedQueued|cancelSession\\(|cancelAll\\(|RequestResult"
+  src docs README.md)
+expect_none("the plot request logic is gone"
+  "PlotRequests|plotrequests|plotRequests|PlotRowState|PlotTrackCondition|tst_plot_requests"
+  src tests docs cmake CMakeLists.txt README.md ":!tests/README.md")
+# No refresh and no cancel for requested calculations anywhere (spec 10).
+# Allow: say "there is no refresh and no cancel"; never name the old controls.
+expect_none("no refresh or cancel control in code or documents"
+  "[Rr]efresh (icon|control|gesture)|press(es|ed|ing)? (the )?refresh|[Cc]ancel (control|icon)|circled x"
+  src docs README.md)
+expect_none("the plot rows' controls are gone"
+  "drawRefreshGlyph|drawCancelGlyph|Control::(Refresh|Cancel)|controlHit|controlCount\\(|controlRect\\("
+  src tests ":!tests/README.md")
+# Applying a profile that carries a column over a requested output computes it
+# for the whole logbook, so no default profile carries one (spec 5). Allow: a
+# new requested calculation adds its sensor or attribute names to the pattern.
+expect_none("no default profile carries a column over a requested output"
+  "\"(sensorID|attributeKey|markerAttributeKey|marker2AttributeKey)\": *\"(Fusion|_FUSION)"
+  src/resources/profiles)
+
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 
@@ -677,9 +781,10 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # 101-120 (sensor fusion and plot-driven jobs, item = 100 + acceptance number),
 # 201-247 (the sensor fusion improvements, item = 200 + requirement
 # number), 301-350 (storing requested calculation results with the session,
-# item = 300 + clause number) and 401-442 (stored results: validity that
-# mirrors memory, item = 400 + clause number). Four line forms; see the head of
-# the map.
+# item = 300 + clause number), 401-442 (stored results: validity that
+# mirrors memory, item = 400 + clause number) and 501-563 (demand-driven
+# requested calculations, item = 500 + clause number). Four line forms; see the
+# head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -750,8 +855,8 @@ else()
     list(APPEND items_seen "${item}")
     if(NOT ((item GREATER_EQUAL 1 AND item LESS_EQUAL 19) OR (item GREATER_EQUAL 101 AND item LESS_EQUAL 120)
             OR (item GREATER_EQUAL 201 AND item LESS_EQUAL 247) OR (item GREATER_EQUAL 301 AND item LESS_EQUAL 350)
-            OR (item GREATER_EQUAL 401 AND item LESS_EQUAL 442)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350 and 401-442: ${line}")
+            OR (item GREATER_EQUAL 401 AND item LESS_EQUAL 442) OR (item GREATER_EQUAL 501 AND item LESS_EQUAL 563)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442 and 501-563: ${line}")
     endif()
   endforeach()
 
@@ -781,6 +886,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 401 442)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 501 563)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

@@ -1,5 +1,5 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Five specifications, five item ranges:
+# (tests/audit/cleanup_audit.cmake). Six specifications, six item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
@@ -23,6 +23,12 @@
 #             stated as amended. Item 427 is stated as amended by its own
 #             section 9.1 (logbook columns over stored results), under which
 #             the section 10 test of that clause is filed as well.
+#   501-563   demand-driven requested calculations (demand from checked plots
+#             and enabled logbook columns, the executor, priority, hidden
+#             loads, the working indicator and pending cells): item = 500 +
+#             clause number. Stated in full in tests/README.md, appendix F.
+#             It amends the specifications of 101-120 and 301-350: items 110,
+#             111, 113-117, 304, 306, 321 and 337 are stated as amended.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -32,11 +38,11 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the five ranges; every item 1-19 needs a line;
-# every item 101-120, 201-247, 301-350 or 401-442 needs at least one test or
-# audit line (manual and ci lines never stand alone). The human-readable
-# matrices are tests/README.md sections 9.1 to 9.5; keep them in sync with
-# this file.
+# Every item must lie in one of the six ranges; every item 1-19 needs a line;
+# every item 101-120, 201-247, 301-350, 401-442 or 501-563 needs at least one
+# test or audit line (manual and ci lines never stand alone). The
+# human-readable matrices are tests/README.md sections 9.1 to 9.6; keep them in
+# sync with this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -289,14 +295,14 @@
 109 tst_jobqueue rejectionSucceedsWithReason
 109 tst_fusion_rows rejectedTrackShowsBadge
 
-# 110 - cancel stops at the next solver boundary, publishes nothing, requestable; the next job starts
+# 110 - (as amended) cancelling a running job through the executor stops it at the next solver boundary, publishes nothing, leaves the calculation requestable; the chosen next job then starts
 110 tst_fusion_golden cancelAtEachKindOfBoundary
 110 tst_fusion_golden cancelDuringPreparation
 110 tst_fusion_session cancelStopsAtNextBoundary
 110 tst_jobqueue cancelRunningThenNextStarts
 110 tst_fusion_jobs cancelDuringFitThenNextJobStarts
 
-# 111 - a session without IMU data is never missing, pending or failed; no job can be created for it
+# 111 - (as amended) a session without IMU data is never waiting, running or failed, nor counted; no job can be created for it
 111 tst_jobqueue refusesMissingInput
 111 tst_calculation_demand sessionWithoutInputIsNeverListed
 111 tst_fusion_session missingInputsAreNotApplicable
@@ -308,15 +314,16 @@
 112 tst_calcengine_blockers inspectionNeverRunsExplicit
 112 tst_fusion_session blockersReportFusion
 
-# 113 - B consumes A: one gesture on a plot of B's output runs A then B
+# 113 - (as amended) B consumes A: checking a plot of B's output runs A then B with no other action
 113 tst_calcengine_blockers chainedBlockers
 113 tst_calculation_demand chainedBlockersContinue
 
-# 114 - never more than one job at a time; duplicate requests create no duplicate jobs
+# 114 - (as amended) never more than one job at a time; the executor holds at most the running job and one chosen next job, and an offer equal to either creates no duplicate
 114 tst_jobqueue oneAtATimeInOfferOrder
 114 tst_jobqueue duplicateOffersCreateNoDuplicates
+114 tst_jobqueue holdsAtMostRunningAndChosenNext
 
-# 115 - row behaviour without widgets: synthetic, then with the real fusion plots; what the user sees
+# 115 - (as amended) row behaviour without widgets, then with the real fusion plots: checking computes the visible tracks one after another, the count rising; unchecking mid-way drops the waiting ones and lets the running one finish; checking again resumes; a fourth track shown afterwards is computed with no other action; what the user sees
 115 tst_calculation_demand rowScript
 115 tst_fusion_rows realRowScript
 115 tst_fusion_rows rollPitchYawShareOneJob
@@ -327,8 +334,10 @@
 115 manual M4
 115 manual M6
 115 manual M7
+115 tst_calculation_demand showingASessionStartsIt
+115 tst_calculation_demand uncheckingDropsWaitingPairsKeepsRunning
 
-# 116 - start-up restore and applying a profile start no job; only a direct check is a gesture
+# 116 - (as amended) starting the application with fusion plots checked starts no job, because every track starts hidden; applying a profile, the Plots menu or any programmatic check creates demand exactly as a click on the check box does
 116 tst_calculation_demand startupRestoreWithHiddenSessionsStartsNothing
 116 tst_calculation_demand profileStyleApplyCreatesDemand
 116 tst_calculation_demand programmaticCheckCreatesDemand
@@ -340,7 +349,7 @@
 116 manual M1
 116 manual M2
 
-# 117 - removing / unloading a session with a queued or running job, and quitting: no crash, no hang, nothing stale
+# 117 - (as amended) removing or unloading a session with a running or chosen next job, and quitting with a job running and one chosen next: no crash, no hang, nothing stale
 117 tst_jobqueue removeSessionWithRunningJob
 117 tst_jobqueue removeSessionWithQueuedJob
 117 tst_jobqueue evictionDeferredWhileJobActive
@@ -618,12 +627,13 @@
 303 tst_calcengine_restore exportOnlyInstalledOk
 303 tst_calcengine_restore restoreNotFound
 
-# 304 - (2) a stored result is a memory, not a request: stale or missing, the calculation reads not requested until a gesture
+# 304 - (2, as amended) a stored result is a memory, not a request: stale or missing, the calculation reads not requested until something switched on (a checked plot over a visible session, an enabled column over it) has it computed
 304 tst_fusion_store codeStampChangeDropsRecordOnLoad
 304 tst_fusion_store dependencyEditDropsRecord
 304 tst_result_store staleRecordDeletedOnLoad
 304 tst_calcengine_restore restoreStaleChecks
 304 audit stored-results
+304 tst_result_columns staleRecordDeletedByWorkerCreatesDemand
 
 # 305 - (2) the session file is unchanged: bytes, format, enumeration; derived sensors never in it
 305 tst_fusion_store sessionFileBytesUnaffectedByRecord
@@ -631,11 +641,12 @@
 305 tst_result_records strayRecordsRemovedAtScan
 305 audit stored-results
 
-# 306 - (2) kernel, job queue gestures and plot-row semantics unchanged beyond counting a restored result as computed
+# 306 - (2, as amended) the kernel is unchanged, and plot rows and columns count a restored result as computed: no working indicator, no job
 306 tst_fusion_golden successFixturesMatchGolden
 306 tst_calculation_demand rowScript
 306 tst_fusion_rows realRowScript
 306 audit gestures
+306 tst_calculation_demand storedResultsCreateNoJob
 
 # 307 - (3) at most one record per (session, calculation), written at the install on the main thread, replaced by the next publish
 307 tst_result_store writesOnOkInstall
@@ -729,12 +740,13 @@
 320 tst_calcengine_restore restoreNeverReplaces
 320 tst_fusion_session restoredFitIsIndistinguishable
 
-# 321 - (5) plot rows count a restored result as computed: no refresh count, no job; stale or absent as today
+# 321 - (5, as amended) plot rows count a restored result as computed: no working indicator, no job; a stale or absent result is in demand like any missing one
 321 tst_fusion_store restoredAfterEvictionIsBitIdentical
 321 tst_fusion_store restoredAfterRestartIsBitIdentical
 321 tst_fusion_store dependencyEditDropsRecord
 321 manual M1
 321 manual M16
+321 tst_calculation_demand storedResultsCreateNoJob
 
 # 322 - (5) blocker inspection reports a restored result as a published one, NotProduced with its detail
 322 tst_calcengine_restore restoreRejection
@@ -858,7 +870,7 @@
 336 tst_fusion_store sessionFileBytesUnaffectedByRecord
 336 tst_result_records saveSessionIgnoresRecords
 
-# 337 - (8) test: a fusion fixture fitted, saved, unloaded, reloaded: seventeen channels and diagnostics bit-identical to the goldens, no job, no refresh count
+# 337 - (8, as amended) test: a fusion fixture fitted, saved, unloaded, reloaded: seventeen channels and diagnostics bit-identical to the goldens, no job, the row plain
 337 tst_fusion_store restoredAfterEvictionIsBitIdentical
 
 # 338 - (8) test: the same after an application restart
@@ -1204,3 +1216,490 @@
 442 tst_result_store restoresUpstreamFirst
 442 tst_result_records shortReadIsUnreadable
 442 manual M22
+
+# ---- Demand-driven requested calculations: item = 500 + clause number ----
+
+# 501 - (2) the user expresses intent through plots and logbook columns, never through calculations: what is switched on is the request
+501 tst_calculation_demand rowScript
+501 tst_calculation_demand programmaticCheckCreatesDemand
+501 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
+501 tst_fusion_rows realRowScript
+501 audit gestures
+501 manual M3
+
+# 502 - (2) anything needed to complete what is switched on is wanted at once; anything no longer needed is dropped
+502 tst_calculation_demand showingASessionStartsIt
+502 tst_calculation_demand hidingASessionDropsItsWaitingPair
+502 tst_calculation_demand uncheckingDropsWaitingPairsKeepsRunning
+502 tst_calculation_demand disablingColumnReleasesHeldSessions
+502 tst_calculation_demand changingDemandReplacesChosenNext
+
+# 503 - (2) finished work is never wasted: results are stored
+503 tst_calculation_demand uncheckingDropsWaitingPairsKeepsRunning
+503 tst_calculation_demand disablingColumnReleasesHeldSessions
+503 tst_calculation_demand storedResultsCreateNoJob
+503 tst_fusion_store fusionColumnWithStoredFitsRunsNothing
+
+# 504 - (2) background work must not degrade the rest of the application
+504 tst_jobqueue workerRunsBelowNormalPriority
+504 tst_jobqueue mainThreadIsNotBlockedByARunningJob
+504 tst_jobqueue idleSchedulerKeepsWorking
+504 tst_calculation_demand passOverManyStubsReadsEachRecordSetOnce
+504 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
+504 manual M27
+
+# 505 - (2) a failure is shown, never retried in a loop
+505 tst_calculation_demand inputDeterminedFailureIsStoredBadgedNeverRerun
+505 tst_calculation_demand jobLevelFailureIsBadgedNotRerunUntilRestart
+505 tst_calculation_demand columnFailuresAreBadgedNotReloaded
+505 tst_calculation_demand notApplicableSessionIsSettledWithoutAJob
+505 tst_calculation_demand unloadableSessionIsSettledAsFailed
+
+# 506 - (2) each component's contract can be stated without naming the others (section 12 gives the contracts)
+506 tst_calculation_demand nullCollaborators
+506 tst_result_columns columnWorkerIsUnchangedByDemand
+506 tst_session_model_engine schedulerTaskCanBeUnregistered
+506 audit demand
+
+# 507 - (3) the fusion kernel, its outputs and the record format are unchanged; the job history the jobs dock will read stays as it is
+507 tst_fusion_golden successFixturesMatchGolden
+507 tst_result_records layoutIsPinned
+507 tst_jobmodel historyFromSignalsAlone
+507 tst_fusion_store restoredAfterRestartIsBitIdentical
+
+# 508 - (3) nothing about demand or the job history is persisted across restarts, and no user-facing switch pauses or throttles background work
+508 tst_jobmodel nothingIsPersisted
+508 tst_calculation_demand jobLevelFailureIsBadgedNotRerunUntilRestart
+508 tst_calculation_demand fillTaskIsLowestAndNotCancellable
+508 audit demand
+
+# 509 - (5) plot demand: for every checked plot whose value is a requested output, every visible session needs the requested calculations that block that output
+509 tst_calculation_demand rowScript
+509 tst_calculation_demand ordinaryPlotsAreNeverInspected
+509 tst_calculation_demand hiddenAndStubRowsAreNotTracks
+509 tst_calculation_demand failedLoadPlaceholderIsNotATrack
+509 tst_fusion_rows allSeventeenFusionPlotsAreExplicitBacked
+509 tst_calculation_demand plotIdMatchesPlotModelRole
+509 tst_calculation_demand uncheckedPlotsAreNeverInspected
+
+# 510 - (5) column demand: for every enabled logbook column whose value depends on a requested output, every session in the logbook needs the requested calculations that block that value
+510 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
+510 tst_calculation_demand loadedHiddenSessionsNeedNoLoad
+510 tst_calculation_demand ordinaryColumnsCreateNoDemand
+510 tst_calculation_demand columnIdIsTheDefinitionKey
+510 tst_fusion_store columnOverFusionFillsUnloadedSessions
+510 manual M24
+
+# 511 - (5) a pair is in demand only while it has no result; a result counts whether published in this run or restored, success or input-determined failure
+511 tst_calculation_demand onlyRequestableCalculationsAreOffered
+511 tst_calculation_demand storedResultsCreateNoJob
+511 tst_calculation_demand inputDeterminedFailureIsStoredBadgedNeverRerun
+511 tst_calculation_demand columnFailuresAreBadgedNotReloaded
+511 tst_fusion_store restoredRejectionShowsBadge
+511 tst_fusion_store restoredAfterRestartIsBitIdentical
+
+# 512 - (5) a pair whose calculation cannot apply (a declared input missing) is never in demand and is not reported anywhere
+512 tst_calculation_demand sessionWithoutInputIsNeverListed
+512 tst_calculation_demand notApplicableSessionIsSettledWithoutAJob
+512 tst_jobqueue refusesMissingInput
+512 tst_fusion_rows noImuSessionIsNeverCounted
+512 tst_fusion_store columnOverFusionFillsUnloadedSessions
+
+# 513 - (5) whether a result exists: blocker inspection for a loaded session; for a session not loaded the logbook's record names and the reasons the index recorded for them, no record opened; a cell has a result only when every calculation it needs has a record; a record with a reason is a failed result before and after a restart alike; a known record counts until the column worker's restore deletes it as stale, which moves the pair into demand; the demand layer checks no staleness itself
+513 tst_calculation_demand storedResultsCreateNoJob
+513 tst_calculation_demand chainedColumnWithUpstreamRecordIsCompleted
+513 tst_calculation_demand storedRejectionIsBadgedAfterRestartWithoutLoad
+513 tst_logbook_index recordReasonsRoundTrip
+513 tst_result_store recordReasonRecordedAtWriteAndRestore
+513 tst_calculation_demand passOverManyStubsReadsEachRecordSetOnce
+513 tst_calculation_demand columnStateCountsAndPendingCells
+513 tst_result_columns staleRecordDeletedByWorkerCreatesDemand
+513 audit demand
+
+# 514 - (5) demand does not depend on how the state arose (a gesture, a profile, the start-up restore); at start-up every session is hidden, so plots create no demand until sessions are shown, while enabled columns do
+514 tst_calculation_demand programmaticCheckCreatesDemand
+514 tst_calculation_demand profileStyleApplyCreatesDemand
+514 tst_calculation_demand startupRestoreWithHiddenSessionsStartsNothing
+514 tst_calculation_demand profileStyleColumnsCreateDemand
+514 tst_calculation_demand startupWithEnabledColumnLoadsAfterColumnWorker
+514 tst_plot_row_delegate programmaticCheckIsTheSameAsAClick
+514 tst_plot_row_delegate startupRestoreWithHiddenSessionsStartsNothingWithViewAttached
+514 manual M1
+514 manual M2
+
+# 515 - (5) nothing about demand is persisted: it is derived again at the next start; a profile carrying a column over a requested output computes it for every session without a result, so no default profile carries such a column
+515 tst_calculation_demand jobLevelFailureIsBadgedNotRerunUntilRestart
+515 tst_calculation_demand profileStyleColumnsCreateDemand
+515 audit demand
+515 manual M2
+
+# 516 - (5) when a requested calculation depends on another, the demand covers both, upstream first
+516 tst_calculation_demand chainedBlockersContinue
+516 tst_calculation_demand heldChainContinues
+516 tst_calculation_demand chainCompletesAfterFirstJobDoesNotSucceed
+516 tst_calculation_demand chainedColumnKeepsItsHold
+516 tst_calcengine_blockers chainedBlockers
+
+# 517 - (6) a pair that enters demand is wanted at once, with no gesture (checking, showing, enabling, an input change that drops a demanded result), and the indicator shows it immediately
+517 tst_calculation_demand showingASessionStartsIt
+517 tst_calculation_demand loadingAVisibleSessionStartsIt
+517 tst_calculation_demand mergeCreatesDemandForShownSessions
+517 tst_calculation_demand plotCheckedDuringAJobJoinsIt
+517 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
+517 tst_calculation_demand inputBurstRunsOneJob
+517 tst_plot_row_delegate checkBoxClickChecksThroughTheModel
+517 tst_plot_row_delegate spaceKeyChecksThroughTheModel
+
+# 518 - (6) a pair that leaves demand (plot unchecked, session hidden, column disabled, result appeared by other means) is dropped before it starts; there is no queue of accepted requests to prune
+518 tst_calculation_demand hidingASessionDropsItsWaitingPair
+518 tst_calculation_demand uncheckingDropsWaitingPairsKeepsRunning
+518 tst_calculation_demand waitingPairNeededByAnotherPlotSurvives
+518 tst_calculation_demand chainStopsForHiddenTrackOrUncheckedPlot
+518 tst_calculation_demand disablingColumnReleasesHeldSessions
+518 tst_calculation_demand onlyRequestableCalculationsAreOffered
+518 tst_calculation_demand resultAppearingWhileWaitingDropsThePair
+518 tst_jobqueue withdrawEndsChosenNext
+518 tst_plot_row_delegate uncheckByClickDropsWaitingWork
+518 audit demand
+518 manual M6
+518 manual M26
+
+# 519 - (6) the running job is never stopped because its pair left demand: it finishes and its result is published and stored; it is stopped only when its inputs change, its session goes away, or the application closes
+519 tst_calculation_demand uncheckingDropsWaitingPairsKeepsRunning
+519 tst_calculation_demand hidingASessionDropsItsWaitingPair
+519 tst_calculation_demand disablingColumnReleasesHeldSessions
+519 tst_calculation_demand removedSessionLeavesNoTrace
+519 tst_jobqueue staleRunningJobIsStoppedAtOnce
+519 tst_jobqueue removeSessionWithRunningJob
+519 tst_jobqueue shutdownWithQueuedAndRunning
+519 tst_fusion_rows realRowScript
+519 audit gestures
+519 manual M6
+
+# 520 - (6) after an input change of a demanded session the pair is in demand at once but starts only once the inputs have been still for a short moment, so a burst of edits runs one job; showing, hiding, checking and enabling take effect without the wait
+520 tst_calculation_demand inputBurstRunsOneJob
+520 tst_calculation_demand staleRunningJobIsWaitingAtOnce
+520 tst_calculation_demand supersededJobIsRunAgainAfterInputsSettle
+520 tst_calculation_demand dependencyBurstIsCoalesced
+520 tst_calculation_demand mergeCreatesDemandForShownSessions
+520 tst_fusion_rows rejectedTrackShowsBadge
+520 manual M18
+
+# 521 - (6) jobs run one at a time on the executor's worker thread
+521 tst_jobqueue oneAtATimeInOfferOrder
+521 tst_jobqueue holdsAtMostRunningAndChosenNext
+521 tst_jobqueue workerIsNotMainThreadAndHasLargeStack
+521 tst_jobmodel neverMoreThanOneRunningRow
+521 audit one-worker
+
+# 522 - (7) the next job is chosen when a job ends and whenever demand changes, from the demand as it is at that moment, not from the order in which pairs entered it
+522 tst_calculation_demand changingDemandReplacesChosenNext
+522 tst_calculation_demand focusedSessionFirstThenRowOrder
+522 tst_calculation_demand columnPriorityFollowsRowOrderAfterPlots
+522 tst_jobqueue offerReplacesChosenNext
+
+# 523 - (7) plot demand first (the focused session, then the other visible sessions in logbook row order), then column demand: visible sessions, then the other loaded sessions, then sessions not loaded as the fill loads them, each in logbook row order
+523 tst_calculation_demand focusedSessionFirstThenRowOrder
+523 tst_calculation_demand visibleSessionsFirstWithinColumnDemand
+523 tst_calculation_demand columnPriorityFollowsRowOrderAfterPlots
+523 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
+
+# 524 - (7) a session made visible while column demand is worked through is computed next, waiting at most for the running job, which is not preempted
+524 tst_calculation_demand sessionShownDuringColumnDemandRunsNext
+524 tst_calculation_demand columnPriorityFollowsRowOrderAfterPlots
+524 manual M26
+
+# 525 - (8) an input-determined failure (rejection, solver failure) is a result: stored, shown with the warning badge and its reason, never run again
+525 tst_calculation_demand inputDeterminedFailureIsStoredBadgedNeverRerun
+525 tst_calculation_demand columnFailuresAreBadgedNotReloaded
+525 tst_fusion_rows rejectedTrackShowsBadge
+525 tst_fusion_store restoredRejectionShowsBadge
+525 tst_fusion_store restoredSolverFailureShowsBadge
+525 manual M7
+
+# 526 - (8) a job-level failure (the worker could not start, out of memory, a failure not a function of the inputs) is badged with its reason, not started again in the run unless its inputs change, not stored, so tried again at the next start; the demand layer remembers it
+526 tst_calculation_demand jobLevelFailureIsBadgedNotRerunUntilRestart
+526 tst_calculation_demand columnJobLevelFailureIsNotReloadedUntilRestart
+526 tst_calculation_demand unloadableSessionIsSettledAsFailed
+526 tst_calculation_demand visibleFailedLoadIsSettledAsFailed
+526 tst_logbook_indicators failedLoadSessionShowsBadgeNotPending
+526 tst_jobqueue workerStartFailureFails
+526 tst_jobqueue resourceExhaustionFails
+526 manual M28
+
+# 527 - (8) there is no retry control
+527 tst_plot_row_delegate clickOnClusterIsAClickOnTheRow
+527 tst_logbook_indicators clickOnIndicatorIsAClickOnTheSection
+527 audit gestures
+527 audit demand
+
+# 528 - (9) for column demand the demand layer, not the column worker, has a session that is not loaded loaded the way showing it would, without making it visible: an ordinary hidden session, pinned from its load until no column it needs is still waiting or running, then left to ordinary eviction
+528 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
+528 tst_calculation_demand chainedColumnKeepsItsHold
+528 tst_calculation_demand heldSessionShownStaysLoaded
+528 tst_calculation_demand removedOrRepopulatedHeldSessionIsReleased
+528 tst_calculation_demand demandDestroyedReleasesHoldsAndTask
+528 tst_column_cache loadPinnedSessionLoadsWithoutShowing
+528 tst_column_cache loadPinnedSessionFailedLoadPinsNothing
+528 tst_calculation_demand noLoadsAfterExecutorShutdown
+
+# 529 - (9) at most a small fixed number of sessions is loaded for this purpose at a time, not smaller than the number of jobs that may run at once; the next is loaded when one has ended
+529 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
+529 tst_calculation_demand sessionShownDuringColumnDemandRunsNext
+529 tst_calculation_demand columnPriorityFollowsRowOrderAfterPlots
+529 audit demand
+529 manual M24
+
+# 530 - (9) the fill is an idle-scheduler task below saving, loading visible sessions, bulk edits and column work, whose steps are the loads, so saves and bulk edits come first; it has work for the whole fill and steps only while it can load; the progress line reports the whole fill; the scheduler gains the generic notion of a task with work it cannot step right now, rests instead of spinning, and learns nothing about jobs
+530 tst_calculation_demand savesAndBulkEditsPrecedeLoadStep
+530 tst_calculation_demand startupWithEnabledColumnLoadsAfterColumnWorker
+530 tst_calculation_demand fillTaskIsLowestAndNotCancellable
+530 tst_calculation_demand fillTaskReportsProgressWhileWaiting
+530 tst_session_model_engine schedulerWaitingTaskDoesNotSpin
+530 tst_calculation_demand bulkEditMakesSettledSessionApplicable
+530 tst_session_model_engine schedulerTaskCanBeUnregistered
+530 audit demand
+530 manual M24
+
+# 531 - (9) the session-id correction of a first load happens before the pair is offered to the executor
+531 tst_calculation_demand identityStubIsOfferedUnderItsRealId
+531 tst_column_cache loadPinnedSessionFollowsIdentityRemap
+
+# 532 - (9) a session whose requested calculation turns out not to apply once loaded is settled as not applicable for the run without a job; its column value stays unavailable
+532 tst_calculation_demand notApplicableSessionIsSettledWithoutAJob
+532 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
+532 tst_fusion_store columnOverFusionFillsUnloadedSessions
+
+# 533 - (9) the column worker is unchanged and never knows a job exists; a record written later drops the cached value and the loaded-row refresh computes the new one; cheap column values never wait for a requested calculation
+533 tst_result_columns columnWorkerIsUnchangedByDemand
+533 tst_result_columns staleRecordDeletedByWorkerCreatesDemand
+533 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
+533 tst_logbook_indicators pendingCellBecomesValueWhenRecordIsWritten
+533 audit demand
+
+# 534 - (10) no refresh and no cancel for requested calculations anywhere; unchecking a plot, hiding sessions or disabling a column is how the user changes what is wanted
+534 tst_plot_row_delegate clickOnClusterIsAClickOnTheRow
+534 tst_logbook_indicators clickOnIndicatorIsAClickOnTheSection
+534 tst_logbook_indicators pendingCellBecomesValueWhenRecordIsWritten
+534 audit gestures
+534 audit demand
+534 manual M4
+534 manual M6
+
+# 535 - (10) a plot row and a logbook column header show a small animated working indicator at the right of their name while any of their demand is waiting or running
+535 tst_plot_row_delegate workingRowPaintsIndicator
+535 tst_plot_row_delegate workingIndicatorAnimatesOnlyWhileWorking
+535 tst_plot_row_delegate workingAnimationClock
+535 tst_logbook_indicators workingColumnShowsIndicatorRightOfText
+535 tst_logbook_indicators indicatorAnimatesOnlyWhileWorking
+535 tst_logbook_indicators indicatorFollowsColumnWhenMovedHiddenOrReordered
+535 tst_logbook_indicators indicatorClearsSortArrowAndNarrowSections
+535 tst_calculation_demand workingIdsFollowStates
+535 tst_plot_row_delegate plotStateChangeRepaintsRow
+535 tst_logbook_indicators plainHeaderAndCellsAreIdenticalToBase
+535 manual M3
+535 manual M23
+
+# 536 - (10) hovering the indicator, the row or the header shows how many sessions are done of how many are wanted, the session being computed with its progress text, and the sessions that could not be computed with their reasons
+536 tst_calculation_demand tooltipText
+536 tst_calculation_demand toolTipListsAtMostTenFailures
+536 tst_calculation_demand sharedJobSameProgress
+536 tst_calculation_demand progressUpdatesWithoutInspection
+536 tst_calculation_demand columnStateCountsAndPendingCells
+536 tst_plot_row_delegate hoverDetailFollowsDemandState
+536 tst_plot_row_delegate toolTipComesFromPlotState
+536 tst_logbook_indicators headerToolTipFollowsDemandState
+536 tst_calculation_demand visibleFailedLoadIsSettledAsFailed
+536 manual M23
+
+# 537 - (10) the warning badge replaces the indicator once work is finished and some sessions could not be computed; its hover lists them with reasons
+537 tst_calculation_demand failuresListedWhileWorking
+537 tst_plot_row_delegate badgeReplacesIndicatorOnceFinished
+537 tst_logbook_indicators badgeReplacesIndicatorWhenFinished
+537 tst_fusion_rows rejectedTrackShowsBadge
+537 tst_logbook_indicators failedLoadSessionShowsBadgeNotPending
+537 manual M7
+
+# 538 - (10) a column cell whose pair is in demand reads as pending, distinct from unavailable and from the unreadable-record pending state; pending is the view's presentation of demand, never a cached value, never in the index; the value underneath stays unavailable until the record is written, and sorting treats pending as unavailable
+538 tst_logbook_indicators pendingCellsAreDistinctFromUnavailable
+538 tst_logbook_indicators pendingCellBecomesValueWhenRecordIsWritten
+538 tst_logbook_indicators sortingTreatsPendingAsUnavailable
+538 tst_logbook_indicators unreadableRecordPendingIsNotDemandPending
+538 tst_logbook_indicators columnStateChangeRepaintsOnlyThatColumn
+538 tst_calculation_demand columnStateCountsAndPendingCells
+538 audit demand
+538 manual M25
+
+# 539 - (10) the logbook's progress line for background work is unchanged in form and reports a column fill for its whole duration, as on-demand column values: remaining of wanted, no cancel
+539 tst_calculation_demand fillTaskIsLowestAndNotCancellable
+539 tst_calculation_demand fillTaskReportsProgressWhileWaiting
+539 tst_logbook_indicators pendingCellBecomesValueWhenRecordIsWritten
+539 manual M24
+
+# 540 - (11) the executor's worker thread runs below normal priority, so that the user interface stays responsive
+540 tst_jobqueue workerRunsBelowNormalPriority
+540 tst_jobqueue mainThreadIsNotBlockedByARunningJob
+540 tst_fusion_jobs solverThreadsRunAtWorkerPriority
+540 audit demand
+540 manual M27
+
+# 541 - (11) the number of jobs that may run at once is a single bound of the executor (one today); the load bound of section 9 follows it, and raising it changes no contract of the demand layer or the column worker
+541 tst_jobqueue holdsAtMostRunningAndChosenNext
+541 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
+541 audit demand
+
+# 542 - (12) one widget-free demand layer replaces the plot rows' request logic: it reads the plot model, the session model, the enabled columns, blocker reports and the record set, derives demand, applies the priority, has sessions loaded, offers the next pair, remembers this run's failures and not-applicable pairs, and publishes per-plot and per-column state
+542 tst_calculation_demand nullCollaborators
+542 tst_calculation_demand changeSignalsAreMinimal
+542 tst_calculation_demand registryChangeReclassifies
+542 tst_calculation_demand removedSessionLeavesNoTrace
+542 audit widget-free-core
+542 audit demand
+
+# 543 - (12) the demand layer is the only caller of the executor; nothing calls back into it: it observes the models and the executor's signals
+543 tst_calculation_demand survivesExecutorShutdown
+543 tst_calculation_demand nullCollaborators
+543 tst_plot_row_delegate survivesDemandDestroyedFirst
+543 tst_logbook_indicators survivesDemandDestroyedFirst
+543 audit gestures
+543 audit demand
+
+# 544 - (12) the executor stays the only place a requested calculation runs and never loads a session; it holds at most the running job and one chosen next job, with no order of arrival, no deduplication against a list and no pruning
+544 tst_jobqueue holdsAtMostRunningAndChosenNext
+544 tst_jobqueue offerReplacesChosenNext
+544 tst_jobqueue withdrawEndsChosenNext
+544 tst_jobqueue duplicateOffersCreateNoDuplicates
+544 tst_jobqueue neverLoadsASession
+544 tst_calculation_demand executorHoldsAtMostRunningAndChosenNext
+544 audit gestures
+544 audit demand
+
+# 545 - (12) the executor's lifecycle (start, stale while running, cancel, supersede, fail, shutdown), its pinning, the publication and storing of results, and the job history are unchanged
+545 tst_jobqueue runsAndPublishes
+545 tst_jobqueue staleRunningJobIsStoppedAtOnce
+545 tst_jobqueue offerWhileStaleJobWindsDown
+545 tst_jobqueue cancelRunningThenNextStarts
+545 tst_jobqueue evictionDeferredWhileJobActive
+545 tst_jobqueue shutdownWithQueuedAndRunning
+545 tst_jobmodel historyFromSignalsAlone
+545 tst_result_store writesOnOkInstall
+545 tst_fusion_jobs jobPublishesAllOutputsTogether
+545 tst_jobqueue offerWhileCancellingCreatesNewJob
+545 tst_jobqueue shutdownIsIdempotentAndRefusesOffers
+
+# 546 - (12) the column worker and the idle scheduler keep their tasks and priorities; the column fill is a new lowest-priority task; the scheduler gains the notion of a task with work it cannot step right now and no knowledge of jobs; the manager and the store record each stored result's outcome in the index
+546 tst_result_columns columnWorkerIsUnchangedByDemand
+546 tst_calculation_demand fillTaskIsLowestAndNotCancellable
+546 tst_session_model_engine schedulerTaskCanBeUnregistered
+546 tst_session_model_engine schedulerWaitingTaskDoesNotSpin
+546 tst_result_store recordReasonRecordedAtWriteAndRestore
+546 audit branch-mechanisms
+546 audit demand
+
+# 547 - (12) the flow is one way: the demand layer chooses, the executor publishes, the listener writes the record, the record change drops cached column values, the loaded-row refresh recomputes them, and the demand layer sees the result through the inspection and record set it always reads
+547 tst_result_columns staleRecordDeletedByWorkerCreatesDemand
+547 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
+547 tst_logbook_indicators pendingCellBecomesValueWhenRecordIsWritten
+547 tst_fusion_store columnOverFusionFillsUnloadedSessions
+547 audit demand
+
+# 548 - (12) what stays true: restoring is not requesting; the column worker's temporary copy never writes a stored result and never requests; a restored result is indistinguishable from a published one; the engine's threading rules; the plot widget's "no data" warning asks the engine directly
+548 tst_calculation_demand storedResultsCreateNoJob
+548 tst_calculation_demand merelyUncomputedIsNotWorthAWarning
+548 tst_result_columns columnWorkerIsUnchangedByDemand
+548 tst_fusion_store restoredAfterRestartIsBitIdentical
+548 tst_fusion_session restoredFitIsIndistinguishable
+548 audit stored-results
+548 audit one-worker
+
+# 549 - (13) test: checking a plot starts the visible sessions without a result; showing another session while it is checked starts it with no other action; hiding drops its waiting pair; unchecking drops all waiting pairs; the running job finishes and its result is stored
+549 tst_calculation_demand rowScript
+549 tst_calculation_demand showingASessionStartsIt
+549 tst_calculation_demand hidingASessionDropsItsWaitingPair
+549 tst_calculation_demand uncheckingDropsWaitingPairsKeepsRunning
+549 tst_fusion_rows realRowScript
+
+# 550 - (13) test: a session made visible during column demand is the next job to start; within column demand visible sessions come before hidden loaded ones, and those before sessions not yet loaded
+550 tst_calculation_demand sessionShownDuringColumnDemandRunsNext
+550 tst_calculation_demand visibleSessionsFirstWithinColumnDemand
+550 tst_calculation_demand columnPriorityFollowsRowOrderAfterPlots
+
+# 551 - (13) test: enabling a column over a requested output wants every session without a result, loads unloaded ones a bounded number at a time as hidden pinned sessions, fills the column, ends with every session computed, not applicable or failed, and they leave the pool by ordinary eviction
+551 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
+551 tst_calculation_demand notApplicableSessionIsSettledWithoutAJob
+551 tst_calculation_demand columnFailuresAreBadgedNotReloaded
+551 tst_calculation_demand unloadableSessionIsSettledAsFailed
+551 tst_fusion_store columnOverFusionFillsUnloadedSessions
+
+# 552 - (13) test: the column worker's behaviour and statistics are unchanged by column demand, and a stale record it deletes moves the pair into demand
+552 tst_result_columns columnWorkerIsUnchangedByDemand
+552 tst_result_columns staleRecordDeletedByWorkerCreatesDemand
+
+# 553 - (13) test: stored results are restored, not recomputed: enabling the column on a logbook whose sessions all have valid stored results creates no job; a stored rejection of a session not loaded is listed as failed with its reason after a restart without loading it; a column over a chain whose upstream record alone is stored is completed
+553 tst_calculation_demand storedResultsCreateNoJob
+553 tst_calculation_demand storedRejectionIsBadgedAfterRestartWithoutLoad
+553 tst_calculation_demand chainedColumnWithUpstreamRecordIsCompleted
+553 tst_fusion_store fusionColumnWithStoredFitsRunsNothing
+
+# 554 - (13) test: an input-determined failure is stored, badged and never run again; a job-level failure is badged, not run again in the run, and tried again after a restart
+554 tst_calculation_demand inputDeterminedFailureIsStoredBadgedNeverRerun
+554 tst_calculation_demand jobLevelFailureIsBadgedNotRerunUntilRestart
+554 tst_calculation_demand columnFailuresAreBadgedNotReloaded
+554 tst_calculation_demand columnJobLevelFailureIsNotReloadedUntilRestart
+
+# 555 - (13) test: a burst of input changes on a demanded session produces one job; the indicator shows from the first change
+555 tst_calculation_demand inputBurstRunsOneJob
+555 tst_calculation_demand staleRunningJobIsWaitingAtOnce
+
+# 556 - (13) test: applying a profile with such a column creates demand; start-up with a checked plot and no visible sessions creates none
+556 tst_calculation_demand profileStyleColumnsCreateDemand
+556 tst_calculation_demand profileStyleApplyCreatesDemand
+556 tst_calculation_demand startupRestoreWithHiddenSessionsStartsNothing
+556 tst_plot_row_delegate startupRestoreWithHiddenSessionsStartsNothingWithViewAttached
+556 manual M2
+
+# 557 - (13) test: the working indicator and hover detail reflect waiting, running, done and failed counts on plot rows and column headers; no control to refresh or cancel a calculation exists
+557 tst_calculation_demand columnStateCountsAndPendingCells
+557 tst_plot_row_delegate workingIndicatorAnimatesOnlyWhileWorking
+557 tst_plot_row_delegate badgeReplacesIndicatorOnceFinished
+557 tst_plot_row_delegate hoverDetailFollowsDemandState
+557 tst_plot_row_delegate clickOnClusterIsAClickOnTheRow
+557 tst_logbook_indicators workingColumnShowsIndicatorRightOfText
+557 tst_logbook_indicators badgeReplacesIndicatorWhenFinished
+557 tst_logbook_indicators headerToolTipFollowsDemandState
+557 tst_logbook_indicators clickOnIndicatorIsAClickOnTheSection
+557 tst_logbook_indicators failedLoadSessionShowsBadgeNotPending
+
+# 558 - (13) test: a pending column cell is distinguishable from an unavailable one, is not written to the logbook index, and becomes the value when the record is written
+558 tst_logbook_indicators pendingCellsAreDistinctFromUnavailable
+558 tst_logbook_indicators pendingCellBecomesValueWhenRecordIsWritten
+558 tst_logbook_indicators sortingTreatsPendingAsUnavailable
+558 tst_logbook_indicators unreadableRecordPendingIsNotDemandPending
+
+# 559 - (13) test: saves and bulk edits still precede the fill's loads; no result is computed from a file being rewritten; the progress line reports the fill from its first load to its last result, and the scheduler does not spin while the fill waits on a job
+559 tst_calculation_demand savesAndBulkEditsPrecedeLoadStep
+559 tst_calculation_demand startupWithEnabledColumnLoadsAfterColumnWorker
+
+# 560 - (13) test: the executor never holds more than the running job and one chosen next job; changing demand replaces the chosen next job
+560 tst_jobqueue holdsAtMostRunningAndChosenNext
+560 tst_jobqueue offerReplacesChosenNext
+560 tst_calculation_demand executorHoldsAtMostRunningAndChosenNext
+560 tst_calculation_demand changingDemandReplacesChosenNext
+
+# 561 - (13) test: the UI thread is not blocked by a running requested calculation, and the calculation runs below normal priority
+561 tst_jobqueue mainThreadIsNotBlockedByARunningJob
+561 tst_jobqueue workerRunsBelowNormalPriority
+561 tst_fusion_jobs solverThreadsRunAtWorkerPriority
+
+# 562 - (13) test: the existing tests of stored results and of the executor pass, those that asserted the refresh gesture, the queue order or the pruning of queued jobs rewritten to the demand rules
+562 tst_jobqueue oneAtATimeInOfferOrder
+562 tst_jobqueue duplicateOffersCreateNoDuplicates
+562 tst_fusion_rows realRowScript
+562 tst_fusion_store dependencyEditDropsRecord
+562 tst_fusion_store codeStampChangeDropsRecordOnLoad
+562 tst_plot_row_layout indicatorOnly
+562 tst_plot_row_layout indicatorAndWarning
+562 audit gestures
+
+# 563 - (14) docs/ describe the executor, the demand layer, logbook columns over requested results, what the user sees (no refresh, the working indicator, pending cells, failures) and where a column over a requested calculation stays unavailable or pending
+563 audit demand

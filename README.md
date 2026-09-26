@@ -319,15 +319,15 @@ flysight-viewer-2/
 ├── CMakeLists.txt                         # Root superbuild configuration
 ├── README.md                              # This file
 ├── docs/
-│   ├── COMPUTED_PLOTS.md                  # User guide: plots that are computed on request (refresh,
-│   │                                      #   counts, warning badge, cancel)
+│   ├── COMPUTED_PLOTS.md                  # User guide: plots and logbook columns computed in the
+│   │                                      #   background (working indicator, badge, pending cells)
 │   ├── SENSOR_FUSION.md                   # The GNSS/IMU fit: inputs, model, limitations, lifecycle
 │   ├── LOCAL_COORDINATES.md               # The recording-wide north/east/down frame; simplified track
 │   ├── DATA_SCHEMA.md                     # Recorded schema, source preservation, conversion layer,
 │   │                                      #   escape hatch, saved-file guarantees, stored
 │   │                                      #   calculation results
 │   └── CALCULATIONS.md                    # Developer note: registered calculations, background
-│                                          #   execution, job queue, plot-driven requests
+│                                          #   execution, the executor, the demand layer
 ├── cmake/
 │   ├── ThirdPartySuperbuild.cmake         # ExternalProject definitions for GeographicLib, KDDockWidgets
 │   ├── SolverSuperbuild.cmake             # Pinned oneTBB and GTSAM: download, options, clean targets
@@ -353,7 +353,7 @@ flysight-viewer-2/
 │                                          #   engine, Qt Core only, also linked by the Python
 │                                          #   bridge), the flysight_core library (import/export,
 │                                          #   logbook, session model, registries, calculations,
-│                                          #   job queue, plot request logic; Qt Core + Gui, no
+│                                          #   executor, demand layer; Qt Core + Gui, no
 │                                          #   UI), the flysight_fusion library, and the
 │                                          #   FlySightViewer executable (UI, docks, plugin host)
 │   ├── engine/                            # Calculation engine: registry, per-session results,
@@ -364,15 +364,16 @@ flysight-viewer-2/
 │   │                                      #   (builtincalculations.* is the entry point)
 │   ├── fusion/                            # Batch GNSS/IMU fit and its registration; library
 │   │                                      #   flysight_fusion, the only target that links GTSAM
-│   ├── jobqueue.*, jobmodel.*             # Application-wide queue of background calculations
+│   ├── jobqueue.*, jobmodel.*             # The executor of requested calculations
 │   │                                      #   (one worker thread) and its Qt item model
-│   ├── plotrequests.*                     # Widget-free logic behind the plot list's rows: what
-│   │                                      #   needs computing, the two gestures, cancel
+│   ├── calculationdemand.*                # The demand layer: what checked plots and
+│   │                                      #   enabled columns need computed, what runs next
 │   ├── units/                             # Unit normalization table and the display-unit layer
 │   ├── preferences/                       # Preferences manager, keys, settings pages
 │   ├── ui/                                # Docks, plot, map, video, analysis widgets
-│   │                                      #   (ui/docks/plotselection/PlotRow*: the plot list's
-│   │                                      #   refresh / progress / cancel / warning controls)
+│   │                                      #   (ui/docks: plotselection/PlotRow*, DemandIndicator.*,
+│   │                                      #   logbook/LogbookHeaderView.*, LogbookCellDelegate.*:
+│   │                                      #   working indicator, badge, pending cells)
 │   ├── csvformat.*                        # The one definition of the on-disk text forms
 │   ├── dataimporter.*, parsedfile.h       # Parser: a file as recorded, nothing added
 │   ├── dataexporter.*                     # Writer: source data and stored attributes only
@@ -413,14 +414,14 @@ flysight-viewer-2/
 
 ## User Documentation
 
-- [docs/COMPUTED_PLOTS.md](docs/COMPUTED_PLOTS.md): plots that are computed on request - the refresh control and its count, progress and cancel, the warning badge, what starts a computation and what never does
+- [docs/COMPUTED_PLOTS.md](docs/COMPUTED_PLOTS.md): plots and logbook columns that are computed in the background - what starts and stops a computation, the working indicator and its count, the warning badge, pending logbook cells
 - [docs/SENSOR_FUSION.md](docs/SENSOR_FUSION.md): the "Sensor fusion" plots - what the GNSS/IMU fit computes, what it needs, what it rejects, and how far to trust it
 - [docs/LOCAL_COORDINATES.md](docs/LOCAL_COORDINATES.md): the "GNSS (Local frame)" plots - the recording-wide north/east/down frame and the simplified map track
 - [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md): the recorded file format, `SCHEMA_VER`, source versus effective values, the conversion layer, import / merge rules, what saved files contain, and the stored results of requested calculations
 
 ## Developer Documentation
 
-- [docs/CALCULATIONS.md](docs/CALCULATIONS.md): how to write a registered calculation (declared inputs, multi-output, candidates, cache versioning), and how explicit calculations run in the background: the asynchronous request, blocker inspection, the threading rule, the job queue, stored results of requested calculations, plot-driven requests, and sensor fusion as a registered calculation
+- [docs/CALCULATIONS.md](docs/CALCULATIONS.md): how to write a registered calculation (declared inputs, multi-output, candidates, cache versioning), and how explicit calculations run in the background: the asynchronous request, blocker inspection, the threading rule, the executor, stored results of requested calculations, the demand layer, and sensor fusion as a registered calculation
 - [python_plugins/README.md](python_plugins/README.md): writing Python plugins
 - [tests/README.md](tests/README.md): building, running, and writing tests; the acceptance traceability matrices, the cleanup audit, fusion golden regression, and the manual verification script
 

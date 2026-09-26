@@ -19,10 +19,12 @@ follows the IMU temperature, and stops when the cost has stopped moving
 (sections 4 and 5).
 
 To the application it is one registered calculation, titled "Sensor fusion".
-It is expensive (seconds to minutes per recording), so it never runs by
-itself: it runs only when you ask for it from the plot list, in the
-background, while the application stays usable.
-[Plots that are computed on request](COMPUTED_PLOTS.md) explains the controls.
+It is expensive (seconds to minutes per recording), so it runs only for what
+you have switched on - a checked fusion plot for the visible recordings, a
+logbook column over a fusion value for every recording - in the background,
+while the application stays usable.
+[Plots and logbook columns that are computed in the background](COMPUTED_PLOTS.md)
+explains what starts and stops a fit and what the rows and columns show.
 The fit always covers the whole recording; zoom and markers do not select a
 fit window. No Python runtime is needed.
 
@@ -39,20 +41,26 @@ document describes what is computed, from what, and how far to trust it.
   with a shared time base) and at least one GNSS fix with a horizontal accuracy
   under 10 m. A recording without them is simply absent from these plots, like
   any plot whose sensor a recording lacks.
-- Check a plot, or press the refresh icon on its row. A fit takes from seconds
-  to several minutes, depending on the length of the recording. All seventeen
-  plots of one recording come from the same fit, so it runs once.
+- Check a fusion plot and every visible recording without a result is fitted,
+  one after another; a logbook column over a fusion value (roll at the exit
+  marker, say) fits every recording of the logbook in the background. A fit
+  takes from seconds to several minutes, depending on the length of the
+  recording. All seventeen plots and every fusion column of one recording
+  come from the same fit, so it runs once.
 - Results are stored with the recording in the logbook (in a file in the
   logbook's `cache/` folder, never in the session file) and come back when the
   recording is loaded again, after hiding it or after a restart. A fitted
   recording is not fitted again. Deleting `cache/` while FlySight Viewer is
-  closed only means that the fits have to be requested again.
+  closed only means that the recordings are fitted again when something
+  switched on needs them.
 - A stored result is dropped when an input of the fit changes (a re-import or
   merge of different data, a changed `SCHEMA_VER`, a changed local origin) and
-  after an update that changes the fit's arithmetic; the plot then shows the
-  refresh icon again. Adding or removing altitude markers, changing
+  after an update that changes the fit's arithmetic; while a fusion plot is
+  checked for it or a fusion column is enabled, the recording is fitted again
+  a moment after the change. Adding or removing altitude markers, changing
   preferences and installing or editing Python plugins keep it, unless a
-  plugin provides one of the fit's inputs. Nothing is recomputed on its own.
+  plugin provides one of the fit's inputs. Nothing is fitted again unless
+  something switched on needs it.
 
 ## 3. Inputs
 
@@ -338,11 +346,15 @@ requested for a recording, every fusion value of that recording is unavailable,
 and no read ever starts it. Plots, the legend, the measure tool, logbook
 columns, the map, exports and plugins all read "unavailable" and move on.
 
-**The plot is the request.** Checking a fusion plot by hand, or pressing the
-refresh control on its row, creates one job per visible recording that lacks
-the result. Nothing else does: not restoring checked plots at start-up, not a
-profile, not showing a track, not an import. Loading a recording whose stored
-result is still valid restores that result: no job, no refresh count.
+**What is switched on is the request.** Checking a fusion plot in any way (a
+click, Space, a profile), showing a recording while one is checked, or
+enabling a logbook column over a fusion value creates one job per recording
+that lacks the result; unchecking, hiding or disabling drops the ones that
+have not started, and a running fit always finishes and is stored. At
+start-up every recording is hidden, so checked plots start nothing until
+recordings are shown; an enabled fusion column continues its fill at once.
+Loading a recording whose stored result is still valid restores that result:
+no job.
 
 **Three steps.** *Prepare*, on the main thread, resolves and captures the
 twenty-two inputs. *Compute* runs on the application's one worker thread, which
@@ -352,11 +364,12 @@ on the main thread, installs all eighteen outputs at once; ordinary
 invalidation then repaints the plots, the legend and everything else that had
 read "unavailable". The engine itself refuses a result whose inputs changed
 while it was being computed, and it knows that at the moment of the change: the
-job queue asks the fit to stop there and then (it stops at its next
+executor asks the fit to stop there and then (it stops at its next
 cancellation boundary, below, instead of running for minutes towards a result
 nobody can use). Such a job ends as superseded, nothing is published or
-cached, and the row shows the refresh control again at once; a refresh queues
-a new fit, which starts when the old one has stopped.
+cached, and the recording counts as waiting at once; a new fit starts by
+itself once the inputs have been still for about a second and the old one has
+stopped.
 
 **Cancellation** is observed at three kinds of boundary: before the fit starts
 (preparation neither reports nor asks; the progress texts begin with
@@ -370,8 +383,9 @@ publishes nothing and caches nothing.
 inputs, so they are cached like any result: the row shows the warning badge,
 and nothing offers a retry until an input changes, because the same inputs
 would give the same answer. Running out of memory, or failing to start the
-worker, is not a function of the inputs and is never cached: the recording
-stays "not computed".
+worker, is not a function of the inputs and is never cached: it is shown with
+the warning badge and its reason, not tried again while the application runs
+unless an input changes, and tried again at the next start.
 
 **Invalidation.** A change to a declared input (a re-import, a merge, a changed
 `SCHEMA_VER`, a changed origin) drops the result, every value derived from
@@ -390,15 +404,25 @@ of the code that computes it, drops a stored fit. A cancelled fit, or one that
 ran out of memory, stores nothing. A stored rejection shows the warning badge
 again, with its reason. A stored fit whose file cannot be read when its
 recording is loaded (another program holding it, say) is kept: the recording
-reads as not fitted until it is loaded again.
+reads as not fitted until it is loaded again (and is fitted again meanwhile if
+something switched on needs it).
 
-**One at a time.** Jobs run one after another in the order requested. Quitting
-cancels them and waits for the running fit to reach its next cancellation
-boundary: at most one solver step.
+**One at a time.** Fits run one after another, below normal priority: the
+focused recording first, then the other visible recordings from top to
+bottom, then the recordings fusion columns need
+([CALCULATIONS.md](CALCULATIONS.md), section 16.6). The solver's helper
+threads, on which GTSAM parallelizes the elimination, take the worker's
+priority while they help a fit, so the whole fit runs below normal priority
+where the operating system applies it (not on Linux; CALCULATIONS.md, section
+15.5). Quitting cancels them and waits for the running fit to reach its next
+cancellation boundary: at most one solver step.
 
 **Logbook columns** over fusion values show the live value for a loaded
-recording, and for an unloaded one the value cached from its stored result. A
-recording without a stored result shows none. One with a stored result whose
+recording, and for an unloaded one the value cached from its stored result.
+While such a column is enabled, every recording without a stored result is
+fitted in the background (recordings that are not loaded are loaded two at a
+time, as hidden recordings); its cell shows "…" until then. A recording
+without IMU data shows none. One with a stored result whose
 value is not cached yet (after an update, say) stays empty until it is loaded.
 
 ## 8. Validation
@@ -414,9 +438,9 @@ demonstrated by tests, all labelled `fusion`:
 | `tst_fusion_golden` | the kernel through its public API reproduces its goldens for twelve synthetic fixtures (three fits, nine rejections), the progress texts at its boundaries, cancellation at each kind of boundary (prefix, segment and full-fit iterations included), determinism and thread independence |
 | `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the two stopping rules forced through the tuning, the per-step covariance, the temperature factor's Jacobians and the three temperature cases, and the fit trace iteration by iteration against the goldens |
 | `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
-| `tst_fusion_jobs` | the real fit through the job queue: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result and kept, for an unloaded session, through an altitude marker added at run time or at the next start |
-| `tst_fusion_rows` | the plot rows with the real fusion plots, end to end |
-| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), rejection and solver-failure badges, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load |
+| `tst_fusion_jobs` | the real fit through the executor: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result and kept, for an unloaded session, through an altitude marker added at run time or at the next start |
+| `tst_fusion_rows` | the plot rows with the real fusion plots, end to end: fits started and dropped by what is checked and visible, with no gesture |
+| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), rejection and solver-failure badges, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a logbook column over roll filled for recordings that are not loaded, and nothing fitted again after a restart |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit on a recording written as `TRACK.CSV` / `SENSOR.CSV`, against a direct kernel run and against the application's own import path |
 
 The goldens live in `tests/data/fusion/`. In exact mode

@@ -349,6 +349,20 @@ stored sensor fusion result:
 "records": {"builtin.fusion.fit": "batch-temperature-bias-v3"}
 ```
 
+Each session entry may also have `"recordReasons"`: an object mapping the
+calculation id of a stored result that did not produce its outputs (a
+rejection or solver failure) to its reason, as the application learned it
+when the record was written or last restored. It is derived, additive and
+optional: an index without it means no reason has been learned yet, and a
+record of an earlier build reads as a success until it is next restored. The
+object is omitted when no record of the session has a reason; removing the
+record removes its entry. Nothing else in the entry changes. For a session
+whose stored sensor fusion result is a solver failure:
+
+```json
+"recordReasons": {"builtin.fusion.fit": "Batch fusion did not converge (iteration limit); sensor fusion unavailable"}
+```
+
 An edit or a merge refreshes only the columns that can depend on the change,
 and an interrupted save cannot leave cached values that disagree with the
 saved session file. A save that fails (a full disk, say) loses nothing: the
@@ -364,10 +378,18 @@ stamp matches the record files on disk and the calculations' current result
 versions; writing or deleting a record drops it. A column's value is the same
 whether or not its session is loaded. For a session that is not loaded and has
 no cached value, the column is unavailable when the session has no stored
-result. When it has one, the logbook's background worker reads the session's
-stored results into a temporary copy of the session, with the same checks as a
-load (a stale record is deleted, an unreadable one skipped), computes the
-value from them and caches it with the stamp. The session is not loaded for
+result. While such a column is enabled, FlySight Viewer computes the
+requested calculation in the background for every session that has no stored
+result, loading sessions that are not loaded two at a time without showing
+them ([COMPUTED_PLOTS.md](COMPUTED_PLOTS.md), section 4); the cached value
+stays unavailable until the record is written, which drops it, and the value
+is then computed from the result like any other. Until then the logbook shows
+the cell as pending ("…"): that is a presentation of the view, never a cached
+value, and never written to `index.json`. When the session has a stored
+result, the logbook's background worker reads the session's stored results
+into a temporary copy of the session, with the same checks as a load (a stale
+record is deleted, an unreadable one skipped), computes the value from them
+and caches it with the stamp. The session is not loaded for
 this, nothing is computed again, and no record is written.
 
 Before a record is written whose calculation `index.json` lists as present
@@ -378,8 +400,9 @@ that failed, or a record that could not be read when the session was loaded,
 section 12) is kept out of `index.json` until the record is written or deleted
 again or the session is unloaded. An unloaded session whose record was skipped
 (when it was loaded, or by the background worker) shows such a column empty
-(pending) until it is loaded again, when the record is read again. An index
-written before stamps existed keeps such a value only for a session without a
+(not cached; this is not the "…" of a value being computed) until it is
+loaded again, when the record is read again. An index written before stamps
+existed keeps such a value only for a session without a
 record.
 
 Developers: when to change the marker is described in
@@ -418,9 +441,11 @@ that is imported and computed before its first save gets its record under the
 name its first save will use.
 
 `cache/` may be deleted while FlySight Viewer is closed. At the next start
-every requested calculation reads as not requested until it is requested again
-from the plot list, and the logbook column values that came from a stored
-result are dropped (section 11) and show as unavailable.
+every requested calculation reads as not computed, and is computed again for
+whatever is switched on (a checked plot for the visible sessions, an enabled
+column over it for every session); the logbook column values that came from a
+stored result are dropped (section 11) and show as pending while they are
+computed again.
 
 **Format.** Binary, not meant to be read by people: the magic `FVRESULT`, a
 format version (2), then the code stamp (`CalculationCompatibilityVersion`),
@@ -439,7 +464,8 @@ result holding any other type is not stored (the write fails and the result
 stays in memory). A SHA-256 of everything before it closes the file. The size
 is of the order of the session file. A damaged record, or one of another
 format version (such as format 1 from development builds), is deleted as stale
-at its session's next load, and the calculation has to be requested again.
+at its session's next load, and the calculation is computed again when
+something switched on needs it.
 There is no migration.
 Only a regular file whose name ends exactly in `.fvresult` (lower case) is a
 record: a directory at a record's path is never listed, so neither the
@@ -514,22 +540,27 @@ never stored.
 - When a session is loaded, every valid record is restored before anything
   reads the session, a record whose result read another stored result after
   that one. Restoring is not requesting: nothing is computed. A stale or
-  missing record leaves the calculation not computed until it is requested
-  again from the plot list.
+  missing record leaves the calculation not computed until something switched
+  on needs it (a checked plot over a visible session, or an enabled logbook
+  column over it), which computes it in the background.
 - Records are also read, never written, when the logbook's background worker
   fills a missing column value of a session that is not loaded (section 11):
   it restores them into a temporary copy of the session with the same checks
   as a load, deletes a stale one and skips an unreadable one, and computes the
   value from them. The session is not loaded, nothing is requested or
-  computed again, and the copy is discarded. Records are read only when a
-  missing column needs one.
+  computed again (an enabled column's missing results are computed by the
+  application's demand for them, not by the worker: section 11), and the copy
+  is discarded. Records are read only when a missing column needs one.
 - A record that exists but cannot be opened or read in full when its session
   is loaded or the background worker reads it (another program holding the
   file locked, for example) is skipped for that load: it is neither restored
   nor deleted, the calculation reads as not requested, and a warning is
-  logged. A record whose result reads the result of a skipped record is
-  skipped too. The next load tries again; a new
-  publish for the same session and calculation replaces the record, and
+  logged. While a checked plot or an enabled column needs it for that loaded
+  session, it is computed again, and its publish replaces the record (or
+  fails like any failed write while the file is locked, below). A record
+  whose result reads the result of a skipped record is skipped too. The next
+  load tries again; a new publish for the same session and calculation
+  replaces the record, and
   deleting the session, or the start-up pass for a session file that no longer
   exists, removes it. A file that is locked without sharing (on Windows) can
   be neither replaced nor removed while the lock lasts: such a publish fails
@@ -539,13 +570,23 @@ never stored.
   skipped record are not cached in `index.json` while it stays skipped
   (section 11). A record that was read but is not a record, is damaged, or
   has another format version is deleted as stale.
+- **Failures that are not a function of the inputs** - running out of memory,
+  a worker that could not be started, a session file that could not be
+  loaded - are never stored: they are shown until the application closes and
+  tried again at the next start. **A stored rejection or solver failure** is a
+  result: its reason is also recorded in `index.json` (section 11,
+  `"recordReasons"`) when the record is written and whenever it is restored,
+  so that a session that is not loaded is listed as "could not be computed"
+  with that reason before and after a restart alike, without opening the
+  record or loading the session.
 - A write that fails (a full disk, say) leaves the previous record, if any,
   intact and the result in memory. The next publish tries again.
 
 **Guarantees.** The session file is untouched: its bytes, its format and what
 it lists do not depend on whether a record exists. Records are derived data.
 Deleting them by hand, or the whole `cache/` folder, with Viewer closed is safe
-and only means that the calculation has to be requested again. Existing
+and only means that the calculation is computed again when something switched
+on needs it. Existing
 logbooks have no records and need no migration. Records are not meant to be
 shared between logbooks or machines; one whose stamps do not match is simply
 discarded. A logbook synced between machines whose plugins or NumPy versions

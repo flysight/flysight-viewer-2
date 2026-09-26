@@ -123,7 +123,7 @@ public:
     JobModel *model() const { return m_model; }
 
     /// Requested calculations that may run at once. startNext() and the demand
-    /// layer's load bound (CalculationDemand::kMaxHeldSessions) are written in
+    /// layer's load bound (kMaxHeldSessions, calculationdemand.h) are written in
     /// terms of it.
     static constexpr int kMaxRunningJobs = 1;
 

@@ -15,22 +15,24 @@
     - 12.1 [Plot-driven jobs](#121-plot-driven-jobs)
     - 12.2 [The fusion runner and the reference recordings](#122-the-fusion-runner-and-the-reference-recordings)
     - 12.3 [Stored results](#123-stored-results)
+    - 12.4 [Demand-driven calculations](#124-demand-driven-calculations)
 
 [Appendix A. The acceptance items (1-19)](#appendix-a-the-acceptance-items-1-19)
 [Appendix B. The acceptance items of sensor fusion and plot-driven jobs (101-120)](#appendix-b-the-acceptance-items-of-sensor-fusion-and-plot-driven-jobs-101-120)
 [Appendix C. The acceptance items of the sensor fusion improvements (201-247)](#appendix-c-the-acceptance-items-of-the-sensor-fusion-improvements-201-247)
 [Appendix D. The acceptance items of stored requested results (301-350)](#appendix-d-the-acceptance-items-of-stored-requested-results-301-350)
 [Appendix E. The acceptance items of stored-result validity (401-442)](#appendix-e-the-acceptance-items-of-stored-result-validity-401-442)
+[Appendix F. The acceptance items of demand-driven requested calculations (501-563)](#appendix-f-the-acceptance-items-of-demand-driven-requested-calculations-501-563)
 
 ## 1. What this is
 
 Qt Test executables that link the `flysight_core` static library (session
-data, calculations, import/export, logbook, session model, job queue, plot
-request logic, registries, unit conversion). They need Qt Core, Gui and Test
+data, calculations, import/export, logbook, session model, the executor, the
+demand layer, registries, unit conversion). They need Qt Core, Gui and Test
 and GeographicLib only: no UI, no WebEngine, no KDDockWidgets, no QCustomPlot,
 no Boost, and - with three kinds of exception - nothing else:
-`tst_python_bridge` embeds Python, `tst_plot_row_delegate` links Qt Widgets,
-and the tests labelled `fusion` link GTSAM (through `flysight_fusion`, or
+`tst_python_bridge` embeds Python, `tst_plot_row_delegate` and
+`tst_logbook_indicators` link Qt Widgets, and the tests labelled `fusion` link GTSAM (through `flysight_fusion`, or
 directly). Each of the three can be switched off (section 3). One more CTest
 entry, `audit_cleanup`, is not an executable but a CMake script (section 10).
 
@@ -39,8 +41,8 @@ The tests are not a standalone project. `tests/` is added by
 test is registered with CTest. Test executables have no install rules, so
 packages are the same whether or not the option is set.
 
-There are 48 test executables plus the audit. `ctest -N` lists 49 entries, or
-56 where the bit-exact runs of the seven fusion golden tests are registered
+There are 49 test executables plus the audit. `ctest -N` lists 50 entries, or
+57 where the bit-exact runs of the seven fusion golden tests are registered
 (`tst_fusion_*_exact`: the same executables a second time, label `exact`,
 Release only; sections 3 and 11). `solver_deploy_probe`,
 `fusion_golden_capture` and `fusion_runner` are also built, but are not tests
@@ -75,20 +77,21 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | `tst_local_coordinates` | The recording-wide `Local` frame: origin gates, analytically known displacements and velocity rotation on WGS84, NaN at the index of an invalid sample only, all outputs unavailable without a qualifying fix, the shared GNSS time axes, invalidation on source changes and independence from markers on a real `SessionData` |
 | `tst_simplified_track` | The simplified map track on the shared `Local` frame: all seven outputs at the same retained sample indices, every dropped sample within 0.5 m of the path and the strictly-greater rule, duplicate-position endpoints, closed, degenerate and empty tracks, non-finite samples left out, one projection per recording, unavailable without a local origin and back after a source correction, siblings invalidated together |
 | `tst_session_engine` | `SessionData` on the engine with the real built-ins: run-once, invalidation, candidate replacement, overrides, preferences, the fresh-evaluation oracle, copy/move semantics; an explicit-policy calculation and a throwing / nested / cyclic set of calculations registered temporarily on the global registry (acceptance 14, 12); an asynchronous request against real session ownership (published, session moved, destroyed, move- and copy-assigned over, declared input edited) |
-| `tst_session_model_engine` | `SessionModel` + `AltitudeMarkerManager`: registry and preference broadcasts reaching `dependencyChanged`, coalescing, merges, rows surviving sort, the read-only `DEVICE_ID` column, a marker only for an altitude whose calculation registered; the job queue's hooks: counted session pins that defer LRU eviction (and nothing else), and immediate publication of engine-returned invalidations without any persistent effect |
-| `tst_result_store` | Stored results of explicit calculations on a real model and logbook (synthetic calculations): written on an Ok install (also before a new session's first save), deleted on an input change, restored on every load path, upstream records first, so that a record whose lookup has a fallback candidate restores in any id order (a session without a known record is not listed), stale records deleted; the bulk edit's temporary load never reads one, the column worker's copy only when a missing column needs it (then with the checks of a load); write failures; an explicit family instance is not stored; a registry change made while the application runs that changes what a name a result looked up resolves to deletes its record, a candidate registered behind the provider and a teardown removal do not; unrelated registrations and the descent-pause preference keep it valid across loads and restarts; a lookup that resolves differently, or a changed plug-in code identity of a calculation the result read, makes it stale; an unreadable record (a directory at its path, a Windows lock, POSIX permissions; rows skip where the platform does not honour them) is skipped and restored at a later load, a record that reads it is kept, the next publish replaces it (the column value over it then reaches `index.json`), and deleting its session removes it, leaves a locked file as a stray for the next start, or leaves a directory (never a record); a format-1 record is deleted |
-| `tst_result_columns` | Logbook columns over explicit results: cached from the restored or published result with a record stamp in index.json, dropped when a record is written or deleted, filled for an unloaded session with a record by the column worker from its stored results restored into a temporary copy (the row never loaded, no record written, nothing run; a stale record deleted and the value cached unavailable; an unreadable one skipped and the value pending; no record read while the missing columns are all on demand), crash points, old indexes, write failures, and a `cache/` folder deleted while the application was closed (no record, nothing requested, the values over it dropped at start-up, nothing run); values over a record skipped at a load never cached while it is skipped; a registry change that does not reach a result (also a provider registered behind a stored input) keeps its row confirmed, one that does deletes the record and its stamp (`registryChangeKeepsLoadedRowConfirmed`); an environment change discards cached values while the record restores |
+| `tst_session_model_engine` | `SessionModel` + `AltitudeMarkerManager`: registry and preference broadcasts reaching `dependencyChanged`, coalescing, merges, rows surviving sort, the read-only `DEVICE_ID` column, a marker only for an altitude whose calculation registered; the executor's hooks: counted session pins that defer LRU eviction (and nothing else), the idle scheduler's `unregisterTask` and replacing `registerTask` (`schedulerTaskCanBeUnregistered`) and a task with work it cannot step, which the scheduler waits on without spinning (`schedulerWaitingTaskDoesNotSpin`), and immediate publication of engine-returned invalidations without any persistent effect |
+| `tst_result_store` | Stored results of explicit calculations on a real model and logbook (synthetic calculations): written on an Ok install (also before a new session's first save), deleted on an input change, restored on every load path, upstream records first, so that a record whose lookup has a fallback candidate restores in any id order (a session without a known record is not listed), stale records deleted; the bulk edit's temporary load never reads one, the column worker's copy only when a missing column needs it (then with the checks of a load); write failures; an explicit family instance is not stored; a registry change made while the application runs that changes what a name a result looked up resolves to deletes its record, a candidate registered behind the provider and a teardown removal do not; unrelated registrations and the descent-pause preference keep it valid across loads and restarts; a lookup that resolves differently, or a changed plug-in code identity of a calculation the result read, makes it stale; an unreadable record (a directory at its path, a Windows lock, POSIX permissions; rows skip where the platform does not honour them) is skipped and restored at a later load, a record that reads it is kept, the next publish replaces it (the column value over it then reaches `index.json`), and deleting its session removes it, leaves a locked file as a stray for the next start, or leaves a directory (never a record); a format-1 record is deleted; the reason of a stored rejection recorded in `index.json` at the write and at every restore (`recordReasonRecordedAtWriteAndRestore`) |
+| `tst_result_columns` | Logbook columns over explicit results: cached from the restored or published result with a record stamp in index.json, dropped when a record is written or deleted, filled for an unloaded session with a record by the column worker from its stored results restored into a temporary copy (the row never loaded, no record written, nothing run; a stale record deleted and the value cached unavailable; an unreadable one skipped and the value pending; no record read while the missing columns are all on demand), crash points, old indexes, write failures, and a `cache/` folder deleted while the application was closed (no record, nothing requested, the values over it dropped at start-up, nothing run); values over a record skipped at a load never cached while it is skipped; a registry change that does not reach a result (also a provider registered behind a stored input) keeps its row confirmed, one that does deletes the record and its stamp (`registryChangeKeepsLoadedRowConfirmed`); an environment change discards cached values while the record restores; the column worker's behaviour and statistics unchanged with column demand active, and a stale record it deletes moving the pair into demand (`columnWorkerIsUnchangedByDemand`, `staleRecordDeletedByWorkerCreatesDemand`) |
 | `tst_session_oracle` | The session-level idempotency oracle (section 7): randomized, seeded sequences of reads, edits, merges, preference and registry changes on real `SessionData` objects (part A) and on the real `SessionModel` / `LogbookManager` through the application's import path, with restarts, simulated crashes and a persisted-state check (part B), compared against a fresh evaluation |
 
-**Jobs and plot rows** (synthetic explicit calculations; no GTSAM)
+**The executor, the demand layer and the demand views** (synthetic explicit calculations; no GTSAM)
 
 | Test | Covers |
 |------|--------|
-| `tst_jobqueue` | The application-wide `JobQueue` on a real `SessionModel`, real session engines and the global registry, with the synthetic explicit calculations of `jobfixture.h` (no GTSAM): publication through the session model, the 64 MiB worker thread, deduplication, one job at a time in request order, refusals (missing input, unloaded or unknown session, blocked, done, unknown), never loading a session, every superseded / succeeded / failed / cancelled path with its reason text, a running job whose ticket went stale (input edit, merge, registration removed, model destroyed, the row's session data replaced - "Session data replaced", not "removed or unloaded") asked to stop at once and ended Superseded with the refusal's reason without its compute reaching the end, a new request behind it created rather than deduplicated and run with the new inputs, first writer wins between a user cancel and a stale stop, cancel wins over a completed compute, pruning of unwanted queued jobs, a job cancelled from a `rowsInserted` slot (no pin left, no `jobQueued` after its `jobFinished`), session removal, deferred eviction, repopulation, merge, sort, shutdown in every order, and the idle scheduler working during a job (sensor-fusion-jobs acceptance 8, 10, 11, 14, 17) |
-| `tst_jobmodel` | The `JobModel` contract under `QAbstractItemModelTester`: every role on every column, a test view that renders the whole job history from model signals alone, never more than one running row, ordered UTC timestamps, progress and cancel-requested as their own signals, removal of finished rows only, the retention bound, and no job persisted: the settings and the logbook folder are byte-identical after jobs of every ending, except for the stored results of the two jobs that published `Ok` (sensor-fusion-jobs acceptance 18; store-requested item 309) |
-| `tst_plot_requests` | `PlotRequests`, the widget-free logic behind the plot list's rows, on a real `PlotModel`, `JobQueue`, `SessionModel`, real session engines and the global registry, with the synthetic plots of `plotfixture.h` (no widgets, no GTSAM): track conditions and row aggregation (counts, progress label, tooltip text, change signals, coalesced passes, text-only progress updates), ordinary and unchecked plots never inspected, hidden rows, stubs and failed-load placeholders are not tracks, the two gestures as one-shot requests, chained continuation and everything that stops it, everything that is not a gesture (programmatic checks, profile apply, startup restore, showing, loading, merging, input invalidation, a superseded job), a running job gone stale showing refresh instead of cancel at once and a refresh queueing a new job behind it, sessions without input never listed, the failed badge and its reason, `PlotRequests::isMerelyUncomputed()` (the plot widget's "No data available" warning is withheld for a value that waits on an explicit calculation or was rejected by one, and for nothing else: one case per blocker state, and asking runs nothing), rows sharing a job, cancel, cancel then refresh while the job winds down, pruning of queued jobs on uncheck and hide, session removal, registry changes, queue shutdown, and null collaborators (sensor-fusion-jobs acceptance 11, 13, 15, 16) |
-| `tst_plot_row_layout` | `layoutPlotRow()` (`src/ui/docks/plotselection/PlotRowLayout.h`), the pure geometry of a plot-list row's control cluster, without widgets or a font: control only, control and warning, warning only, nothing shown, an empty label, right-to-left as the exact mirror image, and the control's hit rectangle (the icon's column over the full row height, out to the row's edge; label and badge outside it) |
-| `tst_plot_row_delegate` | `PlotRowDelegate` in an offscreen `QTreeView` on a real `PlotRequests`, `PlotModel`, `JobQueue` and `SessionModel`, driven by synthesized mouse and key events; the **only test that links Qt Widgets** (`FLYSIGHT_BUILD_WIDGET_TESTS`, label `widgets`). What the view owns: plain rows are pixel-identical to the base delegate, the control is painted and the name elided rather than the cluster, a click on the check box and Space are the check gesture while unchecking, `setPlotEnabled()`, `togglePlot()`, `setData()` and a start-up style restore with the view attached start nothing, refresh and cancel clicks (no toggle, no selection change), press/release pairs that must do nothing, the inert label and badge, right clicks, a double click on refresh, the tooltip from `PlotRowState`, repaint on `rowStateChanged`, and survival of a destroyed `PlotRequests` (sensor-fusion-jobs acceptance 16, wiring half). The offscreen platform has no fonts, so text is drawn as boxes; the assertions are about geometry, identity and events, not about letter shapes |
+| `tst_jobqueue` | The executor, `JobQueue`, on a real `SessionModel`, real session engines and the global registry, with the synthetic explicit calculations of `jobfixture.h` (no GTSAM): publication through the session model, the 64 MiB worker thread at below-normal priority (`workerRunsBelowNormalPriority`), the main thread free while a job computes (`mainThreadIsNotBlockedByARunningJob`), at most the running job and one chosen next job (`holdsAtMostRunningAndChosenNext`), an equal offer creating nothing, a different offer replacing the chosen next job, which ends Cancelled "No longer needed" without an `idle()` in between (`offerReplacesChosenNext`), withdrawing it (`withdrawEndsChosenNext`), one job at a time in offer order, refusals (missing input, unloaded or unknown session, blocked, done, unknown), never loading a session, every superseded / succeeded / failed / cancelled path with its reason text, a running job whose ticket went stale (input edit, merge, registration removed, model destroyed, the row's session data replaced - "Session data replaced", not "removed or unloaded") asked to stop at once and ended Superseded with the refusal's reason without its compute reaching the end, a new offer behind it becoming the chosen next job and run with the new inputs, first writer wins between a user cancel and a stale stop, cancel wins over a completed compute, a job cancelled from a `rowsInserted` slot (no pin left, no `jobQueued` after its `jobFinished`), session removal, deferred eviction, repopulation, merge, sort, shutdown in every order, and the idle scheduler working during a job (sensor-fusion-jobs acceptance 8, 10, 11, 14, 17; demand items 521, 540, 544, 560, 561) |
+| `tst_jobmodel` | The `JobModel` contract under `QAbstractItemModelTester`: every role on every column, a test view that renders the whole job history from model signals alone, never more than one running row, a replaced chosen next job recorded as Cancelled "No longer needed", ordered UTC timestamps, progress and cancel-requested as their own signals, removal of finished rows only, the retention bound, and no job persisted: the settings and the logbook folder are byte-identical after jobs of every ending, except for the stored results of the two jobs that published `Ok` (sensor-fusion-jobs acceptance 18; store-requested item 309) |
+| `tst_calculation_demand` | `CalculationDemand`, the widget-free demand layer, on a real `PlotModel`, executor, `SessionModel`, `LogbookColumnStore`, logbook, real session engines and the global registry, with the synthetic plots of `plotfixture.h` (no widgets, no GTSAM). **Plot demand:** checking a plot starts the visible sessions without a result, showing a session or loading a visible one starts it, hiding drops its waiting pair and unchecking all of them while the running job finishes and is stored (`rowScript`, `showingASessionStartsIt`, `hidingASessionDropsItsWaitingPair`, `uncheckingDropsWaitingPairsKeepsRunning`); a waiting pair whose result appears by other means dropped before it starts (`resultAppearingWhileWaitingDropsThePair`); a click, `setPlotEnabled`, `togglePlot`, `setData` and a profile create the same demand, the start-up restore with every session hidden none; chained calculations upstream first with no `idle()` between links; the focused session, then row order, the chosen next job replaced when demand changes, never more than the running and one chosen next job; the one-second input-settle wait (a burst runs one job, the indicator from the first change); failures (an input-determined one stored, badged and never re-run; a job-level one badged, not re-run in the run and re-run by a new demand layer, as after a restart); not-applicable sessions never listed; per-plot state, counts, tooltip (at most ten per list), change signals, coalesced passes, `isMerelyUncomputed()` (the plot widget's "No data available" warning is withheld for a value that waits on a requested calculation or was rejected by one, and for nothing else); session removal, registry changes, executor shutdown and null collaborators. **Column demand:** enabling a column over a requested output fills every session of the logbook, loading sessions that are not loaded at most two at a time as hidden, pinned sessions that leave by ordinary eviction (`enablingColumnFillsEveryUnloadedSession`), a session shown meanwhile running next, stored results creating no job (a stored rejection of a session that is not loaded badged with its reason after a restart, without a load), settlements (not applicable, failures, a session file that cannot be loaded, visible or hidden) that are not loaded again, chains keeping their hold, holds released on disable, show, removal, repopulation and destruction, the identity stub offered under its real id, per-column state and pending cells, the load step below saves, bulk edits and column work and not cancellable, its progress for the whole fill, and a pass over 2000 stubs reading each record set once (sensor-fusion-jobs acceptance 11, 13, 15, 16; demand items 501-560) |
+| `tst_plot_row_layout` | `layoutPlotRow()` (`src/ui/docks/plotselection/PlotRowLayout.h`), the pure geometry of a plot-list row's indicator cluster, without widgets or a font: indicator only, indicator and warning, warning only, nothing shown, an empty label, right-to-left as the exact mirror image; there is no hit rectangle |
+| `tst_plot_row_delegate` | `PlotRowDelegate` in an offscreen `QTreeView` on a real `CalculationDemand`, `PlotModel`, executor and `SessionModel`, driven by synthesized mouse and key events; one of the **two tests that link Qt Widgets** (`FLYSIGHT_BUILD_WIDGET_TESTS`, label `widgets`). Plain rows pixel-identical to the base delegate; the working indicator and "k of n" painted and the name elided rather than the cluster; the indicator's clock (`workingAnimationClock`) turning only while a plot is working and never repainting when idle; the badge replacing the indicator once finished; hover detail from `DemandState`; a click on the check box, Space and the programmatic paths all writing the model and creating the same demand; a click, right click or double click on the cluster being a click on the row; repaint on `plotStateChanged`; survival of a destroyed demand layer (sensor-fusion-jobs acceptance 16; demand items 514, 517, 534-537, 557). The offscreen platform has no fonts, so text is drawn as boxes; the assertions are about geometry, identity and events, not about letter shapes |
+| `tst_logbook_indicators` | `LogbookView` with `LogbookHeaderView` and `LogbookCellDelegate` in an offscreen window beside a reference `QTreeView`, on a real demand layer, executor and `SessionModel`; the second test that links Qt Widgets (label `widgets`). Plain headers and cells identical to the base classes; a requested column's header showing the indicator right of its text, clear of the sort arrow, following moved, hidden and reordered sections, animating only while working; the badge once finished (also for a session file that cannot be loaded); hover detail from `columnState`; a click on the glyph sorting as elsewhere; pending cells distinct from unavailable ones and from the unreadable-record state, never in the model or `index.json`, sorted as unavailable, and replaced by the value when the record is written; one column's repaint per state change; survival of a destroyed demand layer (demand items 527, 533-538, 557, 558) |
 
 **Source layer, conversion layer, importer**
 
@@ -105,9 +108,9 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 |------|--------|
 | `tst_csvformat` | `CsvFormat`, the one definition of the on-disk text forms: shortest round-trip doubles (a 200 000-value bit-pattern sweep), `-0`, `nan` / `inf` / `-inf`, attribute values by `QVariant` type, line-break flattening, valid names and units |
 | `tst_persistence_roundtrip` | Save / reload on the real importer, exporter and logbook: acceptance 5 (bit-identical samples, units and header attributes preserved, `SCHEMA_VER` only if recorded, effective values unchanged, second cycle byte-identical, independent of any cache) and acceptance 6 (a released logbook file is not rescaled, relabelled or stamped by a save; the `loadSession` backfill is additive and idempotent); non-finite samples, ragged sensors, unrepresentable text; the file writer and the in-memory writer agree (also across the 4 MB flush boundary); an unsupported stored `SCHEMA_VER` is never written |
-| `tst_logbook_index` | `LogbookManager`'s `index.json` column cache: the calculation-compatibility marker gates every cached value and each column's recorded environment the values of that column (acceptance 18 at the storage level; `differentColumnEnvironmentDiscardsThatColumn`, `missingColumnEnvironmentsDiscardOnce`, `environmentIsTheCachedOne`), unsaved-column tracking and save ordering (an interrupted save never leaves a cached column that disagrees with the session file), orphan session files adopted, marks follow remap / remove / reset; the raw load with its failure reason, the legacy backfill as a separate step, identity-entry queries, a legacy flat index coming up as stubs without rewriting a session file |
+| `tst_logbook_index` | `LogbookManager`'s `index.json` column cache (and each session's `"recordReasons"`, `recordReasonsRoundTrip`): the calculation-compatibility marker gates every cached value and each column's recorded environment the values of that column (acceptance 18 at the storage level; `differentColumnEnvironmentDiscardsThatColumn`, `missingColumnEnvironmentsDiscardOnce`, `environmentIsTheCachedOne`), unsaved-column tracking and save ordering (an interrupted save never leaves a cached column that disagrees with the session file), orphan session files adopted, marks follow remap / remove / reset; the raw load with its failure reason, the legacy backfill as a separate step, identity-entry queries, a legacy flat index coming up as stubs without rewriting a session file |
 | `tst_result_records` | Stored requested-calculation results: the record file name (percent-encoded calculation id, canonical, dot-free, distinct under case folding; the parse of a name), the code stamp (the compatibility marker) computed fresh, never made stale by a registration, the binary record format (bit-exact round trip of `-0`, NaN payloads, infinities and subnormals, null / empty / non-ASCII strings and unavailable outputs; a round trip of every accepted attribute type; the pinned byte layout of format version 2, the resolutions included; other format versions (format 1, in both of its layouts, included), damaged and crafted payloads refused without allocating; every other attribute type, `long` and `unsigned long` included, refused at encode; size), and `LogbookManager`'s record files in the logbook's `cache/` folder: a short read is `Unreadable`, never decoded (`readWholeDevice()` on a buffer that holds less than expected: no file system gives a short read on demand); write, read, replace, list, remove, the folder created by the first write only (a missing folder holds no record), write failures leaving the previous record intact (a `cache/` that cannot be created included), removal with the session (dotted identity stems), stray records removed from `cache/` by `initialize()` in all three index branches, `sessions/` untouched (a name spelling the extension in another case is not a record: neither listed nor removed), orphan adoption, remap, and a session save that never depends on records |
-| `tst_column_cache` | The same through `SessionModel`: upgrade discards and lazily recomputes (acceptance 18), an edit refreshes only the affected columns with a warm and a cold engine, merges and bulk edits, interrupted saves, environment changes discarding, in loaded and unloaded rows and without saving, exactly the columns whose environment they change: a declared preference only the columns that read it (`preferenceChangeDiscardsOnlyReadingColumns`), a registration only the columns whose closure it reaches (`environmentCheckDropsExactlyTheReachedColumn`), new altitude markers no column at all, at run time and after a restart (`altitudeMarkerChangeKeepsOtherColumns`), and a value computed after a change but before the queued check (an eviction) stored and flushed only under its column's new environment (`valueComputedBeforeCheckIsStoredUnderItsEnvironment`), save failures (the row stays dirty and loaded, is skipped by the idle saver and the LRU, stays out of the index, and is saved by a later edit or the shutdown flush), line breaks flattened at edit, a column over an explicit result cached from the result the session has and following its record, shown by a stub after a restart without a load (`explicitBackedColumnFollowsItsResult`), a plug-in edit (a changed plug-in code identity) discarding the cached values of the plug-in column at the next start and keeping the others (`pluginEditDiscardsPluginColumns`) |
+| `tst_column_cache` | The same through `SessionModel`: upgrade discards and lazily recomputes (acceptance 18), an edit refreshes only the affected columns with a warm and a cold engine, merges and bulk edits, interrupted saves, environment changes discarding, in loaded and unloaded rows and without saving, exactly the columns whose environment they change: a declared preference only the columns that read it (`preferenceChangeDiscardsOnlyReadingColumns`), a registration only the columns whose closure it reaches (`environmentCheckDropsExactlyTheReachedColumn`), new altitude markers no column at all, at run time and after a restart (`altitudeMarkerChangeKeepsOtherColumns`), and a value computed after a change but before the queued check (an eviction) stored and flushed only under its column's new environment (`valueComputedBeforeCheckIsStoredUnderItsEnvironment`), save failures (the row stays dirty and loaded, is skipped by the idle saver and the LRU, stays out of the index, and is saved by a later edit or the shutdown flush), line breaks flattened at edit, a column over an explicit result cached from the result the session has and following its record, shown by a stub after a restart without a load (`explicitBackedColumnFollowsItsResult`), a plug-in edit (a changed plug-in code identity) discarding the cached values of the plug-in column at the next start and keeping the others (`pluginEditDiscardsPluginColumns`), and `loadPinnedSession()`: a hidden session loaded the way showing it would, pinned under its corrected id, nothing pinned for a file that cannot be loaded (`loadPinnedSessionLoadsWithoutShowing`, `loadPinnedSessionFollowsIdentityRemap`, `loadPinnedSessionFailedLoadPinsNothing`) |
 
 **Import and merge, workflows**
 
@@ -134,11 +137,11 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | `tst_fusion_golden` | The fusion kernel (`flysight_fusion`) through its public API, `src/fusion/fusion.h`, only. What it reaches: `Fusion::run()` on the twelve committed synthetic fixtures and nothing internal. In spec order: the initializer's prefix and segment fits are boundaries of the same kinds as the full fit's, so cancellation at each kind of boundary (`Starting fit`, graph construction, a prefix fit iteration, a segment fit iteration, a full fit iteration) leaves an empty result and no state behind, and preparation has no boundary of its own (the first is `Starting fit`); the progress texts at the kernel's boundaries, prefix and segment texts included, are the golden's; two runs are bit-identical with TBB on, a 64 MiB worker thread matches the main thread, and nothing depends on the caller's data. The golden comparison: for every fixture the fit reproduces the goldens captured from the kernel by `fusion_golden_capture` (three successes: seventeen channels and the diagnostics with their `initializer`, `stopping`, `quality` and `model` objects; nine rejections: the exact reason), the channel writer of the capture tool is the inverse of the loader on the committed files (and the hex sample form round-trips signed zero, a NaN and a subnormal by bit pattern), and the comparator holds its bounds (sensor-fusion-jobs acceptance 4; section 11). Label `fusion` |
 | `tst_fusion_kernel` | The kernel's internals through the seams of `src/fusion/` (the only test that includes those headers), with the literal expectations of the reference's self-test: the shared unwrap rule, preintegration across exact boundaries, every validation defect, backward attitude propagation, heading freedom, dense reconstruction timing and endpoint correction, an exact constant-velocity fit, TBB really on. In spec order: the segmented initializer (segment cutting on fixes and the merge of a short final piece, a window shorter than one segment, the smallest-sAcc anchor and the carried-back start, prefix growth on the marginal yaw sigma about the vertical, the growth stop when a doubling gains nothing, the prefix budget of one pass and 50 iterations and starts that end on the limit, the fallback when every prefix start fails, its progress texts and diagnostics keys, the four synthetic initializer recordings of the specification and `coarse_maneuver`); the stopping rule (the bias-settled cost test, the slow tail accepted and refused on each bound, non-convergence and a never-settling bias as solver failures with their failure shapes); the per-step IMU noise term (the density covariance exactly without a signal change, the specified covariance for a known change, the `dt` scaling, the constants in `model.per_step`); the temperature-dependent gyro bias (the custom IMU factor's six Jacobians against finite differences and its equivalence with `ImuFactor` at zero slope, the graph shape with `T_ref` and the slope prior last, the reconstruction at each interval's own bias, a recording without the temperature channel rejected by name, a constant temperature leaving `b1` at its prior and agreeing with the constant-bias fit, the drifting-bias recording recovering `b1` within 20 % in at most 30 iterations). The golden comparison: the fit trace (the segment account and the cost before and after every optimizer iteration) against the goldens, which localizes a golden failure to a stage, and the chosen prefix fit's iteration count against the golden's (acceptance 4; section 11). Label `fusion` |
 | `tst_fusion_session` | Sensor fusion as a registered calculation (`src/fusion/fusionregistration.cpp`) on real `SessionData` engines bound to the global registry, with the real fit on the test's main thread. What it reaches: the engine's request, prepare / compute / publish and blocker paths on fixture sessions whose effective inputs are bit-identical to the kernel's fixtures, and a natural session through the real input chain. The registration's shape: three registrations, the fit with 22 inputs (all required, `IMU/temperature` the last measurement) and 18 outputs, explicit, title "Sensor fusion". In spec order: cancellation at each kind of boundary through the engine's facility publishes and caches nothing (sensor-fusion-jobs acceptance 10); a session with the temperature column carries it to the kernel bit for bit and matches the kernel's direct run, and a session without `IMU/temperature` is `MissingInput` / `NotApplicable` like one without IMU data, a local origin or a time fit (11). The lifecycle: reads of every fusion value, `accH`, the system-time axis, the diagnostics and an interpolated logbook value never run the fit, in any order, nor does the exporter (5); a request runs once, publishes all outputs together, and brings `accH` and `_system_time` with it (6); prepare / compute / publish equals `request()` bit for bit (7); an input change after publication drops everything while markers do not (8); a rejection is a cached result with its reason, `NotProduced` for inspection, and requestable again after an input change (9); blocker inspection reports the fit through on-demand intermediates and never starts it (12); two sessions are independent. The fit declares its kernel's algorithm string as its result version, no output of an explicit built-in has another candidate (`explicitOutputsHaveOneCandidate`), and a fit exported from one session and restored into another is indistinguishable from the fresh one: every channel bit for bit, the diagnostics byte for byte, status, detail, dependency edges (`SCHEMA_VER` among its leaves), blockers and invalidation, and the fit's snapshot lists what provided each name it looked up (`restoredFitIsIndistinguishable`). The golden comparison: every published result equals the kernel's goldens. Label `fusion` |
-| `tst_fusion_jobs` | The real fit through `JobQueue` on a real `SessionModel`, on the queue's 64 MiB worker: one job publishes all outputs together and announces them through the session model (acceptance 6); the queue gives the bits a synchronous request gives (7); an input edit during the fit asks the fit to stop at once, ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job (11); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before the fit, from the published result after it (with the `"records"` stamp in `index.json`), shown by the unloaded row after a restart without a load, and dropped with the record by an input change (`columnOnFusionOutputIsCachedFromRecord`); an altitude marker added at run time and registered again after a restart keeps that column's and the description's cached values of an unloaded session - no load, nothing pending (`altitudeMarkerKeepsColumnsOfUnloadedSession`); once that value of an unloaded session is gone from `index.json` (cleared, or dropped by an exit-marker move made while the application was closed: `_EXIT_TIME` is not bulk-editable, so the test repeats the `LogbookManager` calls of the bulk edit's stub path - temporary load, column marked unsaved, save), the column worker refills it after a restart from the stored fit restored into its temporary copy: the roll at the marker's time, bit-identical to the loaded session's, with no load of the row, no job, no fit and the record's bytes unchanged (`workerRefillsColumnFromStoredFit`); while the loaded row's cell shows the golden's number the moment the job publishes (`dataChanged` for that row only, and the number already there when the view is told); shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the queue delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 11 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
+| `tst_fusion_jobs` | The real fit through the executor on a real `SessionModel`, on the executor's 64 MiB worker: one job publishes all outputs together and announces them through the session model (acceptance 6); the executor gives the bits a synchronous request gives (7); the solver's oneTBB helper threads run at the worker's below-normal priority while they help a fit (`solverThreadsRunAtWorkerPriority`); an input edit during the fit asks the fit to stop at once, ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job (11); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before the fit, from the published result after it (with the `"records"` stamp in `index.json`), shown by the unloaded row after a restart without a load, and dropped with the record by an input change (`columnOnFusionOutputIsCachedFromRecord`); an altitude marker added at run time and registered again after a restart keeps that column's and the description's cached values of an unloaded session - no load, nothing pending (`altitudeMarkerKeepsColumnsOfUnloadedSession`); once that value of an unloaded session is gone from `index.json` (cleared, or dropped by an exit-marker move made while the application was closed: `_EXIT_TIME` is not bulk-editable, so the test repeats the `LogbookManager` calls of the bulk edit's stub path - temporary load, column marked unsaved, save), the column worker refills it after a restart from the stored fit restored into its temporary copy: the roll at the marker's time, bit-identical to the loaded session's, with no load of the row, no job, no fit and the record's bytes unchanged (`workerRefillsColumnFromStoredFit`); while the loaded row's cell shows the golden's number the moment the job publishes (`dataChanged` for that row only, and the number already there when the view is told); shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the executor delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 11 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit, driven as a child process on fixtures written out as `TRACK.CSV` / `SENSOR.CSV`: its diagnostics equal a direct `Fusion::run()` on the fixture and equal the application's own import-and-fit path (`SessionImport` on a `SessionModel`); the CSV output reloads bit for bit; `--dump-inputs` shows the effective inputs, including the legacy gyro scale of a file without `SCHEMA_VER`; a rejection exits 1 with the failure JSON and writes no CSV; usage and import failures exit 64 and 3; no calculation on the fit's input path declares a preference (the premise of the model-free import); and the seventeen output channels of `fitOutputChannels()` are the golden's columns in order. Label `fusion` |
-| `tst_fusion_golden_exact`, `tst_fusion_kernel_exact`, `tst_fusion_session_exact`, `tst_fusion_jobs_exact`, `tst_fusion_rows_exact`, `tst_fusion_store_exact`, `tst_fusion_runner_exact` | Not executables: the seven tests above that compare with the goldens, run a second time with `FLYSIGHT_FUSION_EXACT=1` and otherwise the same environment, so that every golden comparison is bit equality (section 11, "Tolerance policy"). Registered only where that is a fair demand, the compiler the goldens were captured with (`FLYSIGHT_FUSION_EXACT_TESTS`, section 3). The first two decide bit-identity; the next four show that the bits survive the engine, the queue's worker thread, the plot rows and a stored and restored record; the last is bit identity across the process boundary (the runner's output against an in-process run). Labels `fusion` and `exact` |
-| `tst_fusion_rows` | The plot-row script with the **real** fusion plots: `PlotModel` + `PlotRequests` + `JobQueue` + `SessionModel` + the fusion registration, with real fits on the queue's 64 MiB worker and the seventeen plots of `fusionPlots()` (`tests/fusion/fusionsessions.h`, which mirrors `MainWindow::registerBuiltInPlots()`; `audit_cleanup` pins the application's list at seventeen rows). All seventeen plots are explicit-backed and the six local-frame plots are not; the row script of acceptance 15 on three real tracks (three jobs, the count falling as each publishes, unchecking mid-way removes the queued job and lets the running one finish, cancel leaves the plot checked and the track missing with nothing published, a fourth track is missing with a count of one and starts nothing, refresh computes it), with every published track held to the kernel's goldens and the job history as a literal; roll, pitch and yaw share one job and one progress text; `accH` is blocked by the fit and never has a job of its own; a session without IMU data is in no count, list or tooltip of any of the seventeen rows before, during and after a fit (11); a rejected recording shows the warning badge with the reason, offers no retry, and becomes refreshable when its input changes (9); sessions are edited, tracks hidden and shown and other values read while a real fit runs, without disturbing it (19, the half that needs no widget). Steered by the first progress text of a job and by `jobFinished`: no gate, no sleeps. Label `fusion` |
-| `tst_fusion_store` | The fit's stored result: bit-identical after unload and restart (also when fitted before the first save), rejection / solver failure badge, dependency (a declared input, `SCHEMA_VER`) and code-stamp invalidation, merges, session file untouched, not requested (refresh offered, nothing run) after the `cache/` folder was deleted while closed; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a provider's result version in the record; also run as `_exact` |
+| `tst_fusion_golden_exact`, `tst_fusion_kernel_exact`, `tst_fusion_session_exact`, `tst_fusion_jobs_exact`, `tst_fusion_rows_exact`, `tst_fusion_store_exact`, `tst_fusion_runner_exact` | Not executables: the seven tests above that compare with the goldens, run a second time with `FLYSIGHT_FUSION_EXACT=1` and otherwise the same environment, so that every golden comparison is bit equality (section 11, "Tolerance policy"). Registered only where that is a fair demand, the compiler the goldens were captured with (`FLYSIGHT_FUSION_EXACT_TESTS`, section 3). The first two decide bit-identity; the next four show that the bits survive the engine, the executor's worker thread, the plot rows and a stored and restored record; the last is bit identity across the process boundary (the runner's output against an in-process run). Labels `fusion` and `exact` |
+| `tst_fusion_rows` | The plot-row script with the **real** fusion plots: `PlotModel` + `CalculationDemand` + the executor + `SessionModel` + the fusion registration, with real fits on the executor's 64 MiB worker and the seventeen plots of `fusionPlots()` (`tests/fusion/fusionsessions.h`, which mirrors `MainWindow::registerBuiltInPlots()`; `audit_cleanup` pins the application's list at seventeen rows). All seventeen plots are explicit-backed and the six local-frame plots are not; the row script of acceptance 15 on three real tracks (checking fits them one after another with no other action, the count rising as each publishes; unchecking mid-way drops the waiting one and lets the running one finish; checking again resumes; a fourth track shown is fitted with no other action), with every published track held to the kernel's goldens and the job history as a literal; roll, pitch and yaw share one job and one progress text; `accH` is blocked by the fit and never has a job of its own; a session without IMU data is in no count, list or tooltip of any of the seventeen rows before, during and after a fit (11); a rejected recording shows the warning badge with the reason, offers no retry, and is fitted again after its input changes and settles (9); sessions are edited, tracks hidden and shown and other values read while a real fit runs, without disturbing it, and are fitted afterwards with no other action (19, the half that needs no widget). Steered by the first progress text of a job and by `jobFinished`: no gate, no sleeps. Label `fusion` |
+| `tst_fusion_store` | The fit's stored result: bit-identical after unload and restart (also when fitted before the first save), rejection / solver failure badge, dependency (a declared input, `SCHEMA_VER`) and code-stamp invalidation, merges, session file untouched, not requested after the `cache/` folder was deleted while closed (one fit offered while roll is checked, dropped when unchecked, nothing run); kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a provider's result version in the record; a logbook column over roll filled for sessions that are not loaded, and nothing fitted again after a restart (`columnOverFusionFillsUnloadedSessions`, `fusionColumnWithStoredFitsRunsNothing`); also run as `_exact` |
 
 Three executables are built with these but are not tests and are not counted
 above. `solver_deploy_probe` is a plain executable (no Qt) around the same
@@ -165,7 +168,7 @@ comparison (section 12.2).
 
 | Test | Covers |
 |------|--------|
-| `audit_cleanup` | No old mechanism remains, each fact has one authority, none of the mechanisms of `sensor-fusion-clean-port` that have no successor exists, the structural rules of background work hold (one worker, no locks, GTSAM confined, gestures from the row delegate only, a widget-free core), stored results live in the logbook's `cache/` folder, never in the session file, and are named, written, read, restored and deleted in one place each, and a stored result goes stale only when its in-memory twin would be dropped or its code changed (no environment fingerprint in a record, the plug-in code identity computed in one place, teardown removals at shutdown only), and every line of `tests/acceptance_map.txt` resolves (section 10) |
+| `audit_cleanup` | No old mechanism remains, each fact has one authority, none of the mechanisms of `sensor-fusion-clean-port` that have no successor exists, the structural rules of background work hold (one worker, no locks, GTSAM confined, work started only by the demand layer through the executor, views that only read the demand layer, a model and scheduler that know no jobs, a widget-free core), stored results live in the logbook's `cache/` folder, never in the session file, and are named, written, read, restored and deleted in one place each, and a stored result goes stale only when its in-memory twin would be dropped or its code changed (no environment fingerprint in a record, the plug-in code identity computed in one place, teardown removals at shutdown only), and no refresh, cancel, queue or plot-request logic remains in code or documents, and every line of `tests/acceptance_map.txt` resolves (section 10) |
 
 The `tst_calc*` tests drive `src/engine/` with synthetic calculations against
 `FakeSessionState` / `FakePreferenceProvider` (`support/fakesessionstate.h`).
@@ -255,13 +258,21 @@ where they run. CMake 3.22 or newer is needed for the automatic DLL and
 `PYTHONPATH` resolution; with an older CMake the directories have to be put on
 `PATH` by hand (section 4) and `tst_python_bridge` is disabled.
 
+**Run the suite sequentially.** The fusion tests that run real fits through
+the executor (`tst_fusion_jobs`, `tst_fusion_rows`, `tst_fusion_store` and
+their `_exact` runs) fit on the executor's worker, which runs below normal
+priority (docs/CALCULATIONS.md, section 15.5), so they are sensitive to
+concurrent CPU load: under load a fit can take long enough to reach a test's
+timeout. Run the suite without `-j`, and not beside another CPU-heavy run (a
+second `ctest`, a build).
+
 ## 3. Options and labels
 
 | Option | Default | Effect |
 |--------|---------|--------|
 | `FLYSIGHT_BUILD_TESTS` | `OFF` | Adds `tests/` to the application build. No install rules: packaging is unaffected |
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | Only with the first: also build `tst_python_bridge`. `OFF` removes the target. If NumPy is missing from the build-time Python the test is still built but listed as **Disabled**, not omitted (section 5) |
-| `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | Only with the first: also build `tst_plot_row_delegate`, the one test that links Qt Widgets (it runs an offscreen `QTreeView`). `OFF` removes the target, and then no test target links Widgets. Forwarded by the root `CMakeLists.txt` like the others |
+| `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | Only with the first: also build `tst_plot_row_delegate` and `tst_logbook_indicators`, the two tests that link Qt Widgets (they run offscreen views). `OFF` removes the target, and then no test target links Widgets. Forwarded by the root `CMakeLists.txt` like the others |
 | `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | Only with the first: also build the GTSAM-linked tests (`tst_solver_smoke`, `tst_fusion_golden`, `tst_fusion_kernel`, `tst_fusion_session`, `tst_fusion_jobs`, `tst_fusion_rows`, `tst_fusion_store`, `tst_fusion_runner`) and the executables `solver_deploy_probe`, `fusion_golden_capture` (the golden capture tool) and `fusion_runner` (the command-line fit), all defined in one block of `tests/CMakeLists.txt` (the tests through `flysight_add_fusion_test()`). `OFF` removes the targets, and then no test target references GTSAM. Forwarded by the root `CMakeLists.txt` like the other two |
 | `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | Only with the fusion tests: register the bit-exact runs `tst_fusion_*_exact` (label `exact`; no new executable). `AUTO` registers them when the compiler is 64-bit MSVC of the same major.minor as `cl_version` in `tests/data/fusion/capture.json` (19.44; the file is written by `fusion_golden_capture` at every capture), and otherwise prints "Fusion exact tests not registered: ..." at configure time; `ON` registers them whatever the compiler is; `OFF` never does. In every mode they exist for the Release configuration only. Forwarded by the root `CMakeLists.txt` like the others (section 11, "Tolerance policy") |
 
@@ -272,7 +283,7 @@ inner cache too.
 CTest labels: every executable has `core`; `tst_python_bridge` also `python`;
 `tst_session_oracle` also `oracle`; `audit_cleanup` has `audit`. GTSAM-linked
 tests also have `fusion`, so `ctest -LE fusion` is the GTSAM-free run. The
-Widgets test also has `widgets` (`ctest -LE widgets` runs everything else).
+Widgets tests also have `widgets` (`ctest -LE widgets` runs everything else).
 The bit-exact runs have `core`, `fusion` and `exact` (`ctest -L exact`; seven
 on the capture configuration).
 
@@ -525,7 +536,8 @@ missing invalidation in the code under test.
   they give no hook to isolate settings before the first singleton is touched.
   For the same reason, do not touch application singletons from global or
   static initializers in a test file. A test that needs Qt Widgets
-  (`tst_plot_row_delegate` is the only one) writes its own `main()` instead:
+  (`tst_plot_row_delegate` and `tst_logbook_indicators` are the only ones)
+  writes its own `main()` instead:
   the same order - deterministic hash seed, application object,
   `TestEnvironment`, test object - with a `QApplication` and the application's
   Fusion style. The macro is not given a Widgets form: `testmain.h` is included
@@ -552,7 +564,8 @@ missing invalidation in the code under test.
   `skipReason()` is non-empty where the mechanism is not honoured and the row
   `QSKIP`s), `asFormatOne` (a format-2 record's bytes in the format-1
   layout), the shared logbook columns (`descriptionColumn`,
-  `gyroColumn`, `exitTimeColumn`), `writeAltitudes`, and the
+  `gyroColumn`, `exitTimeColumn`, and `attributeColumn(key)`, a
+  session-attribute column over `key`), `writeAltitudes`, and the
   `dependencyChanged` spy checks (`spyHasAttribute`, `spyHasMeasurement`).
   `storedresults.h`: `storedResolution` (a `StoredResolution` built in one
   call) and the stand-in plug-in folder (`standInPluginIngredients`,
@@ -566,22 +579,27 @@ missing invalidation in the code under test.
   `RecordingProgress`; it uses `std::thread`, which is why
   `flysight_test_support` carries `Threads::Threads` as a usage requirement
   (stated once there; no test names it).
-  `jobfixture.h` (`JobWorld`, `Gate`, `waitIdle`, `Quiet`, `onFirstProgress`) registers controllable
-  explicit calculations on the global registry for tests of the job queue and
-  whatever sits on top of it: a test holds the queue's worker inside a compute
-  function (`Gate::waitEntered`), then releases (`Gate::open`) or cancels it,
+  `jobfixture.h` (`JobWorld`, `Gate`, `waitIdle`, `waitStarted`, `Quiet`,
+  `onFirstProgress`) registers controllable explicit calculations on the
+  global registry for tests of the executor and whatever sits on top of it:
+  a test holds the executor's worker inside a compute function
+  (`Gate::waitEntered`), then releases (`Gate::open`) or cancels it,
   without sleeps; construct the `JobWorld` before the `SessionModel` and
-  destroy it after the `JobQueue` and the model. `ExtraRegistrations` holds
+  destroy it after the executor and the model. `ExtraRegistrations` holds
   calculations one test function adds to the global registry; destroyed after
-  the queue and the model, it unregisters them newest first, as runtime
+  the executor and the model, it unregisters them newest first, as runtime
   changes. `Quiet` is "nothing started
   since" (no `jobQueued`, no new job row); `onFirstProgress` acts on the main
   thread while a job that no gate can hold (a real fit) is still running.
-  `plotfixture.h` (`PlotFixture`) adds synthetic plots (`Syn/...`) over those
-  calculations through on-demand bridge calculations, plus `show()` and
-  `giveInput()` for the application's visibility and edit paths, `spin()`
-  (two turns of the event loop and a flush of the `PlotRequests`) and
-  `sessionIdsOf()` for a row's track lists; construct it
+  `plotfixture.h` (`PlotFixture`) adds synthetic plots (`Syn/...`, eight,
+  the last over the `exhausted` calculation for an out-of-memory job) over
+  those calculations through on-demand bridge calculations, plus `show()`
+  and `giveInput()` for the application's visibility and edit paths,
+  `spin()` (two turns of the event loop and a flush of the demand layer),
+  `waitDemandIdle()` (the executor idle, no pass pending, no session
+  settling and no load step with work; follow it with `waitForIdle(model)`
+  when column values must be filled) and `sessionIdsOf()` for a state's track
+  lists; construct it
   after the `JobWorld` and destroy it before it. Helpers that need GTSAM or
   the fusion library live in `tests/fusion/` instead (section 11, "Fusion
   sessions"), which only the `fusion` tests link: the support library stays
@@ -657,8 +675,8 @@ missing invalidation in the code under test.
 
 ## 9. Acceptance traceability
 
-Five specifications, five ranges of items in `tests/acceptance_map.txt`, the
-machine-checked form of the five tables below (section 10); keep them in sync.
+Six specifications, six ranges of items in `tests/acceptance_map.txt`, the
+machine-checked form of the six tables below (section 10); keep them in sync.
 
 ### 9.1 Schema and calculation engine (items 1-19)
 
@@ -724,7 +742,9 @@ clause, and the test functions that assert it with literal expectations.
 The twenty acceptance items of "Sensor fusion as an explicit calculation, with
 plot-driven background jobs", stated in full in
 [appendix B](#appendix-b-the-acceptance-items-of-sensor-fusion-and-plot-driven-jobs-101-120).
-In the map, item = 100 + the number in the first column.
+In the map, item = 100 + the number in the first column. Items 110, 111, 113,
+114, 115, 116 and 117 are stated as amended by the specification
+"Demand-driven requested calculations" (9.6).
 
 A line of the map has one of four forms, one per kind of evidence:
 
@@ -758,22 +778,22 @@ never stand alone.
 | 6 | runs once, publishes together, derived values appear, second request runs nothing | `tst_fusion_session::requestRunsOnceAndPublishesTogether`; `tst_fusion_jobs::jobPublishesAllOutputsTogether` |
 | 6 | ... and the logbook cell over a fusion output shows the number straight after publication | `tst_fusion_jobs::columnShowsValueStraightAfterPublication` |
 | 7 | asynchronous == synchronous | `tst_calcengine_async::asyncMatchesSync`; `tst_session_engine::asyncRequestOnSession`; `tst_fusion_session::asyncMatchesSync`; `tst_fusion_jobs::queueMatchesSynchronousRequest` |
-| 8 | input change while running: superseded, nothing published, requestable | `tst_calcengine_async::inputChangeWhileRunningRefuses`; `tst_session_engine::asyncRequestOnSession`; `tst_jobqueue::inputChangeWhileRunningSupersedes`; `tst_fusion_jobs::inputChangeDuringFitSupersedes`; (stopped early) `tst_calcengine_async::willBeRefusedReportsTheEnginesMarks`, `tst_jobqueue::staleRunningJobIsStoppedAtOnce`, `requestWhileStaleJobWindsDown`, `tst_plot_requests::staleRunningJobShowsRefreshAtOnce` |
+| 8 | input change while running: superseded, nothing published, requestable | `tst_calcengine_async::inputChangeWhileRunningRefuses`; `tst_session_engine::asyncRequestOnSession`; `tst_jobqueue::inputChangeWhileRunningSupersedes`; `tst_fusion_jobs::inputChangeDuringFitSupersedes`; (stopped early) `tst_calcengine_async::willBeRefusedReportsTheEnginesMarks`, `tst_jobqueue::staleRunningJobIsStoppedAtOnce`, `offerWhileStaleJobWindsDown`, `tst_calculation_demand::staleRunningJobIsWaitingAtOnce` |
 | 8 | change after publication drops the result and dependents | `tst_calcengine_async::changeAfterPublicationDropsDependents`; `tst_fusion_session::changeAfterPublicationDropsEverything` |
 | 9 | rejection: unavailable, diagnostics reason, succeeded job with the reason, no second run, fresh run after an input change | `tst_fusion_session::rejectionIsACachedResult`; `tst_fusion_jobs::rejectedRecordingIsSucceededJob`; (synthetic) `tst_jobqueue::rejectionSucceedsWithReason`; (the row) `tst_fusion_rows::rejectedTrackShowsBadge` |
-| 10 | cancel stops at the next boundary, publishes nothing, requestable; the next job starts | `tst_fusion_golden::cancelAtEachKindOfBoundary`, `cancelDuringPreparation`; `tst_fusion_session::cancelStopsAtNextBoundary`; `tst_jobqueue::cancelRunningThenNextStarts`; `tst_fusion_jobs::cancelDuringFitThenNextJobStarts` |
-| 11 | no-IMU session: never missing / pending / failed; no job possible | `tst_jobqueue::refusesMissingInput`; `tst_plot_requests::sessionWithoutInputIsNeverListed`; `tst_fusion_session::missingInputsAreNotApplicable`; `tst_fusion_jobs::noImuSessionCannotHaveAJob`; `tst_fusion_rows::noImuSessionIsNeverCounted` (all seventeen real rows) |
+| 10 | (as amended) cancel through the executor stops at the next boundary, publishes nothing, requestable; the chosen next job starts | `tst_fusion_golden::cancelAtEachKindOfBoundary`, `cancelDuringPreparation`; `tst_fusion_session::cancelStopsAtNextBoundary`; `tst_jobqueue::cancelRunningThenNextStarts`; `tst_fusion_jobs::cancelDuringFitThenNextJobStarts` |
+| 11 | (as amended) no-IMU session: never waiting / running / failed, nor counted; no job possible | `tst_jobqueue::refusesMissingInput`; `tst_calculation_demand::sessionWithoutInputIsNeverListed`; `tst_fusion_session::missingInputsAreNotApplicable`; `tst_fusion_jobs::noImuSessionCannotHaveAJob`; `tst_fusion_rows::noImuSessionIsNeverCounted` (all seventeen real rows) |
 | 12 | blockers report fusion for `accH`, nothing after publication, never a fit | `tst_calcengine_blockers::derivedNameReportsExplicitBlocker`, `inspectionNeverRunsExplicit`; `tst_fusion_session::blockersReportFusion` |
-| 13 | B consumes A: one gesture runs A then B | `tst_calcengine_blockers::chainedBlockers`; `tst_plot_requests::chainedBlockersContinue` |
-| 14 | one job at a time; no duplicates | `tst_jobqueue::oneAtATimeInRequestOrder`, `duplicateRequestsCreateNoDuplicates` |
-| 15 | row script, without widgets, synthetic | `tst_plot_requests::rowScript` |
+| 13 | (as amended) B consumes A: checking the plot runs A then B | `tst_calcengine_blockers::chainedBlockers`; `tst_calculation_demand::chainedBlockersContinue` |
+| 14 | (as amended) one job at a time; at most the running and one chosen next job; no duplicates | `tst_jobqueue::oneAtATimeInOfferOrder`, `duplicateOffersCreateNoDuplicates`, `holdsAtMostRunningAndChosenNext` |
+| 15 | (as amended) row script, without widgets, synthetic: checking computes the visible tracks, unchecking drops the waiting ones, a track shown is computed | `tst_calculation_demand::rowScript`, `showingASessionStartsIt`, `uncheckingDropsWaitingPairsKeepsRunning` |
 | 15 | row script with the real fusion plots; roll / pitch / yaw share one job; `accH` blocked by fusion | `tst_fusion_rows::realRowScript`, `rollPitchYawShareOneJob`, `accHRowIsBlockedByFusion`, `rejectedTrackShowsBadge`, `allSeventeenFusionPlotsAreExplicitBacked` |
 | 15 | what the user sees | `manual M3`, `M4`, `M6`, `M7` |
-| 16 | start-up restore / profile / programmatic check start nothing (logic) | `tst_plot_requests::startupRestoreStartsNothing`, `profileStyleApplyStartsNothing`, `programmaticCheckStartsNothing` |
-| 16 | ... with the view attached; only a direct check is a gesture | `tst_plot_row_delegate::programmaticCheckStartsNothingWithViewAttached`, `startupStyleRestoreStartsNothingWithViewAttached`, `checkBoxClickIsGesture` |
-| 16 | ... and the plot widget does not warn "No data available" about a checked plot that is merely uncomputed (the predicate; the widget's one call of it is M1) | `tst_plot_requests::merelyUncomputedIsNotWorthAWarning` |
+| 16 | (as amended) start-up restore with hidden tracks starts nothing; a profile or a programmatic check creates demand like a click (logic) | `tst_calculation_demand::startupRestoreWithHiddenSessionsStartsNothing`, `profileStyleApplyCreatesDemand`, `programmaticCheckCreatesDemand` |
+| 16 | ... with the view attached; a click on the check box writes the model like any other check | `tst_plot_row_delegate::programmaticCheckIsTheSameAsAClick`, `startupRestoreWithHiddenSessionsStartsNothingWithViewAttached`, `checkBoxClickChecksThroughTheModel` |
+| 16 | ... and the plot widget does not warn "No data available" about a checked plot that is merely uncomputed (the predicate; the widget's one call of it is M1) | `tst_calculation_demand::merelyUncomputedIsNotWorthAWarning` |
 | 16 | ... in the real `MainWindow` (cannot be constructed in the harness) | `audit gestures`; `manual M1`, `M2` |
-| 17 | remove / unload with a queued or running job; shutdown | `tst_jobqueue::removeSessionWithRunningJob`, `removeSessionWithQueuedJob`, `evictionDeferredWhileJobActive`, `shutdownWithQueuedAndRunning`; `tst_fusion_jobs::shutdownDuringFit` |
+| 17 | (as amended) remove / unload with a running or chosen next job; shutdown | `tst_jobqueue::removeSessionWithRunningJob`, `removeSessionWithQueuedJob`, `evictionDeferredWhileJobActive`, `shutdownWithQueuedAndRunning`; `tst_fusion_jobs::shutdownDuringFit` |
 | 17 | quitting the application | `manual M8`, `M9` |
 | 18 | every transition through model signals; history from the model alone | `tst_jobmodel::historyFromSignalsAlone`, `retentionBound` |
 | 18 | ... and no job is persisted (the records of jobs that published `Ok` are results, not jobs) | `tst_jobmodel::nothingIsPersisted` |
@@ -860,16 +880,17 @@ and every item has at least one test or audit line. "Section" is the section
 of the specification. Clauses 37-45 are its section 8 tests, one per bullet,
 and clauses 47-50 its principles. Clauses 10, 16, 17, 34 and 41 are stated
 as amended by the specification "Stored results: validity that mirrors memory"
-(9.5).
+(9.5). Clauses 4, 6, 21 and 37 are stated as amended by the specification
+"Demand-driven requested calculations" (9.6).
 
 | # | Section | Clause | Evidence |
 |---|---|---|---|
 | 301 | 2 | the result of a requested calculation that ended as a function of its inputs is stored on disk in the logbook's cache: success with its outputs, rejection / solver failure with reason and diagnostics | `tst_result_store::writesOnOkInstall`, `rejectionIsWritten`; `tst_fusion_store::restoredAfterEvictionIsBitIdentical`, `restoredRejectionShowsBadge` |
 | 302 | 2 | it is restored at load, so readers, plot rows and logbook columns see it as if just published, while valid | `tst_result_store::restoreOnEveryLoadPath`; `tst_calcengine_restore::restoreIntoFreshEngine`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`; `tst_result_columns::restartShowsCachedValueWithoutLoading` |
 | 303 | 2 | on-demand and plugin results are never stored | `tst_calcengine_restore::exportOnlyInstalledOk`, `restoreNotFound` |
-| 304 | 2 | a stored result is a memory, not a request: stale or missing, the calculation reads not requested until a gesture | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`, `dependencyEditDropsRecord`; `tst_result_store::staleRecordDeletedOnLoad`; `tst_calcengine_restore::restoreStaleChecks`; `audit stored-results` |
+| 304 | 2, as amended | a stored result is a memory, not a request: stale or missing, the calculation reads not requested until something switched on (a checked plot over a visible session, an enabled column over it) has it computed | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`, `dependencyEditDropsRecord`; `tst_result_store::staleRecordDeletedOnLoad`; `tst_calcengine_restore::restoreStaleChecks`; `tst_result_columns::staleRecordDeletedByWorkerCreatesDemand`; `audit stored-results` |
 | 305 | 2 | the session file is unchanged: bytes, format, enumeration; derived sensors never in it | `tst_fusion_store::sessionFileBytesUnaffectedByRecord`; `tst_result_records::saveSessionIgnoresRecords`, `strayRecordsRemovedAtScan`; `audit stored-results` |
-| 306 | 2 | kernel, job queue gestures and plot-row semantics unchanged beyond counting a restored result as computed | `tst_fusion_golden::successFixturesMatchGolden`; `tst_plot_requests::rowScript`; `tst_fusion_rows::realRowScript`; `audit gestures` |
+| 306 | 2, as amended | the kernel is unchanged, and plot rows and columns count a restored result as computed: no working indicator, no job | `tst_fusion_golden::successFixturesMatchGolden`; `tst_calculation_demand::rowScript`, `storedResultsCreateNoJob`; `tst_fusion_rows::realRowScript`; `audit gestures` |
 | 307 | 3 | at most one record per (session, calculation), written at the install on the main thread, replaced by the next publish | `tst_result_store::writesOnOkInstall`; `tst_result_records::writeReadReplace`; `tst_calcengine_restore::installedOnSyncAndAsync` |
 | 308 | 3 | a record holds the id, the outcome, every installed output (measurements with unit, attributes with the diagnostics) and the validity stamp | `tst_result_records::roundTripIsBitExact`, `rejectionShapedRecord`, `unavailableAndEmptyOutputs`; `tst_result_store::rejectionIsWritten` |
 | 309 | 3 | nothing stored for a result not installed (cancelled, out of memory, refused) or not Ok; such a run deletes nothing | `tst_result_store::nonOkInstallWritesAndDeletesNothing`; `tst_jobmodel::nothingIsPersisted`; `tst_calcengine_restore::installedForEveryStatus`, `exportOnlyInstalledOk` |
@@ -884,7 +905,7 @@ as amended by the specification "Stored results: validity that mirrors memory"
 | 318 | 4 | a record that fails any check is deleted at load; the calculation reads not requested; nothing is recomputed | `tst_result_store::staleRecordDeletedOnLoad`, `upstreamMissingAfterLastPassDeletes`; `tst_fusion_store::codeStampChangeDropsRecordOnLoad` |
 | 319 | 5 | every load path installs the valid records before any reader asks | `tst_result_store::restoreOnEveryLoadPath`, `bulkEditPromotionRestores`, `restoresChainInPasses`, `restoresUpstreamFirst`, `alreadyInstalledIsKept`; `tst_fusion_store::mergeIntoUnloadedSession` |
 | 320 | 5 | same outputs, status, detail and dependency edges as a fresh publish; later invalidation identical | `tst_calcengine_restore::restoreIntoFreshEngine`, `restoredResultInvalidatesLikePublished`, `restoreBeatsOutstandingTicket`, `restoreNeverReplaces`; `tst_fusion_session::restoredFitIsIndistinguishable` |
-| 321 | 5 | plot rows count a restored result as computed: no refresh count, no job; stale or absent as today | `tst_fusion_store::restoredAfterEvictionIsBitIdentical`, `restoredAfterRestartIsBitIdentical`, `dependencyEditDropsRecord`; `manual M1`, `M16` |
+| 321 | 5, as amended | plot rows count a restored result as computed: no working indicator, no job; a stale or absent result is in demand like any missing one | `tst_fusion_store::restoredAfterEvictionIsBitIdentical`, `restoredAfterRestartIsBitIdentical`, `dependencyEditDropsRecord`; `tst_calculation_demand::storedResultsCreateNoJob`; `manual M1`, `M16` |
 | 322 | 5 | blocker inspection reports a restored result as a published one, NotProduced with its detail | `tst_calcengine_restore::restoreRejection`; `tst_fusion_store::restoredRejectionShowsBadge`, `restoredSolverFailureShowsBadge` |
 | 323 | 5 | logbook columns over a requested calculation: computed from the restored or published result, cached with the record stamp; unavailable without a record | `tst_result_columns::columnExplicitCalculations`, `unrequestedIsCachedUnavailable`, `stampWrittenOnFlush`, `publishedResultIsCached`, `restartShowsCachedValueWithoutLoading`, `noRecordStaysUnavailableAfterRestart`, `recordBeforeFirstSaveIsCachedAfterSave`; `tst_calcregistry::explicitDependencies`; `tst_column_cache::explicitBackedColumnFollowsItsResult`; `tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord`, `workerRefillsColumnFromStoredFit`; `tst_result_columns::workerRestoresStoredResult`; `tst_fusion_session::explicitOutputsHaveOneCandidate`; `manual M17` |
 | 324 | 5 | dropping or writing a record drops the values stamped with it: crashes, old indexes, failed writes, environment changes | `tst_result_columns::inputChangeDropsCachedValue`, `onlyDependentColumnsDrop`, `staleRecordOnLoadDropsCachedValue`, `workerRestoresStoredResult`, `crashAfterRecordWrite`, `crashAfterRecordDelete`, `rewriteAfterDropFlushesIndexFirst`, `writeAfterStartupDropFlushesIndexFirst`, `oldIndexWithoutStamp`, `resultVersionChangeDropsCachedValue`, `writeFailureKeepsValueOutOfIndex`, `environmentChangeDiscardsReachedColumn`, `registryChangeKeepsLoadedRowConfirmed`, `managerDropsDependentValues`, `deletingSessionRemovesStamp` |
@@ -900,7 +921,7 @@ as amended by the specification "Stored results: validity that mirrors memory"
 | 334 | 7, as amended | the store reads a record only for a session being loaded, or for the column worker's temporary copy of an unloaded session when a missing column needs it (a load for reading, never for writing), and never starts a calculation | `tst_result_store::temporaryLoadsReadRecordsOnlyForColumns`; `tst_result_columns::workerRestoresStoredResult`, `onDemandColumnsReadNoRecord`, `restartShowsCachedValueWithoutLoading`; `tst_fusion_jobs::workerRefillsColumnFromStoredFit`; `audit stored-results` |
 | 335 | 7 | purity: with or without a record, every reader sees the same value | `tst_calcengine_restore::restoreIntoFreshEngine`; `tst_fusion_session::restoredFitIsIndistinguishable`; `tst_fusion_store::fittedBeforeFirstSaveIsRestored` |
 | 336 | 7 | saving a session with a stored result gives the same bytes as without | `tst_fusion_store::sessionFileBytesUnaffectedByRecord`; `tst_result_records::saveSessionIgnoresRecords` |
-| 337 | 8 | a fusion fixture fitted, saved, unloaded, reloaded: seventeen channels and diagnostics bit-identical to the goldens, no job, no refresh count | `tst_fusion_store::restoredAfterEvictionIsBitIdentical` |
+| 337 | 8, as amended | test: a fusion fixture fitted, saved, unloaded, reloaded: seventeen channels and diagnostics bit-identical to the goldens, no job, the row plain | `tst_fusion_store::restoredAfterEvictionIsBitIdentical` |
 | 338 | 8 | the same after an application restart | `tst_fusion_store::restoredAfterRestartIsBitIdentical` |
 | 339 | 8 | a rejection and a solver failure restored with their reason; the warning as today; no job | `tst_fusion_store::restoredRejectionShowsBadge`, `restoredSolverFailureShowsBadge` |
 | 340 | 8 | an unrelated edit keeps the record; merging IMU data or changing any dependency drops it, reads not requested, the file is gone | `tst_fusion_store::unrelatedEditKeepsRecord`, `dependencyEditDropsRecord`, `mergeIntoLoadedSessionDropsRecord`, `mergeIntoUnloadedSession`; `tst_result_store::inputChangeDeletesRecord` |
@@ -973,6 +994,84 @@ under clause 27, stated as amended.
 | 441 | 12 | what a result reached decides its validity, never what else is registered | `tst_calcengine_restore::restoreAcrossRegistries`; `tst_result_store::recordSurvivesUnrelatedChanges`; `audit result-validity` |
 | 442 | 12 | a transient failure to read is not evidence that a record is wrong | `tst_result_store::unreadableRecordIsSkipped`, `dependentOfSkippedRecordIsKept`, `restoresUpstreamFirst`; `tst_result_records::shortReadIsUnreadable`; `manual M22` |
 
+### 9.6 Demand-driven requested calculations (items 501-563)
+
+The sixty-three clauses of the specification "Demand-driven requested
+calculations", stated in full in
+[appendix F](#appendix-f-the-acceptance-items-of-demand-driven-requested-calculations-501-563).
+In the map, item = 500 + the clause number; the same four line forms as 9.2,
+and every item has at least one test or audit line. "Section" is the section
+of the specification; its sections 1 (motivation) and 4 (terms) have no item.
+Clauses 49-62 are its section 13 tests, one per bullet, and clause 63 its
+section 14. The specification amends those of 9.2 (items 110, 111, 113-117)
+and 9.4 (items 304, 306, 321, 337).
+
+| # | Section | Clause | Evidence |
+|---|---|---|---|
+| 501 | 2 | the user expresses intent through plots and logbook columns, never through calculations: what is switched on is the request | `tst_calculation_demand::rowScript`, `programmaticCheckCreatesDemand`, `enablingColumnFillsEveryUnloadedSession`; `tst_fusion_rows::realRowScript`; `audit gestures`; `manual M3` |
+| 502 | 2 | anything needed to complete what is switched on is wanted at once; anything no longer needed is dropped | `tst_calculation_demand::showingASessionStartsIt`, `hidingASessionDropsItsWaitingPair`, `uncheckingDropsWaitingPairsKeepsRunning`, `disablingColumnReleasesHeldSessions`, `changingDemandReplacesChosenNext` |
+| 503 | 2 | finished work is never wasted: results are stored | `tst_calculation_demand::uncheckingDropsWaitingPairsKeepsRunning`, `disablingColumnReleasesHeldSessions`, `storedResultsCreateNoJob`; `tst_fusion_store::fusionColumnWithStoredFitsRunsNothing` |
+| 504 | 2 | background work must not degrade the rest of the application | `tst_jobqueue::workerRunsBelowNormalPriority`, `mainThreadIsNotBlockedByARunningJob`, `idleSchedulerKeepsWorking`; `tst_calculation_demand::passOverManyStubsReadsEachRecordSetOnce`, `enablingColumnFillsEveryUnloadedSession`; `manual M27` |
+| 505 | 2 | a failure is shown, never retried in a loop | `tst_calculation_demand::inputDeterminedFailureIsStoredBadgedNeverRerun`, `jobLevelFailureIsBadgedNotRerunUntilRestart`, `columnFailuresAreBadgedNotReloaded`, `notApplicableSessionIsSettledWithoutAJob`, `unloadableSessionIsSettledAsFailed` |
+| 506 | 2 | each component's contract can be stated without naming the others (section 12 gives the contracts) | `tst_calculation_demand::nullCollaborators`; `tst_result_columns::columnWorkerIsUnchangedByDemand`; `tst_session_model_engine::schedulerTaskCanBeUnregistered`; `audit demand` |
+| 507 | 3 | the fusion kernel, its outputs and the record format are unchanged; the job history the jobs dock will read stays as it is | `tst_fusion_golden::successFixturesMatchGolden`; `tst_result_records::layoutIsPinned`; `tst_jobmodel::historyFromSignalsAlone`; `tst_fusion_store::restoredAfterRestartIsBitIdentical` |
+| 508 | 3 | nothing about demand or the job history is persisted across restarts, and no user-facing switch pauses or throttles background work | `tst_jobmodel::nothingIsPersisted`; `tst_calculation_demand::jobLevelFailureIsBadgedNotRerunUntilRestart`, `fillTaskIsLowestAndNotCancellable`; `audit demand` |
+| 509 | 5 | plot demand: for every checked plot whose value is a requested output, every visible session needs the requested calculations that block that output | `tst_calculation_demand::rowScript`, `ordinaryPlotsAreNeverInspected`, `hiddenAndStubRowsAreNotTracks`, `failedLoadPlaceholderIsNotATrack`, `plotIdMatchesPlotModelRole`, `uncheckedPlotsAreNeverInspected`; `tst_fusion_rows::allSeventeenFusionPlotsAreExplicitBacked` |
+| 510 | 5 | column demand: for every enabled logbook column whose value depends on a requested output, every session in the logbook needs the requested calculations that block that value | `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `loadedHiddenSessionsNeedNoLoad`, `ordinaryColumnsCreateNoDemand`, `columnIdIsTheDefinitionKey`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions`; `manual M24` |
+| 511 | 5 | a pair is in demand only while it has no result; a result counts whether published in this run or restored, success or input-determined failure | `tst_calculation_demand::onlyRequestableCalculationsAreOffered`, `storedResultsCreateNoJob`, `inputDeterminedFailureIsStoredBadgedNeverRerun`, `columnFailuresAreBadgedNotReloaded`; `tst_fusion_store::restoredRejectionShowsBadge`, `restoredAfterRestartIsBitIdentical` |
+| 512 | 5 | a pair whose calculation cannot apply (a declared input missing) is never in demand and is not reported anywhere | `tst_calculation_demand::sessionWithoutInputIsNeverListed`, `notApplicableSessionIsSettledWithoutAJob`; `tst_jobqueue::refusesMissingInput`; `tst_fusion_rows::noImuSessionIsNeverCounted`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions` |
+| 513 | 5 | whether a result exists: blocker inspection for a loaded session; for a session not loaded the logbook's record names and the reasons the index recorded for them, no record opened; a cell has a result only when every calculation it needs has a record; a record with a reason is a failed result before and after a restart alike; a known record counts until the column worker's restore deletes it as stale, which moves the pair into demand; the demand layer checks no staleness itself | `tst_calculation_demand::storedResultsCreateNoJob`, `chainedColumnWithUpstreamRecordIsCompleted`, `storedRejectionIsBadgedAfterRestartWithoutLoad`, `passOverManyStubsReadsEachRecordSetOnce`, `columnStateCountsAndPendingCells`; `tst_logbook_index::recordReasonsRoundTrip`; `tst_result_store::recordReasonRecordedAtWriteAndRestore`; `tst_result_columns::staleRecordDeletedByWorkerCreatesDemand`; `audit demand` |
+| 514 | 5 | demand does not depend on how the state arose (a gesture, a profile, the start-up restore); at start-up every session is hidden, so plots create no demand until sessions are shown, while enabled columns do | `tst_calculation_demand::programmaticCheckCreatesDemand`, `profileStyleApplyCreatesDemand`, `startupRestoreWithHiddenSessionsStartsNothing`, `profileStyleColumnsCreateDemand`, `startupWithEnabledColumnLoadsAfterColumnWorker`; `tst_plot_row_delegate::programmaticCheckIsTheSameAsAClick`, `startupRestoreWithHiddenSessionsStartsNothingWithViewAttached`; `manual M1`, `M2` |
+| 515 | 5 | nothing about demand is persisted: it is derived again at the next start; a profile carrying a column over a requested output computes it for every session without a result, so no default profile carries such a column | `tst_calculation_demand::jobLevelFailureIsBadgedNotRerunUntilRestart`, `profileStyleColumnsCreateDemand`; `audit demand`; `manual M2` |
+| 516 | 5 | when a requested calculation depends on another, the demand covers both, upstream first | `tst_calculation_demand::chainedBlockersContinue`, `heldChainContinues`, `chainCompletesAfterFirstJobDoesNotSucceed`, `chainedColumnKeepsItsHold`; `tst_calcengine_blockers::chainedBlockers` |
+| 517 | 6 | a pair that enters demand is wanted at once, with no gesture (checking, showing, enabling, an input change that drops a demanded result), and the indicator shows it immediately | `tst_calculation_demand::showingASessionStartsIt`, `loadingAVisibleSessionStartsIt`, `mergeCreatesDemandForShownSessions`, `plotCheckedDuringAJobJoinsIt`, `enablingColumnFillsEveryUnloadedSession`, `inputBurstRunsOneJob`; `tst_plot_row_delegate::checkBoxClickChecksThroughTheModel`, `spaceKeyChecksThroughTheModel` |
+| 518 | 6 | a pair that leaves demand (plot unchecked, session hidden, column disabled, result appeared by other means) is dropped before it starts; there is no queue of accepted requests to prune | `tst_calculation_demand::hidingASessionDropsItsWaitingPair`, `uncheckingDropsWaitingPairsKeepsRunning`, `waitingPairNeededByAnotherPlotSurvives`, `chainStopsForHiddenTrackOrUncheckedPlot`, `disablingColumnReleasesHeldSessions`, `onlyRequestableCalculationsAreOffered`, `resultAppearingWhileWaitingDropsThePair`; `tst_jobqueue::withdrawEndsChosenNext`; `tst_plot_row_delegate::uncheckByClickDropsWaitingWork`; `audit demand`; `manual M6`, `M26` |
+| 519 | 6 | the running job is never stopped because its pair left demand: it finishes and its result is published and stored; it is stopped only when its inputs change, its session goes away, or the application closes | `tst_calculation_demand::uncheckingDropsWaitingPairsKeepsRunning`, `hidingASessionDropsItsWaitingPair`, `disablingColumnReleasesHeldSessions`, `removedSessionLeavesNoTrace`; `tst_jobqueue::staleRunningJobIsStoppedAtOnce`, `removeSessionWithRunningJob`, `shutdownWithQueuedAndRunning`; `tst_fusion_rows::realRowScript`; `audit gestures`; `manual M6` |
+| 520 | 6 | after an input change of a demanded session the pair is in demand at once but starts only once the inputs have been still for a short moment, so a burst of edits runs one job; showing, hiding, checking and enabling take effect without the wait | `tst_calculation_demand::inputBurstRunsOneJob`, `staleRunningJobIsWaitingAtOnce`, `supersededJobIsRunAgainAfterInputsSettle`, `dependencyBurstIsCoalesced`, `mergeCreatesDemandForShownSessions`; `tst_fusion_rows::rejectedTrackShowsBadge`; `manual M18` |
+| 521 | 6 | jobs run one at a time on the executor's worker thread | `tst_jobqueue::oneAtATimeInOfferOrder`, `holdsAtMostRunningAndChosenNext`, `workerIsNotMainThreadAndHasLargeStack`; `tst_jobmodel::neverMoreThanOneRunningRow`; `audit one-worker` |
+| 522 | 7 | the next job is chosen when a job ends and whenever demand changes, from the demand as it is at that moment, not from the order in which pairs entered it | `tst_calculation_demand::changingDemandReplacesChosenNext`, `focusedSessionFirstThenRowOrder`, `columnPriorityFollowsRowOrderAfterPlots`; `tst_jobqueue::offerReplacesChosenNext` |
+| 523 | 7 | plot demand first (the focused session, then the other visible sessions in logbook row order), then column demand: visible sessions, then the other loaded sessions, then sessions not loaded as the fill loads them, each in logbook row order | `tst_calculation_demand::focusedSessionFirstThenRowOrder`, `visibleSessionsFirstWithinColumnDemand`, `columnPriorityFollowsRowOrderAfterPlots`, `enablingColumnFillsEveryUnloadedSession` |
+| 524 | 7 | a session made visible while column demand is worked through is computed next, waiting at most for the running job, which is not preempted | `tst_calculation_demand::sessionShownDuringColumnDemandRunsNext`, `columnPriorityFollowsRowOrderAfterPlots`; `manual M26` |
+| 525 | 8 | an input-determined failure (rejection, solver failure) is a result: stored, shown with the warning badge and its reason, never run again | `tst_calculation_demand::inputDeterminedFailureIsStoredBadgedNeverRerun`, `columnFailuresAreBadgedNotReloaded`; `tst_fusion_rows::rejectedTrackShowsBadge`; `tst_fusion_store::restoredRejectionShowsBadge`, `restoredSolverFailureShowsBadge`; `manual M7` |
+| 526 | 8 | a job-level failure (the worker could not start, out of memory, a failure not a function of the inputs) is badged with its reason, not started again in the run unless its inputs change, not stored, so tried again at the next start; the demand layer remembers it | `tst_calculation_demand::jobLevelFailureIsBadgedNotRerunUntilRestart`, `columnJobLevelFailureIsNotReloadedUntilRestart`, `unloadableSessionIsSettledAsFailed`, `visibleFailedLoadIsSettledAsFailed`; `tst_logbook_indicators::failedLoadSessionShowsBadgeNotPending`; `tst_jobqueue::workerStartFailureFails`, `resourceExhaustionFails`; `manual M28` |
+| 527 | 8 | there is no retry control | `tst_plot_row_delegate::clickOnClusterIsAClickOnTheRow`; `tst_logbook_indicators::clickOnIndicatorIsAClickOnTheSection`; `audit gestures`, `audit demand` |
+| 528 | 9 | for column demand the demand layer, not the column worker, has a session that is not loaded loaded the way showing it would, without making it visible: an ordinary hidden session, pinned from its load until no column it needs is still waiting or running, then left to ordinary eviction | `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `chainedColumnKeepsItsHold`, `heldSessionShownStaysLoaded`, `removedOrRepopulatedHeldSessionIsReleased`, `demandDestroyedReleasesHoldsAndTask`, `noLoadsAfterExecutorShutdown`; `tst_column_cache::loadPinnedSessionLoadsWithoutShowing`, `loadPinnedSessionFailedLoadPinsNothing` |
+| 529 | 9 | at most a small fixed number of sessions is loaded for this purpose at a time, not smaller than the number of jobs that may run at once; the next is loaded when one has ended | `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `sessionShownDuringColumnDemandRunsNext`, `columnPriorityFollowsRowOrderAfterPlots`; `audit demand`; `manual M24` |
+| 530 | 9 | the fill is an idle-scheduler task below saving, loading visible sessions, bulk edits and column work, whose steps are the loads, so saves and bulk edits come first; it has work for the whole fill and steps only while it can load; the progress line reports the whole fill; the scheduler gains the generic notion of a task with work it cannot step right now, rests instead of spinning, and learns nothing about jobs | `tst_calculation_demand::savesAndBulkEditsPrecedeLoadStep`, `startupWithEnabledColumnLoadsAfterColumnWorker`, `fillTaskIsLowestAndNotCancellable`, `fillTaskReportsProgressWhileWaiting`, `bulkEditMakesSettledSessionApplicable`; `tst_session_model_engine::schedulerWaitingTaskDoesNotSpin`, `schedulerTaskCanBeUnregistered`; `audit demand`; `manual M24` |
+| 531 | 9 | the session-id correction of a first load happens before the pair is offered to the executor | `tst_calculation_demand::identityStubIsOfferedUnderItsRealId`; `tst_column_cache::loadPinnedSessionFollowsIdentityRemap` |
+| 532 | 9 | a session whose requested calculation turns out not to apply once loaded is settled as not applicable for the run without a job; its column value stays unavailable | `tst_calculation_demand::notApplicableSessionIsSettledWithoutAJob`, `enablingColumnFillsEveryUnloadedSession`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions` |
+| 533 | 9 | the column worker is unchanged and never knows a job exists; a record written later drops the cached value and the loaded-row refresh computes the new one; cheap column values never wait for a requested calculation | `tst_result_columns::columnWorkerIsUnchangedByDemand`, `staleRecordDeletedByWorkerCreatesDemand`; `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`; `tst_logbook_indicators::pendingCellBecomesValueWhenRecordIsWritten`; `audit demand` |
+| 534 | 10 | no refresh and no cancel for requested calculations anywhere; unchecking a plot, hiding sessions or disabling a column is how the user changes what is wanted | `tst_plot_row_delegate::clickOnClusterIsAClickOnTheRow`; `tst_logbook_indicators::clickOnIndicatorIsAClickOnTheSection`, `pendingCellBecomesValueWhenRecordIsWritten`; `audit gestures`, `audit demand`; `manual M4`, `M6` |
+| 535 | 10 | a plot row and a logbook column header show a small animated working indicator at the right of their name while any of their demand is waiting or running | `tst_plot_row_delegate::workingRowPaintsIndicator`, `workingIndicatorAnimatesOnlyWhileWorking`, `workingAnimationClock`, `plotStateChangeRepaintsRow`; `tst_logbook_indicators::workingColumnShowsIndicatorRightOfText`, `indicatorAnimatesOnlyWhileWorking`, `indicatorFollowsColumnWhenMovedHiddenOrReordered`, `indicatorClearsSortArrowAndNarrowSections`, `plainHeaderAndCellsAreIdenticalToBase`; `tst_calculation_demand::workingIdsFollowStates`; `manual M3`, `M23` |
+| 536 | 10 | hovering the indicator, the row or the header shows how many sessions are done of how many are wanted, the session being computed with its progress text, and the sessions that could not be computed with their reasons | `tst_calculation_demand::tooltipText`, `toolTipListsAtMostTenFailures`, `sharedJobSameProgress`, `progressUpdatesWithoutInspection`, `columnStateCountsAndPendingCells`, `visibleFailedLoadIsSettledAsFailed`; `tst_plot_row_delegate::hoverDetailFollowsDemandState`, `toolTipComesFromPlotState`; `tst_logbook_indicators::headerToolTipFollowsDemandState`; `manual M23` |
+| 537 | 10 | the warning badge replaces the indicator once work is finished and some sessions could not be computed; its hover lists them with reasons | `tst_calculation_demand::failuresListedWhileWorking`; `tst_plot_row_delegate::badgeReplacesIndicatorOnceFinished`; `tst_logbook_indicators::badgeReplacesIndicatorWhenFinished`, `failedLoadSessionShowsBadgeNotPending`; `tst_fusion_rows::rejectedTrackShowsBadge`; `manual M7` |
+| 538 | 10 | a column cell whose pair is in demand reads as pending, distinct from unavailable and from the unreadable-record pending state; pending is the view's presentation of demand, never a cached value, never in the index; the value underneath stays unavailable until the record is written, and sorting treats pending as unavailable | `tst_logbook_indicators::pendingCellsAreDistinctFromUnavailable`, `pendingCellBecomesValueWhenRecordIsWritten`, `sortingTreatsPendingAsUnavailable`, `unreadableRecordPendingIsNotDemandPending`, `columnStateChangeRepaintsOnlyThatColumn`; `tst_calculation_demand::columnStateCountsAndPendingCells`; `audit demand`; `manual M25` |
+| 539 | 10 | the logbook's progress line for background work is unchanged in form and reports a column fill for its whole duration, as on-demand column values: remaining of wanted, no cancel | `tst_calculation_demand::fillTaskIsLowestAndNotCancellable`, `fillTaskReportsProgressWhileWaiting`; `tst_logbook_indicators::pendingCellBecomesValueWhenRecordIsWritten`; `manual M24` |
+| 540 | 11 | the executor's worker thread runs below normal priority, so that the user interface stays responsive | `tst_jobqueue::workerRunsBelowNormalPriority`, `mainThreadIsNotBlockedByARunningJob`; `tst_fusion_jobs::solverThreadsRunAtWorkerPriority`; `audit demand`; `manual M27` |
+| 541 | 11 | the number of jobs that may run at once is a single bound of the executor (one today); the load bound of section 9 follows it, and raising it changes no contract of the demand layer or the column worker | `tst_jobqueue::holdsAtMostRunningAndChosenNext`; `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`; `audit demand` |
+| 542 | 12 | one widget-free demand layer replaces the plot rows' request logic: it reads the plot model, the session model, the enabled columns, blocker reports and the record set, derives demand, applies the priority, has sessions loaded, offers the next pair, remembers this run's failures and not-applicable pairs, and publishes per-plot and per-column state | `tst_calculation_demand::nullCollaborators`, `changeSignalsAreMinimal`, `registryChangeReclassifies`, `removedSessionLeavesNoTrace`; `audit widget-free-core`, `audit demand` |
+| 543 | 12 | the demand layer is the only caller of the executor; nothing calls back into it: it observes the models and the executor's signals | `tst_calculation_demand::survivesExecutorShutdown`, `nullCollaborators`; `tst_plot_row_delegate::survivesDemandDestroyedFirst`; `tst_logbook_indicators::survivesDemandDestroyedFirst`; `audit gestures`, `audit demand` |
+| 544 | 12 | the executor stays the only place a requested calculation runs and never loads a session; it holds at most the running job and one chosen next job, with no order of arrival, no deduplication against a list and no pruning | `tst_jobqueue::holdsAtMostRunningAndChosenNext`, `offerReplacesChosenNext`, `withdrawEndsChosenNext`, `duplicateOffersCreateNoDuplicates`, `neverLoadsASession`; `tst_calculation_demand::executorHoldsAtMostRunningAndChosenNext`; `audit gestures`, `audit demand` |
+| 545 | 12 | the executor's lifecycle (start, stale while running, cancel, supersede, fail, shutdown), its pinning, the publication and storing of results, and the job history are unchanged | `tst_jobqueue::runsAndPublishes`, `staleRunningJobIsStoppedAtOnce`, `offerWhileStaleJobWindsDown`, `cancelRunningThenNextStarts`, `evictionDeferredWhileJobActive`, `shutdownWithQueuedAndRunning`, `offerWhileCancellingCreatesNewJob`, `shutdownIsIdempotentAndRefusesOffers`; `tst_jobmodel::historyFromSignalsAlone`; `tst_result_store::writesOnOkInstall`; `tst_fusion_jobs::jobPublishesAllOutputsTogether` |
+| 546 | 12 | the column worker and the idle scheduler keep their tasks and priorities; the column fill is a new lowest-priority task; the scheduler gains the notion of a task with work it cannot step right now and no knowledge of jobs; the manager and the store record each stored result's outcome in the index | `tst_result_columns::columnWorkerIsUnchangedByDemand`; `tst_calculation_demand::fillTaskIsLowestAndNotCancellable`; `tst_session_model_engine::schedulerTaskCanBeUnregistered`, `schedulerWaitingTaskDoesNotSpin`; `tst_result_store::recordReasonRecordedAtWriteAndRestore`; `audit branch-mechanisms`, `audit demand` |
+| 547 | 12 | the flow is one way: the demand layer chooses, the executor publishes, the listener writes the record, the record change drops cached column values, the loaded-row refresh recomputes them, and the demand layer sees the result through the inspection and record set it always reads | `tst_result_columns::staleRecordDeletedByWorkerCreatesDemand`; `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`; `tst_logbook_indicators::pendingCellBecomesValueWhenRecordIsWritten`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions`; `audit demand` |
+| 548 | 12 | what stays true: restoring is not requesting; the column worker's temporary copy never writes a stored result and never requests; a restored result is indistinguishable from a published one; the engine's threading rules; the plot widget's "no data" warning asks the engine directly | `tst_calculation_demand::storedResultsCreateNoJob`, `merelyUncomputedIsNotWorthAWarning`; `tst_result_columns::columnWorkerIsUnchangedByDemand`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`; `tst_fusion_session::restoredFitIsIndistinguishable`; `audit stored-results`, `audit one-worker` |
+| 549 | 13 | test: checking a plot starts the visible sessions without a result; showing another session while it is checked starts it with no other action; hiding drops its waiting pair; unchecking drops all waiting pairs; the running job finishes and its result is stored | `tst_calculation_demand::rowScript`, `showingASessionStartsIt`, `hidingASessionDropsItsWaitingPair`, `uncheckingDropsWaitingPairsKeepsRunning`; `tst_fusion_rows::realRowScript` |
+| 550 | 13 | test: a session made visible during column demand is the next job to start; within column demand visible sessions come before hidden loaded ones, and those before sessions not yet loaded | `tst_calculation_demand::sessionShownDuringColumnDemandRunsNext`, `visibleSessionsFirstWithinColumnDemand`, `columnPriorityFollowsRowOrderAfterPlots` |
+| 551 | 13 | test: enabling a column over a requested output wants every session without a result, loads unloaded ones a bounded number at a time as hidden pinned sessions, fills the column, ends with every session computed, not applicable or failed, and they leave the pool by ordinary eviction | `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `notApplicableSessionIsSettledWithoutAJob`, `columnFailuresAreBadgedNotReloaded`, `unloadableSessionIsSettledAsFailed`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions` |
+| 552 | 13 | test: the column worker's behaviour and statistics are unchanged by column demand, and a stale record it deletes moves the pair into demand | `tst_result_columns::columnWorkerIsUnchangedByDemand`, `staleRecordDeletedByWorkerCreatesDemand` |
+| 553 | 13 | test: stored results are restored, not recomputed: enabling the column on a logbook whose sessions all have valid stored results creates no job; a stored rejection of a session not loaded is listed as failed with its reason after a restart without loading it; a column over a chain whose upstream record alone is stored is completed | `tst_calculation_demand::storedResultsCreateNoJob`, `storedRejectionIsBadgedAfterRestartWithoutLoad`, `chainedColumnWithUpstreamRecordIsCompleted`; `tst_fusion_store::fusionColumnWithStoredFitsRunsNothing` |
+| 554 | 13 | test: an input-determined failure is stored, badged and never run again; a job-level failure is badged, not run again in the run, and tried again after a restart | `tst_calculation_demand::inputDeterminedFailureIsStoredBadgedNeverRerun`, `jobLevelFailureIsBadgedNotRerunUntilRestart`, `columnFailuresAreBadgedNotReloaded`, `columnJobLevelFailureIsNotReloadedUntilRestart` |
+| 555 | 13 | test: a burst of input changes on a demanded session produces one job; the indicator shows from the first change | `tst_calculation_demand::inputBurstRunsOneJob`, `staleRunningJobIsWaitingAtOnce` |
+| 556 | 13 | test: applying a profile with such a column creates demand; start-up with a checked plot and no visible sessions creates none | `tst_calculation_demand::profileStyleColumnsCreateDemand`, `profileStyleApplyCreatesDemand`, `startupRestoreWithHiddenSessionsStartsNothing`; `tst_plot_row_delegate::startupRestoreWithHiddenSessionsStartsNothingWithViewAttached`; `manual M2` |
+| 557 | 13 | test: the working indicator and hover detail reflect waiting, running, done and failed counts on plot rows and column headers; no control to refresh or cancel a calculation exists | `tst_calculation_demand::columnStateCountsAndPendingCells`; `tst_plot_row_delegate::workingIndicatorAnimatesOnlyWhileWorking`, `badgeReplacesIndicatorOnceFinished`, `hoverDetailFollowsDemandState`, `clickOnClusterIsAClickOnTheRow`; `tst_logbook_indicators::workingColumnShowsIndicatorRightOfText`, `badgeReplacesIndicatorWhenFinished`, `headerToolTipFollowsDemandState`, `clickOnIndicatorIsAClickOnTheSection`, `failedLoadSessionShowsBadgeNotPending` |
+| 558 | 13 | test: a pending column cell is distinguishable from an unavailable one, is not written to the logbook index, and becomes the value when the record is written | `tst_logbook_indicators::pendingCellsAreDistinctFromUnavailable`, `pendingCellBecomesValueWhenRecordIsWritten`, `sortingTreatsPendingAsUnavailable`, `unreadableRecordPendingIsNotDemandPending` |
+| 559 | 13 | test: saves and bulk edits still precede the fill's loads; no result is computed from a file being rewritten; the progress line reports the fill from its first load to its last result, and the scheduler does not spin while the fill waits on a job | `tst_calculation_demand::savesAndBulkEditsPrecedeLoadStep`, `startupWithEnabledColumnLoadsAfterColumnWorker` |
+| 560 | 13 | test: the executor never holds more than the running job and one chosen next job; changing demand replaces the chosen next job | `tst_jobqueue::holdsAtMostRunningAndChosenNext`, `offerReplacesChosenNext`; `tst_calculation_demand::executorHoldsAtMostRunningAndChosenNext`, `changingDemandReplacesChosenNext` |
+| 561 | 13 | test: the UI thread is not blocked by a running requested calculation, and the calculation runs below normal priority | `tst_jobqueue::mainThreadIsNotBlockedByARunningJob`, `workerRunsBelowNormalPriority`; `tst_fusion_jobs::solverThreadsRunAtWorkerPriority` |
+| 562 | 13 | test: the existing tests of stored results and of the executor pass, those that asserted the refresh gesture, the queue order or the pruning of queued jobs rewritten to the demand rules | `tst_jobqueue::oneAtATimeInOfferOrder`, `duplicateOffersCreateNoDuplicates`; `tst_fusion_rows::realRowScript`; `tst_fusion_store::dependencyEditDropsRecord`, `codeStampChangeDropsRecordOnLoad`; `tst_plot_row_layout::indicatorOnly`, `indicatorAndWarning`; `audit gestures` |
+| 563 | 14 | docs/ describe the executor, the demand layer, logbook columns over requested results, what the user sees (no refresh, the working indicator, pending cells, failures) and where a column over a requested calculation stays unavailable or pending | `audit demand` |
+
 ## 10. Cleanup audit
 
 `audit_cleanup` runs `tests/audit/cleanup_audit.cmake`, a CMake script over
@@ -1004,7 +1103,7 @@ takes about a second. It fails, listing **all** violations, when
 - **group `branch-mechanisms`** (item 120): a modal progress dialog other than
   the import dialog, a nested event loop, a thread-local or "a calculation is
   running" flag, anything about calculations or jobs in the idle scheduler (or
-  the idle scheduler in the job code), the plot widget's rebuild guard, the
+  the idle scheduler in the executor's code), the plot widget's rebuild guard, the
   sibling-frame scaffolding, a dialog, message box or status-bar message for a
   calculation outcome, or a hand-cached failure in the fusion registration
   appears. `m_pendingRebuildLevel` in the plot widget is `master`'s own and is
@@ -1019,28 +1118,30 @@ takes about a second. It fails, listing **all** violations, when
   (`tst_solver_smoke.cpp`, `solverprobe.h`, `solver_deploy_probe.cpp`,
   `tst_fusion_kernel.cpp`, `fusion_golden_capture.cpp`), the public or registration
   files of the fusion library include GTSAM or Eigen, the kernel includes a
-  session, engine, queue, preference or GUI header (the registration adapter
-  excepted) or logs, `flysight_core`'s calculation, engine, session-model, queue
-  or plot-request code references the fusion library, or Boost reappears in
+  session, engine, executor, preference or GUI header (the registration
+  adapter excepted) or logs, `flysight_core`'s calculation, engine,
+  session-model, executor or demand-layer code references the fusion library, or Boost reappears in
   the sources or the build;
 - **group `one-worker`**: a thread is created anywhere but in `src/jobqueue.*`,
-  a lock of any kind appears in `src`, or an atomic other than the queue's
+  a lock of any kind appears in `src`, or an atomic other than the executor's
   cancel flag does;
-- **group `gestures`** (item 116): `plotCheckedByUser`, `refreshPressed` or
-  `cancelPressed` is named outside `PlotRequests` and the row delegate,
-  `prepare(` / `publish(` is called outside the queue and the engine,
-  `request(` outside `PlotRequests`, the queue and the engine, anything in
-  `src` outside `src/engine` calls the engine's synchronous `request()`
-  (spelled through `calculationEngine()`, `engine.` or `engine->`; and, against
-  an alias, the one line in `src` outside `src/engine` that calls any
-  `request(` through an object is the job request in `plotrequests.cpp`:
-  explicit work runs only as a job), the UI refers to
-  the job queue beyond `AppContext.h`, or `EvaluationPolicy::Explicit` is
-  tested outside the engine (`CalculationRegistry::explicitDependencies()` is
-  the one authority for "explicit-backed"; `dependsOnExplicit()` is its
-  non-emptiness);
-- **group `widget-free-core`**: the queue, the job model, the plot request
-  logic, the plot model or `PlotRowLayout.h` includes a widget header;
+- **group `gestures`** (items 116, 306, 501, 519, 527, 534, 543, 544, 562): a
+  gesture entry point (`plotCheckedByUser`, `refreshPressed`, `cancelPressed`)
+  is named in `src` or `tests`; `prepare(` / `publish(` is called outside the
+  executor and the engine; `request(` outside the engine; anything in `src`
+  outside `src/engine` calls the engine's synchronous `request()` (spelled
+  through `calculationEngine()`, `engine.` or `engine->`); `offer(` is called
+  on other than exactly one line of `src`, or anywhere but
+  `calculationdemand.cpp`, or `withdrawChosenNext(` anywhere but there (the
+  demand layer is the only caller of the executor); product code cancels a
+  job; the UI refers to the executor beyond `AppContext.h`; or
+  `EvaluationPolicy::Explicit` is tested outside the engine
+  (`CalculationRegistry::explicitDependencies()` is the one authority for
+  "explicit-backed"; `dependsOnExplicit()` is its non-emptiness);
+- **group `widget-free-core`**: the executor, the job model, the demand
+  layer, the plot model, `PlotRowLayout.h` or the shared glyphs
+  (`DemandIndicator.*`) include a widget header (a style option and a header
+  view included);
 - **group `fusion-model`** (items 212, 218, 234, 247): a name of the retired
   resting-window detector or of its gates reappears in `src`, `tests`,
   `cmake`, `docs`, `README.md` or `CMakeLists.txt`; the silent cancellation
@@ -1063,7 +1164,7 @@ takes about a second. It fails, listing **all** violations, when
 - **group `fusion-tooling`** (items 231, 233): `fusion_runner.cpp` names the
   preferences singleton, the logbook manager, the engine's preference
   provider, the session model, the application's import driver, the
-  import-time defaults or the job queue; the runner or the capture tool
+  import-time defaults or the executor; the runner or the capture tool
   formats a number with anything but `CsvFormat` (`QString::number(`, the
   shortest-form flag, `std::to_chars`, `QLocale`, a `'g', 17` format); an
   install rule names `fusion_runner`, `fusion_golden_capture` or
@@ -1084,8 +1185,8 @@ takes about a second. It fails, listing **all** violations, when
   row's load, `restoreStoredResults()`, and the column worker's temporary
   copy, `restoreForColumnWorker()`, which is called from one place only - the
   worker's step - so the bulk edit's temporary load never restores); the
-  store names the job queue, the plot requests or a request / prepare /
-  publish call; the exporter, the importer, the merge, the number formatter or
+  store names the executor, the demand layer or a request / offer / prepare
+  / publish call; the exporter, the importer, the merge, the number formatter or
   `SessionData` names a record; the record or store code includes a widget
   header; the fusion algorithm string appears anywhere but
   `src/fusion/fusion.h`; the compatibility rule stops naming the result
@@ -1113,11 +1214,41 @@ takes about a second. It fails, listing **all** violations, when
   any text outside this file says that a change of registrations or
   preferences makes every stored result stale. This file is excluded from the
   last rule because this section describes it;
+- **group `demand`** (items 506, 508, 513, 515, 518, 527, 529, 530, 533, 534,
+  538, 540-544, 546, 547, 563): `CalculationDemand` is named outside the
+  demand layer, `MainWindow`, `AppContext.h`, the plot list's delegate and
+  dock feature, the logbook view, header view, cell delegate and dock
+  feature, and the plot widget; the executor, the job model, the session
+  model, the scheduler, the logbook, the column store, the plot model, the
+  profile bridge, the result store, the engine, the shared glyphs or the row
+  layout includes `calculationdemand.h`; anything in `src/ui` or `MainWindow`
+  runs a pass, the load step or a settle seam of the demand layer; the
+  plot-row delegate, the header view, the cell delegate or the shared glyphs
+  handle a mouse or key event of their own; the pending queries appear
+  outside the demand layer and the cell delegate; the session model, the
+  logbook, the column store, the scheduler or the plot model names the
+  executor; the idle scheduler mentions demand, calculations, jobs or an
+  executor; `ColumnFillTask` appears outside the demand layer,
+  `sessionmodel.h` and the logbook view, or `loadPinnedSession(` outside the
+  demand layer and the session model; the demand layer loads a session or
+  reads a record itself; `kMaxRunningJobs` is assigned other than once, the
+  load bound is not `JobQueue::kMaxRunningJobs + 1`, or the worker is not
+  started with `QThread::LowPriority`; the removed queue API
+  (`oldestQueued`, `cancelUnwantedQueued`, `cancelSession(`, `cancelAll(`,
+  `RequestResult`) appears in `src`, `docs` or `README.md`; the plot request
+  logic (`PlotRequests`, `PlotRowState`, `PlotTrackCondition`,
+  `tst_plot_requests`) appears anywhere; a refresh or cancel control is
+  named in `src`, `docs` or `README.md` ("refresh icon", "cancel control",
+  "press refresh", "circled x" ...), or its code (`drawRefreshGlyph`,
+  `controlHit` ...) in `src` or `tests`; or a profile in
+  `src/resources/profiles` carries a column over a Sensor fusion value. This
+  file is excluded from the text rules because this section spells the
+  patterns;
 - a line of `tests/acceptance_map.txt` is malformed, names a test function, a
   manual step (`**M<k> ` in this file), a CI token or an audit group that does
-  not exist, or an item outside 1-19, 101-120, 201-247, 301-350 and 401-442;
-  an item 1-19 has no line; or an item 101-120, 201-247, 301-350 or 401-442
-  has no test or audit line.
+  not exist, or an item outside 1-19, 101-120, 201-247, 301-350, 401-442 and
+  501-563; an item 1-19 has no line; or an item 101-120, 201-247, 301-350,
+  401-442 and 501-563 has no test or audit line.
 
 Whether a target **links** GTSAM is not a text question (link items come from
 variables and from other targets' link interfaces). That half of the
@@ -1154,7 +1285,7 @@ a second authority.
 `flysight_fusion`) produced for twelve synthetic fixtures when the goldens were
 last captured by `fusion_golden_capture`, the capture tool built with the
 fusion tests. `tst_fusion_golden` and `tst_fusion_kernel` compare the kernel
-with them, and so, through the registered calculation and the job queue, do
+with them, and so, through the registered calculation and the executor, do
 `tst_fusion_session`, `tst_fusion_jobs` and `tst_fusion_rows` and, through a
 stored and restored record, `tst_fusion_store` (sensor-fusion-jobs acceptance
 4). A golden test that goes red means that the
@@ -1570,7 +1701,7 @@ provide `GNSS/sAcc`: `tst_fusion_store`'s lookup test).
 after `TestEnvironment::registerBuiltIns()`, as the application does;
 `TestEnvironment` itself stays GTSAM-free. The real fit is never run on
 `asyncdriver.h`'s thread modes (default stacks): `ComputeMode::Inline` or the
-job queue's worker.
+executor's worker.
 
 ### Real recordings
 
@@ -1581,7 +1712,7 @@ local check and not a CI test: `tst_fusion_jobs::realRecordingCheck`. It skips
 unless the environment variable `FLYSIGHT_FUSION_RECORDING` names a folder that
 contains `TRACK.CSV` and `SENSOR.CSV`; then it imports both through the
 application's import path into the test's temporary logbook, requests the fit
-through the job queue, waits up to 30 minutes, requires a Succeeded job without
+through the executor, waits up to 30 minutes, requires a Succeeded job without
 a reason, aligned outputs and `Fusion/_time` as a contiguous run of
 `IMU/_time`, and logs the objective, `gnss_states`, `imu_outputs`, the elapsed
 time and the diagnostics. Run the executable directly (section 4), not under
@@ -1607,15 +1738,16 @@ objectives, are in section 12.2.
 
 ## 12. Manual verification
 
-Three scripts. Each step opens with its bold id and, in parentheses, the items
+Four scripts. Each step opens with its bold id and, in parentheses, the items
 of `tests/acceptance_map.txt` it is evidence for; the map cites the ids
 (`manual M<k>`) and `audit_cleanup` checks that they exist here.
 
 ### 12.1 Plot-driven jobs
 
 What no automated test can reach: the real `MainWindow` start-up and profile
-paths (sensor-fusion-jobs acceptance 16), quitting with jobs queued and running
-(17), and interactivity during a fit (19), plus what the rows look like (15).
+paths (sensor-fusion-jobs acceptance 16), quitting with a job running and one
+chosen next (17), and interactivity during a fit (19), plus what the rows look
+like (15).
 
 **Always on a COPY of a logbook.** A development build rewrites `index.json`
 as soon as it starts (its calculation environment differs from a released
@@ -1650,23 +1782,23 @@ middle is rejected for its IMU gap. The script needs the fusion plots (the
 step; for M5 note what you did while the fit ran, for M6 and M9 the wait you
 observed.
 
-**M1 Startup (116, 321).** Check "Sensor fusion > Roll" with three fusable tracks visible, press refresh, and cancel as soon as the first track has published. Quit and restart. After the restart the row is still checked. Track visibility is not kept across restarts, so no track is visible and the row is plain. Show the three tracks again: the first track's roll is drawn at once (its stored result), the row shows the refresh control with the count 2, and no job starts (no progress appears, CPU idle) until the control is pressed. The debug output contains no "No data available" line for the fusion plot.
+**M1 Startup (116, 321, 514).** Check "Sensor fusion > Roll" with three fusable tracks visible that have no stored fit: the three fits start one after another with no other action. As soon as the first track has published, uncheck Roll: the row turns plain at once, the running fit (the second track's) continues to its end, and no third fit starts. Quit and restart. After the restart the row is still checked. Track visibility is not kept across restarts, so no track is visible, the row is plain and no job starts (no progress, CPU idle). Show the three tracks: the first two tracks' roll is drawn at once (their stored results), and the third track's fit starts by itself: the row shows the turning arc and "2 of 3", then turns plain. The debug output contains no "No data available" line for the fusion plot.
 
-**M2 Profile (116).** Uncheck Roll. With fusable tracks visible, apply a profile that checks fusion plots: the rows show refresh with counts; nothing starts. (The Plots menu and its shortcuts list a fixed set of GNSS plots; no fusion plot can be toggled from there.)
+**M2 Profile (116, 514, 515, 556).** Save a profile that checks Roll. Uncheck Roll, and show two fusable tracks without stored fits: nothing starts. Apply the profile: Roll is checked and the two fits start at once, one after the other, exactly as after a click on the check box (this is the real `applyProfile()` path, which no automated test can construct). Uncheck Roll and hide every track, apply the profile again: nothing starts (no track is visible); show one fusable track without a stored fit: its fit starts at once. In Manage Profiles restore the default profiles and apply each of them in turn: none adds a logbook column over a "Sensor fusion" value, and "Computing columns" never appears in the logbook's progress line while every track is hidden. (The Plots menu and its shortcuts list a fixed set of GNSS plots; no fusion plot can be toggled from there.)
 
-**M3 Refresh (115).** Press Roll's refresh control: the row shows "0 of 3" and the cancel control; Pitch and Yaw, if checked, show the same progress. The tooltip lists the computing track with the solver's progress text and the queued tracks. As each fit publishes, its graph appears without any further action, the label advances ("1 of 3", "2 of 3"), and finally the row is plain. The legend and any fusion logbook column fill in at the same moments.
+**M3 Working indicator (115, 501, 535).** With three fusable tracks without stored fits visible, check Roll: the row shows the turning arc and "0 of 3" at the right of its name; Pitch and Yaw, if checked, show the same. The tooltip reads "Computing: 0 of 3 done" and "<name> - Sensor fusion: <progress text>". As each fit publishes, its graph appears without any further action, the label advances ("1 of 3", "2 of 3"), and finally the arc stops and the row is plain. The legend and any fusion logbook column fill in at the same moments.
 
-**M4 Check gesture (115).** On a fresh set of tracks, uncheck and re-check a fusion plot by clicking its check box: jobs start. Do the same with Space.
+**M4 No controls (115, 534).** On a fresh set of tracks, uncheck and re-check a fusion plot by clicking its check box: fits start. Do the same with Space. Click, right-click and double-click the arc and the "k of n" of a working row: the row is selected as by a click anywhere else in it; nothing is cancelled and nothing is toggled. No context menu, menu item or shortcut offers a refresh or a cancel for a calculation.
 
 **M5 Interactive during a fit (119).** While a fit runs: pan and zoom the plot, switch tools, hide and show other tracks, edit a session's description, set a marker, open Preferences. Nothing blocks; no dialog appears.
 
-**M6 Cancel (115).** Press cancel on a row with one running and two queued jobs: at once the row shows refresh with 3, the plot stays checked, other fusion rows change identically; within one solver step the CPU goes idle. Press refresh again: it recomputes.
+**M6 Hide and uncheck (115, 518, 519, 534).** With one fit running and two tracks waiting ("0 of 3"), hide one waiting track: the row shows "0 of 2" at once. Uncheck the plot: the row turns plain at once; the running fit continues (CPU busy) to its end, its record file appears in `cache/`, no further fit starts, and the CPU then goes idle. Check the plot again: the remaining visible track is fitted.
 
-**M7 Fourth track and failure (115).** Show a fourth fusable track afterwards: the row shows refresh with 1 and nothing starts; refresh computes it. Show the recording without IMU data: it never appears in any count or tooltip. For a rejected recording the row shows the warning badge with 1, the tooltip gives the reason, no refresh is offered for it, and no message box appears.
+**M7 Fourth track and failure (115, 525, 537).** Show a fourth fusable track: it is fitted with no other action, after the running fit if one runs. Show the recording without IMU data: it never appears in any count or tooltip. For a rejected recording, once the other fits are done the row shows the warning badge with 1 instead of the arc, the tooltip gives the reason, nothing offers to try again, and no message box appears.
 
-**M8 Remove and unload (117).** With one fit running and one queued, delete the queued track's session, then the running one's: no crash, no hang, nothing published for them; the remaining rows' counts fall.
+**M8 Remove and unload (117).** With one fit running and another track waiting, delete the waiting track's session, then the running one's: no crash, no hang, nothing published for them; the remaining rows' counts fall.
 
-**M9 Quit (117).** With one fit running and two queued, close the window: a wait cursor for at most one solver step, then the application exits; no crash dialog, the process is gone from the task manager, and on restart the logbook is intact. Repeat with File > Exit.
+**M9 Quit (117).** With one fit running and two tracks waiting, close the window: a wait cursor for at most one solver step, then the application exits; no crash dialog, the process is gone from the task manager, and on restart the logbook is intact. Repeat with File > Exit.
 
 Possible without the fusion plots, after any change to the plot list or to
 `MainWindow`'s close path:
@@ -1676,8 +1808,8 @@ Possible without the fusion plots, after any change to the plot list or to
 - With a visible recording that lacks a sensor (for example no IMU) and an IMU plot checked, the "No data available for plot" warning still appears in the debug output.
 - Quit through File > Exit and through the close button, in Debug and Release: no crash, no hang, no debugger output about destroyed objects or running threads.
 
-There is no keyboard, menu, or context-menu surface for refresh and cancel (a
-known limitation): a keyboard user unchecks and checks the row with Space.
+There is no refresh and no cancel for a calculation anywhere: unchecking a
+plot, hiding a track or removing a logbook column is how work is dropped.
 
 ### 12.2 The fusion runner and the reference recordings
 
@@ -1738,19 +1870,45 @@ recordings, and a file browser open on
 `<scratch>/FlySight Viewer/logbook/`: the recordings are in `sessions/`, the
 stored results in `cache/`, which the first fit creates.
 
-**M16 Hide and show again (321, 325).** Set Preferences > Logbook > "Maximum cached sessions" to 0. With three fusable tracks visible and "Sensor fusion > Roll" checked, press refresh and let the three fits finish. `cache/` now holds three `<uuid>.builtin%2Efusion%2Efit.fvresult` files, and `sessions/` holds no such file. Hide the three tracks; with a capacity of 0 every hidden track is unloaded at once. Show them again: roll is drawn at once for each, the row is plain (no refresh icon, no count), no job starts, and the modification times of the three files are unchanged. Set the preference back.
+**M16 Hide and show again (321, 325).** Set Preferences > Logbook > "Maximum cached sessions" to 0. With three fusable tracks visible and "Sensor fusion > Roll" checked, let the three fits finish (they start when Roll is checked). `cache/` now holds three `<uuid>.builtin%2Efusion%2Efit.fvresult` files, and `sessions/` holds no such file. Hide the three tracks; with a capacity of 0 every hidden track is unloaded at once. Show them again: roll is drawn at once for each, the row is plain (no arc, no count), no job starts, and the modification times of the three files are unchanged. Set the preference back.
 
-**M17 Restart (323, 325, 349).** Add a logbook column over a fusion value (roll at the exit marker). With the three tracks of M16 fitted, quit and start again. Before any track is shown, the column shows a number for each of the three, and nothing loads (no progress in the status bar). Show them: the plots draw at once, the row is plain, no job starts.
+**M17 Restart (323, 325, 349).** Add a logbook column over a fusion value (roll at the exit marker). Every other recording of the logbook with IMU data and no stored fit is now fitted in the background too (M24); on a large logbook copy wait until the column's header shows no arc, or use a logbook copy that holds only the script's recordings. With the three tracks of M16 fitted and the column filled, quit and start again. Before any track is shown, the column shows a number for each of the three, nothing loads and no fit starts (no "Computing columns" in the progress line). Show them: the plots draw at once, the row is plain, no job starts.
 
-**M18 Change an input (315).** Edit the description of one fitted track: its roll stays drawn and its record file keeps its modification time. Then re-import a copy of that track's `SENSOR.CSV` in which the `az` value of one `$IMU` row was changed (the header, `SESSION_ID` included, unchanged). The track's roll disappears, the row shows the refresh control with 1, the record file is gone, the logbook cell of the column of M17 becomes empty, and nothing starts until refresh is pressed. Refresh fits it again, and a record file appears again.
+**M18 Change an input (315, 520).** Edit the description of one fitted track: its roll stays drawn and its record file keeps its modification time. Then re-import a copy of that track's `SENSOR.CSV` in which the `az` value of one `$IMU` row was changed (the header, `SESSION_ID` included, unchanged). The track's roll disappears, the row shows the arc, the record file is gone and the track's cell in the column of M17 shows "…"; about a second after the re-import a fit starts by itself, a record file appears again, roll is drawn and the cell shows the new number.
 
-**M19 Delete (329, 330).** Delete one fitted track from the logbook: its `.csv` in `sessions/` and its `.fvresult` files in `cache/` are gone. With the application closed, copy another track's record file within `cache/` to a name whose `<uuid>` part matches no `.csv` (change one character). Start the application: the copy is gone, no extra track appears, and no dialog is shown. Quit, delete the whole `cache/` folder, and start again: every track is still in the logbook, the cells of the column of M17 are empty, showing a track draws no roll and its row shows the refresh control, nothing starts until refresh is pressed, and no `cache/` folder appears until a fit finishes.
+**M19 Delete (329, 330).** Delete one fitted track from the logbook: its `.csv` in `sessions/` and its `.fvresult` files in `cache/` are gone. With the application closed, copy another track's record file within `cache/` to a name whose `<uuid>` part matches no `.csv` (change one character). Start the application: the copy is gone, no extra track appears, and no dialog is shown. Quit, delete the whole `cache/` folder, and start again: every track is still in the logbook, the cells of the column of M17 show "…" and fill in again as the recordings are fitted in the background, and `cache/` reappears with the first finished fit. Remove the column, quit, delete `cache/` again and start: showing a track draws no roll until Roll is checked, which starts its fit, and no `cache/` folder appears until a fit finishes.
 
 **M20 Unrelated changes keep a fit (404, 430).** With the three tracks of M16 fitted and shown, open Preferences > Altitude Markers, add the altitude 1000 and close the dialog. Roll stays drawn for the three tracks, the row stays plain, no job starts, and the three record files in `cache/` keep their modification times. In Preferences > Import set "Descent pause timeout" to 45: the same. The logbook column of M17 is recomputed; a hidden track's cell may stay empty until the track is shown (records are read only when a recording is loaded). Quit and start again, show the three tracks: roll is drawn at once, the row is plain, no job starts, the files keep their modification times, and the column shows the three numbers. Remove the altitude and set the timeout back: the same, also after another restart.
 
 **M21 Editing a plugin (419, 420).** Quit. Copy the repository's `python_plugins/` folder to a scratch folder, copy `examples/imu_tilt.py` from the copy into its top level, and start the application with the environment variable `FLYSIGHT_PLUGINS` set to the scratch folder. The debug output shows `[PluginHost] Plug-in code identity: plugins-sha256:` followed by 64 hex digits and `(3 files)`. Add a logbook column over `_IMU_PEAK_ACCEL` and let it fill. Quit and start again without edits (the interpreter has written `__pycache__/` into the folder): the identity is the same, and the column shows its values for hidden tracks without loading them. Quit, add a comment line to the top-level `imu_tilt.py`, start: the identity differs, the column's values are recomputed in the background and are the same numbers, and showing the three fitted tracks draws roll at once with no job, their record files keeping their modification times (the fit looks up no plugin output). Quit, undo the edit and add a comment line to `examples/imu_tilt.py` instead (never imported), start: the identity differs from both earlier ones. Remove the scratch folder and unset `FLYSIGHT_PLUGINS`.
 
-**M22 A record that cannot be read (421, 422, 442).** Windows only. Quit. In PowerShell, hold one fitted track's record open without sharing: `$f = [IO.File]::Open('<scratch>\FlySight Viewer\logbook\cache\<uuid>.builtin%2Efusion%2Efit.fvresult', 'Open', 'Read', 'None')`. Start the application and show that track: its roll is not drawn, the row shows the refresh control with 1, the debug output has one line containing "skipped (kept for the next load)", the file is still in `cache/` with its modification time, and that track's cell in the column of M17 is empty. Do not press refresh. Quit, run `$f.Close()`, start again: the cell stays empty until the track is shown; show it: roll is drawn at once, the row is plain, no job starts, and the cell shows its number.
+**M22 A record that cannot be read (421, 422, 442).** Windows only. Uncheck Roll and remove the column of M17 first: while either is on, a record that cannot be read reads as not computed and would be fitted again. Quit. In PowerShell, hold one fitted track's record open without sharing: `$f = [IO.File]::Open('<scratch>\FlySight Viewer\logbook\cache\<uuid>.builtin%2Efusion%2Efit.fvresult', 'Open', 'Read', 'None')`. Start the application and show that track: nothing starts, the debug output has one line containing "skipped (kept for the next load)", the file is still in `cache/` with its modification time. Do not check Roll while the file is held. Quit, run `$f.Close()`, start again, check Roll and show the track: roll is drawn at once, the row is plain and no job starts.
+
+Pass / fail and a note per step go in the phase report. A step that fails is
+reported as it failed, not adjusted.
+
+### 12.4 Demand-driven calculations
+
+What the automated tests cannot show: the animated indicator, its hover and
+the pending cells in the real views and themes, a whole-logbook fill with real
+fits and its memory, the application staying usable while a fill runs, and a
+job-level failure tried again after a restart. Use the preamble of 12.1 (a
+COPY of a logbook, never the real one) with a logbook of 20-50 recordings with
+IMU data, several of them never fitted, one without IMU data and one the model
+rejects; Task Manager (Details tab) and, for M27, Sysinternals Process
+Explorer.
+
+**M23 Working indicator and hover (535, 536).** Show two fusable tracks without stored fits and check Roll. The arc at the right of the row's name turns about once a second, "0 of 2" beside it. Hover the arc, then the row's name: both show "Computing: 0 of 2 done" and "<name> - Sensor fusion: <progress text>" (hover again to see the progress text advance). When both fits end the arc stops and the row is plain; with nothing computing, Task Manager shows FlySight Viewer at 0 % CPU (no repaint while idle). Repeat in the light and the dark theme and on a selected row: the arc and the text are readable in each.
+
+**M24 A logbook column fills in the background (510, 529, 530, 539).** Hide every track. In the column editor add "roll at the exit marker" over Sensor fusion. At once its header shows the turning arc right of its name; hovering the header shows "Computing: 0 of <n> done" (n: the recordings with IMU data and a local origin) and the running recording with its progress; the progress line shows "Computing columns: k / n" for the whole fill, with no cancel button, k rising as fits finish. Values replace "…" row by row, from the top. Task Manager's memory for FlySight Viewer stays flat after the first loads (at most two recordings beyond "Maximum cached sessions" are held for the fill). The recording without IMU data stays blank and is not counted. When the fill ends, the arc stops (or the badge shows: M7's rejected recording, hover lists it), and `index.json` in the logbook folder holds the values and no "…", and the progress line has gone. While a fit runs, Task Manager shows no main-thread activity beyond the fit (the scheduler waits, it does not spin). Quit and start again: the column shows its values at once, and nothing is loaded or fitted for it.
+
+**M25 Pending cells (538).** During a fill (M24's, or, once it has finished, after deleting a few records in `cache/` with the application closed and starting again with the column enabled): cells still to come show a grey "…" (a lighter one on a selected row); blank cells are recordings without IMU data; hovering a "…" cell shows "Pending: this value is being computed". Sort by the column ascending, then descending: numbers first, "…" and blank cells together at the bottom both ways. Drag the column elsewhere and narrow it: the arc stays at the right of its (elided) name and clear of the sort arrow; double-click the section's right edge: it widens to fit the name and the arc.
+
+**M26 Visible first, then disabling (518, 524).** While a fill runs, check Roll and show a recording far down the list whose fit is missing: it is fitted next, right after the running fit, and its roll is drawn. Then remove the column in the column editor: the header and its arc are gone, the running fit finishes and its record appears in `cache/`, nothing else starts, and the progress line goes idle.
+
+**M27 Background work does not get in the way (504, 540).** During a fill: pan and zoom plots, show and hide tracks, edit a description, sort and scroll the logbook: everything responds as without the fill. On Windows, in Process Explorer (FlySight Viewer > Properties > Threads) the threads that use the CPU - the executor's worker and the solver's helper threads while they help the fit - run at "Below Normal" priority, the application's other threads at "Normal". (On Linux the worker's priority is not lowered: docs/CALCULATIONS.md, section 15.5; only the responsiveness is checked there.)
+
+**M28 A failure is tried again after a restart (526).** Windows only. Quit. Pick a recording with IMU data and no stored fit (delete its `.fvresult` in `cache/` if it has one) and hold its session file open without sharing: `$f = [IO.File]::Open('<scratch>\FlySight Viewer\logbook\sessions\<uuid>.csv', 'Open', 'Read', 'None')`. Start the application with the column of M24 enabled. When the fill reaches that recording its load fails; once the fill is done the column's header shows the warning badge, and its tooltip lists "<description> - The session file could not be loaded", where <description> is the recording's description as the logbook shows it (the recording is named, not identified by its id). Wait a minute: that recording is not tried again (the progress line has gone, no fit). Quit, run `$f.Close()`, start again: the recording is loaded and fitted in the background, its cell gets its number and the badge is gone.
 
 Pass / fail and a note per step go in the phase report. A step that fails is
 reported as it failed, not adjusted.
@@ -1832,8 +1990,10 @@ The acceptance list of the specification "Sensor fusion as an explicit
 calculation, with plot-driven background jobs", verbatim. These are items
 101-120 of `tests/acceptance_map.txt` (item = 100 + the number below) and the
 rows of section 9.2; "sensor-fusion-jobs acceptance N" in comments on test
-functions refers to them. "The branch" is `sensor-fusion-clean-port`, the
-behavioural reference the fusion kernel was ported from.
+functions refers to them. Clauses 10, 11, 13, 14, 15, 16 and 17 are stated as
+amended by the specification "Demand-driven requested calculations"
+(appendix F). "The branch" is `sensor-fusion-clean-port`, the behavioural
+reference the fusion kernel was ported from.
 
 1. The application builds, deploys its solver runtime libraries, and passes
    its tests on Windows, macOS, and Linux through the existing CI workflow.
@@ -1868,28 +2028,32 @@ behavioural reference the fusion kernel was ported from.
    diagnostics attribute with the reason, a succeeded job carrying that
    reason, no second run on re-request, and a fresh run after its inputs
    change.
-10. Cancelling a running job stops it at the next solver boundary, publishes
-    nothing, and leaves the calculation requestable. The next queued job then
-    starts.
-11. A session with no IMU data never appears as missing, pending, or failed
-    for any fusion plot, and no job can be created for it.
+10. (as amended) Cancelling a running job through the executor stops it at the
+    next solver boundary, publishes nothing, and leaves the calculation
+    requestable. The chosen next job then starts.
+11. (as amended) A session with no IMU data never appears as waiting, running
+    or failed for any fusion plot, is never counted, and no job can be created
+    for it.
 12. Blocker inspection reports fusion for `accH` on an unrequested session,
     nothing after publication, and never triggers a fit.
-13. With two explicit test calculations where B consumes A, one gesture on a
-    plot of B's output runs A then B.
-14. Never more than one job runs at a time. Duplicate requests create no
-    duplicate jobs.
-15. Row behavior, tested without widgets: checking a fusion plot with three
-    visible fusable tracks queues three jobs; the pending count falls as each
-    publishes; unchecking mid-way removes the queued jobs and lets the
-    running one finish; cancel leaves the plot checked and the tracks
-    missing; showing a fourth track afterwards leaves it missing with a
-    count of one and starts nothing; pressing refresh computes it.
-16. Starting the application with fusion plots checked and tracks visible
-    starts no job. Applying a profile that checks fusion plots starts no job.
-17. Removing or unloading a session with a queued or running job, and
-    quitting with jobs queued and running, neither crash nor hang, and
-    publish nothing stale.
+13. (as amended) With two explicit test calculations where B consumes A,
+    checking a plot of B's output runs A then B with no other action.
+14. (as amended) Never more than one job runs at a time. The executor holds at
+    most the running job and one chosen next job, and an offer equal to either
+    creates no duplicate job.
+15. (as amended) Row behaviour, tested without widgets: checking a fusion plot
+    with three visible fusable tracks computes them one after another, the
+    count of done tracks rising as each publishes; unchecking mid-way drops
+    the tracks that are waiting and lets the running one finish; checking
+    again resumes; a fourth track shown afterwards is computed with no other
+    action.
+16. (as amended) Starting the application with fusion plots checked starts no
+    job, because every track starts hidden. Applying a profile that checks
+    fusion plots, the Plots menu and any other programmatic check create
+    demand exactly as a click on the check box does.
+17. (as amended) Removing or unloading a session with a running job or the
+    chosen next job, and quitting with a job running and one chosen next,
+    neither crash nor hang, and publish nothing stale.
 18. The job model reports every transition through model signals and retains
     finished jobs with state, timing, and reason; a test view can render the
     whole history from the model alone.
@@ -2050,6 +2214,8 @@ specification's scope have no item, because no test can show them: stored
 results are not shared between logbooks or machines, and a record need not be
 readable by people. Clauses 10, 16, 17, 34 and 41 are stated as amended by
 the specification "Stored results: validity that mirrors memory" (appendix E).
+Clauses 4, 6, 21 and 37 are stated as amended by the specification
+"Demand-driven requested calculations" (appendix F).
 
 1. (2) The result of every explicitly requested calculation that ended as a
    function of its inputs is stored on disk, in the logbook's cache: a
@@ -2059,14 +2225,15 @@ the specification "Stored results: validity that mirrors memory" (appendix E).
    and logbook columns see it exactly as if it had just been published,
    provided it is still valid.
 3. (2) On-demand and plugin calculation results are never stored.
-4. (2) A stored result is a memory, not a request: when it is stale or
-   missing, the calculation reads as not requested, exactly as before, until a
-   gesture requests it.
+4. (2, as amended) A stored result is a memory, not a request: when it is
+   stale or missing, the calculation reads as not requested until something
+   switched on - a checked plot over a visible session, or an enabled logbook
+   column over it - has it computed.
 5. (2) The session file is unchanged: its bytes, its format and what it
    enumerates; derived sensors never appear in enumeration or in the session
    file.
-6. (2) The kernel, the job queue's gestures and the plot rows' semantics are
-   unchanged beyond counting a restored result as computed.
+6. (2, as amended) The kernel is unchanged, and plot rows and logbook columns
+   count a restored result as computed: no working indicator and no job.
 7. (3) For each (session, requested calculation) there is at most one record,
    written when the result is published (the moment the engine installs it, on
    the main thread) and replaced by the next publish for the same pair.
@@ -2114,8 +2281,9 @@ the specification "Stored results: validity that mirrors memory" (appendix E).
     installed into the engine before any reader asks.
 20. (5) A restored result has the same outputs, status, detail and dependency
     edges as a fresh publish, so that later invalidation behaves identically.
-21. (5) Plot rows count a session with a restored result as computed: no
-    refresh count, no job; a stale or absent record leaves the row as before.
+21. (5, as amended) Plot rows count a session with a restored result as
+    computed: no working indicator, no job; a stale or absent result is in
+    demand like any missing one.
 22. (5) Blocker inspection reports a restored result as it reports a published
     one, a failure's `NotProduced` with its detail included.
 23. (5) Logbook columns that depend on a requested calculation are computed
@@ -2161,9 +2329,9 @@ the specification "Stored results: validity that mirrors memory" (appendix E).
     for a requested output is the same function of the session's inputs.
 36. (7) Saving a session with a stored result gives the same bytes as saving
     it without.
-37. (8) Test: a fusion fixture fitted, saved, unloaded and reloaded yields the
-    seventeen channels and the diagnostics bit-identical to the goldens, with
-    no job created; the row shows no refresh count.
+37. (8, as amended) Test: a fusion fixture fitted, saved, unloaded and
+    reloaded yields the seventeen channels and the diagnostics bit-identical
+    to the goldens, with no job created; the row is plain.
 38. (8) Test: the same after an application restart (the test's logbook
     directory survives across two `SessionModel` lifetimes).
 39. (8) Test: a rejection and a solver failure are restored with their reason;
@@ -2364,3 +2532,206 @@ the result looked up resolves to (docs/CALCULATIONS.md, section 5). Clause
     registered.
 42. (12) A transient failure to read is not evidence that a record is
     wrong.
+
+## Appendix F. The acceptance items of demand-driven requested calculations (501-563)
+
+The clauses of the specification "Demand-driven requested calculations", which
+amends "Sensor fusion as an explicit calculation, with plot-driven background
+jobs" (appendix B) and "Storing requested calculation results with the
+session" (appendix D), one sentence each, with the specification's section
+number in front. These are items 501-563 of `tests/acceptance_map.txt`
+(item = 500 + the number below) and the rows of section 9.6. The
+specification's sections 1 (motivation) and 4 (terms) have no item.
+
+1. (2) The user expresses intent through plots and logbook columns, never
+   through calculations: what is switched on is the request.
+2. (2) Anything needed to complete what is switched on is wanted at once;
+   anything no longer needed is dropped.
+3. (2) Finished work is never wasted: results are stored.
+4. (2) Background work must not degrade the rest of the application.
+5. (2) A failure is shown, never retried in a loop.
+6. (2) Each component's contract can be stated without naming the others
+   (section 12 gives the contracts).
+7. (3) The fusion kernel, its outputs and the record format are unchanged; the
+   job history the jobs dock will read stays as it is.
+8. (3) Nothing about demand or the job history is persisted across restarts,
+   and no user-facing switch pauses or throttles background work.
+9. (5) Plot demand: for every checked plot whose value is a requested output,
+   every visible session needs the requested calculations that block that
+   output.
+10. (5) Column demand: for every enabled logbook column whose value depends on
+    a requested output, every session in the logbook needs the requested
+    calculations that block that value.
+11. (5) A pair is in demand only while it has no result; a result counts
+    whether published in this run or restored, success or input-determined
+    failure.
+12. (5) A pair whose calculation cannot apply (a declared input missing) is
+    never in demand and is not reported anywhere.
+13. (5) Whether a result exists: blocker inspection for a loaded session; for
+    a session not loaded the logbook's record names and the reasons the index
+    recorded for them, no record opened; a cell has a result only when every
+    calculation it needs has a record; a record with a reason is a failed
+    result before and after a restart alike; a known record counts until the
+    column worker's restore deletes it as stale, which moves the pair into
+    demand; the demand layer checks no staleness itself.
+14. (5) Demand does not depend on how the state arose (a gesture, a profile,
+    the start-up restore); at start-up every session is hidden, so plots
+    create no demand until sessions are shown, while enabled columns do.
+15. (5) Nothing about demand is persisted: it is derived again at the next
+    start; a profile carrying a column over a requested output computes it for
+    every session without a result, so no default profile carries such a
+    column.
+16. (5) When a requested calculation depends on another, the demand covers
+    both, upstream first.
+17. (6) A pair that enters demand is wanted at once, with no gesture
+    (checking, showing, enabling, an input change that drops a demanded
+    result), and the indicator shows it immediately.
+18. (6) A pair that leaves demand (plot unchecked, session hidden, column
+    disabled, result appeared by other means) is dropped before it starts;
+    there is no queue of accepted requests to prune.
+19. (6) The running job is never stopped because its pair left demand: it
+    finishes and its result is published and stored; it is stopped only when
+    its inputs change, its session goes away, or the application closes.
+20. (6) After an input change of a demanded session the pair is in demand at
+    once but starts only once the inputs have been still for a short moment,
+    so a burst of edits runs one job; showing, hiding, checking and enabling
+    take effect without the wait.
+21. (6) Jobs run one at a time on the executor's worker thread.
+22. (7) The next job is chosen when a job ends and whenever demand changes,
+    from the demand as it is at that moment, not from the order in which pairs
+    entered it.
+23. (7) Plot demand first (the focused session, then the other visible
+    sessions in logbook row order), then column demand: visible sessions, then
+    the other loaded sessions, then sessions not loaded as the fill loads
+    them, each in logbook row order.
+24. (7) A session made visible while column demand is worked through is
+    computed next, waiting at most for the running job, which is not
+    preempted.
+25. (8) An input-determined failure (rejection, solver failure) is a result:
+    stored, shown with the warning badge and its reason, never run again.
+26. (8) A job-level failure (the worker could not start, out of memory, a
+    failure not a function of the inputs) is badged with its reason, not
+    started again in the run unless its inputs change, not stored, so tried
+    again at the next start; the demand layer remembers it.
+27. (8) There is no retry control.
+28. (9) For column demand the demand layer, not the column worker, has a
+    session that is not loaded loaded the way showing it would, without making
+    it visible: an ordinary hidden session, pinned from its load until no
+    column it needs is still waiting or running, then left to ordinary
+    eviction.
+29. (9) At most a small fixed number of sessions is loaded for this purpose at
+    a time, not smaller than the number of jobs that may run at once; the next
+    is loaded when one has ended.
+30. (9) The fill is an idle-scheduler task below saving, loading visible
+    sessions, bulk edits and column work, whose steps are the loads, so saves
+    and bulk edits come first; it has work for the whole fill and steps only
+    while it can load; the progress line reports the whole fill; the scheduler
+    gains the generic notion of a task with work it cannot step right now,
+    rests instead of spinning, and learns nothing about jobs.
+31. (9) The session-id correction of a first load happens before the pair is
+    offered to the executor.
+32. (9) A session whose requested calculation turns out not to apply once
+    loaded is settled as not applicable for the run without a job; its column
+    value stays unavailable.
+33. (9) The column worker is unchanged and never knows a job exists; a record
+    written later drops the cached value and the loaded-row refresh computes
+    the new one; cheap column values never wait for a requested calculation.
+34. (10) No refresh and no cancel for requested calculations anywhere;
+    unchecking a plot, hiding sessions or disabling a column is how the user
+    changes what is wanted.
+35. (10) A plot row and a logbook column header show a small animated working
+    indicator at the right of their name while any of their demand is waiting
+    or running.
+36. (10) Hovering the indicator, the row or the header shows how many sessions
+    are done of how many are wanted, the session being computed with its
+    progress text, and the sessions that could not be computed with their
+    reasons.
+37. (10) The warning badge replaces the indicator once work is finished and
+    some sessions could not be computed; its hover lists them with reasons.
+38. (10) A column cell whose pair is in demand reads as pending, distinct from
+    unavailable and from the unreadable-record pending state; pending is the
+    view's presentation of demand, never a cached value, never in the index;
+    the value underneath stays unavailable until the record is written, and
+    sorting treats pending as unavailable.
+39. (10) The logbook's progress line for background work is unchanged in form
+    and reports a column fill for its whole duration, as on-demand column
+    values: remaining of wanted, no cancel.
+40. (11) The executor's worker thread runs below normal priority, so that the
+    user interface stays responsive.
+41. (11) The number of jobs that may run at once is a single bound of the
+    executor (one today); the load bound of section 9 follows it, and raising
+    it changes no contract of the demand layer or the column worker.
+42. (12) One widget-free demand layer replaces the plot rows' request logic:
+    it reads the plot model, the session model, the enabled columns, blocker
+    reports and the record set, derives demand, applies the priority, has
+    sessions loaded, offers the next pair, remembers this run's failures and
+    not-applicable pairs, and publishes per-plot and per-column state.
+43. (12) The demand layer is the only caller of the executor; nothing calls
+    back into it: it observes the models and the executor's signals.
+44. (12) The executor stays the only place a requested calculation runs and
+    never loads a session; it holds at most the running job and one chosen
+    next job, with no order of arrival, no deduplication against a list and no
+    pruning.
+45. (12) The executor's lifecycle (start, stale while running, cancel,
+    supersede, fail, shutdown), its pinning, the publication and storing of
+    results, and the job history are unchanged.
+46. (12) The column worker and the idle scheduler keep their tasks and
+    priorities; the column fill is a new lowest-priority task; the scheduler
+    gains the notion of a task with work it cannot step right now and no
+    knowledge of jobs; the manager and the store record each stored result's
+    outcome in the index.
+47. (12) The flow is one way: the demand layer chooses, the executor
+    publishes, the listener writes the record, the record change drops cached
+    column values, the loaded-row refresh recomputes them, and the demand
+    layer sees the result through the inspection and record set it always
+    reads.
+48. (12) What stays true: restoring is not requesting; the column worker's
+    temporary copy never writes a stored result and never requests; a restored
+    result is indistinguishable from a published one; the engine's threading
+    rules; the plot widget's "no data" warning asks the engine directly.
+49. (13) Test: checking a plot starts the visible sessions without a result;
+    showing another session while it is checked starts it with no other
+    action; hiding drops its waiting pair; unchecking drops all waiting pairs;
+    the running job finishes and its result is stored.
+50. (13) Test: a session made visible during column demand is the next job to
+    start; within column demand visible sessions come before hidden loaded
+    ones, and those before sessions not yet loaded.
+51. (13) Test: enabling a column over a requested output wants every session
+    without a result, loads unloaded ones a bounded number at a time as hidden
+    pinned sessions, fills the column, ends with every session computed, not
+    applicable or failed, and they leave the pool by ordinary eviction.
+52. (13) Test: the column worker's behaviour and statistics are unchanged by
+    column demand, and a stale record it deletes moves the pair into demand.
+53. (13) Test: stored results are restored, not recomputed: enabling the
+    column on a logbook whose sessions all have valid stored results creates
+    no job; a stored rejection of a session not loaded is listed as failed
+    with its reason after a restart without loading it; a column over a chain
+    whose upstream record alone is stored is completed.
+54. (13) Test: an input-determined failure is stored, badged and never run
+    again; a job-level failure is badged, not run again in the run, and tried
+    again after a restart.
+55. (13) Test: a burst of input changes on a demanded session produces one
+    job; the indicator shows from the first change.
+56. (13) Test: applying a profile with such a column creates demand; start-up
+    with a checked plot and no visible sessions creates none.
+57. (13) Test: the working indicator and hover detail reflect waiting,
+    running, done and failed counts on plot rows and column headers; no
+    control to refresh or cancel a calculation exists.
+58. (13) Test: a pending column cell is distinguishable from an unavailable
+    one, is not written to the logbook index, and becomes the value when the
+    record is written.
+59. (13) Test: saves and bulk edits still precede the fill's loads; no result
+    is computed from a file being rewritten; the progress line reports the
+    fill from its first load to its last result, and the scheduler does not
+    spin while the fill waits on a job.
+60. (13) Test: the executor never holds more than the running job and one
+    chosen next job; changing demand replaces the chosen next job.
+61. (13) Test: the UI thread is not blocked by a running requested
+    calculation, and the calculation runs below normal priority.
+62. (13) Test: the existing tests of stored results and of the executor pass,
+    those that asserted the refresh gesture, the queue order or the pruning of
+    queued jobs rewritten to the demand rules.
+63. (14) `docs/` describe the executor, the demand layer, logbook columns over
+    requested results, what the user sees (no refresh, the working indicator,
+    pending cells, failures) and where a column over a requested calculation
+    stays unavailable or pending.
