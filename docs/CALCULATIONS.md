@@ -1523,6 +1523,9 @@ column worker, has the sessions of column demand loaded.
   (`TaskDef::canStep`): it is reported as active with its progress, not
   stepped, and the scheduler rests until it is woken instead of spinning. The
   scheduler learns nothing about jobs: the task is one more source of steps.
+  It reports the active task once per tick, so a count that lasts less than a
+  tick (a job that ends before the fill's next tick) is never shown, and a
+  tick that goes to a higher-priority task shows that task's progress instead.
 - **A load step** takes the first session in row order that is not loaded,
   not visible (a visible stub belongs to the visible loader), not settling,
   not held and has a waiting cell, runs a pending pass first so that it
@@ -1562,7 +1565,9 @@ column worker, has the sessions of column demand loaded.
   output as unavailable when the session has no record, computes it from its
   temporary copy when there is one, and never knows a job exists. When a job
   writes the record, the record change drops the cached value and the
-  loaded-row refresh computes the new one. Cheap column values never wait for
+  loaded-row refresh computes the new one (or the column worker, from the
+  same loaded session, when its tick comes before the queued refresh; which
+  comes first is up to the event loop). Cheap column values never wait for
   a requested calculation.
 - **Edge cases:**
   - a column disabled mid-load: the next pass releases the hold and withdraws

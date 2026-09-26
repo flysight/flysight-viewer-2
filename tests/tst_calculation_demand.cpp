@@ -2897,15 +2897,21 @@ void CalculationDemandTest::fillTaskReportsProgressWhileWaiting()
             QVERIFY(fillProgress.at(i).first <= fillProgress.at(i - 1).first);
     }
 
-    // The next fill starts its own count
+    // The next fill starts its own count. Its job is held, so the fill waits on
+    // it and must report. (A job that is let through at once may end before
+    // the fill's first tick, because the save of the edit takes the ticks
+    // before it; that fill then reports only its end, "0 / 1".)
+    QCOMPARE(gate().proceed.available(), 0);
     fillProgress.clear();
-    gate().open(1);
     QVERIFY(giveInput({"s2"}, "G_IN", 20));
     settle();
-    QVERIFY(waitDemandIdle());
-    QVERIFY(!fillProgress.isEmpty());
+    QTRY_VERIFY(!fillProgress.isEmpty());
     QCOMPARE(fillProgress.first(), progressOf(1, 1));
+    gate().open(1);
+    QVERIFY(waitDemandIdle());
     QCOMPARE(fillProgress.last(), progressOf(0, 1));
+    for (const QPair<int, int> &progress : std::as_const(fillProgress))
+        QCOMPARE(progress.second, 1);
 }
 
 // Spec 13: stored results are restored, not recomputed: enabling the column on
@@ -3533,14 +3539,23 @@ void CalculationDemandTest::startupWithEnabledColumnLoadsAfterColumnWorker()
 
     // As MainWindow: the column worker is started, then the demand layer made
     QStringList order;                      // "C" a column worker step, "F" the fill activated, "L" a load
+    bool passDoneAtFill = false;            // at the fill's first activation
+    int copiesAtFill = -1;
     QObject scope;
     connect(&m_model->scheduler(), &IdleScheduler::progressChanged, &scope, [&order](int id, int, int) {
         if (id == SessionModel::ColumnTask)
             order.append(QStringLiteral("C"));
     });
-    connect(&m_model->scheduler(), &IdleScheduler::activeTaskChanged, &scope, [&order](int id, bool) {
-        if (id == SessionModel::ColumnFillTask)
-            order.append(QStringLiteral("F"));
+    connect(&m_model->scheduler(), &IdleScheduler::activeTaskChanged, &scope, [&, this](int id, bool) {
+        if (id != SessionModel::ColumnFillTask)
+            return;
+        if (!order.contains(QStringLiteral("F"))) {
+            const int description = section("_DESCRIPTION");
+            passDoneAtFill = rowState(QStringLiteral("s2")).cachedValues.contains(description)
+                && rowState(QStringLiteral("s4")).cachedValues.contains(description);
+            copiesAtFill = m_model->columnWorkStats().sessionsLoaded;
+        }
+        order.append(QStringLiteral("F"));
     });
     connect(m_model.get(), &SessionModel::sessionLoaded, &scope,
             [&order](const QString &) { order.append(QStringLiteral("L")); });
@@ -3559,7 +3574,17 @@ void CalculationDemandTest::startupWithEnabledColumnLoadsAfterColumnWorker()
     const int firstLoad = int(order.indexOf(QStringLiteral("L")));
     QVERIFY(firstFill >= 0);
     QVERIFY(firstLoad > firstFill);
-    QVERIFY(!order.mid(firstFill).contains(QStringLiteral("C")));
+    // The start-up pass was complete when the fill was first activated: its
+    // values are cached, from the temporary copies of s2 and s4 ...
+    QVERIFY(passDoneAtFill);
+    QCOMPARE(copiesAtFill, 2);
+    // ... and the column worker made no temporary copy afterwards. It may step
+    // again once a load has happened: a job's record drops the loaded row's
+    // cached value, and the worker computes it when its tick comes before the
+    // queued loaded-row refresh (the event loop's order decides).
+    QCOMPARE(m_model->columnWorkStats().sessionsLoaded, copiesAtFill);
+    const int laterColumnStep = int(order.indexOf(QStringLiteral("C"), firstFill));
+    QVERIFY(laterColumnStep < 0 || laterColumnStep > firstLoad);
     QCOMPARE(order.count(QStringLiteral("L")), 4);
     QCOMPARE(m_queue->model()->rowCount(), 4);
 }
@@ -3728,7 +3753,15 @@ void CalculationDemandTest::fillTaskIsLowestAndNotCancellable()
 
     scheduler.cancel(SessionModel::ColumnFillTask);
     QVERIFY(m_demand->hasFillWork());
-    gate().open(4);
+    // One session at a time, so that every count is reported. The scheduler
+    // reports the active task once per tick: with every job let through, a
+    // job can end before the fill's next tick (the column worker's step for
+    // the record just written may take the tick before it), and the count
+    // then falls by two between reports.
+    for (int left = 3; left >= 0; --left) {
+        gate().open(1);
+        QTRY_VERIFY2(fillProgress.contains(progressOf(left, 4)), qPrintable(QString::number(left)));
+    }
     QVERIFY(waitDemandIdle());
     for (int i = 1; i <= 4; ++i)
         QCOMPARE(jobOf(QStringLiteral("s%1").arg(i), "gated").state, JobState::Succeeded);
