@@ -9,7 +9,7 @@
 // the per-plot state and its signals.
 // Column demand: every enabled logbook column over a requested calculation,
 // for every session, loaded or not; the column fill's hidden loads, the bound
-// on holds and their release; settlements; tier (c); the per-column state and
+// on holds and their release; the pair memory; tier (c); the per-column state and
 // the pending cells; the ordering against saves and bulk edits.
 //
 // Synchronization: Gate::waitEntered() proves the worker is inside a compute
@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <memory>
 
+#include <QDir>
 #include <QFile>
 #include <QJsonObject>
 #include <QScopeGuard>
@@ -29,6 +30,7 @@
 
 #include "builtinfixture.h"
 #include "calculationdemand.h"
+#include "calculationrecord.h"
 #include "demandfill.h"
 #include "demandsettleclock.h"
 #include "engine/calculationdescriptor.h"
@@ -158,6 +160,13 @@ private slots:
     void startupWithEnabledColumnLoadsAfterColumnWorker();
     void savesAndBulkEditsPrecedeLoadStep();
     void bulkEditMakesSettledSessionApplicable();
+    void failedRecordWriteIsShownAndNotRetried();
+    void failedRecordWriteIsShownOnThePlotRow();
+    void settledPairsSurviveEvictionSortAndColumnWorker();
+    void pairMemoryIsClearedByRecordInputAndRegistryChanges();
+    void columnVerdictDoesNotSuppressAnotherColumn();
+    void runningColumnTrackFilesItsOtherBlockers();
+    void successfulLoadForgetsFailedLoadFacts();
     void fillTaskIsLowestAndNotCancellable();
     void noLoadsAfterExecutorShutdown();
     void demandDestroyedReleasesHoldsAndTask();
@@ -467,6 +476,14 @@ private:
                                    logbook.lastAccessedMap());
         m_queue = std::make_unique<JobQueue>(m_model.get());
         m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
+    }
+    /// The record file of (session, calculation), where the manager writes it:
+    /// TestEnvironment::cacheDir() + "/" + recordFileName(sessionFileStem(id), calculationId).
+    /// A directory put there makes the write fail.
+    static QString recordPath(const QString &id, const QString &calculationId)
+    {
+        return TestEnvironment::instance().cacheDir() + QLatin1Char('/')
+            + recordFileName(sessionFileStem(id), calculationId);
     }
     /// Whether the session file of `id` on disk has the line.
     static bool fileHas(const QString &id, const QByteArray &line)
@@ -3240,7 +3257,7 @@ void CalculationDemandTest::notApplicableSessionIsSettledWithoutAJob()
     QCOMPARE(state.wantedCount, 0);
     QVERIFY(state.isPlain());
 
-    // Evicted: the settlement keeps it from being loaded again
+    // Evicted: the remembered verdict keeps it from being loaded again
     QVERIFY(makeStubs());
     for (int i = 0; i < 3; ++i)
         spin();
@@ -3934,9 +3951,10 @@ void CalculationDemandTest::savesAndBulkEditsPrecedeLoadStep()
 }
 
 // A settled session becomes applicable by a bulk edit of its stub: the edit is
-// published as an input change, which clears the settlement and starts the
-// session's settle wait, after which the session is loaded again. A bulk edit
-// of an attribute no requested column reads changes nothing.
+// published as an input change, which clears what the run remembered of the
+// session and starts its settle wait, after which the session is loaded
+// again. A bulk edit of an attribute no requested column reads changes
+// nothing.
 void CalculationDemandTest::bulkEditMakesSettledSessionApplicable()
 {
     QVERIFY(m_extra->add(descriptionCalculation()));
@@ -3986,6 +4004,509 @@ void CalculationDemandTest::bulkEditMakesSettledSessionApplicable()
     QVERIFY(!m_demand->isSettling(QStringLiteral("s2")));
     QVERIFY(!m_demand->hasFillWork());
     QVERIFY(col("DESC_OUT").isPlain());
+}
+
+// Spec 7, a session that is not loaded: a record that could not be written is
+// a failure of the run, shown on the column header with the reason. It is not
+// loaded or offered again after its eviction (which makes the column worker
+// process the stub), a sort or the column worker; the next start tries again,
+// and a later successful write clears it.
+void CalculationDemandTest::failedRecordWriteIsShownAndNotRetried()
+{
+    QVERIFY(giveInput({"s1"}, "G_IN", 1));
+    QVERIFY(makeStubs());
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(!sessionFileStem(QStringLiteral("s1")).isEmpty());
+    const QString path = recordPath(QStringLiteral("s1"), QStringLiteral("gated"));
+    QVERIFY(QDir().mkpath(path));
+    const auto removeDirectory = qScopeGuard([path] { QDir().rmdir(path); });
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+
+    // s2-s4 have no G_IN: they are loaded to find the column not applicable
+    {
+        WarningCapture warnings;
+        gate().open(1);
+        enableColumns({"G_OUT"});
+        QVERIFY(waitDemandIdle());
+        QVERIFY(waitForIdle(*m_model));
+        QCOMPARE(warnings.count(QStringLiteral("not written")), 1);
+    }
+    QCOMPARE(jobOf(QStringLiteral("s1"), "gated").state, JobState::Succeeded);
+    QVERIFY(!stored("s1", "gated"));
+
+    QString reason;
+    const auto verifyFailed = [this, &reason, &loadedSpy](int loads) {
+        const DemandState state = col("G_OUT");
+        QCOMPARE(sessionIdsOf(state.failed), QStringList({"s1"}));
+        const DemandTrack &failed = state.failed.at(0);
+        QVERIFY2(failed.reason.startsWith(QStringLiteral("Gated: Couldn't write file")), qPrintable(failed.reason));
+        if (reason.isEmpty())
+            reason = failed.reason;
+        QCOMPARE(failed.reason, reason);
+        QVERIFY(failed.jobFailure);
+        QCOMPARE(failed.calculationTitles, QStringList({"Gated"}));
+        QCOMPARE(failed.sessionName, QStringLiteral("Jump 1"));
+        QVERIFY(state.showsWarning());
+        QVERIFY(!isCellPending(QStringLiteral("s1"), "G_OUT"));
+        QCOMPARE(loadsOf(loadedSpy, "s1"), loads);
+    };
+    verifyFailed(1);
+    if (QTest::currentTestFailed())
+        return;
+
+    {
+        const Quiet quiet(*m_queue);
+
+        // Evicted: the eviction drops the values over the record that could
+        // not be written, and the column worker processes the stub, a
+        // single-row display change the demand layer does not observe
+        QSignalSpy displaySpy(m_model.get(), &QAbstractItemModel::dataChanged);
+        QVERIFY(makeStubs());
+        for (int i = 0; i < 3; ++i)
+            spin();
+        QVERIFY(waitForIdle(*m_model));
+        const int s1Row = rowOf(QStringLiteral("s1"));
+        const bool s1Repainted = std::any_of(displaySpy.cbegin(), displaySpy.cend(), [s1Row](const QList<QVariant> &args) {
+            const QModelIndex topLeft = args.at(0).toModelIndex();
+            const QModelIndex bottomRight = args.at(1).toModelIndex();
+            const QList<int> roles = args.at(2).value<QList<int>>();
+            return topLeft.row() == s1Row && bottomRight.row() == s1Row && roles.contains(Qt::DisplayRole);
+        });
+        QVERIFY(s1Repainted);
+        const auto verifyNotRetried = [&] {
+            verifyFailed(1);
+            QCOMPARE(jobCount("gated"), 1);
+            QVERIFY(!m_demand->hasFillWork());
+        };
+        verifyNotRetried();
+        if (QTest::currentTestFailed())
+            return;
+
+        // Sorted
+        m_model->sort(0, Qt::DescendingOrder);
+        spin();
+        verifyNotRetried();
+        if (QTest::currentTestFailed())
+            return;
+
+        // The column worker
+        m_model->startColumnWorker();
+        QVERIFY(waitForIdle(*m_model));
+        spin();
+        verifyNotRetried();
+        if (QTest::currentTestFailed())
+            return;
+        QVERIFY(quiet.holds());
+    }
+
+    // A restart tries again
+    {
+        WarningCapture warnings;
+        gate().open(1);
+        restartDemand();
+        QVERIFY(waitDemandIdle());
+        QVERIFY(waitForIdle(*m_model));
+        QCOMPARE(warnings.count(QStringLiteral("not written")), 1);
+    }
+    QCOMPARE(jobCount("gated"), 2);
+    reason.clear();         // the same prefix; the text is the new write's
+    verifyFailed(2);
+    if (QTest::currentTestFailed())
+        return;
+
+    // A later successful write clears it. The second run left s1 loaded in the
+    // pool with the result installed, and a request of an installed result
+    // publishes nothing: a fresh engine without the result is loaded instead.
+    QVERIFY(QDir().rmdir(path));
+    QVERIFY(makeStubs({"s1"}));
+    session("s1");
+    {
+        const Quiet quiet(*m_queue);
+        m_demand->flush();
+        verifyFailed(3);        // Blocked on gated, which is remembered failed
+        if (QTest::currentTestFailed())
+            return;
+        spin();
+        QVERIFY(quiet.holds());
+    }
+    gate().open(1);
+    QCOMPARE(engine("s1").request(QStringLiteral("gated")).status, ResultStatus::Ok);
+    QVERIFY(stored("s1", "gated"));
+    m_demand->flush();
+    const DemandState state = col("G_OUT");
+    QCOMPARE(state.failedCount, 0);
+    QCOMPARE(state.doneCount, 1);
+    QCOMPARE(state.wantedCount, 1);
+    QVERIFY(state.isPlain());
+}
+
+// Spec 7, a loaded session: the plot row lists the failed write although the
+// engine holds the result, nothing is offered again, and the failure survives
+// the session's eviction and a load of a fresh engine without the result.
+void CalculationDemandTest::failedRecordWriteIsShownOnThePlotRow()
+{
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
+    show({"s1"});
+    QVERIFY(!sessionFileStem(QStringLiteral("s1")).isEmpty());
+    const QString path = recordPath(QStringLiteral("s1"), QStringLiteral("gated"));
+    QVERIFY(QDir().mkpath(path));
+    const auto removeDirectory = qScopeGuard([path] { QDir().rmdir(path); });
+
+    {
+        WarningCapture warnings;
+        gate().open(1);
+        check("g");
+        QVERIFY(waitDemandIdle());
+        QCOMPARE(warnings.count(QStringLiteral("not written")), 1);
+    }
+
+    DemandState state = row("Syn/g");
+    QCOMPARE(state.failedCount, 1);
+    QCOMPARE(state.failed.at(0).sessionId, QStringLiteral("s1"));
+    const QString reason = state.failed.at(0).reason;
+    QVERIFY2(reason.startsWith(QStringLiteral("Gated: Couldn't write file")), qPrintable(reason));
+    QVERIFY(state.failed.at(0).jobFailure);
+    QVERIFY(state.showsWarning());
+    QVERIFY2(state.toolTip.contains(QStringLiteral("  Jump 1 - Gated: Couldn't write file")), qPrintable(state.toolTip));
+    QCOMPARE(values(QStringLiteral("s1"), "g"), QVector<double>({5.0}));       // installed; the write failed
+
+    const Quiet quiet(*m_queue);
+    for (int i = 0; i < 3; ++i)
+        spin();
+    QVERIFY(quiet.holds());
+
+    // Hidden, evicted and shown: the visible loader loads a fresh engine
+    // without the result
+    QVERIFY(makeStubs({"s1"}));
+    show({"s1"});
+    QVERIFY(waitForIdle(*m_model));
+    state = row("Syn/g");
+    QCOMPARE(sessionIdsOf(state.failed), QStringList({"s1"}));
+    QCOMPARE(state.failed.at(0).reason, reason);
+    QVERIFY(state.showsWarning());
+    spin();
+    QVERIFY(quiet.holds());
+}
+
+// Spec 14, one memory: a session found not applicable, a job-level failure, a
+// failed load and a failed write are not loaded or offered again after an
+// eviction, a sort or the column worker's processing of the stubs, whose
+// display changes the demand layer does not observe.
+void CalculationDemandTest::settledPairsSurviveEvictionSortAndColumnWorker()
+{
+    // s1 fails to write (and is not applicable to X_OUT); s2 is not
+    // applicable to both; s3 cannot be loaded; s4's job fails (and it is not
+    // applicable to G_OUT)
+    QVERIFY(giveInput({"s1"}, "G_IN", 1));
+    QVERIFY(giveInput({"s3"}, "G_IN", 3));
+    QVERIFY(giveInput({"s4"}, "X_IN", 4));
+    QVERIFY(makeStubs());
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(!sessionFileStem(QStringLiteral("s1")).isEmpty());
+    const QString path = recordPath(QStringLiteral("s1"), QStringLiteral("gated"));
+    QVERIFY(QDir().mkpath(path));
+    const auto removeDirectory = qScopeGuard([path] { QDir().rmdir(path); });
+    QVERIFY(QFile::remove(sessionFilePath(QStringLiteral("s3"))));
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+
+    {
+        WarningCapture warnings;
+        gate().open(1);
+        enableColumns({"G_OUT", "X_OUT"});
+        QVERIFY(waitDemandIdle());
+        QVERIFY(waitForIdle(*m_model));
+        QCOMPARE(warnings.count(QStringLiteral("not written")), 1);
+    }
+
+    // Both states, the failures in session order (a sort reorders the rows)
+    const auto snapshot = [this] {
+        QStringList lines;
+        for (const char *key : {"G_OUT", "X_OUT"}) {
+            const DemandState state = col(key);
+            lines.append(QStringLiteral("%1 wanted %2 done %3 waiting %4 running %5 failed %6")
+                             .arg(QLatin1String(key)).arg(state.wantedCount).arg(state.doneCount)
+                             .arg(state.waitingCount).arg(state.runningCount).arg(state.failedCount));
+            QStringList failed;
+            for (const DemandTrack &track : state.failed) {
+                failed.append(QStringLiteral("%1 %2: %3 (%4)").arg(QLatin1String(key), track.sessionId, track.reason,
+                                                                  track.jobFailure ? QStringLiteral("job") : QString()));
+            }
+            failed.sort();
+            lines.append(failed);
+        }
+        return lines;
+    };
+    const QStringList baseline = snapshot();
+    const DemandState g = col("G_OUT");
+    QCOMPARE(sessionIdsOf(g.failed), QStringList({"s1", "s3"}));
+    QVERIFY(g.failed.at(0).reason.startsWith(QStringLiteral("Gated: Couldn't write file")));
+    QCOMPARE(g.failed.at(1).reason, QStringLiteral("The session file could not be loaded"));
+    QCOMPARE(g.wantedCount, 2);
+    const DemandState x = col("X_OUT");
+    QCOMPARE(sessionIdsOf(x.failed), QStringList({"s3", "s4"}));
+    QCOMPARE(x.failed.at(0).reason, QStringLiteral("The session file could not be loaded"));
+    QCOMPARE(x.failed.at(1).reason, QStringLiteral("Exhausted: Out of memory"));
+    QCOMPARE(x.wantedCount, 2);
+    QCOMPARE(jobOf(QStringLiteral("s4"), "exhausted").state, JobState::Failed);
+    for (const char *id : {"s1", "s2", "s3", "s4"})
+        QCOMPARE(loadsOf(loadedSpy, id), 1);
+    const int jobs = m_queue->model()->rowCount();
+    QCOMPARE(jobs, 2);
+
+    const Quiet quiet(*m_queue);
+    const auto verifyUnchanged = [&] {
+        QCOMPARE(snapshot(), baseline);
+        for (const char *id : {"s1", "s2", "s3", "s4"})
+            QCOMPARE(loadsOf(loadedSpy, id), 1);
+        QCOMPARE(m_queue->model()->rowCount(), jobs);
+        QVERIFY(!m_demand->hasFillWork());
+    };
+
+    // Evicted: capacity 0 evicts every hidden row, and s3's placeholder is a
+    // stub again
+    QVERIFY(makeStubs());
+    for (int i = 0; i < 3; ++i)
+        spin();
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(!rowState(QStringLiteral("s3")).isLoaded());
+    verifyUnchanged();
+    if (QTest::currentTestFailed())
+        return;
+
+    // Sorted
+    m_model->sort(0, Qt::AscendingOrder);
+    spin();
+    verifyUnchanged();
+    if (QTest::currentTestFailed())
+        return;
+
+    // The column worker
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+    spin();
+    verifyUnchanged();
+    if (QTest::currentTestFailed())
+        return;
+    QVERIFY(quiet.holds());
+}
+
+// Spec 10.2: a remembered failure is cleared by a record change of the pair,
+// an input change of the session and a registry change, and by nothing else.
+void CalculationDemandTest::pairMemoryIsClearedByRecordInputAndRegistryChanges()
+{
+    const QString reason = QStringLiteral("Gated: The worker thread could not be started");
+    const auto verifyFailedNotOffered = [this, &reason](int jobs) {
+        QCOMPARE(jobOf(QStringLiteral("s1"), "gated").state, JobState::Failed);
+        QCOMPARE(jobCount("gated"), jobs);
+        const DemandState state = row("Syn/g");
+        QCOMPARE(state.failedCount, 1);
+        QVERIFY(state.failed.at(0).jobFailure);
+        QCOMPARE(state.failed.at(0).reason, reason);
+        const Quiet quiet(*m_queue);
+        for (int i = 0; i < 3; ++i)
+            spin();
+        QVERIFY(quiet.holds());
+    };
+    const auto verifySucceeded = [this](int jobs) {
+        QCOMPARE(jobCount("gated"), jobs);
+        QCOMPARE(jobOf(QStringLiteral("s1"), "gated").state, JobState::Succeeded);
+        QVERIFY(row("Syn/g").isPlain());
+    };
+
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
+    show({"s1"});
+    m_queue->failNextWorkerStarts(1);
+    check("g");
+    QVERIFY(waitDemandIdle());
+    verifyFailedNotOffered(1);
+    if (QTest::currentTestFailed())
+        return;
+
+    // A record change of the pair
+    emit LogbookManager::instance().calculationRecordsChanged(QStringLiteral("s1"), QStringLiteral("gated"));
+    gate().open(1);
+    QVERIFY(waitDemandIdle());
+    verifySucceeded(2);
+    if (QTest::currentTestFailed())
+        return;
+
+    // An input change of the session
+    m_queue->failNextWorkerStarts(1);
+    QVERIFY(giveInput({"s1"}, "G_IN", 5));
+    settle();
+    QVERIFY(waitDemandIdle());
+    verifyFailedNotOffered(3);
+    if (QTest::currentTestFailed())
+        return;
+    QVERIFY(giveInput({"s1"}, "G_IN", 6));
+    gate().open(1);
+    settle();
+    QVERIFY(waitDemandIdle());
+    verifySucceeded(4);
+    if (QTest::currentTestFailed())
+        return;
+
+    // A registry change
+    m_queue->failNextWorkerStarts(1);
+    QVERIFY(giveInput({"s1"}, "G_IN", 7));
+    settle();
+    QVERIFY(waitDemandIdle());
+    verifyFailedNotOffered(5);
+    if (QTest::currentTestFailed())
+        return;
+    CalculationDescriptor unrelated;
+    unrelated.id = QStringLiteral("test.demand.unrelated");
+    unrelated.title = QStringLiteral("Unrelated");
+    unrelated.policy = EvaluationPolicy::Explicit;
+    unrelated.inputs = {CalcInput::attribute(QStringLiteral("UNRELATED_IN"))};
+    unrelated.outputs = {DependencyKey::attribute(QStringLiteral("UNRELATED_OUT"))};
+    unrelated.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(QStringLiteral("UNRELATED_OUT"),
+                                                ctx.attribute(QStringLiteral("UNRELATED_IN")).toInt() + 1);
+    };
+    QVERIFY(m_extra->add(unrelated));
+    gate().open(1);
+    QVERIFY(waitDemandIdle());
+    verifySucceeded(6);
+}
+
+// Spec 10.2: a column's not-applicable verdict holds for that column only. Z_OUT
+// is not applicable to s1 (Z_IN is missing) although gated, behind it, can run:
+// G_OUT, over gated's output, is still waiting, offered, and not loaded again
+// after the eviction.
+void CalculationDemandTest::columnVerdictDoesNotSuppressAnotherColumn()
+{
+    CalculationDescriptor needsZ;
+    needsZ.id = QStringLiteral("test.demand.needsZ");
+    needsZ.title = QStringLiteral("Needs Z");
+    needsZ.policy = EvaluationPolicy::OnDemand;
+    needsZ.inputs = {CalcInput::attribute(QStringLiteral("G_OUT")), CalcInput::attribute(QStringLiteral("Z_IN"))};
+    needsZ.outputs = {DependencyKey::attribute(QStringLiteral("Z_OUT"))};
+    needsZ.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(QStringLiteral("Z_OUT"),
+                                                ctx.attribute(QStringLiteral("G_OUT")).toInt()
+                                                    + ctx.attribute(QStringLiteral("Z_IN")).toInt());
+    };
+    QVERIFY(m_extra->add(needsZ));
+
+    // Z_OUT first in source order
+    m_demand->setInputSettleDelay(60000);
+    enableColumns({"Z_OUT", "G_OUT"});
+    m_demand->flush();
+
+    // s1 settles; the walk learns Z_OUT's verdict for (s1, gated)
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
+    QVERIFY(m_demand->isSettling(QStringLiteral("s1")));
+    m_demand->flush();
+    m_demand->flush();
+    DemandState g = col("G_OUT");
+    QCOMPARE(g.wantedCount, 1);
+    QCOMPARE(g.waitingCount, 1);
+    QCOMPARE(col("Z_OUT").wantedCount, 0);
+
+    // Offered once the wait ends
+    m_demand->endInputSettleWaits();
+    m_demand->flush();
+    QVERIFY(jobOf(QStringLiteral("s1"), "gated").id != 0);
+    gate().open(1);
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(jobOf(QStringLiteral("s1"), "gated").state, JobState::Succeeded);
+    g = col("G_OUT");
+    QCOMPARE(g.doneCount, 1);
+    QVERIFY(g.isPlain());
+    QCOMPARE(col("Z_OUT").wantedCount, 0);
+
+    // Evicted: G_OUT is done from the record, Z_OUT not applicable, no load
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+    QVERIFY(makeStubs());
+    for (int i = 0; i < 3; ++i)
+        spin();
+    g = col("G_OUT");
+    QCOMPARE(g.doneCount, 1);
+    QCOMPARE(g.wantedCount, 1);
+    QCOMPARE(col("Z_OUT").wantedCount, 0);
+    QCOMPARE(loadedSpy.count(), 0);
+}
+
+// Spec 10.1: every blocker of a Blocked column report is filed, whatever the
+// track's condition: the second blocker of a Running cell is the chosen next
+// job.
+void CalculationDemandTest::runningColumnTrackFilesItsOtherBlockers()
+{
+    CalculationDescriptor pair;
+    pair.id = QStringLiteral("test.demand.pair");
+    pair.title = QStringLiteral("Pair");
+    pair.policy = EvaluationPolicy::OnDemand;
+    pair.inputs = {CalcInput::attribute(QStringLiteral("G_OUT")), CalcInput::attribute(QStringLiteral("S_OUT"))};
+    pair.outputs = {DependencyKey::attribute(QStringLiteral("PAIR_OUT"))};
+    pair.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(QStringLiteral("PAIR_OUT"),
+                                                ctx.attribute(QStringLiteral("G_OUT")).toInt()
+                                                    + ctx.attribute(QStringLiteral("S_OUT")).toInt());
+    };
+    QVERIFY(m_extra->add(pair));
+    QVERIFY(giveInput({"s1"}, "G_IN", 1));
+    QVERIFY(giveInput({"s1"}, "S_IN", 1));
+
+    enableColumns({"PAIR_OUT"});
+    QVERIFY(gate().waitEntered());
+    m_demand->flush();
+    QCOMPARE(running().sessionId, QStringLiteral("s1"));
+    QCOMPARE(running().calculationId, QStringLiteral("gated"));
+    QCOMPARE(col("PAIR_OUT").runningCount, 1);
+    QCOMPARE(chosenNext().sessionId, QStringLiteral("s1"));
+    QCOMPARE(chosenNext().calculationId, QStringLiteral("stubborn"));
+
+    gate().open(2);
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(jobOf(QStringLiteral("s1"), "gated").state, JobState::Succeeded);
+    QCOMPARE(jobOf(QStringLiteral("s1"), "stubborn").state, JobState::Succeeded);
+    const DemandState state = col("PAIR_OUT");
+    QCOMPARE(state.doneCount, 1);
+    QCOMPARE(state.wantedCount, 1);
+    QVERIFY(state.isPlain());
+}
+
+// Spec 10.2: a load of the session that succeeds forgets its failed-load
+// facts. A failed-load placeholder that is evicted is a stub again, so showing
+// the session loads it once more.
+void CalculationDemandTest::successfulLoadForgetsFailedLoadFacts()
+{
+    for (int i = 1; i <= 4; ++i)
+        QVERIFY(giveInput({QStringLiteral("s%1").arg(i)}, "G_IN", i));
+    QVERIFY(makeStubs());
+    QVERIFY(waitForIdle(*m_model));
+    gate().open(3);
+
+    enableColumns({"G_OUT"});
+    const QString file = sessionFilePath(QStringLiteral("s2"));
+    const QString aside = file + QStringLiteral(".aside");
+    QVERIFY(QFile::copy(file, aside));
+    const auto removeAside = qScopeGuard([aside] { QFile::remove(aside); });
+    QVERIFY(QFile::remove(file));
+    show({"s2"});
+    QVERIFY(rowState(QStringLiteral("s2")).loadFailed);
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+    DemandState state = col("G_OUT");
+    QCOMPARE(sessionIdsOf(state.failed), QStringList({"s2"}));
+    QCOMPARE(state.failed.at(0).reason, QStringLiteral("The session file could not be loaded"));
+
+    // The file is back; hidden and evicted, the placeholder is a stub again,
+    // and showing the session loads it
+    QVERIFY(QFile::rename(aside, file));
+    QVERIFY(makeStubs({"s2"}));
+    QVERIFY(!rowState(QStringLiteral("s2")).loadFailed);
+    gate().open(1);
+    show({"s2"});
+    QVERIFY(rowState(QStringLiteral("s2")).isLoaded());
+    QVERIFY(!rowState(QStringLiteral("s2")).loadFailed);
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+    state = col("G_OUT");
+    QCOMPARE(sessionIdsOf(state.failed), QStringList());
+    QCOMPARE(jobOf(QStringLiteral("s2"), "gated").state, JobState::Succeeded);
+    QCOMPARE(state.failedCount, 0);
 }
 
 // The fill is the lowest-priority task, active once per fill, not cancellable;
@@ -4059,7 +4580,7 @@ void CalculationDemandTest::fillTaskIsLowestAndNotCancellable()
 }
 
 // Nothing is loaded after the executor has shut down, the scheduler goes idle,
-// and the holds are released when the demand layer is destroyed.
+// and no session is held once it has.
 void CalculationDemandTest::noLoadsAfterExecutorShutdown()
 {
     for (int i = 1; i <= 4; ++i)
@@ -4075,6 +4596,9 @@ void CalculationDemandTest::noLoadsAfterExecutorShutdown()
     QSignalSpy idleSpy(&m_model->scheduler(), &IdleScheduler::schedulerIdle);
     m_queue->shutdown();
     m_demand->flush();
+    QCOMPARE(m_demand->heldSessionIds(), QStringList());
+    QVERIFY(!m_model->isSessionPinned(QStringLiteral("s1")));
+    QVERIFY(!m_model->isSessionPinned(QStringLiteral("s2")));
     QVERIFY(!m_demand->hasFillWork());
     QVERIFY(!m_demand->canLoad());
     QVERIFY(waitForIdle(*m_model));
@@ -4082,7 +4606,6 @@ void CalculationDemandTest::noLoadsAfterExecutorShutdown()
         spin();
     QCOMPARE(loadedSpy.count(), 0);
     QVERIFY(idleSpy.count() > 0);
-    QCOMPARE(m_demand->heldSessionIds(), QStringList({"s1", "s2"}));
 
     m_demand.reset();
     QVERIFY(!m_model->isSessionPinned(QStringLiteral("s1")));
@@ -4100,9 +4623,6 @@ void CalculationDemandTest::demandDestroyedReleasesHoldsAndTask()
     enableColumns({"G_OUT"});
     QVERIFY(gate().waitEntered());
     QTRY_COMPARE(m_demand->heldSessionIds(), QStringList({"s1", "s2"}));
-    m_queue->shutdown();                    // the executor's own pins go
-    QVERIFY(m_model->isSessionPinned(QStringLiteral("s1")));
-    QVERIFY(m_model->isSessionPinned(QStringLiteral("s2")));
 
     QObject scope;
     int fillActivations = 0;
@@ -4111,6 +4631,7 @@ void CalculationDemandTest::demandDestroyedReleasesHoldsAndTask()
             ++fillActivations;
     });
     m_demand.reset();
+    m_queue->shutdown();                    // the executor's own pins go: what remains was a hold
     QVERIFY(!m_model->isSessionPinned(QStringLiteral("s1")));
     QVERIFY(!m_model->isSessionPinned(QStringLiteral("s2")));
     QVERIFY(waitForIdle(*m_model));

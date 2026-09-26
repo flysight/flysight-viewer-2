@@ -75,15 +75,17 @@ void DemandFill::update(const QSet<QString> &pendingSessions, const QStringList 
     const auto before = snapshot();
 
     // A hold ends when its row is gone or not loaded any more, or when the
-    // session has no pending cell left. Outside any guard: unpinning only
-    // queues an eviction pass.
+    // session has no pending cell left; every hold ends once the fill may do
+    // no work (the executor is shut down: the owner's `enabled` hook).
+    // Outside any guard: unpinning only queues an eviction pass.
     if (!m_model) {
         m_held.clear();
     } else if (!m_held.isEmpty()) {
+        const bool enabled = m_hooks.enabled && m_hooks.enabled();
         QStringList kept;
         for (const QString &held : std::as_const(m_held)) {
             const int row = m_model->getSessionRow(held);
-            const bool release = row < 0 || !std::as_const(*m_model).rowAt(row).isLoaded()
+            const bool release = !enabled || row < 0 || !std::as_const(*m_model).rowAt(row).isLoaded()
                 || !pendingSessions.contains(held);
             if (release)
                 m_model->unpinSession(held);

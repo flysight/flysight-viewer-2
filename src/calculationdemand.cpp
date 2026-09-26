@@ -29,20 +29,6 @@ QString titleOf(const CalculationBlocker &calculation)
     return calculation.title.isEmpty() ? calculation.instanceId : calculation.title;
 }
 
-// A track is a row the plot widget draws: loaded, visible, and not a
-// failed-load placeholder. Call under a RowStabilityGuard.
-bool isVisibleLoadedTrack(const SessionRow &row)
-{
-    return row.isLoaded() && row.visible && !row.loadFailed;
-}
-
-// Nothing is left to compute for the cell (see SETTLEMENTS)
-bool isFinal(DemandCondition condition)
-{
-    return condition == DemandCondition::Done || condition == DemandCondition::Failed
-        || condition == DemandCondition::NotApplicable;
-}
-
 // The cell is in demand
 bool isPending(DemandCondition condition)
 {
@@ -95,9 +81,17 @@ CalculationDemand::CalculationDemand(SessionModel *sessionModel, PlotModel *plot
         connect(m_sessionModel, &SessionModel::modelChanged, this, &CalculationDemand::scheduleUpdate);
         // The background loader announces visibility only at the end of a
         // batch; a track becomes one the moment its session is loaded. The
-        // load restored the session's stored results.
+        // load restored the session's stored results. A load that succeeded
+        // makes what this run remembered of the session's failed loads false;
+        // a failed-load placeholder is announced too, and forgets nothing.
         connect(m_sessionModel, &SessionModel::sessionLoaded, this, [this](const QString &sessionId) {
-            m_columnReports.remove(sessionId);
+            m_reports.remove(sessionId);
+            const int row = m_sessionModel->getSessionRow(sessionId);
+            if (row >= 0) {
+                const SessionRow &sr = std::as_const(*m_sessionModel).rowAt(row);
+                if (sr.isLoaded() && !sr.loadFailed)
+                    forgetSession(sessionId, Forget::LoadFailures);
+            }
             scheduleUpdate();
         });
         connect(m_sessionModel, &SessionModel::focusedSessionChanged, this,
@@ -108,6 +102,12 @@ CalculationDemand::CalculationDemand(SessionModel *sessionModel, PlotModel *plot
         connect(m_sessionModel, &QAbstractItemModel::modelAboutToBeReset,
                 this, &CalculationDemand::onSessionModelAboutToBeReset);
         connect(m_sessionModel, &QAbstractItemModel::modelReset, this, &CalculationDemand::onSessionModelReset);
+        // Direct: the model relays the result store's announcement from inside
+        // the engine's explicit-result listener, so the slot only records and
+        // schedules, like the record-change slot below. The manager's record
+        // change of the pair comes first.
+        connect(m_sessionModel, &SessionModel::calculationRecordWriteFailed,
+                this, &CalculationDemand::onCalculationRecordWriteFailed, Qt::DirectConnection);
     }
 
     // Direct: emitted from inside record methods, so the slot only drops state
@@ -211,7 +211,7 @@ bool CalculationDemand::isInert() const
     return !m_sessionModel || !m_plotModel || !m_queue;
 }
 
-// ---- Which plots matter -----------------------------------------------------------
+// ---- Which plots and columns matter -----------------------------------------------
 
 // The registry is the one authority (CalculationRegistry::dependsOnExplicit());
 // the memo here is per plot id and also keeps the static names of the plot.
@@ -281,69 +281,61 @@ bool CalculationDemand::isRelevantName(const DependencyKey &key)
     return false;
 }
 
-QVector<PlotValue> CalculationDemand::inspectedPlots()
+// The sources as they are now: a per-pass copy. A plot's requested
+// calculations come from the registry (the model knows nothing of plots), a
+// column's from the session model (a column is requested when they are not
+// empty); both are read, not computed here. Nothing is compared with the last
+// pass: the report memo is keyed by source id, so it is right for any list.
+void CalculationDemand::syncSources()
 {
-    QVector<PlotValue> plots;
+    QVector<Source> sources;
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+
     for (const QString &id : std::as_const(m_checkedOrder)) {
         const PlotValue plot = m_checked.value(id);
-        if (isRequested(plot))
-            plots.append(plot);
+        if (!isRequested(plot))
+            continue;
+        Source source;
+        source.kind = Source::Kind::Plot;
+        source.id = id;
+        source.names = {yName(plot)};
+        source.sensorId = plot.sensorID;
+        setStorable(source, registry.explicitDependencies(yName(plot)));
+        sources.append(source);
     }
-    return plots;
-}
 
-// Brings m_columns in line with the requested enabled columns as the session
-// model reports them now (SessionModel::columnRequestedCalculations(): a
-// column is requested when it is not empty). Runs at the start of every pass:
-// a per-pass copy, read and not computed.
-void CalculationDemand::syncColumns()
-{
-    QVector<ColumnInfo> columns;
     if (m_sessionModel) {
-        const CalculationRegistry &registry = CalculationRegistry::instance();
         const SessionModel &model = *m_sessionModel;
         const int count = model.columnCount();
         for (int i = 0; i < count; ++i) {
-            const LogbookColumn &column = model.column(i);
             const QStringList calculations = model.columnRequestedCalculations(i);
             if (calculations.isEmpty())
                 continue;
-            ColumnInfo info;
-            info.id = columnId(column);
-            info.names = logbookColumnNames(column);
-            info.calculations = calculations;
-            for (const QString &id : calculations) {
-                // An explicit family instance is never stored
-                if (id.contains(QLatin1Char('#')))
-                    continue;
-                const QString title = registry.title(id);
-                info.storable.append(id);
-                info.storableTitles.append(title.isEmpty() ? id : title);
-            }
-            columns.append(info);
+            const LogbookColumn &column = model.column(i);
+            Source source;
+            source.kind = Source::Kind::Column;
+            source.id = columnId(column);
+            source.names = logbookColumnNames(column);
+            setStorable(source, calculations);
+            sources.append(source);
         }
     }
 
-    QStringList before;
-    for (const ColumnInfo &column : std::as_const(m_columns))
-        before.append(column.id);
-    QStringList after;
-    for (const ColumnInfo &column : std::as_const(columns))
-        after.append(column.id);
+    m_sources = sources;
+}
 
-    m_columns = columns;
-    if (before == after)
-        return;
-
-    // The report memo is parallel to the columns; the settlements of a column
-    // that left the set go (its state is announced once by the next pass)
-    m_columnReports.clear();
-    const QSet<QString> present(after.cbegin(), after.cend());
-    for (auto it = m_settled.begin(); it != m_settled.end();) {
-        if (present.contains(it.key().second))
-            ++it;
-        else
-            it = m_settled.erase(it);
+void CalculationDemand::setStorable(Source &source, const QStringList &calculations)
+{
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+    source.storable.clear();
+    source.storableTitles.clear();
+    for (const QString &id : calculations) {
+        // An explicit family instance is never stored
+        if (id.contains(QLatin1Char('#')))
+            continue;
+        const QString title = registry.title(id);
+        source.storable.append(id);
+        source.storableTitles.append(title.isEmpty() ? id : title);
     }
 }
 
@@ -358,10 +350,65 @@ bool CalculationDemand::isMerelyUncomputed(const SessionData &session, const QSt
     return state == State::Blocked || state == State::NotProduced;
 }
 
-// Call under a RowStabilityGuard: `session` is a row of the model read in place.
-BlockerReport CalculationDemand::inspectUnderGuard(const SessionData &session, const PlotValue &plot) const
+// Call under the walk's RowStabilityGuard: `session` is a row of the model read
+// in place. One report per source, combined over its names (two for a Delta
+// column): a value that needs both names exists only when both do. A plot's
+// single name combines to itself, except that an Available or NotApplicable
+// report keeps nothing, a NotProduced one keeps its notes only and a Blocked
+// one its blockers only.
+BlockerReport CalculationDemand::combinedReport(const SessionData &session, const Source &source)
 {
-    const BlockerReport report = session.calculationEngine().blockers(yName(plot));
+    using State = BlockerReport::State;
+    auto &engine = session.calculationEngine();
+
+    bool notApplicable = false;
+    bool notProduced = false;
+    bool blocked = false;
+    BlockerReport combined;
+    QSet<QString> seenBlockers;
+    QSet<QString> seenNotes;
+    for (const DependencyKey &name : source.names) {
+        const BlockerReport report = engine.blockers(name);
+        switch (report.state) {
+        case State::Available:
+            break;
+        case State::NotApplicable:
+            notApplicable = true;
+            break;
+        case State::NotProduced:
+            notProduced = true;
+            for (const UnproducedNote &note : report.notProduced) {
+                if (!seenNotes.contains(note.calculation.instanceId)) {
+                    seenNotes.insert(note.calculation.instanceId);
+                    combined.notProduced.append(note);
+                }
+            }
+            break;
+        case State::Blocked:
+            blocked = true;
+            for (const CalculationBlocker &blocker : report.blockers) {
+                if (!seenBlockers.contains(blocker.instanceId)) {
+                    seenBlockers.insert(blocker.instanceId);
+                    combined.blockers.append(blocker);
+                }
+            }
+            break;
+        }
+    }
+
+    if (notApplicable) {
+        combined = BlockerReport();
+        combined.state = State::NotApplicable;
+    } else if (notProduced) {
+        combined.state = State::NotProduced;
+        combined.blockers.clear();
+    } else if (blocked) {
+        combined.state = State::Blocked;
+        combined.notProduced.clear();
+    } else {
+        combined = BlockerReport();
+        combined.state = State::Available;
+    }
 
 #ifndef QT_NO_DEBUG
     // "y available implies x available" (see the class comment) is a property
@@ -371,11 +418,11 @@ BlockerReport CalculationDemand::inspectUnderGuard(const SessionData &session, c
     // and never loads a session. A time axis that is unavailable for ordinary
     // reasons is not a violation: only one that waits on an explicit
     // calculation would leave a Done track undrawn.
-    if (report.state == BlockerReport::State::Available) {
+    if (source.kind == Source::Kind::Plot && combined.state == State::Available) {
         for (const char *axis : {SessionKeys::Time, SessionKeys::SystemTime}) {
-            const DependencyKey xName = DependencyKey::measurement(plot.sensorID, QLatin1String(axis));
-            if (session.calculationEngine().blockers(xName).state == BlockerReport::State::Blocked) {
-                qWarning().noquote() << "CalculationDemand:" << plotId(plot)
+            const DependencyKey xName = DependencyKey::measurement(source.sensorId, QLatin1String(axis));
+            if (engine.blockers(xName).state == State::Blocked) {
+                qWarning().noquote() << "CalculationDemand:" << source.id
                                      << "is available but its time axis" << QLatin1String(axis)
                                      << "waits on an explicit calculation";
             }
@@ -383,378 +430,233 @@ BlockerReport CalculationDemand::inspectUnderGuard(const SessionData &session, c
     }
 #endif
 
-    return report;
+    return combined;
 }
 
-// The one guarded read of the component. The tracks are the rows the plot
-// widget draws: loaded, visible, and not a failed-load placeholder, in row
-// order. Everything returned is a plain value, so that nothing is offered,
-// withdrawn, or emitted while the guard is held. blockers() may compute
-// on-demand values; that reads, it neither loads nor evicts.
-CalculationDemand::Inspections CalculationDemand::inspect(const QVector<PlotValue> &plots) const
+QString CalculationDemand::noteReason(const UnproducedNote &note)
 {
-    Inspections result;
-    if (!m_sessionModel || plots.isEmpty())
-        return result;
-
-    const SessionModel &model = *m_sessionModel;
-    const SessionModel::RowStabilityGuard guard(model);
-    const int rows = model.rowCount();
-    for (int row = 0; row < rows; ++row) {
-        const SessionRow &sr = model.rowAt(row);
-        if (!isVisibleLoadedTrack(sr))
-            continue;
-
-        const SessionData &session = sr.session.value();
-        Track track;
-        track.sessionId = sr.sessionId;
-        track.sessionName = model.sessionDisplayName(row);
-
-        for (const PlotValue &plot : plots)
-            result[plotId(plot)].append(Inspection{track, inspectUnderGuard(session, plot)});
+    QString detail = note.detail;
+    if (detail.isEmpty()) {
+        detail = note.status == ResultStatus::Failed ? tr("Calculation failed")
+                                                     : tr("No result for this recording");
     }
-    return result;
+    return QStringLiteral("%1: %2").arg(titleOf(note.calculation), detail);
 }
 
 QString CalculationDemand::failureReason(const QList<UnproducedNote> &notes)
 {
     QStringList parts;
-    for (const UnproducedNote &note : notes) {
-        QString detail = note.detail;
-        if (detail.isEmpty()) {
-            detail = note.status == ResultStatus::Failed ? tr("Calculation failed")
-                                                         : tr("No result for this recording");
-        }
-        parts.append(QStringLiteral("%1: %2").arg(titleOf(note.calculation), detail));
-    }
+    for (const UnproducedNote &note : notes)
+        parts.append(noteReason(note));
     // A failed track always says why
     if (parts.isEmpty())
         parts.append(tr("No result for this recording"));
     return parts.join(QStringLiteral("; "));
 }
 
-// `running` is the executor's running record (a default record when there is
-// none).
-DemandTrack CalculationDemand::classify(const Track &track, const BlockerReport &report,
-                                        const JobRecord &running) const
+QString CalculationDemand::loadFailureReason()
 {
-    DemandTrack state;
-    state.sessionId = track.sessionId;
-    state.sessionName = track.sessionName;
+    return tr("The session file could not be loaded");
+}
+
+DemandTrack CalculationDemand::failedTrack(const QString &sessionId, const QStringList &titles,
+                                           const QList<const PairMemory *> &facts)
+{
+    DemandTrack track;
+    track.sessionId = sessionId;
+    track.condition = DemandCondition::Failed;
+    track.calculationTitles = titles;
+    QStringList reasons;
+    bool onlyResults = true;
+    for (const PairMemory *fact : facts) {
+        if (!reasons.contains(fact->reason))
+            reasons.append(fact->reason);
+        if (fact->origin != PairMemory::Origin::Result)
+            onlyResults = false;
+    }
+    track.reason = reasons.join(QStringLiteral("; "));
+    // Not a stored result: tried again at the next start. An unstored result
+    // is a function of the inputs, as a NotProduced track of a loaded session.
+    track.jobFailure = !onlyResults;
+    return track;
+}
+
+// A loaded row that is not a placeholder. `running` is the executor's running
+// record (a default record when there is none). Reads the memory; facts go to
+// `learned` and are applied after the walk.
+DemandTrack CalculationDemand::classifyLoaded(const QString &sessionId, const Source &source,
+                                              const BlockerReport &report, const JobRecord &running,
+                                              QList<LearnedFact> *learned) const
+{
+    DemandTrack track;
+    track.sessionId = sessionId;
+
+    // A column found not applicable remembers it for itself, for every
+    // storable calculation not already kept from being offered: after its
+    // eviction the session is not loaded again for this column
+    const auto learnColumnVerdict = [&] {
+        if (source.kind != Source::Kind::Column)
+            return;
+        for (const QString &id : source.storable) {
+            if (!blocksOffer(remembered(sessionId, id)))
+                learned->append(LearnedFact{sessionId, id, PairMemory::columnVerdict(source.id)});
+        }
+    };
 
     switch (report.state) {
-    case BlockerReport::State::Available:
-        state.condition = DemandCondition::Done;
-        return state;
+    case BlockerReport::State::Available: {
+        // Done only when none of the storable calculations is remembered
+        // failed: in the product only a record that could not be written
+        // meets this (a failed job or an unstored result leaves no result, a
+        // failed load is forgotten when the session loads)
+        QStringList titles;
+        QList<const PairMemory *> failures;
+        for (int i = 0; i < source.storable.size(); ++i) {
+            const PairMemory *memory = remembered(sessionId, source.storable.at(i));
+            if (memory && memory->kind == PairMemory::Kind::Failed) {
+                titles.append(source.storableTitles.at(i));
+                failures.append(memory);
+            }
+        }
+        if (!failures.isEmpty())
+            return failedTrack(sessionId, titles, failures);
+        track.condition = DemandCondition::Done;
+        return track;
+    }
     case BlockerReport::State::NotApplicable:
-        state.condition = DemandCondition::NotApplicable;
-        return state;
+        learnColumnVerdict();
+        track.condition = DemandCondition::NotApplicable;
+        return track;
     case BlockerReport::State::NotProduced:
-        state.condition = DemandCondition::Failed;
-        for (const UnproducedNote &note : report.notProduced)
-            state.calculationTitles.append(titleOf(note.calculation));
-        state.reason = failureReason(report.notProduced);
-        return state;
+        track.condition = DemandCondition::Failed;
+        for (const UnproducedNote &note : report.notProduced) {
+            track.calculationTitles.append(titleOf(note.calculation));
+            // A result that is never stored (a computation that threw) would
+            // be computed again after every eviction: remembered failed
+            if (note.status != ResultStatus::Ok && source.storable.contains(note.calculation.instanceId)) {
+                learned->append(LearnedFact{sessionId, note.calculation.instanceId,
+                                            PairMemory::failed(PairMemory::Origin::Result, noteReason(note))});
+            }
+        }
+        track.reason = failureReason(report.notProduced);
+        return track;
     case BlockerReport::State::Blocked:
         break;      // notes on a Blocked report are ignored: Blocked wins
     }
 
-    const bool runningIsLive = running.id != 0 && !running.cancelRequested
-        && running.sessionId == track.sessionId;
+    const bool runningIsLive = running.id != 0 && !running.cancelRequested && running.sessionId == sessionId;
     bool isRunning = false;
-    bool allNotApplicable = true;
-    QStringList titles;             // the blockers not remembered as not applicable
+    bool allRefused = true;
+    QStringList titles;             // the blockers not refused
     QStringList failedTitles;
-    QStringList failedReasons;
+    QList<const PairMemory *> failures;
     for (const CalculationBlocker &blocker : report.blockers) {
-        const PairKey key(track.sessionId, blocker.instanceId);
         if (runningIsLive && running.instanceId == blocker.instanceId)
             isRunning = true;
 
-        const auto memory = m_memory.constFind(key);
-        if (memory != m_memory.constEnd() && memory->kind == Memory::Kind::JobFailed) {
+        // A column verdict is never read here: the engine is the authority
+        // for a loaded session
+        const PairMemory *memory = remembered(sessionId, blocker.instanceId);
+        if (memory && memory->kind == PairMemory::Kind::Failed) {
             failedTitles.append(titleOf(blocker));
-            failedReasons.append(memory->reason);
+            failures.append(memory);
         }
-        if (memory == m_memory.constEnd() || memory->kind != Memory::Kind::NotApplicable) {
-            allNotApplicable = false;
+        if (!memory || memory->origin != PairMemory::Origin::Refused) {
+            allRefused = false;
             titles.append(titleOf(blocker));
         }
     }
 
     if (isRunning) {
-        state.condition = DemandCondition::Running;
-        state.calculationTitles = titles;
-        state.progressText = running.progressText;
-    } else if (!failedReasons.isEmpty()) {
+        track.condition = DemandCondition::Running;
+        track.calculationTitles = titles;
+        track.progressText = running.progressText;
+    } else if (!failures.isEmpty()) {
         // Not offered again in this run: the badge says why
-        state.condition = DemandCondition::Failed;
-        state.jobFailure = true;
-        state.calculationTitles = failedTitles;
-        state.reason = failedReasons.join(QStringLiteral("; "));
-    } else if (allNotApplicable) {
+        return failedTrack(sessionId, failedTitles, failures);
+    } else if (allRefused) {
         // The executor said there is nothing to run for any of them
-        state.condition = DemandCondition::NotApplicable;
+        learnColumnVerdict();
+        track.condition = DemandCondition::NotApplicable;
     } else {
-        state.condition = DemandCondition::Waiting;
-        state.calculationTitles = titles;
+        track.condition = DemandCondition::Waiting;
+        track.calculationTitles = titles;
     }
-    return state;
+    return track;
 }
 
-// ---- Column demand ------------------------------------------------------------------------
-
-// Call under a RowStabilityGuard: `session` is a row of the model read in place.
-// One report per column, combined over the column's names (two for a Delta):
-// a value that needs both names exists only when both do.
-QVector<BlockerReport> CalculationDemand::columnReports(const SessionData &session,
-                                                       const QVector<ColumnInfo> &columns)
-{
-    using State = BlockerReport::State;
-    QVector<BlockerReport> reports;
-    reports.reserve(columns.size());
-    auto &engine = session.calculationEngine();
-
-    for (const ColumnInfo &column : columns) {
-        bool notApplicable = false;
-        bool notProduced = false;
-        bool blocked = false;
-        BlockerReport combined;
-        QSet<QString> seenBlockers;
-        QSet<QString> seenNotes;
-        for (const DependencyKey &name : column.names) {
-            const BlockerReport report = engine.blockers(name);
-            switch (report.state) {
-            case State::Available:
-                break;
-            case State::NotApplicable:
-                notApplicable = true;
-                break;
-            case State::NotProduced:
-                notProduced = true;
-                for (const UnproducedNote &note : report.notProduced) {
-                    if (!seenNotes.contains(note.calculation.instanceId)) {
-                        seenNotes.insert(note.calculation.instanceId);
-                        combined.notProduced.append(note);
-                    }
-                }
-                break;
-            case State::Blocked:
-                blocked = true;
-                for (const CalculationBlocker &blocker : report.blockers) {
-                    if (!seenBlockers.contains(blocker.instanceId)) {
-                        seenBlockers.insert(blocker.instanceId);
-                        combined.blockers.append(blocker);
-                    }
-                }
-                break;
-            }
-        }
-
-        if (notApplicable) {
-            combined = BlockerReport();
-            combined.state = State::NotApplicable;
-        } else if (notProduced) {
-            combined.state = State::NotProduced;
-            combined.blockers.clear();
-        } else if (blocked) {
-            combined.state = State::Blocked;
-            combined.notProduced.clear();
-        } else {
-            combined = BlockerReport();
-            combined.state = State::Available;
-        }
-        reports.append(combined);
-    }
-    return reports;
-}
-
-// The one guarded read of column demand. It reads only: it writes this
-// component's memos and settlements, and emits, offers, pins and loads nothing.
-// `running` is the executor's running record before the offers; `held` is a
-// copy of the fill's holds.
-CalculationDemand::ColumnWalk CalculationDemand::walkColumns(const JobRecord &running, const QSet<QString> &held)
-{
-    ColumnWalk walk;
-    const int columns = int(m_columns.size());
-    walk.states.resize(columns);
-    walk.pendingCells.resize(columns);
-
-    PairKey runningKey;
-    if (running.id != 0 && !running.cancelRequested)
-        runningKey = PairKey(running.sessionId, running.instanceId);
-
-    // Adds one cell to the column's tallies
-    const auto tally = [&walk](int column, const QString &sessionId, const DemandTrack &track) {
-        walk.states[column].addTrack(track);
-        if (isPending(track.condition)) {
-            walk.pendingCells[column].insert(sessionId);
-            walk.pendingSessions.insert(sessionId);
-        }
-    };
-
-    const SessionModel &model = *m_sessionModel;
-    const SessionModel::RowStabilityGuard guard(model);
-    const int rows = model.rowCount();
-    for (int row = 0; row < rows; ++row) {
-        const SessionRow &sr = model.rowAt(row);
-        const QString &sessionId = sr.sessionId;
-
-        if (sr.isLoaded() && !sr.loadFailed) {
-            // Blocker inspection, memoized per session until its engine state
-            // may have changed
-            auto memo = m_columnReports.find(sessionId);
-            if (memo == m_columnReports.end() || memo->size() != columns)
-                memo = m_columnReports.insert(sessionId, columnReports(sr.session.value(), m_columns));
-            const QVector<BlockerReport> &reports = memo.value();
-
-            QList<Candidate> &tier = sr.visible ? walk.visibleCandidates : walk.hiddenCandidates;
-            QString name;
-            for (int c = 0; c < columns; ++c) {
-                const ColumnInfo &column = m_columns.at(c);
-                DemandTrack track = classify(Track{sessionId, QString()}, reports.at(c), running);
-                if (isListed(track.condition)) {
-                    if (name.isEmpty())
-                        name = model.sessionDisplayName(row);
-                    track.sessionName = name;
-                }
-
-                // The last final verdict outlives the session's eviction
-                const CellKey cell(sessionId, column.id);
-                if (isFinal(track.condition)) {
-                    m_settled.insert(cell, Settlement{track.condition, track.calculationTitles,
-                                                      track.reason, track.jobFailure});
-                } else {
-                    m_settled.remove(cell);
-                }
-
-                if (track.condition == DemandCondition::Waiting && !m_settle->isSettling(sessionId)) {
-                    for (const CalculationBlocker &blocker : reports.at(c).blockers) {
-                        const PairKey key(sessionId, blocker.instanceId);
-                        if (key == runningKey || m_memory.contains(key))
-                            continue;
-                        tier.append(Candidate{sessionId, blocker});     // deduplicated by the pass
-                    }
-                }
-                tally(c, sessionId, track);
-            }
-        } else {
-            // Not loaded, or a failed-load placeholder: no engine is asked
-            m_columnReports.remove(sessionId);
-            bool waiting = false;
-            for (int c = 0; c < columns; ++c) {
-                const DemandTrack track = classifyUnloaded(row, sr, m_columns.at(c));
-                if (track.condition == DemandCondition::Waiting)
-                    waiting = true;
-                tally(c, sessionId, track);
-            }
-            // A visible stub is the visible loader's
-            if (waiting && !sr.visible && !m_settle->isSettling(sessionId) && !held.contains(sessionId)
-                && walk.loadCandidates.size() < DemandFill::kMaxHeldSessions)
-                walk.loadCandidates.append(sessionId);
-        }
-    }
-    return walk;
-}
-
-// Call under a RowStabilityGuard. An engine that holds no stored result is
-// never asked, and no record is opened: see WHERE A RESULT IS LOOKED UP.
-DemandTrack CalculationDemand::classifyUnloaded(int row, const SessionRow &sr, const ColumnInfo &column)
+// Call under the walk's RowStabilityGuard. An engine that holds no stored
+// result is never asked, and no record is opened: see WHERE A RESULT IS
+// LOOKED UP. The memory is read before the manager.
+DemandTrack CalculationDemand::classifyUnloaded(const SessionRow &sr, const Source &source,
+                                                QList<LearnedFact> *learned)
 {
     DemandTrack track;
     track.sessionId = sr.sessionId;
     const QString &sessionId = sr.sessionId;
 
     // 1. Nothing the column needs can be stored
-    if (column.storable.isEmpty()) {
+    if (source.storable.isEmpty()) {
         track.condition = DemandCondition::NotApplicable;
         return track;
     }
 
-    // 2. The last final verdict of this run
-    const CellKey cell(sessionId, column.id);
-    const auto settled = m_settled.constFind(cell);
-    if (settled != m_settled.constEnd()) {
-        track.condition = settled->condition;
-        track.calculationTitles = settled->titles;
-        track.reason = settled->reason;
-        track.jobFailure = settled->jobFailure;
-        if (isListed(track.condition))
-            track.sessionName = m_sessionModel->sessionDisplayName(row);
-        return track;
-    }
-
-    // 3. A record of every calculation the cell needs: a result, failed when
-    //    a record carries a reason
-    const QSet<QString> &records = recordSet(sessionId);
-    const bool everyRecord = std::all_of(column.storable.cbegin(), column.storable.cend(),
-                                         [&records](const QString &id) { return records.contains(id); });
-    if (everyRecord) {
-        const QHash<QString, QString> reasons = m_recordReasons.value(sessionId);
-        for (int i = 0; i < column.storable.size(); ++i) {
-            const QString reason = reasons.value(column.storable.at(i));
-            if (reason.isEmpty())
-                continue;
-            track.calculationTitles.append(column.storableTitles.at(i));
-            if (track.reason.isEmpty())
-                track.reason = QStringLiteral("%1: %2").arg(column.storableTitles.at(i), reason);
-        }
-        if (track.reason.isEmpty()) {
-            track.condition = DemandCondition::Done;
-        } else {
-            track.condition = DemandCondition::Failed;
-            track.sessionName = m_sessionModel->sessionDisplayName(row);
-        }
-        return track;
-    }
-
-    // 4. and 5. What this run remembers of the pairs
+    // 2. and 3. What this run remembers of the pairs
     QStringList failedTitles;
-    QStringList failedReasons;
+    QList<const PairMemory *> failures;
     bool allNotApplicable = true;
-    for (int i = 0; i < column.storable.size(); ++i) {
-        const auto memory = m_memory.constFind(PairKey(sessionId, column.storable.at(i)));
-        if (memory != m_memory.constEnd() && memory->kind == Memory::Kind::JobFailed) {
-            failedTitles.append(column.storableTitles.at(i));
-            failedReasons.append(memory->reason);
+    for (int i = 0; i < source.storable.size(); ++i) {
+        const PairMemory *memory = remembered(sessionId, source.storable.at(i));
+        if (memory && memory->kind == PairMemory::Kind::Failed) {
+            failedTitles.append(source.storableTitles.at(i));
+            failures.append(memory);
         }
-        if (memory == m_memory.constEnd() || memory->kind != Memory::Kind::NotApplicable)
+        if (!notApplicableFor(memory, source.id))
             allNotApplicable = false;
     }
-    if (!failedReasons.isEmpty()) {
-        track.condition = DemandCondition::Failed;
-        track.jobFailure = true;
-        track.calculationTitles = failedTitles;
-        track.reason = failedReasons.join(QStringLiteral("; "));
-        track.sessionName = m_sessionModel->sessionDisplayName(row);
-        return track;
-    }
+    if (!failures.isEmpty())
+        return failedTrack(sessionId, failedTitles, failures);
     if (allNotApplicable) {
         track.condition = DemandCondition::NotApplicable;
         return track;
     }
 
-    // 6. A failed-load placeholder, visible or hidden: nothing retries its
-    //    load in this run, so it is settled rather than left pending
-    if (sr.isLoaded() && sr.loadFailed) {
-        const Settlement failed = loadFailedSettlement();
-        m_settled.insert(cell, failed);
-        track.condition = failed.condition;
-        track.reason = failed.reason;
-        track.jobFailure = failed.jobFailure;
-        track.sessionName = m_sessionModel->sessionDisplayName(row);
+    // 4. A record of every calculation the cell needs: a result, failed when
+    //    a record carries a reason
+    const QSet<QString> &records = recordSet(sessionId);
+    const bool everyRecord = std::all_of(source.storable.cbegin(), source.storable.cend(),
+                                         [&records](const QString &id) { return records.contains(id); });
+    if (everyRecord) {
+        const QHash<QString, QString> reasons = m_recordReasons.value(sessionId);
+        for (int i = 0; i < source.storable.size(); ++i) {
+            const QString reason = reasons.value(source.storable.at(i));
+            if (reason.isEmpty())
+                continue;
+            track.calculationTitles.append(source.storableTitles.at(i));
+            if (track.reason.isEmpty())
+                track.reason = QStringLiteral("%1: %2").arg(source.storableTitles.at(i), reason);
+        }
+        track.condition = track.reason.isEmpty() ? DemandCondition::Done : DemandCondition::Failed;
         return track;
     }
 
-    // 7. In demand: the column fill loads it
+    // 5. A failed-load placeholder, visible or hidden: nothing retries its
+    //    load in this run, so it is remembered failed rather than left
+    //    pending. The track is exactly what rule 2 gives once the facts are
+    //    applied, so the next pass announces nothing.
+    if (sr.isLoaded() && sr.loadFailed) {
+        const PairMemory failed = PairMemory::failed(PairMemory::Origin::Load, loadFailureReason());
+        QList<const PairMemory *> facts;
+        for (const QString &id : source.storable) {
+            learned->append(LearnedFact{sessionId, id, failed});
+            facts.append(&failed);
+        }
+        return failedTrack(sessionId, source.storableTitles, facts);
+    }
+
+    // 6. In demand: the column fill loads it
     track.condition = DemandCondition::Waiting;
     return track;
-}
-
-// A load that failed: a job-level failure, settled for the run (see SETTLEMENTS)
-CalculationDemand::Settlement CalculationDemand::loadFailedSettlement()
-{
-    return Settlement{DemandCondition::Failed, {}, tr("The session file could not be loaded"), true};
 }
 
 // The manager is asked once per session between changes of its records (a
@@ -779,25 +681,87 @@ const QSet<QString> &CalculationDemand::recordSet(const QString &sessionId)
     return m_recordSets.insert(sessionId, ids).value();
 }
 
-// O(columns): settlements exist for the columns of m_columns only (syncColumns()
-// erases those of a column that leaves).
-bool CalculationDemand::eraseSettlements(const QString &sessionId)
+// ---- The pair memory ------------------------------------------------------------------
+
+const CalculationDemand::PairMemory *CalculationDemand::remembered(const QString &sessionId,
+                                                                   const QString &calculationId) const
 {
-    bool erased = false;
-    for (const ColumnInfo &column : std::as_const(m_columns)) {
-        if (m_settled.remove(CellKey(sessionId, column.id)))
-            erased = true;
+    const auto session = m_memory.constFind(sessionId);
+    if (session == m_memory.constEnd())
+        return nullptr;
+    const auto fact = session->constFind(calculationId);
+    return fact == session->constEnd() ? nullptr : &fact.value();
+}
+
+bool CalculationDemand::blocksOffer(const PairMemory *memory)
+{
+    return memory && (memory->kind == PairMemory::Kind::Failed || memory->origin == PairMemory::Origin::Refused);
+}
+
+bool CalculationDemand::notApplicableFor(const PairMemory *memory, const QString &columnId)
+{
+    return memory && memory->kind == PairMemory::Kind::NotApplicable
+        && (memory->origin == PairMemory::Origin::Refused || memory->columns.contains(columnId));
+}
+
+void CalculationDemand::remember(const QString &sessionId, const QString &calculationId, const PairMemory &fact)
+{
+    QHash<QString, PairMemory> &facts = m_memory[sessionId];
+    const auto known = facts.find(calculationId);
+    if (known == facts.end()) {
+        facts.insert(calculationId, fact);
+        return;
     }
-    return erased;
+
+    PairMemory &memory = known.value();
+    if (fact.kind == PairMemory::Kind::Failed) {
+        memory = fact;
+    } else if (fact.origin == PairMemory::Origin::Refused) {
+        if (memory.kind != PairMemory::Kind::Failed)
+            memory = fact;
+    } else if (memory.origin == PairMemory::Origin::ColumnVerdict) {
+        memory.columns.unite(fact.columns);
+    }
+}
+
+bool CalculationDemand::forgetSession(const QString &sessionId, Forget which)
+{
+    if (which == Forget::Everything)
+        return m_memory.remove(sessionId);
+
+    const auto session = m_memory.find(sessionId);
+    if (session == m_memory.end())
+        return false;
+    const qsizetype forgotten = session->removeIf([](QHash<QString, PairMemory>::iterator it) {
+        return it.value().origin == PairMemory::Origin::Load;
+    });
+    if (session->isEmpty())
+        m_memory.erase(session);
+    return forgotten > 0;
+}
+
+bool CalculationDemand::forgetPair(const QString &sessionId, const QString &calculationId)
+{
+    const auto session = m_memory.find(sessionId);
+    if (session == m_memory.end())
+        return false;
+    const bool forgotten = session->remove(calculationId);
+    if (session->isEmpty())
+        m_memory.erase(session);
+    return forgotten;
 }
 
 // A load that failed: not held, and not loaded again in this run; the
 // placeholder stays in the pool and is evicted as usual
 void CalculationDemand::onFillLoadFailed(const QString &sessionId)
 {
-    const Settlement failed = loadFailedSettlement();
-    for (const ColumnInfo &column : std::as_const(m_columns))
-        m_settled.insert(CellKey(sessionId, column.id), failed);
+    const PairMemory failed = PairMemory::failed(PairMemory::Origin::Load, loadFailureReason());
+    for (const Source &source : std::as_const(m_sources)) {
+        if (source.kind != Source::Kind::Column)
+            continue;
+        for (const QString &id : source.storable)
+            remember(sessionId, id, failed);
+    }
     scheduleUpdate();
 }
 
@@ -808,8 +772,8 @@ void CalculationDemand::onFillLoaded(const QString &requestedId, const QString &
         // moved its records there
         m_recordSets.remove(requestedId);
         m_recordReasons.remove(requestedId);
-        m_columnReports.remove(requestedId);
-        eraseSettlements(requestedId);
+        m_reports.remove(requestedId);
+        forgetSession(requestedId, Forget::Everything);
     }
     scheduleUpdate();       // sessionLoaded scheduled a pass already
 }
@@ -834,65 +798,101 @@ void CalculationDemand::runLoadStep()
     m_fill->step();
 }
 
-// ---- The choice -------------------------------------------------------------------------
+// ---- The walk and the choice -------------------------------------------------------------
 
-// Tier (a), the focused track's pairs, then tier (b), the other tracks' pairs in
-// row order. Within a session: plot-model order, then the report's blocker
-// order (upstream first), each pair once.
-// `running` is the executor's running record the walk used.
-QList<CalculationDemand::Candidate> CalculationDemand::plotCandidates(const Inspections &inspections,
-                                                                      const QString &focusedId,
-                                                                      const JobRecord &running) const
+// The one guarded read of the component. For each row and each source whose
+// tracks include it: the track is classified, tallied and, for a loaded
+// session, its report's blockers are filed by tier. Everything returned is a
+// plain value, so that nothing is offered, withdrawn, loaded, pinned or
+// emitted while the guard is held; the walk writes the report and record-set
+// memos only, and the facts it learns go to the pass. blockers() may compute
+// on-demand values; that reads, it neither loads nor evicts.
+CalculationDemand::Walk CalculationDemand::walkRows(const JobRecord &running, const QSet<QString> &held,
+                                                    const QString &focusedId)
 {
-    QList<Candidate> candidates;
-    if (!m_queue)
-        return candidates;
-
-    // The plots in plot-model order, and the tracks in row order (every
-    // inspected plot has the same tracks)
-    QStringList plots;
-    for (const QString &id : m_checkedOrder) {
-        if (inspections.contains(id))
-            plots.append(id);
-    }
-    if (plots.isEmpty())
-        return candidates;
-    QStringList sessions;
-    for (const Inspection &inspection : inspections.value(plots.first()))
-        sessions.append(inspection.track.sessionId);
-    if (sessions.contains(focusedId)) {
-        sessions.removeOne(focusedId);
-        sessions.prepend(focusedId);
-    }
+    Walk walk;
+    const int sources = int(m_sources.size());
+    walk.states.resize(sources);
+    walk.pendingCells.resize(sources);
 
     PairKey runningKey;
     if (running.id != 0 && !running.cancelRequested)
         runningKey = PairKey(running.sessionId, running.instanceId);
 
-    QSet<PairKey> seen;
-    for (const QString &sessionId : std::as_const(sessions)) {
-        if (m_settle->isSettling(sessionId))
-            continue;       // offered once its inputs have been still for the whole wait
-        for (const QString &plot : std::as_const(plots)) {
-            for (const Inspection &inspection : inspections.value(plot)) {
-                if (inspection.track.sessionId != sessionId)
-                    continue;
-                if (inspection.report.state != BlockerReport::State::Blocked)
-                    break;
-                for (const CalculationBlocker &blocker : inspection.report.blockers) {
-                    const PairKey key(sessionId, blocker.instanceId);
-                    if (seen.contains(key))
-                        continue;
-                    seen.insert(key);
-                    if (m_memory.contains(key) || key == runningKey)
-                        continue;
-                    candidates.append(Candidate{sessionId, blocker});
+    const SessionModel &model = *m_sessionModel;
+    const SessionModel::RowStabilityGuard guard(model);
+    const int rows = model.rowCount();
+    for (int row = 0; row < rows; ++row) {
+        const SessionRow &sr = model.rowAt(row);
+        const QString &sessionId = sr.sessionId;
+        const bool loaded = sr.isLoaded() && !sr.loadFailed;
+        const bool settling = m_settle->isSettling(sessionId);
+        QString name;                   // read for the row's first listed track
+        bool named = false;
+        bool waiting = false;           // a column track of a row that is not loaded is waiting
+        QHash<QString, BlockerReport> *reports = nullptr;
+        if (!loaded)
+            m_reports.remove(sessionId);
+
+        for (int s = 0; s < sources; ++s) {
+            const Source &source = m_sources.at(s);
+            const bool isPlot = source.kind == Source::Kind::Plot;
+            // A plot's tracks are the rows the plot widget draws
+            if (isPlot && !(loaded && sr.visible))
+                continue;
+
+            DemandTrack track;
+            if (loaded) {
+                // Blocker inspection, memoized per session until its engine
+                // state may have changed
+                if (!reports)
+                    reports = &m_reports[sessionId];
+                auto memo = reports->find(source.id);
+                if (memo == reports->end())
+                    memo = reports->insert(source.id, combinedReport(sr.session.value(), source));
+                const BlockerReport &report = memo.value();
+                track = classifyLoaded(sessionId, source, report, running, &walk.learned);
+
+                // Every blocker that may be offered, whatever the track's
+                // condition; a settling session is offered once its inputs
+                // have been still for the whole wait
+                if (report.state == BlockerReport::State::Blocked && !settling) {
+                    const Walk::Tier tier = isPlot ? (sessionId == focusedId ? Walk::FocusedPlots : Walk::OtherPlots)
+                                                   : (sr.visible ? Walk::VisibleColumns : Walk::HiddenColumns);
+                    for (const CalculationBlocker &blocker : report.blockers) {
+                        if (PairKey(sessionId, blocker.instanceId) == runningKey
+                            || blocksOffer(remembered(sessionId, blocker.instanceId)))
+                            continue;
+                        walk.tiers[tier].append(Candidate{sessionId, blocker});
+                    }
                 }
-                break;      // one inspection per (plot, session)
+            } else {
+                // Not loaded, or a failed-load placeholder: no engine is asked
+                track = classifyUnloaded(sr, source, &walk.learned);
+                if (track.condition == DemandCondition::Waiting)
+                    waiting = true;
+            }
+
+            if (isListed(track.condition)) {
+                if (!named) {
+                    name = model.sessionDisplayName(row);
+                    named = true;
+                }
+                track.sessionName = name;
+            }
+            walk.states[s].addTrack(track);
+            if (!isPlot && isPending(track.condition)) {
+                walk.pendingCells[s].insert(sessionId);
+                walk.pendingSessions.insert(sessionId);
             }
         }
+
+        // A visible stub is the visible loader's
+        if (waiting && !sr.visible && !settling && !held.contains(sessionId)
+            && walk.loadCandidates.size() < DemandFill::kMaxHeldSessions)
+            walk.loadCandidates.append(sessionId);
     }
-    return candidates;
+    return walk;
 }
 
 // Keeps the executor's chosen next job equal to the first candidate it
@@ -905,7 +905,6 @@ void CalculationDemand::offerChoice(const QList<Candidate> &candidates)
         return;
 
     for (const Candidate &candidate : candidates) {
-        const PairKey key(candidate.sessionId, candidate.calculation.instanceId);
         const JobQueue::OfferResult result = m_queue->offer(candidate.sessionId, candidate.calculation);
         switch (result.kind) {
         case Kind::Created:
@@ -920,10 +919,11 @@ void CalculationDemand::offerChoice(const QList<Candidate> &candidates)
         case Kind::NothingToDo:
         case Kind::UnknownCalculation:
             // There will never be a job for it in this run, unless its
-            // session's inputs change. Column cells were classified before
-            // the offers: the next pass classifies them with the memory. It
-            // cannot repeat this, since a remembered pair is not offered.
-            m_memory.insert(key, Memory{Memory::Kind::NotApplicable, QString()});
+            // session's inputs change. Every track was classified in the walk,
+            // before the offers: the next pass classifies them with the
+            // memory. It cannot repeat this, since a refused pair is not
+            // offered.
+            remember(candidate.sessionId, candidate.calculation.instanceId, PairMemory::refused());
             scheduleUpdate();
             continue;
         case Kind::Blocked:
@@ -966,18 +966,6 @@ void CalculationDemand::flush()
 bool CalculationDemand::hasPendingUpdate() const
 {
     return m_updateTimer.isActive();
-}
-
-// Aggregates one inspected source. `tracks` are in row order.
-DemandState CalculationDemand::buildState(const QString &sourceId, const QList<DemandTrack> &tracks) const
-{
-    DemandState state;
-    state.sourceId = sourceId;
-    state.requested = true;
-    for (const DemandTrack &track : tracks)
-        state.addTrack(track);
-    state.finish();
-    return state;
 }
 
 // Stores the new states and announces the differences. `order` lists the
@@ -1030,12 +1018,14 @@ void CalculationDemand::applyStates(const QStringList &order, const QHash<QStrin
         emit statesChanged();
 }
 
-// The one pass: every path that reconciles runs it. Plot classifications are
-// not cached across passes: the engine's own caches make a repeated blockers()
-// cheap, and a cache keyed on dependencyChanged would be wrong (after A
-// publishes, the blocker of B's output changes from A to B although B's output
-// may not be re-announced). Column reports are memoized per loaded session and
-// dropped by every signal after which they may differ, a job's end included.
+// The one pass: every path that reconciles runs it. One walk classifies every
+// track, tallies every state and files every candidate under one guard; the
+// offers, the fill, the memory and the signals come after it. The reports it
+// reads are memoized per loaded session (see WHAT A PASS COSTS): any
+// dependency change of the session drops its whole entry, and so do a job's
+// end and a load, so the publication of A drops the report of B's output
+// whose blocker changes from A to B, although B's output may not be
+// re-announced.
 void CalculationDemand::recompute()
 {
     m_updateTimer.stop();
@@ -1058,38 +1048,39 @@ void CalculationDemand::recompute()
             withdrawChoice();
         } else {
             syncCheckedSet();
-            syncColumns();
+            syncSources();
 
-            // Ordinary plots and columns cost nothing: sessions are not even
-            // enumerated for them
-            const QVector<PlotValue> plots = inspectedPlots();
-            const Inspections inspections = inspect(plots);
-
-            // Cells are classified before the offers: an offer never starts a
-            // job synchronously, so Running cannot change in between, and a
-            // refused offer schedules the pass that classifies with it
+            // Read before the guard. Every track is classified before the
+            // offers: an offer never starts a job synchronously, so Running
+            // cannot change in between, and a refused offer schedules the
+            // pass that classifies with it.
             const JobRecord running = m_queue->job(m_queue->runningJob());
-            ColumnWalk walk;
-            if (!m_columns.isEmpty()) {
-                const QStringList held = m_fill->heldSessionIds();
-                walk = walkColumns(running, QSet<QString>(held.cbegin(), held.cend()));
-            }
-            // The guards are gone: from here on the session model and the
+            const QStringList held = m_fill->heldSessionIds();
+            const QString focused = m_sessionModel->focusedSessionId();
+            // Ordinary plots and columns cost nothing: with no source, rows
+            // are not even walked
+            const Walk walk = m_sources.isEmpty()
+                ? Walk()
+                : walkRows(running, QSet<QString>(held.cbegin(), held.cend()), focused);
+
+            // The facts change no track of this pass (a NotApplicable or
+            // NotProduced track stays so, and a placeholder's track is already
+            // the one the facts give), so no further pass is needed
+            for (const LearnedFact &learned : walk.learned)
+                remember(learned.sessionId, learned.calculationId, learned.fact);
+
+            // The guard is gone: from here on the session model and the
             // executor may be called. The fill releases its holds, takes the
             // load candidates and wakes the scheduler when its work changed.
             const bool shutDown = m_queue->isShutDown();
             m_fill->update(walk.pendingSessions, shutDown ? QStringList() : walk.loadCandidates);
 
             if (!shutDown) {
-                // Tiers (a) and (b), then (c): visible sessions, then hidden
-                // loaded ones. A pair is listed in its first tier only.
-                QList<Candidate> candidates = plotCandidates(inspections, m_sessionModel->focusedSessionId(),
-                                                             running);
+                // The tiers in order. A pair is listed in its first tier only.
+                QList<Candidate> candidates;
                 QSet<PairKey> listed;
-                for (const Candidate &candidate : std::as_const(candidates))
-                    listed.insert(PairKey(candidate.sessionId, candidate.calculation.instanceId));
-                for (const QList<Candidate> *tier : {&walk.visibleCandidates, &walk.hiddenCandidates}) {
-                    for (const Candidate &candidate : *tier) {
+                for (const QList<Candidate> &tier : walk.tiers) {
+                    for (const Candidate &candidate : tier) {
                         const PairKey key(candidate.sessionId, candidate.calculation.instanceId);
                         if (listed.contains(key))
                             continue;
@@ -1100,29 +1091,21 @@ void CalculationDemand::recompute()
                 offerChoice(candidates);
             }
 
-            // After the offers: the executor's jobs as they are now
-            if (!plots.isEmpty()) {
-                const JobRecord runningNow = m_queue->job(m_queue->runningJob());
-                for (const PlotValue &plot : plots) {
-                    const QString id = plotId(plot);
-                    QList<DemandTrack> tracks;
-                    const QList<Inspection> inspected = inspections.value(id);
-                    for (const Inspection &inspection : inspected)
-                        tracks.append(classify(inspection.track, inspection.report, runningNow));
-                    order.append(id);
-                    states.insert(id, buildState(id, tracks));
-                }
-            }
-
-            for (int c = 0; c < m_columns.size(); ++c) {
-                const QString &id = m_columns.at(c).id;
-                DemandState state = walk.states.at(c);
-                state.sourceId = id;
+            // A plot source without a track has the requested, all-zero state
+            for (int s = 0; s < m_sources.size(); ++s) {
+                const Source &source = m_sources.at(s);
+                DemandState state = walk.states.value(s);
+                state.sourceId = source.id;
                 state.requested = true;
                 state.finish();
-                columnOrder.append(id);
-                columnStates.insert(id, state);
-                pendingCells.insert(id, walk.pendingCells.at(c));
+                if (source.kind == Source::Kind::Plot) {
+                    order.append(source.id);
+                    states.insert(source.id, state);
+                } else {
+                    columnOrder.append(source.id);
+                    columnStates.insert(source.id, state);
+                    pendingCells.insert(source.id, walk.pendingCells.value(s));
+                }
             }
         }
     }
@@ -1183,8 +1166,8 @@ void CalculationDemand::onPlotCheckStateChanged()
 // a stub: it is an input change like any other.
 void CalculationDemand::onDependencyChanged(const QString &sessionId, const DependencyKey &key)
 {
-    // The session's engine state changed: its column reports are inspected again
-    m_columnReports.remove(sessionId);
+    // The session's engine state changed: its reports are inspected again
+    m_reports.remove(sessionId);
 
     // Only the static closure of the checked requested plots and of the
     // requested columns matters: any other edit neither delays nor retries
@@ -1203,9 +1186,10 @@ void CalculationDemand::onDependencyChanged(const QString &sessionId, const Depe
     }
 
     // An input change: whatever was remembered for the session may be
-    // possible now, and the session waits until its inputs are still
-    m_memory.removeIf([&sessionId](QHash<PairKey, Memory>::iterator it) { return it.key().first == sessionId; });
-    eraseSettlements(sessionId);
+    // possible now, and the session waits until its inputs are still. This
+    // is the only clearing of a session that is not loaded: no display
+    // change of the model is observed.
+    forgetSession(sessionId, Forget::Everything);
     m_settle->start(sessionId);
     scheduleUpdate();
 }
@@ -1224,14 +1208,15 @@ void CalculationDemand::onVisibilityChanged(const QSet<QString> &, const QSet<QS
 // columns and rows.
 void CalculationDemand::onSessionModelAboutToBeReset()
 {
-    m_columnReports.clear();
+    m_reports.clear();
     m_recordSets.clear();
     m_recordReasons.clear();
 }
 
 // A sort resets the model too: only the ids that no longer have a row are
-// forgotten, so that a job failure is not retried and a settled session is not
-// loaded again on every sort. A column change resets the model as well.
+// forgotten, so that a failure is not retried and a session found not
+// applicable is not loaded again on every sort. A column change resets the
+// model as well.
 void CalculationDemand::onSessionModelReset()
 {
     // Again: a pass between the two signals read the rows mid-reset
@@ -1245,24 +1230,38 @@ void CalculationDemand::onSessionModelReset()
         for (int row = 0; row < rows; ++row)
             ids.insert(model.rowAt(row).sessionId);
 
-        m_memory.removeIf([&ids](QHash<PairKey, Memory>::iterator it) { return !ids.contains(it.key().first); });
+        m_memory.removeIf([&ids](QHash<QString, QHash<QString, PairMemory>>::iterator it) {
+            return !ids.contains(it.key());
+        });
         m_settle->keepOnly(ids);
-        m_settled.removeIf([&ids](QHash<CellKey, Settlement>::iterator it) { return !ids.contains(it.key().first); });
     }
     scheduleUpdate();
 }
 
 // Inside a record method (a write, a removal, a skip, possibly from an engine
-// listener): only drops state and schedules.
+// listener): only drops state and schedules. A record change of the pair
+// forgets what was remembered of it: a later successful write clears a write
+// that failed. On the failing write itself this comes first, and the
+// write-failed announcement that follows remembers the failure.
 void CalculationDemand::onCalculationRecordsChanged(const QString &sessionId, const QString &calculationId)
 {
     m_recordSets.remove(sessionId);
     m_recordReasons.remove(sessionId);
-    m_columnReports.remove(sessionId);
-    for (const ColumnInfo &column : std::as_const(m_columns)) {
-        if (column.calculations.contains(calculationId))
-            m_settled.remove(CellKey(sessionId, column.id));
-    }
+    m_reports.remove(sessionId);
+    forgetPair(sessionId, calculationId);
+    scheduleUpdate();
+}
+
+// Inside the engine's explicit-result listener: only records and schedules.
+// The result is installed but its record could not be written: a failure of
+// this run, not offered again until the session's inputs change.
+void CalculationDemand::onCalculationRecordWriteFailed(const QString &sessionId, const QString &calculationId,
+                                                       const QString &reason)
+{
+    const QString title = CalculationRegistry::instance().title(calculationId);
+    remember(sessionId, calculationId,
+             PairMemory::failed(PairMemory::Origin::Write,
+                                (title.isEmpty() ? calculationId : title) + QStringLiteral(": ") + reason));
     scheduleUpdate();
 }
 
@@ -1271,12 +1270,13 @@ void CalculationDemand::onJobFinished(JobId id, JobState state)
     // Read first: the record may be trimmed once this slot has returned
     const JobRecord record = m_queue ? m_queue->job(id) : JobRecord();
     if (record.id != 0)
-        m_columnReports.remove(record.sessionId);
+        m_reports.remove(record.sessionId);
     if (state == JobState::Failed && record.id != 0) {
         // Not a function of the inputs, and not stored: not offered again in
         // this run unless the session's inputs change
-        m_memory.insert(PairKey(record.sessionId, record.instanceId),
-                        Memory{Memory::Kind::JobFailed, record.calculationTitle + QStringLiteral(": ") + record.reason});
+        remember(record.sessionId, record.instanceId,
+                 PairMemory::failed(PairMemory::Origin::Job,
+                                    record.calculationTitle + QStringLiteral(": ") + record.reason));
     }
 
     // An end caused by this component's own offer or withdrawal
@@ -1333,11 +1333,10 @@ void CalculationDemand::onRegistryChanged()
 {
     m_requested.clear();
     m_staticNames.clear();
+    // What a source needs follows the registrations: the next pass reads it
+    // again
     m_memory.clear();
-    // What a column needs follows the registrations: the next pass reads it
-    // from the session model
-    m_settled.clear();
-    m_columnReports.clear();
+    m_reports.clear();
     scheduleUpdate();
 }
 

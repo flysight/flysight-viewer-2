@@ -18,7 +18,7 @@ enum class DemandCondition {
     Done,           ///< the value is available (a result exists): nothing to compute
     Waiting,        ///< in demand, not running (inside the input-settle wait, chosen next, or behind other work)
     Running,        ///< the executor's running job, not asked to stop, is one of its calculations
-    Failed,         ///< an input-determined failure (NotProduced) or a job-level failure remembered this run
+    Failed,         ///< an input-determined failure (NotProduced), or a failure remembered this run: a job that failed, a session that could not be loaded, a result that could not be stored
     NotApplicable   ///< unavailable for ordinary reasons, or refused as not applicable: silently absent
 };
 
@@ -29,7 +29,7 @@ struct DemandTrack {
     DemandCondition condition = DemandCondition::NotApplicable;
     QStringList calculationTitles;  ///< Waiting/Running: the blockers' titles; Failed: what did not produce / what failed
     QString reason;                 ///< Failed only; never empty
-    bool jobFailure = false;        ///< Failed only: the job failed (not stored; retried at the next start)
+    bool jobFailure = false;        ///< Failed only: not a stored result (a job that failed, a load that failed, a record that could not be written); tried again at the next start
     QString progressText;           ///< Running only: the running job's latest progress text
 
     bool operator==(const DemandTrack &other) const

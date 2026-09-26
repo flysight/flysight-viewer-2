@@ -766,7 +766,7 @@ expect_none("the fill and the settle clock never call the executor"
 # They expose nothing of the walk: session ids in, session ids and times out.
 # Allow: none expected.
 expect_none("the fill and the settle clock know nothing of the walk"
-  "BlockerReport|blockers\\(|DemandTrack|DemandState|DemandCondition|RowStabilityGuard|Settlement"
+  "BlockerReport|blockers\\(|DemandTrack|DemandState|DemandCondition|RowStabilityGuard|PairMemory|LearnedFact"
   "src/demandfill.*" "src/demandsettleclock.*")
 # One bound of simultaneous jobs, and the load bound follows it: the running
 # job's session and the chosen next job's (docs/CALCULATIONS.md 16.8).

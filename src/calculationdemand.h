@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <QVector>
 
+#include <array>
 #include <memory>
 
 #include "dependencykey.h"
@@ -55,105 +56,109 @@ struct SessionRow;
 /// session is hidden, so plots have no track; enabled requested columns create
 /// demand at once.
 ///
-/// WHERE A RESULT IS LOOKED UP. For a loaded session: the engine's blocker
-/// inspection of the plot's y name, DependencyKey::measurement(sensorID,
-/// measurementID), or of the column's names (logbookColumnNames(): one, two
-/// for a Delta, combined: any NotApplicable, else any NotProduced, else any
-/// Blocked, else Available). For a session that is not loaded (and a
-/// failed-load placeholder, whose engine holds no stored result): the logbook
-/// manager's record set (LogbookManager::knownCalculationRecords()) and the
-/// reasons the index recorded for those records
-/// (LogbookManager::calculationRecordReason()); a record is never opened. A
-/// cell has a result only when every calculation it needs has a record
-/// (explicit family instances are never stored, so a column over them alone
-/// is not applicable to a session that is not loaded); a record with a reason
-/// is a failed result with that reason, after a restart as before it. A known
-/// record counts until the column worker's restore finds it stale and deletes
-/// it; that record change moves the cell into demand. In order, for a session
-/// that is not loaded: no storable calculation - not applicable; a
-/// settlement (below) - its verdict; every record known - done, or failed
-/// with the first recorded reason; a remembered job failure - failed; every
-/// calculation remembered not applicable - not applicable; a failed-load
-/// placeholder - settled failed ("The session file could not be loaded");
-/// otherwise waiting.
+/// WHERE A RESULT IS LOOKED UP. Every source (a checked requested plot, an
+/// enabled requested column) has its names: the plot's y name,
+/// DependencyKey::measurement(sensorID, measurementID), or the column's
+/// logbookColumnNames() (one, two for a Delta); and its storable requested
+/// calculations: for a plot CalculationRegistry::explicitDependencies() of its
+/// y name, for a column SessionModel::columnRequestedCalculations(), each
+/// without the explicit family instances, which are never stored. For a loaded
+/// session: the engine's blocker inspection of the source's names, combined
+/// (any NotApplicable, else any NotProduced, else any Blocked, else
+/// Available); a plot's single name combines to itself. For a session that is
+/// not loaded (and a failed-load placeholder, whose engine holds no stored
+/// result), a track of columns only, in this order:
+///  1. no storable calculation - not applicable (a column over explicit
+///     family instances alone);
+///  2. a storable calculation remembered failed (see MEMORY: a job-level
+///     failure, a failed load, a write that failed, an unstored result) -
+///     failed with the remembered reasons;
+///  3. every storable calculation remembered not applicable for the column
+///     (refused, or this column's verdict) - not applicable;
+///  4. every storable calculation with a record in the logbook manager's
+///     record set (LogbookManager::knownCalculationRecords()) - done, or
+///     failed with the first reason the index recorded for those records
+///     (LogbookManager::calculationRecordReason()); a record is never opened,
+///     and a record with a reason is a failed result after a restart as
+///     before it;
+///  5. a failed-load placeholder - failed ("The session file could not be
+///     loaded"), remembered for the source's storable calculations as a
+///     failed load;
+///  6. otherwise waiting.
+/// Rules 2 and 3 read the memory only; the manager is asked in rule 4 alone.
+/// A known record counts until the column worker's restore finds it stale and
+/// deletes it; that record change moves the cell into demand.
 ///
 /// TRACK CONDITIONS. Each track of a loaded session is classified from its
-/// BlockerReport, the executor's running and chosen next jobs, the memory and
-/// the settle set:
+/// combined BlockerReport, the executor's running job and the memory:
 ///
-///   BlockerReport               executor / memory / settle set          condition
-///   Available                                                           Done
-///   NotApplicable                                                       NotApplicable
-///   NotProduced                                                         Failed (reason from the notes)
-///   Blocked   a blocker is the running job, not asked to stop           Running
-///   Blocked   otherwise, a blocker has a remembered job failure         Failed (job failure)
-///   Blocked   otherwise, every blocker is remembered not applicable     NotApplicable
-///   Blocked   otherwise                                                 Waiting
+///   BlockerReport               executor / memory                         condition
+///   Available                   no storable calculation remembered failed  Done
+///   Available                   a storable calculation remembered failed   Failed (a result that could not be stored)
+///   NotApplicable                                                          NotApplicable
+///   NotProduced                                                            Failed (reason from the notes)
+///   Blocked   a blocker is the running job, not asked to stop              Running
+///   Blocked   otherwise, a blocker has a remembered failure                Failed
+///   Blocked   otherwise, every blocker is remembered refused               NotApplicable
+///   Blocked   otherwise                                                    Waiting
 ///
 /// A Blocked report's notes are ignored: Blocked wins. There is no "stale"
 /// condition - a result invalidated by an input change reports Blocked again.
 /// The x axis of a plot is not inspected: every time axis of a sensor produced
 /// by an explicit calculation is produced by that calculation or derived on
 /// demand from its outputs, so y available implies x available. Debug builds
-/// check that for every plot track classified Done (a warning when a time axis
-/// of the plot's sensor is Blocked); release builds do not. Every count is a
-/// function of the current tracks: wanted = every track that is not
+/// check that for every plot report that is Available (a warning when a time
+/// axis of the plot's sensor is Blocked); release builds do not. Every count is
+/// a function of the current tracks: wanted = every track that is not
 /// NotApplicable, done = Done + Failed. A cell is PENDING while it is Waiting
 /// or Running.
 ///
-/// SETTLEMENTS. Per cell (session, column), for this run only: the last final
-/// verdict (done, failed, not applicable) of a loaded session's cell, recorded
-/// in every pass and erased when the cell is no longer final, and the failure
-/// of a load ("The session file could not be loaded", a job-level failure).
-/// For a session that is not loaded a settlement comes before the record set.
-/// Without it, a session loaded for column demand whose cell ended without a
-/// record (not applicable, an exception, a failed record write, a job-level
-/// failure, a failed load) would be loaded again after its eviction, without
-/// end. Cleared: for a session, by its relevant input change (a bulk edit
-/// publishes one); for a cell, by a record change of one of the column's
-/// calculations; for a column, when it leaves the enabled requested set;
-/// everything by a registry change; a reset of the session model forgets the
-/// ids that no longer have a row (a sort resets the model too). Multi-row
-/// changes (the unit system, the environment check) clear nothing.
-///
-/// WHAT A PASS COSTS. CalculationEngine::blockers() is called only for
-/// (checked AND requested plots) x (tracks) - names the plot widget reads for
-/// the same tracks anyway - and for the requested columns of loaded sessions
-/// whose memo was dropped (an input change or publication, a load, a record
-/// change, a job's end). A plot is REQUESTED when
+/// WHAT A PASS COSTS. CalculationEngine::blockers() is called only for the
+/// tracks of the sources - a plot's tracks are visible loaded sessions, names
+/// the plot widget reads for the same tracks anyway - and only when a loaded
+/// session's report memo lacks the source. Every source's combined report is
+/// memoized per loaded session and dropped by every event after which it may
+/// differ: any dependency change of the session (an input change, a
+/// publication, a bulk edit), its load, a record change of it, a job's end, a
+/// reset of the session model and a registry change; the walk drops the memo
+/// of a row that is not loaded. The memo is keyed per session, not per name:
+/// after A publishes, the blocker of B's output may change from A to B although
+/// B's output is not re-announced, and A's publication drops B's report with
+/// the rest of the session's. A plot is REQUESTED when
 /// CalculationRegistry::dependsOnExplicit() says so for its y name: any name
 /// in the static dependency closure (which looks through source conversions)
 /// has a candidate with explicit policy. That is a pure, memoized function of
 /// the registrations, and exact: a plot that is not requested can never report
 /// a blocker, so it is never inspected, its state is the default value, and no
 /// signal is ever emitted for it. The same holds for a column that is not
-/// requested. With requested columns, a pass costs O(rows) plus O(rows x
-/// requested columns) hash lookups, and one manager lookup per unloaded
-/// session between changes of its records; with none, rows are not even
-/// walked. Sessions are read in place under one RowStabilityGuard per pass
-/// (SessionModel::loadedSession(), SessionModel::rowAt()): nothing is loaded,
-/// evicted, or touched in the LRU by a pass. Plot classifications are not
-/// cached across passes; passes are coalesced to one per event-loop pass.
+/// requested. With sources, a pass costs O(rows x sources) hash lookups, and
+/// one manager lookup per unloaded session between changes of its records;
+/// with none, rows are not even walked. Sessions are read in place under one
+/// RowStabilityGuard per pass (SessionModel::loadedSession(),
+/// SessionModel::rowAt()): nothing is loaded, evicted, or touched in the LRU
+/// by a pass. Passes are coalesced to one per event-loop pass.
 ///
-/// THE CHOICE. Every pass lists the candidates in priority order: (a) the pairs
-/// of the focused session, when it is a plot track; (b) the plot pairs of the
-/// other tracks in row order; (c) the column pairs of every loaded session
+/// THE CHOICE. The walk files the candidates by tier as it goes: (a) the plot
+/// pairs of the focused session, when it is a plot track; (b) the plot pairs of
+/// the other tracks in row order; (c) the column pairs of every loaded session
 /// (not a placeholder): first the visible ones in row order, then the hidden
 /// ones (the pool, and the sessions the column fill has loaded) in row order.
-/// Within a session, plot-model (column) order, then the report's blocker
-/// order (upstream first). A pair is listed once, in its first tier. A pair is
-/// not a candidate while it is remembered, while it is the running job not
-/// asked to stop, or while its session is settling. A session that is not
-/// loaded is never offered: it enters tier (c) once the fill has loaded it.
-/// Each candidate is offered in turn: the first the executor creates is the
-/// chosen next job, and one it answers AlreadyActive for as the chosen next
-/// job is kept as it is; one it refuses as not applicable (missing input,
-/// nothing to do, unknown calculation) is remembered, a pass is scheduled (the
-/// column cells were classified before the offers), and the next is tried.
-/// Blocked is not expected: the candidates list upstream first. With no
-/// candidate accepted, the chosen next job is withdrawn: this component is the
-/// only offerer, so it is always its own. The running job is never stopped
-/// here: it finishes, and its result is published and stored.
+/// Within a session, source order (plot-model order, then column order), then
+/// the report's blocker order (upstream first). Every blocker of a Blocked
+/// report is filed, whatever the track's condition. A pair is listed once, in
+/// its first tier. A pair is not a candidate while a failure or a refusal is
+/// remembered for it, while it is the running job not asked to stop, or while
+/// its session is settling. A session that is not loaded is never offered: it
+/// enters tier (c) once the fill has loaded it. Each candidate is offered in
+/// turn: the first the executor creates is the chosen next job, and one it
+/// answers AlreadyActive for as the chosen next job is kept as it is; one it
+/// refuses as not applicable (missing input, nothing to do, unknown
+/// calculation) is remembered as refused, a pass is scheduled (every track was
+/// classified in the walk, before the offers), and the next is tried. Blocked
+/// is not expected: the candidates list upstream first. With no candidate
+/// accepted, the chosen next job is withdrawn: this component is the only
+/// offerer, so it is always its own. The running job is never stopped here: it
+/// finishes, and its result is published and stored.
 ///
 /// HIDDEN LOADS. The column fill (demandfill.h) loads sessions that are not
 /// loaded for column demand. The pass gives it the sessions with a pending
@@ -169,21 +174,56 @@ struct SessionRow;
 /// job. Showing, hiding, checking, enabling, applying a profile and loading
 /// start no wait. The clock (demandsettleclock.h) holds the deadlines.
 ///
-/// MEMORY. Per pair, for this run only: a job that ended Failed (the worker
-/// could not start, out of memory; never stored) with its reason, and an offer
-/// the executor refused as not applicable. A remembered pair is not offered
-/// again. The memory of a session is cleared by its input change; all memory
-/// by a registry change; a reset of the session model forgets the ids that no
-/// longer have a row (a sort resets the model too). Input-determined failures
-/// are results (stored) and need no memory. Nothing is persisted: a new
-/// component (the next start of the application) tries again.
+/// MEMORY. One memory of this run, keyed by pair (session id, requested
+/// calculation instance id); there is no other memory of a verdict, and a
+/// track's verdict is always derived: for a loaded session from the engine and
+/// the memory, for one that is not loaded from the memory and the record set.
+/// A pair is remembered in one of two kinds:
+///  - Not applicable, not shown: the executor refused an offer of the pair
+///    (missing input, nothing to do, unknown calculation); or a loaded
+///    column's value was found not applicable, and every storable calculation
+///    of that column is remembered so FOR THAT COLUMN ONLY. The engine reports
+///    a name not applicable whenever one input is missing, even when the
+///    requested calculation behind it can run (a column over a marker the
+///    session lacks, beside a column over the same calculation's output), so
+///    the column's verdict is read only by rule 3 of that column for a session
+///    that is not loaded: it never makes another source's track not applicable
+///    and never keeps a pair from being offered. Plots remember no verdict:
+///    they have no track that is not loaded.
+///  - Failed, with its reason, shown with the warning badge: a job that ended
+///    Failed (the worker could not start, out of memory); a load of the
+///    session that failed ("The session file could not be loaded", the fill's
+///    load or a failed-load placeholder); a record that the result store could
+///    not write (SessionModel::calculationRecordWriteFailed, "<title>:
+///    <reason>"); a result the engine holds that is never stored (a
+///    NotProduced note of a storable calculation whose status is not Ok, a
+///    computation that threw), which would otherwise run again after every
+///    eviction.
+/// Failures and refusals keep a pair from being offered, and they are what a
+/// loaded session's classification reads; the column verdict is neither. A
+/// failure replaces whatever was remembered; a refusal replaces a column
+/// verdict. Cleared: for a session, by a relevant dependency change of it (a
+/// bulk edit publishes one), and its failed-load facts by a load of it that
+/// succeeds; for a pair, by a record change of the pair (a later successful
+/// write clears a failed one); everything by a registry change; a reset of the
+/// session model forgets the sessions that no longer have a row (a sort resets
+/// the model and forgets nothing else). Nothing else clears it: no display
+/// change of the session model is observed, so the column worker's processing
+/// of a stub clears nothing, and multi-row changes (the unit system, the
+/// environment check) clear nothing. Input-determined failures that are stored
+/// are results and need no memory. Every storable calculation of a source is
+/// assumed to have a record once its track is done (the registrations give
+/// every output of a requested calculation one candidate). Nothing is
+/// persisted: a new component (the next start of the application) tries
+/// again.
 ///
 /// WHEN A PASS RUNS. Scheduled (a zero-interval timer) by: a check change of
 /// the PlotModel and its reset; SessionModel::visibilityChanged, sessionLoaded,
 /// modelChanged, focusedSessionChanged, modelReset (which a column change
-/// causes), and a relevant dependencyChanged (a bulk edit publishes one);
-/// LogbookManager::calculationRecordsChanged (a record written or removed, or
-/// a changed reason the index learned); the executor's jobStarted
+/// causes), a relevant dependencyChanged (a bulk edit publishes one) and
+/// calculationRecordWriteFailed; LogbookManager::calculationRecordsChanged (a
+/// record written or removed, or a changed reason the index learned); the
+/// executor's jobStarted
 /// and jobCancelRequested; a registry change; the end of a settle wait; the
 /// column fill's load; an offer the executor refused as not applicable. At
 /// once: when a plot is unchecked or a session hidden while a chosen next job
@@ -214,9 +254,11 @@ struct SessionRow;
 /// session is settling and when the next wait ends. This file is the
 /// reconciler: the walk, the classification, the memory, the choice and the
 /// pass. The walk reads the rows under one guard, asks the clock and reads a
-/// copy of the holds. It calls neither the executor nor the fill, and it never
-/// loads or pins. After it, the pass gives the fill the pending sessions and
-/// the load candidates, offers, and announces.
+/// copy of the holds; it returns every state, candidate and learned fact as
+/// plain values. It calls neither the executor nor the fill, it never loads,
+/// pins or emits, and it writes nothing but its memos. After it, the pass
+/// applies the learned facts to the memory, gives the fill the pending
+/// sessions and the load candidates, offers, and announces.
 ///
 /// LIFETIME. Main thread only. No member may be called from inside a
 /// calculation or an engine callback (they inspect engines and offer to the
@@ -304,53 +346,88 @@ signals:
 
 private:
     using PairKey = QPair<QString, QString>;        // (session id, instance id)
-    using CellKey = QPair<QString, QString>;        // (session id, column id)
 
-    /// What this run remembers of a pair.
-    struct Memory {
-        enum class Kind { NotApplicable, JobFailed } kind = Kind::NotApplicable;
-        QString reason;                             ///< JobFailed: "<title>: <JobRecord::reason>"
+    /// One source of demand (see WHAT IS WANTED): a checked requested plot or an enabled
+    /// requested logbook column. Rebuilt at the start of every pass.
+    struct Source {
+        enum class Kind {
+            Plot,       ///< tracks: visible, loaded rows that are not failed-load placeholders; pairs in tiers (a)/(b)
+            Column      ///< tracks: every row, loaded or not; pairs of loaded rows in tier (c)
+        };
+        Kind kind = Kind::Column;
+        QString id;                     ///< plotId() or columnId()
+        QList<DependencyKey> names;     ///< what inspection reads: {y name} or logbookColumnNames()
+        QStringList storable;           ///< requested calculations without explicit family instances ('#'), in the authority's order
+        QStringList storableTitles;     ///< parallel to storable: the registry's titles (the id when a title is empty)
+        QString sensorId;               ///< Plot only: the sensor whose time axes the debug check reads
     };
+
+    /// What this run remembers of one pair (see MEMORY). Plain data; built by
+    /// the factories below, so that kind and origin always match.
+    struct PairMemory {
+        enum class Kind {
+            NotApplicable,  ///< there is nothing to run for it: not shown
+            Failed          ///< shown with the warning badge and `reason`
+        };
+        enum class Origin {
+            Refused,        ///< NotApplicable: the executor refused an offer of the pair
+            ColumnVerdict,  ///< NotApplicable: `columns` found the loaded session not applicable
+            Result,         ///< Failed: the engine held a result of the pair that is never stored (status not Ok)
+            Job,            ///< Failed: the pair's job ended Failed
+            Load,           ///< Failed: the session file could not be loaded
+            Write           ///< Failed: the result's record could not be written
+        };
+        Kind kind = Kind::NotApplicable;
+        Origin origin = Origin::Refused;
+        QString reason;             ///< Failed only: the text shown, "<title>: <why>" or the load text; never empty
+        QSet<QString> columns;      ///< ColumnVerdict only: the ids of the columns that found it so
+
+        static PairMemory refused() { return PairMemory(); }
+        static PairMemory columnVerdict(const QString &columnId)
+        {
+            PairMemory fact;
+            fact.origin = Origin::ColumnVerdict;
+            fact.columns.insert(columnId);
+            return fact;
+        }
+        /// `origin` is Result, Job, Load or Write.
+        static PairMemory failed(Origin origin, const QString &reason)
+        {
+            Q_ASSERT(origin != Origin::Refused && origin != Origin::ColumnVerdict);
+            PairMemory fact;
+            fact.kind = Kind::Failed;
+            fact.origin = origin;
+            fact.reason = reason;
+            return fact;
+        }
+    };
+    /// A fact the walk learned, applied after the walk (the walk writes memos only).
+    struct LearnedFact {
+        QString sessionId;
+        QString calculationId;
+        PairMemory fact;
+    };
+    /// What forgetSession() forgets of a session.
+    enum class Forget {
+        Everything,     ///< every fact of the session
+        LoadFailures    ///< its failed-load facts only
+    };
+
     /// One pair the executor may be offered.
     struct Candidate {
         QString sessionId;
         CalculationBlocker calculation;
     };
 
-    struct Track {
-        QString sessionId;
-        QString sessionName;
-    };
-    /// What one guarded inspection returns for one (plot, track): plain values.
-    struct Inspection {
-        Track track;
-        BlockerReport report;
-    };
-    using Inspections = QHash<QString, QList<Inspection>>;      // by plot id, tracks in row order
-
-    /// One requested enabled logbook column.
-    struct ColumnInfo {
-        QString id;                          // columnId()
-        QList<DependencyKey> names;          // logbookColumnNames(): what inspection reads
-        QStringList calculations;            // E(c) as SessionModel::columnRequestedCalculations() gives it
-        QStringList storable;                // E(c) without explicit family instances (ids containing '#')
-        QStringList storableTitles;          // parallel to storable: the registry's titles
-    };
-    /// The last final verdict of a cell (see SETTLEMENTS).
-    struct Settlement {
-        DemandCondition condition = DemandCondition::Done;
-        QStringList titles;
-        QString reason;
-        bool jobFailure = false;
-    };
-    /// What one column walk returns: plain values, built under one guard.
-    struct ColumnWalk {
-        QList<Candidate> visibleCandidates;         // tier (c), visible sessions, row order
-        QList<Candidate> hiddenCandidates;          // tier (c), hidden loaded sessions, row order
-        QStringList loadCandidates;                 // at most DemandFill::kMaxHeldSessions, row order
-        QSet<QString> pendingSessions;              // sessions with a pending cell
-        QVector<DemandState> states;                // parallel to m_columns (counts and listed tracks)
-        QVector<QSet<QString>> pendingCells;        // parallel to m_columns
+    /// What the one walk returns: plain values, built under one guard.
+    struct Walk {
+        enum Tier { FocusedPlots, OtherPlots, VisibleColumns, HiddenColumns, TierCount };
+        std::array<QList<Candidate>, TierCount> tiers;  // each in row order; deduplicated by the pass
+        QVector<DemandState> states;                    // parallel to m_sources: counts and listed tracks, not finished
+        QVector<QSet<QString>> pendingCells;            // parallel to m_sources; empty for plots
+        QSet<QString> pendingSessions;                  // sessions with a pending column cell
+        QStringList loadCandidates;                     // at most DemandFill::kMaxHeldSessions, row order
+        QList<LearnedFact> learned;                     // applied by the pass after the walk
     };
 
     // Which plots and columns matter
@@ -359,53 +436,70 @@ private:
     /// In the static closure of a checked requested plot, or of a requested
     /// column (read from the session model).
     bool isRelevantName(const DependencyKey &key);
-    QVector<PlotValue> inspectedPlots();            // checked AND requested, in plot-model order
-    void syncColumns();
+    /// Rebuilds m_sources: the checked requested plots in plot-model order,
+    /// then the requested enabled columns in the session model's column order.
+    void syncSources();
+    /// Fills storable and storableTitles from `calculations`.
+    static void setStorable(Source &source, const QStringList &calculations);
     bool isInert() const;
 
     // Inspection and classification
-    Inspections inspect(const QVector<PlotValue> &plots) const;
-    /// Call under a RowStabilityGuard (inspect() holds it).
-    BlockerReport inspectUnderGuard(const SessionData &session, const PlotValue &plot) const;
+    /// The source's names inspected and combined for a loaded session. Call
+    /// under the walk's RowStabilityGuard.
+    static BlockerReport combinedReport(const SessionData &session, const Source &source);
+    /// A loaded row that is not a placeholder (see TRACK CONDITIONS).
     /// `running` is the executor's running record (a default record when
-    /// there is none).
-    DemandTrack classify(const Track &track, const BlockerReport &report, const JobRecord &running) const;
+    /// there is none). Facts learned go to `learned`.
+    DemandTrack classifyLoaded(const QString &sessionId, const Source &source, const BlockerReport &report,
+                               const JobRecord &running, QList<LearnedFact> *learned) const;
+    /// A column track whose row is not loaded or is a failed-load placeholder
+    /// (see WHERE A RESULT IS LOOKED UP). Call under the walk's guard. Facts
+    /// learned go to `learned`.
+    DemandTrack classifyUnloaded(const SessionRow &sr, const Source &source, QList<LearnedFact> *learned);
+    /// A Failed track from remembered failures: `titles` and `facts` are
+    /// parallel. The reason is the distinct reasons joined by "; " in order;
+    /// jobFailure is true unless every fact's origin is Result.
+    static DemandTrack failedTrack(const QString &sessionId, const QStringList &titles,
+                                   const QList<const PairMemory *> &facts);
+    /// "<title>: <detail>" of one note, with a default detail.
+    static QString noteReason(const UnproducedNote &note);
     static QString failureReason(const QList<UnproducedNote> &notes);
-
-    // Column demand
-    /// The one guarded read of the column demand. Writes this component's
-    /// memos and settlements only. `running` is the executor's running record
-    /// before the offers; `held` is a copy of the fill's holds.
-    ColumnWalk walkColumns(const JobRecord &running, const QSet<QString> &held);
-    /// The combined report of each requested column for a loaded session.
-    /// Call under a RowStabilityGuard.
-    static QVector<BlockerReport> columnReports(const SessionData &session, const QVector<ColumnInfo> &columns);
-    /// The rules for a session that is not loaded (see WHERE A RESULT IS
-    /// LOOKED UP). Call under a RowStabilityGuard.
-    /// `row` is the row of `sr` (its display name).
-    DemandTrack classifyUnloaded(int row, const SessionRow &sr, const ColumnInfo &column);
-    /// The settlement of every cell of a session whose load failed.
-    static Settlement loadFailedSettlement();
+    static QString loadFailureReason();
     /// The manager's record set of a session, memoized with its reasons.
     const QSet<QString> &recordSet(const QString &sessionId);
-    bool eraseSettlements(const QString &sessionId);    // true when one was erased
-    /// The fill's hooks: a load that failed is settled failed for every
+
+    // The pair memory
+    /// What is remembered of the pair; null when nothing. O(1).
+    const PairMemory *remembered(const QString &sessionId, const QString &calculationId) const;
+    /// A failure or a refusal: the pair is not offered, and a loaded
+    /// session's classification reads it.
+    static bool blocksOffer(const PairMemory *memory);
+    /// Refused, or found not applicable by the column `columnId`.
+    static bool notApplicableFor(const PairMemory *memory, const QString &columnId);
+    /// The one writer: a failure replaces anything; a refusal replaces a
+    /// column verdict; a column verdict unites into one and is kept out by
+    /// anything else. Never schedules.
+    void remember(const QString &sessionId, const QString &calculationId, const PairMemory &fact);
+    bool forgetSession(const QString &sessionId, Forget which);    // true when something was forgotten
+    bool forgetPair(const QString &sessionId, const QString &calculationId);
+
+    /// The fill's hooks: a load that failed is remembered failed for every
     /// requested column; a load under a corrected id drops what was known
     /// under the old one.
     void onFillLoadFailed(const QString &sessionId);
     void onFillLoaded(const QString &requestedId, const QString &heldId);
 
-    // The choice
-    /// `running` is the record the walk used.
-    QList<Candidate> plotCandidates(const Inspections &inspections, const QString &focusedId,
-                                    const JobRecord &running) const;
+    // The walk and the choice
+    /// The one guarded read of the component (see PARTS). `running` is the
+    /// executor's running record before the offers; `held` is a copy of the
+    /// fill's holds; `focusedId` the session model's focused session.
+    Walk walkRows(const JobRecord &running, const QSet<QString> &held, const QString &focusedId);
     void offerChoice(const QList<Candidate> &candidates);
     void withdrawChoice();
 
     // The pass
     void scheduleUpdate();
     void recompute();
-    DemandState buildState(const QString &sourceId, const QList<DemandTrack> &tracks) const;
     void applyStates(const QStringList &order, const QHash<QString, DemandState> &states,
                      const QStringList &columnOrder, const QHash<QString, DemandState> &columnStates,
                      const QHash<QString, QSet<QString>> &pendingCells);
@@ -418,6 +512,8 @@ private:
     void onSessionModelAboutToBeReset();
     void onSessionModelReset();
     void onCalculationRecordsChanged(const QString &sessionId, const QString &calculationId);
+    void onCalculationRecordWriteFailed(const QString &sessionId, const QString &calculationId,
+                                        const QString &reason);
     void onJobFinished(JobId id, JobState state);
     void onJobProgress(JobId id, const QString &text);
     void onRegistryChanged();
@@ -434,21 +530,22 @@ private:
     QHash<QString, bool> m_requested;                       // memo, by plot id
     QHash<QString, QSet<DependencyKey>> m_staticNames;      // memo, by plot id
 
-    QHash<QString, DemandState> m_states;                   // inspected plots only
-    QHash<PairKey, Memory> m_memory;                        // this run's job failures and refusals
+    // The sources as the last pass found them (a per-pass copy)
+    QVector<Source> m_sources;                              // plots in plot-model order, then columns in SessionModel column order
+    // memo: a loaded session's combined report per source id. A plot id and a
+    // column id never collide (a column id starts with its type and '|').
+    QHash<QString, QHash<QString, BlockerReport>> m_reports;
+    /// Session id -> requested calculation instance id -> what this run remembers.
+    /// Keyed by pair; nested so that a session's facts are found in O(1).
+    QHash<QString, QHash<QString, PairMemory>> m_memory;
 
-    // Column demand
-    // The requested enabled columns as the session model reported them at the
-    // start of the last pass, in its column order: a per-pass copy
-    QVector<ColumnInfo> m_columns;
+    QHash<QString, DemandState> m_states;                   // requested checked plots only
     QHash<QString, DemandState> m_columnStates;             // requested columns only, by column id
     QHash<QString, QSet<QString>> m_pendingCells;           // column id -> sessions whose cell is pending
     bool m_hasPendingCells = false;                         // some set of m_pendingCells is not empty
-    QHash<CellKey, Settlement> m_settled;                   // see SETTLEMENTS
     QHash<QString, QSet<QString>> m_recordSets;             // memo: knownCalculationRecords(), rows not loaded
     QHash<QString, QHash<QString, QString>> m_recordReasons; // memo beside it: calculationRecordReason(), non-empty
     int m_recordSetLookups = 0;
-    QHash<QString, QVector<BlockerReport>> m_columnReports; // memo: loaded sessions, parallel to m_columns
 
     // The parts: the input-settle wait's deadlines and the column fill
     std::unique_ptr<DemandSettleClock> m_settle;

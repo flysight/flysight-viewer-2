@@ -20,8 +20,9 @@ class SessionModel;
 /// column demand, releases a hold when its session has no pending cell or no
 /// loaded row, loads the next candidate when a hold is free and the scheduler
 /// steps it, reports progress as the sessions remaining of the high-water
-/// mark, loads nothing once the executor is shut down (the owner's `enabled`
-/// hook), and holds nothing once the component goes (detach()).
+/// mark, and holds nothing once the executor is shut down (the owner's
+/// `enabled` hook: nothing more is loaded, and the next update() releases
+/// every hold) or the component goes (detach()).
 ///
 /// It is the idle scheduler's lowest-priority task
 /// (SessionModel::ColumnFillTask, priority 5), registered by registerTask(). It
@@ -54,7 +55,8 @@ class SessionModel;
 ///  - a load that fails: not held; the owner's `loadFailed` hook remembers it
 ///    so that it is not a candidate again this run;
 ///  - the executor shut down: no work (the owner's `enabled` hook), nothing
-///    more is loaded.
+///    more is loaded, and every hold is released at the next update() (the
+///    executor's shutdown ends its jobs, and each end runs the owner's pass).
 /// Saves, visible loads, bulk edits and column work have a higher priority,
 /// so a load never reads a file that a bulk edit is about to rewrite.
 ///
@@ -90,7 +92,8 @@ public:
 
     /// After each pass: releases every hold whose row is gone or not loaded,
     /// or whose session is not in `pendingSessions` (every hold when the model
-    /// is gone); takes `loadCandidates` (row order, at most kMaxHeldSessions);
+    /// is gone or `enabled` is false); takes `loadCandidates` (row order, at
+    /// most kMaxHeldSessions);
     /// remaining = pendingSessions.size(), and the total is the high-water mark,
     /// started afresh when remaining rises from 0; wakes the scheduler when
     /// hasWork(), the counts, the candidates or the number of holds changed.
