@@ -357,33 +357,37 @@ void JobQueue::startNext()
                 outcome = session->calculationEngine().prepare(record.calculationId, record.instanceOutput);
             }
         }
+        // A job that ends before it starts ends this attempt: endJob() queues
+        // the next start (the chosen next job that the end's slots put in
+        // place), so a disagreement between an offer's readiness and prepare()
+        // costs one attempt per event-loop turn at most, never a loop.
         if (!loaded) {
             endJob(id, JobState::Superseded, tr("Session removed or unloaded"));
-            continue;
+            return;
         }
 
         using Kind = CalculationEngine::PrepareOutcome::Kind;
         switch (outcome.kind) {
         case Kind::NotFound:
             endJob(id, JobState::Superseded, tr("Calculation is no longer registered"));
-            continue;
+            return;
         case Kind::NotExplicit:
             endJob(id, JobState::Superseded, tr("Calculation is no longer requested explicitly"));
-            continue;
+            return;
         case Kind::AlreadyValid:
             endJob(id, JobState::Superseded, tr("Result is already available"));
-            continue;
+            return;
         case Kind::NothingToRun:
             // prepare() cached "nothing to run" as readiness() would; the names
             // it dropped are ours to pass on.
             endJob(id, JobState::Superseded, tr("Inputs changed: nothing to compute"),
                    std::nullopt, outcome.invalidated);
-            continue;
+            return;
         case Kind::Blocked:
             endJob(id, JobState::Superseded,
                    tr("Inputs changed: waiting for %1").arg(blockerTitles(outcome.blockers)),
                    std::nullopt, outcome.invalidated);
-            continue;
+            return;
         case Kind::Ready:
             break;      // `invalidated` is informational: no value changed
         }

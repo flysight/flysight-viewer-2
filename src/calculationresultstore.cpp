@@ -89,11 +89,10 @@ void CalculationResultStore::onExplicitResultEvent(const QString &sessionId, con
         // retried: the next Ok publish of the pair tries again.
         QString error;
         LogbookManager &logbook = LogbookManager::instance();
+        // The manager notes the record's reason in the index as it writes it
+        // (a rejection or a solver failure is an Ok result with a reason).
         if (logbook.writeCalculationRecord(sessionId, CalculationRecord::stamped(*snapshot), &error)) {
             ++m_stats.recordsWritten;
-            // The index notes what the record holds: a rejection or a solver
-            // failure is an Ok result with a reason
-            logbook.setCalculationRecordReason(sessionId, event.instanceId, snapshot->detail);
         } else {
             ++m_stats.writeFailures;
         }

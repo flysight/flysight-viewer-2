@@ -206,9 +206,13 @@ public:
     /// yet (a record of an earlier build, until its next restore), and when
     /// there is no record. Never opens a record.
     QString calculationRecordReason(const QString &sessionId, const QString &calculationId) const;
-    /// Records what a record holds. Called by the result store with the
-    /// record it has just written or just read. Emits nothing; marks the
-    /// index for a flush when the value changed.
+    /// Records what a record holds. Called by writeCalculationRecord() for
+    /// the record it has just written, and by the result store for each
+    /// record it has just read at a restore, which only the store can know.
+    /// The removal paths clear it: removeCalculationRecord() and
+    /// removeCalculationRecords() for each record they remove, removeSession()
+    /// for the whole session. Emits nothing; marks the index for a flush when
+    /// the value changed.
     void setCalculationRecordReason(const QString &sessionId, const QString &calculationId, const QString &reason);
     // Ids whose record may disagree with the loaded session's engine. Values
     // that depend on them are never written to index.json.

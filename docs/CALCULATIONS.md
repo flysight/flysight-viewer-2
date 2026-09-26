@@ -761,6 +761,11 @@ At start (`prepare()`); no compute ran and `startedAt` stays invalid:
 | `Blocked` | Superseded | "Inputs changed: waiting for %1", the blockers' titles (`invalidated` is published) |
 | `Ready` | runs | |
 
+A job that ends at start ends that attempt: the next chosen next job (one a
+slot of the end offered) is tried at the next turn of the event loop, never in
+the same call. Should an offer's readiness and `prepare()` ever disagree, that
+costs one attempt per turn at most, never a loop.
+
 When the worker has returned, in this order:
 
 | Condition | End state | Reason / extras |
@@ -1332,7 +1337,12 @@ Otherwise a pass is scheduled by:
 | `LogbookManager` | `calculationRecordsChanged` |
 | the executor | `jobStarted`, `jobCancelRequested`; `jobFinished` runs the pass at once; `jobProgress` updates texts only |
 | the registry | its observer call |
-| the demand layer | the end of a settle wait (16.5); a load of the column fill (16.8) |
+| the demand layer | the end of a settle wait (16.5); a load of the column fill (16.8); an offer refused as not applicable (16.7) |
+
+A session-model reset reaches the executor first, which may end a chosen next
+job whose session is gone; its `jobFinished` runs a pass at once. So the
+demand layer drops its column set and its memos on `modelAboutToBeReset`,
+before any of that, and the pass reads the new rows and columns.
 
 ### 16.4 Work follows demand
 
@@ -1457,7 +1467,10 @@ running job.
   memory is not persisted, so the next start of the application tries again.
 - **Not applicable.** An offer the executor refuses as `MissingInput`,
   `NothingToDo` or `UnknownCalculation` is remembered like a failure, the
-  track reads `NotApplicable`, and the memory clears the same way.
+  track reads `NotApplicable`, and the memory clears the same way. The refusal
+  schedules a pass: column cells are classified before the offers, so the
+  next pass is the one that reads the memory. A remembered pair is not offered
+  again, so this never repeats.
 - **Memory and resets.** A session-model reset (a sort resets the model)
   forgets only the entries of sessions that no longer have a row; a registry
   change forgets everything.
@@ -1561,12 +1574,20 @@ column worker, has the sessions of column demand loaded.
   - a calculation found not applicable after the load: settled without a job;
     the worker's cached "unavailable" stays;
   - the executor shut down: nothing more is loaded.
-- **A known cost.** A column whose value reaches a requested calculation only
-  through one of several candidates of an on-demand name would load each
-  session without a record once per run to find out. No registered column is
-  like this today (every fusion output has one candidate); if one appears, the
-  fix belongs to `CalculationRegistry::explicitDependencies()`, not to the
-  demand layer.
+- **Known costs.**
+  - A session without a record for which the calculation turns out not to
+    apply (for sensor fusion, a recording without IMU data) is loaded once
+    per run to find that out: "not applicable" is a settlement of the run
+    (16.7), not a record, so the next start loads it again. Until the fill
+    has loaded it, its cell is `Waiting` ("…"), counted in the column's
+    "k of n" and in the fill's progress; then it is not applicable, blank and
+    not counted.
+  - A column whose value reaches a requested calculation only through one of
+    several candidates of an on-demand name would load each session without
+    a record once per run to find out. No registered column is like this
+    today (every fusion output has one candidate); if one appears, the fix
+    belongs to `CalculationRegistry::explicitDependencies()`, not to the
+    demand layer.
 
 ### 16.9 API and threading rules
 

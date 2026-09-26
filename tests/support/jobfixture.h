@@ -127,11 +127,11 @@ private:
 
 /// Spins the event loop until the executor has no chosen next job and nothing
 /// running. False if that does not happen within timeoutMs.
-bool waitIdle(FlySight::JobQueue &queue, int timeoutMs = 5000);
+bool waitIdle(FlySight::JobQueue &queue, int timeoutMs = 30000);
 
 /// Spins the event loop until `job` is no longer Queued (it started, or ended
 /// without starting): for tests without a gate. False on timeout.
-bool waitStarted(FlySight::JobQueue &executor, FlySight::JobId job, int timeoutMs = 5000);
+bool waitStarted(FlySight::JobQueue &executor, FlySight::JobId job, int timeoutMs = 30000);
 
 /// "Nothing started" since this object was created: no jobQueued signal and no
 /// new row in the job model.

@@ -50,12 +50,11 @@ protected:
 private:
     QTreeView *treeView;
     SessionModel *model;
-    CalculationDemand *m_demand;
     QProgressBar *m_progressBar;
     QToolButton *m_cancelButton;
     int m_activeTaskId = -1;
 
-    void setupView();
+    void setupView(CalculationDemand *demand);
 };
 
 } // namespace FlySight

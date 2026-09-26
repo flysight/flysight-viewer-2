@@ -1254,6 +1254,7 @@
 505 tst_calculation_demand columnFailuresAreBadgedNotReloaded
 505 tst_calculation_demand notApplicableSessionIsSettledWithoutAJob
 505 tst_calculation_demand unloadableSessionIsSettledAsFailed
+505 tst_calculation_demand columnOfferRefusalIsNotLeftPending
 
 # 506 - (2) each component's contract can be stated without naming the others (section 12 gives the contracts)
 506 tst_calculation_demand nullCollaborators
@@ -1468,6 +1469,7 @@
 # 532 - (9) a session whose requested calculation turns out not to apply once loaded is settled as not applicable for the run without a job; its column value stays unavailable
 532 tst_calculation_demand notApplicableSessionIsSettledWithoutAJob
 532 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
+532 tst_calculation_demand columnOfferRefusalIsNotLeftPending
 532 tst_fusion_store columnOverFusionFillsUnloadedSessions
 
 # 533 - (9) the column worker is unchanged and never knows a job exists; a record written later drops the cached value and the loaded-row refresh computes the new one; cheap column values never wait for a requested calculation

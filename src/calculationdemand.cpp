@@ -95,7 +95,11 @@ CalculationDemand::CalculationDemand(SessionModel *sessionModel, PlotModel *plot
         });
         connect(m_sessionModel, &SessionModel::focusedSessionChanged, this,
                 [this](const QString &) { scheduleUpdate(); });
-        // A column change resets the model too (SessionModel::rebuildColumns)
+        // A column change resets the model too (SessionModel::rebuildColumns).
+        // The executor's reset slot runs first and may end a job, whose
+        // jobFinished runs a pass at once: the memos go before the reset.
+        connect(m_sessionModel, &QAbstractItemModel::modelAboutToBeReset,
+                this, &CalculationDemand::onSessionModelAboutToBeReset);
         connect(m_sessionModel, &QAbstractItemModel::modelReset, this, &CalculationDemand::onSessionModelReset);
         connect(m_sessionModel, &QAbstractItemModel::dataChanged, this, &CalculationDemand::onSessionDataChanged);
     }
@@ -167,10 +171,10 @@ bool CalculationDemand::isCellPending(const QString &sessionId, const QString &c
 }
 
 // Painted for every cell: the ids are computed on every call, so that a stale
-// mapping can never answer.
+// mapping can never answer. Nothing is computed while no cell is pending.
 bool CalculationDemand::isCellPending(int row, int column) const
 {
-    if (!m_sessionModel || row < 0 || row >= m_sessionModel->rowCount()
+    if (!m_hasPendingCells || !m_sessionModel || row < 0 || row >= m_sessionModel->rowCount()
         || column < 0 || column >= m_sessionModel->columnCount())
         return false;
     const SessionModel &model = *m_sessionModel;
@@ -730,7 +734,7 @@ DemandTrack CalculationDemand::classifyUnloaded(const SessionRow &sr, const Colu
     // 6. A failed-load placeholder, visible or hidden: nothing retries its
     //    load in this run, so it is settled rather than left pending
     if (sr.isLoaded() && sr.loadFailed) {
-        const Settlement failed{DemandCondition::Failed, {}, tr("The session file could not be loaded"), true};
+        const Settlement failed = loadFailedSettlement();
         m_settled.insert(cell, failed);
         track.condition = failed.condition;
         track.reason = failed.reason;
@@ -743,6 +747,12 @@ DemandTrack CalculationDemand::classifyUnloaded(const SessionRow &sr, const Colu
     track.condition = DemandCondition::Waiting;
     track.settling = isSettling(sessionId);
     return track;
+}
+
+// A load that failed: a job-level failure, settled for the run (see SETTLEMENTS)
+CalculationDemand::Settlement CalculationDemand::loadFailedSettlement()
+{
+    return Settlement{DemandCondition::Failed, {}, tr("The session file could not be loaded"), true};
 }
 
 // The manager is asked once per session between changes of its records
@@ -905,10 +915,9 @@ void CalculationDemand::runLoadStep()
     if (held.isEmpty()) {
         // Not held, and not loaded again in this run: the placeholder stays in
         // the pool and is evicted as usual
-        for (const ColumnInfo &column : std::as_const(m_columns)) {
-            m_settled.insert(CellKey(id, column.id),
-                             Settlement{DemandCondition::Failed, {}, tr("The session file could not be loaded"), true});
-        }
+        const Settlement failed = loadFailedSettlement();
+        for (const ColumnInfo &column : std::as_const(m_columns))
+            m_settled.insert(CellKey(id, column.id), failed);
         scheduleUpdate();
         return;
     }
@@ -1014,8 +1023,11 @@ void CalculationDemand::offerChoice(const QList<Candidate> &candidates)
         case Kind::NothingToDo:
         case Kind::UnknownCalculation:
             // There will never be a job for it in this run, unless its
-            // session's inputs change
+            // session's inputs change. Column cells were classified before
+            // the offers: the next pass classifies them with the memory. It
+            // cannot repeat this, since a remembered pair is not offered.
             m_memory.insert(key, Memory{Memory::Kind::NotApplicable, QString()});
+            scheduleUpdate();
             continue;
         case Kind::Blocked:
         case Kind::SessionNotLoaded:
@@ -1180,6 +1192,8 @@ void CalculationDemand::applyStates(const QStringList &order, const QHash<QStrin
     m_states = states;
     m_columnStates = columnStates;
     m_pendingCells = pendingCells;
+    m_hasPendingCells = std::any_of(pendingCells.cbegin(), pendingCells.cend(),
+                                    [](const QSet<QString> &cells) { return !cells.isEmpty(); });
 
     for (const QString &id : std::as_const(changedColumns))
         emit columnStateChanged(id);
@@ -1234,7 +1248,8 @@ void CalculationDemand::recompute()
             const Inspections inspections = inspect(plots);
 
             // Cells are classified before the offers: an offer never starts a
-            // job synchronously, so Running cannot change in between
+            // job synchronously, so Running cannot change in between, and a
+            // refused offer schedules the pass that classifies with it
             ColumnWalk walk;
             if (!m_columns.isEmpty()) {
                 walk = walkColumns(m_queue->job(m_queue->runningJob()),
@@ -1417,12 +1432,7 @@ void CalculationDemand::onDependencyChanged(const QString &sessionId, const Depe
 
     // An input change: whatever was remembered for the session may be
     // possible now, and the session waits until its inputs are still
-    for (auto it = m_memory.begin(); it != m_memory.end();) {
-        if (it.key().first == sessionId)
-            it = m_memory.erase(it);
-        else
-            ++it;
-    }
+    m_memory.removeIf([&sessionId](QHash<PairKey, Memory>::iterator it) { return it.key().first == sessionId; });
     eraseSettlements(sessionId);
     m_settleUntil.insert(sessionId, QDeadlineTimer(m_settleDelayMs));
     armSettleTimer();
@@ -1438,15 +1448,24 @@ void CalculationDemand::onVisibilityChanged(const QSet<QString> &, const QSet<QS
         scheduleUpdate();
 }
 
-// A sort resets the model too: only the ids that no longer have a row are
-// forgotten, so that a job failure is not retried and a settled session is not
-// loaded again on every sort. A column change resets the model as well.
-void CalculationDemand::onSessionModelReset()
+// Whatever a pass reads of the rows and the columns is read again: a pass that
+// runs inside the reset's delivery (the executor's jobFinished) sees the new
+// columns and rows.
+void CalculationDemand::onSessionModelAboutToBeReset()
 {
     m_columnsDirty = true;
     m_columnReports.clear();
     m_recordSets.clear();
     m_recordReasons.clear();
+}
+
+// A sort resets the model too: only the ids that no longer have a row are
+// forgotten, so that a job failure is not retried and a settled session is not
+// loaded again on every sort. A column change resets the model as well.
+void CalculationDemand::onSessionModelReset()
+{
+    // Again: a pass between the two signals read the rows mid-reset
+    onSessionModelAboutToBeReset();
 
     if (m_sessionModel) {
         const SessionModel &model = *m_sessionModel;
@@ -1456,24 +1475,10 @@ void CalculationDemand::onSessionModelReset()
         for (int row = 0; row < rows; ++row)
             ids.insert(model.rowAt(row).sessionId);
 
-        for (auto it = m_memory.begin(); it != m_memory.end();) {
-            if (!ids.contains(it.key().first))
-                it = m_memory.erase(it);
-            else
-                ++it;
-        }
-        for (auto it = m_settleUntil.begin(); it != m_settleUntil.end();) {
-            if (!ids.contains(it.key()))
-                it = m_settleUntil.erase(it);
-            else
-                ++it;
-        }
-        for (auto it = m_settled.begin(); it != m_settled.end();) {
-            if (!ids.contains(it.key().first))
-                it = m_settled.erase(it);
-            else
-                ++it;
-        }
+        m_memory.removeIf([&ids](QHash<PairKey, Memory>::iterator it) { return !ids.contains(it.key().first); });
+        m_settleUntil.removeIf(
+            [&ids](QHash<QString, QDeadlineTimer>::iterator it) { return !ids.contains(it.key()); });
+        m_settled.removeIf([&ids](QHash<CellKey, Settlement>::iterator it) { return !ids.contains(it.key().first); });
         armSettleTimer();
     }
     scheduleUpdate();

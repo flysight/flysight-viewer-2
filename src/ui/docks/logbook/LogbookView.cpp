@@ -20,8 +20,7 @@ namespace FlySight {
 LogbookView::LogbookView(SessionModel *model, CalculationDemand *demand, QWidget *parent)
     : QWidget(parent),
       treeView(new QTreeView(this)),
-      model(model),
-      m_demand(demand)
+      model(model)
 {
     QIcon closeIcon = style()->standardIcon(QStyle::SP_TitleBarCloseButton);
 
@@ -46,7 +45,7 @@ LogbookView::LogbookView(SessionModel *model, CalculationDemand *demand, QWidget
     layout->addLayout(progressLayout);
     setLayout(layout);
 
-    setupView();
+    setupView(demand);
 
     treeView->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(treeView, &QTreeView::customContextMenuRequested, this, &LogbookView::onContextMenuRequested);
@@ -70,13 +69,15 @@ QList<QModelIndex> LogbookView::selectedRows() const {
     return treeView->selectionModel()->selectedRows();
 }
 
-void LogbookView::setupView()
+// The demand layer is handed on, not kept: the header and the delegate hold
+// it weakly.
+void LogbookView::setupView(CalculationDemand *demand)
 {
     // The header before the model: the tree hands it the model and its sort
     // settings, and the lines below configure it
-    treeView->setHeader(new LogbookHeaderView(model, m_demand, treeView));
+    treeView->setHeader(new LogbookHeaderView(model, demand, treeView));
     treeView->setModel(model);
-    treeView->setItemDelegate(new LogbookCellDelegate(model, m_demand, treeView));
+    treeView->setItemDelegate(new LogbookCellDelegate(model, demand, treeView));
     treeView->setRootIsDecorated(false);
     treeView->header()->setDefaultSectionSize(100);
 
@@ -297,8 +298,6 @@ void LogbookView::onProgressChanged(int id, int remaining, int total)
         label = tr("Updating sessions: %v / %m");
         break;
     case SessionModel::ColumnTask:
-        label = tr("Computing columns: %v / %m");
-        break;
     case SessionModel::ColumnFillTask:
         // The same text on purpose: to the user a column fills in the
         // background the same way whether its values are cheap or requested

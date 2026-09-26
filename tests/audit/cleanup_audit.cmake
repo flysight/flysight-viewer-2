@@ -337,6 +337,11 @@ audit_group(solver-confinement)
 expect_only("GTSAM headers: kernel and its tests only" "#include <gtsam/"
   "^src/fusion/|^tests/(tst_solver_smoke\\.cpp|solverprobe\\.h|solver_deploy_probe\\.cpp|tst_fusion_kernel\\.cpp|fusion_golden_capture\\.cpp|README\\.md)$"
   src tests cmake)
+# oneTBB is GTSAM's thread pool; one adapter drives its workers' priority
+# (fusion/solverthreads.h). Allow: none expected; a new use of oneTBB belongs
+# in that adapter.
+expect_only("oneTBB: the solver-threads adapter only" "#include [<\"](oneapi/)?tbb/"
+  "^src/fusion/solverthreads\\.cpp$" src tests)
 expect_none("public and registration files are GTSAM-free" "#include <(gtsam|Eigen)"
   src/fusion/fusion.h src/fusion/fusionregistration.h src/fusion/fusionregistration.cpp)
 # Allow: only the registration adapter may see the engine and the session keys.
@@ -744,12 +749,14 @@ expect_only("hidden loads go through loadPinnedSession" "loadPinnedSession\\("
 expect_none("the demand layer never loads a session or reads a record itself"
   "sessionRef\\(|loadSession\\(|readCalculationRecord|calculationRecordIds\\(|restoreSession\\(|restoreStoredResults\\("
   "src/calculationdemand.*")
-# One bound of simultaneous jobs, and the load bound follows it (spec 11).
+# One bound of simultaneous jobs, and the load bound follows it: the running
+# job's session and the chosen next job's (docs/CALCULATIONS.md 16.8).
 # Allow: change the number only together with the executor's run slots.
 expect_count("one bound of simultaneous jobs" "kMaxRunningJobs *=[^=]" 1 src)
 expect_count("the load bound follows the executor's bound"
   "kMaxHeldSessions *= *JobQueue::kMaxRunningJobs *\\+ *1" 1 src/calculationdemand.h)
-# Allow: none expected. The worker runs below normal priority (spec 11).
+# Allow: none expected. The worker runs below normal priority
+# (docs/CALCULATIONS.md 15.5).
 expect_count("the worker runs below normal priority" "start\\(QThread::LowPriority\\)" 1 src/jobqueue.cpp)
 # The executor is not a queue. Allow: none expected (tests/README.md is not
 # searched: its section 10 spells these names).
@@ -758,7 +765,8 @@ expect_none("the executor keeps no queue" "oldestQueued|cancelUnwantedQueued|can
 expect_none("the plot request logic is gone"
   "PlotRequests|plotrequests|plotRequests|PlotRowState|PlotTrackCondition|tst_plot_requests"
   src tests docs cmake CMakeLists.txt README.md ":!tests/README.md")
-# No refresh and no cancel for requested calculations anywhere (spec 10).
+# No refresh and no cancel for requested calculations anywhere: work follows
+# demand (docs/COMPUTED_PLOTS.md section 5).
 # Allow: say "there is no refresh and no cancel"; never name the old controls.
 expect_none("no refresh or cancel control in code or documents"
   "[Rr]efresh (icon|control|gesture)|press(es|ed|ing)? (the )?refresh|[Cc]ancel (control|icon)|circled x"
@@ -767,7 +775,8 @@ expect_none("the plot rows' controls are gone"
   "drawRefreshGlyph|drawCancelGlyph|Control::(Refresh|Cancel)|controlHit|controlCount\\(|controlRect\\("
   src tests ":!tests/README.md")
 # Applying a profile that carries a column over a requested output computes it
-# for the whole logbook, so no default profile carries one (spec 5). Allow: a
+# for the whole logbook, so no default profile carries one
+# (docs/COMPUTED_PLOTS.md section 4). Allow: a
 # new requested calculation adds its sensor or attribute names to the pattern.
 expect_none("no default profile carries a column over a requested output"
   "\"(sensorID|attributeKey|markerAttributeKey|marker2AttributeKey)\": *\"(Fusion|_FUSION)"

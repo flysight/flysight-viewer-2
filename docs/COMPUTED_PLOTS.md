@@ -94,8 +94,11 @@ place.
 
 A cell whose value is still to come shows a grey "…". A blank cell means the
 value does not exist for that recording (for sensor fusion, a recording
-without IMU data). Sorting by the column puts "…" and blank cells together at
-the bottom.
+without IMU data). FlySight Viewer learns that only by loading the recording:
+until the fill has loaded it, such a recording shows "…" and is counted in the
+header's numbers, and then turns blank and leaves the count. Only computed
+results are kept, so it is loaded again, once, at every start. Sorting by the
+column puts "…" and blank cells together at the bottom.
 
 Visible tracks go first: a track you show while a column fills is computed
 next, after the computation that is running. Removing or disabling the column
@@ -126,8 +129,8 @@ running computation.
   again, also after a restart, the plot is drawn at once, without computing.
 - **Deleting the logbook's `cache/` folder** while FlySight Viewer is closed is
   safe: the recordings are untouched, and every such track is "not computed"
-  again at the next start; every such track is computed again as soon as
-  something switched on needs it.
+  again at the next start and is computed again as soon as something switched
+  on needs it.
 - **If a kept result cannot be read** when its track is shown (another program
   has its file open, for example), the track is "not computed" for that time
   only: the file is kept, and the result comes back the next time the track is

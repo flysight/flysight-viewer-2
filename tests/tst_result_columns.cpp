@@ -1662,7 +1662,7 @@ void ResultColumnsTest::columnWorkerIsUnchangedByDemand()
 
     m_model->startColumnWorker();
     if (withDemand) {
-        QVERIFY(waitDemandIdle(*m_queue, *demand, 10000));
+        QVERIFY(waitDemandIdle(*m_queue, *demand));
         QVERIFY(waitForIdle(*m_model));
     } else {
         QVERIFY(waitForIdle(*m_model));
@@ -1757,7 +1757,7 @@ void ResultColumnsTest::staleRecordDeletedByWorkerCreatesDemand()
             [&](JobId job) { sequence.append(QStringLiteral("job:") + m_queue->job(job).sessionId); });
 
     m_model->startBulkEdit({row("s1")}, kD, QStringLiteral("bulk"));
-    QVERIFY(waitDemandIdle(*m_queue, *demand, 10000));
+    QVERIFY(waitDemandIdle(*m_queue, *demand));
     QVERIFY(waitForIdle(*m_model));
 
     QVERIFY(workerSeen);

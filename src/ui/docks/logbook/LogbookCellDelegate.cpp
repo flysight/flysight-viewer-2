@@ -39,12 +39,13 @@ QString LogbookCellDelegate::pendingToolTip()
 }
 
 // A value always wins: a loaded row reads a just-written record live before
-// the demand layer's next pass drops the cell from pending
+// the demand layer's next pass drops the cell from pending. The value is
+// checked first: most cells have one, and then the demand layer is not asked.
 bool LogbookCellDelegate::showsPending(const QModelIndex &index) const
 {
     return m_demand && m_model && index.isValid() && index.model() == m_model.data()
-        && m_demand->isCellPending(index.row(), index.column())
-        && index.data(Qt::DisplayRole).toString().isEmpty();
+        && index.data(Qt::DisplayRole).toString().isEmpty()
+        && m_demand->isCellPending(index.row(), index.column());
 }
 
 void LogbookCellDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const

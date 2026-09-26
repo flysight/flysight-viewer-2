@@ -47,7 +47,12 @@ struct DemandTrack {
     QString reason;                 ///< Failed only; never empty
     bool jobFailure = false;        ///< Failed only: the job failed (not stored; retried at the next start)
     bool settling = false;          ///< Waiting only: the session is inside its input-settle wait
-    JobId job = 0;                  ///< Running: the running job; Waiting: the chosen next job if it is this track's, else 0
+    /// Running: the running job. Waiting: the chosen next job if it is this
+    /// track's, else 0 - for a plot track the chosen next job after the
+    /// pass's offers; a column track is classified before them, so it names
+    /// the chosen next job as the pass found it (column states do not list
+    /// waiting tracks).
+    JobId job = 0;
     QString progressText;           ///< Running only: the running job's latest progress text
 
     bool operator==(const DemandTrack &other) const
@@ -78,7 +83,8 @@ struct DemandState {
     QString toolTip;                ///< buildToolTip(*this); empty when isPlain()
 
     bool isWorking() const { return waitingCount + runningCount > 0; }
-    bool showsWarning() const { return !isWorking() && failedCount > 0; }   ///< spec 10: the badge replaces the indicator
+    /// The warning badge replaces the working indicator: shown only once nothing is working.
+    bool showsWarning() const { return !isWorking() && failedCount > 0; }
     bool isPlain() const { return !isWorking() && failedCount == 0; }
 
     bool operator==(const DemandState &other) const
@@ -211,7 +217,8 @@ struct DemandState {
 /// loaded is never offered: it enters tier (c) once the fill has loaded it.
 /// The first candidate the executor accepts is its chosen next job (an equal
 /// chosen next job is kept as it is); one it refuses as not applicable
-/// (missing input, nothing to do, unknown calculation) is remembered and the
+/// (missing input, nothing to do, unknown calculation) is remembered, a pass
+/// is scheduled (the column cells were classified before the offers), and the
 /// next is tried. With no candidate accepted, the chosen next job this
 /// component offered is withdrawn; one it did not offer is left alone. The
 /// running job is never stopped here: it finishes, and its result is
@@ -276,12 +283,13 @@ struct DemandState {
 /// session that is not loaded when it changed what this component knows of
 /// it; LogbookManager::calculationRecordsChanged; the executor's jobStarted
 /// and jobCancelRequested; a registry change; the end of a settle wait; the
-/// column fill's load. At once: when a plot is unchecked or a session hidden
-/// while a chosen next job exists (so that it is dropped before it can
-/// start), in jobFinished, which the executor emits before it decides between
-/// idle() and the next start - so a chain of requested calculations continues
-/// without an idle period between its links - and before the fill's load
-/// when a pass is pending. jobProgress updates texts only, without inspection.
+/// column fill's load; an offer the executor refused as not applicable. At
+/// once: when a plot is unchecked or a session hidden while a chosen next job
+/// exists (so that it is dropped before it can start), in jobFinished, which
+/// the executor emits before it decides between idle() and the next start -
+/// so a chain of requested calculations continues without an idle period
+/// between its links - and before the fill's load when a pass is pending.
+/// jobProgress updates texts only, without inspection.
 ///
 /// PRESENTATION. The views read plotState(), columnState(), isCellPending(),
 /// workingPlotIds() and workingColumnIds(), and repaint on plotStateChanged(),
@@ -310,7 +318,8 @@ class CalculationDemand : public QObject
 public:
     static constexpr int kInputSettleMs = 1000;      ///< input-settle wait
     /// Sessions the demand layer holds loaded for column demand at most:
-    /// the running job's and the chosen next job's (spec 9, 11).
+    /// the running job's and the chosen next job's (the executor's bound
+    /// plus one; see HIDDEN LOADS).
     static constexpr int kMaxHeldSessions = JobQueue::kMaxRunningJobs + 1;
     /// Tracks listed per section of a tooltip at most (running, failed); a
     /// longer section ends "and N more".
@@ -469,6 +478,8 @@ private:
     /// The rules for a session that is not loaded (see WHERE A RESULT IS
     /// LOOKED UP). Call under a RowStabilityGuard.
     DemandTrack classifyUnloaded(const SessionRow &sr, const ColumnInfo &column);
+    /// The settlement of every cell of a session whose load failed.
+    static Settlement loadFailedSettlement();
     /// The manager's record set of a session, memoized with its reasons.
     const QSet<QString> &recordSet(const QString &sessionId);
     QString rowDisplayName(const SessionRow &sr) const;
@@ -505,6 +516,7 @@ private:
     void onPlotCheckStateChanged();
     void onDependencyChanged(const QString &sessionId, const DependencyKey &key);
     void onVisibilityChanged(const QSet<QString> &shown, const QSet<QString> &hidden);
+    void onSessionModelAboutToBeReset();
     void onSessionModelReset();
     void onSessionDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles);
     void onCalculationRecordsChanged(const QString &sessionId, const QString &calculationId);
@@ -534,6 +546,7 @@ private:
     bool m_columnsDirty = true;
     QHash<QString, DemandState> m_columnStates;             // requested columns only, by column id
     QHash<QString, QSet<QString>> m_pendingCells;           // column id -> sessions whose cell is pending
+    bool m_hasPendingCells = false;                         // some set of m_pendingCells is not empty
     QHash<CellKey, Settlement> m_settled;                   // see SETTLEMENTS
     QHash<QString, QSet<QString>> m_recordSets;             // memo: knownCalculationRecords(), rows not loaded
     QHash<QString, QHash<QString, QString>> m_recordReasons; // memo beside it: calculationRecordReason(), non-empty

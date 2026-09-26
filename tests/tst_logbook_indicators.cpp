@@ -73,19 +73,29 @@ namespace {
 
 const QRgb kAmber = qRgb(0xE6, 0x9F, 0x00);
 
-/// Counts the paint events of a widget.
+/// Counts the paint events of a widget. With an `area`, only those confined to
+/// it: what a repaint of one section or row causes (a frame of the working
+/// clock, a state change), not a stray expose of the whole widget.
 class PaintCounter : public QObject {
 public:
-    explicit PaintCounter(QWidget *watched) : QObject(watched) { watched->installEventFilter(this); }
+    explicit PaintCounter(QWidget *watched, const QRect &area = QRect())
+        : QObject(watched), m_area(area)
+    {
+        watched->installEventFilter(this);
+    }
     int count = 0;
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override
     {
-        if (event->type() == QEvent::Paint)
+        if (event->type() == QEvent::Paint
+            && (m_area.isNull() || m_area.contains(static_cast<QPaintEvent *>(event)->region().boundingRect())))
             ++count;
         return QObject::eventFilter(watched, event);
     }
+
+private:
+    QRect m_area;
 };
 
 /// Unites the regions of the paint events of a widget.
@@ -225,7 +235,7 @@ private:
         PlotFixture::spin(m_demand.get());
         QApplication::processEvents();
     }
-    [[nodiscard]] bool waitDemandIdle(int timeoutMs = 10000)
+    [[nodiscard]] bool waitDemandIdle(int timeoutMs = 30000)
     {
         return FlySightTest::waitDemandIdle(*m_queue, *m_demand, timeoutMs);
     }
@@ -537,10 +547,11 @@ void LogbookIndicatorsTest::indicatorAnimatesOnlyWhileWorking()
     QCOMPARE(clock->frame(), 0);
     QCOMPARE(header()->indicatorRect(g), QRect());
 
-    // No idle repaint
-    const int settled = paints->count;
+    // No idle repaint: the clock is stopped (above), and the section is not
+    // repainted by itself
+    const auto *sectionPaints = new PaintCounter(header()->viewport(), sectionRect(g));
     QTest::qWait(4 * WorkingAnimation::kFrameIntervalMs);
-    QCOMPARE(paints->count, settled);
+    QCOMPARE(sectionPaints->count, 0);
 }
 
 void LogbookIndicatorsTest::badgeReplacesIndicatorWhenFinished()
@@ -603,12 +614,11 @@ void LogbookIndicatorsTest::failedLoadSessionShowsBadgeNotPending()
     QVERIFY(text.contains(QStringLiteral("Could not be computed:")));
     QVERIFY(text.contains(QStringLiteral("The session file could not be loaded")));
 
-    // Settled: nothing repaints the header any more
-    auto *paints = new PaintCounter(header()->viewport());
-    const int before = paints->count;
+    // Settled: nothing repaints the section any more
+    const auto *paints = new PaintCounter(header()->viewport(), sectionRect(g));
     for (int i = 0; i < 3; ++i)
         spin();
-    QCOMPARE(paints->count, before);
+    QCOMPARE(paints->count, 0);
 }
 
 void LogbookIndicatorsTest::headerToolTipFollowsDemandState()

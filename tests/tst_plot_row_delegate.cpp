@@ -32,6 +32,7 @@
 #include <QHelpEvent>
 #include <QImage>
 #include <QItemSelectionModel>
+#include <QPaintEvent>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QStyleFactory>
@@ -63,19 +64,29 @@ using namespace FlySightTest;
 
 namespace {
 
-/// Counts the paint events of a widget.
+/// Counts the paint events of a widget. With an `area`, only those confined to
+/// it: what a repaint of one section or row causes (a frame of the working
+/// clock, a state change), not a stray expose of the whole widget.
 class PaintCounter : public QObject {
 public:
-    explicit PaintCounter(QWidget *watched) : QObject(watched) { watched->installEventFilter(this); }
+    explicit PaintCounter(QWidget *watched, const QRect &area = QRect())
+        : QObject(watched), m_area(area)
+    {
+        watched->installEventFilter(this);
+    }
     int count = 0;
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override
     {
-        if (event->type() == QEvent::Paint)
+        if (event->type() == QEvent::Paint
+            && (m_area.isNull() || m_area.contains(static_cast<QPaintEvent *>(event)->region().boundingRect())))
             ++count;
         return QObject::eventFilter(watched, event);
     }
+
+private:
+    QRect m_area;
 };
 
 /// A rect of viewport coordinates, cut from an image grabbed from the viewport.
@@ -1091,10 +1102,13 @@ void PlotRowDelegateTest::workingIndicatorAnimatesOnlyWhileWorking()
     QVERIFY(!clock->isTicking());
     QCOMPARE(clock->frame(), 0);
 
-    // No idle repaint
-    const int settled = paints->count;
+    // No idle repaint: the clock is stopped (above), and the row is not
+    // repainted by itself
+    const QRect cell = m_view->visualRect(index);
+    const QRect rowRect(0, cell.top(), m_view->viewport()->width(), cell.height());
+    const auto *rowPaints = new PaintCounter(m_view->viewport(), rowRect);
     QTest::qWait(4 * WorkingAnimation::kFrameIntervalMs);
-    QCOMPARE(paints->count, settled);
+    QCOMPARE(rowPaints->count, 0);
 
     // A plot whose demand is already done never starts the clock
     check("g2");

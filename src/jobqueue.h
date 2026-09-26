@@ -97,8 +97,11 @@ class SessionModel;
 /// jobsChanged; (4) the session is unpinned; (5) the model trims its finished
 /// rows; (6) idle(), or the chosen next job, which a slot may have offered
 /// during (3), is scheduled. The next job never starts synchronously: always
-/// from the event loop. A chosen next job that an offer replaces skips (6), so
-/// that no idle() falls between it and its replacement.
+/// from the event loop. A job that ends at its start (for any of the reasons
+/// of docs/CALCULATIONS.md 15.2) ends that attempt, and the next is tried at
+/// the next turn of the event loop: one attempt per turn at most. A chosen
+/// next job that an offer replaces skips (6), so that no idle() falls between
+/// it and its replacement.
 ///
 /// Slots connected to the executor's signals may call offer(),
 /// withdrawChosenNext(), cancel() and shutdown().

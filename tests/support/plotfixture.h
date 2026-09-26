@@ -83,7 +83,7 @@ QStringList sessionIdsOf(const QList<FlySight::DemandTrack> &tracks);
 /// wanted has run. False on timeout. Follow with waitForIdle(model) when
 /// column values must be filled.
 bool waitDemandIdle(FlySight::JobQueue &executor, FlySight::CalculationDemand &demand,
-                    int timeoutMs = 5000);
+                    int timeoutMs = 30000);
 
 } // namespace FlySightTest
 

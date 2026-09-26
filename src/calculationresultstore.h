@@ -39,8 +39,9 @@ namespace FlySight {
 ///    own checks would say. The next load tries again.
 ///  - The logbook index learns each record's outcome where a record is open
 ///    anyway: its reason (a rejection, a solver failure; empty when the
-///    result produced its outputs) is reported to
-///    LogbookManager::setCalculationRecordReason() after a write, and by
+///    result produced its outputs) is noted by
+///    LogbookManager::writeCalculationRecord() when the record is written,
+///    and reported to LogbookManager::setCalculationRecordReason() by
 ///    restoreSession() for every record it read and did not delete.
 ///  - Explicit family instances ("<familyId>#<key>") are not stored: their
 ///    events are ignored (CalculationEngine::exportResult() refuses them).

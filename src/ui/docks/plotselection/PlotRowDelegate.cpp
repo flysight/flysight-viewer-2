@@ -72,8 +72,9 @@ PlotRowMetrics PlotRowDelegate::metricsFor(const QStyleOptionViewItem &opt)
     return metrics;
 }
 
-// The badge and the indicator are exclusive (spec section 10): while working,
-// failures appear in the tooltip only.
+// The badge and the indicator are exclusive (DemandState::showsWarning(); see
+// docs/COMPUTED_PLOTS.md section 2): while working, failures appear in the
+// tooltip only.
 PlotRowGeometry PlotRowDelegate::geometryFor(const QStyleOptionViewItem &opt, const DemandState &state) const
 {
     const bool showsIndicator = state.isWorking();
