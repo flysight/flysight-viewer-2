@@ -17,7 +17,8 @@
 
 namespace FlySight {
 
-LogbookView::LogbookView(SessionModel *model, CalculationDemand *demand, QWidget *parent)
+LogbookView::LogbookView(SessionModel *model, CalculationDemand *demand, WorkingAnimation *clock,
+                         QWidget *parent)
     : QWidget(parent),
       treeView(new QTreeView(this)),
       model(model)
@@ -45,7 +46,7 @@ LogbookView::LogbookView(SessionModel *model, CalculationDemand *demand, QWidget
     layout->addLayout(progressLayout);
     setLayout(layout);
 
-    setupView(demand);
+    setupView(demand, clock);
 
     treeView->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(treeView, &QTreeView::customContextMenuRequested, this, &LogbookView::onContextMenuRequested);
@@ -69,13 +70,13 @@ QList<QModelIndex> LogbookView::selectedRows() const {
     return treeView->selectionModel()->selectedRows();
 }
 
-// The demand layer is handed on, not kept: the header and the delegate hold
-// it weakly.
-void LogbookView::setupView(CalculationDemand *demand)
+// The demand layer and the clock are handed on, not kept: the header and the
+// delegate hold them weakly.
+void LogbookView::setupView(CalculationDemand *demand, WorkingAnimation *clock)
 {
     // The header before the model: the tree hands it the model and its sort
     // settings, and the lines below configure it
-    treeView->setHeader(new LogbookHeaderView(model, demand, treeView));
+    treeView->setHeader(new LogbookHeaderView(model, demand, clock, treeView));
     treeView->setModel(model);
     treeView->setItemDelegate(new LogbookCellDelegate(model, demand, treeView));
     treeView->setRootIsDecorated(false);
@@ -298,10 +299,13 @@ void LogbookView::onProgressChanged(int id, int remaining, int total)
         label = tr("Updating sessions: %v / %m");
         break;
     case SessionModel::ColumnTask:
-    case SessionModel::ColumnFillTask:
-        // The same text on purpose: to the user a column fills in the
-        // background the same way whether its values are cheap or requested
         label = tr("Computing columns: %v / %m");
+        break;
+    case SessionModel::ColumnFillTask:
+        // The demand layer's fill has a total of its own (the sessions still
+        // to compute), so it has a text of its own: the line never shows two
+        // totals under one label when the fill follows a column pass
+        label = tr("Computing results: %v / %m");
         break;
     default:
         label = tr("Working: %v / %m");

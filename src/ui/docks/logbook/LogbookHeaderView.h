@@ -8,6 +8,7 @@
 #include <QString>
 
 #include "demandstate.h"
+#include "ui/docks/DemandIndicator.h"
 
 class QStyleOptionHeaderV2;
 
@@ -15,7 +16,6 @@ namespace FlySight {
 
 class CalculationDemand;
 class SessionModel;
-class WorkingAnimation;
 
 /// The logbook's column header. It paints what CalculationDemand reports for a
 /// logbook column and decides nothing.
@@ -52,12 +52,12 @@ class WorkingAnimation;
 /// started or stopped.
 ///
 /// REPAINT. columnStateChanged(id) repaints that column's section; while any
-/// column is working (workingColumnIds()) a WorkingAnimation repaints the
-/// working sections 12.5 times a second, and it stops as soon as nothing is
-/// working (statesChanged()).
+/// column is working, each frame of the application's working-indicator clock
+/// (given at construction; the application makes it follow the demand layer)
+/// repaints the working sections (workingColumnIds()).
 ///
-/// The demand layer is held weakly: without it (never given, or destroyed
-/// first) the header is exactly QHeaderView.
+/// The demand layer and the clock are held weakly: without the demand layer
+/// (never given, or destroyed first) the header is exactly QHeaderView.
 class LogbookHeaderView : public QHeaderView
 {
     Q_OBJECT
@@ -65,8 +65,11 @@ public:
     /// A horizontal header for the logbook's tree, configured as QTreeView's own
     /// (movable sections, last section stretched, AlignLeft|AlignVCenter default
     /// alignment). `model` is the session model the tree shows; `demand` may be
-    /// null (then the header is exactly QHeaderView).
-    LogbookHeaderView(SessionModel *model, CalculationDemand *demand, QWidget *parent = nullptr);
+    /// null (then the header is exactly QHeaderView); `clock` is the
+    /// application's working-indicator clock (may be null: the arc is drawn at
+    /// rest).
+    LogbookHeaderView(SessionModel *model, CalculationDemand *demand, WorkingAnimation *clock,
+                      QWidget *parent = nullptr);
 
     /// What hovering the section shows: columnState(<its column id>).toolTip;
     /// empty for a plain section, out of range, or without a demand layer.
@@ -74,7 +77,7 @@ public:
     /// Where the section's indicator or badge is painted, in viewport
     /// coordinates; null when none is (plain, hidden, or too narrow). Tests only.
     QRect indicatorRect(int logicalIndex) const;
-    WorkingAnimation *animation() const { return m_animation; }    ///< tests only
+    WorkingAnimation *animation() const { return m_clock.data(); }  ///< the clock it was given; tests only
 
 protected:
     void paintSection(QPainter *painter, const QRect &rect, int logicalIndex) const override;
@@ -83,7 +86,6 @@ protected:
 
 private slots:
     void onColumnStateChanged(const QString &columnId);
-    void syncAnimation();
     void onAnimationFrame();
 
 private:
@@ -100,7 +102,7 @@ private:
 
     QPointer<SessionModel> m_model;
     QPointer<CalculationDemand> m_demand;
-    WorkingAnimation *m_animation;                // child; never null
+    QPointer<WorkingAnimation> m_clock;           // the application's; may be null
 };
 
 } // namespace FlySight

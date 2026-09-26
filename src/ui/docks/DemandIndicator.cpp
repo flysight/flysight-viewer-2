@@ -1,6 +1,7 @@
 #include "DemandIndicator.h"
 
 #include <QColor>
+#include <QFontMetrics>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
@@ -68,6 +69,14 @@ void drawWarningGlyph(QPainter *painter, const QRectF &rect)
     painter->drawEllipse(QPointF(x, rect.top() + rect.height() * 0.80), penWidth * 0.6, penWidth * 0.6);
 
     painter->restore();
+}
+
+GlyphMetrics glyphMetrics(const QFontMetrics &metrics, int room)
+{
+    GlyphMetrics glyph;
+    glyph.side = qMin(room, metrics.height());
+    glyph.spacing = qMax(2, glyph.side / 4);
+    return glyph;
 }
 
 // ---- WorkingAnimation -----------------------------------------------------------

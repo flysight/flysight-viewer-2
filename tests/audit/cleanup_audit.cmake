@@ -702,8 +702,10 @@ audit_group(demand)
 # Allow: a new view that presents the demand layer is added to the allowed-file
 # regex; nothing below the demand layer (the executor, the session model, the
 # scheduler, the logbook) ever is. Elsewhere a comment says "the demand layer".
+# The shared indicator's view half (DemandIndicatorView.*) is one of its views;
+# DemandIndicator.* is not.
 expect_only("only the application and its views know the demand layer" "CalculationDemand"
-  "^src/${DEMAND_FILES}\\.(cpp|h)$|^src/mainwindow\\.(cpp|h)$|^src/ui/docks/AppContext\\.h$|^src/ui/docks/plotselection/(PlotRowDelegate\\.(cpp|h)|PlotSelectionDockFeature\\.cpp)$|^src/ui/docks/logbook/(LogbookView|LogbookHeaderView|LogbookCellDelegate)\\.(cpp|h)$|^src/ui/docks/logbook/LogbookDockFeature\\.cpp$|^src/ui/docks/plot/PlotWidget\\.cpp$"
+  "^src/${DEMAND_FILES}\\.(cpp|h)$|^src/mainwindow\\.(cpp|h)$|^src/ui/docks/AppContext\\.h$|^src/ui/docks/DemandIndicatorView\\.(cpp|h)$|^src/ui/docks/plotselection/(PlotRowDelegate\\.(cpp|h)|PlotSelectionDockFeature\\.cpp)$|^src/ui/docks/logbook/(LogbookView|LogbookHeaderView|LogbookCellDelegate)\\.(cpp|h)$|^src/ui/docks/logbook/LogbookDockFeature\\.cpp$|^src/ui/docks/plot/PlotWidget\\.cpp$"
   src)
 # Allow: none expected. The layers below the demand layer, the shared glyphs
 # and the row layout never include it (so they can use none of its types).
@@ -723,7 +725,8 @@ expect_none("the views only read the demand layer" "[.>](flush|runLoadStep|endIn
 expect_none("the demand views handle no event of their own"
   "editorEvent|mouse(Press|Release|DoubleClick|Move)Event|keyPressEvent"
   "src/ui/docks/plotselection/PlotRowDelegate.*" "src/ui/docks/logbook/LogbookHeaderView.*"
-  "src/ui/docks/logbook/LogbookCellDelegate.*" "src/ui/docks/DemandIndicator.*")
+  "src/ui/docks/logbook/LogbookCellDelegate.*" "src/ui/docks/DemandIndicator.*"
+  "src/ui/docks/DemandIndicatorView.*")
 # Pending is a presentation of demand: the demand layer answers it and the cell
 # delegate paints it; the model, its cached values and index.json never see it.
 # Allow: none expected.

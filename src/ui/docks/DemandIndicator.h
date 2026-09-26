@@ -4,13 +4,18 @@
 // Painting shared by the plot list's rows and the logbook's column headers:
 // the working indicator and the warning badge that present the demand layer's
 // state (demandstate.h), and the clock that turns the indicator while
-// something is working and stops when nothing is. QtCore and QtGui only.
+// something is working and stops when nothing is. QtCore and QtGui only: the
+// glyphs, the glyph's size beside a line of text (glyphMetrics), and the
+// clock's mechanics; no demand-layer type: what a view shows, its colour and
+// hover, and how the one clock follows the demand layer are
+// DemandIndicatorView.h's.
 
 #include <QObject>
 #include <QTimer>
 #include <QtGlobal>
 
 class QColor;
+class QFontMetrics;
 class QPainter;
 class QRectF;
 
@@ -26,10 +31,22 @@ void drawWorkingGlyph(QPainter *painter, const QRectF &rect, const QColor &color
 /// Leaves the painter's state as it found it.
 void drawWarningGlyph(QPainter *painter, const QRectF &rect);
 
-/// The clock of the working indicator: one per view. It ticks only while the
-/// view has something working (setActive(true)), and it restarts at frame 0.
-/// It never repaints anything itself: its owner connects frameAdvanced() to
-/// its own repaint of what is working.
+/// The glyph's side and the room it takes beside text, for one text line of
+/// `metrics` in `room` pixels of height: side = min(room, line height),
+/// spacing = max(2, side / 4). The plot rows and the column headers use it alike.
+struct GlyphMetrics {
+    int side = 0;
+    int spacing = 0;
+    int reserve() const { return side + spacing; }   ///< side and the spacing beside it
+};
+GlyphMetrics glyphMetrics(const QFontMetrics &metrics, int room);
+
+/// The clock of the working indicator: one per application, created beside the
+/// demand layer and handed to the views that show the indicator. It ticks only
+/// while something is working (setActive(true); DemandIndicatorView.h's
+/// followDemand() decides that), and it restarts at frame 0. It never repaints
+/// anything itself: each view connects frameAdvanced() to its own repaint of
+/// what is working, and reads angle() when it paints.
 class WorkingAnimation : public QObject
 {
     Q_OBJECT

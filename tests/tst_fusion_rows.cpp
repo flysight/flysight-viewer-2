@@ -270,7 +270,8 @@ void FusionRowsTest::allSeventeenFusionPlotsAreExplicitBacked()
         QCOMPARE(state.runningCount, 0);
         QCOMPARE(state.failedCount, 0);
         QVERIFY(state.isWorking());
-        QCOMPARE(state.progressLabel, QStringLiteral("0 of 1"));
+        QCOMPARE(state.doneCount, 0);
+        QCOMPARE(state.wantedCount, 1);
     }
     for (const PlotValue &plot : localFramePlots()) {
         const QString id = CalculationDemand::plotId(plot);
@@ -344,7 +345,6 @@ void FusionRowsTest::realRowScript()
     QCOMPARE(state.doneCount, 0);
     QCOMPARE(state.waitingCount, 3);
     QCOMPARE(state.runningCount, 0);
-    QCOMPARE(state.progressLabel, QStringLiteral("0 of 3"));
     QCOMPARE(m_queue->model()->rowCount(), 1);
     const JobId job1 = fitJobOf("s1").id;
     QVERIFY(job1 != 0);
@@ -405,7 +405,6 @@ void FusionRowsTest::realRowScript()
     QCOMPARE(state.wantedCount, 3);
     QCOMPARE(state.doneCount, 2);
     QCOMPARE(state.waitingCount, 1);
-    QCOMPARE(state.progressLabel, QStringLiteral("2 of 3"));
     const JobId job4 = fitJobOf("s3").id;
     QVERIFY(job4 != 0 && job4 != job3);
     QCOMPARE(m_queue->chosenNextJob(), job4);
@@ -429,7 +428,6 @@ void FusionRowsTest::realRowScript()
     QCOMPARE(whileS3Runs.doneCount, 2);
     QCOMPARE(whileS3Runs.runningCount, 1);
     QCOMPARE(whileS3Runs.waitingCount, 1);
-    QCOMPARE(whileS3Runs.progressLabel, QStringLiteral("2 of 4"));
     QCOMPARE(whileS3Runs.running.at(0).sessionId, QStringLiteral("s3"));
     QCOMPARE(runningWhileS3Runs, job4);
     QCOMPARE(m_queue->job(job5).calculationTitle, kTitle);
@@ -451,7 +449,6 @@ void FusionRowsTest::realRowScript()
     QCOMPARE(seen.at(0).state, JobState::Succeeded);
     QCOMPARE(seen.at(0).row.doneCount, 1);
     QCOMPARE(seen.at(0).row.wantedCount, 3);
-    QCOMPARE(seen.at(0).row.progressLabel, QStringLiteral("1 of 3"));
     QCOMPARE(seen.at(1).job, job3);
     QCOMPARE(seen.at(1).state, JobState::Cancelled);
     QCOMPARE(seen.at(2).job, job2);
@@ -461,7 +458,6 @@ void FusionRowsTest::realRowScript()
     QCOMPARE(seen.at(3).state, JobState::Succeeded);
     QCOMPARE(seen.at(3).row.doneCount, 3);
     QCOMPARE(seen.at(3).row.wantedCount, 4);
-    QCOMPARE(seen.at(3).row.progressLabel, QStringLiteral("3 of 4"));
     QCOMPARE(seen.at(4).job, job5);
     QCOMPARE(seen.at(4).state, JobState::Succeeded);
     QCOMPARE(seen.at(4).row.doneCount, 4);
@@ -511,7 +507,8 @@ void FusionRowsTest::rollPitchYawShareOneJob()
     for (const DemandState &state : std::as_const(during)) {
         QCOMPARE(state.runningCount, 1);
         QCOMPARE(state.waitingCount, 0);
-        QCOMPARE(state.progressLabel, QStringLiteral("0 of 1"));
+        QCOMPARE(state.doneCount, 0);
+        QCOMPARE(state.wantedCount, 1);
         QCOMPARE(state.running.at(0).sessionId, QStringLiteral("s2"));
         QVERIFY(!state.running.at(0).progressText.isEmpty());
         QCOMPARE(state.running.at(0).progressText, during.at(0).running.at(0).progressText);

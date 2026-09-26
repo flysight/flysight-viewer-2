@@ -161,7 +161,8 @@ flysight_add_test(tst_plot_row_layout SOURCES tst_plot_row_layout.cpp)
 # tst_logbook_indicators (below) are the only tests that link Qt Widgets; they
 # compile the plot list's row delegate, and the logbook view with its header
 # view and cell delegate, from the application sources (pattern:
-# tst_python_bridge). QT_QPA_PLATFORM=offscreen is already set by
+# tst_python_bridge). Both compile the shared indicator (DemandIndicator.*,
+# DemandIndicatorView.*). QT_QPA_PLATFORM=offscreen is already set by
 # flysight_add_test().
 option(FLYSIGHT_BUILD_WIDGET_TESTS "Build and run the tests that need Qt Widgets" ON)
 if(FLYSIGHT_BUILD_WIDGET_TESTS)
@@ -171,16 +172,23 @@ if(FLYSIGHT_BUILD_WIDGET_TESTS)
             "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowDelegate.h"
             "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicator.cpp"
             "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicator.h"
+            "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicatorView.cpp"
+            "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicatorView.h"
     LIBS Qt${QT_VERSION_MAJOR}::Widgets)
   set_tests_properties(tst_plot_row_delegate PROPERTIES LABELS "core;widgets")
-  # ... and the logbook's column headers (working indicator, badge, hover) and
-  # pending cells in a real LogbookView, compiled from the application sources.
+  # ... and tst_logbook_indicators: the logbook's column headers, pending cells
+  # and progress line in a real LogbookView, beside a plot list with the row
+  # delegate, on one working-indicator clock, compiled from the application
+  # sources.
   flysight_add_test(tst_logbook_indicators
     SOURCES tst_logbook_indicators.cpp
             "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookView.cpp"          "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookView.h"
             "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookHeaderView.cpp"    "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookHeaderView.h"
             "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookCellDelegate.cpp"  "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookCellDelegate.h"
+            "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowDelegate.cpp" "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowDelegate.h"
+            "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowLayout.h"
             "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicator.cpp"              "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicator.h"
+            "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicatorView.cpp"          "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicatorView.h"
     LIBS Qt${QT_VERSION_MAJOR}::Widgets)
   set_tests_properties(tst_logbook_indicators PROPERTIES LABELS "core;widgets")
 endif()

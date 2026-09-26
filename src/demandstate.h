@@ -55,7 +55,6 @@ struct DemandState {
     /// Each in session-model row order; waiting tracks are counted
     /// (waitingCount), never listed.
     QList<DemandTrack> running, failed;
-    QString progressLabel;          ///< "<doneCount> of <wantedCount>" while isWorking(); else empty
     QString toolTip;                ///< buildToolTip(*this); empty when isPlain()
 
     bool isWorking() const { return waitingCount + runningCount > 0; }
@@ -69,8 +68,7 @@ struct DemandState {
             && wantedCount == other.wantedCount && doneCount == other.doneCount
             && waitingCount == other.waitingCount && runningCount == other.runningCount
             && failedCount == other.failedCount && running == other.running
-            && failed == other.failed
-            && progressLabel == other.progressLabel && toolTip == other.toolTip;
+            && failed == other.failed && toolTip == other.toolTip;
     }
     bool operator!=(const DemandState &other) const { return !(*this == other); }
 
@@ -80,8 +78,7 @@ struct DemandState {
     /// Counts one track: wanted unless NotApplicable; done = Done + Failed;
     /// Running and Failed tracks are also appended to running / failed.
     void addTrack(const DemandTrack &track);
-    /// Sets progressLabel ("<doneCount> of <wantedCount>" while isWorking(),
-    /// else empty) and toolTip; call once every track is added.
+    /// Sets toolTip (buildToolTip(*this)); call once every track is added.
     void finish();
     /// The ready-made tooltip of a state: "Computing: k of n done" with the
     /// running tracks, then "Could not be computed:" with the failed tracks,

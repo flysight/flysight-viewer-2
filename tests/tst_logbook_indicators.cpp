@@ -9,11 +9,13 @@
 // What is proved here is what the view owns: plain sections and cells are the
 // base classes', a working column's header shows the turning indicator at the
 // right of its text and a finished column with failures the badge, the hover
-// detail, the clock that runs only while a column works, that a click on the
-// glyph is a click on the section, and cells that read pending (distinct from
-// unavailable and from the row's unreadable-record pending state) without a
-// trace in the model, its cached values or index.json. State, counts and what
-// is computed are CalculationDemand's (tst_calculation_demand).
+// detail, the application's one working-indicator clock, shared with the plot
+// list's rows (a plot list with the row delegate, beside the window), that a
+// click on the glyph is a click on the section, cells that read pending
+// (distinct from unavailable and from the row's unreadable-record pending
+// state) without a trace in the model, its cached values or index.json, and
+// the progress line's texts. State, counts and what is computed are
+// CalculationDemand's (tst_calculation_demand).
 //
 // Synchronization: Gate::waitEntered() proves the worker is inside a compute
 // function; QTRY_*, waitDemandIdle() and waitForIdle() spin the event loop;
@@ -25,6 +27,7 @@
 #include <memory>
 
 #include <QApplication>
+#include <QDir>
 #include <QFile>
 #include <QHBoxLayout>
 #include <QHashFunctions>
@@ -34,6 +37,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPaintEvent>
+#include <QProgressBar>
 #include <QRegion>
 #include <QSignalSpy>
 #include <QStyleFactory>
@@ -45,6 +49,7 @@
 #include <QtTest>
 
 #include "calculationdemand.h"
+#include "calculationrecord.h"
 #include "engine/calculationregistry.h"
 #include "idlescheduler.h"
 #include "jobfixture.h"
@@ -62,9 +67,11 @@
 #include "testenvironment.h"
 #include "testutil.h"
 #include "ui/docks/DemandIndicator.h"
+#include "ui/docks/DemandIndicatorView.h"
 #include "ui/docks/logbook/LogbookCellDelegate.h"
 #include "ui/docks/logbook/LogbookHeaderView.h"
 #include "ui/docks/logbook/LogbookView.h"
+#include "ui/docks/plotselection/PlotRowDelegate.h"
 
 using namespace FlySight;
 using namespace FlySightTest;
@@ -154,8 +161,10 @@ private slots:
     void plainHeaderAndCellsAreIdenticalToBase();
     void workingColumnShowsIndicatorRightOfText();
     void indicatorAnimatesOnlyWhileWorking();
+    void plotRowsAndHeaderTurnOnOneClock();
     void badgeReplacesIndicatorWhenFinished();
     void failedLoadSessionShowsBadgeNotPending();
+    void failedWriteIsListedInTheHover();
     void headerToolTipFollowsDemandState();
     void indicatorFollowsColumnWhenMovedHiddenOrReordered();
     void indicatorClearsSortArrowAndNarrowSections();
@@ -163,6 +172,7 @@ private slots:
     void pendingCellsAreDistinctFromUnavailable();
     void pendingCellBecomesValueWhenRecordIsWritten_data();
     void pendingCellBecomesValueWhenRecordIsWritten();
+    void fillProgressLineHasItsOwnText();
     void sortingTreatsPendingAsUnavailable();
     void unreadableRecordPendingIsNotDemandPending_data();
     void unreadableRecordPendingIsNotDemandPending();
@@ -173,8 +183,8 @@ private:
     Gate &gate() { return m_world->gate(); }
 
     /// The logbook view and the reference tree in one window, as described at
-    /// the top of the file; the header's clock frozen. False when the window
-    /// was never exposed.
+    /// the top of the file; the clock frozen. False when the window was never
+    /// exposed.
     [[nodiscard]] bool buildUi();
     void destroyUi();
     /// The executor, the demand layer and the UI over the current model.
@@ -310,6 +320,35 @@ private:
         QHelpEvent event(QEvent::ToolTip, pos, tree()->viewport()->mapToGlobal(pos));
         return cells()->helpEvent(&event, tree(), opt, index);
     }
+    /// A plot list over m_plots as PlotSelectionDockFeature configures it, with
+    /// the row delegate on the demand layer and the one clock, shown as a
+    /// window of its own; `delegate` is set to its delegate. Null when the
+    /// window was never exposed. The caller destroys it before returning.
+    [[nodiscard]] std::unique_ptr<QTreeView> makePlotList(PlotRowDelegate **delegate)
+    {
+        auto tree = std::make_unique<QTreeView>();
+        tree->setModel(m_plots.get());
+        tree->setHeaderHidden(true);
+        tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        auto *rows = new PlotRowDelegate(m_demand.get(), m_clock.get(), tree.get());
+        tree->setItemDelegate(rows);
+        tree->expandAll();
+        tree->resize(300, 300);
+        tree->show();
+        if (!QTest::qWaitForWindowExposed(tree.get()))
+            return nullptr;
+        if (delegate)
+            *delegate = rows;
+        return tree;
+    }
+    /// The plot list's row of a plot id (the delegate's lookup).
+    QModelIndex plotIndex(const char *plotId) const
+    {
+        const QModelIndexList found = m_plots->match(m_plots->index(0, 0), PlotModel::PlotValueIdRole,
+                                                     QString::fromLatin1(plotId), 1,
+                                                     Qt::MatchExactly | Qt::MatchRecursive);
+        return found.isEmpty() ? QModelIndex() : found.first();
+    }
     /// Hides any tooltip and waits until it is gone.
     [[nodiscard]] static bool hideToolTip()
     {
@@ -323,6 +362,7 @@ private:
     std::unique_ptr<JobQueue> m_queue;
     std::unique_ptr<PlotModel> m_plots;
     std::unique_ptr<CalculationDemand> m_demand;
+    std::unique_ptr<WorkingAnimation> m_clock;  // the application's one clock, as MainWindow makes it
     std::unique_ptr<QWidget> m_window;
     LogbookView *m_logbook = nullptr;          // children of the window
     QTreeView *m_reference = nullptr;
@@ -372,6 +412,8 @@ bool LogbookIndicatorsTest::buildServices()
 {
     m_queue = std::make_unique<JobQueue>(m_model.get());
     m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
+    m_clock = std::make_unique<WorkingAnimation>();
+    followDemand(m_clock.get(), m_demand.get());
     return buildUi();
 }
 
@@ -379,7 +421,7 @@ bool LogbookIndicatorsTest::buildUi()
 {
     m_window = std::make_unique<QWidget>();
     auto *layout = new QHBoxLayout(m_window.get());
-    m_logbook = new LogbookView(m_model.get(), m_demand.get(), m_window.get());
+    m_logbook = new LogbookView(m_model.get(), m_demand.get(), m_clock.get(), m_window.get());
     m_logbook->setFixedWidth(460);
     layout->addWidget(m_logbook);
 
@@ -404,7 +446,7 @@ bool LogbookIndicatorsTest::buildUi()
     tree()->sortByColumn(descriptionSection(), Qt::AscendingOrder);
     m_reference->sortByColumn(descriptionSection(), Qt::AscendingOrder);
 
-    header()->animation()->setFrozen(true);
+    header()->animation()->setFrozen(true);       // m_clock
     spin();
     return header() && cells() && m_model->rowAt(0).sessionId == QStringLiteral("s1");
 }
@@ -431,6 +473,7 @@ void LogbookIndicatorsTest::cleanup()
 
     destroyUi();
     m_demand.reset();
+    m_clock.reset();
     QStringList stillPinned;
     if (m_model) {
         for (const char *id : {"s1", "s2", "s3", "s4"}) {
@@ -554,6 +597,77 @@ void LogbookIndicatorsTest::indicatorAnimatesOnlyWhileWorking()
     QCOMPARE(sectionPaints->count, 0);
 }
 
+// Spec 12, "One clock": the plot list's rows and the logbook's column headers
+// turn on the application's one clock. One frame turns both; each view
+// repaints only its own working items; the clock stops when nothing works.
+void LogbookIndicatorsTest::plotRowsAndHeaderTurnOnOneClock()
+{
+    PlotRowDelegate *rows = nullptr;
+    auto plotList = makePlotList(&rows);
+    QVERIFY(plotList);
+
+    // Syn/g over s1 and the column G_OUT: one job (s1, gated), which both share
+    PlotFixture::show(*m_model, {"s1"});
+    m_plots->setPlotEnabled(QStringLiteral("Syn"), QStringLiteral("g"), true);
+    enableColumns({QStringLiteral("G_OUT")});
+    QVERIFY(gate().waitEntered());
+    QTRY_VERIFY(m_demand->plotState(QStringLiteral("Syn/g")).isWorking() && col("G_OUT").isWorking());
+    spin();
+
+    // One clock: the one both views were given; neither made its own
+    QCOMPARE(rows->animation(), m_clock.get());
+    QCOMPARE(header()->animation(), m_clock.get());
+    QVERIFY(m_window->findChildren<WorkingAnimation *>().isEmpty());
+    QVERIFY(plotList->findChildren<WorkingAnimation *>().isEmpty());
+    QVERIFY(m_clock->isActive());
+    QVERIFY(!m_clock->isTicking());         // frozen by buildUi()
+
+    // One frame turns both
+    const QModelIndex row = plotIndex("Syn/g");
+    QVERIFY(row.isValid());
+    const QRect rowCell = plotList->visualRect(row);
+    const QRect rowRect(0, rowCell.top(), plotList->viewport()->width(), rowCell.height());
+    const int g = section("G_OUT");
+    const QRect rowGlyph = rows->indicatorRect(row);
+    const QRect sectionGlyph = header()->indicatorRect(g);
+    QVERIFY(!rowGlyph.isNull());
+    QVERIFY(!sectionGlyph.isNull());
+    const QImage rowsBefore = plotList->viewport()->grab().toImage();
+    const QImage headerBefore = grabHeader();
+    auto *rowPaints = new PaintCounter(plotList->viewport(), rowRect);
+    auto *sectionPaints = new PaintCounter(header()->viewport(), sectionRect(g));
+    m_clock->advance();
+    QTRY_VERIFY(rowPaints->count > 0 && sectionPaints->count > 0);
+    QVERIFY(cut(plotList->viewport()->grab().toImage(), rowGlyph) != cut(rowsBefore, rowGlyph));
+    QVERIFY(cut(grabHeader(), sectionGlyph) != cut(headerBefore, sectionGlyph));
+    QCOMPARE(m_clock->angle(), 30.0);       // the one angle both painted
+
+    // Each view repaints only its own working items: s1 done, s2 running, so
+    // the plot row is finished and the column still works
+    gate().open(1);
+    QVERIFY(gate().waitEntered());
+    QTRY_VERIFY(!m_demand->plotState(QStringLiteral("Syn/g")).isWorking());
+    spin();
+    QVERIFY(col("G_OUT").isWorking());
+    QVERIFY(m_clock->isActive());
+    rowPaints = new PaintCounter(plotList->viewport(), rowRect);
+    sectionPaints = new PaintCounter(header()->viewport(), sectionRect(g));
+    m_clock->advance();
+    spin();
+    QTRY_VERIFY(sectionPaints->count > 0);
+    QCOMPARE(rowPaints->count, 0);
+
+    // Nothing works: the clock stops, back at frame 0
+    gate().open(16);
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+    spin();
+    QVERIFY(!m_clock->isActive());
+    QCOMPARE(m_clock->frame(), 0);
+
+    plotList.reset();
+}
+
 void LogbookIndicatorsTest::badgeReplacesIndicatorWhenFinished()
 {
     QVERIFY(makeBadgedColumn());
@@ -619,6 +733,80 @@ void LogbookIndicatorsTest::failedLoadSessionShowsBadgeNotPending()
     for (int i = 0; i < 3; ++i)
         spin();
     QCOMPARE(paints->count, 0);
+}
+
+// Spec 12, "A stored result that could not be written" (the presentation
+// half; the demand side is tst_calculation_demand's): the plot row and the
+// column header show the badge, and the hover lists the session with the
+// store's reason.
+void LogbookIndicatorsTest::failedWriteIsListedInTheHover()
+{
+    // A directory where s1's record would be written
+    const QString path = TestEnvironment::instance().cacheDir() + QLatin1Char('/')
+        + recordFileName(sessionFileStem(QStringLiteral("s1")), QStringLiteral("gated"));
+    QVERIFY(QDir().mkpath(path));
+    const auto removeDirectory = qScopeGuard([path] { QDir(path).removeRecursively(); });
+
+    PlotRowDelegate *rows = nullptr;
+    auto plotList = makePlotList(&rows);
+    QVERIFY(plotList);
+
+    PlotFixture::show(*m_model, {"s1"});
+    m_plots->setPlotEnabled(QStringLiteral("Syn"), QStringLiteral("g"), true);
+    enableColumns({QStringLiteral("G_OUT")});
+    gate().open(16);
+    {
+        WarningCapture warnings;            // the store logs "not written"
+        QVERIFY(waitDemandIdle());
+        QVERIFY(waitForIdle(*m_model));
+    }
+    spin();
+
+    // The plot row
+    const DemandState plot = m_demand->plotState(QStringLiteral("Syn/g"));
+    QVERIFY(plot.showsWarning());
+    QCOMPARE(plot.failedCount, 1);
+    QVERIFY2(plot.toolTip.startsWith(QStringLiteral("Could not be computed:")), qPrintable(plot.toolTip));
+    QString failedLine;
+    for (const QString &line : plot.toolTip.split(QLatin1Char('\n'))) {
+        if (line.startsWith(QStringLiteral("  Jump 1 - ")))
+            failedLine = line;
+    }
+    QVERIFY2(failedLine.contains(QStringLiteral("Couldn't write file")), qPrintable(plot.toolTip));
+    const QModelIndex row = plotIndex("Syn/g");
+    QCOMPARE(rows->toolTipFor(row), plot.toolTip);
+    const QRect rowGlyph = rows->indicatorRect(row);
+    QVERIFY(!rowGlyph.isNull());
+    QVERIFY(hasPixel(plotList->viewport()->grab().toImage(), rowGlyph, kAmber));
+    QVERIFY(hideToolTip());
+    {
+        QStyleOptionViewItem opt;
+        opt.initFrom(plotList->viewport());
+        opt.widget = plotList.get();
+        opt.rect = plotList->visualRect(row);
+        const QPoint pos = rowGlyph.center();
+        QHelpEvent event(QEvent::ToolTip, pos, plotList->viewport()->mapToGlobal(pos));
+        QVERIFY(rows->helpEvent(&event, plotList.get(), opt, row));
+        QCOMPARE(QToolTip::text(), plot.toolTip);
+    }
+
+    // The column header: s2 and s4 were written, s3 is not applicable
+    const DemandState column = col("G_OUT");
+    QVERIFY(column.showsWarning());
+    QCOMPARE(column.failedCount, 1);
+    QCOMPARE(column.wantedCount, 3);
+    QVERIFY2(column.toolTip.split(QLatin1Char('\n')).contains(failedLine), qPrintable(column.toolTip));
+    const int g = section("G_OUT");
+    QCOMPARE(header()->toolTipForSection(g), column.toolTip);
+    const QRect sectionGlyph = header()->indicatorRect(g);
+    QVERIFY(!sectionGlyph.isNull());
+    QVERIFY(hasPixel(grabHeader(), sectionGlyph, kAmber));
+    QVERIFY(hideToolTip());
+    QVERIFY(headerHelp(sectionGlyph.center()));
+    QCOMPARE(QToolTip::text(), column.toolTip);
+
+    QVERIFY(hideToolTip());
+    plotList.reset();
 }
 
 void LogbookIndicatorsTest::headerToolTipFollowsDemandState()
@@ -942,6 +1130,80 @@ void LogbookIndicatorsTest::pendingCellBecomesValueWhenRecordIsWritten()
         QCOMPARE(resetSpy.count(), 0);
 }
 
+// Spec 12, "The fill's own progress text": the progress line says "Computing
+// results" for the demand layer's fill and "Computing columns" for the column
+// worker, and the other tasks' texts are as before.
+void LogbookIndicatorsTest::fillProgressLineHasItsOwnText()
+{
+    auto *bar = m_logbook->findChild<QProgressBar *>();
+    auto *cancel = m_logbook->findChild<QToolButton *>();
+    QVERIFY(bar);
+    QVERIFY(cancel);
+
+    // Direct: each task's text, and its cancel button
+    struct Expected {
+        int id;
+        bool cancellable;
+        const char *text;
+    };
+    const QList<Expected> expected = {
+        {SessionModel::SaveTask, false, "Saving sessions: 1 / 3"},
+        {SessionModel::LoadTask, true, "Loading sessions: 1 / 3"},
+        {SessionModel::BulkEditTask, false, "Updating sessions: 1 / 3"},
+        {SessionModel::ColumnTask, true, "Computing columns: 1 / 3"},
+        {SessionModel::ColumnFillTask, false, "Computing results: 1 / 3"},
+    };
+    for (const Expected &e : expected) {
+        m_logbook->onActiveTaskChanged(e.id, e.cancellable);
+        m_logbook->onProgressChanged(e.id, 2, 3);
+        QVERIFY2(bar->isVisibleTo(m_logbook), e.text);
+        QCOMPARE(bar->text(), QString::fromLatin1(e.text));
+        QCOMPARE(cancel->isVisibleTo(m_logbook), e.cancellable);
+    }
+    QCOMPARE(bar->format(), QStringLiteral("Computing results: %v / %m"));
+    // A report for another task than the active one changes nothing
+    m_logbook->onProgressChanged(SessionModel::ColumnTask, 0, 5);
+    QCOMPARE(bar->text(), QStringLiteral("Computing results: 1 / 3"));
+    QCOMPARE(bar->format(), QStringLiteral("Computing results: %v / %m"));
+    m_logbook->onSchedulerIdle();
+    QVERIFY(!bar->isVisibleTo(m_logbook));
+    QVERIFY(!cancel->isVisibleTo(m_logbook));
+
+    // Live: a fill over unloaded sessions, wired as LogbookDockFeature wires it
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
+    QVERIFY(waitForIdle(*m_model));
+    for (const char *id : {"s1", "s2", "s3", "s4"})
+        QVERIFY2(!m_model->rowAt(m_model->getSessionRow(QString::fromLatin1(id))).isLoaded(), id);
+    IdleScheduler &scheduler = m_model->scheduler();
+    connect(&scheduler, &IdleScheduler::activeTaskChanged, m_logbook, &LogbookView::onActiveTaskChanged);
+    connect(&scheduler, &IdleScheduler::progressChanged, m_logbook, &LogbookView::onProgressChanged);
+    connect(&scheduler, &IdleScheduler::schedulerIdle, m_logbook, &LogbookView::onSchedulerIdle);
+    // Connected after the view's slot, so it sees the format that slot set
+    QObject scope;
+    QList<std::pair<int, QString>> reports;
+    connect(&scheduler, &IdleScheduler::progressChanged, &scope, [&](int id, int, int) {
+        if (id == SessionModel::ColumnFillTask || id == SessionModel::ColumnTask)
+            reports.append({id, bar->format()});
+    });
+
+    gate().open(16);
+    enableColumns({QStringLiteral("G_OUT")});
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+
+    int fillReports = 0;
+    for (const auto &[id, format] : std::as_const(reports)) {
+        if (id == SessionModel::ColumnFillTask) {
+            ++fillReports;
+            QCOMPARE(format, QStringLiteral("Computing results: %v / %m"));
+        } else {
+            QCOMPARE(format, QStringLiteral("Computing columns: %v / %m"));
+        }
+    }
+    QVERIFY(fillReports > 0);
+    QTRY_VERIFY(!bar->isVisible());
+}
+
 // Sorting treats a pending cell as unavailable: missing values go to the
 // bottom both ways, and the index does not change.
 void LogbookIndicatorsTest::sortingTreatsPendingAsUnavailable()
@@ -1037,6 +1299,8 @@ void LogbookIndicatorsTest::unreadableRecordPendingIsNotDemandPending()
     m_queue = std::make_unique<JobQueue>(m_model.get());
     const Quiet quiet(*m_queue);
     m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
+    m_clock = std::make_unique<WorkingAnimation>();
+    followDemand(m_clock.get(), m_demand.get());
     QVERIFY(buildUi());
 
     {

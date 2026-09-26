@@ -11,9 +11,10 @@
 //
 // What is proved here is what the view owns: plain rows are the base
 // delegate's, the working indicator and the warning badge are painted, a
-// click anywhere is the base delegate's click, the tooltip, the repaint, and
-// the working indicator's clock (DemandIndicator.h), which runs only while a
-// plot is working.
+// click anywhere is the base delegate's click, the tooltip, the repaint, the
+// application's working-indicator clock, made to follow the demand layer by
+// followDemand() (DemandIndicatorView.h), which runs only while a plot is
+// working, and the glyph plumbing both views share.
 // State, counts and what is computed are CalculationDemand's
 // (tst_calculation_demand).
 //
@@ -36,12 +37,14 @@
 #include <QSettings>
 #include <QSignalSpy>
 #include <QStyleFactory>
+#include <QStyleOptionHeader>
 #include <QStyledItemDelegate>
 #include <QToolTip>
 #include <QTreeView>
 #include <QtTest>
 
 #include "calculationdemand.h"
+#include "demandstate.h"
 #include "engine/calculationregistry.h"
 #include "jobfixture.h"
 #include "jobmodel.h"
@@ -57,6 +60,7 @@
 #include "testenvironment.h"
 #include "testutil.h"
 #include "ui/docks/DemandIndicator.h"
+#include "ui/docks/DemandIndicatorView.h"
 #include "ui/docks/plotselection/PlotRowDelegate.h"
 
 using namespace FlySight;
@@ -129,6 +133,7 @@ private slots:
     void plotStateChangeRepaintsRow();
     void survivesDemandDestroyedFirst();
     void workingAnimationClock();
+    void sharedGlyphPlumbing();
     void workingIndicatorAnimatesOnlyWhileWorking();
     void badgeReplacesIndicatorOnceFinished();
     void hoverDetailFollowsDemandState();
@@ -205,7 +210,7 @@ private:
         return m_view->style()->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &opt, m_view.get());
     }
     QPoint checkBoxCentre(const QModelIndex &index) const { return checkBoxRect(index).center(); }
-    /// A point of the row on the plot's name: not the check box, not the cluster.
+    /// A point of the row on the plot's name: not the check box, not the glyph.
     QPoint namePoint(const QModelIndex &index) const
     {
         const QRect box = checkBoxRect(index);
@@ -271,27 +276,12 @@ private:
         return image;
     }
 
-    /// The indicator's slot of a working row (the right-most glyph of its
-    /// cluster), and the label's rect left of it, as PlotRowLayout places them.
-    QRect indicatorSlot(const QModelIndex &index) const
+    /// The row left of its glyph: the check box and the name.
+    QRect besideGlyph(const QModelIndex &index) const
     {
-        const QRect cluster = m_delegate->clusterRect(index);
-        const int side = glyphSide(index);
-        return QRect(cluster.right() - side + 1, cluster.top() + (cluster.height() - side) / 2, side, side);
-    }
-    QRect labelRect(const QModelIndex &index) const
-    {
-        const QRect cluster = m_delegate->clusterRect(index);
-        const int side = glyphSide(index);
-        const int spacing = qMax(2, side / 4);
-        return QRect(cluster.left(), cluster.top(), cluster.width() - side - spacing, cluster.height());
-    }
-    /// The badge's slot of a badged row (the left-most glyph of its cluster).
-    QRect badgeSlot(const QModelIndex &index) const
-    {
-        const QRect cluster = m_delegate->clusterRect(index);
-        const int side = glyphSide(index);
-        return QRect(cluster.left(), cluster.top() + (cluster.height() - side) / 2, side, side);
+        const QRect row = m_view->visualRect(index);
+        const QRect glyph = m_delegate->indicatorRect(index);
+        return QRect(row.left(), row.top(), glyph.left() - row.left(), row.height());
     }
     /// PlotRowDelegate's glyph side: one text line, within the row.
     int glyphSide(const QModelIndex &index) const
@@ -312,7 +302,7 @@ private:
 
     /// Syn/g checked from code with s1 and s2 visible: the demand layer starts
     /// s1 (held in the gate, its progress text delivered) and chooses s2 next.
-    /// The row is working, "0 of 2". Invalid on any other outcome.
+    /// The row is working: 0 of 2 done. Invalid on any other outcome.
     QModelIndex makeWorkingRow()
     {
         check("g");
@@ -325,7 +315,7 @@ private:
             }))
             return QModelIndex();
         const DemandState state = row("Syn/g");
-        if (!state.isWorking() || state.progressLabel != QStringLiteral("0 of 2")
+        if (!state.isWorking() || state.doneCount != 0 || state.wantedCount != 2
             || sessionIdsOf(state.running) != QStringList({"s1"})
             || state.waitingCount != 1 || m_queue->job(m_queue->chosenNextJob()).sessionId != QLatin1String("s2"))
             return QModelIndex();
@@ -339,6 +329,7 @@ private:
     std::unique_ptr<JobQueue> m_queue;
     std::unique_ptr<PlotModel> m_plots;
     std::unique_ptr<CalculationDemand> m_demand;
+    std::unique_ptr<WorkingAnimation> m_clock;  // the application's one clock, as MainWindow makes it
     std::unique_ptr<QTreeView> m_view;
     PlotRowDelegate *m_delegate = nullptr;      // a child of the view
     QStringList m_registryBefore;
@@ -386,6 +377,8 @@ bool PlotRowDelegateTest::buildUi(const QVector<PlotValue> &plots, QSettings *se
     if (!plotsLater)
         m_plots->setPlots(plots);
     m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
+    m_clock = std::make_unique<WorkingAnimation>();
+    followDemand(m_clock.get(), m_demand.get());
 
     // As PlotSelectionDockFeature configures its view
     m_view = std::make_unique<QTreeView>();
@@ -393,7 +386,7 @@ bool PlotRowDelegateTest::buildUi(const QVector<PlotValue> &plots, QSettings *se
     m_view->setHeaderHidden(true);
     m_view->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_view->resize(300, 300);
-    m_delegate = new PlotRowDelegate(m_demand.get(), m_view.get());
+    m_delegate = new PlotRowDelegate(m_demand.get(), m_clock.get(), m_view.get());
     // Pixel comparisons need a still indicator (frame 0, the static glyph);
     // the animation tests unfreeze it
     m_delegate->animation()->setFrozen(true);
@@ -417,6 +410,7 @@ void PlotRowDelegateTest::destroyUi()
     m_delegate = nullptr;
     m_view.reset();
     m_demand.reset();
+    m_clock.reset();
     m_plots.reset();
 }
 
@@ -490,19 +484,19 @@ void PlotRowDelegateTest::plainRowsAreIdenticalToBaseDelegate()
     QVERIFY(row("Syn/plain").isPlain());
     with = grabViewport();
     QCOMPARE(with, grabViewportWithBaseDelegate());
-    QCOMPARE(m_delegate->clusterRect(indexOf("Syn/plain")), QRect());
+    QCOMPARE(m_delegate->indicatorRect(indexOf("Syn/plain")), QRect());
 
     // Without a component every row is plain, whatever is checked. (Checking
     // Syn/g starts s1 in the gate; cleanup() opens it.)
     check("g");
     QVERIFY(!row("Syn/g").isPlain());
-    PlotRowDelegate inert(nullptr, m_view.get());
+    PlotRowDelegate inert(nullptr, nullptr, m_view.get());
     m_view->setItemDelegate(&inert);
     QApplication::processEvents();
     const QImage withInert = m_view->viewport()->grab().toImage();
     m_view->setItemDelegate(m_delegate);
     QCOMPARE(withInert, grabViewportWithBaseDelegate());
-    QCOMPARE(inert.clusterRect(indexOf("Syn/g")), QRect());
+    QCOMPARE(inert.indicatorRect(indexOf("Syn/g")), QRect());
     QVERIFY(inert.toolTipFor(indexOf("Syn/g")).isEmpty());
 }
 
@@ -512,22 +506,29 @@ void PlotRowDelegateTest::workingRowPaintsIndicator()
     const QModelIndex index = makeWorkingRow();
     QVERIFY(index.isValid());
 
-    // The cluster sits inside the row, right-aligned, clear of the check box
-    const QRect cluster = m_delegate->clusterRect(index);
-    QVERIFY(!cluster.isNull());
+    // The glyph sits inside the row, right-aligned, clear of the check box
+    const QRect indicatorRect = m_delegate->indicatorRect(index);
+    QVERIFY(!indicatorRect.isNull());
+    QCOMPARE(indicatorRect.size(), QSize(glyphSide(index), glyphSide(index)));
     const QRect rowRect = m_view->visualRect(index);
-    QVERIFY(rowRect.contains(cluster));
-    QVERIFY(cluster.left() > checkBoxRect(index).right());
-    QVERIFY(cluster.center().x() > rowRect.center().x());
+    QVERIFY(rowRect.contains(indicatorRect));
+    QVERIFY(indicatorRect.left() > checkBoxRect(index).right());
+    QVERIFY(indicatorRect.center().x() > rowRect.center().x());
 
     const QImage with = grabViewport();
     const QImage base = grabViewportWithBaseDelegate();
-    QVERIFY(cut(with, cluster) != cut(base, cluster));                              // label and indicator
-    // The indicator is the right-most element: the arc's right-hand side
-    const int side = qMax(2, cluster.height() / 4);
-    const QRect indicatorEdge(cluster.right() - side + 1, cluster.top(), side, cluster.height());
+    QVERIFY(cut(with, indicatorRect) != cut(base, indicatorRect));                  // the indicator
+    // The arc's right-hand side
+    const int side = qMax(2, indicatorRect.height() / 4);
+    const QRect indicatorEdge(indicatorRect.right() - side + 1, indicatorRect.top(), side, indicatorRect.height());
     QVERIFY(cut(with, indicatorEdge) != cut(base, indicatorEdge));
     QCOMPARE(cut(with, checkBoxRect(index)), cut(base, checkBoxRect(index)));       // the check box is the style's
+    // No label: the name "g" fits, so the row left of the glyph is the base
+    // delegate's; and so is the right margin
+    QCOMPARE(cut(with, besideGlyph(index)), cut(base, besideGlyph(index)));
+    const QRect margin(indicatorRect.right() + 1, rowRect.top(), rowRect.right() - indicatorRect.right(),
+                       rowRect.height());
+    QCOMPARE(cut(with, margin), cut(base, margin));
     // Every other row is untouched
     const QRect other = m_view->visualRect(indexOf("Syn/g2"));
     QCOMPARE(cut(with, other), cut(base, other));
@@ -538,15 +539,15 @@ void PlotRowDelegateTest::workingRowPaintsIndicator()
 }
 
 // Two rows in the same state, one with a name that does not fit: the name
-// gives way, and the cluster is painted exactly as on the row with room.
+// gives way, and the glyph is painted exactly as on the row with room.
 void PlotRowDelegateTest::longNameIsElidedNotTheCluster()
 {
     QVector<PlotValue> plots = PlotFixture::plots();
     plots[0].plotName = QStringLiteral("A plot with a name that certainly does not fit in this narrow view");
     destroyUi();
     QVERIFY(buildUi(plots));
-    // Room for the check box, the cluster ("0 of 2" and the indicator) and a
-    // little of the name, which is far longer
+    // Room for the check box, the glyph and a little of the name, which is
+    // far longer
     m_view->resize(220, 300);
     spin();
 
@@ -555,38 +556,52 @@ void PlotRowDelegateTest::longNameIsElidedNotTheCluster()
     check("g2");
     QVERIFY(gate().waitEntered());
     const DemandState g = row("Syn/g");
-    QCOMPARE(g.progressLabel, QStringLiteral("0 of 2"));
-    QCOMPARE(row("Syn/g2").progressLabel, g.progressLabel);
+    QCOMPARE(g.doneCount, 0);
+    QCOMPARE(g.wantedCount, 2);
+    QCOMPARE(row("Syn/g2").doneCount, g.doneCount);
+    QCOMPARE(row("Syn/g2").wantedCount, g.wantedCount);
     QCOMPARE(row("Syn/g2").wantedCount, 2);
     const QModelIndex longRow = indexOf("Syn/g");
     const QModelIndex shortRow = indexOf("Syn/g2");
 
-    // The cluster is fully visible
+    // The base delegate elides the long name at a character boundary, so what
+    // it leaves may end short of the narrow glyph: widen the view a pixel at a
+    // time until it runs into the glyph's place (asserted below)
+    const auto baseRunsIntoGlyph = [&] {
+        const QImage base = grabViewportWithBaseDelegate();
+        return cut(base, m_delegate->indicatorRect(longRow)) != cut(base, m_delegate->indicatorRect(shortRow));
+    };
+    for (int width = 220; width < 260 && !baseRunsIntoGlyph(); ++width) {
+        m_view->resize(width + 1, 300);
+        spin();
+    }
+
+    // The glyph is fully visible
     const QRect viewport = m_view->viewport()->rect();
-    const QRect cluster = m_delegate->clusterRect(longRow);
-    QVERIFY(!cluster.isNull());
-    QVERIFY(viewport.contains(cluster));
-    QVERIFY(cluster.left() > checkBoxRect(longRow).right());
+    const QRect glyph = m_delegate->indicatorRect(longRow);
+    QVERIFY(!glyph.isNull());
+    QVERIFY(viewport.contains(glyph));
+    QVERIFY(glyph.left() > checkBoxRect(longRow).right());
     QCOMPARE(m_view->visualRect(longRow).right(), viewport.right());
 
-    // The band over the label and the indicator of each row (same x, other y)
-    const auto clusterBand = [&](const QModelIndex &index) { return m_delegate->clusterRect(index); };
-    QCOMPARE(clusterBand(longRow).left(), clusterBand(shortRow).left());
-    QCOMPARE(clusterBand(longRow).width(), clusterBand(shortRow).width());
+    // The band over the glyph of each row (same x, other y)
+    const auto glyphBand = [&](const QModelIndex &index) { return m_delegate->indicatorRect(index); };
+    QCOMPARE(glyphBand(longRow).left(), glyphBand(shortRow).left());
+    QCOMPARE(glyphBand(longRow).width(), glyphBand(shortRow).width());
 
     const QImage with = grabViewport();
     const QImage base = grabViewportWithBaseDelegate();
     // The base delegate runs the long name through the band ...
-    QVERIFY(cut(base, clusterBand(longRow)) != cut(base, clusterBand(shortRow)));
-    // ... this one keeps it clear: both clusters are the same picture
-    QCOMPARE(cut(with, clusterBand(longRow)), cut(with, clusterBand(shortRow)));
-    QVERIFY(cut(with, clusterBand(longRow)) != cut(base, clusterBand(longRow)));
+    QVERIFY(cut(base, glyphBand(longRow)) != cut(base, glyphBand(shortRow)));
+    // ... this one keeps it clear: both glyphs are the same picture
+    QCOMPARE(cut(with, glyphBand(longRow)), cut(with, glyphBand(shortRow)));
+    QVERIFY(cut(with, glyphBand(longRow)) != cut(base, glyphBand(longRow)));
     // The check box is where it was, and what is left of the name is still
     // painted between the two
     QCOMPARE(cut(with, checkBoxRect(longRow)), cut(base, checkBoxRect(longRow)));
     QRect name = m_view->visualRect(longRow);
     name.setLeft(checkBoxRect(longRow).right() + 1);
-    name.setRight(clusterBand(longRow).left() - 1);
+    name.setRight(glyphBand(longRow).left() - 1);
     QVERIFY(name.width() > 0);
     const QImage nameImage = cut(with, name);
     bool painted = false;
@@ -624,7 +639,8 @@ void PlotRowDelegateTest::checkBoxClickChecksThroughTheModel()
     QVERIFY(gate().waitEntered());
     const DemandState state = row("Syn/g");
     QVERIFY(state.isWorking());
-    QCOMPARE(state.progressLabel, QStringLiteral("0 of 2"));
+    QCOMPARE(state.doneCount, 0);
+    QCOMPARE(state.wantedCount, 2);
     QCOMPARE(sessionIdsOf(state.running), QStringList({"s1"}));
     QCOMPARE(state.waitingCount, 1);
     QCOMPARE(m_queue->job(m_queue->chosenNextJob()).sessionId, QStringLiteral("s2"));
@@ -658,7 +674,8 @@ void PlotRowDelegateTest::spaceKeyChecksThroughTheModel()
     QVERIFY(gate().waitEntered());
     const DemandState state = row("Syn/g");
     QVERIFY(state.isWorking());
-    QCOMPARE(state.progressLabel, QStringLiteral("0 of 2"));
+    QCOMPARE(state.doneCount, 0);
+    QCOMPARE(state.wantedCount, 2);
     QCOMPARE(queuedSpy.count(), 2);
 
     gate().open();
@@ -691,7 +708,7 @@ void PlotRowDelegateTest::uncheckByClickDropsWaitingWork()
     QCOMPARE(m_queue->job(running).state, JobState::Running);
     QVERIFY(!m_queue->job(running).cancelRequested);
     QVERIFY(row("Syn/g").isPlain());
-    QCOMPARE(m_delegate->clusterRect(index), QRect());
+    QCOMPARE(m_delegate->indicatorRect(index), QRect());
 
     // Checked again, s2 is chosen next again; Space drops it the same way
     check("g");
@@ -760,8 +777,9 @@ void PlotRowDelegateTest::programmaticCheckIsTheSameAsAClick()
         QVERIFY2(gate().waitEntered(), path.name);                      // s1
         const DemandState state = row("Syn/g");
         QVERIFY2(state.isWorking(), path.name);
-        QCOMPARE(state.progressLabel, QStringLiteral("0 of 2"));
-        QVERIFY2(!m_delegate->clusterRect(index).isNull(), path.name);
+        QCOMPARE(state.doneCount, 0);
+        QCOMPARE(state.wantedCount, 2);
+        QVERIFY2(!m_delegate->indicatorRect(index).isNull(), path.name);
         gate().open();
         QVERIFY2(gate().waitEntered(), path.name);                      // s2
         gate().open();
@@ -813,7 +831,7 @@ void PlotRowDelegateTest::startupRestoreWithHiddenSessionsStartsNothingWithViewA
     const DemandState state = row("Syn/g");
     QVERIFY(state.isPlain());
     QCOMPARE(state.wantedCount, 0);
-    QCOMPARE(m_delegate->clusterRect(index), QRect());
+    QCOMPARE(m_delegate->indicatorRect(index), QRect());
     spin();
     QVERIFY(quiet.holds());
     QVERIFY(m_queue->isIdle());
@@ -824,9 +842,10 @@ void PlotRowDelegateTest::startupRestoreWithHiddenSessionsStartsNothingWithViewA
     QVERIFY(gate().waitEntered());
     const DemandState working = row("Syn/g");
     QVERIFY(working.isWorking());
-    QCOMPARE(working.progressLabel, QStringLiteral("0 of 1"));
+    QCOMPARE(working.doneCount, 0);
+    QCOMPARE(working.wantedCount, 1);
     QCOMPARE(sessionIdsOf(working.running), QStringList({"s1"}));
-    QVERIFY(!m_delegate->clusterRect(index).isNull());
+    QVERIFY(!m_delegate->indicatorRect(index).isNull());
     gate().open();
     QVERIFY(waitDemandIdle(*m_queue, *m_demand));
     QVERIFY(row("Syn/g").isPlain());
@@ -838,8 +857,8 @@ void PlotRowDelegateTest::startupRestoreWithHiddenSessionsStartsNothingWithViewA
 
 // ---- Nothing in the row is clickable ------------------------------------------------------
 
-// Left, right, middle and double clicks over the working indicator and its
-// label, and over the warning badge and its count, out to the row's edge: no
+// Left, right, middle and double clicks over the working indicator and over
+// the warning badge, out to the row's edge: no
 // job is created or cancelled, no check is toggled, and the current index and
 // the selection are exactly what the base delegate leaves for the same clicks.
 void PlotRowDelegateTest::clickOnClusterIsAClickOnTheRow()
@@ -859,14 +878,14 @@ void PlotRowDelegateTest::clickOnClusterIsAClickOnTheRow()
     QVERIFY(workingRow.isValid());
     const DemandState working = row("Syn/g");
 
-    // Both clusters are painted
+    // Both glyphs are painted
     {
         const QImage with = grabViewport();
         const QImage base = grabViewportWithBaseDelegate();
         for (const QModelIndex &index : {workingRow, badgeRow}) {
-            const QRect cluster = m_delegate->clusterRect(index);
-            QVERIFY(!cluster.isNull());
-            QVERIFY(cut(with, cluster) != cut(base, cluster));
+            const QRect glyph = m_delegate->indicatorRect(index);
+            QVERIFY(!glyph.isNull());
+            QVERIFY(cut(with, glyph) != cut(base, glyph));
         }
     }
 
@@ -877,11 +896,11 @@ void PlotRowDelegateTest::clickOnClusterIsAClickOnTheRow()
     QStyledItemDelegate base;
 
     for (const QModelIndex &index : {workingRow, badgeRow}) {
-        const QRect cluster = m_delegate->clusterRect(index);
+        const QRect glyph = m_delegate->indicatorRect(index);
         const QRect rowRect = m_view->visualRect(index);
-        const int y = cluster.center().y();
-        const QList<QPoint> points = {cluster.center(), QPoint(cluster.left(), y), QPoint(cluster.right(), y),
-                                      QPoint(cluster.right(), cluster.top()), QPoint(rowRect.right(), y)};
+        const int y = glyph.center().y();
+        const QList<QPoint> points = {glyph.center(), QPoint(glyph.left(), y), QPoint(glyph.right(), y),
+                                      QPoint(glyph.right(), glyph.top()), QPoint(rowRect.right(), y)};
         for (const QPoint &point : points) {
             for (const Click kind : {Click::Left, Click::Right, Click::Middle, Click::Double}) {
                 const QByteArray what = QByteArray::number(int(kind)) + " at "
@@ -971,7 +990,7 @@ void PlotRowDelegateTest::plotStateChangeRepaintsRow()
     QCOMPARE(changedSpy.count(), 1);
     QCOMPARE(changedSpy.at(0).at(0).toString(), QStringLiteral("Syn/g"));
     QCOMPARE(row("Syn/g").wantedCount, 3);
-    QCOMPARE(row("Syn/g").progressLabel, QStringLiteral("0 of 3"));
+    QCOMPARE(row("Syn/g").doneCount, 0);
     QTRY_VERIFY(paints->count > before);
     QCOMPARE(plotModelSpy.count(), 0);
 
@@ -987,17 +1006,19 @@ void PlotRowDelegateTest::survivesDemandDestroyedFirst()
 {
     const QModelIndex index = makeWorkingRow();
     QVERIFY(index.isValid());
-    const QPoint inCluster = m_delegate->clusterRect(index).center();
+    const QPoint inGlyph = m_delegate->indicatorRect(index).center();
     const Quiet quiet(*m_queue);
 
     m_demand.reset();
 
+    // The delegate's clock is the application's, stopped when the demand layer went
+    QVERIFY(m_delegate->animation() == m_clock.get());
     QVERIFY(!m_delegate->animation()->isActive());
-    QCOMPARE(m_delegate->clusterRect(index), QRect());
+    QCOMPARE(m_delegate->indicatorRect(index), QRect());
     QVERIFY(m_delegate->toolTipFor(index).isEmpty());
-    click(inCluster);
-    QTest::mouseDClick(m_view->viewport(), Qt::LeftButton, {}, inCluster);
-    QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, inCluster);
+    click(inGlyph);
+    QTest::mouseDClick(m_view->viewport(), Qt::LeftButton, {}, inGlyph);
+    QTest::mouseRelease(m_view->viewport(), Qt::LeftButton, {}, inGlyph);
     QVERIFY(isChecked(index));
 
     click(checkBoxCentre(index));               // the check box still works
@@ -1010,7 +1031,7 @@ void PlotRowDelegateTest::survivesDemandDestroyedFirst()
     QVERIFY(isChecked(index));
 
     const QStyleOptionViewItem opt = optionFor(index);
-    QHelpEvent event(QEvent::ToolTip, inCluster, m_view->viewport()->mapToGlobal(inCluster));
+    QHelpEvent event(QEvent::ToolTip, inGlyph, m_view->viewport()->mapToGlobal(inGlyph));
     QVERIFY(!m_delegate->helpEvent(&event, m_view.get(), opt, index));
 
     QApplication::processEvents();
@@ -1070,6 +1091,118 @@ void PlotRowDelegateTest::workingAnimationClock()
     QVERIFY(clock.isTicking());
     clock.setActive(false);
     QVERIFY(!clock.isTicking());
+
+    // Made to follow no demand layer: inactive at once; no clock: nothing
+    WorkingAnimation follower;
+    followDemand(&follower, nullptr);
+    QVERIFY(!follower.isActive());
+    QVERIFY(!follower.isTicking());
+    followDemand(nullptr, nullptr);
+    followDemand(nullptr, m_demand.get());
+}
+
+// The glyph plumbing both views share returns what each view computed on its
+// own before: the metrics (DemandIndicator.h), and the colour and the tooltip
+// display (DemandIndicatorView.h).
+void PlotRowDelegateTest::sharedGlyphPlumbing()
+{
+    // Metrics: side = min(room, line height), spacing = max(2, side / 4)
+    const QFontMetrics fm = m_view->fontMetrics();
+    QCOMPARE(glyphMetrics(fm, 1000).side, fm.height());
+    QCOMPARE(glyphMetrics(fm, 7).side, 7);
+    QCOMPARE(glyphMetrics(fm, 7).spacing, 2);
+    QCOMPARE(glyphMetrics(fm, 40).spacing, qMax(2, qMin(40, fm.height()) / 4));
+    for (int room = 0; room <= 3 * fm.height(); ++room) {
+        const GlyphMetrics glyph = glyphMetrics(fm, room);
+        QCOMPARE(glyph.reserve(), glyph.side + glyph.spacing);
+        // The removed per-view rules: the plot row's (room = row height - 2)
+        // and the header's (room = the label's height), which were the same
+        const int side = qMin(room, fm.height());
+        QCOMPARE(glyph.side, side);
+        QCOMPARE(glyph.spacing, qMax(2, side / 4));
+    }
+
+    // Colours: a palette in which every (group, role) used has its own colour
+    QPalette p;
+    const QList<QPalette::ColorGroup> groups = {QPalette::Normal, QPalette::Inactive, QPalette::Disabled};
+    const QList<QPalette::ColorRole> roles = {QPalette::Text, QPalette::HighlightedText, QPalette::ButtonText};
+    int n = 0;
+    for (const QPalette::ColorGroup group : groups) {
+        for (const QPalette::ColorRole role : roles) {
+            ++n;
+            p.setColor(group, role, QColor(20 * n, 255 - 20 * n, 7 * n));
+        }
+    }
+
+    QStyleOptionViewItem v;
+    v.palette = p;
+    v.state = QStyle::State_Enabled | QStyle::State_Active;
+    QCOMPARE(glyphColor(v), p.color(QPalette::Normal, QPalette::Text));
+    v.state |= QStyle::State_Selected;
+    QCOMPARE(glyphColor(v), p.color(QPalette::Normal, QPalette::HighlightedText));
+    v.state = QStyle::State_Enabled;                                // an inactive window
+    QCOMPARE(glyphColor(v), p.color(QPalette::Inactive, QPalette::Text));
+    v.state = QStyle::State_None;
+    QCOMPARE(glyphColor(v), p.color(QPalette::Disabled, QPalette::Text));
+    v.state = QStyle::State_Active;
+    QCOMPARE(glyphColor(v), p.color(QPalette::Disabled, QPalette::Text));
+
+    QStyleOptionHeader h;
+    h.palette = p;
+    h.state = QStyle::State_Enabled | QStyle::State_Active;
+    QCOMPARE(glyphColor(h), p.color(QPalette::Normal, QPalette::ButtonText));
+    h.state = QStyle::State_Enabled;
+    QCOMPARE(glyphColor(h), p.color(QPalette::Inactive, QPalette::ButtonText));
+    h.state = QStyle::State_Active;
+    QCOMPARE(glyphColor(h), p.color(QPalette::Disabled, QPalette::ButtonText));
+
+    // Every combination, against the removed per-view rules
+    const QList<QStyle::State> flags = {QStyle::State_Enabled, QStyle::State_Active, QStyle::State_Selected};
+    for (int mask = 0; mask < 8; ++mask) {
+        QStyle::State state = QStyle::State_None;
+        for (int bit = 0; bit < 3; ++bit) {
+            if (mask & (1 << bit))
+                state |= flags.at(bit);
+        }
+        // The plot row's
+        QPalette::ColorGroup rowGroup = (state & QStyle::State_Enabled) ? QPalette::Normal : QPalette::Disabled;
+        if (rowGroup == QPalette::Normal && !(state & QStyle::State_Active))
+            rowGroup = QPalette::Inactive;
+        const bool selected = state & QStyle::State_Selected;
+        v.state = state;
+        QCOMPARE(glyphColor(v), p.color(rowGroup, selected ? QPalette::HighlightedText : QPalette::Text));
+        // The header's: ButtonText whatever the selection
+        QPalette::ColorGroup headerGroup = QPalette::Normal;
+        if (!(state & QStyle::State_Enabled))
+            headerGroup = QPalette::Disabled;
+        else if (!(state & QStyle::State_Active))
+            headerGroup = QPalette::Inactive;
+        h.state = state;
+        QCOMPARE(glyphColor(h), p.color(headerGroup, QPalette::ButtonText));
+        QVERIFY(glyphColor(h) != p.color(headerGroup, QPalette::HighlightedText));
+    }
+
+    // The tooltip: shown for a state with one, nothing for a plain state or
+    // without an event
+    QToolTip::hideText();
+    QVERIFY(QTest::qWaitFor([] { return !QToolTip::isVisible(); }, 2000));
+    QWidget *viewport = m_view->viewport();
+    const QRect area = viewport->rect();
+    const QPoint position = area.center();
+    QHelpEvent event(QEvent::ToolTip, position, viewport->mapToGlobal(position));
+
+    const DemandState plain;
+    QVERIFY(!showIndicatorToolTip(&event, plain, viewport, area));
+    QVERIFY(!QToolTip::isVisible());
+
+    DemandState working;
+    working.waitingCount = 1;
+    working.toolTip = QStringLiteral("Computing: 0 of 1 done");
+    QVERIFY(!showIndicatorToolTip(nullptr, working, viewport, area));
+    QVERIFY(!QToolTip::isVisible());
+    QVERIFY(showIndicatorToolTip(&event, working, viewport, area));
+    QCOMPARE(QToolTip::text(), working.toolTip);
+    QToolTip::hideText();
 }
 
 // The arc turns while the plot works: a frame repaints the row and moves only
@@ -1088,9 +1221,8 @@ void PlotRowDelegateTest::workingIndicatorAnimatesOnlyWhileWorking()
     clock->advance();
     QTRY_VERIFY(paints->count > before);
     const QImage frame1 = m_view->viewport()->grab().toImage();
-    QVERIFY(cut(frame1, m_delegate->clusterRect(index)) != cut(frame0, m_delegate->clusterRect(index)));
-    QVERIFY(cut(frame1, indicatorSlot(index)) != cut(frame0, indicatorSlot(index)));
-    QCOMPARE(cut(frame1, labelRect(index)), cut(frame0, labelRect(index)));        // "0 of 2"
+    QVERIFY(cut(frame1, m_delegate->indicatorRect(index)) != cut(frame0, m_delegate->indicatorRect(index)));
+    QCOMPARE(cut(frame1, besideGlyph(index)), cut(frame0, besideGlyph(index)));
     QCOMPARE(cut(frame1, checkBoxRect(index)), cut(frame0, checkBoxRect(index)));
 
     clock->setFrozen(false);
@@ -1131,16 +1263,18 @@ void PlotRowDelegateTest::badgeReplacesIndicatorOnceFinished()
     QVERIFY(!m_delegate->animation()->isActive());
 
     const QImage badged = grabViewport();
-    const QRect cluster = m_delegate->clusterRect(badgeRow);
-    QVERIFY(!cluster.isNull());
-    QVERIFY(hasPixel(badged, cluster, qRgb(0xE6, 0x9F, 0x00)));
+    const QRect badge = m_delegate->indicatorRect(badgeRow);
+    QVERIFY(!badge.isNull());
+    QVERIFY(hasPixel(badged, badge, qRgb(0xE6, 0x9F, 0x00)));
+    // No count: the row left of the badge is the base delegate's
+    QCOMPARE(cut(badged, besideGlyph(badgeRow)), cut(grabViewportWithBaseDelegate(), besideGlyph(badgeRow)));
 
     // The glyph slot holds the badge, not a working row's arc at frame 0
     const QModelIndex workingRow = makeWorkingRow();
     QVERIFY(workingRow.isValid());
     const QImage working = grabViewport();
-    QVERIFY(!hasPixel(working, m_delegate->clusterRect(workingRow), qRgb(0xE6, 0x9F, 0x00)));
-    QVERIFY(cut(badged, badgeSlot(badgeRow)) != cut(working, indicatorSlot(workingRow)));
+    QVERIFY(!hasPixel(working, m_delegate->indicatorRect(workingRow), qRgb(0xE6, 0x9F, 0x00)));
+    QVERIFY(cut(badged, m_delegate->indicatorRect(badgeRow)) != cut(working, m_delegate->indicatorRect(workingRow)));
 
     const QString text = QStringLiteral("Could not be computed:\n  Jump 1 - Explicit A: negative input");
     QCOMPARE(row("Syn/ea").toolTip, text);
@@ -1162,7 +1296,7 @@ void PlotRowDelegateTest::hoverDetailFollowsDemandState()
         QHelpEvent event(QEvent::ToolTip, position, m_view->viewport()->mapToGlobal(position));
         return m_delegate->helpEvent(&event, m_view.get(), opt, index);
     };
-    QVERIFY(helpAt(indicatorSlot(index).center()));
+    QVERIFY(helpAt(m_delegate->indicatorRect(index).center()));
     QCOMPARE(QToolTip::text(), working);
 
     // s1 done, s2 running
@@ -1171,7 +1305,7 @@ void PlotRowDelegateTest::hoverDetailFollowsDemandState()
     const QString next = QStringLiteral("Computing: 1 of 2 done\n  Jump 2 - Gated: step 1");
     QTRY_COMPARE(row("Syn/g").toolTip, next);
     QCOMPARE(m_delegate->toolTipFor(index), next);
-    QVERIFY(helpAt(indicatorSlot(index).center()));
+    QVERIFY(helpAt(m_delegate->indicatorRect(index).center()));
     QCOMPARE(QToolTip::text(), next);
     QToolTip::hideText();
 }

@@ -24,11 +24,12 @@ PlotSelectionDockFeature::PlotSelectionDockFeature(const AppContext& ctx, QObjec
     m_treeView->setHeaderHidden(true);
     m_treeView->setEditTriggers(QAbstractItemView::NoEditTriggers);
 
-    // Rows of plots over requested calculations show an animated working
-    // indicator and "k of n" while their demand is computed, and a warning
-    // badge for sessions that could not be computed; hovering a row shows the
-    // detail (null demand layer: plain rows)
-    m_treeView->setItemDelegate(new PlotRowDelegate(ctx.calculationDemand, m_treeView));
+    // Rows of plots over requested calculations show one glyph: the turning
+    // working indicator while their demand is computed, or a warning badge for
+    // sessions that could not be computed. Hovering a row shows the counts and
+    // the detail. The indicator turns with the application's one clock (null
+    // demand layer: plain rows).
+    m_treeView->setItemDelegate(new PlotRowDelegate(ctx.calculationDemand, ctx.workingClock, m_treeView));
 
     // Preserve tree expansion state across model resets
     connect(m_plotModel, &QAbstractItemModel::modelAboutToBeReset,

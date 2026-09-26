@@ -422,6 +422,7 @@ set(PROJECT_SOURCES
   markermodel.cpp            markermodel.h
   ui/docks/AppContext.h
   ui/docks/DemandIndicator.h    ui/docks/DemandIndicator.cpp
+  ui/docks/DemandIndicatorView.h    ui/docks/DemandIndicatorView.cpp
   ui/docks/DockFeature.h
   ui/docks/DockRegistry.h    ui/docks/DockRegistry.cpp
   ui/docks/plotselection/PlotSelectionDockFeature.h    ui/docks/plotselection/PlotSelectionDockFeature.cpp

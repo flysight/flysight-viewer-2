@@ -6,52 +6,20 @@
 #include <QStringList>
 #include <QStyle>
 #include <QStyleOptionHeaderV2>
-#include <QToolTip>
 
 #include "calculationdemand.h"
 #include "sessionmodel.h"
 #include "ui/docks/DemandIndicator.h"
+#include "ui/docks/DemandIndicatorView.h"
 
 namespace FlySight {
 
-namespace {
-
-/// The header text's colour (CE_HeaderLabel draws with ButtonText), in the
-/// colour group the section is painted in.
-QColor glyphColor(const QStyleOptionHeader &opt)
-{
-    QPalette::ColorGroup group = QPalette::Normal;
-    if (!(opt.state & QStyle::State_Enabled))
-        group = QPalette::Disabled;
-    else if (!(opt.state & QStyle::State_Active))
-        group = QPalette::Inactive;
-    return opt.palette.color(group, QPalette::ButtonText);
-}
-
-/// The glyph's side and the room it takes beside the text, for one text line
-/// of `lineHeight` in a label `labelHeight` tall: the plot rows' rule.
-struct GlyphMetrics {
-    int side = 0;
-    int spacing = 0;
-    int reserve = 0;        // side + spacing
-};
-
-GlyphMetrics glyphMetrics(int labelHeight, int lineHeight)
-{
-    GlyphMetrics metrics;
-    metrics.side = qMin(labelHeight, lineHeight);
-    metrics.spacing = qMax(2, metrics.side / 4);
-    metrics.reserve = metrics.side + metrics.spacing;
-    return metrics;
-}
-
-} // namespace
-
-LogbookHeaderView::LogbookHeaderView(SessionModel *model, CalculationDemand *demand, QWidget *parent)
+LogbookHeaderView::LogbookHeaderView(SessionModel *model, CalculationDemand *demand, WorkingAnimation *clock,
+                                     QWidget *parent)
     : QHeaderView(Qt::Horizontal, parent)
     , m_model(model)
     , m_demand(demand)
-    , m_animation(new WorkingAnimation(this))
+    , m_clock(clock)
 {
     // What QTreeView gives its own header; QTreeView::setHeader() adds the rest
     setSectionsMovable(true);
@@ -61,18 +29,14 @@ LogbookHeaderView::LogbookHeaderView(SessionModel *model, CalculationDemand *dem
     if (m_demand) {
         connect(m_demand, &CalculationDemand::columnStateChanged,
                 this, &LogbookHeaderView::onColumnStateChanged);
-        connect(m_demand, &CalculationDemand::statesChanged,
-                this, &LogbookHeaderView::syncAnimation);
-        connect(m_animation, &WorkingAnimation::frameAdvanced,
-                this, &LogbookHeaderView::onAnimationFrame);
         // Without the demand layer every section is plain at once
-        connect(m_demand, &QObject::destroyed, this, [this] {
-            syncAnimation();
-            viewport()->update();
-        });
+        repaintWhenDemandDestroyed(m_demand, viewport());
+        // The clock follows the demand layer where it was made (followDemand());
+        // this header only repaints its own working sections on its frames
+        if (m_clock)
+            connect(m_clock, &WorkingAnimation::frameAdvanced,
+                    this, &LogbookHeaderView::onAnimationFrame);
     }
-    // Columns may already be working when the view is built
-    syncAnimation();
 }
 
 // ---- Mapping --------------------------------------------------------------------
@@ -119,7 +83,7 @@ QRect LogbookHeaderView::layoutGlyph(QStyleOptionHeaderV2 &opt) const
 {
     // SE_HeaderLabel already excludes the sort arrow when the section shows one
     const QRect label = style()->subElementRect(QStyle::SE_HeaderLabel, &opt, this);
-    const GlyphMetrics metrics = glyphMetrics(label.height(), opt.fontMetrics.height());
+    const GlyphMetrics metrics = glyphMetrics(opt.fontMetrics, label.height());
     if (metrics.side <= 0 || label.width() < metrics.side)
         return QRect();
 
@@ -127,7 +91,7 @@ QRect LogbookHeaderView::layoutGlyph(QStyleOptionHeaderV2 &opt) const
     // the glyph. CE_HeaderLabel would elide "name\n(unit)" as one string
     // against one width, so each line is elided here and the style elides
     // nothing more.
-    const int textWidth = qMax(0, label.width() - 2 * metrics.reserve);
+    const int textWidth = qMax(0, label.width() - 2 * metrics.reserve());
     QStringList lines = opt.text.split(QLatin1Char('\n'));
     int block = 0;
     for (QString &line : lines) {
@@ -178,8 +142,7 @@ QSize LogbookHeaderView::sectionSizeFromContents(int logicalIndex) const
         const QString id = columnIdOf(logicalIndex);
         if (!id.isEmpty() && m_demand->columnState(id).requested) {
             // Room for the glyph on both sides of the centred text
-            const int line = fontMetrics().height();
-            size.rwidth() += 2 * glyphMetrics(line, line).reserve;
+            size.rwidth() += 2 * glyphMetrics(fontMetrics(), fontMetrics().height()).reserve();
         }
     }
     return size;
@@ -209,10 +172,7 @@ void LogbookHeaderView::paintSection(QPainter *painter, const QRect &rect, int l
     painter->save();
     painter->setClipRect(rect);
     painter->setRenderHint(QPainter::Antialiasing);
-    if (state.isWorking())
-        drawWorkingGlyph(painter, QRectF(glyph), glyphColor(opt), m_animation->angle());
-    else
-        drawWarningGlyph(painter, QRectF(glyph));       // showsWarning(): the badge replaces the indicator
+    drawDemandGlyph(painter, QRectF(glyph), state, glyphColor(opt), m_clock);
     painter->restore();
 }
 
@@ -223,13 +183,10 @@ bool LogbookHeaderView::viewportEvent(QEvent *event)
     if (event->type() == QEvent::ToolTip) {
         auto *helpEvent = static_cast<QHelpEvent *>(event);
         const int logical = logicalIndexAt(helpEvent->pos());
-        const QString text = toolTipForSection(logical);
-        if (!text.isEmpty()) {
-            // Plain text as CalculationDemand built it: the whole section shows
-            // it, and it hides when the pointer leaves the section
-            QToolTip::showText(helpEvent->globalPos(), text, viewport(), sectionViewportRect(logical));
+        // The whole section shows the state's tooltip, which hides when the
+        // pointer leaves the section; a plain section keeps the base's
+        if (showIndicatorToolTip(helpEvent, stateFor(logical), viewport(), sectionViewportRect(logical)))
             return true;
-        }
     }
     return QHeaderView::viewportEvent(event);
 }
@@ -244,18 +201,11 @@ void LogbookHeaderView::onColumnStateChanged(const QString &columnId)
     }
 }
 
-void LogbookHeaderView::syncAnimation()
-{
-    m_animation->setActive(m_demand && !m_demand->workingColumnIds().isEmpty());
-}
-
 // Only the working sections show the arc: only they are repainted
 void LogbookHeaderView::onAnimationFrame()
 {
-    if (!m_demand) {
-        syncAnimation();
+    if (!m_demand)
         return;
-    }
     const QStringList working = m_demand->workingColumnIds();
     if (working.isEmpty())
         return;

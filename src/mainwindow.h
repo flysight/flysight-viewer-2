@@ -30,6 +30,7 @@ class PlotRangeModel;
 class MeasureModel;
 class JobQueue;
 class CalculationDemand;
+class WorkingAnimation;
 
 class MainWindow : public KDDockWidgets::QtWidgets::MainWindow
 {
@@ -134,6 +135,7 @@ private:
     MarkerModel *m_markerModel = nullptr;
     JobQueue *m_jobQueue = nullptr;             // the executor of requested calculations
     CalculationDemand *m_calculationDemand = nullptr; // the demand layer: plot and column demand, their state; destroyed before the executor
+    WorkingAnimation *m_workingClock = nullptr;  // the working indicator's one clock: follows the demand layer; destroyed right after it
 
     // Pointer to QActionGroup for tools
     QActionGroup *toolActionGroup;

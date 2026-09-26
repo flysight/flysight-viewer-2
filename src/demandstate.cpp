@@ -31,7 +31,6 @@ void DemandState::addTrack(const DemandTrack &track)
 
 void DemandState::finish()
 {
-    progressLabel = isWorking() ? tr("%1 of %2").arg(doneCount).arg(wantedCount) : QString();
     toolTip = buildToolTip(*this);
 }
 

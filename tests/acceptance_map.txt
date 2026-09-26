@@ -1700,7 +1700,6 @@
 562 tst_fusion_store dependencyEditDropsRecord
 562 tst_fusion_store codeStampChangeDropsRecordOnLoad
 562 tst_plot_row_layout indicatorOnly
-562 tst_plot_row_layout indicatorAndWarning
 562 audit gestures
 
 # 563 - (14) docs/ describe the executor, the demand layer, logbook columns over requested results, what the user sees (no refresh, the working indicator, pending cells, failures) and where a column over a requested calculation stays unavailable or pending

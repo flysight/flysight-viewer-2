@@ -8,6 +8,7 @@
 
 #include "calculationdemand.h"
 #include "sessionmodel.h"
+#include "ui/docks/DemandIndicatorView.h"
 
 namespace FlySight {
 
@@ -21,10 +22,7 @@ LogbookCellDelegate::LogbookCellDelegate(SessionModel *model, CalculationDemand 
         connect(m_demand, &CalculationDemand::columnStateChanged,
                 this, &LogbookCellDelegate::onColumnStateChanged);
         // Without the demand layer no cell is pending any more
-        connect(m_demand, &QObject::destroyed, this, [this] {
-            if (m_view)
-                m_view->viewport()->update();
-        });
+        repaintWhenDemandDestroyed(m_demand, m_view->viewport());
     }
 }
 

@@ -5,51 +5,31 @@
 #include <QHelpEvent>
 #include <QPainter>
 #include <QStyle>
-#include <QToolTip>
 
 #include "calculationdemand.h"
 #include "plotmodel.h"
 #include "ui/docks/DemandIndicator.h"
+#include "ui/docks/DemandIndicatorView.h"
 
 namespace FlySight {
 
-namespace {
-
-/// The row's text colour, chosen as QStyledItemDelegate chooses it.
-QColor glyphColor(const QStyleOptionViewItem &opt)
-{
-    QPalette::ColorGroup group = (opt.state & QStyle::State_Enabled) ? QPalette::Normal : QPalette::Disabled;
-    if (group == QPalette::Normal && !(opt.state & QStyle::State_Active))
-        group = QPalette::Inactive;
-    const bool selected = opt.state & QStyle::State_Selected;
-    return opt.palette.color(group, selected ? QPalette::HighlightedText : QPalette::Text);
-}
-
-} // namespace
-
-PlotRowDelegate::PlotRowDelegate(CalculationDemand *demand, QAbstractItemView *view)
+PlotRowDelegate::PlotRowDelegate(CalculationDemand *demand, WorkingAnimation *clock, QAbstractItemView *view)
     : QStyledItemDelegate(view)
     , m_demand(demand)
     , m_view(view)
-    , m_animation(new WorkingAnimation(this))
+    , m_clock(clock)
 {
     if (m_demand && m_view) {
         connect(m_demand, &CalculationDemand::plotStateChanged,
                 this, &PlotRowDelegate::onPlotStateChanged);
-        // The clock follows whether any plot is working
-        connect(m_demand, &CalculationDemand::statesChanged,
-                this, &PlotRowDelegate::syncAnimation);
         // Without the demand layer every row is plain at once
-        connect(m_demand, &QObject::destroyed, this, [this] {
-            syncAnimation();
-            if (m_view)
-                m_view->viewport()->update();
-        });
-        connect(m_animation, &WorkingAnimation::frameAdvanced,
-                this, &PlotRowDelegate::onAnimationFrame);
+        repaintWhenDemandDestroyed(m_demand, m_view->viewport());
+        // The clock follows the demand layer where it was made (followDemand());
+        // this delegate only repaints its own working rows on its frames
+        if (m_clock)
+            connect(m_clock, &WorkingAnimation::frameAdvanced,
+                    this, &PlotRowDelegate::onAnimationFrame);
     }
-    // States may already be working when the view is built
-    syncAnimation();
 }
 
 // ---- State and geometry ---------------------------------------------------------
@@ -66,28 +46,20 @@ DemandState PlotRowDelegate::stateFor(const QModelIndex &index) const
 
 PlotRowMetrics PlotRowDelegate::metricsFor(const QStyleOptionViewItem &opt)
 {
+    const GlyphMetrics glyph = glyphMetrics(opt.fontMetrics, opt.rect.height() - 2);
     PlotRowMetrics metrics;
-    metrics.iconSide = qMin(opt.rect.height() - 2, opt.fontMetrics.height());
-    metrics.spacing = qMax(2, metrics.iconSide / 4);
-    metrics.rightMargin = metrics.spacing;
+    metrics.iconSide = glyph.side;
+    metrics.spacing = glyph.spacing;
+    metrics.rightMargin = glyph.spacing;
     return metrics;
 }
 
-// The badge and the indicator are exclusive (DemandState::showsWarning(); see
-// docs/COMPUTED_PLOTS.md section 2): while working, failures appear in the
-// tooltip only.
 PlotRowGeometry PlotRowDelegate::geometryFor(const QStyleOptionViewItem &opt, const DemandState &state) const
 {
-    const bool showsIndicator = state.isWorking();
-    const bool showsWarning = state.showsWarning();
-    const int labelWidth = showsIndicator ? opt.fontMetrics.horizontalAdvance(state.progressLabel) : 0;
-    const int countWidth = showsWarning
-        ? opt.fontMetrics.horizontalAdvance(QString::number(state.failedCount)) : 0;
-    return layoutPlotRow(opt.rect, metricsFor(opt), showsWarning, countWidth,
-                         showsIndicator, labelWidth, opt.direction);
+    return layoutPlotRow(opt.rect, metricsFor(opt), !state.isPlain(), opt.direction);
 }
 
-QRect PlotRowDelegate::clusterRect(const QModelIndex &index) const
+QRect PlotRowDelegate::indicatorRect(const QModelIndex &index) const
 {
     if (!m_view || !index.isValid())
         return QRect();
@@ -98,14 +70,7 @@ QRect PlotRowDelegate::clusterRect(const QModelIndex &index) const
     opt.initFrom(m_view);
     opt.rect = m_view->visualRect(index);
     initStyleOption(&opt, index);
-    const PlotRowGeometry geometry = geometryFor(opt, state);
-    QRect cluster;
-    for (const QRect &rect : {geometry.warningIcon, geometry.warningCount,
-                              geometry.progressLabel, geometry.indicatorIcon}) {
-        if (!rect.isNull())
-            cluster = cluster.united(rect);
-    }
-    return cluster;
+    return geometryFor(opt, state).glyph;
 }
 
 // ---- Painting -------------------------------------------------------------------
@@ -127,35 +92,19 @@ void PlotRowDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     const PlotRowMetrics metrics = metricsFor(opt);
     const PlotRowGeometry geometry = geometryFor(opt, state);
 
-    // The name gives way, never the cluster. The style still paints the whole
+    // The name gives way, never the glyph. The style still paints the whole
     // item over the full rect - background, selection, hover, focus, check
-    // box, text - so the highlight runs under the cluster.
+    // box, text - so the highlight runs under the glyph.
     const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget);
     const int textMargin = style->pixelMetric(QStyle::PM_FocusFrameHMargin, nullptr, widget) + 1;
-    const int available = textRect.width() - (geometry.clusterWidth + metrics.spacing) - 2 * textMargin;
+    const int available = textRect.width() - (geometry.reservedWidth + metrics.spacing) - 2 * textMargin;
     opt.text = opt.fontMetrics.elidedText(opt.text, Qt::ElideRight, qMax(0, available));
     style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
 
     painter->save();
     painter->setClipRect(opt.rect);
     painter->setRenderHint(QPainter::Antialiasing);
-    painter->setFont(opt.font);
-
-    const QColor color = glyphColor(opt);
-
-    if (state.isWorking()) {
-        drawWorkingGlyph(painter, QRectF(geometry.indicatorIcon), color, m_animation->angle());
-        if (!geometry.progressLabel.isNull()) {
-            painter->setPen(color);
-            painter->drawText(geometry.progressLabel, Qt::AlignVCenter | Qt::AlignRight, state.progressLabel);
-        }
-    } else if (state.showsWarning()) {
-        drawWarningGlyph(painter, QRectF(geometry.warningIcon));
-        painter->setPen(color);
-        painter->drawText(geometry.warningCount, Qt::AlignVCenter | Qt::AlignLeft,
-                          QString::number(state.failedCount));
-    }
-
+    drawDemandGlyph(painter, QRectF(geometry.glyph), state, glyphColor(opt), m_clock);
     painter->restore();
 }
 
@@ -169,14 +118,10 @@ QString PlotRowDelegate::toolTipFor(const QModelIndex &index) const
 bool PlotRowDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view, const QStyleOptionViewItem &option,
                                 const QModelIndex &index)
 {
-    if (event && event->type() == QEvent::ToolTip && view) {
-        // Plain text as CalculationDemand built it: the whole row shows it
-        const QString text = toolTipFor(index);
-        if (!text.isEmpty()) {
-            QToolTip::showText(event->globalPos(), text, view->viewport(), option.rect);
-            return true;
-        }
-    }
+    // The whole row shows the state's tooltip; a plain row keeps the base's
+    if (event && event->type() == QEvent::ToolTip && view
+        && showIndicatorToolTip(event, stateFor(index), view->viewport(), option.rect))
+        return true;
     return QStyledItemDelegate::helpEvent(event, view, option, index);
 }
 
@@ -201,18 +146,12 @@ void PlotRowDelegate::onPlotStateChanged(const QString &plotId)
         m_view->update(index);      // harmless for a row that is scrolled out or collapsed
 }
 
-void PlotRowDelegate::syncAnimation()
-{
-    m_animation->setActive(m_demand && m_view && !m_demand->workingPlotIds().isEmpty());
-}
-
-// Only the working rows show the arc: only they are repainted
+// Only the working rows show the arc: only they are repainted. With only a
+// column working there is nothing here to repaint.
 void PlotRowDelegate::onAnimationFrame()
 {
-    if (!m_demand) {
-        syncAnimation();
+    if (!m_demand || !m_view)
         return;
-    }
     const QStringList working = m_demand->workingPlotIds();
     for (const QString &plotId : working) {
         const QModelIndex index = indexForPlot(plotId);

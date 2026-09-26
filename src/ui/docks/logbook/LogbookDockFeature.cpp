@@ -13,8 +13,9 @@ LogbookDockFeature::LogbookDockFeature(const AppContext& ctx, QObject* parent)
     m_dock = new KDDockWidgets::QtWidgets::DockWidget(QStringLiteral("Logbook"));
 
     // Create LogbookView; the demand layer supplies the column headers'
-    // indicators and the pending cells (null: plain)
-    m_logbookView = new LogbookView(ctx.sessionModel, ctx.calculationDemand, m_dock);
+    // indicators and the pending cells (null: plain), and the one clock that
+    // turns the headers' indicators
+    m_logbookView = new LogbookView(ctx.sessionModel, ctx.calculationDemand, ctx.workingClock, m_dock);
     m_dock->setWidget(m_logbookView);
 
     // Forward LogbookView signals to feature signals

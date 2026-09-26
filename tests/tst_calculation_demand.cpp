@@ -806,7 +806,8 @@ void CalculationDemandTest::rowScript()
     QCOMPARE(chosenNext().sessionId, QStringLiteral("s2"));     // the chosen next job is s2's
     QCOMPARE(jobOf("s3", "gated").id, JobId(0));
     QVERIFY(!m_demand->isSettling("s2"));
-    QCOMPARE(state.progressLabel, QStringLiteral("0 of 3"));
+    QCOMPARE(state.doneCount, 0);
+    QCOMPARE(state.wantedCount, 3);
     QCOMPARE(state.toolTip, QStringLiteral("Computing: 0 of 3 done\n"
                                            "  Jump 1 - Gated: step 1"));
 
@@ -822,7 +823,6 @@ void CalculationDemandTest::rowScript()
     QCOMPARE(m_queue->chosenNextJob(), job3);
     QCOMPARE(state.doneCount, 1);
     QCOMPARE(state.wantedCount, 3);
-    QCOMPARE(state.progressLabel, QStringLiteral("1 of 3"));
     QCOMPARE(values("s1", "g"), QVector<double>({5.0}));
 
     // 3. Unchecking drops the waiting pair at once and lets the running job finish
@@ -848,7 +848,8 @@ void CalculationDemandTest::rowScript()
     QVERIFY(job4 != job3);
     QCOMPARE(stateOf(job4), JobState::Running);
     state = row("Syn/g");
-    QCOMPARE(state.progressLabel, QStringLiteral("2 of 3"));
+    QCOMPARE(state.doneCount, 2);
+    QCOMPARE(state.wantedCount, 3);
 
     // 5. A fourth track shown while s3 runs becomes the chosen next job
     show({"s4"});
@@ -857,14 +858,14 @@ void CalculationDemandTest::rowScript()
     QVERIFY(job5 != 0);
     QCOMPARE(m_queue->chosenNextJob(), job5);
     QCOMPARE(state.wantedCount, 4);
-    QCOMPARE(state.progressLabel, QStringLiteral("2 of 4"));
+    QCOMPARE(state.doneCount, 2);
     QCOMPARE(m_queue->job(job5).sessionName, QStringLiteral("Jump 4"));
     gate().open(2);
     QVERIFY(waitDemandIdle());
     state = row("Syn/g");
     QVERIFY(state.isPlain());
     QVERIFY(state.toolTip.isEmpty());
-    QVERIFY(state.progressLabel.isEmpty());
+    QVERIFY(!state.isWorking());
     QCOMPARE(state.doneCount, 4);
     QCOMPARE(values("s4", "g"), QVector<double>({5.0}));
 
@@ -924,7 +925,7 @@ void CalculationDemandTest::chainedBlockersContinue()
     for (int i = 0; i < announced.size() - 1; ++i) {
         QVERIFY(announced.at(i).isWorking());
         QCOMPARE(announced.at(i).wantedCount, 1);
-        QCOMPARE(announced.at(i).progressLabel, QStringLiteral("0 of 1"));
+        QCOMPARE(announced.at(i).doneCount, 0);
     }
     QVERIFY(announced.last().isPlain());
 }
@@ -1442,7 +1443,8 @@ void CalculationDemandTest::inputBurstRunsOneJob()
         QCOMPARE(state.waitingCount, 1);
         QVERIFY(m_demand->isSettling("s1"));
         QCOMPARE(m_queue->chosenNextJob(), JobId(0));
-        QCOMPARE(state.progressLabel, QStringLiteral("0 of 1"));
+        QCOMPARE(state.doneCount, 0);
+        QCOMPARE(state.wantedCount, 1);
         spin();
         QVERIFY(giveInput({"s1"}, "G_IN", 6));
         spin();
@@ -1797,7 +1799,6 @@ void CalculationDemandTest::failuresListedWhileWorking()
     QCOMPARE(state.wantedCount, 2);
     QCOMPARE(state.doneCount, 1);
     QVERIFY(!state.showsWarning());
-    QCOMPARE(state.progressLabel, QStringLiteral("1 of 2"));
     QCOMPARE(state.toolTip, QStringLiteral("Computing: 1 of 2 done\n"
                                            "Could not be computed:\n"
                                            "  Jump 1 - Explicit A: negative input"));
@@ -1921,8 +1922,9 @@ void CalculationDemandTest::sharedJobSameProgress()
     QCOMPARE(g2.runningCount, g.runningCount);
     QCOMPARE(g2.waitingCount, g.waitingCount);
     QCOMPARE(g2.wantedCount, g.wantedCount);
-    QCOMPARE(g2.progressLabel, g.progressLabel);
-    QCOMPARE(g.progressLabel, QStringLiteral("0 of 2"));
+    QCOMPARE(g2.doneCount, g.doneCount);
+    QCOMPARE(g.doneCount, 0);
+    QCOMPARE(g.wantedCount, 2);
     QCOMPARE(g2.running.at(0).progressText, QStringLiteral("step 1"));
     QCOMPARE(g2.toolTip, g.toolTip);
     QCOMPARE(g2.running.at(0).sessionId, g.running.at(0).sessionId);
@@ -1952,7 +1954,8 @@ void CalculationDemandTest::plotCheckedDuringAJobJoinsIt()
     QCOMPARE(state.runningCount, 1);
     QCOMPARE(running().id, gated);
     QCOMPARE(state.running.at(0).sessionId, QStringLiteral("s1"));
-    QCOMPARE(state.progressLabel, QStringLiteral("0 of 1"));
+    QCOMPARE(state.doneCount, 0);
+    QCOMPARE(state.wantedCount, 1);
     QCOMPARE(m_queue->model()->rowCount(), 1);
 
     gate().open(1);
@@ -3709,7 +3712,7 @@ void CalculationDemandTest::columnStateCountsAndPendingCells()
     DemandState state = col("G_OUT");
     QCOMPARE(state.wantedCount, 4);
     QCOMPARE(state.waitingCount, 4);
-    QCOMPARE(state.progressLabel, QStringLiteral("0 of 4"));
+    QCOMPARE(state.doneCount, 0);
 
     QVERIFY(gate().waitEntered());
     QTRY_COMPARE(col("G_OUT").running.value(0).progressText, QStringLiteral("step 1"));
@@ -3732,7 +3735,7 @@ void CalculationDemandTest::columnStateCountsAndPendingCells()
     gate().open(3);
     QVERIFY(waitDemandIdle());
     state = col("G_OUT");
-    QVERIFY(state.progressLabel.isEmpty());
+    QVERIFY(!state.isWorking());
     QVERIFY(state.isPlain());
     QCOMPARE(state.doneCount, 3);
     for (const QList<QVariant> &arguments : std::as_const(columnSpy))
