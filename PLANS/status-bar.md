@@ -92,7 +92,8 @@ Out of scope, unchanged:
   wait, the pair memory and when it clears, the fill's loads and holds, the
   absence of any refresh or cancel for computations.
 - The scheduler's contract and the tasks the session model registers, other
-  than where their progress is shown.
+  than where their progress is shown and one read-only query the scheduler
+  gains (section 12).
 - The pending cell ("…") of the logbook and its hover; the plot widget's
   reading of a merely uncomputed value (it does not warn "No data
   available" for it).
@@ -306,9 +307,12 @@ The contracts of the earlier specifications stand, with these amendments:
   failures (section 10), and it asks the scheduler to cancel. It decides
   nothing: what is shown follows from section 6's rule and the values it
   reads.
-- **The scheduler** is unchanged. It still knows nothing of jobs or demand,
-  and it still reports the fill as a task; the status bar is what maps the
-  fill to the computations' item.
+- **The scheduler** keeps its contract. It still knows nothing of jobs or
+  demand, and it still reports the fill as a task; the status bar is what maps
+  the fill to the computations' item. It gains one read-only query, whether
+  any task has work, so that a test can wait for background work to end
+  without inferring it from signals; the fill no longer reports progress, so
+  signals alone no longer tell a resting fill from an idle scheduler.
 - **The demand layer** stays widget-free, the only offerer, and observed by
   nothing that changes what it does. Its presentation surface is section
   10. The fill loses its display progress only.
