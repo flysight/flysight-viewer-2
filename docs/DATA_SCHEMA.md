@@ -351,13 +351,20 @@ stored sensor fusion result:
 
 Each session entry may also have `"recordReasons"`: an object mapping the
 calculation id of a stored result that did not produce its outputs (a
-rejection or solver failure) to its reason, as the application learned it
-when the record was written or last restored. It is derived, additive and
-optional: an index without it means no reason has been learned yet, and a
-record of an earlier build reads as a success until it is next restored. The
-object is omitted when no record of the session has a reason; removing the
-record removes its entry. Nothing else in the entry changes. For a session
-whose stored sensor fusion result is a solver failure:
+rejection or solver failure) to its reason, as the application learned it when
+the record was written or last restored. When a restore (a load, or the
+background worker's temporary copy) learns a reason that differs from what the
+index held - a record of an earlier build, or an index whose `"recordReasons"`
+was lost - the index records it and announces it as a change of that record,
+so the logbook lists the session as "could not be computed" with that reason
+at once, without loading it, and the cached column values over that record are
+computed again once, with the same values; learning the same reason again
+changes nothing. It is derived, additive and optional: an index without it
+means no reason has been learned yet, and a record of an earlier build reads
+as a success until it is next restored. The object is omitted when no record
+of the session has a reason; removing the record removes its entry. Nothing
+else in the entry changes. For a session whose stored sensor fusion result is
+a solver failure:
 
 ```json
 "recordReasons": {"builtin.fusion.fit": "Batch fusion did not converge (iteration limit); sensor fusion unavailable"}
@@ -572,15 +579,20 @@ never stored.
   has another format version is deleted as stale.
 - **Failures that are not a function of the inputs** - running out of memory,
   a worker that could not be started, a session file that could not be
-  loaded - are never stored: they are shown until the application closes and
-  tried again at the next start. **A stored rejection or solver failure** is a
-  result: its reason is also recorded in `index.json` (section 11,
-  `"recordReasons"`) when the record is written and whenever it is restored,
+  loaded, a result whose record could not be written - are never stored: they
+  are shown until the application closes (or the recording's inputs change)
+  and tried again at the next start. **A stored rejection or solver
+  failure** is a result: its reason is also recorded in `index.json` (section
+  11, `"recordReasons"`) when the record is written and whenever it is restored,
   so that a session that is not loaded is listed as "could not be computed"
   with that reason before and after a restart alike, without opening the
   record or loading the session.
 - A write that fails (a full disk, say) leaves the previous record, if any,
-  intact and the result in memory. The next publish tries again.
+  intact and the result in memory. The recording is then listed as "could not
+  be computed" with the write's reason for the rest of the run, whether or not
+  it stays loaded, and the calculation is not run again for it until its
+  inputs change; nothing about the failure is stored, so the next start tries
+  again ([COMPUTED_PLOTS.md](COMPUTED_PLOTS.md), section 7).
 
 **Guarantees.** The session file is untouched: its bytes, its format and what
 it lists do not depend on whether a record exists. Records are derived data.

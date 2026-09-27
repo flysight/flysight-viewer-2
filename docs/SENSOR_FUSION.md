@@ -382,10 +382,11 @@ publishes nothing and caches nothing.
 **Outcomes.** A rejection (section 6) and a solver failure are functions of the
 inputs, so they are cached like any result: the row shows the warning badge,
 and nothing offers a retry until an input changes, because the same inputs
-would give the same answer. Running out of memory, or failing to start the
-worker, is not a function of the inputs and is never cached: it is shown with
-the warning badge and its reason, not tried again while the application runs
-unless an input changes, and tried again at the next start.
+would give the same answer. Running out of memory, failing to start the
+worker, or failing to write the fit's stored copy is not a function of the
+inputs and is never cached as a failure: it is shown with the warning badge
+and its reason, not tried again while the application runs unless an input
+changes, and tried again at the next start.
 
 **Invalidation.** A change to a declared input (a re-import, a merge, a changed
 `SCHEMA_VER`, a changed origin) drops the result, every value derived from

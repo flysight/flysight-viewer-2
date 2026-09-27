@@ -368,12 +368,15 @@ flysight-viewer-2/
 │   │                                      #   (one worker thread) and its Qt item model
 │   ├── calculationdemand.*                # The demand layer: what checked plots and
 │   │                                      #   enabled columns need computed, what runs next
+│   ├── demandstate.*, demandfill.*,       # Its parts: the values the views present, the
+│   │   demandsettleclock.*                #   column fill (hidden loads), the input-settle clock
 │   ├── units/                             # Unit normalization table and the display-unit layer
 │   ├── preferences/                       # Preferences manager, keys, settings pages
 │   ├── ui/                                # Docks, plot, map, video, analysis widgets
 │   │                                      #   (ui/docks: plotselection/PlotRow*, DemandIndicator.*,
-│   │                                      #   logbook/LogbookHeaderView.*, LogbookCellDelegate.*:
-│   │                                      #   working indicator, badge, pending cells)
+│   │                                      #   DemandIndicatorView.*, logbook/LogbookHeaderView.*,
+│   │                                      #   LogbookCellDelegate.*: working indicator and its
+│   │                                      #   one clock, badge, pending cells)
 │   ├── csvformat.*                        # The one definition of the on-disk text forms
 │   ├── dataimporter.*, parsedfile.h       # Parser: a file as recorded, nothing added
 │   ├── dataexporter.*                     # Writer: source data and stored attributes only
@@ -414,7 +417,7 @@ flysight-viewer-2/
 
 ## User Documentation
 
-- [docs/COMPUTED_PLOTS.md](docs/COMPUTED_PLOTS.md): plots and logbook columns that are computed in the background - what starts and stops a computation, the working indicator and its count, the warning badge, pending logbook cells
+- [docs/COMPUTED_PLOTS.md](docs/COMPUTED_PLOTS.md): plots and logbook columns that are computed in the background - what starts and stops a computation, the working indicator and its tooltip, the warning badge, pending logbook cells
 - [docs/SENSOR_FUSION.md](docs/SENSOR_FUSION.md): the "Sensor fusion" plots - what the GNSS/IMU fit computes, what it needs, what it rejects, and how far to trust it
 - [docs/LOCAL_COORDINATES.md](docs/LOCAL_COORDINATES.md): the "GNSS (Local frame)" plots - the recording-wide north/east/down frame and the simplified map track
 - [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md): the recorded file format, `SCHEMA_VER`, source versus effective values, the conversion layer, import / merge rules, what saved files contain, and the stored results of requested calculations

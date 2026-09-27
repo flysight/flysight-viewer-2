@@ -16,6 +16,7 @@
     - 12.2 [The fusion runner and the reference recordings](#122-the-fusion-runner-and-the-reference-recordings)
     - 12.3 [Stored results](#123-stored-results)
     - 12.4 [Demand-driven calculations](#124-demand-driven-calculations)
+    - 12.5 [Calculation refinements](#125-calculation-refinements)
 
 [Appendix A. The acceptance items (1-19)](#appendix-a-the-acceptance-items-1-19)
 [Appendix B. The acceptance items of sensor fusion and plot-driven jobs (101-120)](#appendix-b-the-acceptance-items-of-sensor-fusion-and-plot-driven-jobs-101-120)
@@ -23,6 +24,7 @@
 [Appendix D. The acceptance items of stored requested results (301-350)](#appendix-d-the-acceptance-items-of-stored-requested-results-301-350)
 [Appendix E. The acceptance items of stored-result validity (401-442)](#appendix-e-the-acceptance-items-of-stored-result-validity-401-442)
 [Appendix F. The acceptance items of demand-driven requested calculations (501-563)](#appendix-f-the-acceptance-items-of-demand-driven-requested-calculations-501-563)
+[Appendix G. The acceptance items of calculation refinements (601-662)](#appendix-g-the-acceptance-items-of-calculation-refinements-601-662)
 
 ## 1. What this is
 
@@ -77,21 +79,21 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | `tst_local_coordinates` | The recording-wide `Local` frame: origin gates, analytically known displacements and velocity rotation on WGS84, NaN at the index of an invalid sample only, all outputs unavailable without a qualifying fix, the shared GNSS time axes, invalidation on source changes and independence from markers on a real `SessionData` |
 | `tst_simplified_track` | The simplified map track on the shared `Local` frame: all seven outputs at the same retained sample indices, every dropped sample within 0.5 m of the path and the strictly-greater rule, duplicate-position endpoints, closed, degenerate and empty tracks, non-finite samples left out, one projection per recording, unavailable without a local origin and back after a source correction, siblings invalidated together |
 | `tst_session_engine` | `SessionData` on the engine with the real built-ins: run-once, invalidation, candidate replacement, overrides, preferences, the fresh-evaluation oracle, copy/move semantics; an explicit-policy calculation and a throwing / nested / cyclic set of calculations registered temporarily on the global registry (acceptance 14, 12); an asynchronous request against real session ownership (published, session moved, destroyed, move- and copy-assigned over, declared input edited) |
-| `tst_session_model_engine` | `SessionModel` + `AltitudeMarkerManager`: registry and preference broadcasts reaching `dependencyChanged`, coalescing, merges, rows surviving sort, the read-only `DEVICE_ID` column, a marker only for an altitude whose calculation registered; the executor's hooks: counted session pins that defer LRU eviction (and nothing else), the idle scheduler's `unregisterTask` and replacing `registerTask` (`schedulerTaskCanBeUnregistered`) and a task with work it cannot step, which the scheduler waits on without spinning (`schedulerWaitingTaskDoesNotSpin`), and immediate publication of engine-returned invalidations without any persistent effect |
-| `tst_result_store` | Stored results of explicit calculations on a real model and logbook (synthetic calculations): written on an Ok install (also before a new session's first save), deleted on an input change, restored on every load path, upstream records first, so that a record whose lookup has a fallback candidate restores in any id order (a session without a known record is not listed), stale records deleted; the bulk edit's temporary load never reads one, the column worker's copy only when a missing column needs it (then with the checks of a load); write failures; an explicit family instance is not stored; a registry change made while the application runs that changes what a name a result looked up resolves to deletes its record, a candidate registered behind the provider and a teardown removal do not; unrelated registrations and the descent-pause preference keep it valid across loads and restarts; a lookup that resolves differently, or a changed plug-in code identity of a calculation the result read, makes it stale; an unreadable record (a directory at its path, a Windows lock, POSIX permissions; rows skip where the platform does not honour them) is skipped and restored at a later load, a record that reads it is kept, the next publish replaces it (the column value over it then reaches `index.json`), and deleting its session removes it, leaves a locked file as a stray for the next start, or leaves a directory (never a record); a format-1 record is deleted; the reason of a stored rejection recorded in `index.json` at the write and at every restore (`recordReasonRecordedAtWriteAndRestore`) |
-| `tst_result_columns` | Logbook columns over explicit results: cached from the restored or published result with a record stamp in index.json, dropped when a record is written or deleted, filled for an unloaded session with a record by the column worker from its stored results restored into a temporary copy (the row never loaded, no record written, nothing run; a stale record deleted and the value cached unavailable; an unreadable one skipped and the value pending; no record read while the missing columns are all on demand), crash points, old indexes, write failures, and a `cache/` folder deleted while the application was closed (no record, nothing requested, the values over it dropped at start-up, nothing run); values over a record skipped at a load never cached while it is skipped; a registry change that does not reach a result (also a provider registered behind a stored input) keeps its row confirmed, one that does deletes the record and its stamp (`registryChangeKeepsLoadedRowConfirmed`); an environment change discards cached values while the record restores; the column worker's behaviour and statistics unchanged with column demand active, and a stale record it deletes moving the pair into demand (`columnWorkerIsUnchangedByDemand`, `staleRecordDeletedByWorkerCreatesDemand`) |
+| `tst_session_model_engine` | `SessionModel` + `AltitudeMarkerManager`: registry and preference broadcasts reaching `dependencyChanged`, coalescing, merges, rows surviving sort, the read-only `DEVICE_ID` column, a marker only for an altitude whose calculation registered; the executor's hooks: counted session pins that defer LRU eviction (and nothing else), the idle scheduler's `unregisterTask` and replacing `registerTask` (`schedulerTaskCanBeUnregistered`) and a task with work it cannot step, which the scheduler waits on without spinning (`schedulerWaitingTaskDoesNotSpin`); a task that can wait and loses its work without a step is completed once, not cancelled, after a final progress report and before the next active task or idle, while a task without `canStep` is not (`schedulerCompletesWaitingTaskWhoseWorkIsGone`); a bulk edit publishing its edit as a dependency change on both of its paths (`bulkEditAnnouncesADependencyChange`), and immediate publication of engine-returned invalidations without any persistent effect |
+| `tst_result_store` | Stored results of explicit calculations on a real model and logbook (synthetic calculations): written on an Ok install (also before a new session's first save), deleted on an input change, restored on every load path, upstream records first, so that a record whose lookup has a fallback candidate restores in any id order (a session without a known record is not listed), stale records deleted; the bulk edit's temporary load never reads one, the column worker's copy only when a missing column needs it (then with the checks of a load); write failures, each announced with its reason after the record change of the pair (`writeFailureIsAnnounced`); an explicit family instance is not stored; a registry change made while the application runs that changes what a name a result looked up resolves to deletes its record, a candidate registered behind the provider and a teardown removal do not; unrelated registrations and the descent-pause preference keep it valid across loads and restarts; a lookup that resolves differently, or a changed plug-in code identity of a calculation the result read, makes it stale; an unreadable record (a directory at its path, a Windows lock, POSIX permissions; rows skip where the platform does not honour them) is skipped and restored at a later load, a record that reads it is kept, the next publish replaces it (the column value over it then reaches `index.json`), and deleting its session removes it, leaves a locked file as a stray for the next start, or leaves a directory (never a record); a format-1 record is deleted; the reason of a stored rejection recorded in `index.json` at the write and at every restore, and a changed reason announced as a record change (`recordReasonRecordedAtWriteAndRestore`) |
+| `tst_result_columns` | Logbook columns over explicit results: cached from the restored or published result with a record stamp in index.json, dropped when a record is written or deleted, filled for an unloaded session with a record by the column worker from its stored results restored into a temporary copy (the row never loaded, no record written, nothing run; a stale record deleted and the value cached unavailable; an unreadable one skipped and the value pending; no record read while the missing columns are all on demand), crash points, old indexes, write failures, and a `cache/` folder deleted while the application was closed (no record, nothing requested, the values over it dropped at start-up, nothing run); values over a record skipped at a load never cached while it is skipped; a registry change that does not reach a result (also a provider registered behind a stored input) keeps its row confirmed, one that does deletes the record and its stamp (`registryChangeKeepsLoadedRowConfirmed`); an environment change discards cached values while the record restores; the column worker's behaviour and statistics unchanged with column demand active, and a stale record it deletes moving the pair into demand (`columnWorkerIsUnchangedByDemand`, `staleRecordDeletedByWorkerCreatesDemand`); the session model's column knowledge - each enabled column's requested calculations and closure, current before the queued environment check (`sessionModelExposesColumnKnowledge`) - and a row's display name for loaded rows, stubs and failed-load placeholders (`sessionDisplayNameOfEveryRowKind`) |
 | `tst_session_oracle` | The session-level idempotency oracle (section 7): randomized, seeded sequences of reads, edits, merges, preference and registry changes on real `SessionData` objects (part A) and on the real `SessionModel` / `LogbookManager` through the application's import path, with restarts, simulated crashes and a persisted-state check (part B), compared against a fresh evaluation |
 
 **The executor, the demand layer and the demand views** (synthetic explicit calculations; no GTSAM)
 
 | Test | Covers |
 |------|--------|
-| `tst_jobqueue` | The executor, `JobQueue`, on a real `SessionModel`, real session engines and the global registry, with the synthetic explicit calculations of `jobfixture.h` (no GTSAM): publication through the session model, the 64 MiB worker thread at below-normal priority (`workerRunsBelowNormalPriority`), the main thread free while a job computes (`mainThreadIsNotBlockedByARunningJob`), at most the running job and one chosen next job (`holdsAtMostRunningAndChosenNext`), an equal offer creating nothing, a different offer replacing the chosen next job, which ends Cancelled "No longer needed" without an `idle()` in between (`offerReplacesChosenNext`), withdrawing it (`withdrawEndsChosenNext`), one job at a time in offer order, refusals (missing input, unloaded or unknown session, blocked, done, unknown), never loading a session, every superseded / succeeded / failed / cancelled path with its reason text, a running job whose ticket went stale (input edit, merge, registration removed, model destroyed, the row's session data replaced - "Session data replaced", not "removed or unloaded") asked to stop at once and ended Superseded with the refusal's reason without its compute reaching the end, a new offer behind it becoming the chosen next job and run with the new inputs, first writer wins between a user cancel and a stale stop, cancel wins over a completed compute, a job cancelled from a `rowsInserted` slot (no pin left, no `jobQueued` after its `jobFinished`), session removal, deferred eviction, repopulation, merge, sort, shutdown in every order, and the idle scheduler working during a job (sensor-fusion-jobs acceptance 8, 10, 11, 14, 17; demand items 521, 540, 544, 560, 561) |
+| `tst_jobqueue` | The executor, `JobQueue`, on a real `SessionModel`, real session engines and the global registry, with the synthetic explicit calculations of `jobfixture.h` (no GTSAM): publication through the session model, the 64 MiB worker thread at below-normal priority (`workerRunsBelowNormalPriority`), the main thread free while a job computes (`mainThreadIsNotBlockedByARunningJob`), at most the running job and one chosen next job (`holdsAtMostRunningAndChosenNext`), an equal offer creating nothing, a different offer replacing the chosen next job, which ends Cancelled "No longer needed" (`offerReplacesChosenNext`), withdrawing it (`withdrawEndsChosenNext`), one job at a time in offer order, refusals (missing input, unloaded or unknown session, blocked, done, unknown), never loading a session, every superseded / succeeded / failed / cancelled path with its reason text, a running job whose ticket went stale (input edit, merge, registration removed, model destroyed, the row's session data replaced - "Session data replaced", not "removed or unloaded") asked to stop at once and ended Superseded with the refusal's reason without its compute reaching the end, a new offer behind it becoming the chosen next job and run with the new inputs, first writer wins between a user cancel and a stale stop, cancel wins over a completed compute, a job cancelled from a `rowsInserted` slot (no pin left), session removal, deferred eviction, repopulation, merge, sort, shutdown in every order, the idle scheduler working during a job, and the job record naming its session by the session model's display name (`runsAndPublishes`) (sensor-fusion-jobs acceptance 8, 10, 11, 14, 17; demand items 521, 540, 544, 560, 561; refinement items 606, 624, 628, 629) |
 | `tst_jobmodel` | The `JobModel` contract under `QAbstractItemModelTester`: every role on every column, a test view that renders the whole job history from model signals alone, never more than one running row, a replaced chosen next job recorded as Cancelled "No longer needed", ordered UTC timestamps, progress and cancel-requested as their own signals, removal of finished rows only, the retention bound, and no job persisted: the settings and the logbook folder are byte-identical after jobs of every ending, except for the stored results of the two jobs that published `Ok` (sensor-fusion-jobs acceptance 18; store-requested item 309) |
-| `tst_calculation_demand` | `CalculationDemand`, the widget-free demand layer, on a real `PlotModel`, executor, `SessionModel`, `LogbookColumnStore`, logbook, real session engines and the global registry, with the synthetic plots of `plotfixture.h` (no widgets, no GTSAM). **Plot demand:** checking a plot starts the visible sessions without a result, showing a session or loading a visible one starts it, hiding drops its waiting pair and unchecking all of them while the running job finishes and is stored (`rowScript`, `showingASessionStartsIt`, `hidingASessionDropsItsWaitingPair`, `uncheckingDropsWaitingPairsKeepsRunning`); a waiting pair whose result appears by other means dropped before it starts (`resultAppearingWhileWaitingDropsThePair`); a click, `setPlotEnabled`, `togglePlot`, `setData` and a profile create the same demand, the start-up restore with every session hidden none; chained calculations upstream first with no `idle()` between links; the focused session, then row order, the chosen next job replaced when demand changes, never more than the running and one chosen next job; the one-second input-settle wait (a burst runs one job, the indicator from the first change); failures (an input-determined one stored, badged and never re-run; a job-level one badged, not re-run in the run and re-run by a new demand layer, as after a restart); not-applicable sessions never listed; per-plot state, counts, tooltip (at most ten per list), change signals, coalesced passes, `isMerelyUncomputed()` (the plot widget's "No data available" warning is withheld for a value that waits on a requested calculation or was rejected by one, and for nothing else); session removal, registry changes, executor shutdown and null collaborators. **Column demand:** enabling a column over a requested output fills every session of the logbook, loading sessions that are not loaded at most two at a time as hidden, pinned sessions that leave by ordinary eviction (`enablingColumnFillsEveryUnloadedSession`), a session shown meanwhile running next, stored results creating no job (a stored rejection of a session that is not loaded badged with its reason after a restart, without a load), settlements (not applicable, failures, a session file that cannot be loaded, visible or hidden) that are not loaded again, a column pair the executor refuses at offer time remembered and followed by a pass so that its cell does not stay pending (`columnOfferRefusalIsNotLeftPending`), chains keeping their hold, holds released on disable, show, removal, repopulation and destruction, the identity stub offered under its real id, per-column state and pending cells, the load step below saves, bulk edits and column work and not cancellable, its progress for the whole fill, and a pass over 2000 stubs reading each record set once (sensor-fusion-jobs acceptance 11, 13, 15, 16; demand items 501-560) |
-| `tst_plot_row_layout` | `layoutPlotRow()` (`src/ui/docks/plotselection/PlotRowLayout.h`), the pure geometry of a plot-list row's indicator cluster, without widgets or a font: indicator only, indicator and warning, warning only, nothing shown, an empty label, right-to-left as the exact mirror image; there is no hit rectangle |
-| `tst_plot_row_delegate` | `PlotRowDelegate` in an offscreen `QTreeView` on a real `CalculationDemand`, `PlotModel`, executor and `SessionModel`, driven by synthesized mouse and key events; one of the **two tests that link Qt Widgets** (`FLYSIGHT_BUILD_WIDGET_TESTS`, label `widgets`). Plain rows pixel-identical to the base delegate; the working indicator and "k of n" painted and the name elided rather than the cluster; the indicator's clock (`workingAnimationClock`) turning only while a plot is working and never repainting when idle; the badge replacing the indicator once finished; hover detail from `DemandState`; a click on the check box, Space and the programmatic paths all writing the model and creating the same demand; a click, right click or double click on the cluster being a click on the row; repaint on `plotStateChanged`; survival of a destroyed demand layer (sensor-fusion-jobs acceptance 16; demand items 514, 517, 534-537, 557). The offscreen platform has no fonts, so text is drawn as boxes; the assertions are about geometry, identity and events, not about letter shapes |
-| `tst_logbook_indicators` | `LogbookView` with `LogbookHeaderView` and `LogbookCellDelegate` in an offscreen window beside a reference `QTreeView`, on a real demand layer, executor and `SessionModel`; the second test that links Qt Widgets (label `widgets`). Plain headers and cells identical to the base classes; a requested column's header showing the indicator right of its text, clear of the sort arrow, following moved, hidden and reordered sections, animating only while working; the badge once finished (also for a session file that cannot be loaded); hover detail from `columnState`; a click on the glyph sorting as elsewhere; pending cells distinct from unavailable ones and from the unreadable-record state, never in the model or `index.json`, sorted as unavailable, and replaced by the value when the record is written; one column's repaint per state change; survival of a destroyed demand layer (demand items 527, 533-538, 557, 558) |
+| `tst_calculation_demand` | `CalculationDemand`, the widget-free demand layer, on a real `PlotModel`, executor, `SessionModel`, `LogbookColumnStore`, logbook, real session engines and the global registry, with the synthetic plots of `plotfixture.h` (no widgets, no GTSAM). **Plot demand:** checking a plot starts the visible sessions without a result, showing a session or loading a visible one starts it, hiding drops its waiting pair and unchecking all of them while the running job finishes and is stored (`rowScript`, `showingASessionStartsIt`, `hidingASessionDropsItsWaitingPair`, `uncheckingDropsWaitingPairsKeepsRunning`); a waiting pair whose result appears by other means dropped before it starts (`resultAppearingWhileWaitingDropsThePair`); a click, `setPlotEnabled`, `togglePlot`, `setData` and a profile create the same demand, the start-up restore with every session hidden none; chained calculations upstream first, the executor never idle between links; the focused session, then row order, the chosen next job replaced when demand changes, never more than the running and one chosen next job; the one-second input-settle wait (a burst runs one job, the indicator from the first change); failures (an input-determined one stored, badged and never re-run; a job-level one badged, not re-run in the run and re-run by a new demand layer, as after a restart); not-applicable sessions never listed; per-plot state, counts, tooltip (at most ten per list), change signals, coalesced passes, `isMerelyUncomputed()` (the plot widget's "No data available" warning is withheld for a value that waits on a requested calculation or was rejected by one, and for nothing else); session removal, registry changes, executor shutdown and null collaborators. **Column demand:** enabling a column over a requested output fills every session of the logbook, loading sessions that are not loaded at most two at a time as hidden, pinned sessions that leave by ordinary eviction (`enablingColumnFillsEveryUnloadedSession`), a session shown meanwhile running next, stored results creating no job (a stored rejection of a session that is not loaded badged with its reason after a restart, without a load), one pair memory (a refused offer or a column's not-applicable verdict; a failed job, load or record write; an exception result) that keeps a session from being loaded or a pair from being offered again after eviction, a sort or the column worker's pass (`settledPairsSurviveEvictionSortAndColumnWorker`), cleared by a record change, an input change or a registry change (`pairMemoryIsClearedByRecordInputAndRegistryChanges`), a column's verdict for that column only (`columnVerdictDoesNotSuppressAnotherColumn`), a column pair the executor refuses at offer time remembered and followed by a pass so that its cell does not stay pending (`columnOfferRefusalIsNotLeftPending`), chains keeping their hold, holds released on disable, show, removal, repopulation and destruction, the identity stub offered under its real id, per-column state and pending cells, the load step below saves, bulk edits and column work and not cancellable, its progress for the whole fill, and a pass over 2000 stubs reading each record set once. **Refinements:** one walk for plots and columns, a column track running on one blocker filing its others (`runningColumnTrackFilesItsOtherBlockers`); a record that could not be written shown as a failure on the column header and the plot row, not retried in the run, cleared by a later write, tried again after a restart (`failedRecordWriteIsShownAndNotRetried`, `failedRecordWriteIsShownOnThePlotRow`); a reason learned by the column worker's restore reaching the demand layer through the record change alone (`recordReasonReachesDemandThroughRecordChange`); column knowledge from the session model (`columnKnowledgeComesFromTheSessionModel`); the choice acting on the executor's answer and withdrawing a chosen next job nothing wants (`chosenNextJobFollowsTheExecutorsAnswer`); the settle clock (`settleClockAnswersItsQuestions`); the fill completed by the scheduler, a fill that ends behind another task not leaking its total (`fillEndingBehindAnotherTaskStartsNextCountFresh`), holds released at the executor's shutdown; a successful load forgetting a session's failed-load facts (`successfulLoadForgetsFailedLoadFacts`) (sensor-fusion-jobs acceptance 11, 13, 15, 16; demand items 501-560; refinement items 601-604, 607, 609, 611, 612, 615, 616, 618-620, 622, 624-627, 630-643, 645, 647, 648, 651-659) |
+| `tst_plot_row_layout` | `layoutPlotRow()` (`src/ui/docks/plotselection/PlotRowLayout.h`), the pure geometry of a plot-list row's one glyph, without widgets or a font: the glyph shown, nothing shown, right-to-left as the exact mirror image; there is no hit rectangle |
+| `tst_plot_row_delegate` | `PlotRowDelegate` in an offscreen `QTreeView` on a real `CalculationDemand`, `PlotModel`, executor and `SessionModel`, driven by synthesized mouse and key events; one of the **two tests that link Qt Widgets** (`FLYSIGHT_BUILD_WIDGET_TESTS`, label `widgets`); it also compiles the shared indicator (`DemandIndicator.*`, `DemandIndicatorView.*`). Plain rows pixel-identical to the base delegate; one glyph, the working indicator, painted with no label and the name elided rather than the glyph; the application's clock, made to follow the demand layer by `followDemand()`, turning only while a plot is working (`workingAnimationClock`) and never repainting when idle; the badge replacing the indicator once finished, with no count; hover detail from `DemandState`; the shared glyph metrics, colours and tooltip display (`sharedGlyphPlumbing`); a click on the check box, Space and the programmatic paths all writing the model and creating the same demand; a click, right click or double click on the glyph being a click on the row; repaint on `plotStateChanged`; survival of a destroyed demand layer (sensor-fusion-jobs acceptance 16; demand items 514, 517, 534-537, 557; refinement items 644-646, 649, 650, 660). The offscreen platform has no fonts, so text is drawn as boxes; the assertions are about geometry, identity and events, not about letter shapes |
+| `tst_logbook_indicators` | `LogbookView` with `LogbookHeaderView` and `LogbookCellDelegate` in an offscreen window beside a reference `QTreeView`, and a plot list with the row delegate, on a real demand layer, executor and `SessionModel` and one working-indicator clock; the second test that links Qt Widgets (label `widgets`). Plain headers and cells identical to the base classes; a requested column's header showing the indicator right of its text, clear of the sort arrow, following moved, hidden and reordered sections, animating only while working; the badge once finished (also for a session file that cannot be loaded); hover detail from `columnState`; a click on the glyph sorting as elsewhere; pending cells distinct from unavailable ones and from the unreadable-record state, never in the model or `index.json`, sorted as unavailable, and replaced by the value when the record is written; one column's repaint per state change; survival of a destroyed demand layer; the plot rows and the headers turning on that one clock (`plotRowsAndHeaderTurnOnOneClock`); the progress line's texts, "Computing results" for the fill (`fillProgressLineHasItsOwnText`); a record that could not be written listed in the row's and the header's hover (`failedWriteIsListedInTheHover`) (demand items 527, 533-539, 557, 558; refinement items 618, 633, 644-650, 652, 660) |
 
 **Source layer, conversion layer, importer**
 
@@ -108,7 +110,7 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 |------|--------|
 | `tst_csvformat` | `CsvFormat`, the one definition of the on-disk text forms: shortest round-trip doubles (a 200 000-value bit-pattern sweep), `-0`, `nan` / `inf` / `-inf`, attribute values by `QVariant` type, line-break flattening, valid names and units |
 | `tst_persistence_roundtrip` | Save / reload on the real importer, exporter and logbook: acceptance 5 (bit-identical samples, units and header attributes preserved, `SCHEMA_VER` only if recorded, effective values unchanged, second cycle byte-identical, independent of any cache) and acceptance 6 (a released logbook file is not rescaled, relabelled or stamped by a save; the `loadSession` backfill is additive and idempotent); non-finite samples, ragged sensors, unrepresentable text; the file writer and the in-memory writer agree (also across the 4 MB flush boundary); an unsupported stored `SCHEMA_VER` is never written |
-| `tst_logbook_index` | `LogbookManager`'s `index.json` column cache (and each session's `"recordReasons"`, `recordReasonsRoundTrip`): the calculation-compatibility marker gates every cached value and each column's recorded environment the values of that column (acceptance 18 at the storage level; `differentColumnEnvironmentDiscardsThatColumn`, `missingColumnEnvironmentsDiscardOnce`, `environmentIsTheCachedOne`), unsaved-column tracking and save ordering (an interrupted save never leaves a cached column that disagrees with the session file), orphan session files adopted, marks follow remap / remove / reset; the raw load with its failure reason, the legacy backfill as a separate step, identity-entry queries, a legacy flat index coming up as stubs without rewriting a session file |
+| `tst_logbook_index` | `LogbookManager`'s `index.json` column cache (and each session's `"recordReasons"`, `recordReasonsRoundTrip`; a changed reason announced as a record change, an unchanged one silent, `recordReasonChangeIsAnnounced`): the calculation-compatibility marker gates every cached value and each column's recorded environment the values of that column (acceptance 18 at the storage level; `differentColumnEnvironmentDiscardsThatColumn`, `missingColumnEnvironmentsDiscardOnce`, `environmentIsTheCachedOne`), unsaved-column tracking and save ordering (an interrupted save never leaves a cached column that disagrees with the session file), orphan session files adopted, marks follow remap / remove / reset; the raw load with its failure reason, the legacy backfill as a separate step, identity-entry queries, a legacy flat index coming up as stubs without rewriting a session file |
 | `tst_result_records` | Stored requested-calculation results: the record file name (percent-encoded calculation id, canonical, dot-free, distinct under case folding; the parse of a name), the code stamp (the compatibility marker) computed fresh, never made stale by a registration, the binary record format (bit-exact round trip of `-0`, NaN payloads, infinities and subnormals, null / empty / non-ASCII strings and unavailable outputs; a round trip of every accepted attribute type; the pinned byte layout of format version 2, the resolutions included; other format versions (format 1, in both of its layouts, included), damaged and crafted payloads refused without allocating; every other attribute type, `long` and `unsigned long` included, refused at encode; size), and `LogbookManager`'s record files in the logbook's `cache/` folder: a short read is `Unreadable`, never decoded (`readWholeDevice()` on a buffer that holds less than expected: no file system gives a short read on demand); write, read, replace, list, remove, the folder created by the first write only (a missing folder holds no record), write failures leaving the previous record intact (a `cache/` that cannot be created included), removal with the session (dotted identity stems), stray records removed from `cache/` by `initialize()` in all three index branches, `sessions/` untouched (a name spelling the extension in another case is not a record: neither listed nor removed), orphan adoption, remap, and a session save that never depends on records |
 | `tst_column_cache` | The same through `SessionModel`: upgrade discards and lazily recomputes (acceptance 18), an edit refreshes only the affected columns with a warm and a cold engine, merges and bulk edits, interrupted saves, environment changes discarding, in loaded and unloaded rows and without saving, exactly the columns whose environment they change: a declared preference only the columns that read it (`preferenceChangeDiscardsOnlyReadingColumns`), a registration only the columns whose closure it reaches (`environmentCheckDropsExactlyTheReachedColumn`), new altitude markers no column at all, at run time and after a restart (`altitudeMarkerChangeKeepsOtherColumns`), and a value computed after a change but before the queued check (an eviction) stored and flushed only under its column's new environment (`valueComputedBeforeCheckIsStoredUnderItsEnvironment`), save failures (the row stays dirty and loaded, is skipped by the idle saver and the LRU, stays out of the index, and is saved by a later edit or the shutdown flush), line breaks flattened at edit, a column over an explicit result cached from the result the session has and following its record, shown by a stub after a restart without a load (`explicitBackedColumnFollowsItsResult`), a plug-in edit (a changed plug-in code identity) discarding the cached values of the plug-in column at the next start and keeping the others (`pluginEditDiscardsPluginColumns`), and `loadPinnedSession()`: a hidden session loaded the way showing it would, pinned under its corrected id, nothing pinned for a file that cannot be loaded (`loadPinnedSessionLoadsWithoutShowing`, `loadPinnedSessionFollowsIdentityRemap`, `loadPinnedSessionFailedLoadPinsNothing`) |
 
@@ -580,7 +582,7 @@ missing invalidation in the code under test.
   `flysight_test_support` carries `Threads::Threads` as a usage requirement
   (stated once there; no test names it).
   `jobfixture.h` (`JobWorld`, `Gate`, `waitIdle`, `waitStarted`, `Quiet`,
-  `onFirstProgress`) registers controllable explicit calculations on the
+  `activeJobIds`, `onFirstProgress`) registers controllable explicit calculations on the
   global registry for tests of the executor and whatever sits on top of it:
   a test holds the executor's worker inside a compute function
   (`Gate::waitEntered`), then releases (`Gate::open`) or cancels it,
@@ -589,7 +591,9 @@ missing invalidation in the code under test.
   calculations one test function adds to the global registry; destroyed after
   the executor and the model, it unregisters them newest first, as runtime
   changes. `Quiet` is "nothing started
-  since" (no `jobQueued`, no new job row); `onFirstProgress` acts on the main
+  since" (no new job row); `activeJobIds(queue)` is the ids of the active
+  job records, in model order: the running job, then the chosen next job;
+  `onFirstProgress` acts on the main
   thread while a job that no gate can hold (a real fit) is still running.
   `plotfixture.h` (`PlotFixture`) adds synthetic plots (`Syn/...`, eight,
   the last over the `exhausted` calculation for an out-of-memory job) over
@@ -598,7 +602,9 @@ missing invalidation in the code under test.
   `spin()` (two turns of the event loop and a flush of the demand layer),
   `waitDemandIdle()` (the executor idle, no pass pending, no session
   settling and no load step with work; follow it with `waitForIdle(model)`
-  when column values must be filled) and `sessionIdsOf()` for a state's track
+  when column values must be filled; it returns as soon as the fill has no
+  work, which can be before the scheduler's completion tick: read the fill's
+  final progress or `schedulerIdle` with `QTRY_*`) and `sessionIdsOf()` for a state's track
   lists; construct it
   after the `JobWorld` and destroy it before it. Helpers that need GTSAM or
   the fusion library live in `tests/fusion/` instead (section 11, "Fusion
@@ -609,8 +615,10 @@ missing invalidation in the code under test.
   skipped and deleted, and the time spent restoring and writing. Provoke a write
   failure portably, with a directory at the record's path or an output
   attribute type a record refuses; never with permission bits (Windows ignores
-  the read-only attribute on directories). Make a record unreadable with
-  `UnreadableFile`. A directory at a record's path is never listed, so the
+  the read-only attribute on directories). A write failure is also announced
+  (`SessionModel::calculationRecordWriteFailed`), and the demand layer shows
+  it as a failure. Make a record unreadable with `UnreadableFile`. A
+  directory at a record's path is never listed, so the
   store reaches it only through the ids the logbook manager knows: within a
   run, not after a restart; restart rows use the lock or the permissions.
   Make a record stale by rewriting it or by changing a resolution; a
@@ -675,8 +683,8 @@ missing invalidation in the code under test.
 
 ## 9. Acceptance traceability
 
-Six specifications, six ranges of items in `tests/acceptance_map.txt`, the
-machine-checked form of the six tables below (section 10); keep them in sync.
+Seven specifications, seven ranges of items in `tests/acceptance_map.txt`, the
+machine-checked form of the seven tables below (section 10); keep them in sync.
 
 ### 9.1 Schema and calculation engine (items 1-19)
 
@@ -1004,7 +1012,9 @@ and every item has at least one test or audit line. "Section" is the section
 of the specification; its sections 1 (motivation) and 4 (terms) have no item.
 Clauses 49-62 are its section 13 tests, one per bullet, and clause 63 its
 section 14. The specification amends those of 9.2 (items 110, 111, 113-117)
-and 9.4 (items 304, 306, 321, 337).
+and 9.4 (items 304, 306, 321, 337). Clauses 13, 26, 28, 30, 32, 35, 36, 37,
+39, 46, 47, 57 and 59 are stated as amended by the specification "Calculation
+refinements" (9.7).
 
 | # | Section | Clause | Evidence |
 |---|---|---|---|
@@ -1020,7 +1030,7 @@ and 9.4 (items 304, 306, 321, 337).
 | 510 | 5 | column demand: for every enabled logbook column whose value depends on a requested output, every session in the logbook needs the requested calculations that block that value | `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `loadedHiddenSessionsNeedNoLoad`, `ordinaryColumnsCreateNoDemand`, `columnIdIsTheDefinitionKey`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions`; `manual M24` |
 | 511 | 5 | a pair is in demand only while it has no result; a result counts whether published in this run or restored, success or input-determined failure | `tst_calculation_demand::onlyRequestableCalculationsAreOffered`, `storedResultsCreateNoJob`, `inputDeterminedFailureIsStoredBadgedNeverRerun`, `columnFailuresAreBadgedNotReloaded`; `tst_fusion_store::restoredRejectionShowsBadge`, `restoredAfterRestartIsBitIdentical` |
 | 512 | 5 | a pair whose calculation cannot apply (a declared input missing) is never in demand and is not reported anywhere | `tst_calculation_demand::sessionWithoutInputIsNeverListed`, `notApplicableSessionIsSettledWithoutAJob`; `tst_jobqueue::refusesMissingInput`; `tst_fusion_rows::noImuSessionIsNeverCounted`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions` |
-| 513 | 5 | whether a result exists: blocker inspection for a loaded session; for a session not loaded the logbook's record names and the reasons the index recorded for them, no record opened; a cell has a result only when every calculation it needs has a record; a record with a reason is a failed result before and after a restart alike; a known record counts until the column worker's restore deletes it as stale, which moves the pair into demand; the demand layer checks no staleness itself | `tst_calculation_demand::storedResultsCreateNoJob`, `chainedColumnWithUpstreamRecordIsCompleted`, `storedRejectionIsBadgedAfterRestartWithoutLoad`, `passOverManyStubsReadsEachRecordSetOnce`, `columnStateCountsAndPendingCells`; `tst_logbook_index::recordReasonsRoundTrip`; `tst_result_store::recordReasonRecordedAtWriteAndRestore`; `tst_result_columns::staleRecordDeletedByWorkerCreatesDemand`; `audit demand` |
+| 513 | 5, as amended | whether a result exists: blocker inspection for a loaded session; for a session not loaded, first what this run remembers of its pairs (a failure; a not-applicable verdict of that column), then the logbook's record names and the reasons the index recorded for them, no record opened; a cell has a result only when every calculation it needs has a record; a record with a reason is a failed result before and after a restart alike; a reason the index learns later is announced as a record change; a known record counts until the column worker's restore deletes it as stale, which moves the pair into demand; the demand layer checks no staleness itself | `tst_calculation_demand::storedResultsCreateNoJob`, `chainedColumnWithUpstreamRecordIsCompleted`, `storedRejectionIsBadgedAfterRestartWithoutLoad`, `passOverManyStubsReadsEachRecordSetOnce`, `columnStateCountsAndPendingCells`, `recordReasonReachesDemandThroughRecordChange`, `failedRecordWriteIsShownAndNotRetried`; `tst_logbook_index::recordReasonsRoundTrip`, `recordReasonChangeIsAnnounced`; `tst_result_store::recordReasonRecordedAtWriteAndRestore`; `tst_result_columns::staleRecordDeletedByWorkerCreatesDemand`; `audit demand` |
 | 514 | 5 | demand does not depend on how the state arose (a gesture, a profile, the start-up restore); at start-up every session is hidden, so plots create no demand until sessions are shown, while enabled columns do | `tst_calculation_demand::programmaticCheckCreatesDemand`, `profileStyleApplyCreatesDemand`, `startupRestoreWithHiddenSessionsStartsNothing`, `profileStyleColumnsCreateDemand`, `startupWithEnabledColumnLoadsAfterColumnWorker`; `tst_plot_row_delegate::programmaticCheckIsTheSameAsAClick`, `startupRestoreWithHiddenSessionsStartsNothingWithViewAttached`; `manual M1`, `M2` |
 | 515 | 5 | nothing about demand is persisted: it is derived again at the next start; a profile carrying a column over a requested output computes it for every session without a result, so no default profile carries such a column | `tst_calculation_demand::jobLevelFailureIsBadgedNotRerunUntilRestart`, `profileStyleColumnsCreateDemand`; `audit demand`; `manual M2` |
 | 516 | 5 | when a requested calculation depends on another, the demand covers both, upstream first | `tst_calculation_demand::chainedBlockersContinue`, `heldChainContinues`, `chainCompletesAfterFirstJobDoesNotSucceed`, `chainedColumnKeepsItsHold`; `tst_calcengine_blockers::chainedBlockers` |
@@ -1033,28 +1043,28 @@ and 9.4 (items 304, 306, 321, 337).
 | 523 | 7 | plot demand first (the focused session, then the other visible sessions in logbook row order), then column demand: visible sessions, then the other loaded sessions, then sessions not loaded as the fill loads them, each in logbook row order | `tst_calculation_demand::focusedSessionFirstThenRowOrder`, `visibleSessionsFirstWithinColumnDemand`, `columnPriorityFollowsRowOrderAfterPlots`, `enablingColumnFillsEveryUnloadedSession` |
 | 524 | 7 | a session made visible while column demand is worked through is computed next, waiting at most for the running job, which is not preempted | `tst_calculation_demand::sessionShownDuringColumnDemandRunsNext`, `columnPriorityFollowsRowOrderAfterPlots`; `manual M26` |
 | 525 | 8 | an input-determined failure (rejection, solver failure) is a result: stored, shown with the warning badge and its reason, never run again | `tst_calculation_demand::inputDeterminedFailureIsStoredBadgedNeverRerun`, `columnFailuresAreBadgedNotReloaded`; `tst_fusion_rows::rejectedTrackShowsBadge`; `tst_fusion_store::restoredRejectionShowsBadge`, `restoredSolverFailureShowsBadge`; `manual M7` |
-| 526 | 8 | a job-level failure (the worker could not start, out of memory, a failure not a function of the inputs) is badged with its reason, not started again in the run unless its inputs change, not stored, so tried again at the next start; the demand layer remembers it | `tst_calculation_demand::jobLevelFailureIsBadgedNotRerunUntilRestart`, `columnJobLevelFailureIsNotReloadedUntilRestart`, `unloadableSessionIsSettledAsFailed`, `visibleFailedLoadIsSettledAsFailed`; `tst_logbook_indicators::failedLoadSessionShowsBadgeNotPending`; `tst_jobqueue::workerStartFailureFails`, `resourceExhaustionFails`; `manual M28` |
+| 526 | 8, as amended | a failure that is not a function of the inputs (the worker could not start, out of memory, a session file that could not be loaded, a result whose record could not be written) is badged with its reason, not offered and its session not loaded again in the run unless its inputs change, not stored, so tried again at the next start; the demand layer remembers it for the pair | `tst_calculation_demand::jobLevelFailureIsBadgedNotRerunUntilRestart`, `columnJobLevelFailureIsNotReloadedUntilRestart`, `unloadableSessionIsSettledAsFailed`, `visibleFailedLoadIsSettledAsFailed`, `failedRecordWriteIsShownAndNotRetried`, `settledPairsSurviveEvictionSortAndColumnWorker`, `pairMemoryIsClearedByRecordInputAndRegistryChanges`; `tst_logbook_indicators::failedLoadSessionShowsBadgeNotPending`; `tst_jobqueue::workerStartFailureFails`, `resourceExhaustionFails`; `manual M28`, `M32` |
 | 527 | 8 | there is no retry control | `tst_plot_row_delegate::clickOnClusterIsAClickOnTheRow`; `tst_logbook_indicators::clickOnIndicatorIsAClickOnTheSection`; `audit gestures`, `audit demand` |
-| 528 | 9 | for column demand the demand layer, not the column worker, has a session that is not loaded loaded the way showing it would, without making it visible: an ordinary hidden session, pinned from its load until no column it needs is still waiting or running, then left to ordinary eviction | `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `chainedColumnKeepsItsHold`, `heldSessionShownStaysLoaded`, `removedOrRepopulatedHeldSessionIsReleased`, `demandDestroyedReleasesHoldsAndTask`, `noLoadsAfterExecutorShutdown`; `tst_column_cache::loadPinnedSessionLoadsWithoutShowing`, `loadPinnedSessionFailedLoadPinsNothing` |
+| 528 | 9, as amended | for column demand the demand layer, not the column worker, has a session that is not loaded loaded the way showing it would, without making it visible: an ordinary hidden session, pinned from its load until no column it needs is still waiting or running, the executor is shut down or the demand layer goes, then left to ordinary eviction | `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `chainedColumnKeepsItsHold`, `heldSessionShownStaysLoaded`, `removedOrRepopulatedHeldSessionIsReleased`, `demandDestroyedReleasesHoldsAndTask`, `noLoadsAfterExecutorShutdown`; `tst_column_cache::loadPinnedSessionLoadsWithoutShowing`, `loadPinnedSessionFailedLoadPinsNothing` |
 | 529 | 9 | at most a small fixed number of sessions is loaded for this purpose at a time, not smaller than the number of jobs that may run at once; the next is loaded when one has ended | `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `sessionShownDuringColumnDemandRunsNext`, `columnPriorityFollowsRowOrderAfterPlots`; `audit demand`; `manual M24` |
-| 530 | 9 | the fill is an idle-scheduler task below saving, loading visible sessions, bulk edits and column work, whose steps are the loads, so saves and bulk edits come first; it has work for the whole fill and steps only while it can load; the progress line reports the whole fill; the scheduler gains the generic notion of a task with work it cannot step right now, rests instead of spinning, and learns nothing about jobs | `tst_calculation_demand::savesAndBulkEditsPrecedeLoadStep`, `startupWithEnabledColumnLoadsAfterColumnWorker`, `fillTaskIsLowestAndNotCancellable`, `fillTaskReportsProgressWhileWaiting`, `bulkEditMakesSettledSessionApplicable`; `tst_session_model_engine::schedulerWaitingTaskDoesNotSpin`, `schedulerTaskCanBeUnregistered`; `audit demand`; `manual M24` |
+| 530 | 9, as amended | the fill is an idle-scheduler task below saving, loading visible sessions, bulk edits and column work, whose steps are the loads, so saves and bulk edits come first; it has work for the whole fill and steps only while it can load; the progress line reports the whole fill; the scheduler has the generic notion of a task with work it cannot step right now, rests instead of spinning, completes such a task once its work is gone without a step, and learns nothing about jobs | `tst_calculation_demand::savesAndBulkEditsPrecedeLoadStep`, `startupWithEnabledColumnLoadsAfterColumnWorker`, `fillTaskIsLowestAndNotCancellable`, `fillTaskReportsProgressWhileWaiting`, `bulkEditMakesSettledSessionApplicable`, `fillEndingBehindAnotherTaskStartsNextCountFresh`; `tst_session_model_engine::schedulerWaitingTaskDoesNotSpin`, `schedulerTaskCanBeUnregistered`, `schedulerCompletesWaitingTaskWhoseWorkIsGone`; `audit demand`; `manual M24` |
 | 531 | 9 | the session-id correction of a first load happens before the pair is offered to the executor | `tst_calculation_demand::identityStubIsOfferedUnderItsRealId`; `tst_column_cache::loadPinnedSessionFollowsIdentityRemap` |
-| 532 | 9 | a session whose requested calculation turns out not to apply once loaded is settled as not applicable for the run without a job; its column value stays unavailable | `tst_calculation_demand::notApplicableSessionIsSettledWithoutAJob`, `enablingColumnFillsEveryUnloadedSession`, `columnOfferRefusalIsNotLeftPending`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions` |
+| 532 | 9, as amended | a session whose requested calculation turns out not to apply once loaded is remembered as not applicable for that column for the run, without a job, and is not loaded again for it; its column value stays unavailable | `tst_calculation_demand::notApplicableSessionIsSettledWithoutAJob`, `enablingColumnFillsEveryUnloadedSession`, `columnOfferRefusalIsNotLeftPending`, `columnVerdictDoesNotSuppressAnotherColumn`, `settledPairsSurviveEvictionSortAndColumnWorker`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions` |
 | 533 | 9 | the column worker is unchanged and never knows a job exists; a record written later drops the cached value and the loaded-row refresh computes the new one; cheap column values never wait for a requested calculation | `tst_result_columns::columnWorkerIsUnchangedByDemand`, `staleRecordDeletedByWorkerCreatesDemand`; `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`; `tst_logbook_indicators::pendingCellBecomesValueWhenRecordIsWritten`; `audit demand` |
 | 534 | 10 | no refresh and no cancel for requested calculations anywhere; unchecking a plot, hiding sessions or disabling a column is how the user changes what is wanted | `tst_plot_row_delegate::clickOnClusterIsAClickOnTheRow`; `tst_logbook_indicators::clickOnIndicatorIsAClickOnTheSection`, `pendingCellBecomesValueWhenRecordIsWritten`; `audit gestures`, `audit demand`; `manual M4`, `M6` |
-| 535 | 10 | a plot row and a logbook column header show a small animated working indicator at the right of their name while any of their demand is waiting or running | `tst_plot_row_delegate::workingRowPaintsIndicator`, `workingIndicatorAnimatesOnlyWhileWorking`, `workingAnimationClock`, `plotStateChangeRepaintsRow`; `tst_logbook_indicators::workingColumnShowsIndicatorRightOfText`, `indicatorAnimatesOnlyWhileWorking`, `indicatorFollowsColumnWhenMovedHiddenOrReordered`, `indicatorClearsSortArrowAndNarrowSections`, `plainHeaderAndCellsAreIdenticalToBase`; `tst_calculation_demand::workingIdsFollowStates`; `manual M3`, `M23` |
-| 536 | 10 | hovering the indicator, the row or the header shows how many sessions are done of how many are wanted, the session being computed with its progress text, and the sessions that could not be computed with their reasons | `tst_calculation_demand::tooltipText`, `toolTipListsAtMostTenFailures`, `sharedJobSameProgress`, `progressUpdatesWithoutInspection`, `columnStateCountsAndPendingCells`, `visibleFailedLoadIsSettledAsFailed`; `tst_plot_row_delegate::hoverDetailFollowsDemandState`, `toolTipComesFromPlotState`; `tst_logbook_indicators::headerToolTipFollowsDemandState`; `manual M23` |
-| 537 | 10 | the warning badge replaces the indicator once work is finished and some sessions could not be computed; its hover lists them with reasons | `tst_calculation_demand::failuresListedWhileWorking`; `tst_plot_row_delegate::badgeReplacesIndicatorOnceFinished`; `tst_logbook_indicators::badgeReplacesIndicatorWhenFinished`, `failedLoadSessionShowsBadgeNotPending`; `tst_fusion_rows::rejectedTrackShowsBadge`; `manual M7` |
+| 535 | 10, as amended | a plot row and a logbook column header show one small animated working indicator at the right of their name while any of their demand is waiting or running, with no label or count beside it; the indicators of the plot list and the logbook turn on one clock | `tst_plot_row_delegate::workingRowPaintsIndicator`, `workingIndicatorAnimatesOnlyWhileWorking`, `workingAnimationClock`, `plotStateChangeRepaintsRow`; `tst_logbook_indicators::workingColumnShowsIndicatorRightOfText`, `indicatorAnimatesOnlyWhileWorking`, `indicatorFollowsColumnWhenMovedHiddenOrReordered`, `indicatorClearsSortArrowAndNarrowSections`, `plainHeaderAndCellsAreIdenticalToBase`, `plotRowsAndHeaderTurnOnOneClock`; `tst_calculation_demand::workingIdsFollowStates`; `manual M3`, `M23`, `M29`, `M30`; `tst_plot_row_layout::indicatorOnly` |
+| 536 | 10, as amended | hovering the indicator, the row or the header shows how many sessions are done of how many are wanted (the only place the numbers are shown), the session being computed with its progress text, and the sessions that could not be computed with their reasons, a result that could not be stored included | `tst_calculation_demand::tooltipText`, `toolTipListsAtMostTenFailures`, `sharedJobSameProgress`, `progressUpdatesWithoutInspection`, `columnStateCountsAndPendingCells`, `visibleFailedLoadIsSettledAsFailed`; `tst_plot_row_delegate::hoverDetailFollowsDemandState`, `toolTipComesFromPlotState`, `sharedGlyphPlumbing`; `tst_logbook_indicators::headerToolTipFollowsDemandState`, `failedWriteIsListedInTheHover`; `manual M23`, `M29` |
+| 537 | 10, as amended | the warning badge, with no count, replaces the indicator once work is finished and some sessions could not be computed, a result that could not be stored included; its hover lists them with reasons | `tst_calculation_demand::failuresListedWhileWorking`, `failedRecordWriteIsShownOnThePlotRow`; `tst_plot_row_delegate::badgeReplacesIndicatorOnceFinished`; `tst_logbook_indicators::badgeReplacesIndicatorWhenFinished`, `failedLoadSessionShowsBadgeNotPending`, `failedWriteIsListedInTheHover`; `tst_fusion_rows::rejectedTrackShowsBadge`; `manual M7`, `M29` |
 | 538 | 10 | a column cell whose pair is in demand reads as pending, distinct from unavailable and from the unreadable-record pending state; pending is the view's presentation of demand, never a cached value, never in the index; the value underneath stays unavailable until the record is written, and sorting treats pending as unavailable | `tst_logbook_indicators::pendingCellsAreDistinctFromUnavailable`, `pendingCellBecomesValueWhenRecordIsWritten`, `sortingTreatsPendingAsUnavailable`, `unreadableRecordPendingIsNotDemandPending`, `columnStateChangeRepaintsOnlyThatColumn`; `tst_calculation_demand::columnStateCountsAndPendingCells`; `audit demand`; `manual M25` |
-| 539 | 10 | the logbook's progress line for background work is unchanged in form and reports a column fill for its whole duration, as on-demand column values: remaining of wanted, no cancel | `tst_calculation_demand::fillTaskIsLowestAndNotCancellable`, `fillTaskReportsProgressWhileWaiting`; `tst_logbook_indicators::pendingCellBecomesValueWhenRecordIsWritten`; `manual M24` |
+| 539 | 10, as amended | the logbook's progress line for background work is unchanged in form and reports a column fill for its whole duration, remaining of wanted, with no cancel, under a text of its own ("Computing results: k / n") distinct from the column worker's ("Computing columns: k / n") | `tst_calculation_demand::fillTaskIsLowestAndNotCancellable`, `fillTaskReportsProgressWhileWaiting`; `tst_logbook_indicators::pendingCellBecomesValueWhenRecordIsWritten`, `fillProgressLineHasItsOwnText`; `manual M24`, `M31` |
 | 540 | 11 | the executor's worker thread runs below normal priority, so that the user interface stays responsive | `tst_jobqueue::workerRunsBelowNormalPriority`, `mainThreadIsNotBlockedByARunningJob`; `tst_fusion_jobs::solverThreadsRunAtWorkerPriority`; `audit demand`; `manual M27` |
 | 541 | 11 | the number of jobs that may run at once is a single bound of the executor (one today); the load bound of section 9 follows it, and raising it changes no contract of the demand layer or the column worker | `tst_jobqueue::holdsAtMostRunningAndChosenNext`; `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`; `audit demand` |
 | 542 | 12 | one widget-free demand layer replaces the plot rows' request logic: it reads the plot model, the session model, the enabled columns, blocker reports and the record set, derives demand, applies the priority, has sessions loaded, offers the next pair, remembers this run's failures and not-applicable pairs, and publishes per-plot and per-column state | `tst_calculation_demand::nullCollaborators`, `changeSignalsAreMinimal`, `registryChangeReclassifies`, `removedSessionLeavesNoTrace`; `audit widget-free-core`, `audit demand` |
 | 543 | 12 | the demand layer is the only caller of the executor; nothing calls back into it: it observes the models and the executor's signals | `tst_calculation_demand::survivesExecutorShutdown`, `nullCollaborators`; `tst_plot_row_delegate::survivesDemandDestroyedFirst`; `tst_logbook_indicators::survivesDemandDestroyedFirst`; `audit gestures`, `audit demand` |
 | 544 | 12 | the executor stays the only place a requested calculation runs and never loads a session; it holds at most the running job and one chosen next job, with no order of arrival, no deduplication against a list and no pruning | `tst_jobqueue::holdsAtMostRunningAndChosenNext`, `offerReplacesChosenNext`, `withdrawEndsChosenNext`, `duplicateOffersCreateNoDuplicates`, `neverLoadsASession`; `tst_calculation_demand::executorHoldsAtMostRunningAndChosenNext`; `audit gestures`, `audit demand` |
 | 545 | 12 | the executor's lifecycle (start, stale while running, cancel, supersede, fail, shutdown), its pinning, the publication and storing of results, and the job history are unchanged | `tst_jobqueue::runsAndPublishes`, `staleRunningJobIsStoppedAtOnce`, `offerWhileStaleJobWindsDown`, `cancelRunningThenNextStarts`, `evictionDeferredWhileJobActive`, `shutdownWithQueuedAndRunning`, `offerWhileCancellingCreatesNewJob`, `shutdownIsIdempotentAndRefusesOffers`; `tst_jobmodel::historyFromSignalsAlone`; `tst_result_store::writesOnOkInstall`; `tst_fusion_jobs::jobPublishesAllOutputsTogether` |
-| 546 | 12 | the column worker and the idle scheduler keep their tasks and priorities; the column fill is a new lowest-priority task; the scheduler gains the notion of a task with work it cannot step right now and no knowledge of jobs; the manager and the store record each stored result's outcome in the index | `tst_result_columns::columnWorkerIsUnchangedByDemand`; `tst_calculation_demand::fillTaskIsLowestAndNotCancellable`; `tst_session_model_engine::schedulerTaskCanBeUnregistered`, `schedulerWaitingTaskDoesNotSpin`; `tst_result_store::recordReasonRecordedAtWriteAndRestore`; `audit branch-mechanisms`, `audit demand` |
-| 547 | 12 | the flow is one way: the demand layer chooses, the executor publishes, the listener writes the record, the record change drops cached column values, the loaded-row refresh recomputes them, and the demand layer sees the result through the inspection and record set it always reads | `tst_result_columns::staleRecordDeletedByWorkerCreatesDemand`; `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`; `tst_logbook_indicators::pendingCellBecomesValueWhenRecordIsWritten`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions`; `audit demand` |
+| 546 | 12, as amended | the column worker and the idle scheduler keep their tasks and priorities; the column fill is a new lowest-priority task; the scheduler has the notion of a task with work it cannot step right now, completes it when its work is gone, and knows nothing of jobs; the manager and the store record each stored result's outcome in the index, the manager announces a changed outcome, and the store announces a record it could not write | `tst_result_columns::columnWorkerIsUnchangedByDemand`; `tst_calculation_demand::fillTaskIsLowestAndNotCancellable`; `tst_session_model_engine::schedulerTaskCanBeUnregistered`, `schedulerWaitingTaskDoesNotSpin`, `schedulerCompletesWaitingTaskWhoseWorkIsGone`; `tst_result_store::recordReasonRecordedAtWriteAndRestore`, `writeFailureIsAnnounced`; `audit branch-mechanisms`, `audit demand`; `tst_logbook_index::recordReasonChangeIsAnnounced` |
+| 547 | 12, as amended | the flow is one way: the demand layer chooses, the executor publishes, the listener writes the record or the store announces that it could not, the index notes the outcome and announces it, the record change drops cached column values and the demand layer's memos, the loaded-row refresh recomputes the values, and the demand layer sees the result or the failure through the inspection, the record set and the pair memory it always reads | `tst_result_columns::staleRecordDeletedByWorkerCreatesDemand`; `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `recordReasonReachesDemandThroughRecordChange`, `failedRecordWriteIsShownAndNotRetried`; `tst_logbook_indicators::pendingCellBecomesValueWhenRecordIsWritten`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions`; `audit demand` |
 | 548 | 12 | what stays true: restoring is not requesting; the column worker's temporary copy never writes a stored result and never requests; a restored result is indistinguishable from a published one; the engine's threading rules; the plot widget's "no data" warning asks the engine directly | `tst_calculation_demand::storedResultsCreateNoJob`, `merelyUncomputedIsNotWorthAWarning`; `tst_result_columns::columnWorkerIsUnchangedByDemand`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`; `tst_fusion_session::restoredFitIsIndistinguishable`; `audit stored-results`, `audit one-worker` |
 | 549 | 13 | test: checking a plot starts the visible sessions without a result; showing another session while it is checked starts it with no other action; hiding drops its waiting pair; unchecking drops all waiting pairs; the running job finishes and its result is stored | `tst_calculation_demand::rowScript`, `showingASessionStartsIt`, `hidingASessionDropsItsWaitingPair`, `uncheckingDropsWaitingPairsKeepsRunning`; `tst_fusion_rows::realRowScript` |
 | 550 | 13 | test: a session made visible during column demand is the next job to start; within column demand visible sessions come before hidden loaded ones, and those before sessions not yet loaded | `tst_calculation_demand::sessionShownDuringColumnDemandRunsNext`, `visibleSessionsFirstWithinColumnDemand`, `columnPriorityFollowsRowOrderAfterPlots` |
@@ -1064,13 +1074,101 @@ and 9.4 (items 304, 306, 321, 337).
 | 554 | 13 | test: an input-determined failure is stored, badged and never run again; a job-level failure is badged, not run again in the run, and tried again after a restart | `tst_calculation_demand::inputDeterminedFailureIsStoredBadgedNeverRerun`, `jobLevelFailureIsBadgedNotRerunUntilRestart`, `columnFailuresAreBadgedNotReloaded`, `columnJobLevelFailureIsNotReloadedUntilRestart` |
 | 555 | 13 | test: a burst of input changes on a demanded session produces one job; the indicator shows from the first change | `tst_calculation_demand::inputBurstRunsOneJob`, `staleRunningJobIsWaitingAtOnce` |
 | 556 | 13 | test: applying a profile with such a column creates demand; start-up with a checked plot and no visible sessions creates none | `tst_calculation_demand::profileStyleColumnsCreateDemand`, `profileStyleApplyCreatesDemand`, `startupRestoreWithHiddenSessionsStartsNothing`; `tst_plot_row_delegate::startupRestoreWithHiddenSessionsStartsNothingWithViewAttached`; `manual M2` |
-| 557 | 13 | test: the working indicator and hover detail reflect waiting, running, done and failed counts on plot rows and column headers; no control to refresh or cancel a calculation exists | `tst_calculation_demand::columnStateCountsAndPendingCells`; `tst_plot_row_delegate::workingIndicatorAnimatesOnlyWhileWorking`, `badgeReplacesIndicatorOnceFinished`, `hoverDetailFollowsDemandState`, `clickOnClusterIsAClickOnTheRow`; `tst_logbook_indicators::workingColumnShowsIndicatorRightOfText`, `badgeReplacesIndicatorWhenFinished`, `headerToolTipFollowsDemandState`, `clickOnIndicatorIsAClickOnTheSection`, `failedLoadSessionShowsBadgeNotPending` |
+| 557 | 13, as amended | test: the working indicator and hover detail reflect waiting, running, done and failed counts on plot rows and column headers, the plot row showing one glyph and no label or count; no control to refresh or cancel a calculation exists | `tst_calculation_demand::columnStateCountsAndPendingCells`; `tst_plot_row_delegate::workingIndicatorAnimatesOnlyWhileWorking`, `badgeReplacesIndicatorOnceFinished`, `hoverDetailFollowsDemandState`, `clickOnClusterIsAClickOnTheRow`, `workingRowPaintsIndicator`, `sharedGlyphPlumbing`; `tst_logbook_indicators::workingColumnShowsIndicatorRightOfText`, `badgeReplacesIndicatorWhenFinished`, `headerToolTipFollowsDemandState`, `clickOnIndicatorIsAClickOnTheSection`, `failedLoadSessionShowsBadgeNotPending`, `failedWriteIsListedInTheHover` |
 | 558 | 13 | test: a pending column cell is distinguishable from an unavailable one, is not written to the logbook index, and becomes the value when the record is written | `tst_logbook_indicators::pendingCellsAreDistinctFromUnavailable`, `pendingCellBecomesValueWhenRecordIsWritten`, `sortingTreatsPendingAsUnavailable`, `unreadableRecordPendingIsNotDemandPending` |
-| 559 | 13 | test: saves and bulk edits still precede the fill's loads; no result is computed from a file being rewritten; the progress line reports the fill from its first load to its last result, and the scheduler does not spin while the fill waits on a job | `tst_calculation_demand::savesAndBulkEditsPrecedeLoadStep`, `startupWithEnabledColumnLoadsAfterColumnWorker` |
+| 559 | 13, as amended | test: saves and bulk edits still precede the fill's loads; no result is computed from a file being rewritten; the progress line reports the fill from its first load to its last result without any step that loads nothing, and the scheduler does not spin while the fill waits on a job | `tst_calculation_demand::savesAndBulkEditsPrecedeLoadStep`, `startupWithEnabledColumnLoadsAfterColumnWorker`, `fillTaskReportsProgressWhileWaiting`; `tst_session_model_engine::schedulerCompletesWaitingTaskWhoseWorkIsGone`, `schedulerWaitingTaskDoesNotSpin`; `tst_logbook_indicators::fillProgressLineHasItsOwnText` |
 | 560 | 13 | test: the executor never holds more than the running job and one chosen next job; changing demand replaces the chosen next job | `tst_jobqueue::holdsAtMostRunningAndChosenNext`, `offerReplacesChosenNext`; `tst_calculation_demand::executorHoldsAtMostRunningAndChosenNext`, `changingDemandReplacesChosenNext` |
 | 561 | 13 | test: the UI thread is not blocked by a running requested calculation, and the calculation runs below normal priority | `tst_jobqueue::mainThreadIsNotBlockedByARunningJob`, `workerRunsBelowNormalPriority`; `tst_fusion_jobs::solverThreadsRunAtWorkerPriority` |
-| 562 | 13 | test: the existing tests of stored results and of the executor pass, those that asserted the refresh gesture, the queue order or the pruning of queued jobs rewritten to the demand rules | `tst_jobqueue::oneAtATimeInOfferOrder`, `duplicateOffersCreateNoDuplicates`; `tst_fusion_rows::realRowScript`; `tst_fusion_store::dependencyEditDropsRecord`, `codeStampChangeDropsRecordOnLoad`; `tst_plot_row_layout::indicatorOnly`, `indicatorAndWarning`; `audit gestures` |
+| 562 | 13 | test: the existing tests of stored results and of the executor pass, those that asserted the refresh gesture, the queue order or the pruning of queued jobs rewritten to the demand rules | `tst_jobqueue::oneAtATimeInOfferOrder`, `duplicateOffersCreateNoDuplicates`; `tst_fusion_rows::realRowScript`; `tst_fusion_store::dependencyEditDropsRecord`, `codeStampChangeDropsRecordOnLoad`; `tst_plot_row_layout::indicatorOnly`; `audit gestures` |
 | 563 | 14 | docs/ describe the executor, the demand layer, logbook columns over requested results, what the user sees (no refresh, the working indicator, pending cells, failures) and where a column over a requested calculation stays unavailable or pending | `audit demand` |
+
+### 9.7 Calculation refinements (items 601-662)
+
+The sixty-two clauses of the specification "Calculation refinements", stated
+in full in
+[appendix G](#appendix-g-the-acceptance-items-of-calculation-refinements-601-662).
+In the map, item = 600 + the clause number; the same four line forms as 9.2,
+and every item has at least one test or audit line. "Section" is the section
+of the specification (10.1 and 10.2 its subsections); its sections 1
+(motivation) and 4 (terms) have no item. Clauses 53-61 are its section 14
+tests, one per bullet, and clause 62 its section 15. Clauses 34, 42 and 50
+are stated as settled when they were implemented: a column track that is
+running or failed on one blocker files its other blockers, as a plot track
+does; the fill releases every hold once the executor is shut down; the glyph
+plumbing that needs Qt Widgets lives in the views' half of the shared
+indicator (`DemandIndicatorView`), and the state's progress label, which no
+view reads, is gone. The specification, revised after its plan review,
+carries the rest of what the first plan draft had settled (the scheduler's
+rule scoped to tasks that can wait, a fill that starts from nothing starting
+its own count, a column's verdict holding for that column, the bulk edit's
+announcement of its edit, a successful load forgetting failed-load facts).
+The specification amends those of 9.6 (items 513, 526, 528, 530, 532,
+535-537, 539, 546, 547, 557, 559).
+
+| # | Section | Clause | Evidence |
+|---|---|---|---|
+| 601 | 2 | the principles of the demand-driven specification hold unchanged: what is switched on is the request, anything wanted is wanted at once, finished work is never wasted, background work never degrades the application, a failure is shown and never retried in a loop, each component's contract can be stated without naming the others | `tst_calculation_demand::rowScript`, `enablingColumnFillsEveryUnloadedSession`, `storedResultsCreateNoJob`, `nullCollaborators`, `failedRecordWriteIsShownAndNotRetried`; `tst_jobqueue::workerRunsBelowNormalPriority`; `audit demand` |
+| 602 | 2 | a fact is computed by the component that owns it and read by the others: each enabled column's closure and requested calculations and a row's display name by the session model, a record's reason by the logbook index, a failed record write by the result store | `tst_result_columns::sessionModelExposesColumnKnowledge`, `sessionDisplayNameOfEveryRowKind`; `tst_calculation_demand::columnKnowledgeComesFromTheSessionModel`; `tst_logbook_index::recordReasonChangeIsAnnounced`; `tst_result_store::writeFailureIsAnnounced`; `audit demand` |
+| 603 | 2 | a component announces what it changes; no component infers another's change from a signal about something else | `tst_logbook_index::recordReasonChangeIsAnnounced`; `tst_result_store::writeFailureIsAnnounced`; `tst_calculation_demand::recordReasonReachesDemandThroughRecordChange`; `audit demand` |
+| 604 | 2 | one rule, one path: plots and columns are classified, tallied and filed as candidates by one walk, the difference between them being data | `tst_calculation_demand::runningColumnTrackFilesItsOtherBlockers`, `focusedSessionFirstThenRowOrder`, `columnPriorityFollowsRowOrderAfterPlots`, `columnStateCountsAndPendingCells`; `audit demand` |
+| 605 | 2 | what no product code uses is removed, unless a named later feature needs it, in which case it is kept and says so: the executor's cancel operation and job history stay for the jobs dock | `tst_jobqueue::cancelRunningThenNextStarts`; `tst_jobmodel::historyFromSignalsAlone`; `audit gestures`, `audit demand` |
+| 606 | 3 | unchanged: the executor's lifecycle, the fusion kernel, the record format, the logbook index's other contents, and the column worker's behaviour and statistics | `tst_jobqueue::runsAndPublishes`, `staleRunningJobIsStoppedAtOnce`, `shutdownWithQueuedAndRunning`; `tst_fusion_golden::successFixturesMatchGolden`; `tst_result_records::layoutIsPinned`; `tst_logbook_index::recordReasonsRoundTrip`; `tst_result_columns::columnWorkerIsUnchangedByDemand` |
+| 607 | 3 | unchanged: what is in demand, its priority, the input-settle wait, the bound on held sessions, and the one-way flow between the demand layer, the executor, the store and the column worker | `tst_calculation_demand::focusedSessionFirstThenRowOrder`, `visibleSessionsFirstWithinColumnDemand`, `inputBurstRunsOneJob`, `supersededJobIsRunAgainAfterInputsSettle`, `enablingColumnFillsEveryUnloadedSession`; `tst_result_columns::staleRecordDeletedByWorkerCreatesDemand`; `audit demand` |
+| 608 | 3 | the jobs dock is out of scope: the executor keeps its cancel operation and its job history for it; the column worker does not load sessions for the demand layer | `tst_jobqueue::cancelQueued`, `cancelRunningThenNextStarts`; `tst_jobmodel::historyFromSignalsAlone`; `tst_result_columns::columnWorkerIsUnchangedByDemand`; `audit gestures` |
+| 609 | 5 | a task registered as one that can wait (TaskDef::canStep) which the scheduler last reported active and which has no work any more is completed at the next tick whether or not it was stepped: its progress is reported one last time and its completion is called, not cancelled, before the next active task is reported or the scheduler goes idle; whoever takes a resting task's work away wakes the scheduler | `tst_session_model_engine::schedulerCompletesWaitingTaskWhoseWorkIsGone`; `tst_calculation_demand::fillTaskReportsProgressWhileWaiting` |
+| 610 | 5 | a task that lost its work because it was cancelled completes once, as cancelled; a task unregistered while active is never completed | `tst_session_model_engine::schedulerCompletesWaitingTaskWhoseWorkIsGone`, `schedulerTaskCanBeUnregistered` |
+| 611 | 5 | the other tasks (save, load, bulk edit, column work) complete through their step or by cancel at the same moments as before: they can lose work outside a step, so the rule applies to tasks that can wait only | `tst_session_model_engine::schedulerCompletesWaitingTaskWhoseWorkIsGone`, `schedulerWaitingTaskDoesNotSpin`; `tst_calculation_demand::savesAndBulkEditsPrecedeLoadStep`, `startupWithEnabledColumnLoadsAfterColumnWorker` |
+| 612 | 5 | the fill has no ending state and no step that loads nothing; its progress is the sessions with a pending column cell of its high-water mark, which resets when the task completes and starts afresh when the sessions with a pending cell rise from none | `tst_calculation_demand::fillTaskReportsProgressWhileWaiting`, `fillEndingBehindAnotherTaskStartsNextCountFresh`, `fillTaskIsLowestAndNotCancellable`; `audit demand` |
+| 613 | 5 | the scheduler still learns nothing about jobs or demand | `tst_session_model_engine::schedulerCompletesWaitingTaskWhoseWorkIsGone`; `audit demand`, `audit branch-mechanisms` |
+| 614 | 6 | recording a reason that differs from what the logbook index held emits the record-changed signal for that session and calculation, as a record write or removal does; an unchanged reason emits nothing, and a write or removal still emits exactly once | `tst_logbook_index::recordReasonChangeIsAnnounced`; `tst_result_store::recordReasonRecordedAtWriteAndRestore`; `tst_result_columns::managerDropsDependentValues` |
+| 615 | 6 | a reason taught to the index by a restore into the column worker's copy reaches the demand layer through that signal alone; the demand layer compares no reasons on the model's display change | `tst_calculation_demand::recordReasonReachesDemandThroughRecordChange`, `storedRejectionIsBadgedAfterRestartWithoutLoad`; `audit demand` |
+| 616 | 6 | the bulk edit announces its edit as a dependency change on both of its paths (a loaded session, and the temporary copy of one that is not loaded), and the demand layer observes no display change of the model: a bulk edit reaches it as an input change, and the column worker's display changes are never read | `tst_session_model_engine::bulkEditAnnouncesADependencyChange`; `tst_calculation_demand::bulkEditMakesSettledSessionApplicable`, `settledPairsSurviveEvictionSortAndColumnWorker`; `audit demand` |
+| 617 | 7 | the result store announces a record write that failed, with the reason, for the session and calculation, after the index's record change of that pair; the result stays installed and nothing retries the write | `tst_result_store::writeFailureIsAnnounced`, `writeFailureLeavesResultUsable`, `writeFailureKeepsPreviousRecord` |
+| 618 | 7 | a track whose record could not be written is failed with that reason on plot rows and column headers alike, whether the session is loaded or not: a source is done only when none of its storable calculations is remembered so | `tst_calculation_demand::failedRecordWriteIsShownAndNotRetried`, `failedRecordWriteIsShownOnThePlotRow`; `tst_logbook_indicators::failedWriteIsListedInTheHover`; `manual M32` |
+| 619 | 7 | such a pair is not offered again and its session is not loaded again for it in the run until its inputs change, so the user's view is the same before and after an eviction | `tst_calculation_demand::failedRecordWriteIsShownAndNotRetried`, `failedRecordWriteIsShownOnThePlotRow`, `settledPairsSurviveEvictionSortAndColumnWorker`; `manual M32` |
+| 620 | 7 | a later successful write of the pair's record clears the failure; nothing is persisted, so the next start tries the write again | `tst_calculation_demand::failedRecordWriteIsShownAndNotRetried`, `pairMemoryIsClearedByRecordInputAndRegistryChanges`; `manual M32` |
+| 621 | 8 | the session model exposes, per enabled column, its static dependency closure and its requested calculations, current under the registrations at the moment of the call and valid between two column rebuilds | `tst_result_columns::sessionModelExposesColumnKnowledge`, `columnExplicitCalculations` |
+| 622 | 8 | the demand layer reads each column's closure and requested calculations from the session model and computes neither; a column change reaches it through the model's reset alone; it still computes a plot's closure and requested calculations from the registry | `tst_calculation_demand::columnKnowledgeComesFromTheSessionModel`, `ordinaryColumnsCreateNoDemand`, `ordinaryPlotsAreNeverInspected`; `audit demand` |
+| 623 | 8 | the session model exposes one display name of a row: the loaded session's description, else the description the logbook index caches for the row, else the session id | `tst_result_columns::sessionDisplayNameOfEveryRowKind` |
+| 624 | 8 | the demand layer's tracks and the executor's job records name a session by that display name, for loaded rows, stubs and failed-load placeholders alike, and neither computes a name | `tst_jobqueue::runsAndPublishes`; `tst_calculation_demand::visibleFailedLoadIsSettledAsFailed`, `recordReasonReachesDemandThroughRecordChange`, `failedRecordWriteIsShownAndNotRetried`; `audit demand` |
+| 625 | 9 | the demand layer keeps no memory of its own offer: it is the only offerer, so the chosen next job is always its own, and when the choice finds nothing it is withdrawn | `tst_calculation_demand::chosenNextJobFollowsTheExecutorsAnswer`, `changingDemandReplacesChosenNext`, `hidingASessionDropsItsWaitingPair`; `audit gestures` |
+| 626 | 9 | the demand layer does not compare a candidate with the chosen next job before offering it; it acts on the executor's answer, and an offer equal to the chosen next job keeps it as it is | `tst_calculation_demand::chosenNextJobFollowsTheExecutorsAnswer`, `executorHoldsAtMostRunningAndChosenNext`; `tst_jobqueue::duplicateOffersCreateNoDuplicates` |
+| 627 | 9 | a track has no settling flag and no job id, and a source's state no list of waiting tracks; the counts stay, and nothing the user sees changes | `tst_calculation_demand::columnStateCountsAndPendingCells`, `tooltipText`, `changeSignalsAreMinimal`, `progressUpdatesWithoutInspection`; `audit demand` |
+| 628 | 9 | the executor has no idle signal, no queued signal, no query of both active jobs and no busy-period bookkeeping; its job model, its idle and running queries and its other signals carry the same facts | `tst_jobqueue::runsAndPublishes`, `holdsAtMostRunningAndChosenNext`, `offerReplacesChosenNext`, `cancelFromRowsInsertedLeavesNoPin`; `tst_jobmodel::historyFromSignalsAlone`; `audit gestures` |
+| 629 | 9 | the executor keeps its cancel operation for the jobs dock; no product code calls it, and its comment and the audit say so | `tst_jobqueue::cancelRunningThenNextStarts`, `cancelQueued`; `audit gestures` |
+| 630 | 9 | the executor's refusal kinds are unchanged; the demand layer offers upstream first, so a Blocked refusal is not expected from it, and the documentation says so instead of the code guarding for it | `tst_jobqueue::refusesBlockedAndDone`, `refusesMissingInput`; `tst_calculation_demand::chainedBlockersContinue`, `columnOfferRefusalIsNotLeftPending` |
+| 631 | 10.1 | one walk over the session rows derives every source's state, counts, listed tracks, pending cells and candidates, for plots and columns at once, under one row stability guard, returning plain values; offers, withdrawals, holds, loads and signals happen after it | `tst_calculation_demand::changeSignalsAreMinimal`, `columnStateCountsAndPendingCells`, `workingIdsFollowStates`, `passOverManyStubsReadsEachRecordSetOnce`; `audit demand` |
+| 632 | 10.1 | a loaded session is classified from the engine's blocker inspection of the source's names, combined alike for a plot's one name and a column's names, the running job, the pair memory and the settle wait; the combined report is memoized per session and source and dropped by an input change or publication, a load, a record change, a job's end, a reset or a registry change | `tst_calculation_demand::hiddenAndStubRowsAreNotTracks`, `ordinaryPlotsAreNeverInspected`, `uncheckedPlotsAreNeverInspected`, `progressUpdatesWithoutInspection`, `chainedBlockersContinue`, `registryChangeReclassifies` |
+| 633 | 10.1 | a session that is not loaded is a track of columns only, classified in this order: no storable calculation, not applicable; a storable calculation remembered failed (a job, a load or a write that failed), failed with the remembered reason; every storable calculation remembered not applicable for that column, not applicable; every storable calculation with a record, done, or failed with the first recorded reason; a failed-load placeholder, failed ("The session file could not be loaded"); otherwise waiting | `tst_calculation_demand::storedRejectionIsBadgedAfterRestartWithoutLoad`, `unloadableSessionIsSettledAsFailed`, `failedRecordWriteIsShownAndNotRetried`, `columnVerdictDoesNotSuppressAnotherColumn`, `passOverManyStubsReadsEachRecordSetOnce`; `tst_logbook_indicators::failedLoadSessionShowsBadgeNotPending` |
+| 634 | 10.1, as settled | candidates are filed in the walk by tier: the focused session's plot pairs, the other visible sessions' plot pairs, then the column pairs of visible loaded sessions, then of hidden loaded sessions, each in row order; within a session source order, then blocker order; a pair once, in its first tier; never a pair with a remembered failure or refusal, the running job not asked to stop, or a pair of a settling session; a column track running or failed on one blocker files its other blockers, as a plot track does | `tst_calculation_demand::focusedSessionFirstThenRowOrder`, `columnPriorityFollowsRowOrderAfterPlots`, `visibleSessionsFirstWithinColumnDemand`, `sessionShownDuringColumnDemandRunsNext`, `runningColumnTrackFilesItsOtherBlockers`, `inputBurstRunsOneJob` |
+| 635 | 10.1 | the load candidates are the waiting, hidden, unloaded sessions that are not settling and not held, in row order, up to the bound | `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `sessionShownDuringColumnDemandRunsNext`, `heldSessionShownStaysLoaded`, `chainedColumnKeepsItsHold` |
+| 636 | 10.2 | one memory of the run, keyed by pair (session, requested calculation), holds not applicable (the executor refused the pair, or a loaded column found its source not applicable) or failed with a reason (a job that ended failed, a result that is never stored, a load that failed, a record write that failed); there is no memory per cell, and every verdict is derived from the engine or the record set and this memory | `tst_calculation_demand::settledPairsSurviveEvictionSortAndColumnWorker`, `notApplicableSessionIsSettledWithoutAJob`, `columnFailuresAreBadgedNotReloaded`, `columnJobLevelFailureIsNotReloadedUntilRestart`, `columnOfferRefusalIsNotLeftPending`, `unloadableSessionIsSettledAsFailed`; `audit demand` |
+| 637 | 10.2 | a column's not-applicable verdict holds for that column only: it keeps its session from being loaded again for that column, and it never makes another source's track not applicable nor keeps a pair from being offered | `tst_calculation_demand::columnVerdictDoesNotSuppressAnotherColumn`, `notApplicableSessionIsSettledWithoutAJob` |
+| 638 | 10.2 | the memory is cleared for a session by a relevant input change, for a pair by a record change of that pair, for everything by a registry change; a model reset forgets the pairs of sessions that no longer have a row; nothing is persisted | `tst_calculation_demand::pairMemoryIsClearedByRecordInputAndRegistryChanges`, `removedSessionLeavesNoTrace`, `registryChangeReclassifies`, `jobLevelFailureIsBadgedNotRerunUntilRestart` |
+| 639 | 10.2 | a bulk edit of a session clears what the run remembered of it, through the dependency change it publishes, for a loaded session and for one that is not loaded alike; nothing else clears a session's facts, the column worker's display changes in particular; a load of the session that succeeds forgets its failed-load facts | `tst_calculation_demand::bulkEditMakesSettledSessionApplicable`, `settledPairsSurviveEvictionSortAndColumnWorker`, `failedRecordWriteIsShownAndNotRetried`, `successfulLoadForgetsFailedLoadFacts`; `manual M33` |
+| 640 | 10.2 | a session found not applicable, a job-level failure, a failed load and a failed write are not loaded or offered again after an eviction, a sort, or the column worker's processing of the stub | `tst_calculation_demand::settledPairsSurviveEvictionSortAndColumnWorker`, `notApplicableSessionIsSettledWithoutAJob`, `columnJobLevelFailureIsNotReloadedUntilRestart`, `unloadableSessionIsSettledAsFailed` |
+| 641 | 11 | the demand layer stays one component with one contract towards the views and the executor, divided into parts with contracts of their own (the presentation values, the fill, the settle clock and the reconciler); the fill and the settle clock expose nothing of the walk, and the walk calls neither the executor nor the session model's loading and pinning | `tst_calculation_demand::settleClockAnswersItsQuestions`, `nullCollaborators`; `audit demand` |
+| 642 | 11, as settled | the fill keeps at most the bound of hidden sessions loaded and pinned for column demand, releases a hold when its session has no pending cell or no loaded row, loads the next candidate when a hold is free and the scheduler steps it, reports the sessions remaining of its high-water mark, and holds nothing once the executor is shut down or the component goes | `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `disablingColumnReleasesHeldSessions`, `removedOrRepopulatedHeldSessionIsReleased`, `noLoadsAfterExecutorShutdown`, `demandDestroyedReleasesHoldsAndTask`, `fillTaskReportsProgressWhileWaiting` |
+| 643 | 11 | the settle clock holds the per-session deadlines of the input-settle wait and one timer for the earliest, answers whether a session is settling and when the next wait ends, and calls its owner when a wait ends | `tst_calculation_demand::settleClockAnswersItsQuestions`, `inputBurstRunsOneJob`, `supersededJobIsRunAgainAfterInputsSettle` |
+| 644 | 12 | a plot row and a logbook column header show the same one glyph: the turning arc while any of the source's demand is waiting or running, the warning badge once the work is finished and some sessions could not be computed, and nothing else; the plot row has no "k of n" label and no count, and its layout keeps room for one glyph | `tst_plot_row_layout::indicatorOnly`, `nothingShown`, `rightToLeftIsMirrorImage`; `tst_plot_row_delegate::workingRowPaintsIndicator`, `badgeReplacesIndicatorOnceFinished`, `longNameIsElidedNotTheCluster`; `tst_logbook_indicators::workingColumnShowsIndicatorRightOfText`, `badgeReplacesIndicatorWhenFinished`; `audit demand`; `manual M29` |
+| 645 | 12 | the hover carries both numbers, on a plot row as on a column header | `tst_plot_row_delegate::hoverDetailFollowsDemandState`, `toolTipComesFromPlotState`; `tst_logbook_indicators::headerToolTipFollowsDemandState`; `tst_calculation_demand::tooltipText`; `manual M29` |
+| 646 | 12 | one working-indicator clock per application, created beside the demand layer and handed to the views as the demand layer is: the arcs of the plot list and the logbook's headers turn in step, the clock runs only while any plot or column is working, and each view repaints its own working rows or sections on its frames | `tst_logbook_indicators::plotRowsAndHeaderTurnOnOneClock`, `indicatorAnimatesOnlyWhileWorking`; `tst_plot_row_delegate::workingIndicatorAnimatesOnlyWhileWorking`, `workingAnimationClock`, `survivesDemandDestroyedFirst`; `audit demand`; `manual M30` |
+| 647 | 12 | the logbook's progress line says "Computing results: k / n" while the fill is the active task, distinct from the column worker's "Computing columns: k / n"; the fill is not cancellable, and saves, loads, bulk edits and column work still come first | `tst_logbook_indicators::fillProgressLineHasItsOwnText`; `tst_calculation_demand::fillTaskIsLowestAndNotCancellable`, `savesAndBulkEditsPrecedeLoadStep`; `audit demand`; `manual M31` |
+| 648 | 12 | a stored result that could not be written is listed among the sessions that could not be computed, with its reason, on the plot row and the column header | `tst_logbook_indicators::failedWriteIsListedInTheHover`; `tst_calculation_demand::failedRecordWriteIsShownOnThePlotRow`; `manual M32` |
+| 649 | 12 | nothing else the user sees changes: the hover detail, pending cells, the warning badge's meaning, and the absence of any refresh or cancel control | `tst_logbook_indicators::pendingCellsAreDistinctFromUnavailable`, `pendingCellBecomesValueWhenRecordIsWritten`, `plainHeaderAndCellsAreIdenticalToBase`, `clickOnIndicatorIsAClickOnTheSection`; `tst_plot_row_delegate::plainRowsAreIdenticalToBaseDelegate`, `clickOnClusterIsAClickOnTheRow`; `audit demand` |
+| 650 | 12, as settled | the shared glyph plumbing owns the glyph's colour for a style option and its side and spacing beside a line of text, and the repaint when the demand layer is destroyed and the tooltip display are written once; the views compute none of them; the part that needs Qt Widgets is the views' half of the shared indicator, beside the widget-free glyphs, and a state carries no progress label, which no view reads | `tst_plot_row_delegate::sharedGlyphPlumbing`, `survivesDemandDestroyedFirst`; `tst_logbook_indicators::survivesDemandDestroyedFirst`, `indicatorClearsSortArrowAndNarrowSections`; `audit demand`, `audit widget-free-core` |
+| 651 | 13 | the demand layer remains widget-free, the only offerer and observed by nothing; the views present the same state through one glyph and one clock and decide nothing | `tst_calculation_demand::nullCollaborators`, `survivesExecutorShutdown`; `audit widget-free-core`, `audit gestures`, `audit demand` |
+| 652 | 13 | the flow stays one way: the demand layer chooses; the executor publishes; the store writes the record or announces that it could not; the index notes the outcome and announces it; the record change drops the cached column values and the demand layer's memos; the demand layer sees the result, or the failure, through what it always reads | `tst_result_columns::staleRecordDeletedByWorkerCreatesDemand`; `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `recordReasonReachesDemandThroughRecordChange`, `failedRecordWriteIsShownAndNotRetried`; `tst_logbook_indicators::pendingCellBecomesValueWhenRecordIsWritten`; `audit demand` |
+| 653 | 14 | test: a task with work it cannot step loses its work without a step and is completed once, not cancelled, after a final progress report, before the next active task is reported or the scheduler goes idle; the existing tasks complete at the same moments as before; the fill's progress line reports the fill from its first load to its last result without any step that loads nothing | `tst_session_model_engine::schedulerCompletesWaitingTaskWhoseWorkIsGone`; `tst_calculation_demand::fillTaskReportsProgressWhileWaiting`, `fillEndingBehindAnotherTaskStartsNextCountFresh`, `savesAndBulkEditsPrecedeLoadStep` |
+| 654 | 14 | test: a reason recorded by a restore into the column worker's copy reaches the demand layer through the manager's record-changed signal alone: a stored rejection of a session that is not loaded is badged with its reason after the worker's pass, and no reason comparison happens on the model's display change | `tst_calculation_demand::recordReasonReachesDemandThroughRecordChange`, `storedRejectionIsBadgedAfterRestartWithoutLoad`; `tst_logbook_index::recordReasonChangeIsAnnounced` |
+| 655 | 14 | test: a record write that fails is a shown failure: listed as failed with the reason while the session is loaded and after its eviction, not offered again in the run, cleared by a later successful write, tried again at a restart; no session is loaded twice for it | `tst_calculation_demand::failedRecordWriteIsShownAndNotRetried`, `failedRecordWriteIsShownOnThePlotRow`; `tst_result_store::writeFailureIsAnnounced` |
+| 656 | 14 | test: the demand layer reads each column's closure and requested calculations from the session model, and a column change reaches it through the model's reset alone; the tracks and the job records name a session by the model's display name, for loaded rows, stubs and failed-load placeholders alike | `tst_calculation_demand::columnKnowledgeComesFromTheSessionModel`, `visibleFailedLoadIsSettledAsFailed`; `tst_result_columns::sessionModelExposesColumnKnowledge`, `sessionDisplayNameOfEveryRowKind`; `tst_jobqueue::runsAndPublishes` |
+| 657 | 14 | test: plots and columns are classified, tallied and filed by one walk, and the acceptance items of the demand-driven specification on demand, priority, the settle wait, failures, not applicable, chains and unloaded sessions pass unchanged in what they assert: counts, listed running and failed tracks, pending cells and tooltips are as before | `tst_calculation_demand::rowScript`, `enablingColumnFillsEveryUnloadedSession`, `focusedSessionFirstThenRowOrder`, `inputBurstRunsOneJob`, `columnFailuresAreBadgedNotReloaded`, `notApplicableSessionIsSettledWithoutAJob`, `chainedBlockersContinue`, `columnStateCountsAndPendingCells`, `runningColumnTrackFilesItsOtherBlockers`; `tst_fusion_rows::realRowScript` |
+| 658 | 14 | test: every case the per-cell memory covered is covered by a pair fact: a session found not applicable, a job-level failure, a failed load and a failed write are not loaded or offered again after eviction, a sort or the column worker's pass; a bulk edit makes the session applicable again; a record change of the pair, an input change of the session and a registry change clear what is remembered | `tst_calculation_demand::settledPairsSurviveEvictionSortAndColumnWorker`, `bulkEditMakesSettledSessionApplicable`, `pairMemoryIsClearedByRecordInputAndRegistryChanges`, `columnVerdictDoesNotSuppressAnotherColumn` |
+| 659 | 14 | test: no product code reads the removed signals, queries and fields; the executor never holds more than the running and the chosen next job; the chosen next job is withdrawn when demand no longer wants it | `tst_calculation_demand::chosenNextJobFollowsTheExecutorsAnswer`, `executorHoldsAtMostRunningAndChosenNext`, `changingDemandReplacesChosenNext`; `tst_jobqueue::holdsAtMostRunningAndChosenNext`; `audit gestures`, `audit demand` |
+| 660 | 14 | test: the plot row shows the arc or the badge and no label or count; the two views' clocks are one; the fill's progress text is its own; a stored result that could not be written is listed in the hover | `tst_plot_row_delegate::workingRowPaintsIndicator`, `badgeReplacesIndicatorOnceFinished`, `sharedGlyphPlumbing`; `tst_plot_row_layout::indicatorOnly`; `tst_logbook_indicators::plotRowsAndHeaderTurnOnOneClock`, `fillProgressLineHasItsOwnText`, `failedWriteIsListedInTheHover` |
+| 661 | 14 | the audit's demand and gestures groups keep the removed and moved names out, and a rule forbids a second computation of a column's requested calculations outside the session model and the registry | `audit demand`, `audit gestures` |
+| 662 | 15 | docs/ and tests/README.md describe the executor's signals and queries (cancel kept for the jobs dock), the one walk, the one memory, the parts of the demand layer, the fill's completion, the failed write, the session model as the source of column knowledge and display names, one glyph and one clock, and the fill's progress text | `audit demand` |
 
 ## 10. Cleanup audit
 
@@ -1127,7 +1225,8 @@ takes about a second. It fails, listing **all** violations, when
 - **group `one-worker`**: a thread is created anywhere but in `src/jobqueue.*`,
   a lock of any kind appears in `src`, or an atomic other than the executor's
   cancel flag does;
-- **group `gestures`** (items 116, 306, 501, 519, 527, 534, 543, 544, 562): a
+- **group `gestures`** (items 116, 306, 501, 519, 527, 534, 543, 544, 562,
+  605, 608, 625, 628, 629, 651, 659, 661): a
   gesture entry point (`plotCheckedByUser`, `refreshPressed`, `cancelPressed`)
   is named in `src` or `tests`; `prepare(` / `publish(` is called outside the
   executor and the engine; `request(` outside the engine; anything in `src`
@@ -1136,14 +1235,21 @@ takes about a second. It fails, listing **all** violations, when
   on other than exactly one line of `src`, or anywhere but
   `calculationdemand.cpp`, or `withdrawChosenNext(` anywhere but there (the
   demand layer is the only caller of the executor); product code cancels a
-  job; the UI refers to the executor beyond `AppContext.h`; or
+  job; the UI refers to the executor beyond `AppContext.h`;
   `EvaluationPolicy::Explicit` is tested outside the engine
   (`CalculationRegistry::explicitDependencies()` is the one authority for
   "explicit-backed"; `dependsOnExplicit()` is its non-emptiness);
+  `cancel(JobId` is not declared exactly once in `src/jobqueue.h` (kept for
+  the jobs dock); the executor's removed idle and queued signals, its two-job
+  query or its busy-period bookkeeping (`jobQueued`, `activeJobs(`,
+  `JobQueue::idle`, `announceIdleIfIdle`, `m_idleAnnounced`, `AfterEnd`)
+  appear in `src` or `tests`, or `idle()` in `src`; or the demand layer's
+  own-offer memory (`m_offeredJob`, `withdrawOwnOffer`) reappears;
 - **group `widget-free-core`**: the executor, the job model, the demand
-  layer, the plot model, `PlotRowLayout.h` or the shared glyphs
-  (`DemandIndicator.*`) include a widget header (a style option and a header
-  view included);
+  layer (its four files), the plot model, `PlotRowLayout.h` or the shared
+  glyphs (`DemandIndicator.*`; not its view half, `DemandIndicatorView.*`,
+  which is a view) include a widget header (a style option and a header view
+  included);
 - **group `fusion-model`** (items 212, 218, 234, 247): a name of the retired
   resting-window detector or of its gates reappears in `src`, `tests`,
   `cmake`, `docs`, `README.md` or `CMakeLists.txt`; the silent cancellation
@@ -1217,40 +1323,73 @@ takes about a second. It fails, listing **all** violations, when
   preferences makes every stored result stale. This file is excluded from the
   last rule because this section describes it;
 - **group `demand`** (items 506, 508, 513, 515, 518, 527, 529, 530, 533, 534,
-  538, 540-544, 546, 547, 563): `CalculationDemand` is named outside the
-  demand layer, `MainWindow`, `AppContext.h`, the plot list's delegate and
-  dock feature, the logbook view, header view, cell delegate and dock
-  feature, and the plot widget; the executor, the job model, the session
-  model, the scheduler, the logbook, the column store, the plot model, the
-  profile bridge, the result store, the engine, the shared glyphs or the row
-  layout includes `calculationdemand.h`; anything in `src/ui` or `MainWindow`
-  runs a pass, the load step or a settle seam of the demand layer; the
-  plot-row delegate, the header view, the cell delegate or the shared glyphs
-  handle a mouse or key event of their own; the pending queries appear
-  outside the demand layer and the cell delegate; the session model, the
-  logbook, the column store, the scheduler or the plot model names the
-  executor; the idle scheduler mentions demand, calculations, jobs or an
-  executor; `ColumnFillTask` appears outside the demand layer,
-  `sessionmodel.h` and the logbook view, or `loadPinnedSession(` outside the
-  demand layer and the session model; the demand layer loads a session or
-  reads a record itself; `kMaxRunningJobs` is assigned other than once, the
-  load bound is not `JobQueue::kMaxRunningJobs + 1`, or the worker is not
-  started with `QThread::LowPriority`; the removed queue API
+  538, 540-544, 546, 547, 563, 601-605, 607, 612, 613, 615, 616, 622, 624,
+  627, 631, 636, 641, 644, 646, 647, 649-652, 659, 661, 662):
+  `CalculationDemand` is named outside the demand layer's files
+  (`calculationdemand`, `demandstate`, `demandfill`, `demandsettleclock`),
+  `MainWindow`, `AppContext.h`, the plot list's delegate and dock feature,
+  the logbook view, header view, cell delegate and dock feature, the plot
+  widget and the shared indicator's view half (`DemandIndicatorView.*`); the
+  executor, the job model, the session model, the scheduler, the logbook, the
+  column store, the plot model, the profile bridge, the result store, the
+  engine, the shared glyphs or the row layout includes a header of the demand
+  layer; anything in `src/ui` or `MainWindow` runs a pass, the load step or a
+  settle seam of the demand layer; the plot-row delegate, the header view,
+  the cell delegate or the shared indicator (`DemandIndicator.*`,
+  `DemandIndicatorView.*`) handle a mouse or key event of their own; the
+  pending queries appear outside the demand layer and the cell delegate; the
+  session model, the logbook, the column store, the scheduler or the plot
+  model names the executor; the idle scheduler mentions demand,
+  calculations, jobs or an executor; `ColumnFillTask` appears outside the
+  reconciler, the fill, `sessionmodel.h` and the logbook view, or
+  `loadPinnedSession(` outside the reconciler, the fill and the session
+  model; the demand layer loads a session or reads a record itself; the
+  demand layer loads or pins other than through its fill; the fill or the
+  settle clock calls the executor or names a type of the walk
+  (`BlockerReport`, `DemandTrack`, `DemandState`, `DemandCondition`,
+  `RowStabilityGuard`, `PairMemory`, `LearnedFact`); `kMaxRunningJobs` is
+  assigned other than once, the load bound in `demandfill.h` is not
+  `JobQueue::kMaxRunningJobs + 1`, or the worker is not started with
+  `QThread::LowPriority`; the removed queue API
   (`oldestQueued`, `cancelUnwantedQueued`, `cancelSession(`, `cancelAll(`,
   `RequestResult`) appears in `src`, `docs` or `README.md`; the plot request
   logic (`PlotRequests`, `PlotRowState`, `PlotTrackCondition`,
   `tst_plot_requests`) appears anywhere; a refresh or cancel control is
   named in `src`, `docs` or `README.md` ("refresh icon", "cancel control",
   "press refresh", "circled x" ...), or its code (`drawRefreshGlyph`,
-  `controlHit` ...) in `src` or `tests`; or a profile in
-  `src/resources/profiles` carries a column over a Sensor fusion value. This
-  file is excluded from the text rules because this section spells the
-  patterns;
+  `controlHit` ...) in `src` or `tests`; a profile in
+  `src/resources/profiles` carries a column over a Sensor fusion value;
+  `logbookColumnExplicitCalculations(` is called outside the registry-side
+  definition (`logbookcolumn.*`), the session model and the logbook index
+  (one computation of a column's requested calculations); the demand layer
+  calls the registry's `explicitDependencies(` or `staticDependencies(` more
+  than once each (a plot's), reads a record's reason more than once, or holds
+  more than one row stability guard; the demand layer or the executor names
+  `SessionKeys::Description` or `_DESCRIPTION` (one display name, the session
+  model's); the demand layer observes a display change of the model (a
+  `::dataChanged` other than the plot model's one check-state connection);
+  a name the one walk and the one pair memory replaced (`isFillEnding`,
+  `Settlement`, `ColumnWalk`, `walkColumns`, `plotCandidates`,
+  `syncColumns`, `rowDisplayName`, `onSessionDataChanged`,
+  `CalculationDemand::buildToolTip` ..., a track's `.settling`, a state's
+  `.waiting`) appears in `src` or `tests`; `progressLabel`, `clusterRect` or
+  `syncAnimation` appears in `src` or `tests`, or a label or count in the
+  plot list's sources; a `WorkingAnimation` is created other than once, in
+  `mainwindow.cpp`, or `followDemand(` is called outside
+  `DemandIndicatorView.*` and `mainwindow.cpp`; the plot row or the header
+  computes a glyph colour, a tooltip display, a glyph size, a glyph choice or
+  drives the clock, or anything in `src/ui` but `DemandIndicatorView.cpp`
+  connects to a `destroyed` signal; the fill's "Computing results" text is
+  not in `LogbookView.cpp` exactly once; or `docs` or `README.md` name the
+  removed executor API, the per-cell memory, `progressLabel`, the fill's
+  ending step, one clock per view, a "k of n" beside the arc or a count
+  beside the triangle. This file is excluded from the text rules because this
+  section spells the patterns;
 - a line of `tests/acceptance_map.txt` is malformed, names a test function, a
   manual step (`**M<k> ` in this file), a CI token or an audit group that does
-  not exist, or an item outside 1-19, 101-120, 201-247, 301-350, 401-442 and
-  501-563; an item 1-19 has no line; or an item 101-120, 201-247, 301-350,
-  401-442 or 501-563 has no test or audit line.
+  not exist, or an item outside 1-19, 101-120, 201-247, 301-350, 401-442,
+  501-563 and 601-662; an item 1-19 has no line; or an item 101-120,
+  201-247, 301-350, 401-442, 501-563 or 601-662 has no test or audit line.
 
 Whether a target **links** GTSAM is not a text question (link items come from
 variables and from other targets' link interfaces). That half of the
@@ -1740,7 +1879,7 @@ objectives, are in section 12.2.
 
 ## 12. Manual verification
 
-Four scripts. Each step opens with its bold id and, in parentheses, the items
+Five scripts. Each step opens with its bold id and, in parentheses, the items
 of `tests/acceptance_map.txt` it is evidence for; the map cites the ids
 (`manual M<k>`) and `audit_cleanup` checks that they exist here.
 
@@ -1784,21 +1923,21 @@ middle is rejected for its IMU gap. The script needs the fusion plots (the
 step; for M5 note what you did while the fit ran, for M6 and M9 the wait you
 observed.
 
-**M1 Startup (116, 321, 514).** Check "Sensor fusion > Roll" with three fusable tracks visible that have no stored fit: the three fits start one after another with no other action. As soon as the first track has published, uncheck Roll: the row turns plain at once, the running fit (the second track's) continues to its end, and no third fit starts. Quit and restart. After the restart the row is still checked. Track visibility is not kept across restarts, so no track is visible, the row is plain and no job starts (no progress, CPU idle). Show the three tracks: the first two tracks' roll is drawn at once (their stored results), and the third track's fit starts by itself: the row shows the turning arc and "2 of 3", then turns plain. The debug output contains no "No data available" line for the fusion plot.
+**M1 Startup (116, 321, 514).** Check "Sensor fusion > Roll" with three fusable tracks visible that have no stored fit: the three fits start one after another with no other action. As soon as the first track has published, uncheck Roll: the row turns plain at once, the running fit (the second track's) continues to its end, and no third fit starts. Quit and restart. After the restart the row is still checked. Track visibility is not kept across restarts, so no track is visible, the row is plain and no job starts (no progress, CPU idle). Show the three tracks: the first two tracks' roll is drawn at once (their stored results), and the third track's fit starts by itself: the row shows the turning arc (its tooltip reads "Computing: 2 of 3 done"), then turns plain. The debug output contains no "No data available" line for the fusion plot.
 
-**M2 Profile (116, 514, 515, 556).** Save a profile that checks Roll. Uncheck Roll, and show two fusable tracks without stored fits: nothing starts. Apply the profile: Roll is checked and the two fits start at once, one after the other, exactly as after a click on the check box (this is the real `applyProfile()` path, which no automated test can construct). Uncheck Roll and hide every track, apply the profile again: nothing starts (no track is visible); show one fusable track without a stored fit: its fit starts at once. In Manage Profiles restore the default profiles and apply each of them in turn: none adds a logbook column over a "Sensor fusion" value: while every track is hidden, no column header shows a working indicator and no fit starts. (The progress line may show "Computing columns" for the cheap columns of a profile: that label is shared on purpose.) (The Plots menu and its shortcuts list a fixed set of GNSS plots; no fusion plot can be toggled from there.)
+**M2 Profile (116, 514, 515, 556).** Save a profile that checks Roll. Uncheck Roll, and show two fusable tracks without stored fits: nothing starts. Apply the profile: Roll is checked and the two fits start at once, one after the other, exactly as after a click on the check box (this is the real `applyProfile()` path, which no automated test can construct). Uncheck Roll and hide every track, apply the profile again: nothing starts (no track is visible); show one fusable track without a stored fit: its fit starts at once. In Manage Profiles restore the default profiles and apply each of them in turn: none adds a logbook column over a "Sensor fusion" value: while every track is hidden, no column header shows a working indicator and no fit starts. (The progress line may show "Computing columns" for the cheap columns of a profile; "Computing results" would mean a column over a requested output.) (The Plots menu and its shortcuts list a fixed set of GNSS plots; no fusion plot can be toggled from there.)
 
-**M3 Working indicator (115, 501, 535).** With three fusable tracks without stored fits visible, check Roll: the row shows the turning arc and "0 of 3" at the right of its name; Pitch and Yaw, if checked, show the same. The tooltip reads "Computing: 0 of 3 done" and "<name> - Sensor fusion: <progress text>". As each fit publishes, its graph appears without any further action, the label advances ("1 of 3", "2 of 3"), and finally the arc stops and the row is plain. The legend and any fusion logbook column fill in at the same moments.
+**M3 Working indicator (115, 501, 535).** With three fusable tracks without stored fits visible, check Roll: the row shows the turning arc at the right of its name, with no number; Pitch and Yaw, if checked, show the same. The tooltip reads "Computing: 0 of 3 done" and "<name> - Sensor fusion: <progress text>". As each fit publishes, its graph appears without any further action, the tooltip's numbers advance ("1 of 3", "2 of 3"), and finally the arc stops and the row is plain. The legend and any fusion logbook column fill in at the same moments.
 
-**M4 No controls (115, 534).** On a fresh set of tracks, uncheck and re-check a fusion plot by clicking its check box: fits start. Do the same with Space. Click, right-click and double-click the arc and the "k of n" of a working row: the row is selected as by a click anywhere else in it; nothing is cancelled and nothing is toggled. No context menu, menu item or shortcut offers a refresh or a cancel for a calculation.
+**M4 No controls (115, 534).** On a fresh set of tracks, uncheck and re-check a fusion plot by clicking its check box: fits start. Do the same with Space. Click, right-click and double-click the arc of a working row: the row is selected as by a click anywhere else in it; nothing is cancelled and nothing is toggled. No context menu, menu item or shortcut offers a refresh or a cancel for a calculation.
 
 **M5 Interactive during a fit (119).** While a fit runs: pan and zoom the plot, switch tools, hide and show other tracks, edit a session's description, set a marker, open Preferences. Nothing blocks; no dialog appears.
 
-**M6 Hide and uncheck (115, 518, 519, 534).** With one fit running and two tracks waiting ("0 of 3"), hide one waiting track: the row shows "0 of 2" at once. Uncheck the plot: the row turns plain at once; the running fit continues (CPU busy) to its end, its record file appears in `cache/`, no further fit starts, and the CPU then goes idle. Check the plot again: the remaining visible track is fitted.
+**M6 Hide and uncheck (115, 518, 519, 534).** With one fit running and two tracks waiting (the tooltip reads "Computing: 0 of 3 done"), hide one waiting track: the tooltip reads "0 of 2" at once. Uncheck the plot: the row turns plain at once; the running fit continues (CPU busy) to its end, its record file appears in `cache/`, no further fit starts, and the CPU then goes idle. Check the plot again: the remaining visible track is fitted.
 
-**M7 Fourth track and failure (115, 525, 537).** Show a fourth fusable track: it is fitted with no other action, after the running fit if one runs. Show the recording without IMU data: it never appears in any count or tooltip. For a rejected recording, once the other fits are done the row shows the warning badge with 1 instead of the arc, the tooltip gives the reason, nothing offers to try again, and no message box appears.
+**M7 Fourth track and failure (115, 525, 537).** Show a fourth fusable track: it is fitted with no other action, after the running fit if one runs. Show the recording without IMU data: it never appears in any count or tooltip. For a rejected recording, once the other fits are done the row shows the warning badge instead of the arc, with no number, the tooltip gives the reason, nothing offers to try again, and no message box appears.
 
-**M8 Remove and unload (117).** With one fit running and another track waiting, delete the waiting track's session, then the running one's: no crash, no hang, nothing published for them; the remaining rows' counts fall.
+**M8 Remove and unload (117).** With one fit running and another track waiting, delete the waiting track's session, then the running one's: no crash, no hang, nothing published for them; the counts in the rows' tooltips fall.
 
 **M9 Quit (117).** With one fit running and two tracks waiting, close the window: a wait cursor for at most one solver step, then the application exits; no crash dialog, the process is gone from the task manager, and on restart the logbook is intact. Repeat with File > Exit.
 
@@ -1874,7 +2013,7 @@ stored results in `cache/`, which the first fit creates.
 
 **M16 Hide and show again (321, 325).** Set Preferences > Logbook > "Maximum cached sessions" to 0. With three fusable tracks visible and "Sensor fusion > Roll" checked, let the three fits finish (they start when Roll is checked). `cache/` now holds three `<uuid>.builtin%2Efusion%2Efit.fvresult` files, and `sessions/` holds no such file. Hide the three tracks; with a capacity of 0 every hidden track is unloaded at once. Show them again: roll is drawn at once for each, the row is plain (no arc, no count), no job starts, and the modification times of the three files are unchanged. Set the preference back.
 
-**M17 Restart (323, 325, 349).** Add a logbook column over a fusion value (roll at the exit marker). Every other recording of the logbook with IMU data and no stored fit is now fitted in the background too (M24); on a large logbook copy wait until the column's header shows no arc, or use a logbook copy that holds only the script's recordings. With the three tracks of M16 fitted and the column filled, quit and start again. Before any track is shown, the column shows a number for each of the three at once, without loading them, and no fit starts. The recording without IMU data is the only one loaded for the column: its cell reads "…" and the progress line shows "Computing columns" until the fill has loaded it (that the fit does not apply is remembered for a run only), then its cell is blank and the progress line goes. The rejected recording is not loaded: its rejection is stored. Show them: the plots draw at once, the row is plain, no job starts.
+**M17 Restart (323, 325, 349).** Add a logbook column over a fusion value (roll at the exit marker). Every other recording of the logbook with IMU data and no stored fit is now fitted in the background too (M24); on a large logbook copy wait until the column's header shows no arc, or use a logbook copy that holds only the script's recordings. With the three tracks of M16 fitted and the column filled, quit and start again. Before any track is shown, the column shows a number for each of the three at once, without loading them, and no fit starts. The recording without IMU data is the only one loaded for the column: its cell reads "…" and the progress line shows "Computing results" until the fill has loaded it (that the fit does not apply is remembered for a run only), then its cell is blank and the progress line goes. The rejected recording is not loaded: its rejection is stored. Show them: the plots draw at once, the row is plain, no job starts.
 
 **M18 Change an input (315, 520).** Edit the description of one fitted track: its roll stays drawn and its record file keeps its modification time. Then re-import a copy of that track's `SENSOR.CSV` in which the `az` value of one `$IMU` row was changed (the header, `SESSION_ID` included, unchanged). The track's roll disappears, the row shows the arc, the record file is gone and the track's cell in the column of M17 shows "…"; about a second after the re-import a fit starts by itself, a record file appears again, roll is drawn and the cell shows the new number.
 
@@ -1900,9 +2039,9 @@ IMU data, several of them never fitted, one without IMU data and one the model
 rejects; Task Manager (Details tab) and, for M27, Sysinternals Process
 Explorer.
 
-**M23 Working indicator and hover (535, 536).** Show two fusable tracks without stored fits and check Roll. The arc at the right of the row's name turns about once a second, "0 of 2" beside it. Hover the arc, then the row's name: both show "Computing: 0 of 2 done" and "<name> - Sensor fusion: <progress text>" (hover again to see the progress text advance). When both fits end the arc stops and the row is plain; with nothing computing, Task Manager shows FlySight Viewer at 0 % CPU (no repaint while idle). Repeat in the light and the dark theme and on a selected row: the arc and the text are readable in each.
+**M23 Working indicator and hover (535, 536).** Show two fusable tracks without stored fits and check Roll. The arc at the right of the row's name turns about once a second, with no number beside it. Hover the arc, then the row's name: both show "Computing: 0 of 2 done" and "<name> - Sensor fusion: <progress text>" (hover again to see the progress text advance). When both fits end the arc stops and the row is plain; with nothing computing, Task Manager shows FlySight Viewer at 0 % CPU (no repaint while idle). Repeat in the light and the dark theme and on a selected row: the arc and the text are readable in each.
 
-**M24 A logbook column fills in the background (510, 529, 530, 539).** Hide every track. In the column editor add "roll at the exit marker" over Sensor fusion. At once its header shows the turning arc right of its name; hovering the header shows "Computing: 0 of <n> done" (n: the recordings with IMU data and a local origin, plus those without that the fill has not loaded yet) and the running recording with its progress; the progress line shows "Computing columns: k / n" for the whole fill, with no cancel button, k rising as fits finish. Values replace "…" row by row, from the top. Task Manager's memory for FlySight Viewer stays flat after the first loads (at most two recordings beyond "Maximum cached sessions" are held for the fill). The recording without IMU data reads "…" and is counted in n until the fill has loaded it; then it turns blank and leaves the count (n falls by one). When the fill ends, the arc stops (or the badge shows: M7's rejected recording, hover lists it), and `index.json` in the logbook folder holds the values and no "…", and the progress line has gone. While a fit runs, Task Manager shows no main-thread activity beyond the fit (the scheduler waits, it does not spin). Quit and start again: the column shows its values at once, and nothing is fitted for it. The recording without IMU data reads "…" again and is loaded once more (that the fit does not apply to it is remembered for a run only, since only fits are stored), then turns blank; no other recording is loaded for the column.
+**M24 A logbook column fills in the background (510, 529, 530, 539).** Hide every track. In the column editor add "roll at the exit marker" over Sensor fusion. At once its header shows the turning arc right of its name; hovering the header shows "Computing: 0 of <n> done" (n: the recordings with IMU data and a local origin, plus those without that the fill has not loaded yet) and the running recording with its progress; the progress line shows "Computing results: k / n" for the whole fill, with no cancel button, k rising as fits finish. Values replace "…" row by row, from the top. Task Manager's memory for FlySight Viewer stays flat after the first loads (at most two recordings beyond "Maximum cached sessions" are held for the fill). The recording without IMU data reads "…" and is counted in n until the fill has loaded it; then it turns blank and leaves the count (n falls by one). When the fill ends, the arc stops (or the badge shows: M7's rejected recording, hover lists it), and `index.json` in the logbook folder holds the values and no "…", and the progress line has gone. While a fit runs, Task Manager shows no main-thread activity beyond the fit (the scheduler waits, it does not spin). Quit and start again: the column shows its values at once, and nothing is fitted for it. The recording without IMU data reads "…" again and is loaded once more (that the fit does not apply to it is remembered for a run only, since only fits are stored), then turns blank; no other recording is loaded for the column.
 
 **M25 Pending cells (538).** During a fill (M24's, or, once it has finished, after deleting a few records in `cache/` with the application closed and starting again with the column enabled): cells still to come show a grey "…" (a lighter one on a selected row); blank cells are recordings without IMU data; hovering a "…" cell shows "Pending: this value is being computed". Sort by the column ascending, then descending: numbers first, "…" and blank cells together at the bottom both ways. Drag the column elsewhere and narrow it: the arc stays at the right of its (elided) name and clear of the sort arrow; double-click the section's right edge: it widens to fit the name and the arc.
 
@@ -1911,6 +2050,26 @@ Explorer.
 **M27 Background work does not get in the way (504, 540).** During a fill: pan and zoom plots, show and hide tracks, edit a description, sort and scroll the logbook: everything responds as without the fill. On Windows, in Process Explorer (FlySight Viewer > Properties > Threads) the threads that use the CPU - the executor's worker and the solver's helper threads while they help the fit - run at "Below Normal" priority, the application's other threads at "Normal". (On Linux the worker's priority is not lowered: docs/CALCULATIONS.md, section 15.5; only the responsiveness is checked there.)
 
 **M28 A failure is tried again after a restart (526).** Windows only. This step assumes that a session file held open without sharing makes its load fail on Windows; that is not verified yet, so if the recording loads and is fitted, the step could not be carried out (record it), rather than a failure. Quit. Pick a recording with IMU data and no stored fit (delete its `.fvresult` in `cache/` if it has one) and hold its session file open without sharing: `$f = [IO.File]::Open('<scratch>\FlySight Viewer\logbook\sessions\<uuid>.csv', 'Open', 'Read', 'None')`. Start the application with the column of M24 enabled. When the fill reaches that recording its load fails; once the fill is done the column's header shows the warning badge, and its tooltip lists "<description> - The session file could not be loaded", where <description> is the recording's description as the logbook shows it (the recording is named, not identified by its id). Wait a minute: that recording is not tried again (the progress line has gone, no fit). Quit, run `$f.Close()`, start again: the recording is loaded and fitted in the background, its cell gets its number and the badge is gone.
+
+Pass / fail and a note per step go in the phase report. A step that fails is
+reported as it failed, not adjusted.
+
+### 12.5 Calculation refinements
+
+What the automated tests cannot show: the two arcs turning in step in the
+real window, the progress line switching texts, a real record write that
+fails and a session file that loads later in the run. Use the preamble of
+12.1 (a COPY of a logbook, never the real one) and the recordings of 12.4.
+
+**M29 One glyph (535, 536, 537, 644, 645).** Show two fusable tracks without stored fits and check Roll: the row shows the turning arc at its right end and nothing else - no "0 of 2". Hovering the row or the arc shows "Computing: 0 of 2 done" and the running track with its step; the numbers advance as fits finish. With a recording the model rejects shown as well, once the other fits end the row shows only the warning triangle, with no number; its tooltip lists the recording with its reason. Compare the row's height, elision and plain look with a row that needs no computing, in the light and the dark theme.
+
+**M30 One clock (535, 646).** With the fits of M29 running, add a logbook column over a fusion value so that its header works too. Watch the row's arc and the header's arc for a few seconds: they point the same way at every moment. When the plot's fits end and the column still works, the header's arc keeps turning and the row is plain. When nothing works both arcs are gone and Task Manager shows FlySight Viewer at 0 % CPU.
+
+**M31 The fill's own progress text (539, 647).** Hide every track and add the fusion column of M30 on a logbook with recordings that are not loaded and have no stored fit: the progress line shows "Computing results: k / n", with no cancel button. While it fills, add a column that needs no computing (for example the exit time): the line shows "Computing columns: k / n" (with its cancel button) while that column is filled, then "Computing results: k / n" again with the fill's own total; it never shows one label with two totals. When the fill ends the line goes.
+
+**M32 A result that cannot be stored (526, 618, 619, 620, 648).** Quit. Pick a fusable recording without a stored fit and, in `<scratch>/FlySight Viewer/logbook/cache/`, create a folder with its record file's name (`<uuid>.builtin%2Efusion%2Efit.fvresult`; on Linux or macOS, `chmod a-w cache` instead). Start, show the recording and check Roll: the fit runs once; the plot draws it, and the row shows the warning triangle whose tooltip lists the recording with "Sensor fusion: Couldn't write file ...". Hide and show the recording, set "Maximum cached sessions" to 0 and hide it: no second fit starts (CPU idle). Add the fusion column: its header shows the triangle with the same entry, and the recording is not loaded or fitted for it. Quit and start again with the folder in place: the fit runs once more and fails the same way. Quit, remove the folder (or `chmod u+w cache`), start: the fit runs, its record file appears and the row is plain.
+
+**M33 A session file that loads later in the run (639).** Windows only, with the caveat of M28 (if the held file still loads, record that the step could not be carried out). Reproduce M28 up to the badge that lists "<description> - The session file could not be loaded". Without quitting, run `$f.Close()` and show that recording: it loads, its entry leaves the header's tooltip, its fit runs (a visible session first) and its cell gets its number; the badge goes once nothing else failed.
 
 Pass / fail and a note per step go in the phase report. A step that fails is
 reported as it failed, not adjusted.
@@ -2543,7 +2702,9 @@ jobs" (appendix B) and "Storing requested calculation results with the
 session" (appendix D), one sentence each, with the specification's section
 number in front. These are items 501-563 of `tests/acceptance_map.txt`
 (item = 500 + the number below) and the rows of section 9.6. The
-specification's sections 1 (motivation) and 4 (terms) have no item.
+specification's sections 1 (motivation) and 4 (terms) have no item. Clauses
+13, 26, 28, 30, 32, 35-37, 39, 46, 47, 57 and 59 are stated as amended by the
+specification "Calculation refinements" (appendix G).
 
 1. (2) The user expresses intent through plots and logbook columns, never
    through calculations: what is switched on is the request.
@@ -2569,13 +2730,16 @@ specification's sections 1 (motivation) and 4 (terms) have no item.
     failure.
 12. (5) A pair whose calculation cannot apply (a declared input missing) is
     never in demand and is not reported anywhere.
-13. (5) Whether a result exists: blocker inspection for a loaded session; for
-    a session not loaded the logbook's record names and the reasons the index
-    recorded for them, no record opened; a cell has a result only when every
-    calculation it needs has a record; a record with a reason is a failed
-    result before and after a restart alike; a known record counts until the
-    column worker's restore deletes it as stale, which moves the pair into
-    demand; the demand layer checks no staleness itself.
+13. (5, as amended) Whether a result exists: blocker inspection for a loaded
+    session; for a session not loaded, first what this run remembers of its
+    pairs (a failure; a not-applicable verdict of that column), then the
+    logbook's record names and the reasons the index recorded for them, no
+    record opened; a cell has a result only when every calculation it needs
+    has a record; a record with a reason is a failed result before and after a
+    restart alike; a reason the index learns later is announced as a record
+    change; a known record counts until the column worker's restore deletes it
+    as stale, which moves the pair into demand; the demand layer checks no
+    staleness itself.
 14. (5) Demand does not depend on how the state arose (a gesture, a profile,
     the start-up restore); at start-up every session is hidden, so plots
     create no demand until sessions are shown, while enabled columns do.
@@ -2611,53 +2775,62 @@ specification's sections 1 (motivation) and 4 (terms) have no item.
     preempted.
 25. (8) An input-determined failure (rejection, solver failure) is a result:
     stored, shown with the warning badge and its reason, never run again.
-26. (8) A job-level failure (the worker could not start, out of memory, a
-    failure not a function of the inputs) is badged with its reason, not
-    started again in the run unless its inputs change, not stored, so tried
-    again at the next start; the demand layer remembers it.
+26. (8, as amended) A failure that is not a function of the inputs (the worker
+    could not start, out of memory, a session file that could not be loaded, a
+    result whose record could not be written) is badged with its reason, not
+    offered and its session not loaded again in the run unless its inputs
+    change, not stored, so tried again at the next start; the demand layer
+    remembers it for the pair.
 27. (8) There is no retry control.
-28. (9) For column demand the demand layer, not the column worker, has a
-    session that is not loaded loaded the way showing it would, without making
-    it visible: an ordinary hidden session, pinned from its load until no
-    column it needs is still waiting or running, then left to ordinary
-    eviction.
+28. (9, as amended) For column demand the demand layer, not the column worker,
+    has a session that is not loaded loaded the way showing it would, without
+    making it visible: an ordinary hidden session, pinned from its load until
+    no column it needs is still waiting or running, the executor is shut down
+    or the demand layer goes, then left to ordinary eviction.
 29. (9) At most a small fixed number of sessions is loaded for this purpose at
     a time, not smaller than the number of jobs that may run at once; the next
     is loaded when one has ended.
-30. (9) The fill is an idle-scheduler task below saving, loading visible
-    sessions, bulk edits and column work, whose steps are the loads, so saves
-    and bulk edits come first; it has work for the whole fill and steps only
-    while it can load; the progress line reports the whole fill; the scheduler
-    gains the generic notion of a task with work it cannot step right now,
-    rests instead of spinning, and learns nothing about jobs.
+30. (9, as amended) The fill is an idle-scheduler task below saving, loading
+    visible sessions, bulk edits and column work, whose steps are the loads,
+    so saves and bulk edits come first; it has work for the whole fill and
+    steps only while it can load; the progress line reports the whole fill;
+    the scheduler has the generic notion of a task with work it cannot step
+    right now, rests instead of spinning, completes such a task once its work
+    is gone without a step, and learns nothing about jobs.
 31. (9) The session-id correction of a first load happens before the pair is
     offered to the executor.
-32. (9) A session whose requested calculation turns out not to apply once
-    loaded is settled as not applicable for the run without a job; its column
-    value stays unavailable.
+32. (9, as amended) A session whose requested calculation turns out not to
+    apply once loaded is remembered as not applicable for that column for the
+    run, without a job, and is not loaded again for it; its column value stays
+    unavailable.
 33. (9) The column worker is unchanged and never knows a job exists; a record
     written later drops the cached value and the loaded-row refresh computes
     the new one; cheap column values never wait for a requested calculation.
 34. (10) No refresh and no cancel for requested calculations anywhere;
     unchecking a plot, hiding sessions or disabling a column is how the user
     changes what is wanted.
-35. (10) A plot row and a logbook column header show a small animated working
-    indicator at the right of their name while any of their demand is waiting
-    or running.
-36. (10) Hovering the indicator, the row or the header shows how many sessions
-    are done of how many are wanted, the session being computed with its
-    progress text, and the sessions that could not be computed with their
-    reasons.
-37. (10) The warning badge replaces the indicator once work is finished and
-    some sessions could not be computed; its hover lists them with reasons.
+35. (10, as amended) A plot row and a logbook column header show one small
+    animated working indicator at the right of their name while any of their
+    demand is waiting or running, with no label or count beside it; the
+    indicators of the plot list and the logbook turn on one clock.
+36. (10, as amended) Hovering the indicator, the row or the header shows how
+    many sessions are done of how many are wanted (the only place the numbers
+    are shown), the session being computed with its progress text, and the
+    sessions that could not be computed with their reasons, a result that
+    could not be stored included.
+37. (10, as amended) The warning badge, with no count, replaces the indicator
+    once work is finished and some sessions could not be computed, a result
+    that could not be stored included; its hover lists them with reasons.
 38. (10) A column cell whose pair is in demand reads as pending, distinct from
     unavailable and from the unreadable-record pending state; pending is the
     view's presentation of demand, never a cached value, never in the index;
     the value underneath stays unavailable until the record is written, and
     sorting treats pending as unavailable.
-39. (10) The logbook's progress line for background work is unchanged in form
-    and reports a column fill for its whole duration, as on-demand column
-    values: remaining of wanted, no cancel.
+39. (10, as amended) The logbook's progress line for background work is
+    unchanged in form and reports a column fill for its whole duration,
+    remaining of wanted, with no cancel, under a text of its own ("Computing
+    results: k / n") distinct from the column worker's ("Computing columns: k
+    / n").
 40. (11) The executor's worker thread runs below normal priority, so that the
     user interface stays responsive.
 41. (11) The number of jobs that may run at once is a single bound of the
@@ -2677,16 +2850,20 @@ specification's sections 1 (motivation) and 4 (terms) have no item.
 45. (12) The executor's lifecycle (start, stale while running, cancel,
     supersede, fail, shutdown), its pinning, the publication and storing of
     results, and the job history are unchanged.
-46. (12) The column worker and the idle scheduler keep their tasks and
-    priorities; the column fill is a new lowest-priority task; the scheduler
-    gains the notion of a task with work it cannot step right now and no
-    knowledge of jobs; the manager and the store record each stored result's
-    outcome in the index.
-47. (12) The flow is one way: the demand layer chooses, the executor
-    publishes, the listener writes the record, the record change drops cached
-    column values, the loaded-row refresh recomputes them, and the demand
-    layer sees the result through the inspection and record set it always
-    reads.
+46. (12, as amended) The column worker and the idle scheduler keep their tasks
+    and priorities; the column fill is a new lowest-priority task; the
+    scheduler has the notion of a task with work it cannot step right now,
+    completes it when its work is gone, and knows nothing of jobs; the manager
+    and the store record each stored result's outcome in the index, the
+    manager announces a changed outcome, and the store announces a record it
+    could not write.
+47. (12, as amended) The flow is one way: the demand layer chooses, the
+    executor publishes, the listener writes the record or the store announces
+    that it could not, the index notes the outcome and announces it, the
+    record change drops cached column values and the demand layer's memos, the
+    loaded-row refresh recomputes the values, and the demand layer sees the
+    result or the failure through the inspection, the record set and the pair
+    memory it always reads.
 48. (12) What stays true: restoring is not requesting; the column worker's
     temporary copy never writes a stored result and never requests; a restored
     result is indistinguishable from a published one; the engine's threading
@@ -2716,16 +2893,18 @@ specification's sections 1 (motivation) and 4 (terms) have no item.
     job; the indicator shows from the first change.
 56. (13) Test: applying a profile with such a column creates demand; start-up
     with a checked plot and no visible sessions creates none.
-57. (13) Test: the working indicator and hover detail reflect waiting,
-    running, done and failed counts on plot rows and column headers; no
-    control to refresh or cancel a calculation exists.
+57. (13, as amended) Test: the working indicator and hover detail reflect
+    waiting, running, done and failed counts on plot rows and column headers,
+    the plot row showing one glyph and no label or count; no control to
+    refresh or cancel a calculation exists.
 58. (13) Test: a pending column cell is distinguishable from an unavailable
     one, is not written to the logbook index, and becomes the value when the
     record is written.
-59. (13) Test: saves and bulk edits still precede the fill's loads; no result
-    is computed from a file being rewritten; the progress line reports the
-    fill from its first load to its last result, and the scheduler does not
-    spin while the fill waits on a job.
+59. (13, as amended) Test: saves and bulk edits still precede the fill's
+    loads; no result is computed from a file being rewritten; the progress
+    line reports the fill from its first load to its last result without any
+    step that loads nothing, and the scheduler does not spin while the fill
+    waits on a job.
 60. (13) Test: the executor never holds more than the running job and one
     chosen next job; changing demand replaces the chosen next job.
 61. (13) Test: the UI thread is not blocked by a running requested
@@ -2737,3 +2916,254 @@ specification's sections 1 (motivation) and 4 (terms) have no item.
     requested results, what the user sees (no refresh, the working indicator,
     pending cells, failures) and where a column over a requested calculation
     stays unavailable or pending.
+
+## Appendix G. The acceptance items of calculation refinements (601-662)
+
+The testable statements of the specification "Calculation refinements", which
+amends "Demand-driven requested calculations" (appendix F), one sentence each,
+with the specification's section number in front. The specification numbers
+no clauses; the numbers below are this list's, and item = 600 + the number
+(items 601-662 of `tests/acceptance_map.txt`, the rows of section 9.7). Its
+sections 1 (motivation) and 4 (terms) have no item; section 13's contracts
+are clauses 51 and 52 and the amended clauses of appendix F. Clauses 34, 42
+and 50 are stated as settled when they were implemented (9.7 says how).
+
+1. (2) The principles of the demand-driven specification hold unchanged: what
+   is switched on is the request, anything wanted is wanted at once, finished
+   work is never wasted, background work never degrades the application, a
+   failure is shown and never retried in a loop, each component's contract can
+   be stated without naming the others.
+2. (2) A fact is computed by the component that owns it and read by the
+   others: each enabled column's closure and requested calculations and a
+   row's display name by the session model, a record's reason by the logbook
+   index, a failed record write by the result store.
+3. (2) A component announces what it changes; no component infers another's
+   change from a signal about something else.
+4. (2) One rule, one path: plots and columns are classified, tallied and filed
+   as candidates by one walk, the difference between them being data.
+5. (2) What no product code uses is removed, unless a named later feature
+   needs it, in which case it is kept and says so: the executor's cancel
+   operation and job history stay for the jobs dock.
+6. (3) Unchanged: the executor's lifecycle, the fusion kernel, the record
+   format, the logbook index's other contents, and the column worker's
+   behaviour and statistics.
+7. (3) Unchanged: what is in demand, its priority, the input-settle wait, the
+   bound on held sessions, and the one-way flow between the demand layer, the
+   executor, the store and the column worker.
+8. (3) The jobs dock is out of scope: the executor keeps its cancel operation
+   and its job history for it; the column worker does not load sessions for
+   the demand layer.
+9. (5) A task registered as one that can wait (TaskDef::canStep) which the
+   scheduler last reported active and which has no work any more is completed
+   at the next tick whether or not it was stepped: its progress is reported
+   one last time and its completion is called, not cancelled, before the next
+   active task is reported or the scheduler goes idle; whoever takes a resting
+   task's work away wakes the scheduler.
+10. (5) A task that lost its work because it was cancelled completes once, as
+    cancelled; a task unregistered while active is never completed.
+11. (5) The other tasks (save, load, bulk edit, column work) complete through
+    their step or by cancel at the same moments as before: they can lose work
+    outside a step, so the rule applies to tasks that can wait only.
+12. (5) The fill has no ending state and no step that loads nothing; its
+    progress is the sessions with a pending column cell of its high-water
+    mark, which resets when the task completes and starts afresh when the
+    sessions with a pending cell rise from none.
+13. (5) The scheduler still learns nothing about jobs or demand.
+14. (6) Recording a reason that differs from what the logbook index held emits
+    the record-changed signal for that session and calculation, as a record
+    write or removal does; an unchanged reason emits nothing, and a write or
+    removal still emits exactly once.
+15. (6) A reason taught to the index by a restore into the column worker's
+    copy reaches the demand layer through that signal alone; the demand layer
+    compares no reasons on the model's display change.
+16. (6) The bulk edit announces its edit as a dependency change on both of its
+    paths (a loaded session, and the temporary copy of one that is not
+    loaded), and the demand layer observes no display change of the model: a
+    bulk edit reaches it as an input change, and the column worker's display
+    changes are never read.
+17. (7) The result store announces a record write that failed, with the
+    reason, for the session and calculation, after the index's record change
+    of that pair; the result stays installed and nothing retries the write.
+18. (7) A track whose record could not be written is failed with that reason
+    on plot rows and column headers alike, whether the session is loaded or
+    not: a source is done only when none of its storable calculations is
+    remembered so.
+19. (7) Such a pair is not offered again and its session is not loaded again
+    for it in the run until its inputs change, so the user's view is the same
+    before and after an eviction.
+20. (7) A later successful write of the pair's record clears the failure;
+    nothing is persisted, so the next start tries the write again.
+21. (8) The session model exposes, per enabled column, its static dependency
+    closure and its requested calculations, current under the registrations at
+    the moment of the call and valid between two column rebuilds.
+22. (8) The demand layer reads each column's closure and requested
+    calculations from the session model and computes neither; a column change
+    reaches it through the model's reset alone; it still computes a plot's
+    closure and requested calculations from the registry.
+23. (8) The session model exposes one display name of a row: the loaded
+    session's description, else the description the logbook index caches for
+    the row, else the session id.
+24. (8) The demand layer's tracks and the executor's job records name a
+    session by that display name, for loaded rows, stubs and failed-load
+    placeholders alike, and neither computes a name.
+25. (9) The demand layer keeps no memory of its own offer: it is the only
+    offerer, so the chosen next job is always its own, and when the choice
+    finds nothing it is withdrawn.
+26. (9) The demand layer does not compare a candidate with the chosen next job
+    before offering it; it acts on the executor's answer, and an offer equal
+    to the chosen next job keeps it as it is.
+27. (9) A track has no settling flag and no job id, and a source's state no
+    list of waiting tracks; the counts stay, and nothing the user sees
+    changes.
+28. (9) The executor has no idle signal, no queued signal, no query of both
+    active jobs and no busy-period bookkeeping; its job model, its idle and
+    running queries and its other signals carry the same facts.
+29. (9) The executor keeps its cancel operation for the jobs dock; no product
+    code calls it, and its comment and the audit say so.
+30. (9) The executor's refusal kinds are unchanged; the demand layer offers
+    upstream first, so a Blocked refusal is not expected from it, and the
+    documentation says so instead of the code guarding for it.
+31. (10.1) One walk over the session rows derives every source's state,
+    counts, listed tracks, pending cells and candidates, for plots and columns
+    at once, under one row stability guard, returning plain values; offers,
+    withdrawals, holds, loads and signals happen after it.
+32. (10.1) A loaded session is classified from the engine's blocker inspection
+    of the source's names, combined alike for a plot's one name and a column's
+    names, the running job, the pair memory and the settle wait; the combined
+    report is memoized per session and source and dropped by an input change
+    or publication, a load, a record change, a job's end, a reset or a
+    registry change.
+33. (10.1) A session that is not loaded is a track of columns only, classified
+    in this order: no storable calculation, not applicable; a storable
+    calculation remembered failed (a job, a load or a write that failed),
+    failed with the remembered reason; every storable calculation remembered
+    not applicable for that column, not applicable; every storable calculation
+    with a record, done, or failed with the first recorded reason; a
+    failed-load placeholder, failed ("The session file could not be loaded");
+    otherwise waiting.
+34. (10.1, as settled) Candidates are filed in the walk by tier: the focused
+    session's plot pairs, the other visible sessions' plot pairs, then the
+    column pairs of visible loaded sessions, then of hidden loaded sessions,
+    each in row order; within a session source order, then blocker order; a
+    pair once, in its first tier; never a pair with a remembered failure or
+    refusal, the running job not asked to stop, or a pair of a settling
+    session; a column track running or failed on one blocker files its other
+    blockers, as a plot track does.
+35. (10.1) The load candidates are the waiting, hidden, unloaded sessions that
+    are not settling and not held, in row order, up to the bound.
+36. (10.2) One memory of the run, keyed by pair (session, requested
+    calculation), holds not applicable (the executor refused the pair, or a
+    loaded column found its source not applicable) or failed with a reason (a
+    job that ended failed, a result that is never stored, a load that failed,
+    a record write that failed); there is no memory per cell, and every
+    verdict is derived from the engine or the record set and this memory.
+37. (10.2) A column's not-applicable verdict holds for that column only: it
+    keeps its session from being loaded again for that column, and it never
+    makes another source's track not applicable nor keeps a pair from being
+    offered.
+38. (10.2) The memory is cleared for a session by a relevant input change, for
+    a pair by a record change of that pair, for everything by a registry
+    change; a model reset forgets the pairs of sessions that no longer have a
+    row; nothing is persisted.
+39. (10.2) A bulk edit of a session clears what the run remembered of it,
+    through the dependency change it publishes, for a loaded session and for
+    one that is not loaded alike; nothing else clears a session's facts, the
+    column worker's display changes in particular; a load of the session that
+    succeeds forgets its failed-load facts.
+40. (10.2) A session found not applicable, a job-level failure, a failed load
+    and a failed write are not loaded or offered again after an eviction, a
+    sort, or the column worker's processing of the stub.
+41. (11) The demand layer stays one component with one contract towards the
+    views and the executor, divided into parts with contracts of their own
+    (the presentation values, the fill, the settle clock and the reconciler);
+    the fill and the settle clock expose nothing of the walk, and the walk
+    calls neither the executor nor the session model's loading and pinning.
+42. (11, as settled) The fill keeps at most the bound of hidden sessions
+    loaded and pinned for column demand, releases a hold when its session has
+    no pending cell or no loaded row, loads the next candidate when a hold is
+    free and the scheduler steps it, reports the sessions remaining of its
+    high-water mark, and holds nothing once the executor is shut down or the
+    component goes.
+43. (11) The settle clock holds the per-session deadlines of the input-settle
+    wait and one timer for the earliest, answers whether a session is settling
+    and when the next wait ends, and calls its owner when a wait ends.
+44. (12) A plot row and a logbook column header show the same one glyph: the
+    turning arc while any of the source's demand is waiting or running, the
+    warning badge once the work is finished and some sessions could not be
+    computed, and nothing else; the plot row has no "k of n" label and no
+    count, and its layout keeps room for one glyph.
+45. (12) The hover carries both numbers, on a plot row as on a column header.
+46. (12) One working-indicator clock per application, created beside the
+    demand layer and handed to the views as the demand layer is: the arcs of
+    the plot list and the logbook's headers turn in step, the clock runs only
+    while any plot or column is working, and each view repaints its own
+    working rows or sections on its frames.
+47. (12) The logbook's progress line says "Computing results: k / n" while the
+    fill is the active task, distinct from the column worker's "Computing
+    columns: k / n"; the fill is not cancellable, and saves, loads, bulk edits
+    and column work still come first.
+48. (12) A stored result that could not be written is listed among the
+    sessions that could not be computed, with its reason, on the plot row and
+    the column header.
+49. (12) Nothing else the user sees changes: the hover detail, pending cells,
+    the warning badge's meaning, and the absence of any refresh or cancel
+    control.
+50. (12, as settled) The shared glyph plumbing owns the glyph's colour for a
+    style option and its side and spacing beside a line of text, and the
+    repaint when the demand layer is destroyed and the tooltip display are
+    written once; the views compute none of them; the part that needs Qt
+    Widgets is the views' half of the shared indicator, beside the widget-free
+    glyphs, and a state carries no progress label, which no view reads.
+51. (13) The demand layer remains widget-free, the only offerer and observed
+    by nothing; the views present the same state through one glyph and one
+    clock and decide nothing.
+52. (13) The flow stays one way: the demand layer chooses; the executor
+    publishes; the store writes the record or announces that it could not; the
+    index notes the outcome and announces it; the record change drops the
+    cached column values and the demand layer's memos; the demand layer sees
+    the result, or the failure, through what it always reads.
+53. (14) Test: a task with work it cannot step loses its work without a step
+    and is completed once, not cancelled, after a final progress report,
+    before the next active task is reported or the scheduler goes idle; the
+    existing tasks complete at the same moments as before; the fill's progress
+    line reports the fill from its first load to its last result without any
+    step that loads nothing.
+54. (14) Test: a reason recorded by a restore into the column worker's copy
+    reaches the demand layer through the manager's record-changed signal
+    alone: a stored rejection of a session that is not loaded is badged with
+    its reason after the worker's pass, and no reason comparison happens on
+    the model's display change.
+55. (14) Test: a record write that fails is a shown failure: listed as failed
+    with the reason while the session is loaded and after its eviction, not
+    offered again in the run, cleared by a later successful write, tried again
+    at a restart; no session is loaded twice for it.
+56. (14) Test: the demand layer reads each column's closure and requested
+    calculations from the session model, and a column change reaches it
+    through the model's reset alone; the tracks and the job records name a
+    session by the model's display name, for loaded rows, stubs and
+    failed-load placeholders alike.
+57. (14) Test: plots and columns are classified, tallied and filed by one
+    walk, and the acceptance items of the demand-driven specification on
+    demand, priority, the settle wait, failures, not applicable, chains and
+    unloaded sessions pass unchanged in what they assert: counts, listed
+    running and failed tracks, pending cells and tooltips are as before.
+58. (14) Test: every case the per-cell memory covered is covered by a pair
+    fact: a session found not applicable, a job-level failure, a failed load
+    and a failed write are not loaded or offered again after eviction, a sort
+    or the column worker's pass; a bulk edit makes the session applicable
+    again; a record change of the pair, an input change of the session and a
+    registry change clear what is remembered.
+59. (14) Test: no product code reads the removed signals, queries and fields;
+    the executor never holds more than the running and the chosen next job;
+    the chosen next job is withdrawn when demand no longer wants it.
+60. (14) Test: the plot row shows the arc or the badge and no label or count;
+    the two views' clocks are one; the fill's progress text is its own; a
+    stored result that could not be written is listed in the hover.
+61. (14) The audit's demand and gestures groups keep the removed and moved
+    names out, and a rule forbids a second computation of a column's requested
+    calculations outside the session model and the registry.
+62. (15) `docs/` and `tests/README.md` describe the executor's signals and
+    queries (cancel kept for the jobs dock), the one walk, the one memory, the
+    parts of the demand layer, the fill's completion, the failed write, the
+    session model as the source of column knowledge and display names, one
+    glyph and one clock, and the fill's progress text.

@@ -31,12 +31,12 @@ At the right-hand end of a checked plot's row in the plot list:
 
 | You see | It means |
 | --- | --- |
-| A turning arc with "k of n" | Computing. Of the n visible tracks that can be computed for this plot, k are done (a track that could not be computed counts as done) |
-| A warning triangle with a number | Computing has finished, and that many visible tracks could not be computed (section 7) |
+| A turning arc | Computing. The tooltip says how many of the visible tracks that can be computed for this plot are done (a track that could not be computed counts as done) |
+| A warning triangle | Computing has finished, and some visible tracks could not be computed (section 7); the tooltip says which |
 | Nothing | Everything that can be shown is shown - or the plot never needs computing. Such a row looks exactly as it always has |
 
 The arc and the triangle are never shown together: the triangle appears once
-the work is done.
+the work is done. The row shows no number: hover over it for the counts.
 
 Hover over the row, the arc or the triangle for details. The tooltip has up to
 two parts:
@@ -68,7 +68,7 @@ Anything that switches such a value on:
 Tracks whose result was kept from earlier (section 6) are drawn at once and
 are not computed again. As each other track finishes, its graph appears by
 itself, the legend and any logbook column that uses the value fill in, and the
-count on the row rises.
+numbers in the row's tooltip rise.
 
 When you start FlySight Viewer every track is hidden, so checked plots start
 nothing until you show tracks. A logbook column over such a value continues
@@ -84,7 +84,9 @@ A logbook column over a computed value (roll at the exit marker, say) is
 filled for every recording in the logbook, whether or not it is shown.
 Recordings that are not loaded are loaded in the background, at most two at a
 time, as hidden recordings. The progress line under the logbook shows
-"Computing columns: k / n" for the whole fill, with no cancel button.
+"Computing results: k / n" for the whole fill, with no cancel button. The
+logbook's other background work, such as filling a column that needs no
+computing ("Computing columns: k / n"), saving or loading, goes first.
 
 While a column fills, its header shows the turning arc at the right of its
 name. Hovering the header shows the counts, the recording being computed with
@@ -96,9 +98,9 @@ A cell whose value is still to come shows a grey "…". A blank cell means the
 value does not exist for that recording (for sensor fusion, a recording
 without IMU data). FlySight Viewer learns that only by loading the recording:
 until the fill has loaded it, such a recording shows "…" and is counted in the
-header's numbers, and then turns blank and leaves the count. Only computed
-results are kept, so it is loaded again, once, at every start. Sorting by the
-column puts "…" and blank cells together at the bottom.
+numbers of the header's tooltip, and then turns blank and leaves the count.
+Only computed results are kept, so it is loaded again, once, at every start.
+Sorting by the column puts "…" and blank cells together at the bottom.
 
 Visible tracks go first: a track you show while a column fills is computed
 next, after the computation that is running. Removing or disabling the column
@@ -154,9 +156,17 @@ gives the reason. No message box appears.
 Nothing offers to try again, because the same data give the same answer. When
 the recording's data change (section 6), it is computed again.
 
-A few failures are not about the data: the computer ran out of memory, or the
-recording's file could not be read. They are shown the same way, are not tried
-again while FlySight Viewer runs, and are tried again the next time it starts.
+A few failures are not about the data: the computer ran out of memory, the
+recording's file could not be read, or a computed result could not be kept
+(the disk is full, or the logbook's `cache/` folder cannot be written). They
+are shown the same way, are not tried again while FlySight Viewer runs, and
+are tried again the next time it starts.
+
+A result that could not be kept is listed the same way, with the reason
+("Couldn't write file ..."): while the recording stays loaded the plot still
+draws it, but the plot row and the column header show the warning triangle,
+the recording is not computed again while FlySight Viewer runs unless its
+data change, and the next start computes and keeps it again.
 
 This is different from a track that lacks the needed sensor altogether - a
 recording without IMU data, for sensor fusion. That track is silently absent
@@ -166,12 +176,14 @@ no warning.
 ## 8. While computing
 
 The application stays fully usable: you can pan and zoom, show and hide
-tracks, edit recordings, set markers, and import files. Computations run one
-at a time, in the background, at a lower priority than the rest of the
-application: first the track you are looking at (the focused one), then the
-other visible tracks from top to bottom, then what logbook columns need, from
-top to bottom. Quitting stops them; expect a short wait while the running one
-reaches a point where it can stop.
+tracks, edit recordings, set markers, and import files. The turning arcs of
+the plot list and of the logbook's column headers turn together; they stop
+when nothing is being computed. Computations run one at a time, in the
+background, at a lower priority than the rest of the application: first the
+track you are looking at (the focused one), then the other visible tracks
+from top to bottom, then what logbook columns need, from top to bottom.
+Quitting stops them; expect a short wait while the running one reaches a
+point where it can stop.
 
 ## 9. Known limitations
 

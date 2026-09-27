@@ -684,8 +684,16 @@ readers and start nothing either
 (`tst_python_bridge::pluginsNeverStartExplicitWork`). Loading a session starts
 none either: a stored result is restored, not requested (15.8). A job that
 ends cancelled, superseded or failed leaves its result missing, and the demand
-layer offers it again while it is in demand - except a job-level failure,
-which it remembers for the rest of the run (16.7).
+layer offers it again while it is in demand - except a failure that is not a
+function of the inputs, which it remembers for the rest of the run (16.7).
+
+**What it announces.** The executor's state is in its job model and its
+queries; it has no idle signal, no queued signal and no query of both active
+jobs, because no product code used them. A new job is a new row of the job
+model (`rowsInserted`); `isIdle()` is "nothing runs and no chosen next job";
+`runningJob()` and `chosenNextJob()` are the two active jobs. `cancel(JobId)`
+is kept for the jobs dock, a later view of the job history; no product code
+calls it today (15.3).
 
 ### 15.1 What a job is
 
@@ -729,12 +737,13 @@ never starts anything synchronously.
 
 **Replacement.** A `Ready` offer whose `(sessionId, instanceId)` differs from
 the chosen next job replaces it: the old one ends Cancelled ("No longer
-needed"; it never started, and its pin is released), with no `idle()` between
-the old job and the new one, and the executor validates the offer again after
-that end's signals (a slot may shut it down or offer). The new job is Queued,
-pinned, announced (`jobQueued`, `jobsChanged`) and started from the event loop,
+needed"; it never started, and its pin is released), and the executor
+validates the offer again after that end's signals (a slot may shut it down or
+offer); the new job is pinned, appended to the job model as Queued
+(`rowsInserted`), announced by `jobsChanged` and started from the event loop,
 never synchronously. **Withdrawal.** `withdrawChosenNext()` ends the chosen
-next job Cancelled ("No longer needed"); `idle()` follows when nothing runs.
+next job Cancelled ("No longer needed"); nothing else follows, and `isIdle()`
+is then true when nothing runs.
 
 **A running job asked to stop does not count.** A running job that has been
 asked to stop - cancelled, or stopped because its inputs went stale (section
@@ -801,13 +810,12 @@ the engine's `invalidated` set, so a `dependencyChanged` listener that looks at
 the job model already sees the job finished; while it runs, `publishingJob()`
 returns the job's id, so a listener can tell a publication's
 `dependencyChanged` from an edit's; (3) `jobFinished`, `jobsChanged`; (4) the
-session is unpinned; (5) the model trims its finished rows; (6) `idle()`, or
-the chosen next job, which a slot may have offered during (3), is scheduled. A
-chosen next job that an offer replaces skips (6). The demand layer runs its
-pass synchronously in its `jobFinished` slot, so the next link of a chain is
-chosen before step (6) and the executor reports no `idle()` between links
-(16.4). Slots connected to the executor's signals may call `offer()`,
-`withdrawChosenNext()`, `cancel()` and `shutdown()`.
+session is unpinned; (5) the model trims its finished rows; (6) the chosen
+next job, which a slot may have offered during (3), is scheduled to start. The
+demand layer runs its pass synchronously in its `jobFinished` slot, so the next
+link of a chain is chosen before step (6) and the executor is never idle
+between links (16.4). Slots connected to the executor's signals may call
+`offer()`, `withdrawChosenNext()`, `cancel()` and `shutdown()`.
 
 ### 15.3 Cancellation, abandonment, shutdown
 
@@ -815,11 +823,13 @@ chosen before step (6) and the executor reports no `idle()` between links
   once; its record stays as a finished entry. On the running job it requests
   cancellation; the job stays Running (`cancelRequested`) until the compute
   function returns, and the next job does not start before then.
-  `cancel(JobId)` is kept for a later jobs dock; no product code calls it
-  (audit group `gestures`, "no product code cancels a job"). A job cancelled
-  from outside while its pair is still in demand is offered again at once by
-  the demand layer; a jobs dock that cancels will need its own policy (for
-  example remembering a user cancel like a job-level failure).
+  `cancel(JobId)` is kept for the jobs dock, a later view of the job history;
+  no product code calls it today, and its doc comment and the cleanup audit
+  (group `gestures`: "no product code cancels a job", "cancel is kept for the
+  jobs dock") say so. A job cancelled from outside while its pair is still in
+  demand is offered again at once by the demand layer; a jobs dock that
+  cancels will need its own policy (for example remembering a user cancel
+  like a job-level failure).
 - **Cancel wins over a late result.** Once cancellation was requested the job
   ends Cancelled and publishes nothing, even if the compute function returned a
   complete result. The outcome does not depend on a race the user cannot see.
@@ -952,7 +962,8 @@ progress and a jobs dock can be a pure view of it.
   `StartedColumn`, `FinishedColumn` (local short-format text, empty when
   invalid), `ReasonColumn`.
 - Roles, answered on every column: `JobIdRole`, `SessionIdRole`,
-  `SessionNameRole` (a snapshot at the offer: `_DESCRIPTION`, else the id),
+  `SessionNameRole` (a snapshot at the offer: the session model's display
+  name of the row, `SessionModel::sessionDisplayName()`, 16.2),
   `CalculationIdRole`, `InstanceIdRole`, `CalculationTitleRole`, `StateRole`
   (`int(JobState)`), `CancelRequestedRole`, `ProgressTextRole` (kept after the
   end), `QueuedTimeRole` / `StartedTimeRole` / `FinishedTimeRole` (`QDateTime`,
@@ -996,12 +1007,11 @@ publish to engines).
 | `chosenNextJob()` | the one Queued job, 0 if none |
 | `publishingJob()` | the job whose publication is being delivered (15.2, step 2), 0 at every other moment |
 | `activeJob(sessionId, instanceId)` | the chosen next or running job an offer would be equal to, 0 if none; never a running job that was asked to stop |
-| `activeJobs()` | the running job (also one winding down), then the chosen next job: at most two ids |
-| `runningJob()`, `job(id)`, `isIdle()`, `isShutDown()` | queries; `isIdle()` is "nothing runs and no chosen next job"; `job()` returns a default record (id 0) for an unknown or removed job |
-| `cancel(id)` | false: unknown or already finished. Kept for a jobs dock; no product caller |
+| `runningJob()`, `job(id)`, `isIdle()`, `isShutDown()` | queries; `isIdle()` is "nothing runs and no chosen next job"; `job()` returns a default record (id 0) for an unknown or removed job; the running job and the chosen next job are the only active jobs |
+| `cancel(id)` | false: unknown or already finished. Kept for the jobs dock; no product caller today (15.3) |
 | `shutdown()` | 15.3 |
 | `failNextWorkerStarts(n)` | test seam: thread-creation failure cannot be provoked portably |
-| signals `jobQueued(id)`, `jobStarted(id)`, `jobProgress(id, text)`, `jobCancelRequested(id)`, `jobFinished(id, state)`, `jobsChanged()` (after each of the others except `jobProgress`), `idle()` (the last active job ended) | `jobQueued` follows the model's `rowsInserted`. A job that a `rowsInserted` slot ended (cancel, shutdown) is not announced as queued afterwards: `jobFinished` was its only signal, and `offer()` still returns `Created` |
+| signals `jobStarted(id)`, `jobProgress(id, text)`, `jobCancelRequested(id)`, `jobFinished(id, state)`, `jobsChanged()` (after each of the others except `jobProgress`) | A created job is announced by the job model's `rowsInserted` (then `jobsChanged`); a job that a `rowsInserted` slot ended (cancel, shutdown) has `jobFinished` as its only executor signal, and `offer()` still returns `Created`. There is no idle or queued signal: `isIdle()`, `runningJob()`, `chosenNextJob()` and the records answer those questions |
 | `JobModel(QObject *parent)`; `rowCount`, `columnCount`, `data`, `headerData`, `flags`, `roleNames`, `removeRows`; `rowOf(id)`, `record(row)`, `record(id)`, `records()`, `stateText(state)`, `removeFinished(id)`, `clearFinished()`, `finishedLimit()`, `setFinishedLimit(n)`, `kDefaultFinishedLimit` | 15.6. Only `JobQueue` appends rows and changes job state: it is a friend for the private mutators only, and reads through `records()` like any view. `records()` is a reference to the rows, valid until the model next changes |
 | `JobId`, `JobState`, `JobRecord` (`isFinished()`, `isActive()`) | the vocabulary, `src/jobmodel.h` |
 | `SessionModel::pinSession(id)`, `unpinSession(id)`, `isSessionPinned(id)` | 15.4. `unpinSession()` never evicts synchronously, so it is safe in a slot |
@@ -1009,7 +1019,8 @@ publish to engines).
 
 Tests: `tests/tst_jobqueue.cpp` (the executor), `tests/tst_jobmodel.cpp`, and
 the controllable calculations of `tests/support/jobfixture.h` (`waitStarted`,
-`waitIdle`, `Quiet`).
+`waitIdle`, `Quiet`: no new job row since it was created, and
+`activeJobIds()`: the ids of the active records, in model order).
 
 ### 15.8 Stored results
 
@@ -1032,8 +1043,23 @@ and restore; the files are described in
   then
   `LogbookManager::writeCalculationRecord()`, on the main thread. The write is
   atomic (`QSaveFile`). A failure is warned once, leaves the previous record
-  and the in-memory result untouched, and is not retried before the next `Ok`
-  publish.
+  and the in-memory result untouched, is not retried, and is **announced**:
+  `CalculationResultStore::recordWriteFailed(sessionId, calculationId,
+  reason)`, relayed by `SessionModel::calculationRecordWriteFailed(...)`
+  (consumers connect to the model, never to the store), with the manager's
+  error text ("The result could not be stored" when it gives none). It is
+  emitted from inside the engine's explicit-result listener, after the
+  manager's `calculationRecordsChanged` for the same pair (a failure for an
+  unknown session has no record change), so a slot records state and
+  schedules only. `stats().writeFailures` counts the announcements. The
+  demand layer shows the failure (16.7).
+- **Reasons.** The logbook index learns the reason of every record the store
+  writes (the manager notes it as it writes the record) and of every record
+  the store restores and keeps (`LogbookManager::setCalculationRecordReason()`,
+  called by the restore); a reason that differs from what the index held is
+  announced as a record change of the pair (`calculationRecordsChanged`), an
+  unchanged one emits nothing (DATA_SCHEMA section 11). A write or a removal
+  emits exactly one record change, whether or not its reason changed.
 - `Installed` with any other status writes nothing and deletes nothing.
 - `Dropped` (an input change, or a registry change made while the
   application runs, dropped the result):
@@ -1142,8 +1168,13 @@ switched on needs and that have no result - and keeps the executor's chosen
 next job equal to its first choice. It is the **only product caller of
 `JobQueue::offer()` and `withdrawChosenNext()`**. Nothing calls into it but the
 views' read-only queries; it observes the models, the logbook's record
-changes, the registry and the executor's signals. Everything it decides is
-tested without widgets (`tests/tst_calculation_demand.cpp`).
+changes (which also announce a reason the index learned, 16.7), the session
+model's relay of a record that could not be written, the registry and the
+executor's signals. It is divided into parts whose contracts stand alone
+(16.12): the presentation values (`src/demandstate.h`), the column fill
+(`src/demandfill.h`), the settle clock (`src/demandsettleclock.h`), and the
+reconciler, the component itself. Everything it decides is tested without
+widgets (`tests/tst_calculation_demand.cpp`).
 
 The principles it implements:
 
@@ -1153,7 +1184,9 @@ The principles it implements:
 - finished work is never wasted: results are stored (15.8);
 - background work must not degrade the rest of the application (15.5, 16.8);
 - a failure is shown, never retried in a loop (16.7);
-- each component's contract can be stated without naming the others (16.11).
+- each component's contract can be stated without naming the others (16.11);
+- a fact is computed by the component that owns it and read by the others; a
+  component announces what it changes (16.11).
 
 ### 16.1 Demand and track conditions
 
@@ -1166,16 +1199,24 @@ requested calculations that block that name for that session.
 requested output (16.3), every **session row of the logbook**, loaded or not,
 needs the requested calculations that block that value.
 
+A **source** is a checked requested plot or an enabled requested column; a
+**track** is one session of a source (plot: a visible, loaded row that is not
+a failed-load placeholder; column: every row). Plots and columns are walked,
+classified, tallied and filed as candidates by one walk (16.3, 16.6); the
+kind of the source is the only difference.
+
 **Where a result is looked up** - two sources only:
 
 - A loaded session (visible or in the hidden pool): blocker inspection
-  (section 13) of the plot's y name, or of the column's names (one, or two for
-  a `Delta` column, combined: any `NotApplicable` -> `NotApplicable`, else any
-  `NotProduced` -> `NotProduced`, else any `Blocked` -> `Blocked` with the
-  union of the blockers, else `Available`).
+  (section 13) of the source's names - a plot's y name, a column's one or two
+  names (two for a `Delta` column) - combined alike for both: any
+  `NotApplicable` -> `NotApplicable`, else any `NotProduced` -> `NotProduced`,
+  else any `Blocked` -> `Blocked` with the union of the blockers, else
+  `Available`. A single name combines to itself.
 - A session that is not loaded (a stub, or a failed-load placeholder, whose
-  engine holds no stored result): the logbook's known record names
-  (`LogbookManager::knownCalculationRecords()`) and the reasons the index
+  engine holds no stored result): what this run remembers of its pairs
+  (16.7) and the logbook's known record names
+  (`LogbookManager::knownCalculationRecords()`) with the reasons the index
   recorded for them (`LogbookManager::calculationRecordReason()`, 16.7); no
   record is opened. A cell has a result only when every storable calculation
   it needs has a record. A known record counts as a result until something
@@ -1189,23 +1230,36 @@ needs the requested calculations that block that value.
 
 | Report | Condition |
 |---|---|
-| `Available` | `Done` |
-| `NotApplicable` | `NotApplicable`: silently absent, as plots treat missing data |
-| `NotProduced` | `Failed`: an input-determined failure, with a reason built from the notes |
-| `Blocked`, a blocker is the running job and it was not asked to stop | `Running` |
-| `Blocked`, otherwise a blocker is remembered as a job-level failure (16.7) | `Failed` (job-level) |
-| `Blocked`, otherwise every blocker is remembered as not applicable | `NotApplicable` |
-| `Blocked`, otherwise | `Waiting` (with `settling` while the session's inputs settle, 16.5) |
+| `Available`, no storable calculation of the source remembered failed | `Done` |
+| `Available`, a storable calculation remembered failed (a record that could not be written, 16.7) | `Failed` |
+| `NotApplicable` | `NotApplicable`: silently absent |
+| `NotProduced` | `Failed`: an input-determined failure, reason built from the notes |
+| `Blocked`, a blocker is the running job not asked to stop | `Running` |
+| `Blocked`, otherwise a blocker has a remembered failure (16.7) | `Failed` |
+| `Blocked`, otherwise every blocker was refused by the executor as not applicable | `NotApplicable` |
+| `Blocked`, otherwise | `Waiting` |
 
-`Blocked` wins over `NotProduced`, as in section 13. There is no "stale"
-condition: a result invalidated by an input change reports `Blocked` again. A
-cell of a session that is not loaded is decided in this order: no storable
-calculation -> `NotApplicable`; a settlement of this run (16.7) -> its
-verdict; every record known -> `Done`, or `Failed` with the reason the index
-recorded for one of them; a remembered job-level failure -> `Failed`; every
-calculation remembered not applicable -> `NotApplicable`; a failed-load
-placeholder -> `Failed` ("The session file could not be loaded", settled);
-otherwise `Waiting`.
+A column's not-applicable verdict (16.7) is never read for a loaded session:
+the engine is the authority there. `Blocked` wins over `NotProduced`, as in
+section 13. There is no "stale" condition: a result invalidated by an input
+change reports `Blocked` again.
+
+A column track of a session that is not loaded is decided in this order:
+
+1. the source has no storable calculation (explicit family instances alone)
+   -> `NotApplicable`;
+2. a storable calculation remembered failed (a job, a load or a record write
+   that failed) -> `Failed` with the remembered reason(s);
+3. every storable calculation remembered not applicable for this column ->
+   `NotApplicable`;
+4. every storable calculation has a record -> `Done`, or `Failed` with the
+   first reason the index recorded;
+5. a failed-load placeholder -> `Failed` ("The session file could not be
+   loaded", remembered for its pairs, so the next pass gives the same track);
+6. otherwise `Waiting`.
+
+The index is asked only in step 4, once per session between record changes
+(the memo of 16.3).
 
 - A session without the calculation's inputs is `NotApplicable`: it is never
   waiting, running or failed, never counted, and never offered.
@@ -1228,12 +1282,12 @@ build does not contain the check.
 
 ### 16.2 Plot and column state
 
-`plotState(plotId)` and `columnState(columnId)` return a `DemandState`, a plain
-value. `plotId` is `"<sensorID>/<measurementID>"`, equal to
-`PlotModel::PlotValueIdRole`; `columnId` is
-`logbookColumnDefinitionKey(column)`. The default value ("plain") is returned
-for a plot that is unchecked, not requested or unknown, and for a column that
-is not enabled, not requested or unknown.
+`plotState(plotId)` and `columnState(columnId)` return a `DemandState`
+(`src/demandstate.h`), a plain value. `plotId` is
+`"<sensorID>/<measurementID>"`, equal to `PlotModel::PlotValueIdRole`;
+`columnId` is `logbookColumnDefinitionKey(column)`. The default value
+("plain") is returned for a plot that is unchecked, not requested or unknown,
+and for a column that is not enabled, not requested or unknown.
 
 | Field | Meaning |
 |---|---|
@@ -1242,25 +1296,26 @@ is not enabled, not requested or unknown.
 | `wantedCount` | tracks that are not `NotApplicable` |
 | `doneCount` | `Done` plus `Failed`: nothing is left to compute for them |
 | `waitingCount`, `runningCount` | `runningCount` is 0 or 1 |
-| `failedCount` | input-determined and job-level failures |
-| `running`, `waiting`, `failed` | lists of `DemandTrack` in row order; a column state counts its waiting tracks without listing them |
-| `progressLabel` | "<done> of <wanted>" while working, else empty: a failed track counts as done |
-| `toolTip` | `buildToolTip(*this)`; empty for a plain state |
+| `failedCount` | input-determined failures and failures remembered by this run (a job, a load, a record write) |
+| `running`, `failed` | lists of `DemandTrack` in row order; waiting tracks are counted (`waitingCount`), never listed |
+| `toolTip` | `DemandState::buildToolTip(*this)`; empty for a plain state |
 
-`isWorking()` is "anything waiting or running"; `showsWarning()` is "not
-working and something failed" (the badge replaces the indicator); `isPlain()`
-is neither. There is no "episode": the counts are the truth of the moment.
+`addTrack()` counts a track and `finish()` builds the tooltip; the reconciler
+calls them. `isWorking()` is "anything waiting or running"; `showsWarning()`
+is "not working and something failed" (the badge replaces the indicator);
+`isPlain()` is neither. There is no "episode": the counts are the truth of
+the moment.
 
-`DemandTrack`: `sessionId`; `sessionName` (the name the logbook shows: the live
-`_DESCRIPTION` of a loaded session; for a session that is not loaded or failed
-to load, the description cached in `index.json`; the session id only when no
-description exists - `tst_calculation_demand::visibleFailedLoadIsSettledAsFailed`
-asserts the name); `condition`; `calculationTitles`; `reason` (failed);
-`jobFailure` (failed: a job-level failure, not stored); `settling` (waiting);
-`job`; `progressText` (running).
+`DemandTrack`: `sessionId`; `sessionName` (`SessionModel::sessionDisplayName()`
+of the row: the loaded session's description, else the description the
+logbook index caches for the row, else the session id - the executor's job
+records use the same name; `tst_result_columns::sessionDisplayNameOfEveryRowKind`);
+`condition`; `calculationTitles`; `reason` (failed); `jobFailure` (failed: not
+a stored result - a job, a load or a record write that failed - so tried
+again at the next start); `progressText` (running).
 
-The tooltip, built by the pure `buildToolTip(state)`, is a block of plain
-text; each part is omitted when empty:
+The tooltip, built by the pure `DemandState::buildToolTip(state)`, is a block
+of plain text; each part is omitted when empty:
 
 ```
 Computing: <done> of <wanted> done
@@ -1270,23 +1325,24 @@ Could not be computed:
   and <n> more
 ```
 
-Each list shows at most `kToolTipListLimit` (10) sessions and ends with "and
-<n> more" when there are more; the state's own lists stay complete. No message
-box reports a calculation outcome.
+Each list shows at most `DemandState::kToolTipListLimit` (10) sessions and
+ends with "and <n> more" when there are more; the state's own lists stay
+complete. The tooltip is the only place a view shows the counts (16.10). No
+message box reports a calculation outcome.
 
 `isCellPending(sessionId, columnId)` and `isCellPending(row, column)` are true
 exactly for a `Waiting` or `Running` cell of a requested column; the row is
 mapped to its session on every call. `workingPlotIds()` and
 `workingColumnIds()` return the ids whose state is working, which is what the
-views' animation clocks follow.
+application's one working-indicator clock follows (16.10).
 
 Signals: `plotStateChanged(plotId)` and `columnStateChanged(columnId)` (the
 state, or for a column its set of pending cells, changed), per id, then
 `statesChanged()` once per pass; a state is stored before it is announced. The
 running job's progress text updates the states without a pass and without
-inspection. A state may be one event-loop pass behind the models: a consumer
-that must not be (the plot widget's "no data" warning) asks the engine
-(16.10).
+inspection, on the running tracks of the job's session. A state may be one
+event-loop pass behind the models: a consumer that must not be (the plot
+widget's "no data" warning) asks the engine (16.10).
 
 ### 16.3 Requested plots and columns, and what inspection costs
 
@@ -1302,26 +1358,42 @@ the registrations, memoized in the registry and per plot id, and dropped by a
 registry observer. It is exact: `staticDependencies()` is a superset of every
 dynamic dependency set and a blocker is always reached through declared
 inputs, so a plot that is not requested can never report a blocker. A column
-is requested when `logbookColumnExplicitCalculations()` is not empty (the same
-registry answer the column cache uses; section 17). The demand layer never
-tests `EvaluationPolicy::Explicit` itself.
+is requested when `SessionModel::columnRequestedCalculations(i)` is not empty.
+The demand layer never tests `EvaluationPolicy::Explicit` itself.
 
-**What a pass costs.** Plots that are not requested are never inspected: no
-`blockers()` call, no read, no signal, one hash lookup. Blocker inspection runs
-only for (checked, requested plots) x (visible, loaded tracks) - names the plot
-widget reads for the same tracks anyway - and for (enabled, requested columns)
-x (loaded rows whose report memo was dropped: by an input change or a
-publication, a load, a record change, a job's end or a single-row display
-change), through `SessionModel::loadedSession()` under one
-`RowStabilityGuard`: nothing is loaded, evicted or touched in the LRU inside a
-pass, and the guard is released before anything is offered, withdrawn, pinned
-or emitted. Plot classifications are not cached across passes (after A
-publishes, the blocker of B's output changes from A to B although B's output
-may not be re-announced); the engine's caches make a repeated `blockers()`
-cheap. A session that is not loaded costs one `knownCalculationRecords()` call
-between changes to its records (a memo). With requested columns enabled a pass
-is O(rows) plus O(rows x requested columns) hash lookups; with none, the rows
-are not walked at all.
+**The session model is the one source of each enabled column's requested
+calculations and static dependency closure** (`columnRequestedCalculations()`,
+`columnDependencyClosure()`: computed from the registry by
+`logbookColumnExplicitCalculations()` and `staticDependencies()`, section 17;
+valid between two column rebuilds - a column change resets the model - and
+current under the registrations at the moment of the call). The demand layer
+reads them at the start of every pass and computes neither; a column change
+reaches it through the model's reset alone. A plot's closure and requested
+calculations (`CalculationRegistry::staticDependencies()` and
+`explicitDependencies()` of the y name) the demand layer computes itself: the
+model knows nothing of plots. The logbook index keeps its own registry-side
+use, because it sits below the model and decides the validity of cached
+values before any model exists (DATA_SCHEMA section 11). The cleanup audit
+(group `demand`) allows `logbookColumnExplicitCalculations()` in the
+registry-side definition, the session model and the index only.
+
+**What a pass costs.** One walk over the session rows, for every source at
+once, under one `RowStabilityGuard`, returns plain values: states, counts,
+listed tracks, pending cells, candidates by tier, load candidates and the
+facts it learned (16.7). Nothing is loaded, evicted or touched in the LRU
+inside it; offers, withdrawals, holds, loads and signals come after it. Plots
+that are not requested are never inspected. A loaded session's combined
+report is memoized per session and source and computed only for that
+source's tracks (a plot's only for visible loaded rows), so `blockers()` runs
+for (checked requested plots x visible loaded tracks) and (requested columns
+x loaded rows) only when the memo is missing. The memo is dropped per session
+by any `dependencyChanged` of the session (an input change, a bulk edit or a
+publication), a load, a record change, a job's end, and wholly by a reset and
+a registry change - so after A publishes, B's report is computed again
+although B's output may not be re-announced (the reason the memo is per
+session, not per name). A session that is not loaded costs one
+`knownCalculationRecords()` call between changes to its records. A pass is
+O(rows x sources) hash lookups; with no source, the rows are not walked.
 
 **When a pass runs.** Passes are coalesced to one per event-loop pass (a
 zero-interval timer). A pass runs at once, synchronously, in the executor's
@@ -1333,16 +1405,16 @@ Otherwise a pass is scheduled by:
 | Source | Signal |
 |---|---|
 | `PlotModel` | a check-state `dataChanged`, `modelReset` |
-| `SessionModel` | `visibilityChanged`, `sessionLoaded`, `modelChanged`, `focusedSessionChanged`, `modelReset` (which a column change causes), `dependencyChanged` of a relevant name (16.5), and a single-row display `dataChanged` of a session that is not loaded when it changed what the demand layer knows of it (a bulk edit, the column worker: they emit no `dependencyChanged`) |
-| `LogbookManager` | `calculationRecordsChanged` |
+| `SessionModel` | `visibilityChanged`, `sessionLoaded`, `modelChanged`, `focusedSessionChanged`, `modelReset` (which a column change causes), `dependencyChanged` of a relevant name (16.5; a bulk edit publishes one on both of its paths, so a bulk edit of a session that is not loaded arrives here too) and `calculationRecordWriteFailed` (16.7). The demand layer observes no `dataChanged` of the model: the column worker's display change of every stub it processes reaches nothing (16.7) |
+| `LogbookManager` | `calculationRecordsChanged` (a record written or removed, or a reason the index learned) |
 | the executor | `jobStarted`, `jobCancelRequested`; `jobFinished` runs the pass at once; `jobProgress` updates texts only |
 | the registry | its observer call |
-| the demand layer | the end of a settle wait (16.5); a load of the column fill (16.8); an offer refused as not applicable (16.7) |
+| the demand layer | the end of a settle wait (16.5); a load of the column fill (16.8); an offer refused as not applicable, a failed load (16.7) |
 
 A session-model reset reaches the executor first, which may end a chosen next
 job whose session is gone; its `jobFinished` runs a pass at once. So the
-demand layer drops its column set and its memos on `modelAboutToBeReset`,
-before any of that, and the pass reads the new rows and columns.
+demand layer drops its memos on `modelAboutToBeReset`, before any of that,
+and the pass reads the new rows and the model's columns.
 
 ### 16.4 Work follows demand
 
@@ -1381,32 +1453,35 @@ result is published and stored, even when its pair left demand. It is stopped
 only as 15.3 says: its inputs changed, its session went away, or the
 application closes.
 
-**Offering.** Each pass walks the candidates in priority order (16.6); a
-candidate that is already the chosen next job is kept as it is, and otherwise
-the first candidate the executor accepts becomes the chosen next job:
+**Offering.** Each pass offers the candidates in priority order (16.6) and
+acts on the executor's answer; it does not compare a candidate with the
+chosen next job itself:
 
 | Executor's answer | Reaction |
 |---|---|
 | `Created` | the chosen next job (a different one was replaced); done |
-| `MissingInput`, `NothingToDo`, `UnknownCalculation` | remembered as not applicable (16.7); next candidate |
-| `Blocked`, `SessionNotLoaded`, `AlreadyActive` | next candidate; nothing remembered |
+| `AlreadyActive`, naming the chosen next job | already the choice, kept as it is; done |
+| `AlreadyActive`, naming the running job | next candidate (not expected: the running pair is not a candidate) |
+| `MissingInput`, `NothingToDo`, `UnknownCalculation` | remembered as refused, not applicable (16.7); next candidate |
+| `Blocked`, `SessionNotLoaded` | next candidate; nothing remembered |
 | `ShuttingDown` | stop |
 
-When no candidate is accepted, the demand layer withdraws the chosen next job
-if it offered it itself; a chosen next job it did not offer is replaced when
-it has a choice and otherwise left alone (the executor's own tests drive the
-executor directly).
+`Blocked` is not expected: the candidates list upstream first (16.6), and the
+executor's refusal kinds are unchanged; the code does not guard for it. When
+the choice finds nothing, the demand layer withdraws the chosen next job: it
+is the only offerer (cleanup audit, group `gestures`), so the chosen next job
+is always its own.
 
 **Chained calculations.** When requested calculation B consumes requested A,
 demand covers both, upstream first, as blocker inspection orders them. The
-pass that runs synchronously in `jobFinished` (before the executor decides
-between `idle()` and the next start, 15.2) offers the next link, so the
-executor reports no `idle()` between links; the engine state is current there
-because the publication's `dependencyChanged` precedes `jobFinished`. A hold
-(16.8) lasts across the links.
+pass that runs synchronously in `jobFinished` (before the executor schedules
+the next start, 15.2) offers the next link, so the executor is never idle
+between links; the engine state is current there because the publication's
+`dependencyChanged` precedes `jobFinished`. A hold (16.8) lasts across the
+links.
 
-**After shutdown** nothing is offered or loaded, and the states stay working
-until the demand layer is destroyed.
+**After shutdown** nothing is offered or loaded, the holds are released
+(16.8), and the states stay working until the demand layer is destroyed.
 
 ### 16.5 The input-settle wait
 
@@ -1414,14 +1489,15 @@ until the demand layer is destroyed.
 relevant name (the static closure of every checked requested plot and every
 enabled requested column) on a session is an input change, unless it is the
 delivery of a publication (`JobQueue::publishingJob()` is a job of that
-session). An input change forgets the session's remembered failures,
-not-applicable verdicts and settlements, and starts or restarts its wait.
+session). An input change forgets what this run remembered of the session
+(16.7), and starts or restarts its wait; the settle clock (16.12) holds the
+deadlines.
 
 - While the wait runs, the session's pairs are in demand and counted
-  `Waiting` (with `settling`), so the indicator shows from the first change,
-  but they are not offered; a burst of edits runs one job. The executor
-  already stops a running job whose inputs changed (15.3); the wait decides
-  only when the replacement starts.
+  `Waiting`, so the indicator shows from the first change, but they are not
+  offered; a burst of edits runs one job. The executor already stops a
+  running job whose inputs changed (15.3); the wait decides only when the
+  replacement starts.
 - An irrelevant edit (a description) starts no wait and clears nothing.
   Showing, hiding, checking, enabling, profiles and loading take effect
   without a wait.
@@ -1438,12 +1514,17 @@ candidates are, in order:
    loaded) in logbook row order, so that what the user is looking at is
    computed before what only the logbook shows.
 
-Within a session: plot-model order, then column order, then the blockers'
-order (upstream first); each (session, instance) once, in its first tier. A
-pair is not a candidate while it is remembered (16.7), while it is the running
-job not asked to stop, or while its session settles. A session that is not
-loaded is never offered: it enters tier 3 once the fill has loaded it (16.8),
-in row order.
+The walk files the candidates of plots and columns by one rule: every blocker
+of a `Blocked` report of a loaded track, in the tier of its source and
+session; within a session, source order (plot-model order, then column
+order), then the blockers' order (upstream first); each (session, instance)
+once, in its first tier. A pair is not a candidate while a failure or a
+refusal is remembered for it (a column's not-applicable verdict does not keep
+it from being offered), while it is the running job not asked to stop, or
+while its session settles. So a column track that is running on one blocker,
+or failed on one, files its other blockers, as a plot track does. A session
+that is not loaded is never offered: it enters tier 3 once the fill has
+loaded it (16.8).
 
 The choice is made from demand as it is at that moment, not from the order in
 which pairs entered it: a different first choice replaces the executor's
@@ -1451,81 +1532,122 @@ chosen next job (Cancelled "No longer needed"). The running job is not
 preempted. So a session shown during a column fill is computed next, after the
 running job.
 
-### 16.7 Failures, not applicable, settlements
+### 16.7 Failures, not applicable, the pair memory
 
 - **Input-determined failures are results.** A rejection or solver failure
   (`NotProduced`) is stored, shown with the warning badge and its reason, and
   never offered again; an input change makes it `Blocked` again. A result the
   engine cached as `Failed` (a compute function that threw) is kept in memory,
-  not stored: badged, not offered again in this run, computed again after a
-  restart.
-- **Job-level failures** (`JobState::Failed`: the worker could not be started,
-  or the calculation ran out of memory) are remembered per (session,
-  calculation instance) with the reason "<title>: <reason>" (for example
-  "Sensor fusion: Out of memory"). The pair is badged (`jobFailure`) and not
-  offered again until the session's inputs change or the registry changes. The
-  memory is not persisted, so the next start of the application tries again.
+  not stored: badged, remembered for the pair (a session evicted afterwards is
+  not loaded again for it), computed again after a restart.
+- **Failures that are not a function of the inputs** are remembered per
+  (session, calculation instance) with a reason: a job that ended `Failed`
+  (the worker could not be started, out of memory: "<title>: <reason>", for
+  example "Sensor fusion: Out of memory"); a session file that could not be
+  loaded ("The session file could not be loaded", for each storable
+  calculation of the session's column sources; a failed-load placeholder,
+  visible or hidden, gives the same); a record that could not be written
+  ("<title>: <the manager's error>", for example "Sensor fusion: Couldn't
+  write file ..."; 15.8). Badged (`jobFailure`), never pending, not offered
+  and its session not loaded again for it until the memory is cleared
+  (below). Not persisted: the next start tries again.
+- **A record that could not be written** is a failure although the loaded
+  engine holds the result: a source is done only when none of its storable
+  calculations is remembered failed, so the plot row and the column header
+  list the session with the write's reason while it is loaded and after its
+  eviction alike, and no session is loaded twice for it. The index's record
+  change of the pair comes first and forgets what was remembered; the relay's
+  `calculationRecordWriteFailed` follows and records the failure. A later
+  successful write of the pair's record (its record change) clears it.
 - **Not applicable.** An offer the executor refuses as `MissingInput`,
-  `NothingToDo` or `UnknownCalculation` is remembered like a failure, the
-  track reads `NotApplicable`, and the memory clears the same way. The refusal
-  schedules a pass: column cells are classified before the offers, so the
-  next pass is the one that reads the memory. A remembered pair is not offered
-  again, so this never repeats.
-- **Memory and resets.** A session-model reset (a sort resets the model)
-  forgets only the entries of sessions that no longer have a row; a registry
-  change forgets everything.
-- **Settlements** (columns only): the last final verdict (`Done`, `Failed`,
-  `NotApplicable`) of a session's cell, kept per (session, column) for the
-  run, so that a session evicted after its verdict is not loaded again to find
-  the same answer (a calculation that does not apply, a thrown exception, a
-  failed record write, a job-level failure, a failed load). For a session that
-  is not loaded a settlement takes precedence over the record names. Cleared
-  by the session's input change, by a record change of a calculation of that
-  column, by a single-row display change of the session while it is not
-  loaded (a bulk edit), by the column leaving the enabled set, by a registry
-  change, and for sessions whose row is gone. Multi-row changes (the unit
-  system, the environment check) clear nothing.
-- **A session whose file cannot be loaded** (a failed-load placeholder, visible
-  or hidden) is settled as a job-level failure, "The session file could not be
-  loaded": badged, never pending, not retried in this run unless its data
-  change; the next start tries again.
+  `NothingToDo` or `UnknownCalculation` is remembered for the pair; the track
+  reads `NotApplicable`. A loaded column track the engine reports
+  `NotApplicable` remembers each storable calculation of the column not
+  applicable **for that column only** (a column verdict): it is read only
+  when the session is not loaded and that column is classified (16.1 step 3),
+  so the session is not loaded again for the column; it never makes another
+  source's track not applicable and never keeps a pair from being offered,
+  because the engine reports a name `NotApplicable` whenever one input is
+  genuinely missing, even if the calculation behind it is requestable. Plots
+  remember no verdict. The refusal schedules a pass; the walk classifies
+  before the offers, so a refusal reaches the plot row and the column header
+  in the next pass.
+- **The pair memory.** One memory of this run, keyed by (session id,
+  requested calculation instance id), holding a kind (not applicable, or
+  failed with a reason) and where the fact came from. There is no memory per
+  cell: a track's verdict is always derived - for a loaded session from the
+  engine and the memory, for one that is not loaded from the memory and the
+  record set. Facts the walk learns (a column verdict, an exception result, a
+  placeholder's failed load) are applied after the walk.
+- **Clearing.** For a session: a relevant input change (16.5; a bulk edit is
+  one, on both of its paths: the session model publishes it as a dependency
+  change, for a stub with the attribute's own name); a successful load
+  forgets its failed-load facts. For a pair: a record change of that pair.
+  For everything: a registry change. A session-model reset (a sort resets the
+  model) forgets the sessions that no longer have a row; an id correction by
+  the fill forgets the old id. Multi-row changes (the unit system, the
+  environment check) clear nothing, and neither does any display change of
+  the model: the demand layer observes none, so the column worker's
+  processing of a stub (the recomputation after an eviction that dropped
+  values over an unconfirmed record included) never clears a fact. A session
+  found not applicable is therefore not loaded again after an eviction, and a
+  session whose record could not be written is not loaded again either.
 - **There is no retry control.** Changing an input is how a failure is
-  retried; restarting the application retries job-level failures.
+  retried; restarting the application retries the failures that are not a
+  function of the inputs.
 - **Stored failures of sessions that are not loaded.** Records are never
   opened for such a session; the logbook index records each record's reason
   instead (`LogbookManager::calculationRecordReason()`, DATA_SCHEMA section
-  11), learned by the result store when the record is written and when it is
-  restored. A stored rejection or solver failure of a session that is not
-  loaded is therefore a failed result with its reason, listed in the column's
-  failure list and badge before and after a restart alike, without a load. A
-  record written by an earlier build has no recorded reason until its next
-  restore (the column worker's copy or a load) and counts as a success until
-  then.
+  11): the index learns each record's reason when the store writes it and
+  whenever it restores it; a reason that differs from what the index held is
+  announced as a record change of that pair, so the demand layer learns it
+  without a load and through no other signal. A stored rejection or solver
+  failure of a session that is not loaded is therefore a failed result with
+  its reason, listed in the column's failure list and badge before and after
+  a restart alike, without a load. A record written by an earlier build has
+  no recorded reason until its next restore (the column worker's copy or a
+  load) and counts as a success until then.
 
 ### 16.8 Sessions that are not loaded
 
 The executor needs its session loaded (15.1), so the demand layer, not the
 column worker, has the sessions of column demand loaded.
 
-- **The column fill** is an `IdleScheduler` task the demand layer registers
-  through `SessionModel::scheduler()` under `SessionModel::ColumnFillTask` (4),
-  at priority 5, below saving (1), loading visible sessions (2), bulk edits (3)
-  and column work (4); it is unregistered when the demand layer is destroyed.
-  It has work while any session has a waiting or running column cell; it can
-  step (load) only while a hold is free and an unloaded session waits; its
-  progress is the sessions that still have such a cell, of the fill's
-  high-water mark, and one last step, which loads nothing, reports the fill
-  complete. So the logbook's progress line shows "Computing columns: k / n"
-  for the whole fill, from the first load to the last result, under the same
-  label as the cheap column pass (to the user a column fills in the same way
-  whether its values are cheap or requested). For this the scheduler gained
-  the generic notion of a task with work it cannot step right now
-  (`TaskDef::canStep`): it is reported as active with its progress, not
-  stepped, and the scheduler rests until it is woken instead of spinning. The
-  scheduler learns nothing about jobs: the task is one more source of steps.
-  It reports the active task once per tick, so a count that lasts less than a
-  tick (a job that ends before the fill's next tick) is never shown, and a
-  tick that goes to a higher-priority task shows that task's progress instead.
+- **The column fill** is an `IdleScheduler` task under
+  `SessionModel::ColumnFillTask` (4), priority 5 (below saving 1, visible
+  loads 2, bulk edits 3, column work 4), registered by the fill
+  (`src/demandfill.h`) through `SessionModel::scheduler()` and unregistered
+  when the demand layer is destroyed, not cancellable. It has work while any
+  session has a waiting or running column cell; it can step (load) only while
+  a hold is free and an unloaded session waits; its progress is the sessions
+  with such a cell of the fill's high-water mark. **Completion without a
+  step:** when the last pending cell is resolved (the job's result published,
+  a failure or a verdict remembered, the column disabled), the fill has no
+  work, and the pass that found it so wakes the scheduler; on its next tick
+  the scheduler reports the fill's final progress and completes it, before it
+  reports the next active task or goes idle. There is no step that loads
+  nothing. The high-water mark resets when the task completes; a fill that
+  starts while no session had a pending cell starts its own count (a fill
+  that ended while another task was active is completed only if it was the
+  task last reported active). The logbook's progress line shows "Computing
+  results: k / n" for the whole fill (16.10).
+  **The scheduler's side** (generic, knowing nothing of jobs or demand): a
+  task registered with `TaskDef::canStep` can wait on something outside the
+  scheduler - reported as active with its progress, not stepped, the
+  scheduler resting until woken instead of spinning - and can lose its work
+  outside a step; when the task the scheduler last reported active is such a
+  task and has no work any more, the next tick reports its progress one last
+  time and calls its completion (not cancelled) before it reports the next
+  active task or goes idle. Whoever takes a resting task's work away wakes
+  the scheduler. The rule applies to tasks that can wait; the others (save,
+  load, bulk edit, column work) complete through their step or `cancel()`,
+  as before - they, too, can lose work outside a step (hiding the rest of a
+  background load batch, an eviction's save, a flush), and completing them
+  there would change when they complete. A cancelled task completes once, as
+  cancelled; an unregistered one never. The scheduler reports the active
+  task once per tick, so a count that lasts less than a tick (a job that ends
+  before the fill's next tick) is never shown, and a tick that goes to a
+  higher-priority task shows that task's progress instead.
 - **A load step** takes the first session in row order that is not loaded,
   not visible (a visible stub belongs to the visible loader), not settling,
   not held and has a waiting cell, runs a pending pass first so that it
@@ -1535,22 +1657,24 @@ column worker, has the sessions of column demand loaded.
   results restored, `sessionLoaded`, the LRU and its eviction pass) without
   making the row visible, pinned under the id the row has after the load. The
   session-id correction therefore always precedes the offer; no pair of a
-  session that is not loaded is ever offered. A load that fails settles the
-  session (16.7).
-- **The bound.** At most `CalculationDemand::kMaxHeldSessions`
+  session that is not loaded is ever offered. A load that fails is
+  remembered as a failed load for the session's pairs (16.7).
+- **The bound.** At most `DemandFill::kMaxHeldSessions`
   (`JobQueue::kMaxRunningJobs + 1`, so 2: the running job's session and the
   chosen next job's) are held at a time; the next is loaded when one is
   released. Sessions that were already loaded are never held and do not
   count: the executor pins them while their job is chosen or running.
 - **Holds.** A hold is the demand layer's own pin, begun when the load returns
   and released when the session has no `Waiting` or `Running` cell left (its
-  job ended and the result was published, it was settled, its column was
-  disabled, its result appeared by other means), when its row is gone or
-  unloaded, when the demand layer is inert, and at its destruction. A hold
-  lasts across the links of a chain. The executor's own pin keeps a running
-  job's session loaded after a hold is released. Released sessions stay in the
-  hidden pool until ordinary LRU eviction; the pool may exceed "Maximum cached
-  sessions" by at most the holds, and a capacity of 0 works.
+  job ended and the result was published, a failure or a verdict was
+  remembered, its column was disabled, its result appeared by other means),
+  when its row is gone or unloaded, when the demand layer is inert, once the
+  executor is shut down (at the first pass after `shutdown()`, which runs
+  inside it when a job was active), and at its destruction. A hold lasts
+  across the links of a chain. The executor's own pin keeps a running job's
+  session loaded after a hold is released. Released sessions stay in the
+  hidden pool until ordinary LRU eviction; the pool may exceed "Maximum
+  cached sessions" by at most the holds, and a capacity of 0 works.
 - **Ordering.** The scheduler steps the highest-priority task that has work
   and can step, so a load step never runs while a save, a visible load, a bulk
   edit or column work has work: a stub is never dirty, a bulk edit on a stub
@@ -1576,23 +1700,30 @@ column worker, has the sessions of column demand loaded.
     not in the LRU and stays loaded;
   - the logbook reopened, or sessions removed: the model reset releases the
     holds;
-  - a calculation found not applicable after the load: settled without a job;
-    the worker's cached "unavailable" stays;
-  - the executor shut down: nothing more is loaded.
+  - a calculation found not applicable after the load: the column's verdict
+    is remembered, without a job; the worker's cached "unavailable" stays;
+  - the executor shut down: nothing more is loaded, and the holds are
+    released.
 - **Known costs.**
   - A session without a record for which the calculation turns out not to
     apply (for sensor fusion, a recording without IMU data) is loaded once
-    per run to find that out: "not applicable" is a settlement of the run
-    (16.7), not a record, so the next start loads it again. Until the fill
-    has loaded it, its cell is `Waiting` ("…"), counted in the column's
-    "k of n" and in the fill's progress; then it is not applicable, blank and
-    not counted.
+    per run to find that out: "not applicable" is a verdict this run
+    remembers for the column (16.7), not a record, so the next start loads it
+    again. Until the fill has loaded it, its cell is `Waiting` ("…"), counted
+    in the column's counts (its header's tooltip) and in the fill's progress;
+    then it is not applicable, blank and not counted.
   - A column whose value reaches a requested calculation only through one of
     several candidates of an on-demand name would load each session without
     a record once per run to find out. No registered column is like this
     today (every fusion output has one candidate); if one appears, the fix
     belongs to `CalculationRegistry::explicitDependencies()`, not to the
     demand layer.
+  - The product's registrations give every output of an explicit calculation
+    one candidate (`tst_fusion_session::explicitOutputsHaveOneCandidate`); a
+    registration that gave a requested column's name a second, non-explicit
+    path could make a loaded track done while a storable calculation has no
+    record, and that session would be loaded again after each eviction; the
+    fix would belong to `CalculationRegistry::explicitDependencies()`.
 
 ### 16.9 API and threading rules
 
@@ -1607,60 +1738,89 @@ every test seam safe.
 | Member | Meaning |
 |---|---|
 | `CalculationDemand(SessionModel *, PlotModel *, JobQueue *, QObject *parent)` / `~CalculationDemand()` | the destructor removes the registry observer, unregisters the column fill and releases the holds |
-| `kInputSettleMs`, `kMaxHeldSessions`, `kToolTipListLimit` | 1000 ms (16.5); `JobQueue::kMaxRunningJobs + 1` (16.8); 10 (16.2) |
+| `CalculationDemand::kInputSettleMs` | 1000 ms (16.5) |
+| `DemandFill::kMaxHeldSessions` | `JobQueue::kMaxRunningJobs + 1` (16.8) |
+| `DemandState::kToolTipListLimit`, `DemandState::buildToolTip(state)` | 10 (16.2); static and pure |
 | `plotId(sensorId, measurementId)`, `plotId(PlotValue)`, `columnId(column)` | the ids of 16.2 |
 | `plotState(plotId)`, `columnState(columnId)` | 16.2; the last computed state, at most one event-loop pass behind the models |
 | `isCellPending(sessionId, columnId)`, `isCellPending(row, column)` | 16.2 |
 | `workingPlotIds()`, `workingColumnIds()` | 16.2 |
-| `buildToolTip(state)` | 16.2; static and pure |
 | `isMerelyUncomputed(session, sensorId, measurementId)` | 16.10; static |
 | signals `plotStateChanged(plotId)`, `columnStateChanged(columnId)`, `statesChanged()` | 16.2 |
-| `flush()`, `hasPendingUpdate()`, `passCount()`, `setInputSettleDelay(ms)`, `inputSettleDelay()`, `endInputSettleWaits()`, `isSettling(id)`, `hasSettlingSessions()`, `heldSessionIds()`, `hasFillWork()`, `canLoad()`, `runLoadStep()`, `recordSetLookups()` | test seams; the views never call them |
-| `DemandCondition`, `DemandTrack`, `DemandState` (`isWorking()`, `showsWarning()`, `isPlain()`, `operator==`) | 16.1, 16.2 |
+| `flush()`, `hasPendingUpdate()`, `passCount()`, `setInputSettleDelay(ms)`, `inputSettleDelay()`, `endInputSettleWaits()`, `isSettling(id)`, `hasSettlingSessions()`, `heldSessionIds()`, `hasFillWork()`, `canLoad()`, `runLoadStep()`, `recordSetLookups()` | test seams; the views never call them (the fill and settle seams forward to the parts, 16.12) |
+| `DemandCondition`, `DemandTrack`, `DemandState` (`isWorking()`, `showsWarning()`, `isPlain()`, `addTrack()`, `finish()`, `operator==`) | 16.1, 16.2; `src/demandstate.h` |
+| `SessionModel::columnRequestedCalculations(column)`, `columnDependencyClosure(column)` | 16.3: the enabled column's requested calculations and static closure; empty out of range; plain reads, allowed under a `RowStabilityGuard`, not from inside a registry observer |
+| `SessionModel::sessionDisplayName(row)` | 16.2 |
+| `SessionModel::calculationRecordWriteFailed(sessionId, calculationId, reason)` | 15.8, 16.7 |
 | `SessionModel::loadPinnedSession(id)` | 16.8: returns the id the row has after the load, empty (nothing pinned) when there is no such row or the file cannot be loaded; the caller unpins that id |
-| `SessionModel::ColumnFillTask` | 16.8; the task id the demand layer registers |
-| `IdleScheduler::registerTask(id, def)`, `unregisterTask(id)`, `TaskDef::canStep` | `registerTask` replaces a task already registered under the id; `unregisterTask` removes one without calling its `onComplete` |
+| `SessionModel::ColumnFillTask` | 16.8; the task id the fill registers |
+| `IdleScheduler::registerTask(id, def)`, `unregisterTask(id)`, `TaskDef::canStep` | `registerTask` replaces a task already registered under the id; `unregisterTask` removes one without calling its `onComplete`; `TaskDef::canStep` marks a task that can wait: it is not stepped while it cannot, and it is completed when it was the task last reported active and its work is gone (16.8) |
 
 Tests: `tests/tst_calculation_demand.cpp` (plot and column demand, with the
 synthetic plots of `tests/support/plotfixture.h` over the calculations of
 `jobfixture.h`), `tests/tst_result_columns.cpp` (the column worker unchanged by
-demand), `tests/tst_column_cache.cpp` (`loadPinnedSession()`),
+demand; the model's column knowledge and display name),
+`tests/tst_column_cache.cpp` (`loadPinnedSession()`),
 `tests/tst_session_model_engine.cpp` (`unregisterTask`, a task that cannot
-step), `tests/tst_logbook_index.cpp` and `tests/tst_result_store.cpp` (the
-recorded reasons).
+step, a waiting task completed when its work is gone),
+`tests/tst_logbook_index.cpp` (the recorded reasons; a changed reason
+announced) and `tests/tst_result_store.cpp` (the recorded reasons; a failed
+write announced).
 
 ### 16.10 The views and application wiring
 
 **Plot rows.** `PlotRowDelegate`
 (`src/ui/docks/plotselection/PlotRowDelegate.h`), installed on the plot list
-by `PlotSelectionDockFeature`, paints `DemandState` right-aligned in the row:
-while working, the working indicator (an open 270-degree arc in the row's text
-colour, turning about once a second) and `progressLabel` ("k of n"); once the
-work is finished and some sessions failed, the warning badge with
-`failedCount`; never both. Plain rows are painted by the unmodified
-`QStyledItemDelegate`, pixel for pixel; the name is elided, never the cluster;
-the row height never changes. The tooltip is `DemandState::toolTip`, over the
-whole row. The geometry is the pure `layoutPlotRow()` (`PlotRowLayout.h`),
-which has no hit rectangle. **No gestures:** the delegate handles no event of
-its own; checking a row is the base class's write to `PlotModel`, which the
-demand layer observes like every other check change.
+by `PlotSelectionDockFeature`, paints one glyph right-aligned in the row of a
+requested plot: while working, the working indicator (an open 270-degree arc
+in the row's text colour, turning about once a second); once the work is
+finished and some sessions could not be computed, the warning badge; nothing
+else - no label, no count: the hover carries the numbers
+(`DemandState::toolTip`, over the whole row). Plain rows are painted by the
+unmodified `QStyledItemDelegate`, pixel for pixel; the name is elided so the
+glyph is never covered; the row height never changes. The geometry is the
+pure `layoutPlotRow()` (`PlotRowLayout.h`): one square glyph, no hit
+rectangle. **No gestures:** the delegate handles no event of its own;
+checking a row is the base class's write to `PlotModel`, which the demand
+layer observes like every other check change.
 
-**The shared glyphs.** `src/ui/docks/DemandIndicator.h` (Qt Core and Gui only)
-holds `drawWorkingGlyph()`, `drawWarningGlyph()` and `WorkingAnimation`, one
-clock per view, ticking (80 ms per frame, 30 degrees per frame) only while its
-view has something working (`workingPlotIds()` / `workingColumnIds()`). It
-stops and returns to frame 0 when nothing is, and each frame repaints only the
-working rows or sections. The glyphs are drawn with `QPainter` (no bundled
-images).
+**The shared glyphs.** `src/ui/docks/DemandIndicator.h` (Qt Core and Gui
+only; no demand-layer type): `drawWorkingGlyph()`, `drawWarningGlyph()`,
+`glyphMetrics()` (the glyph's side for a line of text, `min(room, line
+height)`, and the spacing beside it, `max(2, side / 4)`), and
+`WorkingAnimation`, the working indicator's clock (80 ms per frame, 30
+degrees per frame). **One clock per application:** `MainWindow` creates it
+right after the demand layer and hands it to the views through
+`AppContext::workingClock`, as it hands them the demand layer;
+`followDemand()` makes it active exactly while `workingPlotIds()` or
+`workingColumnIds()` is not empty (asked again on every `statesChanged()`),
+and stops it at frame 0 when neither is or the demand layer is destroyed. It
+never repaints anything itself: each view repaints only its own working rows
+or sections on `frameAdvanced` and reads the clock's angle when it paints, so
+the plot list's arcs and the logbook headers' arcs turn in step. A view given
+no clock draws the arc at rest.
 
-**Logbook column headers.** `LogbookView` takes the demand layer and installs
-`LogbookHeaderView` (`src/ui/docks/logbook/LogbookHeaderView.h`): a requested
-column's header shows the same indicator or badge immediately right of its
-centred text, inside the style's label rect (clear of the sort arrow), each
-line of the text elided to make room; the header shows no count. Hovering the
-section shows `columnState(id).toolTip`; double-clicking the section's edge
-fits text and glyph; clicks sort exactly as before. The section-to-column
-mapping is computed per call (sorting and a column change reset the model).
+`src/ui/docks/DemandIndicatorView.h`, the views' half (Qt Widgets; a view of
+the demand layer that decides nothing): `glyphColor()` - the style's text
+colour in its colour group (Disabled when not enabled, else Inactive when the
+window is not active, else Normal): `Text` or `HighlightedText` for a row,
+`ButtonText` for a header section; `drawDemandGlyph()` - the one glyph of a
+`DemandState`; `showIndicatorToolTip()` - the state's tooltip over an area,
+or nothing for a plain state; `repaintWhenDemandDestroyed()`;
+`followDemand()`. The plot rows, the headers and the cells compute none of
+these (the cell delegate's pending colour and tooltip are its own). The
+glyphs are drawn with `QPainter` (no bundled images).
+
+**Logbook column headers.** `LogbookView` takes the demand layer and the
+clock and installs `LogbookHeaderView`
+(`src/ui/docks/logbook/LogbookHeaderView.h`): a requested column's header
+shows the same glyph (`drawDemandGlyph()`, sized by `glyphMetrics()`)
+immediately right of its centred text, inside the style's label rect (clear
+of the sort arrow), each line of the text elided to make room; the header
+shows no count. Hovering the section shows `columnState(id).toolTip`;
+double-clicking the section's edge fits text and glyph; clicks sort exactly
+as before. The section-to-column mapping is computed per call (sorting and a
+column change reset the model).
 
 **Pending cells.** `LogbookCellDelegate`
 (`src/ui/docks/logbook/LogbookCellDelegate.h`) paints a cell whose pair is in
@@ -1673,29 +1833,38 @@ the model, its cached values, `pendingColumns`, `index.json` and
 `SessionModel::sort()` never see it; the cached value underneath stays
 unavailable until the record is written, so sorting treats a pending cell as
 unavailable. A `columnStateChanged` repaints that column's visible rect only.
-Cells are not animated.
+Cells are not animated. The cell delegate turns plain when the demand layer
+is destroyed (`repaintWhenDemandDestroyed()`).
 
-**The progress line** is unchanged in form; the column fill reports on it
-(16.8).
+**The progress line.** The logbook's progress line is unchanged in form. It
+labels the active scheduler task: "Saving sessions", "Loading sessions",
+"Updating sessions", "Computing columns: k / n" for the column worker, and
+**"Computing results: k / n"** for the column fill
+(`SessionModel::ColumnFillTask`, 16.8), so the line never shows two totals
+under one label when the fill follows a column pass. The fill shows no
+cancel button.
 
-**Ownership and order.** `MainWindow` creates the `JobQueue` and then the
-`CalculationDemand` in its constructor, after the session model is populated
-and the calculations are registered and before any dock exists, and hands both
-to the docks through `AppContext` (`jobQueue`, `calculationDemand`). Restored
-plots and a first-launch profile reach the demand layer as ordinary model
-changes and every session starts hidden, so start-up starts no job for plots,
-while an enabled column over a requested output does start its fill.
-`closeEvent()` calls `JobQueue::shutdown()` **first**, before sessions are
-flushed and the layout is saved (with a wait cursor when the executor is busy;
-the wait is at most one solver step). A future veto of the close must be
-decided before that call: an executor that was shut down refuses every later
-offer. `~MainWindow()` deletes the demand layer, then the executor,
+**Ownership and order.** `MainWindow` creates the `JobQueue`, then the
+`CalculationDemand` and right after it the working-indicator clock (made to
+follow the demand layer by `followDemand()`) in its constructor, after the
+session model is populated and the calculations are registered and before any
+dock exists, and hands them to the docks through `AppContext` (`jobQueue`,
+`calculationDemand`, `workingClock`). Restored plots and a first-launch
+profile reach the demand layer as ordinary model changes and every session
+starts hidden, so start-up starts no job for plots, while an enabled column
+over a requested output does start its fill. `closeEvent()` calls
+`JobQueue::shutdown()` **first**, before sessions are flushed and the layout
+is saved (with a wait cursor when the executor is busy; the wait is at most
+one solver step). A future veto of the close must be decided before that
+call: an executor that was shut down refuses every later offer.
+`~MainWindow()` deletes the demand layer, then the clock, then the executor,
 explicitly and before everything else: `QObject` deletes children in creation
 order, which would destroy the session model under the executor. The plot
 list's delegate and the logbook's header view and cell delegate hold the
-demand layer weakly and turn plain once it is gone. No signal of the executor
-or the demand layer is connected to anything that shows a dialog; no message
-box, status message, or progress dialog reports a calculation outcome.
+demand layer and the clock weakly and turn plain once the demand layer is
+gone. No signal of the executor or the demand layer is connected to anything
+that shows a dialog; no message box, status message, or progress dialog
+reports a calculation outcome.
 
 **The "no data" warning.** One reader warns when a checked plot has no data for
 a visible track: `PlotWidget::updatePlot()`. For the value it just read as
@@ -1721,39 +1890,55 @@ A restored result (15.8) needs no publication: it is installed before the
 row's `sessionLoaded`, which already makes the plot, the legend and the rows
 read the session.
 
-Tests: `tests/tst_plot_row_layout.cpp` (geometry, no widgets),
-`tests/tst_plot_row_delegate.cpp` and `tests/tst_logbook_indicators.cpp` (the
-delegate, the header view and the cell delegate in offscreen views: the only
-tests that link Qt Widgets, behind `FLYSIGHT_BUILD_WIDGET_TESTS`), and the
-manual script in `tests/README.md`, section 12 (steps M1-M9 and M23-M28). That
-nothing but the demand layer offers work, and that the views only read it, are
-rules of the cleanup audit (groups `gestures` and `demand`).
+Tests: `tests/tst_plot_row_layout.cpp` (the one glyph's geometry, no
+widgets), `tests/tst_plot_row_delegate.cpp` (also the shared plumbing,
+`sharedGlyphPlumbing`) and `tests/tst_logbook_indicators.cpp` (the header
+view, the cell delegate and, beside them, a plot list with the row delegate
+on one clock; the progress line's texts; a failed write in both hovers), in
+offscreen views: the only tests that link Qt Widgets, behind
+`FLYSIGHT_BUILD_WIDGET_TESTS`; and the manual script in `tests/README.md`,
+section 12 (steps M1-M9 and M23-M33). That nothing but the demand layer
+offers work, and that the views only read it, are rules of the cleanup audit
+(groups `gestures` and `demand`).
 
 ### 16.11 Component contracts and the one-way flow
 
 One sentence of contract per component, none naming another's workings:
 
 - **The demand layer:** from what is switched on and where results are, it
-  derives demand, chooses by priority, has sessions loaded for column demand
-  within its bound, offers the next pair, remembers this run's failures, and
-  publishes the state the views present.
+  derives every source's state and every candidate in one walk, chooses by
+  priority, has sessions loaded for column demand within its bound, offers
+  the next pair, remembers this run's failures and not-applicable verdicts in
+  one pair memory, and publishes the state the views present.
 - **The executor:** runs one requested calculation for one loaded session with
   the engine's prepare / compute / publish steps, holding at most the running
-  job and one chosen next job; it never loads a session and knows no caller.
+  job and one chosen next job; it never loads a session and knows no caller;
+  it announces its jobs through its job model and keeps `cancel()` for the
+  jobs dock.
 - **The column worker:** keeps cached column values a function of what is on
   disk; it never requests, prepares or runs a requested calculation and never
   knows a job exists.
-- **The idle scheduler:** runs steps of registered tasks by priority; it knows
-  nothing about jobs.
-- **The views:** present the demand layer's state; they never run a pass,
-  offer, or write.
+- **The idle scheduler:** runs steps of registered tasks by priority, and
+  completes a task that can wait once its work is gone, whether or not it was
+  stepped; it knows nothing about jobs or demand.
+- **The session model:** the one source of each enabled column's closure and
+  requested calculations and of a row's display name; it knows nothing of the
+  demand layer's use of them.
+- **The logbook index:** notes each stored result's outcome and announces a
+  changed one as a record change.
+- **The result store:** writes the record of an `Ok` result, or announces that
+  it could not.
+- **The views:** present the demand layer's state through one glyph and one
+  clock; they never run a pass, offer, or write.
 
 **The flow is one way:** the demand layer chooses; the executor publishes into
-the loaded session and the engine's listener writes the record, whose reason
-the index notes; the record change drops the cached column values over it and
-the loaded-row refresh recomputes them; the demand layer sees the result
-through the same blocker inspection and record names it always reads, and the
-pair leaves demand. No component asks another what it intends to do.
+the loaded session; the store writes the record or announces that it could
+not; the index notes the outcome and announces it; the record change drops
+the cached column values and the demand layer's memos, and the loaded-row
+refresh recomputes the values; the demand layer sees the result, or the
+failure, through the blocker inspection, the record names and the pair memory
+it always reads, and the pair leaves demand. No component infers another's
+change from a signal about something else.
 
 **What stays true:** restoring a stored result is not requesting (only a
 missing result creates demand); the temporary copy used for cheap column
@@ -1763,6 +1948,38 @@ unchanged; the plot widget's "no data" warning keeps asking the engine.
 
 The cleanup audit's group `demand` holds these boundaries as text rules
 (`tests/README.md`, section 10).
+
+### 16.12 The parts of the demand layer
+
+- `src/demandstate.h`: the presentation values (`DemandCondition`,
+  `DemandTrack`, `DemandState`, the tooltip and its limit); plain values with
+  no behaviour beyond counting a track and building the text; the views
+  depend on these and on the component's read interface only.
+- `src/demandfill.h`, `DemandFill`: given, after each pass, the set of
+  sessions with a pending column cell and the load candidates in order, it
+  keeps at most `kMaxHeldSessions` hidden sessions loaded and pinned for
+  column demand, releases a hold when its session has no pending cell or no
+  loaded row, loads the next candidate when a hold is free and the scheduler
+  steps it, reports progress as the sessions remaining of the high-water
+  mark, and holds nothing once the executor is shut down or the component
+  goes. It speaks of session ids only, never calls the executor (it learns of
+  a shutdown through its owner's hook) and calls back only through its
+  owner's hooks.
+- `src/demandsettleclock.h`, `DemandSettleClock`: the per-session deadlines
+  of the input-settle wait and one single-shot timer for the earliest; it
+  answers whether a session is settling and when the next wait ends, and
+  calls its owner when a wait ends. What starts a wait is the owner's
+  decision.
+- `src/calculationdemand.h`, the reconciler: the walk, the classification
+  rules, the pair memory, the choice and the pass. The walk reads the rows
+  under one guard, asks the settle clock and reads a copy of the holds; it
+  calls neither the executor nor the fill, never loads, pins or emits, and
+  returns every state, candidate and learned fact as plain values. After it
+  the pass applies the learned facts, gives the fill the pending sessions and
+  load candidates, offers, and announces.
+- The cleanup audit (group `demand`) keeps these boundaries: only the fill
+  loads and pins, the fill and the settle clock never call the executor and
+  know nothing of the walk, one guard per pass.
 
 ## 17. Sensor fusion as a registered calculation
 

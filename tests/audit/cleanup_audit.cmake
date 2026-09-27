@@ -31,7 +31,13 @@
 #     read it, "pending" never reaches the model or the index, the executor
 #     has one bound of jobs on a below-normal worker, no default profile
 #     carries a column over a requested output, and no refresh, cancel, queue
-#     or plot-request logic remains (items 501-563).
+#     or plot-request logic remains (items 501-563);
+#   - a fact is computed by the component that owns it and announced by it:
+#     the session model alone computes a column's requested calculations
+#     (with the index, below it), the demand layer keeps one memory and one
+#     walk in parts of its own, one working-indicator clock turns every
+#     view, and the executor's unused signals and queries stay gone
+#     (items 601-662).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -376,7 +382,7 @@ expect_none("no locks"
   "QMutex|QReadWriteLock|QWaitCondition|QSemaphore|std::mutex|std::shared_mutex|std::condition_variable" src)
 expect_only("one atomic: the cancel flag" "std::atomic|QAtomic" "^src/jobqueue\\.cpp$" src)
 
-# ─────────────────────────────── gestures (acceptance 116)
+# ─────────────────────────────── gestures (items 116, 306, 501, 519, 527, 534, 543, 544, 562, 605, 608, 625, 628, 629, 651, 659, 661)
 # Only the demand layer starts requested calculations, and it derives what to
 # start from what is switched on; nothing is a gesture. MainWindow cannot be
 # constructed in the test harness, so that nothing in it (start-up restore,
@@ -400,7 +406,8 @@ expect_only("no reader requests" "[.>]request\\(" "^src/engine/" src)
 # it closes the door on an alias (`auto &e = session.calculationEngine();
 # e.request(`). The offer is made on exactly one line of product code, and
 # only the demand layer withdraws the chosen next job; no product code cancels
-# a job (JobQueue::cancel() is kept for a later jobs view).
+# a job (JobQueue::cancel() is kept for the jobs dock, a later view of the job
+# history, and its doc comment says so).
 # Allow: none expected. The count changes only when a second legitimate caller
 # of JobQueue::offer() appears, which is itself a design change
 # (calculationdemand.h: "the only caller"). The choice stays in the reconciler,
@@ -414,6 +421,25 @@ expect_only("one call of offer( in product code: the demand layer" "[.>]offer\\(
 expect_only("the chosen next job is withdrawn by the demand layer only" "[.>]withdrawChosenNext\\("
   "^src/calculationdemand\\.cpp$" src)
 expect_none("no product code cancels a job" "([Jj]ob[Qq]ueue|m_queue|executor)(->|\\.)cancel\\(" src)
+# The cancel operation stays for the jobs dock, a later view of the job
+# history; the rule above keeps it without a product caller. Allow: none
+# expected; removing it is a decision about the jobs dock, not this rule.
+expect_count("cancel is kept for the jobs dock" "bool cancel\\(JobId" 1 src/jobqueue.h)
+# The executor lost what no product code used: the idle and queued signals,
+# the query of both active jobs, and the busy-period bookkeeping behind the
+# idle signal. The job model's rowsInserted, isIdle(), runningJob(),
+# chosenNextJob() and the records carry the same facts. Allow: none
+# expected; a jobs dock that needs one brings it back with its first caller
+# (tests/README.md is excluded: section 10 spells these names).
+expect_none("the executor has no idle or queued signal and no two-job query"
+  "jobQueued|activeJobs\\(|JobQueue::idle\\b|announceIdleIfIdle|m_idleAnnounced|AfterEnd"
+  src tests ":!tests/README.md")
+expect_none("the executor announces no idle()" "\\bidle\\(\\)" src)
+# The demand layer is the only offerer (the rules above), so the chosen next
+# job is always its own: it keeps no memory of its own offer and withdraws
+# the chosen next job whenever its choice finds nothing. Allow: none expected.
+expect_none("the demand layer keeps no memory of its own offer" "m_offeredJob|withdrawOwnOffer"
+  src tests ":!tests/README.md")
 # Allow: a future jobs dock is a pure view of JobQueue::model() and is added to
 # the regex when it exists. Until then AppContext only carries the pointer.
 expect_only("no jobs window, no view of the queue" "[Jj]ob[Qq]ueue|JobModel"
@@ -421,7 +447,10 @@ expect_only("no jobs window, no view of the queue" "[Jj]ob[Qq]ueue|JobModel"
 # CalculationRegistry::explicitDependencies() is the one definition of
 # "explicit-backed" (dependsOnExplicit() is its non-emptiness): plot rows ask
 # dependsOnExplicit(), the logbook column cache asks explicitDependencies()
-# through logbookColumnExplicitCalculations(). Neither tests the policy
+# through logbookColumnExplicitCalculations(); the session model hands each
+# enabled column's requested calculations to the demand layer
+# (columnRequestedCalculations()), and the demand layer asks
+# explicitDependencies() for a plot's (group demand). Neither tests the policy
 # itself, and neither does the result store: what may be stored is decided by
 # CalculationEngine::exportResult().
 expect_only("one authority: explicit-backed" "EvaluationPolicy::Explicit"
@@ -697,7 +726,7 @@ expect_none("no text says an unrelated change makes stored results stale"
 # the documents.
 # =============================================================================
 
-# ─────────────────────────────── demand (items 506, 508, 513, 515, 518, 527, 529, 530, 533, 534, 538, 540-544, 546, 547, 563)
+# ─────────────────────────────── demand (items 506, 508, 513, 515, 518, 527, 529, 530, 533, 534, 538, 540-544, 546, 547, 563, 601-605, 607, 612, 613, 615, 616, 622, 624, 627, 631, 636, 641, 644, 646, 647, 649-652, 659, 661, 662)
 audit_group(demand)
 # Allow: a new view that presents the demand layer is added to the allowed-file
 # regex; nothing below the demand layer (the executor, the session model, the
@@ -804,6 +833,93 @@ expect_none("no default profile carries a column over a requested output"
   "\"(sensorID|attributeKey|markerAttributeKey|marker2AttributeKey)\": *\"(Fusion|_FUSION)"
   src/resources/profiles)
 
+# ─────────────────────────────── calculation refinements (items 601-662)
+# A column's requested calculations are computed by the registry-side
+# authority (logbookColumnExplicitCalculations(), logbookcolumn.*) for two
+# owners only: the session model, the one source of each enabled column's
+# closure and requested calculations (the demand layer reads
+# columnRequestedCalculations() and columnDependencyClosure()), and the
+# logbook index, which sits below the model, runs before any model exists
+# and decides the validity of cached values over records. The demand layer
+# computes a plot's requested calculations and closure from the registry
+# (the model knows nothing of plots), one call each; comments name the
+# registry's functions as CalculationRegistry::name(). Allow: none expected.
+expect_only("one computation of a column's requested calculations: the session model and the index"
+  "logbookColumnExplicitCalculations\\("
+  "^src/logbookcolumn\\.(cpp|h)$|^src/sessionmodel\\.(cpp|h)$|^src/logbookmanager\\.(cpp|h)$" src)
+expect_count("the demand layer asks the registry for a plot's requested calculations only"
+  "[.>]explicitDependencies\\(" 1 ${DEMAND_LAYER})
+expect_count("the demand layer computes a plot's closure only" "[.>]staticDependencies\\(" 1 ${DEMAND_LAYER})
+# One display name of a session: SessionModel::sessionDisplayName(). The
+# demand layer and the executor read it and compute none. Allow: none
+# expected; a comment says "the display name".
+expect_none("one display name of a session: the session model's" "SessionKeys::Description|_DESCRIPTION"
+  ${DEMAND_LAYER} "src/jobqueue.*" "src/jobmodel.*")
+# The index announces a reason it learns (a record change); the demand
+# layer reads reasons only when it looks up a session's record set.
+# Allow: none expected.
+expect_count("the demand layer reads a record's reason in one place" "[.>]calculationRecordReason\\(" 1
+  ${DEMAND_LAYER})
+# The demand layer observes no display change of the model: a bulk edit
+# reaches it as the dependency change the session model publishes, and
+# the column worker's display changes reach nothing. A new fact the demand
+# layer needs is announced by its owner (a signal of its own), never
+# inferred from dataChanged. Allow: one line, the plot model's check-state
+# connection in calculationdemand.cpp (connect(m_plotModel,
+# &QAbstractItemModel::dataChanged, ...)); any second "::dataChanged" in
+# the demand layer, whatever its variable or line wrapping, trips the count.
+# The session model's old slot name, onSessionDataChanged, is forbidden with
+# the replaced machinery below.
+expect_count("the demand layer observes no display change of the model" "::dataChanged" 1
+  ${DEMAND_LAYER})
+# One walk over the rows per pass, under one guard. Allow: none expected.
+expect_count("the one walk reads the rows under one guard" "RowStabilityGuard +[A-Za-z_]+\\(" 1
+  ${DEMAND_LAYER})
+# What the one walk and the one pair memory replaced stays gone: the fill's
+# ending step, the per-cell memory, the second walk and its column tables,
+# the dirty flags, the demand layer's own display name, its display-change
+# slot and the fields no view read. Allow: none expected (tests/README.md is
+# excluded: section 10 spells these names).
+expect_none("the demand layer's replaced machinery stays gone"
+  "isFillEnding|m_fillEnding|[Ss]ettlement|m_settled|CellKey|ColumnWalk|walkColumns|ColumnInfo|plotCandidates|inspectUnderGuard|inspectedPlots|syncColumns|m_columnReports|buildState|finishState|rebuildRelevantNames|m_relevantNames|m_columnsDirty|rowDisplayName|onSessionDataChanged|JobFailed|CalculationDemand::(buildToolTip|kToolTipListLimit|kMaxHeldSessions)|\\.(settling|waiting)\\b"
+  src tests ":!tests/README.md")
+# One indicator: a plot row shows the arc or the badge and nothing else;
+# the hover carries the numbers. Allow: none expected.
+expect_none("the views keep no label, no cluster and no clock logic of their own"
+  "progressLabel|clusterRect|syncAnimation" src tests ":!tests/README.md")
+expect_none("the plot row shows one glyph" "warningCount|warningIcon|indicatorIcon|drawText\\("
+  src/ui/docks/plotselection)
+# One working-indicator clock per application: MainWindow creates it beside
+# the demand layer and hands it to the views through AppContext, and
+# followDemand() (DemandIndicatorView.h) makes it follow the demand layer.
+# The followDemand pattern needs an argument, so a comment that names
+# "followDemand()" does not match. Allow: none expected (tests make their
+# own clock; tests are not searched).
+expect_count("one working-indicator clock" "new WorkingAnimation\\b|make_unique<WorkingAnimation>" 1 src)
+expect_only("one working-indicator clock" "new WorkingAnimation\\b|make_unique<WorkingAnimation>"
+  "^src/mainwindow\\.cpp$" src)
+expect_only("the clock follows the demand layer in one place" "followDemand\\([^)]"
+  "^src/ui/docks/DemandIndicatorView\\.(cpp|h)$|^src/mainwindow\\.cpp$" src)
+# The glyph's colour, size and spacing, the choice of glyph, the tooltip
+# display and the repaint when the demand layer goes are written once
+# (DemandIndicator.*, DemandIndicatorView.*). The cell delegate's pending
+# colour and tooltip are its own. Allow: none expected.
+expect_none("the plot rows and the headers share the glyph plumbing"
+  "QPalette::ColorGroup|QToolTip::|qMax\\(2|drawWorkingGlyph|drawWarningGlyph|[.>]setActive\\("
+  "src/ui/docks/plotselection/PlotRowDelegate.*" "src/ui/docks/logbook/LogbookHeaderView.*")
+expect_only("the views learn of the demand layer's end in one place" "&QObject::destroyed"
+  "^src/ui/docks/DemandIndicatorView\\.cpp$" src/ui)
+# The fill's progress text is its own, distinct from the column worker's.
+# Allow: reword, never duplicate.
+expect_count("the fill has a progress text of its own" "\"Computing results: %v / %m\"" 1
+  src/ui/docks/logbook/LogbookView.cpp)
+# The documents describe the refined demand layer. Allow: say "the pair
+# memory", "a remembered failure", "the scheduler completes it"; never name
+# the removed API or the per-cell memory.
+expect_none("the documents describe the refined demand layer"
+  "jobQueued|activeJobs\\(|\\bidle\\(\\)|[Ss]ettlement|progressLabel|isFillEnding|one clock per view|lose work only by stepping|under the same label|arc with \"k of n\"|triangle with a number|CalculationDemand::(kMaxHeldSessions|kToolTipListLimit|buildToolTip)"
+  docs README.md)
+
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 
@@ -813,9 +929,10 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # 201-247 (the sensor fusion improvements, item = 200 + requirement
 # number), 301-350 (storing requested calculation results with the session,
 # item = 300 + clause number), 401-442 (stored results: validity that
-# mirrors memory, item = 400 + clause number) and 501-563 (demand-driven
-# requested calculations, item = 500 + clause number). Four line forms; see the
-# head of the map.
+# mirrors memory, item = 400 + clause number), 501-563 (demand-driven
+# requested calculations, item = 500 + clause number) and 601-662
+# (calculation refinements, item = 600 + clause number). Four line forms; see
+# the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -886,8 +1003,9 @@ else()
     list(APPEND items_seen "${item}")
     if(NOT ((item GREATER_EQUAL 1 AND item LESS_EQUAL 19) OR (item GREATER_EQUAL 101 AND item LESS_EQUAL 120)
             OR (item GREATER_EQUAL 201 AND item LESS_EQUAL 247) OR (item GREATER_EQUAL 301 AND item LESS_EQUAL 350)
-            OR (item GREATER_EQUAL 401 AND item LESS_EQUAL 442) OR (item GREATER_EQUAL 501 AND item LESS_EQUAL 563)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442 and 501-563: ${line}")
+            OR (item GREATER_EQUAL 401 AND item LESS_EQUAL 442) OR (item GREATER_EQUAL 501 AND item LESS_EQUAL 563)
+            OR (item GREATER_EQUAL 601 AND item LESS_EQUAL 662)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563 and 601-662: ${line}")
     endif()
   endforeach()
 
@@ -923,6 +1041,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 501 563)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 601 662)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
