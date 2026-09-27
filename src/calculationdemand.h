@@ -36,9 +36,9 @@ struct SessionRow;
 /// calculations are wanted from what the user has switched on, keeps the
 /// executor's chosen next job equal to its current choice, has sessions that
 /// are not loaded loaded for column demand, and publishes the per-plot and
-/// per-column state that the plot list and the logbook present. The views
-/// paint plotState(), columnState() and isCellPending(); they decide nothing
-/// and call nothing else here.
+/// per-column state, the progress of the computations and the failures of
+/// each recording, which the views present. The views read the values that
+/// PRESENTATION lists; they decide nothing and call nothing else here.
 ///
 /// WHAT IS WANTED. (a) Plot demand: every checked plot whose value is a
 /// requested output (the plot is REQUESTED), for every track: a session that
@@ -194,11 +194,15 @@ struct SessionRow;
 ///    Failed (the worker could not start, out of memory); a load of the
 ///    session that failed ("The session file could not be loaded", the fill's
 ///    load or a failed-load placeholder); a record that the result store could
-///    not write (SessionModel::calculationRecordWriteFailed, "<title>:
-///    <reason>"); a result the engine holds that is never stored (a
-///    NotProduced note of a storable calculation whose status is not Ok, a
-///    computation that threw), which would otherwise run again after every
-///    eviction.
+///    not write (SessionModel::calculationRecordWriteFailed); a result the
+///    engine holds that is never stored (a NotProduced note of a storable
+///    calculation whose status is not Ok, a computation that threw), which
+///    would otherwise run again after every eviction. The reason remembered
+///    is the why alone, never the calculation's title and never empty; a
+///    failed track's text is built from it in one place (failedTrack():
+///    "<title>: <why>", the why alone for a failed load, which is the
+///    session's failure), and a failure entry (PRESENTATION) carries it beside
+///    the title.
 /// Failures and refusals keep a pair from being offered, and they are what a
 /// loaded session's classification reads; the column verdict is neither. A
 /// failure replaces whatever was remembered; a refusal replaces a column
@@ -234,12 +238,38 @@ struct SessionRow;
 ///
 /// PRESENTATION. The views read plotState(), columnState(), isCellPending(),
 /// workingPlotIds() and workingColumnIds(), and repaint on plotStateChanged(),
-/// columnStateChanged() and statesChanged(). They never run a pass (flush() is
+/// columnStateChanged() and statesChanged(). Three further values are direct
+/// projections of what the one walk classifies and the pair memory holds,
+/// each with an announcement of its own:
+///  - progress() (DemandProgress): the sessions with a Waiting or Running
+///    track in any source, plot and column tracks alike, each session once;
+///    the high-water mark of that count since it was last 0; and the display
+///    name and latest progress text of the executor's running job not asked
+///    to stop (both empty when there is none, and in a pass with no source,
+///    which walks no row). progressChanged() when it differs, after a pass or
+///    on a progress text of the job the value describes (without a pass).
+///  - failures() (SessionFailures per session): every session with a Failed
+///    track in some source, in session-model row order, with its display name
+///    and each failed pair once (the first source that fails it wins), with
+///    the calculation's title, the reason and whether the next start tries it
+///    again. The entries are made by the same call that makes the track Failed,
+///    so a track and its entries never disagree; a session that leaves demand
+///    leaves the list, and returns with it, the memory unchanged.
+///    sessionFailures() answers for one session from an index, without a
+///    scan. failuresChanged() when the list differs, order included.
+///  - the pending cells (isCellPending()): pendingCellsChanged(columnId) for
+///    each requested column whose set differs after a pass, and for each
+///    column no longer requested that had pending cells.
+/// Every value is stored before anything is announced: a slot of any signal
+/// reads every query. When the component is inert, progress is the default
+/// value and there are no failures. The views never run a pass (flush() is
 /// a test seam), never offer, and never write. "Pending" exists only here and
 /// in the view that paints it: never in SessionModel, the cached column values
 /// or the logbook index. The values the views read, the tooltip and its
 /// limit (DemandState::kToolTipListLimit tracks per section, then how many more
-/// there are; the state's own lists stay complete) are in demandstate.h.
+/// there are; the state's own lists stay complete) and the one text form of a
+/// recording's failures and of the capped list (SessionFailures::text(),
+/// SessionFailures::listText()) are in demandstate.h.
 ///
 /// THE ONLY CALLER. This is the only product caller of JobQueue::offer() and
 /// JobQueue::withdrawChosenNext(). Nothing calls back into it: it observes
@@ -306,6 +336,16 @@ public:
     QStringList workingPlotIds() const;
     QStringList workingColumnIds() const;
 
+    /// The computations' progress as the last pass (or the running job's
+    /// latest progress text) left it; the default value when inert.
+    DemandProgress progress() const;
+    /// Every session with a current failure, in session-model row order; each
+    /// session once, each pair once. Empty when inert.
+    QList<SessionFailures> failures() const;
+    /// That session's element of failures(); for a session without a failure,
+    /// one with the given id, an empty name and no calculations. O(1).
+    SessionFailures sessionFailures(const QString &sessionId) const;
+
     /// True when a plot value that was just read as empty is absent only
     /// because a requested calculation has not produced it: it is waiting to be
     /// computed (BlockerReport::State::Blocked; the row shows it working) or
@@ -344,6 +384,16 @@ signals:
     /// from what it was. Emitted per column, before statesChanged().
     void columnStateChanged(const QString &columnId);
     void statesChanged();                           ///< once per pass (or progress update) that changed a state
+    /// progress() differs from what it was: after a pass, or on a progress
+    /// text of the job it describes. Every value is stored before it is emitted.
+    void progressChanged();
+    /// failures() differs from what it was (order included), after a pass.
+    /// Every value is stored before it is emitted.
+    void failuresChanged();
+    /// The set of pending cells of the column differs after a pass: a
+    /// requested column whose set changed, or a column no longer requested
+    /// that had pending cells. Every value is stored before it is emitted.
+    void pendingCellsChanged(const QString &columnId);
 
 private:
     using PairKey = QPair<QString, QString>;        // (session id, instance id)
@@ -380,7 +430,7 @@ private:
         };
         Kind kind = Kind::NotApplicable;
         Origin origin = Origin::Refused;
-        QString reason;             ///< Failed only: the text shown, "<title>: <why>" or the load text; never empty
+        QString reason;             ///< Failed only: the why, without the title (failedTrack() adds it); never empty
         QSet<QString> columns;      ///< ColumnVerdict only: the ids of the columns that found it so
 
         static PairMemory refused() { return PairMemory(); }
@@ -429,6 +479,10 @@ private:
         QSet<QString> pendingSessions;                  ///< sessions with a pending column cell
         QStringList loadCandidates;                     ///< at most DemandFill::kMaxHeldSessions, row order
         QList<LearnedFact> learned;                     ///< applied by the pass after the walk
+        /// count, sessionName and progressText; the pass keeps highWater
+        DemandProgress progress;
+        JobId progressJob = 0;                          ///< the running job progress describes; 0 when none
+        QList<SessionFailures> failures;                ///< row order; each pair of a row once
     };
 
     // Which plots and columns matter
@@ -450,18 +504,32 @@ private:
     static BlockerReport combinedReport(const SessionData &session, const Source &source);
     /// A loaded row that is not a placeholder (see TRACK CONDITIONS).
     /// `running` is the executor's running record (a default record when
-    /// there is none). Facts learned go to `learned`.
+    /// there is none). Facts learned go to `learned`; a Failed track appends
+    /// one entry per failed pair to `failures`.
     DemandTrack classifyLoaded(const QString &sessionId, const Source &source, const BlockerReport &report,
-                               const JobRecord &running, QList<LearnedFact> *learned) const;
+                               const JobRecord &running, QList<LearnedFact> *learned,
+                               QList<FailedCalculation> *failures) const;
     /// A column track whose row is not loaded or is a failed-load placeholder
     /// (see WHERE A RESULT IS LOOKED UP). Call under the walk's guard. Facts
-    /// learned go to `learned`.
-    DemandTrack classifyUnloaded(const SessionRow &sr, const Source &source, QList<LearnedFact> *learned);
-    /// A Failed track from remembered failures: `titles` and `facts` are
-    /// parallel. The reason is the distinct reasons joined by "; " in order;
-    /// jobFailure is true unless every fact's origin is Result.
-    static DemandTrack failedTrack(const QString &sessionId, const QStringList &titles,
-                                   const QList<const PairMemory *> &facts);
+    /// learned go to `learned`; a Failed track appends one entry per failed
+    /// pair to `failures`.
+    DemandTrack classifyUnloaded(const SessionRow &sr, const Source &source, QList<LearnedFact> *learned,
+                                 QList<FailedCalculation> *failures);
+    /// A Failed track from remembered failures: `calculationIds`, `titles` and
+    /// `facts` are parallel. The one place a track's text is built from a
+    /// remembered why: "<title>: <why>" per fact, the why alone for a failed
+    /// load; the distinct texts joined by "; " in order. jobFailure is true
+    /// unless every fact's origin is Result. Appends one entry per fact to
+    /// `failures`, each tried again at the next start (nothing remembered is
+    /// stored).
+    static DemandTrack failedTrack(const QString &sessionId, const QStringList &calculationIds,
+                                   const QStringList &titles, const QList<const PairMemory *> &facts,
+                                   QList<FailedCalculation> *failures);
+    /// The why of a failure: `detail`, or the default when it is empty (a
+    /// failed computation's, or that of a calculation that gave no result).
+    static QString failureDetail(const QString &detail, bool computationFailed);
+    /// failureDetail() of one note.
+    static QString noteDetail(const UnproducedNote &note);
     /// "<title>: <detail>" of one note, with a default detail.
     static QString noteReason(const UnproducedNote &note);
     static QString failureReason(const QList<UnproducedNote> &notes);
@@ -507,7 +575,8 @@ private:
     void recompute();
     void applyStates(const QStringList &order, const QHash<QString, DemandState> &states,
                      const QStringList &columnOrder, const QHash<QString, DemandState> &columnStates,
-                     const QHash<QString, QSet<QString>> &pendingCells);
+                     const QHash<QString, QSet<QString>> &pendingCells, const DemandProgress &progress,
+                     JobId progressJob, const QList<SessionFailures> &failures);
 
     // Slots
     void onPlotDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles);
@@ -551,6 +620,10 @@ private:
     QHash<QString, DemandState> m_columnStates;             // requested columns only, by column id
     QHash<QString, QSet<QString>> m_pendingCells;           // column id -> sessions whose cell is pending
     bool m_hasPendingCells = false;                         // some set of m_pendingCells is not empty
+    DemandProgress m_progress;
+    JobId m_progressJob = 0;                                // the running job m_progress describes; 0 when none
+    QList<SessionFailures> m_failures;                      // row order
+    QHash<QString, qsizetype> m_failureIndex;               // session id -> its index in m_failures
     QHash<QString, QSet<QString>> m_recordSets;             // memo: knownCalculationRecords(), rows not loaded
     QHash<QString, QHash<QString, QString>> m_recordReasons; // memo beside it: calculationRecordReason(), non-empty
     int m_recordSetLookups = 0;

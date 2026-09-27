@@ -1345,9 +1345,10 @@ takes about a second. It fails, listing **all** violations, when
   `loadPinnedSession(` outside the reconciler, the fill and the session
   model; the demand layer loads a session or reads a record itself; the
   demand layer loads or pins other than through its fill; the fill or the
-  settle clock calls the executor or names a type of the walk
-  (`BlockerReport`, `DemandTrack`, `DemandState`, `DemandCondition`,
-  `RowStabilityGuard`, `PairMemory`, `LearnedFact`); `kMaxRunningJobs` is
+  settle clock calls the executor or names a type of the walk or of the
+  presentation (`BlockerReport`, `DemandTrack`, `DemandState`,
+  `DemandCondition`, `RowStabilityGuard`, `PairMemory`, `LearnedFact`,
+  `DemandProgress`, `SessionFailures`, `FailedCalculation`); `kMaxRunningJobs` is
   assigned other than once, the load bound in `demandfill.h` is not
   `JobQueue::kMaxRunningJobs + 1`, or the worker is not started with
   `QThread::LowPriority`; the removed queue API

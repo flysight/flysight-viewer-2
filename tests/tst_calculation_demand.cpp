@@ -179,6 +179,18 @@ private slots:
     void workingIdsFollowStates();
     void toolTipListsAtMostTenFailures();
 
+    // Progress and failures
+    void progressCountsEachSessionOnce();
+    void progressTextWithoutAPass();
+    void failuresNameEachCalculationOnce();
+    void failuresAreOnePerSessionInRowOrder();
+    void storedRejectionIsAFailureWithoutLoad();
+    void unstoredFailureReturnsOnlyWhenItFailsAgain();
+    void failuresClearAsThePairMemoryClears();
+    void failuresFollowWhatIsSwitchedOn();
+    void pendingCellsChangedPerColumn();
+    void failureTextAndItsLimit();
+
 private:
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
     CalculationEngine &engine(const QString &id) { return session(id).calculationEngine(); }
@@ -490,6 +502,44 @@ private:
     {
         QFile file(sessionFilePath(id));
         return file.open(QIODevice::ReadOnly) && file.readAll().contains(line);
+    }
+
+    // ---- Progress and failures ----------------------------------------------
+    /// The current progress: a pending pass runs first.
+    DemandProgress progressNow()
+    {
+        m_demand->flush();
+        return m_demand->progress();
+    }
+    /// One entry as one line: "<session id> (<session name>) <calculation id>
+    /// [<title>] <reason>", ending " +retry" when the next start tries it again.
+    static QString entryLine(const SessionFailures &session, const FailedCalculation &entry)
+    {
+        return QStringLiteral("%1 (%2) %3 [%4] %5%6")
+            .arg(session.sessionId, session.sessionName, entry.calculationId, entry.title, entry.reason,
+                 entry.retriedAtNextStart ? QStringLiteral(" +retry") : QString());
+    }
+    /// failures() as entryLine()s, in list order: a pending pass runs first.
+    QStringList failureLines()
+    {
+        m_demand->flush();
+        QStringList lines;
+        const QList<SessionFailures> failures = m_demand->failures();
+        for (const SessionFailures &session : failures) {
+            for (const FailedCalculation &entry : session.calculations)
+                lines.append(entryLine(session, entry));
+        }
+        return lines;
+    }
+    /// The session ids of failures(), in list order: a pending pass runs first.
+    QStringList failedSessions()
+    {
+        m_demand->flush();
+        QStringList ids;
+        const QList<SessionFailures> failures = m_demand->failures();
+        for (const SessionFailures &session : failures)
+            ids.append(session.sessionId);
+        return ids;
     }
 
     std::unique_ptr<JobWorld> m_world;
@@ -4850,6 +4900,657 @@ void CalculationDemandTest::toolTipListsAtMostTenFailures()
     QCOMPARE(lines.size(), 1 + 10 + 1);
     QCOMPARE(lines.at(10), QStringLiteral("  Run 10 - Sensor fusion: iteration 3"));
     QCOMPARE(lines.last(), QStringLiteral("  and 1 more"));
+}
+
+// ---- Progress and failures ----------------------------------------------------------
+
+// Spec 10 and 5: the computations' count is the number of sessions with a
+// waiting or running track in any source, each once, a stub with a waiting
+// cell included; the high-water mark holds until the count is 0, and a new
+// burst starts at its own count; the running job's recording and step are
+// named while it runs, and not once it is asked to stop.
+void CalculationDemandTest::progressCountsEachSessionOnce()
+{
+    for (int i = 1; i <= 4; ++i)
+        QVERIFY(giveInput({QStringLiteral("s%1").arg(i)}, "G_IN", i));
+    show({"s1", "s2"});
+    QVERIFY(makeStubs({"s3", "s4"}));
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(isLoaded("s1"));
+    QVERIFY(isLoaded("s2"));
+
+    // s1 and s2 have a plot track and a column track each, s3 and s4 a
+    // waiting cell
+    enableColumns({"G_OUT"});
+    check("g");
+    QVERIFY(gate().waitEntered());
+    DemandProgress progress = progressNow();
+    QCOMPARE(running().sessionId, QStringLiteral("s1"));
+    QCOMPARE(progress.count, 4);
+    QCOMPARE(progress.highWater, 4);
+    QCOMPARE(progress.sessionName, QStringLiteral("Jump 1"));
+    QTRY_COMPARE(progressNow().progressText, QStringLiteral("step 1"));
+
+    // One job at a time: the count falls, the high-water mark stays
+    for (int left = 3; left >= 1; --left) {
+        gate().open(1);
+        QVERIFY(gate().waitEntered());
+        QTRY_COMPARE(progressNow().count, left);
+        QTRY_COMPARE(progressNow().sessionName, QStringLiteral("Jump %1").arg(5 - left));
+        QCOMPARE(progressNow().highWater, 4);
+    }
+    gate().open(1);
+    QVERIFY(waitDemandIdle());
+    QVERIFY(progressNow() == DemandProgress());
+
+    // A new burst of work, inside the input-settle wait: no job runs
+    m_demand->setInputSettleDelay(60000);
+    QVERIFY(giveInput({"s2"}, "G_IN", 7));
+    QVERIFY(m_demand->isSettling("s2"));
+    progress = progressNow();
+    QCOMPARE(progress.count, 1);
+    QCOMPARE(progress.highWater, 1);
+    QVERIFY(progress.sessionName.isEmpty());
+    QVERIFY(progress.progressText.isEmpty());
+
+    // The job runs; an input change makes it stale, and it winds down
+    // described by nothing
+    settle();
+    QVERIFY(gate().waitEntered());
+    QTRY_COMPARE(progressNow().sessionName, QStringLiteral("Jump 2"));
+    const JobId stale = running().id;
+    QCOMPARE(m_queue->job(stale).sessionId, QStringLiteral("s2"));
+    QVERIFY(giveInput({"s2"}, "G_IN", 8));
+    QVERIFY(m_queue->job(stale).cancelRequested);
+    progress = progressNow();
+    QCOMPARE(stateOf(stale), JobState::Running);
+    QCOMPARE(progress.count, 1);
+    QCOMPARE(progress.highWater, 1);
+    QVERIFY(progress.sessionName.isEmpty());
+    QVERIFY(progress.progressText.isEmpty());
+
+    QTRY_COMPARE(stateOf(stale), JobState::Superseded);
+    gate().open(1);
+    settle();
+    QVERIFY(waitDemandIdle());
+    QVERIFY(progressNow() == DemandProgress());
+}
+
+// Spec 10: the running job's progress text changes the progress without a
+// pass; the same text, a text of a job that is not running and a pass that
+// changes nothing announce nothing.
+void CalculationDemandTest::progressTextWithoutAPass()
+{
+    QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
+    show({"s1", "s2"});
+    check("g");
+    QVERIFY(gate().waitEntered());
+    const JobId runningJob = jobOf("s1", "gated").id;
+    QTRY_COMPARE(m_queue->job(runningJob).progressText, QStringLiteral("step 1"));
+    spin();
+    QCOMPARE(progressNow().progressText, QStringLiteral("step 1"));
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 1"));
+
+    QSignalSpy progressSpy(m_demand.get(), &CalculationDemand::progressChanged);
+
+    // Passes that change nothing announce nothing
+    const int passesBefore = m_demand->passCount();
+    check("plain");
+    m_demand->flush();
+    check("plain", false);
+    m_demand->flush();
+    QCOMPARE(m_demand->passCount(), passesBefore + 2);
+    QCOMPARE(progressSpy.count(), 0);
+
+    // The executor's own signal, delivered by hand: the text alone changes
+    const int passes = m_demand->passCount();
+    const int runs = totalRuns();
+    emit m_queue->jobProgress(runningJob, QStringLiteral("iteration 7"));
+    QVERIFY(!m_demand->hasPendingUpdate());
+    QCOMPARE(m_demand->passCount(), passes);
+    QCOMPARE(totalRuns(), runs);
+    QCOMPARE(progressSpy.count(), 1);
+    const DemandProgress progress = m_demand->progress();
+    QCOMPARE(progress.progressText, QStringLiteral("iteration 7"));
+    QCOMPARE(progress.sessionName, QStringLiteral("Jump 1"));
+    QCOMPARE(progress.count, 2);
+    QCOMPARE(progress.highWater, 2);
+
+    // The same text again, the chosen next job's and an unknown job's
+    const JobId queued = m_queue->chosenNextJob();
+    QCOMPARE(m_queue->job(queued).sessionId, QStringLiteral("s2"));
+    emit m_queue->jobProgress(runningJob, QStringLiteral("iteration 7"));
+    emit m_queue->jobProgress(queued, QStringLiteral("not running"));
+    emit m_queue->jobProgress(JobId(999), QStringLiteral("elsewhere"));
+    QCOMPARE(progressSpy.count(), 1);
+    QCOMPARE(m_demand->progress().progressText, QStringLiteral("iteration 7"));
+    QCOMPARE(m_demand->passCount(), passes);
+
+    gate().open(2);
+    QVERIFY(waitDemandIdle());
+}
+
+// Spec 10 and 7: an entry names its calculation by its title, its reason does
+// not repeat the title, and it says whether the next start tries it again: a
+// stored rejection is not tried again; a failed job, a failed load, a failed
+// write and an unstored result are. One origin per step.
+void CalculationDemandTest::failuresNameEachCalculationOnce()
+{
+    QVERIFY(giveInput({"s1"}, "EA_IN", -1));
+    QVERIFY(giveInput({"s1"}, "G_IN", 1));
+    QVERIFY(giveInput({"s2"}, "T_IN", 1));
+    QVERIFY(giveInput({"s3"}, "G_IN", 3));
+    QVERIFY(waitForIdle(*m_model));
+
+    // A stored rejection
+    show({"s1"});
+    check("ea");
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(failureLines(), QStringList({"s1 (Jump 1) expA [Explicit A] negative input"}));
+    QCOMPARE(m_demand->sessionFailures(QStringLiteral("s1")).text(), QStringLiteral("Explicit A: negative input"));
+    check("ea", false);
+    QCOMPARE(failureLines(), QStringList());
+
+    // An unstored result (a computation that threw): the same entry for the
+    // loaded session and, after its eviction, from the memory
+    enableColumns({"T_OUT"});
+    QVERIFY(waitDemandIdle());
+    const QStringList thrower{"s2 (Jump 2) thrower [Thrower] synthetic failure +retry"};
+    QCOMPARE(failureLines(), thrower);
+    QCOMPARE(m_demand->sessionFailures(QStringLiteral("s2")).text(),
+             QStringLiteral("Thrower: synthetic failure (tried again at the next start)"));
+    {
+        QSignalSpy failuresSpy(m_demand.get(), &CalculationDemand::failuresChanged);
+        QVERIFY(makeStubs());
+        for (int i = 0; i < 3; ++i)
+            spin();
+        QVERIFY(waitDemandIdle());
+        QVERIFY(!isLoaded("s2"));
+        QCOMPARE(failureLines(), thrower);
+        QCOMPARE(failuresSpy.count(), 0);
+    }
+    enableColumns({});
+    QCOMPARE(failureLines(), QStringList());
+
+    // A failed job: the worker could not be started
+    show({"s3"});
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(isLoaded("s3"));
+    m_queue->failNextWorkerStarts(1);
+    check("g");
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(jobOf("s3", "gated").state, JobState::Failed);
+    QCOMPARE(failureLines(),
+             QStringList({"s3 (Jump 3) gated [Gated] The worker thread could not be started +retry"}));
+    QCOMPARE(m_demand->sessionFailures(QStringLiteral("s3")).text(),
+             QStringLiteral("Gated: The worker thread could not be started (tried again at the next start)"));
+    check("g", false);
+    QCOMPARE(failureLines(), QStringList());
+
+    // A failed load: the session file is gone
+    QVERIFY(!isLoaded("s4"));
+    QVERIFY(QFile::remove(sessionFilePath(QStringLiteral("s4"))));
+    enableColumns({"X_OUT"});
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(jobCount("exhausted"), 0);
+    QCOMPARE(failureLines(),
+             QStringList({"s4 (Jump 4) exhausted [Exhausted] The session file could not be loaded +retry"}));
+    QCOMPARE(m_demand->sessionFailures(QStringLiteral("s4")).text(),
+             QStringLiteral("Exhausted: The session file could not be loaded (tried again at the next start)"));
+    enableColumns({});
+    QCOMPARE(failureLines(), QStringList());
+
+    // A failed write: the record's path is a directory
+    show({"s3"}, false);
+    QVERIFY(!sessionFileStem(QStringLiteral("s1")).isEmpty());
+    const QString path = recordPath(QStringLiteral("s1"), QStringLiteral("gated"));
+    QVERIFY(QDir().mkpath(path));
+    const auto removeDirectory = qScopeGuard([path] { QDir().rmdir(path); });
+    {
+        WarningCapture warnings;
+        gate().open(1);
+        check("g");
+        show({"s1"});
+        QVERIFY(waitForIdle(*m_model));
+        QVERIFY(waitDemandIdle());
+        QCOMPARE(warnings.count(QStringLiteral("not written")), 1);
+    }
+    QCOMPARE(jobOf("s1", "gated").state, JobState::Succeeded);
+    const QStringList lines = failureLines();
+    QCOMPARE(lines.size(), 1);
+    QVERIFY2(lines.at(0).startsWith(QStringLiteral("s1 (Jump 1) gated [Gated] Couldn't write file")),
+             qPrintable(lines.at(0)));
+    QVERIFY2(lines.at(0).endsWith(QStringLiteral(" +retry")), qPrintable(lines.at(0)));
+    const SessionFailures s1 = m_demand->sessionFailures(QStringLiteral("s1"));
+    QCOMPARE(s1.calculations.size(), 1);
+    const QString reason = s1.calculations.at(0).reason;
+    QVERIFY2(!reason.startsWith(QStringLiteral("Gated")), qPrintable(reason));
+    QCOMPARE(s1.text(), QStringLiteral("Gated: ") + reason + QStringLiteral(" (tried again at the next start)"));
+}
+
+// Spec 10: one element per recording, in session-model row order, and each
+// pair once however many sources fail it; a sort reorders the list.
+void CalculationDemandTest::failuresAreOnePerSessionInRowOrder()
+{
+    QVERIFY(giveInput({"s2"}, "T_IN", 1));
+    QVERIFY(giveInput({"s2"}, "EA_IN", -1));
+    show({"s2"});
+    check("ea");
+    enableColumns({"T_OUT", "EA1"});
+    QVERIFY(waitDemandIdle());
+
+    // The plot is the first source: expA, from the plot and EA1 alike, then
+    // thrower
+    const QStringList s2Lines{"s2 (Jump 2) expA [Explicit A] negative input",
+                              "s2 (Jump 2) thrower [Thrower] synthetic failure +retry"};
+    QCOMPARE(failureLines(), s2Lines);
+    QCOMPARE(m_demand->failures().size(), 1);
+    QCOMPARE(m_demand->sessionFailures(QStringLiteral("s2")).text(),
+             QStringLiteral("Explicit A: negative input\n"
+                            "Thrower: synthetic failure (tried again at the next start)"));
+
+    // A failure of s1 found later is listed first
+    QVERIFY(giveInput({"s1"}, "EA_IN", -1));
+    show({"s1"});
+    settle();
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(failedSessions(), QStringList({"s1", "s2"}));
+    QCOMPARE(failureLines(), QStringList({"s1 (Jump 1) expA [Explicit A] negative input"}) + s2Lines);
+
+    // A sort reverses the rows, and the list follows in one announcement
+    const SessionFailures s2 = m_demand->sessionFailures(QStringLiteral("s2"));
+    QCOMPARE(s2.calculations.size(), 2);
+    QSignalSpy failuresSpy(m_demand.get(), &CalculationDemand::failuresChanged);
+    m_model->sort(0, Qt::DescendingOrder);
+    spin();
+    QCOMPARE(failedSessions(), QStringList({"s2", "s1"}));
+    QCOMPARE(failuresSpy.count(), 1);
+    QVERIFY(m_demand->failures().at(0) == s2);
+    QVERIFY(m_demand->sessionFailures(QStringLiteral("s2")) == s2);
+    QVERIFY(m_demand->sessionFailures(QStringLiteral("s4"))
+            == (SessionFailures{QStringLiteral("s4"), QString(), {}}));
+    QVERIFY(m_demand->sessionFailures(QStringLiteral("s4")).calculations.isEmpty());
+}
+
+// Spec 7: a stored rejection of a session that is not loaded is a failure at
+// the first pass of a new demand layer, without a load and without a job.
+// From an index without "recordReasons" it is absent until the column
+// worker's pass reports the reason.
+void CalculationDemandTest::storedRejectionIsAFailureWithoutLoad()
+{
+    QVERIFY(giveInput({"s2"}, "EA_IN", -1));
+    enableColumns({"EA1"});
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(jobOf(QStringLiteral("s2"), "expA").state, JobState::Succeeded);
+    QVERIFY(stored("s2", "expA"));
+    const QStringList rejection{"s2 (Jump 2) expA [Explicit A] negative input"};
+    QCOMPARE(failureLines(), rejection);
+
+    // Its first pass lists it; nothing is loaded for it and nothing runs
+    const auto verifyListedAtFirstPass = [this, &rejection] {
+        const Quiet quiet(*m_queue);
+        QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+        QSignalSpy failuresSpy(m_demand.get(), &CalculationDemand::failuresChanged);
+        QVERIFY(m_demand->hasPendingUpdate());
+        QCOMPARE(m_demand->passCount(), 0);
+        QCOMPARE(failureLines(), rejection);
+        QCOMPARE(failuresSpy.count(), 1);
+        QVERIFY(waitDemandIdle());          // s1, s3 and s4 are loaded to find they do not apply
+        QCOMPARE(failureLines(), rejection);
+        QCOMPARE(failuresSpy.count(), 1);
+        QCOMPARE(loadsOf(loadedSpy, "s2"), 0);
+        QVERIFY(quiet.holds());
+    };
+
+    // Evicted, and a new demand layer
+    QVERIFY(makeStubs());
+    QVERIFY(waitForIdle(*m_model));
+    restartDemand();
+    verifyListedAtFirstPass();
+    if (QTest::currentTestFailed())
+        return;
+
+    // A full restart: from index.json's "recordReasons"
+    QVERIFY(waitForIdle(*m_model));
+    restartApplication();
+    QVERIFY(!isLoaded("s2"));
+    verifyListedAtFirstPass();
+    if (QTest::currentTestFailed())
+        return;
+
+    // An index without "recordReasons": absent until the column worker's copy
+    // restores the record and the index learns its reason
+    restartWithoutRecordReasons();
+    if (QTest::currentTestFailed())
+        return;
+    const Quiet quiet(*m_queue);
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+    QCOMPARE(failureLines(), QStringList());
+    m_model->startColumnWorker();
+    QTRY_COMPARE(LogbookManager::instance().calculationRecordReason(QStringLiteral("s2"), QStringLiteral("expA")),
+                 QStringLiteral("negative input"));
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(failureLines(), rejection);
+    QCOMPARE(loadsOf(loadedSpy, "s2"), 0);
+    QVERIFY(quiet.holds());
+}
+
+// Spec 7: a failure that is not stored is absent from a new demand layer; it
+// is listed again only when the retry fails again, and not once a retry
+// succeeds.
+void CalculationDemandTest::unstoredFailureReturnsOnlyWhenItFailsAgain()
+{
+    const QStringList failed{"s1 (Jump 1) gated [Gated] The worker thread could not be started +retry"};
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
+    show({"s1"});
+    m_queue->failNextWorkerStarts(1);
+    check("g");
+    QVERIFY(waitDemandIdle());
+    const JobId first = jobOf("s1", "gated").id;
+    QCOMPARE(stateOf(first), JobState::Failed);
+    QCOMPARE(failureLines(), failed);
+
+    // The next start fails again: nothing at its first pass, then the new
+    // job's failure
+    m_queue->failNextWorkerStarts(1);
+    restartDemand();
+    QCOMPARE(failureLines(), QStringList());
+    QVERIFY(waitDemandIdle());
+    const JobRecord again = jobOf("s1", "gated");
+    QVERIFY(again.id != first);
+    QCOMPARE(again.state, JobState::Failed);
+    QCOMPARE(jobCount("gated"), 2);
+    QCOMPARE(failureLines(), failed);
+
+    // The next start succeeds: nothing is listed, and the result is stored
+    gate().open(1);
+    restartDemand();
+    QCOMPARE(failureLines(), QStringList());
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(jobOf("s1", "gated").state, JobState::Succeeded);
+    QCOMPARE(jobCount("gated"), 3);
+    QCOMPARE(failureLines(), QStringList());
+    QVERIFY(stored("s1", "gated"));
+}
+
+// Spec 7: a failure leaves the list as the pair memory clears (a record
+// change of the pair, an input change of the session, a registry change, the
+// session's row removed), at once, before any retry runs; it stays through
+// an eviction, a sort and the column worker's pass.
+void CalculationDemandTest::failuresClearAsThePairMemoryClears()
+{
+    const QStringList failed{"s1 (Jump 1) gated [Gated] The worker thread could not be started +retry"};
+    // A new input that the worker fails to compute
+    const auto failWith = [this, &failed](double input) {
+        m_queue->failNextWorkerStarts(1);
+        QVERIFY(giveInput({"s1"}, "G_IN", input));
+        settle();
+        QVERIFY(waitDemandIdle());
+        QCOMPARE(jobOf("s1", "gated").state, JobState::Failed);
+        QCOMPARE(failureLines(), failed);
+    };
+
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
+    show({"s1"});
+    m_queue->failNextWorkerStarts(1);
+    check("g");
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(failureLines(), failed);
+
+    // A record change of the pair
+    emit LogbookManager::instance().calculationRecordsChanged(QStringLiteral("s1"), QStringLiteral("gated"));
+    QCOMPARE(failureLines(), QStringList());
+    gate().open(1);
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(jobOf("s1", "gated").state, JobState::Succeeded);
+    QCOMPARE(failureLines(), QStringList());
+
+    // An input change of the session
+    failWith(5);
+    if (QTest::currentTestFailed())
+        return;
+    m_demand->setInputSettleDelay(60000);
+    QVERIFY(giveInput({"s1"}, "G_IN", 6));
+    QVERIFY(m_demand->isSettling("s1"));
+    QCOMPARE(failureLines(), QStringList());
+    gate().open(1);
+    settle();
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(jobOf("s1", "gated").state, JobState::Succeeded);
+
+    // A registry change
+    failWith(7);
+    if (QTest::currentTestFailed())
+        return;
+    CalculationDescriptor unrelated;
+    unrelated.id = QStringLiteral("test.demand.unrelated");
+    unrelated.title = QStringLiteral("Unrelated");
+    unrelated.policy = EvaluationPolicy::Explicit;
+    unrelated.inputs = {CalcInput::attribute(QStringLiteral("UNRELATED_IN"))};
+    unrelated.outputs = {DependencyKey::attribute(QStringLiteral("UNRELATED_OUT"))};
+    unrelated.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute(QStringLiteral("UNRELATED_OUT"),
+                                                ctx.attribute(QStringLiteral("UNRELATED_IN")).toInt() + 1);
+    };
+    QVERIFY(m_extra->add(unrelated));
+    QCOMPARE(failureLines(), QStringList());
+    gate().open(1);
+    settle();
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(jobOf("s1", "gated").state, JobState::Succeeded);
+
+    // The session's row removed
+    failWith(8);
+    if (QTest::currentTestFailed())
+        return;
+    QVERIFY(m_model->removeSessions({"s1"}));
+    QCOMPARE(failureLines(), QStringList());
+    check("g", false);
+
+    // A column job failure over stubs stays through an eviction, a sort and
+    // the column worker, unannounced
+    QVERIFY(giveInput({"s2"}, "X_IN", 4));
+    enableColumns({"X_OUT"});
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(jobOf("s2", "exhausted").state, JobState::Failed);
+    const QStringList exhausted{"s2 (Jump 2) exhausted [Exhausted] Out of memory +retry"};
+    QCOMPARE(failureLines(), exhausted);
+
+    QSignalSpy failuresSpy(m_demand.get(), &CalculationDemand::failuresChanged);
+    const Quiet quiet(*m_queue);
+    QVERIFY(makeStubs({"s2", "s3", "s4"}));
+    for (int i = 0; i < 3; ++i)
+        spin();
+    QVERIFY(waitForIdle(*m_model));
+    QCOMPARE(failureLines(), exhausted);
+    m_model->sort(0, Qt::DescendingOrder);
+    spin();
+    QCOMPARE(failureLines(), exhausted);
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+    spin();
+    QCOMPARE(failureLines(), exhausted);
+    QCOMPARE(failuresSpy.count(), 0);
+    QVERIFY(quiet.holds());
+}
+
+// Spec 7: a failure is about what is switched on. It stays while a source
+// over the calculation wants the session and leaves with the last; switched
+// on again, it is back from the pair memory, without a job.
+void CalculationDemandTest::failuresFollowWhatIsSwitchedOn()
+{
+    const QStringList failed{"s1 (Jump 1) gated [Gated] The worker thread could not be started +retry"};
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
+    show({"s1"});
+    m_queue->failNextWorkerStarts(1);
+    enableColumns({"G_OUT"});
+    check("g");
+    check("g2");
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(jobCount("gated"), 1);
+    QCOMPARE(failureLines(), failed);
+
+    // One source after the other: the failure stays while one is left
+    QSignalSpy failuresSpy(m_demand.get(), &CalculationDemand::failuresChanged);
+    check("g", false);
+    QCOMPARE(failureLines(), failed);
+    check("g2", false);
+    QCOMPARE(failureLines(), failed);
+    QCOMPARE(failuresSpy.count(), 0);
+    enableColumns({});
+    QCOMPARE(failureLines(), QStringList());
+    QCOMPARE(failuresSpy.count(), 1);
+
+    // Switched on again
+    {
+        const Quiet quiet(*m_queue);
+        enableColumns({"G_OUT"});
+        QCOMPARE(failureLines(), failed);
+        spin();
+        QVERIFY(quiet.holds());
+    }
+
+    // A plot-only failure follows the session's visibility
+    enableColumns({});
+    check("g");
+    QCOMPARE(failureLines(), failed);
+    {
+        const Quiet quiet(*m_queue);
+        show({"s1"}, false);
+        QCOMPARE(failureLines(), QStringList());
+        show({"s1"});
+        QCOMPARE(failureLines(), failed);
+        spin();
+        QVERIFY(quiet.holds());
+    }
+    QCOMPARE(jobCount("gated"), 1);
+}
+
+// Overview decision 4: the pending cells have an announcement of their own,
+// per column whose set changed in a pass, a column no longer requested that
+// had pending cells included, and never for a progress text. A slot reads
+// the stored value.
+void CalculationDemandTest::pendingCellsChangedPerColumn()
+{
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
+    const QString gOut = colId("G_OUT");
+    QSignalSpy pendingSpy(m_demand.get(), &CalculationDemand::pendingCellsChanged);
+    QSignalSpy columnSpy(m_demand.get(), &CalculationDemand::columnStateChanged);
+    const auto announced = [&pendingSpy] {
+        QStringList ids;
+        for (const QList<QVariant> &arguments : std::as_const(pendingSpy))
+            ids.append(arguments.at(0).toString());
+        return ids;
+    };
+
+    // Enabled: G_OUT has a pending cell; EA1 has none (no session has its input)
+    enableColumns({"G_OUT", "EA1"});
+    QVERIFY(isCellPending(QStringLiteral("s1"), "G_OUT"));
+    QCOMPARE(announced(), QStringList({gOut}));
+    QVERIFY(gate().waitEntered());
+    m_demand->flush();
+    QCOMPARE(col("G_OUT").runningCount, 1);
+    QCOMPARE(announced(), QStringList({gOut}));      // running is pending too
+
+    // A progress text changes the column's state, not its cells
+    pendingSpy.clear();
+    columnSpy.clear();
+    emit m_queue->jobProgress(running().id, QStringLiteral("iteration 7"));
+    QVERIFY(!columnSpy.isEmpty());
+    QCOMPARE(pendingSpy.count(), 0);
+
+    // The job's end
+    gate().open(1);
+    QVERIFY(waitDemandIdle());
+    QVERIFY(!isCellPending(QStringLiteral("s1"), "G_OUT"));
+    QCOMPARE(announced(), QStringList({gOut}));
+
+    // Disabled while a cell is pending: announced, and a slot sees it gone
+    m_demand->setInputSettleDelay(60000);
+    QVERIFY(giveInput({"s1"}, "G_IN", 5));
+    QVERIFY(isCellPending(QStringLiteral("s1"), "G_OUT"));
+    QObject scope;
+    QList<bool> pendingInSlot;
+    connect(m_demand.get(), &CalculationDemand::pendingCellsChanged, &scope,
+            [this, &gOut, &pendingInSlot](const QString &id) {
+        if (id == gOut)
+            pendingInSlot.append(m_demand->isCellPending(QStringLiteral("s1"), gOut));
+    });
+    pendingSpy.clear();
+    enableColumns({"EA1"});
+    m_demand->flush();
+    QCOMPARE(announced(), QStringList({gOut}));
+    QCOMPARE(pendingInSlot, QList<bool>({false}));
+
+    // Passes that change nothing announce nothing
+    pendingSpy.clear();
+    check("plain");
+    m_demand->flush();
+    check("plain", false);
+    m_demand->flush();
+    QCOMPARE(pendingSpy.count(), 0);
+}
+
+// Spec 7 and 8: the one text form of a recording's failures and of the capped
+// list. An inert demand layer has the default progress and no failures.
+void CalculationDemandTest::failureTextAndItsLimit()
+{
+    QCOMPARE(SessionFailures::kListLimit, 10);
+    const FailedCalculation rejected{QStringLiteral("expA"), QStringLiteral("Explicit A"),
+                                     QStringLiteral("negative input"), false};
+    const FailedCalculation outOfMemory{QStringLiteral("exhausted"), QStringLiteral("Exhausted"),
+                                        QStringLiteral("Out of memory"), true};
+
+    // One recording
+    const SessionFailures one{QStringLiteral("a"), QStringLiteral("Morning"), {rejected}};
+    QCOMPARE(one.text(), QStringLiteral("Explicit A: negative input"));
+    const SessionFailures two{QStringLiteral("b"), QStringLiteral("Noon"), {rejected, outOfMemory}};
+    QCOMPARE(two.text(), QStringLiteral("Explicit A: negative input\n"
+                                        "Exhausted: Out of memory (tried again at the next start)"));
+    QCOMPARE(SessionFailures().text(), QString());
+
+    // The list: each name, its lines indented; nothing for nothing
+    QCOMPARE(SessionFailures::listText({}), QString());
+    QCOMPARE(SessionFailures::listText({one, two}),
+             QStringLiteral("Morning\n"
+                            "  Explicit A: negative input\n"
+                            "Noon\n"
+                            "  Explicit A: negative input\n"
+                            "  Exhausted: Out of memory (tried again at the next start)"));
+
+    // Twelve recordings: ten, then how many more; exactly ten: no such line
+    const auto recordings = [&rejected](int n) {
+        QList<SessionFailures> list;
+        for (int k = 1; k <= n; ++k)
+            list.append(SessionFailures{QStringLiteral("s%1").arg(k), QStringLiteral("Jump %1").arg(k), {rejected}});
+        return list;
+    };
+    QStringList tenLines;
+    for (int k = 1; k <= 10; ++k)
+        tenLines << QStringLiteral("Jump %1").arg(k) << QStringLiteral("  Explicit A: negative input");
+    QCOMPARE(SessionFailures::listText(recordings(12)),
+             (tenLines + QStringList{QStringLiteral("and 2 more")}).join(QLatin1Char('\n')));
+    QCOMPARE(SessionFailures::listText(recordings(10)), tenLines.join(QLatin1Char('\n')));
+    QCOMPARE(SessionFailures::listText(recordings(11)).split(QLatin1Char('\n')).last(),
+             QStringLiteral("and 1 more"));
+
+    // An inert demand layer beside a working one
+    QVERIFY(giveInput({"s1"}, "G_IN", 4));
+    show({"s1"});
+    check("g");
+    QVERIFY(gate().waitEntered());
+    QCOMPARE(progressNow().count, 1);
+    {
+        CalculationDemand inert(m_model.get(), m_plots.get(), nullptr);
+        inert.flush();
+        QVERIFY(inert.progress() == DemandProgress());
+        QVERIFY(inert.failures().isEmpty());
+        QVERIFY(inert.sessionFailures(QStringLiteral("s1"))
+                == (SessionFailures{QStringLiteral("s1"), QString(), {}}));
+    }
+    gate().open(1);
+    QVERIFY(waitDemandIdle());
+    QVERIFY(progressNow() == DemandProgress());
 }
 
 FLYSIGHT_TEST_MAIN(CalculationDemandTest)

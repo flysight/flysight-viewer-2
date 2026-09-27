@@ -808,10 +808,10 @@ expect_only("the demand layer loads and pins through its fill only"
 expect_none("the fill and the settle clock never call the executor"
   "[.>](offer|withdrawChosenNext|runningJob|chosenNextJob|publishingJob|isShutDown|isIdle|job)\\("
   "src/demandfill.*" "src/demandsettleclock.*")
-# They expose nothing of the walk: session ids in, session ids and times out.
-# Allow: none expected.
+# They expose nothing of the walk, and present nothing: session ids in,
+# session ids and times out. Allow: none expected.
 expect_none("the fill and the settle clock know nothing of the walk"
-  "BlockerReport|blockers\\(|DemandTrack|DemandState|DemandCondition|RowStabilityGuard|PairMemory|LearnedFact"
+  "BlockerReport|blockers\\(|DemandTrack|DemandState|DemandCondition|RowStabilityGuard|PairMemory|LearnedFact|DemandProgress|SessionFailures|FailedCalculation"
   "src/demandfill.*" "src/demandsettleclock.*")
 # One bound of simultaneous jobs, and the load bound follows it: the running
 # job's session and the chosen next job's (docs/CALCULATIONS.md 16.8).
