@@ -20,28 +20,27 @@ class SessionModel;
 /// column demand, releases a hold when its session has no pending cell or no
 /// loaded row, loads the next candidate when a hold is free and the scheduler
 /// steps it, reports progress as the sessions remaining of the high-water
-/// mark, and holds nothing once the executor is shut down (the owner's
-/// `enabled` hook: nothing more is loaded, and the next update() releases
-/// every hold) or the component goes (detach()).
+/// mark, loads nothing more once the executor is shut down (the owner's
+/// `enabled` hook; the next update(), when a pass runs, releases every hold)
+/// and holds nothing once the component goes (detach()).
 ///
 /// It is the idle scheduler's lowest-priority task
 /// (SessionModel::ColumnFillTask, priority 5), registered by registerTask(). It
-/// has work while some session has a pending cell, and reports the sessions
-/// that have one of the fill's high-water mark, so the logbook's progress line
-/// shows the fill for its whole duration; the scheduler completes the fill
-/// when it has no pending cell left, reporting its final progress (a fill that
-/// starts while no session had a pending cell starts its own count). Its steps
-/// are loads: it can step while fewer than kMaxHeldSessions sessions are held
-/// and a candidate waits, taking the candidates in the order given; otherwise
-/// the scheduler rests until update() wakes it. A load is
+/// has work while some session has a pending cell, and reports the number of
+/// sessions that have one out of the fill's high-water mark, so the logbook's
+/// progress line shows the fill for its whole duration; the scheduler completes
+/// the fill when it has no pending cell left, reporting its final progress (a
+/// fill that starts while no session had a pending cell starts its own count).
+/// Its steps are loads: it can step while fewer than kMaxHeldSessions sessions
+/// are held and a candidate waits, taking the candidates in the order given;
+/// otherwise the scheduler rests until update() wakes it. A load is
 /// SessionModel::loadPinnedSession(): the real load (the session-id correction
 /// included, so every pair offered carries the row's corrected id) and a pin,
 /// the HOLD, from the load until the session has no pending cell left (so a
-/// chain of requested calculations keeps it). Sessions that were already
-/// loaded are never held; the executor pins them while their job is chosen or
-/// running. A released session stays in the pool of hidden sessions until
-/// ordinary eviction. Not cancellable: a cancel would be undone at the next
-/// tick. Cases:
+/// chain of requested calculations keeps it). Sessions that were already loaded
+/// are never held; the executor pins them while their job is chosen or running.
+/// A released session stays in the pool of hidden sessions until ordinary
+/// eviction. Not cancellable: a cancel would be undone at the next tick. Cases:
 ///  - a pool capacity (LogbookCacheSize) below the bound: the pool exceeds it
 ///    by at most the holds, which the eviction pass after a release evicts;
 ///    capacity 0 works;
@@ -55,8 +54,10 @@ class SessionModel;
 ///  - a load that fails: not held; the owner's `loadFailed` hook remembers it
 ///    so that it is not a candidate again this run;
 ///  - the executor shut down: no work (the owner's `enabled` hook), nothing
-///    more is loaded, and every hold is released at the next update() (the
-///    executor's shutdown ends its jobs, and each end runs the owner's pass).
+///    more is loaded, and every hold is released at the next update(). The
+///    shutdown ends the executor's jobs and each end runs the owner's pass;
+///    with no job to end no pass may follow, and the holds last until the
+///    next pass or detach().
 /// Saves, visible loads, bulk edits and column work have a higher priority,
 /// so a load never reads a file that a bulk edit is about to rewrite.
 ///
@@ -93,10 +94,10 @@ public:
     /// After each pass: releases every hold whose row is gone or not loaded,
     /// or whose session is not in `pendingSessions` (every hold when the model
     /// is gone or `enabled` is false); takes `loadCandidates` (row order, at
-    /// most kMaxHeldSessions);
-    /// remaining = pendingSessions.size(), and the total is the high-water mark,
-    /// started afresh when remaining rises from 0; wakes the scheduler when
-    /// hasWork(), the counts, the candidates or the number of holds changed.
+    /// most kMaxHeldSessions); remaining = pendingSessions.size(), and the
+    /// total is the high-water mark, started afresh when remaining rises from
+    /// 0; wakes the scheduler when hasWork(), the counts, the candidates or the
+    /// number of holds changed.
     void update(const QSet<QString> &pendingSessions, const QStringList &loadCandidates);
 
     QStringList heldSessionIds() const { return m_held; }   ///< in load order

@@ -85,7 +85,7 @@ CalculationDemand::CalculationDemand(SessionModel *sessionModel, PlotModel *plot
         // makes what this run remembered of the session's failed loads false;
         // a failed-load placeholder is announced too, and forgets nothing.
         connect(m_sessionModel, &SessionModel::sessionLoaded, this, [this](const QString &sessionId) {
-            m_reports.remove(sessionId);
+            dropReports(sessionId);
             const int row = m_sessionModel->getSessionRow(sessionId);
             if (row >= 0) {
                 const SessionRow &sr = std::as_const(*m_sessionModel).rowAt(row);
@@ -113,7 +113,7 @@ CalculationDemand::CalculationDemand(SessionModel *sessionModel, PlotModel *plot
     // Direct: emitted from inside record methods, so the slot only drops state
     // and schedules, like SessionModel's own
     connect(&LogbookManager::instance(), &LogbookManager::calculationRecordsChanged,
-            this, &CalculationDemand::onCalculationRecordsChanged);
+            this, &CalculationDemand::onCalculationRecordsChanged, Qt::DirectConnection);
 
     if (m_plotModel) {
         connect(m_plotModel, &QAbstractItemModel::dataChanged, this, &CalculationDemand::onPlotDataChanged);
@@ -681,6 +681,18 @@ const QSet<QString> &CalculationDemand::recordSet(const QString &sessionId)
     return m_recordSets.insert(sessionId, ids).value();
 }
 
+void CalculationDemand::dropReports(const QString &sessionId)
+{
+    m_reports.remove(sessionId);
+    ++m_reportDrops;
+}
+
+void CalculationDemand::dropAllReports()
+{
+    m_reports.clear();
+    ++m_reportDrops;
+}
+
 // ---- The pair memory ------------------------------------------------------------------
 
 const CalculationDemand::PairMemory *CalculationDemand::remembered(const QString &sessionId,
@@ -772,10 +784,10 @@ void CalculationDemand::onFillLoaded(const QString &requestedId, const QString &
         // moved its records there
         m_recordSets.remove(requestedId);
         m_recordReasons.remove(requestedId);
-        m_reports.remove(requestedId);
+        dropReports(requestedId);
         forgetSession(requestedId, Forget::Everything);
     }
-    scheduleUpdate();       // sessionLoaded scheduled a pass already
+    scheduleUpdate();       // coalesces with the pass sessionLoaded scheduled
 }
 
 QStringList CalculationDemand::heldSessionIds() const
@@ -806,7 +818,10 @@ void CalculationDemand::runLoadStep()
 // plain value, so that nothing is offered, withdrawn, loaded, pinned or
 // emitted while the guard is held; the walk writes the report and record-set
 // memos only, and the facts it learns go to the pass. blockers() may compute
-// on-demand values; that reads, it neither loads nor evicts.
+// on-demand values; that reads, it neither loads nor evicts. blockers() and
+// the display name may deliver the engine's pending events; the slots they
+// reach here only drop memos and schedule, so the walk holds no reference into
+// its memos across them.
 CalculationDemand::Walk CalculationDemand::walkRows(const JobRecord &running, const QSet<QString> &held,
                                                     const QString &focusedId)
 {
@@ -830,9 +845,8 @@ CalculationDemand::Walk CalculationDemand::walkRows(const JobRecord &running, co
         QString name;                   // read for the row's first listed track
         bool named = false;
         bool waiting = false;           // a column track of a row that is not loaded is waiting
-        QHash<QString, BlockerReport> *reports = nullptr;
         if (!loaded)
-            m_reports.remove(sessionId);
+            dropReports(sessionId);
 
         for (int s = 0; s < sources; ++s) {
             const Source &source = m_sources.at(s);
@@ -844,13 +858,19 @@ CalculationDemand::Walk CalculationDemand::walkRows(const JobRecord &running, co
             DemandTrack track;
             if (loaded) {
                 // Blocker inspection, memoized per session until its engine
-                // state may have changed
-                if (!reports)
-                    reports = &m_reports[sessionId];
-                auto memo = reports->find(source.id);
-                if (memo == reports->end())
-                    memo = reports->insert(source.id, combinedReport(sr.session.value(), source));
-                const BlockerReport &report = memo.value();
+                // state may have changed. A copy, never a reference into the
+                // memos (see above); a report whose memos were dropped while
+                // it was computed is used by this pass but not memoized.
+                BlockerReport report;
+                const auto memos = m_reports.constFind(sessionId);
+                if (memos != m_reports.constEnd() && memos->contains(source.id)) {
+                    report = memos->value(source.id);
+                } else {
+                    const quint64 drops = m_reportDrops;
+                    report = combinedReport(sr.session.value(), source);
+                    if (m_reportDrops == drops)
+                        m_reports[sessionId].insert(source.id, report);
+                }
                 track = classifyLoaded(sessionId, source, report, running, &walk.learned);
 
                 // Every blocker that may be offered, whatever the track's
@@ -1167,7 +1187,7 @@ void CalculationDemand::onPlotCheckStateChanged()
 void CalculationDemand::onDependencyChanged(const QString &sessionId, const DependencyKey &key)
 {
     // The session's engine state changed: its reports are inspected again
-    m_reports.remove(sessionId);
+    dropReports(sessionId);
 
     // Only the static closure of the checked requested plots and of the
     // requested columns matters: any other edit neither delays nor retries
@@ -1208,7 +1228,7 @@ void CalculationDemand::onVisibilityChanged(const QSet<QString> &, const QSet<QS
 // columns and rows.
 void CalculationDemand::onSessionModelAboutToBeReset()
 {
-    m_reports.clear();
+    dropAllReports();
     m_recordSets.clear();
     m_recordReasons.clear();
 }
@@ -1247,7 +1267,7 @@ void CalculationDemand::onCalculationRecordsChanged(const QString &sessionId, co
 {
     m_recordSets.remove(sessionId);
     m_recordReasons.remove(sessionId);
-    m_reports.remove(sessionId);
+    dropReports(sessionId);
     forgetPair(sessionId, calculationId);
     scheduleUpdate();
 }
@@ -1270,7 +1290,7 @@ void CalculationDemand::onJobFinished(JobId id, JobState state)
     // Read first: the record may be trimmed once this slot has returned
     const JobRecord record = m_queue ? m_queue->job(id) : JobRecord();
     if (record.id != 0)
-        m_reports.remove(record.sessionId);
+        dropReports(record.sessionId);
     if (state == JobState::Failed && record.id != 0) {
         // Not a function of the inputs, and not stored: not offered again in
         // this run unless the session's inputs change
@@ -1336,7 +1356,7 @@ void CalculationDemand::onRegistryChanged()
     // What a source needs follows the registrations: the next pass reads it
     // again
     m_memory.clear();
-    m_reports.clear();
+    dropAllReports();
     scheduleUpdate();
 }
 

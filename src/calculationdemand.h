@@ -45,16 +45,16 @@ struct SessionRow;
 /// is visible, loaded, and not a failed-load placeholder, in session-model row
 /// order. (b) Column demand: every enabled logbook column whose value depends
 /// on a requested calculation (the column is REQUESTED:
-/// SessionModel::columnRequestedCalculations() is not empty), for every session row of
-/// the logbook, loaded or not; one track per cell. A pair (session, requested
-/// calculation) is wanted while it has no result. A result counts whether it
-/// was published in this run or restored from storage (SessionModel restores
-/// it before the row is published), and whether it is a success or an
-/// input-determined failure. Nothing about how the state arose matters: a
-/// click, the Plots menu, applying a profile, the start-up restore of checked
-/// plots and enabling a column create the same demand. At start-up every
-/// session is hidden, so plots have no track; enabled requested columns create
-/// demand at once.
+/// SessionModel::columnRequestedCalculations() is not empty), for every
+/// session row of the logbook, loaded or not; one track per cell. A pair
+/// (session, requested calculation) is wanted while it has no result. A
+/// result counts whether it was published in this run or restored from
+/// storage (SessionModel restores it before the row is published), and
+/// whether it is a success or an input-determined failure. Nothing about how
+/// the state arose matters: a click, the Plots menu, applying a profile, the
+/// start-up restore of checked plots and enabling a column create the same
+/// demand. At start-up every session is hidden, so plots have no track;
+/// enabled requested columns create demand at once.
 ///
 /// WHERE A RESULT IS LOOKED UP. Every source (a checked requested plot, an
 /// enabled requested column) has its names: the plot's y name,
@@ -223,14 +223,13 @@ struct SessionRow;
 /// causes), a relevant dependencyChanged (a bulk edit publishes one) and
 /// calculationRecordWriteFailed; LogbookManager::calculationRecordsChanged (a
 /// record written or removed, or a changed reason the index learned); the
-/// executor's jobStarted
-/// and jobCancelRequested; a registry change; the end of a settle wait; the
-/// column fill's load; an offer the executor refused as not applicable. At
-/// once: when a plot is unchecked or a session hidden while a chosen next job
-/// exists (so that it is dropped before it can start), in jobFinished, which
-/// the executor emits before it schedules the next start - so a chain of
-/// requested calculations continues without an idle period between its
-/// links - and before the fill's load when a pass is pending.
+/// executor's jobStarted and jobCancelRequested; a registry change; the end of
+/// a settle wait; the column fill's load; an offer the executor refused as not
+/// applicable. At once: when a plot is unchecked or a session hidden while a
+/// chosen next job exists (so that it is dropped before it can start), in
+/// jobFinished, which the executor emits before it schedules the next start -
+/// so a chain of requested calculations continues without an idle period
+/// between its links - and before the fill's load when a pass is pending.
 /// jobProgress updates texts only, without inspection.
 ///
 /// PRESENTATION. The views read plotState(), columnState(), isCellPending(),
@@ -245,8 +244,8 @@ struct SessionRow;
 /// THE ONLY CALLER. This is the only product caller of JobQueue::offer() and
 /// JobQueue::withdrawChosenNext(). Nothing calls back into it: it observes
 /// PlotModel, SessionModel (its column set, column knowledge and display names
-/// included), the logbook manager's
-/// record changes, the registry and the executor's signals.
+/// included), the logbook manager's record changes, the registry and the
+/// executor's signals.
 ///
 /// PARTS. The presentation values (demandstate.h) are what the views read. The
 /// fill (demandfill.h) holds sessions loaded for column demand and runs the
@@ -299,9 +298,11 @@ public:
     /// The same by SessionModel row and column index; false out of range.
     bool isCellPending(int row, int column) const;
 
-    /// Ids of the plots / logbook columns whose state isWorking(), in no particular
-    /// order; empty when nothing is working. What the views' working-indicator
-    /// clocks follow (statesChanged() says when to ask again).
+    /// Ids of the plots / logbook columns whose state isWorking(), in no
+    /// particular order; empty when nothing is working. What the application's
+    /// one working-indicator clock follows (followDemand(),
+    /// DemandIndicatorView.h), and what the views repaint on its frames
+    /// (statesChanged() says when to ask again).
     QStringList workingPlotIds() const;
     QStringList workingColumnIds() const;
 
@@ -422,12 +423,12 @@ private:
     /// What the one walk returns: plain values, built under one guard.
     struct Walk {
         enum Tier { FocusedPlots, OtherPlots, VisibleColumns, HiddenColumns, TierCount };
-        std::array<QList<Candidate>, TierCount> tiers;  // each in row order; deduplicated by the pass
-        QVector<DemandState> states;                    // parallel to m_sources: counts and listed tracks, not finished
-        QVector<QSet<QString>> pendingCells;            // parallel to m_sources; empty for plots
-        QSet<QString> pendingSessions;                  // sessions with a pending column cell
-        QStringList loadCandidates;                     // at most DemandFill::kMaxHeldSessions, row order
-        QList<LearnedFact> learned;                     // applied by the pass after the walk
+        std::array<QList<Candidate>, TierCount> tiers;  ///< each in row order; deduplicated by the pass
+        QVector<DemandState> states;                    ///< parallel to m_sources: counts and listed tracks, not finished
+        QVector<QSet<QString>> pendingCells;            ///< parallel to m_sources; empty for plots
+        QSet<QString> pendingSessions;                  ///< sessions with a pending column cell
+        QStringList loadCandidates;                     ///< at most DemandFill::kMaxHeldSessions, row order
+        QList<LearnedFact> learned;                     ///< applied by the pass after the walk
     };
 
     // Which plots and columns matter
@@ -467,6 +468,10 @@ private:
     static QString loadFailureReason();
     /// The manager's record set of a session, memoized with its reasons.
     const QSet<QString> &recordSet(const QString &sessionId);
+    /// Drop the session's report memos / every report memo; both count in
+    /// m_reportDrops.
+    void dropReports(const QString &sessionId);
+    void dropAllReports();
 
     // The pair memory
     /// What is remembered of the pair; null when nothing. O(1).
@@ -535,6 +540,9 @@ private:
     // memo: a loaded session's combined report per source id. A plot id and a
     // column id never collide (a column id starts with its type and '|').
     QHash<QString, QHash<QString, BlockerReport>> m_reports;
+    // Counts every drop of report memos (a removal or a clear): a report whose
+    // memos were dropped while it was computed is not memoized
+    quint64 m_reportDrops = 0;
     /// Session id -> requested calculation instance id -> what this run remembers.
     /// Keyed by pair; nested so that a session's facts are found in O(1).
     QHash<QString, QHash<QString, PairMemory>> m_memory;
