@@ -73,6 +73,7 @@ public:
 
     /// What hovering the section shows: columnState(<its column id>).toolTip;
     /// empty for a plain section, out of range, or without a demand layer.
+    /// Tests only.
     QString toolTipForSection(int logicalIndex) const;
     /// Where the section's indicator or badge is painted, in viewport
     /// coordinates; null when none is (plain, hidden, or too narrow). Tests only.

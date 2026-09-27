@@ -67,7 +67,8 @@ public:
     bool helpEvent(QHelpEvent *event, QAbstractItemView *view, const QStyleOptionViewItem &option,
                    const QModelIndex &index) override;
 
-    /// What helpEvent() shows; empty for plain rows and categories.
+    /// What helpEvent() shows; empty for plain rows and categories. For tests
+    /// and for nothing else.
     QString toolTipFor(const QModelIndex &index) const;
     /// Where the row's one glyph is painted, in viewport coordinates; null for
     /// plain rows. For tests and for nothing else.

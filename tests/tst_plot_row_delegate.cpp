@@ -575,6 +575,7 @@ void PlotRowDelegateTest::longNameIsElidedNotTheCluster()
         m_view->resize(width + 1, 300);
         spin();
     }
+    QVERIFY2(baseRunsIntoGlyph(), "no width in 220..260 makes the base delegate's text reach the glyph");
 
     // The glyph is fully visible
     const QRect viewport = m_view->viewport()->rect();
@@ -1092,13 +1093,16 @@ void PlotRowDelegateTest::workingAnimationClock()
     clock.setActive(false);
     QVERIFY(!clock.isTicking());
 
-    // Made to follow no demand layer: inactive at once; no clock: nothing
+    // Made to follow no demand layer: inactive at once; no clock: nothing, not
+    // even a connection that a state change of the demand layer would reach
     WorkingAnimation follower;
     followDemand(&follower, nullptr);
     QVERIFY(!follower.isActive());
     QVERIFY(!follower.isTicking());
     followDemand(nullptr, nullptr);
     followDemand(nullptr, m_demand.get());
+    emit m_demand->statesChanged();
+    QVERIFY(!follower.isActive());
 }
 
 // The glyph plumbing both views share returns what each view computed on its

@@ -4722,7 +4722,7 @@ void CalculationDemandTest::settleClockAnswersItsQuestions()
 
 // ---- Presentation -------------------------------------------------------------------
 
-// The ids the views' clocks follow: exactly the plots and columns whose state
+// The ids the one clock follows: exactly the plots and columns whose state
 // is working, and statesChanged() says when they change.
 void CalculationDemandTest::workingIdsFollowStates()
 {
