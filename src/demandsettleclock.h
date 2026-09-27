@@ -42,7 +42,7 @@ public:
 
 private:
     void arm();                                 ///< single shot for nextWaitEnd(), or stop
-    void onTimeout();                           ///< dropExpired(); arm(); m_waitEnded()
+    void onTimeout();                           ///< dropExpired(); arm(); m_waitEnded() if a wait ended
 
     QHash<QString, QDeadlineTimer> m_until;
     QTimer m_timer;                             ///< single shot

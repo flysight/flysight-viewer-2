@@ -81,9 +81,13 @@ void DemandSettleClock::arm()
 
 void DemandSettleClock::onTimeout()
 {
+    // A coarse timer may fire a little before the earliest deadline: then no
+    // wait has ended, and the clock only re-arms
+    const qsizetype before = m_until.size();
     dropExpired();
+    const bool ended = m_until.size() < before;
     arm();
-    if (m_waitEnded)
+    if (ended && m_waitEnded)
         m_waitEnded();
 }
 
