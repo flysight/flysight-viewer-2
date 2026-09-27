@@ -1,219 +1,94 @@
-# Hierarchical Agent Workflow — Quick Reference
+# Agent workflow
 
-A system for implementing software features using coordinated sub-agents that keep context clean and enable parallel execution.
+A feature goes through three stages, each in its own conversation so that
+context stays clean. Michael writes the specification with an assistant,
+a planning coordinator turns it into a phased plan, and an implementation
+orchestrator implements the plan through implementation and review
+subagents, committing each accepted phase.
 
-## Core Concept
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         YOU                                     │
-│                          │                                      │
-│                          ▼                                      │
-│  ┌─────────────────────────────────────────┐                   │
-│  │       PLANNING COORDINATOR              │ ◄── Lightweight   │
-│  │   (creates structure, delegates detail) │     context       │
-│  └──────────────┬──────────────────────────┘                   │
-│                 │                                               │
-│        ┌────────┼────────┬────────┐                            │
-│        ▼        ▼        ▼        ▼                            │
-│   ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐                  │
-│   │Phase 1 │ │Phase 2 │ │Phase 3 │ │Phase N │  ◄── Parallel    │
-│   │  Doc   │ │  Doc   │ │  Doc   │ │  Doc   │      where       │
-│   └────────┘ └────────┘ └────────┘ └────────┘      possible    │
-│                                                                 │
-│                          │                                      │
-│                          ▼                                      │
-│  ┌─────────────────────────────────────────┐                   │
-│  │     IMPLEMENTATION ORCHESTRATOR         │ ◄── Fresh         │
-│  │   (coordinates impl & review agents)    │     conversation  │
-│  └──────────────┬──────────────────────────┘                   │
-│                 │                                               │
-│        ┌────────┴────────┐                                     │
-│        ▼                 ▼                                      │
-│   ┌─────────┐       ┌─────────┐                                │
-│   │  Impl   │ ◄───► │ Review  │  ◄── Iterate until ACCEPT     │
-│   │  Agent  │       │  Agent  │      (max 3 cycles)            │
-│   └─────────┘       └─────────┘                                │
-│                                                                 │
-│                          │                                      │
-│                          ▼                                      │
-│              ┌───────────┴───────────┐                         │
-│              ▼           ▼           ▼                          │
-│         Architecture  Quality   Requirements                    │
-│           Review      Review      Review                        │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+```text
+PLANS/<feature>.md                 the specification (behaviour, boundaries,
+                                   tests, documentation, Commit Policy)
+        |
+        v  planning-coordinator.md  -> spawns phase-documenter.md per phase
+PLANS/implementation-plan/
+    00-overview.md                 spec verbatim, phases, references,
+                                   decisions, Commit Policy
+    NN-<phase>.md                  one per phase
+        |
+        v  implementation-orchestrator.md
+           -> implementation-agent.md, review-agent.md per phase,
+              final reviews, one commit and tag per accepted phase
+        |
+        v  Michael reviews and pushes; the spec and plan move to PLANS/done/
+           and are committed on their own
 ```
 
-## File Structure
+## Files
 
-Place these files in your project:
-
-```
-your-project/
-├── .claude/
-│   └── prompts/
-│       ├── planning-coordinator.md      # Orchestrates planning phase
-│       ├── phase-documenter.md          # Template for phase sub-agents
-│       ├── implementation-orchestrator.md # Orchestrates implementation
-│       ├── implementation-agent.md      # Template for coding sub-agents
-│       └── review-agent.md              # Template for review sub-agents
-├── PLANS/
-│   └── implementation-plan/             # Generated during planning
-│       ├── 00-overview.md
-│       ├── 01-phase-one.md
-│       └── ...
-└── src/
-    └── ...
+```text
+.claude/prompts/planning-coordinator.md       stage 2 coordinator
+.claude/prompts/phase-documenter.md           one phase document
+.claude/prompts/implementation-orchestrator.md stage 3 coordinator
+.claude/prompts/implementation-agent.md       writes the code of one phase
+.claude/prompts/review-agent.md               reviews one phase, or the whole
+CLAUDE.md                                     project facts every agent loads
+CLAUDE.local.md                               this machine's facts (untracked)
 ```
 
-## File Relationships
+## Starting each stage
 
-```
-planning-coordinator.md ──references──► phase-documenter.md
-                                        (spawns sub-agents using this)
+Planning, in a fresh conversation:
 
-implementation-orchestrator.md ──references──► implementation-agent.md
-                               ──references──► review-agent.md
-                                               (spawns sub-agents using these)
-```
-
-## Workflow
-
-### Step 1: Planning Phase
-
-Start a Claude Code conversation and run:
-
-```
-Follow the instructions in .claude/prompts/planning-coordinator.md
-
-Feature specification:
-[Describe what you want to build, or reference a spec file]
-```
-
-**What happens:**
-1. Coordinator analyzes codebase for patterns
-2. Creates `PLANS/implementation-plan/00-overview.md` with phase structure
-3. Spawns sub-agents to document each phase in detail
-4. **Waits for all sub-agents to return results** (does not yield its turn)
-5. Performs integration check on completed documents
-6. Produces completion report
-
-**Output:** `PLANS/implementation-plan/` folder with overview + one file per phase
-
-### Step 2: Implementation Phase
-
-Start a **fresh conversation** (clean context) and run:
-
-```
-Follow the instructions in .claude/prompts/implementation-orchestrator.md
-
-The implementation plan is in PLANS/implementation-plan/
-```
-
-**What happens:**
-1. Orchestrator reads plan, identifies parallel tracks
-2. Spawns implementation agents for each track
-3. **Waits for each agent to complete** before spawning review agents
-4. Spawns review agents to verify each implementation
-5. **Waits for review verdicts** and routes feedback until all phases pass (max 3 iterations)
-6. Spawns final review agents (architecture, quality, requirements)
-7. **Waits for all reviews** and produces completion report
-
-**Output:** Working code + final review summary
-
-## Key Principles
-
-| Principle | Why It Matters |
-|-----------|----------------|
-| **Coordinators don't write code** | Keeps their context focused on orchestration |
-| **Sub-agents get FULL context** | They have fresh context windows—don't starve them |
-| **Parallel where possible** | Independent phases/tracks run simultaneously |
-| **Bounded iteration** | Max 3 review cycles prevents infinite loops |
-| **Explicit handoffs** | Each agent receives complete, unabridged instructions |
-| **Continuous execution** | Coordinators never yield their turn until all work is done |
-
-### The Context Rule
-
-```
-Coordinators: Keep YOUR context lean (don't read full files)
-Sub-agents:   Give them EVERYTHING (full specs, all reference files)
-```
-
-The constraint is on the coordinator's context, not what gets passed to sub-agents. A complex feature might need 15+ reference files—pass all of them.
-
-### The Continuity Rule
-
-```
-Coordinators: Do NOT end your turn while work remains
-              Spawn → Wait → Collect → Act → Repeat
-              The entire workflow is one atomic turn
-```
-
-Coordinators must stay active and wait for sub-agent results. They must not describe future actions and stop — they must actually execute the full loop.
-
-## Customization Points
-
-### Adjusting Review Strictness
-
-Edit `review-agent.md` section "When to ACCEPT" / "When to REJECT"
-
-### Changing Iteration Limits
-
-Edit `implementation-orchestrator.md`:
-```
-- If iteration < 3: Route feedback...
-- If iteration >= 3: Mark as "Escalated"...
-```
-
-### Adding Domain-Specific Patterns
-
-Add a section to `phase-documenter.md` or `implementation-agent.md`:
-```markdown
-## Project-Specific Patterns
-
-- Always use [your pattern] for [situation]
-- Reference `path/to/canonical/example.cpp` for [pattern type]
-```
-
-### Specialized Final Reviews
-
-Edit the "Final Review Phase" section in `implementation-orchestrator.md` to add or modify the three review perspectives.
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| Agent going off-track | Check that spawn instructions include full context |
-| Infinite revision loops | Verify iteration counter is being checked |
-| Context exhaustion | Ensure coordinator isn't reading full source files |
-| Inconsistent phases | Add cross-reference check in planning coordinator |
-| Missed requirements | Strengthen requirements coverage final review |
-| **Coordinator stops early** | Ensure "Execution Loop — CRITICAL" section is present and coordinator is told not to yield its turn |
-| **Coordinator describes future work and stops** | Add explicit "Do NOT describe what you will do and stop — actually do it" language |
-
-## Quick Commands
-
-**Start planning:**
-```
+```text
 Follow .claude/prompts/planning-coordinator.md
-Feature: [description]
+Specification: PLANS/<feature>.md
 ```
 
-**Start implementation:**
-```
+Implementation, in a fresh conversation:
+
+```text
 Follow .claude/prompts/implementation-orchestrator.md
 Plan: PLANS/implementation-plan/
 ```
 
-**Resume stuck implementation:**
-```
+Resuming an interrupted implementation:
+
+```text
 Continue as implementation orchestrator per .claude/prompts/implementation-orchestrator.md
-Current status: [paste status table]
-Resume from: [track/phase]
+Plan: PLANS/implementation-plan/
+Done so far: <phases committed, with tags>; resume from <phase>.
 ```
 
-## Version
+## Conventions
 
-Last updated: February 2025
-Compatible with: Claude Code with sub-agent/Task capabilities
+- **The specification** says what the change must do and the boundaries it
+  must respect, at the level of behaviour and architecture. It names a
+  function or class only when the name is part of the observable contract.
+  It carries no planner notes, build-machine details or status history. It
+  ends with a Commit Policy section, which is Michael's standing
+  authorization to commit for that plan and names the branch, the commit
+  subject format and the tag format. Specifications and archived plans
+  are committed on their own, never in a phase commit.
+- **The plan** keeps the same altitude inside a phase and is explicit only
+  at the interfaces between phases, where two agents working from different
+  documents must agree. The overview carries the specification verbatim and
+  the Commit Policy verbatim.
+- **Coordinators do not write code**, and only the implementation
+  orchestrator changes repository state. Subagents get everything they need
+  by path and read it in full; a coordinator passes paths, not pasted
+  contents, and keeps its own context for coordination.
+- **A review builds and runs.** A review that did not build the tree and run
+  the relevant tests is not a review.
+- **Every phase leaves the tree green**: build, tests, the audit and the
+  acceptance map. The documentation that describes changed behaviour changes
+  with it.
+- **Iteration is bounded**: three review cycles per phase, then escalation
+  to Michael with the phase uncommitted.
+
+## Models
+
+The stages are run with Opus 5.5 at high effort; subagents inherit the
+session's model unless a spawn says otherwise. The prompts assume an agent
+that reads files reliably, keeps working until the task is done, and
+reports what it did without being handed a template.
