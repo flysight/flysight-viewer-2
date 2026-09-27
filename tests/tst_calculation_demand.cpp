@@ -3063,6 +3063,8 @@ void CalculationDemandTest::fillTaskReportsProgressWhileWaiting()
     connect(&scheduler, &IdleScheduler::schedulerIdle, &scope, [&] { events.append(QStringLiteral("I")); });
     connect(m_model.get(), &SessionModel::sessionLoaded, &scope,
             [&](const QString &id) { events.append(QStringLiteral("L ") + id); });
+    int activeTask = -1;                        // the task the scheduler last reported active
+    connect(&scheduler, &IdleScheduler::activeTaskChanged, &scope, [&](int id, bool) { activeTask = id; });
     // At each job's end, after the demand layer's own slot (connected first)
     QList<bool> fillWorkAtEnd;
     connect(m_queue.get(), &JobQueue::jobFinished, &scope,
@@ -3097,7 +3099,20 @@ void CalculationDemandTest::fillTaskReportsProgressWhileWaiting()
     QTRY_VERIFY(events.contains(QStringLiteral("L s3")));
     QVERIFY(!events.contains(QStringLiteral("I")));
 
-    gate().open(3);
+    // The other jobs one at a time, each let through while the scheduler rests
+    // on the fill, so that each ends with the fill the active task. (A job's
+    // result drops the loaded row's column value until the model's queued
+    // refresh computes it again, and meanwhile the column work has work. A
+    // job that ends while a tick is due can see that tick run before the
+    // refresh where the event loop fires a due timer before events posted in
+    // the same round (glib, Core Foundation): the column work becomes the
+    // active task, and a fill that loses its work behind it is not completed.)
+    for (int job = 0; job < 3; ++job) {
+        QVERIFY(gate().waitEntered());
+        QTRY_VERIFY(!scheduler.isTicking());
+        QCOMPARE(activeTask, int(SessionModel::ColumnFillTask));
+        gate().open(1);
+    }
     QVERIFY(waitDemandIdle());
     // The pass in the last job's end found no pending cell left: the fill had
     // no work from then on, and the scheduler completed it
