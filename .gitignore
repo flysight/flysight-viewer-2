@@ -50,5 +50,17 @@ third-party/KDDockWidgets-install/
 third-party/GTSAM-install/
 third-party/oneTBB-install/
 
-# Claude Code files
-.claude/
+# Local working files
+/TEMP/
+/experiments/
+
+# Solver sources and build trees from before the superbuild downloaded them
+third-party/gtsam/
+third-party/gtsam-build/
+third-party/oneTBB/
+third-party/oneTBB-build/
+
+# Claude Code: personal files only
+.claude/settings.local.json
+.claude/worktrees/
+CLAUDE.local.md
