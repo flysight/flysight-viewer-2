@@ -87,12 +87,25 @@ set(ALWAYS_EXCLUDED ":!python_plugins/README.md" ":!tests/audit")
 # Default pathspec
 set(P src tests python_plugins cmake CMakeLists.txt)
 
+# Word boundaries. The rules run on Windows, Linux and macOS, and git grep -E
+# uses the platform's regex library: the GNU escapes (\b, \<, \w, \s, ...) work
+# on the first two and match nothing on macOS, where a rule using them checks
+# nothing (or, for expect_count, fails). A rule spells a boundary with these
+# groups instead: a hit is a matching line, so the extra character matched
+# does not count. _grep refuses a pattern with a GNU escape.
+set(WB_START "(^|[^A-Za-z0-9_])")    # before a name: the line's start or a non-word character
+set(WB_END "([^A-Za-z0-9_]|$)")      # after a name: a non-word character or the line's end
+
 function(_violation text)
   set(VIOLATIONS "${VIOLATIONS}\n  - ${text}" PARENT_SCOPE)
 endfunction()
 
 # _grep(<out-var> <regex> <pathspec>...): matching lines ("file:line:text"), as a list
 function(_grep out regex)
+  if(regex MATCHES "\\\\[bBwWsSdD<>]")
+    message(FATAL_ERROR "cleanup audit: '${regex}' uses a GNU regex escape, which macOS "
+                        "git grep does not support; spell a word boundary with WB_START / WB_END")
+  endif()
   execute_process(
     COMMAND "${GIT}" -c core.quotepath=off grep --untracked -I -n -E -e "${regex}" -- ${ARGN} ${ALWAYS_EXCLUDED}
     WORKING_DIRECTORY "${REPO}"
@@ -155,7 +168,7 @@ endfunction()
 # m_sideEffectFrames: the sibling-frame scaffolding of sensor-fusion-clean-port
 # (seventeen per-output registrations writing each other's results).
 expect_none("old engine"
-  "CalculatedValue\\b|calculatedvalue\\.|DependencyManager|dependencymanager|calculatedvalueregistry|CalculatedValueRegistry|m_sideEffectKeys|m_sideEffectFrames|m_activeCalculations|toDependencyKey"
+  "CalculatedValue${WB_END}|calculatedvalue\\.|DependencyManager|dependencymanager|calculatedvalueregistry|CalculatedValueRegistry|m_sideEffectKeys|m_sideEffectFrames|m_activeCalculations|toDependencyKey"
   ${P})
 
 # ─────────────────────────────── old registration API and direct cache setters
@@ -164,19 +177,19 @@ expect_none("old registration / setters"
   ${P})
 
 # ─────────────────────────────── import-time conversion
-expect_none("import-time conversion" "toSI\\b|PHASE4-SWITCH" ${P})
+expect_none("import-time conversion" "toSI${WB_END}|PHASE4-SWITCH" ${P})
 expect_none("import-time conversion (importer)" "UnitConversion|unitconversion\\.h"
   src/dataimporter.cpp src/dataimporter.h)
 
 # ─────────────────────────────── friends and back doors
 expect_none("friend / back doors"
-  "friend class DataImporter|invalidateAllCalculations|initializeFromDevice|loadAllSessions|scanSessionFiles\\b"
+  "friend class DataImporter|invalidateAllCalculations|initializeFromDevice|loadAllSessions|scanSessionFiles${WB_END}"
   src tests)
 
 # ─────────────────────────────── ambiguous unit API (not tests: Fs1FileBuilder::units)
 # Allow: this matches ANY `.units(` / `->units(` call in src. A new, unrelated
 # accessor of that name needs a ":!src/<file>" exclusion here (or another name).
-expect_none("ambiguous unit API" "\\bgetUnit\\(|[.>]units\\(" src)
+expect_none("ambiguous unit API" "${WB_START}getUnit\\(|[.>]units\\(" src)
 
 # ─────────────────────────────── dead bridge code
 expect_none("dead bridge"
@@ -186,7 +199,7 @@ expect_none("dead bridge (DependencyKey crossing)" "DependencyKey"
 
 # ─────────────────────────────── superseded commit 4668f48 (import-time gyro correction)
 expect_none("superseded import-time correction"
-  "GyroScaling|ImportGyroScaling|DataSchema\\b|dataSchemaVersion|SchemaVersion\\b"
+  "GyroScaling|ImportGyroScaling|DataSchema${WB_END}|dataSchemaVersion|SchemaVersion${WB_END}"
   ${P} docs README.md)
 
 # ─────────────────────────────── renamed-column conventions
@@ -432,9 +445,9 @@ expect_count("cancel is kept for the jobs dock" "bool cancel\\(JobId" 1 src/jobq
 # expected; a jobs dock that needs one brings it back with its first caller
 # (tests/README.md is excluded: section 10 spells these names).
 expect_none("the executor has no idle or queued signal and no two-job query"
-  "jobQueued|activeJobs\\(|JobQueue::idle\\b|announceIdleIfIdle|m_idleAnnounced|AfterEnd"
+  "jobQueued|activeJobs\\(|JobQueue::idle${WB_END}|announceIdleIfIdle|m_idleAnnounced|AfterEnd"
   src tests ":!tests/README.md")
-expect_none("the executor announces no idle()" "\\bidle\\(\\)" src)
+expect_none("the executor announces no idle()" "${WB_START}idle\\(\\)" src)
 # The demand layer is the only offerer (the rules above), so the chosen next
 # job is always its own: it keeps no memory of its own offer and withdraws
 # the chosen next job whenever its choice finds nothing. Allow: none expected.
@@ -477,10 +490,10 @@ expect_none("the logic components see no widget"
 # ─────────────────────────────── fusion-model (items 212, 218, 234, 247)
 audit_group(fusion-model)
 # Allow: tests/README.md is excluded because its section 10 spells these
-# patterns. `kWindowLength\b` and not `kWindowLength`: the kernel's
+# patterns. `kWindowLength` only at a word end (WB_END): the kernel's
 # kWindowLengthsMessage (fusionsamples.cpp) is a rejection reason, not a gate.
 expect_none("the stationary-window detector is gone"
-  "stationarywindow|StationaryWindow|assessStationaryWindow|bestStationaryWindow|kMaxMeanRate|imuGapLimit|kWindowLength\\b|kWindowGrid"
+  "stationarywindow|StationaryWindow|assessStationaryWindow|bestStationaryWindow|kMaxMeanRate|imuGapLimit|kWindowLength${WB_END}|kWindowGrid"
   src tests cmake docs README.md CMakeLists.txt ":!tests/README.md")
 # Allow: none expected. Preparation neither reports nor asks; the first
 # boundary of a run is "Starting fit" (fusionprogress.h).
@@ -581,7 +594,7 @@ expect_only("record file names: the record format and the logbook manager only"
 # deleted on an input change or when stale - all by the result store; the
 # logbook manager deletes them itself with their session and as strays.
 expect_only("records are written, read and removed by the result store"
-  "\\b(write|read|remove)CalculationRecords?\\("
+  "${WB_START}(write|read|remove)CalculationRecords?\\("
   "^src/logbookmanager\\.(cpp|h)$|^src/calculationresultstore\\.(cpp|h)$" src)
 expect_only("one result store, owned by the session model" "CalculationResultStore"
   "^src/calculationresultstore\\.(cpp|h)$|^src/sessionmodel\\.(cpp|h)$" src)
@@ -881,7 +894,7 @@ expect_count("the one walk reads the rows under one guard" "RowStabilityGuard +[
 # slot and the fields no view read. Allow: none expected (tests/README.md is
 # excluded: section 10 spells these names).
 expect_none("the demand layer's replaced machinery stays gone"
-  "isFillEnding|m_fillEnding|[Ss]ettlement|m_settled|CellKey|ColumnWalk|walkColumns|ColumnInfo|plotCandidates|inspectUnderGuard|inspectedPlots|syncColumns|m_columnReports|buildState|finishState|rebuildRelevantNames|m_relevantNames|m_columnsDirty|rowDisplayName|onSessionDataChanged|JobFailed|CalculationDemand::(buildToolTip|kToolTipListLimit|kMaxHeldSessions)|\\.(settling|waiting)\\b"
+  "isFillEnding|m_fillEnding|[Ss]ettlement|m_settled|CellKey|ColumnWalk|walkColumns|ColumnInfo|plotCandidates|inspectUnderGuard|inspectedPlots|syncColumns|m_columnReports|buildState|finishState|rebuildRelevantNames|m_relevantNames|m_columnsDirty|rowDisplayName|onSessionDataChanged|JobFailed|CalculationDemand::(buildToolTip|kToolTipListLimit|kMaxHeldSessions)|\\.(settling|waiting)${WB_END}"
   src tests ":!tests/README.md")
 # One indicator: a plot row shows the arc or the badge and nothing else;
 # the hover carries the numbers. Allow: none expected.
@@ -895,8 +908,8 @@ expect_none("the plot row shows one glyph" "warningCount|warningIcon|indicatorIc
 # The followDemand pattern needs an argument, so a comment that names
 # "followDemand()" does not match. Allow: none expected (tests make their
 # own clock; tests are not searched).
-expect_count("one working-indicator clock" "new WorkingAnimation\\b|make_unique<WorkingAnimation>" 1 src)
-expect_only("one working-indicator clock" "new WorkingAnimation\\b|make_unique<WorkingAnimation>"
+expect_count("one working-indicator clock" "new WorkingAnimation${WB_END}|make_unique<WorkingAnimation>" 1 src)
+expect_only("one working-indicator clock" "new WorkingAnimation${WB_END}|make_unique<WorkingAnimation>"
   "^src/mainwindow\\.cpp$" src)
 expect_only("the clock follows the demand layer in one place" "followDemand\\([^)]"
   "^src/ui/docks/DemandIndicatorView\\.(cpp|h)$|^src/mainwindow\\.cpp$" src)
@@ -917,7 +930,7 @@ expect_count("the fill has a progress text of its own" "\"Computing results: %v 
 # memory", "a remembered failure", "the scheduler completes it"; never name
 # the removed API or the per-cell memory.
 expect_none("the documents describe the refined demand layer"
-  "jobQueued|activeJobs\\(|\\bidle\\(\\)|[Ss]ettlement|progressLabel|isFillEnding|one clock per view|lose work only by stepping|under the same label|arc with \"k of n\"|triangle with a number|CalculationDemand::(kMaxHeldSessions|kToolTipListLimit|buildToolTip)"
+  "jobQueued|activeJobs\\(|${WB_START}idle\\(\\)|[Ss]ettlement|progressLabel|isFillEnding|one clock per view|lose work only by stepping|under the same label|arc with \"k of n\"|triangle with a number|CalculationDemand::(kMaxHeldSessions|kToolTipListLimit|buildToolTip)"
   docs README.md)
 
 # ─────────────────────────────── leftover markers
