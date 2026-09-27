@@ -92,13 +92,14 @@ struct CalculationRecordRead {
 /// into its temporary copy of an unloaded session) are UNCONFIRMED:
 /// flushIndex() leaves them out of the stamp and omits the values over them.
 /// Records are read for a session being loaded and for that copy, which is
-/// never written from. Writing or removing
-/// a record drops the session's cached values over that calculation and emits
-/// calculationRecordsChanged(); so does learning a record reason that differs
-/// from the one the index held (setCalculationRecordReason()). Ordering rule: a write whose calculation
-/// index.json on disk lists as present under a value flushes the index first;
-/// a removal never needs to (the start-up check sees the present -> absent
-/// flip). See the crash table above writeCalculationRecord() in the .cpp.
+/// never written from. Writing or removing a record drops the session's cached
+/// values over that calculation and emits calculationRecordsChanged(); learning
+/// a record reason that differs from the one the index held
+/// (setCalculationRecordReason()) emits it too, without dropping values.
+/// Ordering rule: a write whose calculation index.json on disk lists as present
+/// under a value flushes the index first; a removal never needs to (the
+/// start-up check sees the present -> absent flip). See the crash table above
+/// writeCalculationRecord() in the .cpp.
 ///
 /// SAVE ORDERING. index.json and a session file are separate atomic writes.
 /// The invariant kept by construction is: index.json on disk never holds a
@@ -375,11 +376,13 @@ public:
 signals:
     // A record of (sessionId, calculationId) was written, removed, skipped at a
     // load, or a write or removal of it failed, or the index learned a changed
-    // reason of it (setCalculationRecordReason()). The cached values of the
-    // session that depend on the calculation have already been dropped here.
-    // Emitted synchronously, from inside the record method (so possibly from an
-    // engine listener): a receiver must only drop state and defer work. Not
-    // emitted by removeSession(), the stray pass, or initialize().
+    // reason of it (setCalculationRecordReason()). For a write, a removal, a
+    // skip or a failure the manager has already dropped the session's cached
+    // values that depend on the calculation; for a learned reason it has not
+    // (each listener drops what it caches). Emitted synchronously, from inside
+    // the record method (so possibly from an engine listener): a receiver must
+    // only drop state and defer work. Not emitted by removeSession(), the stray
+    // pass, or initialize().
     void calculationRecordsChanged(const QString &sessionId, const QString &calculationId);
 
 private:

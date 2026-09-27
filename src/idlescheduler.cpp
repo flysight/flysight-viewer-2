@@ -93,13 +93,20 @@ void IdleScheduler::tick()
             entry && entry->def.canStep && entry->def.hasWork && !entry->def.hasWork()) {
             const TaskId gone = m_activeTask;
             reportProgress(gone);
-            // A slot of progressChanged may have removed the task; a removed
-            // task is never completed
-            const Entry *still = find(gone);
-            const CompleteFn complete = still ? still->def.onComplete : CompleteFn();
-            m_activeTask = -1;
-            if (complete)
-                complete(false);
+            // A slot of progressChanged may have cancelled the task (completed
+            // already), removed it (never completed) or given it work again
+            // (the scan below reports it active again): the rule goes on only
+            // while the task is still the one reported active, and completes
+            // it only while it still has no work
+            if (m_activeTask == gone) {
+                m_activeTask = -1;
+                if (const Entry *still = find(gone);
+                    still && still->def.canStep && still->def.hasWork && !still->def.hasWork()) {
+                    const CompleteFn complete = still->def.onComplete;
+                    if (complete)
+                        complete(false);
+                }
+            }
         }
     }
 

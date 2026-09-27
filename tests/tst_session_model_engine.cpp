@@ -901,8 +901,9 @@ void SessionModelEngineTest::schedulerWaitingTaskDoesNotSpin()
 // A task that waits (registered with canStep) and loses its work without a
 // step is completed by the next tick: its final progress, then
 // onComplete(false), before the next active task or idle, and only once. A
-// cancelled task is completed once, as cancelled. A task without canStep is
-// completed only through its step or cancel().
+// cancelled task is completed once, as cancelled, also when a slot of its final
+// progress cancels it; one given its work back by that slot is not completed. A
+// task without canStep is completed only through its step or cancel().
 void SessionModelEngineTest::schedulerCompletesWaitingTaskWhoseWorkIsGone()
 {
     QVERIFY(waitForIdle(*m_model));
@@ -1013,6 +1014,57 @@ void SessionModelEngineTest::schedulerCompletesWaitingTaskWhoseWorkIsGone()
     QVERIFY(!events.join(QLatin1Char(' ')).contains(QStringLiteral("C95")));
     QCOMPARE(events.first(), QStringLiteral("A95"));
     QCOMPARE(events.last(), QStringLiteral("I"));
+
+    // (e) A slot of the final progress cancels 93: it is completed once, as
+    // cancelled, and not completed again by the tick that reported it
+    waitingHasWork = true;
+    waitingRemaining = 1;
+    events.clear();
+    scheduler.wake();
+    QTRY_VERIFY(!scheduler.isTicking());
+    QCOMPARE(events, QStringList({"A93", "P93 1/3"}));
+    {
+        QObject cancelScope;
+        connect(&scheduler, &IdleScheduler::progressChanged, &cancelScope,
+                [&scheduler](int id, int remaining, int) {
+            if (id == 93 && remaining == 0)
+                scheduler.cancel(93);
+        });
+        events.clear();
+        waitingHasWork = false;
+        waitingRemaining = 0;
+        scheduler.wake();
+        QTRY_VERIFY(events.contains(QStringLiteral("I")));
+        QVERIFY(waitForIdle(*m_model));
+    }
+    QCOMPARE(events, QStringList({"P93 0/3", "C93:1", "I"}));
+    QCOMPARE(waitingSteps, 0);
+
+    // (f) A slot of the final progress gives 93 its work back: it is not
+    // completed, and the scheduler reports it active again
+    waitingHasWork = true;
+    waitingRemaining = 1;
+    events.clear();
+    scheduler.wake();
+    QTRY_VERIFY(!scheduler.isTicking());
+    QCOMPARE(events, QStringList({"A93", "P93 1/3"}));
+    {
+        QObject giveBackScope;
+        connect(&scheduler, &IdleScheduler::progressChanged, &giveBackScope,
+                [&waitingHasWork, &waitingRemaining](int id, int remaining, int) {
+            if (id == 93 && remaining == 0) {
+                waitingHasWork = true;
+                waitingRemaining = 2;
+            }
+        });
+        events.clear();
+        waitingHasWork = false;
+        waitingRemaining = 0;
+        scheduler.wake();
+        QTRY_VERIFY(!scheduler.isTicking());
+    }
+    QCOMPARE(events, QStringList({"P93 0/3", "A93", "P93 2/3"}));
+    QCOMPARE(waitingSteps, 0);
 }
 
 // The bulk edit publishes its edit as a direct edit does: the row's display
