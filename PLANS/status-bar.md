@@ -124,7 +124,9 @@ refinements apply. In addition:
 
 The main window has a status bar. It is always present, and empty when
 nothing is in progress and nothing has failed: it never appears or
-disappears, so the layout does not jump.
+disappears, so the layout does not jump. The activity area sits at its left,
+where an application says what it is doing, and the warning at its right,
+where state indicators sit; a widget takes width only while it is shown.
 
 Its activity area presents the items in progress:
 
@@ -210,9 +212,11 @@ current failure and is not counted.
 ## 8. The logbook row
 
 A recording that has a current failure shows one warning glyph on its row
-in the logbook, at the left of the row's first cell, whatever column that
+in the logbook, after the text of the row's first cell, whatever column that
 is: the logbook has no fixed column, and the glyph belongs to the row, not
-to a column. Its hover lists the recording's failed calculations with their
+to a column. The glyph follows the text as a badge follows a name, so the
+text stays where it is and the glyph is never pinned to the cell's edge
+beside the next column. Its hover lists the recording's failed calculations with their
 reasons, in the form of the status bar's hover for that recording. A row
 that is not loaded shows the glyph from the record set, without loading,
 exactly as its column header was badged before.
@@ -224,7 +228,8 @@ it is per cell by nature, answers "will this fill in?" where the question is
 asked, and duplicates nothing.
 
 The glyph takes room in the first cell's text rectangle only when it is
-shown, so a logbook without failures looks exactly as it does today.
+shown, and takes it from the trailing end, so a logbook without failures
+looks exactly as it does today and a failing row's text does not move.
 
 ## 9. What goes
 
