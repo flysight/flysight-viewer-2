@@ -311,8 +311,10 @@ physical plausibility of a result before interpreting it.
 ## 6. What is rejected
 
 The fit refuses input it cannot use. A rejection is a result: the measurement
-outputs are unavailable, `_FUSION_DIAGNOSTICS` carries the reason, and the plot
-row shows a warning badge with that reason.
+outputs are unavailable, `_FUSION_DIAGNOSTICS` carries the reason, and the
+recording is listed among those that could not be computed, with that reason:
+in the status bar's warning and on its logbook row
+([COMPUTED_PLOTS.md](COMPUTED_PLOTS.md), section 7).
 
 - a non-finite value in any input channel (`IMU/temperature` included);
 - a GNSS accuracy (sigma) that is not positive;
@@ -380,13 +382,14 @@ for a prefix, its length). A linear solve in progress finishes first. A cancelle
 publishes nothing and caches nothing.
 
 **Outcomes.** A rejection (section 6) and a solver failure are functions of the
-inputs, so they are cached like any result: the row shows the warning badge,
-and nothing offers a retry until an input changes, because the same inputs
-would give the same answer. Running out of memory, failing to start the
-worker, or failing to write the fit's stored copy is not a function of the
-inputs and is never cached as a failure: it is shown with the warning badge
-and its reason, not tried again while the application runs unless an input
-changes, and tried again at the next start.
+inputs, so they are cached like any result: the recording is listed among
+those that could not be computed (the status bar's warning and the logbook
+row), with its reason, and nothing offers a retry until an input changes,
+because the same inputs would give the same answer. Running out of memory,
+failing to start the worker, or failing to write the fit's stored copy is not
+a function of the inputs and is never cached as a failure: the recording is
+listed the same way with its reason, marked as tried again at the next start;
+it is not tried again while the application runs unless an input changes.
 
 **Invalidation.** A change to a declared input (a re-import, a merge, a changed
 `SCHEMA_VER`, a changed origin) drops the result, every value derived from
@@ -402,8 +405,9 @@ changes that string, and every stored fit is then dropped at its recording's
 next load. The record also states what provided each input the fit looked up,
 and a load repeats those lookups, so only a change of what the fit reads, or
 of the code that computes it, drops a stored fit. A cancelled fit, or one that
-ran out of memory, stores nothing. A stored rejection shows the warning badge
-again, with its reason. A stored fit whose file cannot be read when its
+ran out of memory, stores nothing. A stored rejection is listed again among
+the recordings that could not be computed, with its reason, also after a
+restart and without loading the recording. A stored fit whose file cannot be read when its
 recording is loaded (another program holding it, say) is kept: the recording
 reads as not fitted until it is loaded again (and is fitted again meanwhile if
 something switched on needs it).
@@ -440,8 +444,8 @@ demonstrated by tests, all labelled `fusion`:
 | `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the two stopping rules forced through the tuning, the per-step covariance, the temperature factor's Jacobians and the three temperature cases, and the fit trace iteration by iteration against the goldens |
 | `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
 | `tst_fusion_jobs` | the real fit through the executor: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result and kept, for an unloaded session, through an altitude marker added at run time or at the next start |
-| `tst_fusion_rows` | the plot rows with the real fusion plots, end to end: fits started and dropped by what is checked and visible, with no gesture |
-| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), rejection and solver-failure badges, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a logbook column over roll filled for recordings that are not loaded, and nothing fitted again after a restart |
+| `tst_fusion_rows` | the demand layer with the real fusion plots, end to end: fits started and dropped by what is checked and visible, with no gesture; progress and failures as each fit ends |
+| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), a rejection and a solver failure listed among the recordings that could not be computed, with their reasons, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a logbook column over roll filled for recordings that are not loaded, and nothing fitted again after a restart |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit on a recording written as `TRACK.CSV` / `SENSOR.CSV`, against a direct kernel run and against the application's own import path |
 
 The goldens live in `tests/data/fusion/`. In exact mode

@@ -37,11 +37,12 @@
 #     (with the index, below it), the demand layer keeps one memory and one
 #     walk in parts of its own, and the executor's unused signals and queries
 #     stay gone (items 601-662);
-#   - background work is shown in the status bar and a failure on its
-#     recording's logbook row: the per-source indicators, their shared
-#     painting and the working-indicator clock stay gone, the plot list
-#     presents nothing of the demand layer, and one drawing of the warning
-#     glyph remains, the style's.
+#   - background work is shown in one place and a failure once per
+#     recording: the status bar presents the scheduler's tasks and the demand
+#     layer's progress and failures, the logbook row a recording's failures,
+#     and one drawing of the warning glyph remains, the style's; the
+#     per-source presentation, the indicators, the clock and the logbook's
+#     progress line stay gone, in code and documents (items 701-754).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -298,7 +299,7 @@ set(DEMAND_FILES "(calculationdemand|demandstate|demandfill|demandsettleclock)")
 # the fusion library.
 set(FUSION_CORE "src/jobqueue.*" "src/jobmodel.*" ${DEMAND_LAYER} src/fusion)
 
-# ─────────────────────────────── branch-mechanisms (acceptance 120)
+# ─────────────────────────────── branch-mechanisms (acceptance 120; item 739)
 # The branch ran the fit inside a getter, behind an application-modal progress
 # dialog with a nested event loop, and needed a thread-local re-entrancy guard,
 # an idle-scheduler pause and a plot-widget rebuild guard to survive that.
@@ -325,10 +326,10 @@ expect_none("jobs never touch the idle scheduler" "[Ii]dle[Ss]cheduler"
   "src/jobqueue.*" "src/jobmodel.*" src/fusion)
 # m_pendingRebuildLevel is master's own and is not part of this rule.
 expect_none("no plot rebuild guard" "m_rebuildingPlot|QScopedValueRollback" src/ui/docks/plot)
-# Allow: none expected. A calculation outcome is reported by the views of the
-# demand layer (the plot row's badge and tooltip, the status bar's warning),
-# never by a dialog or a message box, and the calculation code and the plot
-# list never reach for the status bar themselves.
+# Allow: none expected. A calculation outcome is reported by the status bar's
+# warning and the logbook row, which present the demand layer; never by a
+# dialog or a message box, and the kernel, the calculations and the plot list
+# never use the status bar.
 expect_none("no dialog or message box for a calculation outcome"
   "QMessageBox|QProgressDialog|QDialog|QErrorMessage|statusBar\\("
   ${FUSION_CORE} src/engine src/calculations src/ui/docks/plotselection)
@@ -401,7 +402,7 @@ expect_none("no locks"
   "QMutex|QReadWriteLock|QWaitCondition|QSemaphore|std::mutex|std::shared_mutex|std::condition_variable" src)
 expect_only("one atomic: the cancel flag" "std::atomic|QAtomic" "^src/jobqueue\\.cpp$" src)
 
-# ─────────────────────────────── gestures (items 116, 306, 501, 519, 527, 534, 543, 544, 562, 605, 608, 625, 628, 629, 651, 659, 661)
+# ─────────────────────────────── gestures (items 116, 306, 501, 519, 527, 534, 543, 544, 562, 605, 608, 625, 628, 629, 651, 659, 661, 737, 740)
 # Only the demand layer starts requested calculations, and it derives what to
 # start from what is switched on; nothing is a gesture. MainWindow cannot be
 # constructed in the test harness, so that nothing in it (start-up restore,
@@ -744,7 +745,7 @@ expect_none("no text says an unrelated change makes stored results stale"
 # the documents.
 # =============================================================================
 
-# ─────────────────────────────── demand (items 506, 508, 513, 515, 518, 527, 529, 530, 533, 534, 538, 540-544, 546, 547, 563, 601-605, 607, 612, 613, 615, 616, 622, 624, 627, 631, 636, 641, 644, 646, 647, 649-652, 659, 661, 662)
+# ─────────────────────────────── demand (items 506, 508, 513, 515, 518, 527, 529, 530, 533-535, 538, 540-544, 546, 547, 563, 601-605, 607, 612, 613, 615, 616, 622, 624, 627, 631, 636, 641, 644, 646, 647, 649-652, 659-662, 701, 702, 706, 708, 723-728, 732, 736-744, 752-754)
 audit_group(demand)
 # Allow: a new view that presents the demand layer is added to the allowed-file
 # regex; nothing below the demand layer (the executor, the session model, the
@@ -900,6 +901,7 @@ expect_count("the one walk reads the rows under one guard" "RowStabilityGuard +[
 expect_none("the demand layer's replaced machinery stays gone"
   "isFillEnding|m_fillEnding|[Ss]ettlement|m_settled|CellKey|ColumnWalk|walkColumns|ColumnInfo|plotCandidates|inspectUnderGuard|inspectedPlots|syncColumns|m_columnReports|buildState|finishState|rebuildRelevantNames|m_relevantNames|m_columnsDirty|rowDisplayName|onSessionDataChanged|JobFailed|CalculationDemand::(buildToolTip|kToolTipListLimit|kMaxHeldSessions)|\\.(settling|waiting)${WB_END}"
   src tests ":!tests/README.md")
+# ─────────────────────────────── one status bar for background work (items 701-754)
 # No view keeps a progress label, a cluster of glyphs or an animation clock:
 # progress is the status bar's bar, and nothing turns. Allow: none expected
 # (tests/README.md is excluded: its tables name the removed tests).
@@ -958,11 +960,14 @@ expect_only("the main window makes the status bar" "new StatusBarFeature" "^src/
 expect_none("the logbook presents no task progress" "QProgressBar|IdleScheduler|minimumSizeHint|cancelRequested"
   src/ui/docks/logbook)
 expect_none("the fill reports no progress of its own" "Progress\\{|[Hh]igh[-]?[Ww]ater" "src/demandfill.*")
-# The documents describe the refined demand layer. Allow: say "the pair
-# memory", "a remembered failure", "the scheduler completes it"; never name
-# the removed API or the per-cell memory.
+# The documents describe the refined demand layer and the status bar: the
+# removed executor API, the per-cell memory, the per-source presentation and
+# its indicators, clock and progress line stay out of docs/ and the README.
+# Not "badge" alone: DATA_SCHEMA.md says "no badge" of legacy files. Allow:
+# say "the pair memory", "a remembered failure", "the scheduler completes
+# it", "the status bar", "the row warning", "progress", "failures".
 expect_none("the documents describe the refined demand layer"
-  "jobQueued|activeJobs\\(|${WB_START}idle\\(\\)|[Ss]ettlement|progressLabel|isFillEnding|one clock per view|lose work only by stepping|under the same label|arc with \"k of n\"|triangle with a number|CalculationDemand::(kMaxHeldSessions|kToolTipListLimit|buildToolTip)"
+  "jobQueued|activeJobs\\(|${WB_START}idle\\(\\)|[Ss]ettlement|progressLabel|isFillEnding|one clock per view|lose work only by stepping|under the same label|arc with \"k of n\"|triangle with a number|CalculationDemand::(kMaxHeldSessions|kToolTipListLimit|buildToolTip)|plotState|columnState|workingPlotIds|workingColumnIds|statesChanged|DemandState|DemandTrack|DemandCondition|buildToolTip|kToolTipListLimit|jobFailure|showsWarning|isPlain|isWorking\\(|WorkingAnimation|followDemand|workingClock|[Ww]orking[- ]indicator|DemandIndicator|PlotRowDelegate|PlotRowLayout|LogbookHeaderView|glyphMetrics|drawDemandGlyph|showIndicatorToolTip|repaintWhenDemandDestroyed|progress line|[Ww]arning badge|badges|turning arc"
   docs README.md)
 
 # ─────────────────────────────── leftover markers
@@ -975,9 +980,10 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # number), 301-350 (storing requested calculation results with the session,
 # item = 300 + clause number), 401-442 (stored results: validity that
 # mirrors memory, item = 400 + clause number), 501-563 (demand-driven
-# requested calculations, item = 500 + clause number) and 601-662
-# (calculation refinements, item = 600 + clause number). Four line forms; see
-# the head of the map.
+# requested calculations, item = 500 + clause number), 601-662
+# (calculation refinements, item = 600 + clause number) and 701-754 (one
+# status bar for background work, item = 700 + clause number). Four line
+# forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -1049,8 +1055,8 @@ else()
     if(NOT ((item GREATER_EQUAL 1 AND item LESS_EQUAL 19) OR (item GREATER_EQUAL 101 AND item LESS_EQUAL 120)
             OR (item GREATER_EQUAL 201 AND item LESS_EQUAL 247) OR (item GREATER_EQUAL 301 AND item LESS_EQUAL 350)
             OR (item GREATER_EQUAL 401 AND item LESS_EQUAL 442) OR (item GREATER_EQUAL 501 AND item LESS_EQUAL 563)
-            OR (item GREATER_EQUAL 601 AND item LESS_EQUAL 662)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563 and 601-662: ${line}")
+            OR (item GREATER_EQUAL 601 AND item LESS_EQUAL 662) OR (item GREATER_EQUAL 701 AND item LESS_EQUAL 754)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662 and 701-754: ${line}")
     endif()
   endforeach()
 
@@ -1092,6 +1098,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 601 662)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 701 754)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

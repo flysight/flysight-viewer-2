@@ -1,7 +1,7 @@
 # Plots and logbook columns that are computed in the background
 
 1. [Why some values need computing](#1-why-some-values-need-computing)
-2. [What a plot row shows](#2-what-a-plot-row-shows)
+2. [What the status bar shows](#2-what-the-status-bar-shows)
 3. [What starts a computation](#3-what-starts-a-computation)
 4. [Logbook columns over computed values](#4-logbook-columns-over-computed-values)
 5. [When you stop needing a result](#5-when-you-stop-needing-a-result)
@@ -25,35 +25,37 @@ a column on is the request; switching it off drops what has not started yet.
 A result, once computed, is kept with the recording (section 6), so it is
 computed only once.
 
-## 2. What a plot row shows
+## 2. What the status bar shows
 
-At the right-hand end of a checked plot's row in the plot list:
+The status bar at the bottom of the main window is where FlySight Viewer shows
+the work it does in the background. It is empty while nothing is running and
+nothing has failed, and it is always there, so the window's layout does not
+jump when work starts or ends.
 
 | You see | It means |
 | --- | --- |
-| A turning arc | Computing. The tooltip says how many of the visible tracks that can be computed for this plot are done (a track that could not be computed counts as done) |
-| A warning triangle | Computing has finished, and some visible tracks could not be computed (section 7); the tooltip says which |
-| Nothing | Everything that can be shown is shown - or the plot never needs computing. Such a row looks exactly as it always has |
+| "Computing results: k / n" and a bar | Computing. n recordings have been waiting to be computed since the status bar last had none, and k of them are done. Each recording counts once, however many plots and logbook columns want it |
+| "Saving sessions", "Loading sessions", "Updating sessions" or "Computing columns", with its count and bar | Other background work of the logbook (section 8) |
+| A warning triangle and, for example, "2 recordings could not be computed" | Some recordings could not be computed (section 7). It is shown beside "Computing results" while computing continues, and alone once it ends |
+| Nothing | Nothing is running and nothing has failed |
 
-The arc and the triangle are never shown together: the triangle appears once
-the work is done. The row shows no number: hover over it for the counts.
+Hover over the label or the bar for details: it lists everything in progress,
+each with its own count, and under "Computing results" the recording being
+computed and its current step. A cancel button appears beside the bar only for
+work that can be stopped; computing results never has one (section 5).
 
-Hover over the row, the arc or the triangle for details. The tooltip has up to
-two parts:
+Plot rows show nothing about computing: a row over a computed plot looks
+exactly as any other row. A track whose result is still to come is absent
+from the plot until it arrives, and appears by itself when it does.
 
-- **Computing: k of n done**, followed by the track being worked on and its
-  current step;
-- **Could not be computed:**, followed by each track that could not be
-  computed, with the reason.
+One computation per recording can serve several plots. Roll, pitch and yaw,
+for example, come from one and the same computation, so one computation fills
+them all in, and the recording is counted once.
 
-Each part lists at most ten tracks and then says how many more there are.
-
-Several rows can show the same progress at the same time. Roll, pitch and yaw,
-for example, come from one and the same computation per track, so they show
-the same progress, and one computation fills them all in.
-
-Only visible tracks count. A track whose recording lacks the needed sensor
-data never appears in any number or tooltip.
+A track whose recording lacks the needed sensor data is never listed among
+the recordings that could not be computed. A plot never counts it; a logbook
+column counts it only until the recording has been loaded to find that out
+(section 4).
 
 ## 3. What starts a computation
 
@@ -68,7 +70,7 @@ Anything that switches such a value on:
 Tracks whose result was kept from earlier (section 6) are drawn at once and
 are not computed again. As each other track finishes, its graph appears by
 itself, the legend and any logbook column that uses the value fill in, and the
-numbers in the row's tooltip rise.
+count of "Computing results" in the status bar advances.
 
 When you start FlySight Viewer every track is hidden, so checked plots start
 nothing until you show tracks. A logbook column over such a value continues
@@ -83,22 +85,22 @@ computation.
 A logbook column over a computed value (roll at the exit marker, say) is
 filled for every recording in the logbook, whether or not it is shown.
 Recordings that are not loaded are loaded in the background, at most two at a
-time, as hidden recordings. The progress line under the logbook shows
-"Computing results: k / n" for the whole fill, with no cancel button. The
-logbook's other background work, such as filling a column that needs no
-computing ("Computing columns: k / n"), saving or loading, goes first.
+time, as hidden recordings. The status bar shows the fill as "Computing
+results: k / n", with no cancel button, counted together with what the plots
+are computing. The logbook's other background work, such as filling a column
+that needs no computing ("Computing columns: k / n"), saving or loading, goes
+first and is shown first (section 8).
 
-While a column fills, its header shows the turning arc at the right of its
-name. Hovering the header shows the counts, the recording being computed with
-its current step, and any recordings that could not be computed with their
-reasons. When the work is done the arc goes, or the warning triangle takes its
-place.
+A column header looks as any other header while its column fills. A recording
+that could not be computed shows the warning triangle at the left of its row
+(section 7).
 
 A cell whose value is still to come shows a grey "…". A blank cell means the
 value does not exist for that recording (for sensor fusion, a recording
 without IMU data). FlySight Viewer learns that only by loading the recording:
-until the fill has loaded it, such a recording shows "…" and is counted in the
-numbers of the header's tooltip, and then turns blank and leaves the count.
+until the fill has loaded it, such a recording shows "…" and is counted in
+"Computing results" in the status bar, and then turns blank and leaves the
+count.
 Only computed results are kept, so it is loaded again, once, at every start.
 Sorting by the column puts "…" and blank cells together at the bottom.
 
@@ -149,9 +151,25 @@ running computation.
 ## 7. When a track cannot be computed
 
 Some recordings cannot be computed: for sensor fusion, for example, one with a
-gap in its sensor data. Once the work is done the plot row, or the column
-header, shows the warning triangle, and the tooltip names the recording and
-gives the reason. No message box appears.
+gap in its sensor data. As soon as such a failure is found, not once the work
+is done, two things show it:
+
+- the status bar shows a warning triangle and the number of recordings that
+  could not be computed ("1 recording could not be computed"). A recording
+  with two calculations that failed counts once. While computing continues
+  the warning stands beside "Computing results", so a failure found early in
+  a long fill is visible at once; when nothing is computing it stands alone;
+- the recording's row in the logbook shows the warning triangle at the left
+  of its first cell, whichever column that is (moving or hiding columns moves
+  it with them). A row without a failure looks exactly as before and takes no
+  room for it.
+
+Hovering over the status bar's warning lists the recordings, in the order of
+the logbook's rows, each with the calculation that could not be computed and
+the reason; it lists ten and then says how many more there are. Hovering over
+a row's triangle lists that recording's calculations and reasons in the same
+form. The row's cells over the calculation that failed are blank: the
+triangle says why. No message box appears.
 
 Nothing offers to try again, because the same data give the same answer. When
 the recording's data change (section 6), it is computed again.
@@ -159,14 +177,31 @@ the recording's data change (section 6), it is computed again.
 A few failures are not about the data: the computer ran out of memory, the
 recording's file could not be read, or a computed result could not be kept
 (the disk is full, or the logbook's `cache/` folder cannot be written). They
-are shown the same way, are not tried again while FlySight Viewer runs, and
-are tried again the next time it starts.
+are shown the same way, with "(tried again at the next start)" after the
+reason: they are not tried again while FlySight Viewer runs, and are tried
+again the next time it starts.
 
 A result that could not be kept is listed the same way, with the reason
 ("Couldn't write file ..."): while the recording stays loaded the plot still
-draws it, but the plot row and the column header show the warning triangle,
-the recording is not computed again while FlySight Viewer runs unless its
-data change, and the next start computes and keeps it again.
+draws it, but the status bar's warning and the recording's row show it, the
+recording is not computed again while FlySight Viewer runs unless its data
+change, and the next start computes and keeps it again.
+
+**What stays visible after a restart.** A failure about the data is kept with
+the recording in the logbook's `cache/` folder, and nothing else is written.
+At the next start it shows again without loading the recording or computing
+anything, as soon as the plot or column that wants it is restored and the
+logbook has read its columns in the background. A failure that is not about
+the data is not kept: it is tried again at the next start and shows only if it
+fails again, so a disk that has since been freed, or a file that has since
+been restored, clears it.
+
+The warning is about what you have switched on, and it shows for as long as
+the recording cannot be computed. It clears when its cause does: the
+recording's data change, or the last plot or column that wants the
+calculation is switched off (switching it on again shows the warning again,
+without computing). Nothing dismisses it by hand, and clicking it does
+nothing.
 
 This is different from a track that lacks the needed sensor altogether - a
 recording without IMU data, for sensor fusion. That track is silently absent
@@ -176,19 +211,26 @@ no warning.
 ## 8. While computing
 
 The application stays fully usable: you can pan and zoom, show and hide
-tracks, edit recordings, set markers, and import files. The turning arcs of
-the plot list and of the logbook's column headers turn together; they stop
-when nothing is being computed. Computations run one at a time, in the
+tracks, edit recordings, set markers, and import files. Computations run one
+at a time, in the
 background, at a lower priority than the rest of the application: first the
 track you are looking at (the focused one), then the other visible tracks
 from top to bottom, then what logbook columns need, from top to bottom.
 Quitting stops them; expect a short wait while the running one reaches a
 point where it can stop.
 
+The status bar shows one thing at a time. The logbook's other background work
+(saving, loading, updating recordings after an edit of many at once, filling a
+column that needs no computing) comes first, with its own count and, where it
+can be stopped, a cancel button; "Computing results" returns when it ends.
+Hover over the status bar to see both.
+
 ## 9. Known limitations
 
-- There is no window that lists computations. The plot rows, the column
-  headers and their tooltips are where progress and failures are reported.
+- There is no window that lists computations. The status bar is where
+  progress and the warning are shown, and the logbook rows where each
+  recording's failures are shown.
+- The logbook cannot be sorted or filtered by the row warning.
 - There is no switch that pauses background work. To stop it, remove the
   column or uncheck the plot.
 - On Linux the background computation does not run at a lower

@@ -203,7 +203,7 @@ cmake --build build
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | With tests enabled: build the embedded-Python plugin bridge test (needs NumPy in the build interpreter) |
 | `FLYSIGHT_BUILD_SOLVER_DEPS` | `ON` | With `FLYSIGHT_BUILD_THIRD_PARTY`: also download and build oneTBB and GTSAM. `OFF` reuses the installs in `GTSAM_INSTALL_DIR` / `ONETBB_INSTALL_DIR` |
 | `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | With tests enabled: build the GTSAM-linked tests (`tst_solver_smoke` and the `tst_fusion_*` tests) and the three non-test executables `solver_deploy_probe`, `fusion_golden_capture` (the golden capture tool) and `fusion_runner` (the command-line fit). With `OFF` no test target references GTSAM |
-| `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | With tests enabled: build `tst_plot_row_delegate`, the one test that links Qt Widgets (it runs an offscreen `QTreeView`). With `OFF` no test target links Widgets |
+| `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | With tests enabled: build `tst_logbook_indicators` and `tst_status_bar`, the two tests that link Qt Widgets (they run offscreen views). With `OFF` no test target links Widgets |
 | `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | With the fusion tests: run the golden regression tests a second time in bit-exact mode (`tst_fusion_*_exact`, `ctest -C Release -L exact`; Release configuration only). `AUTO` registers them only when the compiler is the one the goldens were captured with (64-bit MSVC 19.44, read from `tests/data/fusion/capture.json`) and otherwise says so at configure time; `ON` forces them, `OFF` removes them |
 
 **Path Variables:**
@@ -320,7 +320,8 @@ flysight-viewer-2/
 ├── README.md                              # This file
 ├── docs/
 │   ├── COMPUTED_PLOTS.md                  # User guide: plots and logbook columns computed in the
-│   │                                      #   background (working indicator, badge, pending cells)
+│   │                                      #   background (the status bar, the row warning,
+│   │                                      #   pending cells)
 │   ├── SENSOR_FUSION.md                   # The GNSS/IMU fit: inputs, model, limitations, lifecycle
 │   ├── LOCAL_COORDINATES.md               # The recording-wide north/east/down frame; simplified track
 │   ├── DATA_SCHEMA.md                     # Recorded schema, source preservation, conversion layer,
@@ -373,10 +374,9 @@ flysight-viewer-2/
 │   ├── units/                             # Unit normalization table and the display-unit layer
 │   ├── preferences/                       # Preferences manager, keys, settings pages
 │   ├── ui/                                # Docks, plot, map, video, analysis widgets
-│   │                                      #   (ui/docks: plotselection/PlotRow*, DemandIndicator.*,
-│   │                                      #   DemandIndicatorView.*, logbook/LogbookHeaderView.*,
-│   │                                      #   LogbookCellDelegate.*: working indicator and its
-│   │                                      #   one clock, badge, pending cells)
+│   │                                      #   (ui/docks/logbook/LogbookCellDelegate.*: pending
+│   │                                      #   cells and the row warning;
+│   │                                      #   ui/statusbar/StatusBarFeature.*: the status bar)
 │   ├── csvformat.*                        # The one definition of the on-disk text forms
 │   ├── dataimporter.*, parsedfile.h       # Parser: a file as recorded, nothing added
 │   ├── dataexporter.*                     # Writer: source data and stored attributes only
@@ -417,7 +417,7 @@ flysight-viewer-2/
 
 ## User Documentation
 
-- [docs/COMPUTED_PLOTS.md](docs/COMPUTED_PLOTS.md): plots and logbook columns that are computed in the background - what starts and stops a computation, the working indicator and its tooltip, the warning badge, pending logbook cells
+- [docs/COMPUTED_PLOTS.md](docs/COMPUTED_PLOTS.md): plots and logbook columns that are computed in the background - what starts and stops a computation, the status bar and its warning, the row warning, pending logbook cells, what stays visible after a restart
 - [docs/SENSOR_FUSION.md](docs/SENSOR_FUSION.md): the "Sensor fusion" plots - what the GNSS/IMU fit computes, what it needs, what it rejects, and how far to trust it
 - [docs/LOCAL_COORDINATES.md](docs/LOCAL_COORDINATES.md): the "GNSS (Local frame)" plots - the recording-wide north/east/down frame and the simplified map track
 - [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md): the recorded file format, `SCHEMA_VER`, source versus effective values, the conversion layer, import / merge rules, what saved files contain, and the stored results of requested calculations
