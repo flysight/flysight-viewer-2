@@ -3,6 +3,8 @@
 #include <QApplication>
 #include <QHeaderView>
 #include <QHelpEvent>
+#include <QIcon>
+#include <QPainter>
 #include <QStyle>
 #include <QToolTip>
 #include <QTreeView>
@@ -74,28 +76,71 @@ int LogbookCellDelegate::firstVisualColumn() const
     return -1;
 }
 
-// The style lays the decoration out: at the leading edge of the text
-// rectangle, after the check box, mirrored right to left, in the selection's
-// icon mode, with the text elided into what is left. At most one text line
+// The option the cell is painted with: the base class's, and for a pending
+// cell the ellipsis in the muted colour
+QStyleOptionViewItem LogbookCellDelegate::cellOption(const QStyleOptionViewItem &option,
+                                                     const QModelIndex &index, bool pending) const
+{
+    QStyleOptionViewItem opt = option;
+    initStyleOption(&opt, index);
+    if (pending) {
+        opt.text = pendingText();
+        opt.features |= QStyleOptionViewItem::HasDisplay;
+
+        // Muted in every colour group: the placeholder colour, and the
+        // selection's text colour at 60 % on a selected row. The alignment is
+        // the cell's own, where the value will appear.
+        QPalette::ColorGroup group = QPalette::Normal;
+        if (!(opt.state & QStyle::State_Enabled))
+            group = QPalette::Disabled;
+        else if (!(opt.state & QStyle::State_Active))
+            group = QPalette::Inactive;
+        opt.palette.setColor(QPalette::Text, opt.palette.color(group, QPalette::PlaceholderText));
+        QColor selected = opt.palette.color(group, QPalette::HighlightedText);
+        selected.setAlphaF(0.6f);
+        opt.palette.setColor(QPalette::HighlightedText, selected);
+    }
+    return opt;
+}
+
+// The glyph follows the text, as a badge follows a name: the text is drawn
+// in its own place, elided into what the text rectangle leaves once the
+// glyph's room is taken from its trailing end, and the glyph sits right after
+// the drawn text, so it is attached to what it annotates and never pinned to
+// the cell's edge next to the neighbouring column. At most one text line
 // tall, so it fits the row that sizeHint() gave without it.
-void LogbookCellDelegate::addWarning(QStyleOptionViewItem &opt)
+LogbookCellDelegate::WarningLayout LogbookCellDelegate::layoutWarning(const QStyleOptionViewItem &opt)
 {
     const QWidget *widget = opt.widget;
     QStyle *style = widget ? widget->style() : QApplication::style();
+    const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget);
+    const int margin = style->pixelMetric(QStyle::PM_FocusFrameHMargin, nullptr, widget) + 1;
+    const QRect inner = textRect.adjusted(margin, 0, -margin, 0);
     const int side = qMin(opt.decorationSize.height(), opt.fontMetrics.height());
-    opt.features |= QStyleOptionViewItem::HasDecoration;
-    opt.icon = style->standardIcon(QStyle::SP_MessageBoxWarning, &opt, widget);
-    opt.decorationSize = QSize(side, side);
+    const int spacing = qMax(2, side / 4);
+    const bool rightToLeft = opt.direction == Qt::RightToLeft;
+
+    WarningLayout layout;
+    layout.textArea = inner;
+    if (rightToLeft)
+        layout.textArea.setLeft(qMin(inner.right() + 1, inner.left() + side + spacing));
+    else
+        layout.textArea.setRight(qMax(inner.left() - 1, inner.right() - side - spacing));
+    layout.elided = opt.fontMetrics.elidedText(opt.text, Qt::ElideRight, layout.textArea.width());
+    const QRect drawn = style->itemTextRect(opt.fontMetrics, layout.textArea,
+                                            int(opt.displayAlignment | Qt::TextSingleLine),
+                                            opt.state & QStyle::State_Enabled, layout.elided);
+    const int top = inner.center().y() - side / 2;
+    if (rightToLeft)
+        layout.glyph = QRect(drawn.left() - spacing - side, top, side, side);
+    else
+        layout.glyph = QRect(drawn.right() + 1 + spacing, top, side, side);
+    return layout;
 }
 
 QRect LogbookCellDelegate::glyphRect(const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
-    QStyleOptionViewItem opt = option;
-    initStyleOption(&opt, index);
-    addWarning(opt);
-    const QWidget *widget = opt.widget;
-    QStyle *style = widget ? widget->style() : QApplication::style();
-    return style->subElementRect(QStyle::SE_ItemViewItemDecoration, &opt, widget) & option.rect;
+    return layoutWarning(cellOption(option, index, showsPending(index))).glyph & option.rect;
 }
 
 // The option QAbstractItemView::initViewItemOption() gives the cell, as far
@@ -133,31 +178,40 @@ void LogbookCellDelegate::paint(QPainter *painter, const QStyleOptionViewItem &o
         return;
     }
 
-    QStyleOptionViewItem opt = option;
-    initStyleOption(&opt, index);
-    if (pending) {
-        opt.text = pendingText();
-        opt.features |= QStyleOptionViewItem::HasDisplay;
-
-        // Muted in every colour group: the placeholder colour, and the
-        // selection's text colour at 60 % on a selected row. The alignment is
-        // the cell's own, where the value will appear.
-        QPalette::ColorGroup group = QPalette::Normal;
-        if (!(opt.state & QStyle::State_Enabled))
-            group = QPalette::Disabled;
-        else if (!(opt.state & QStyle::State_Active))
-            group = QPalette::Inactive;
-        opt.palette.setColor(QPalette::Text, opt.palette.color(group, QPalette::PlaceholderText));
-        QColor selected = opt.palette.color(group, QPalette::HighlightedText);
-        selected.setAlphaF(0.6f);
-        opt.palette.setColor(QPalette::HighlightedText, selected);
-    }
-    if (warning)
-        addWarning(opt);
-
+    const QStyleOptionViewItem opt = cellOption(option, index, pending);
     const QWidget *widget = opt.widget;
     QStyle *style = widget ? widget->style() : QApplication::style();
-    style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
+    if (!warning) {
+        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
+        return;
+    }
+
+    // Everything but the text (the background, the selection, the check box,
+    // the focus frame), then the text in its own place, then the glyph after it
+    const WarningLayout layout = layoutWarning(opt);
+    QStyleOptionViewItem rest = opt;
+    rest.text.clear();
+    style->drawControl(QStyle::CE_ItemViewItem, &rest, painter, widget);
+
+    QPalette::ColorGroup group = QPalette::Normal;
+    if (!(opt.state & QStyle::State_Enabled))
+        group = QPalette::Disabled;
+    else if (!(opt.state & QStyle::State_Active))
+        group = QPalette::Inactive;
+    QPalette palette = opt.palette;
+    palette.setCurrentColorGroup(group);
+    const bool selected = opt.state & QStyle::State_Selected;
+
+    painter->save();
+    painter->setClipRect(opt.rect);
+    painter->setFont(opt.font);
+    style->drawItemText(painter, layout.textArea, int(opt.displayAlignment | Qt::TextSingleLine), palette,
+                        opt.state & QStyle::State_Enabled, layout.elided,
+                        selected ? QPalette::HighlightedText : QPalette::Text);
+    // The style's warning icon, in the selection's icon mode on a selected row
+    style->standardIcon(QStyle::SP_MessageBoxWarning, &opt, widget)
+        .paint(painter, layout.glyph, Qt::AlignCenter, selected ? QIcon::Selected : QIcon::Normal);
+    painter->restore();
 }
 
 // The glyph's rect shows the failures, so that the rest of a pending first

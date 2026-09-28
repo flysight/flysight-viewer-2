@@ -17,19 +17,6 @@
 
 namespace FlySight {
 
-namespace {
-
-// A hidden widget keeps its room in the layout, so that showing or hiding it
-// never changes the bar's height (nor moves what sits beside it).
-void keepSizeWhenHidden(QWidget *widget)
-{
-    QSizePolicy policy = widget->sizePolicy();
-    policy.setRetainSizeWhenHidden(true);
-    widget->setSizePolicy(policy);
-}
-
-} // namespace
-
 StatusBarFeature::StatusBarFeature(const AppContext &ctx, QStatusBar *statusBar, QObject *parent)
     : QObject(parent)
     , m_scheduler(&ctx.sessionModel->scheduler())
@@ -51,7 +38,7 @@ StatusBarFeature::StatusBarFeature(const AppContext &ctx, QStatusBar *statusBar,
     m_activityBar = new QProgressBar(activity);
     m_activityBar->setObjectName(QStringLiteral("statusActivityBar"));
     m_activityBar->setTextVisible(false);        // the label carries the count
-    m_activityBar->setMaximumWidth(160);
+    m_activityBar->setFixedWidth(120);           // compact, beside its label
     activityLayout->addWidget(m_activityBar);
 
     m_cancelButton = new QToolButton(activity);
@@ -78,13 +65,31 @@ StatusBarFeature::StatusBarFeature(const AppContext &ctx, QStatusBar *statusBar,
     m_warningText->setObjectName(QStringLiteral("statusWarningText"));
     warningLayout->addWidget(m_warningText);
 
-    for (QWidget *widget : {static_cast<QWidget *>(m_activityLabel), static_cast<QWidget *>(m_activityBar),
-                            static_cast<QWidget *>(m_cancelButton), warning})
-        keepSizeWhenHidden(widget);
+    // The activity container is always shown and keeps the height of the
+    // tallest thing the bar can show, so that the bar's height never changes;
+    // its widgets and the warning take width only while they are shown.
+    // Measured with texts in place: an empty label is shorter than one line.
+    m_activityLabel->setText(countText(tr("Computing results"), 100, 100));
+    m_warningText->setText(tr("%1 recordings could not be computed").arg(100));
+    int tallest = 0;
+    for (const QWidget *widget : {static_cast<QWidget *>(m_activityLabel), static_cast<QWidget *>(m_activityBar),
+                                  static_cast<QWidget *>(m_cancelButton), static_cast<QWidget *>(warningIcon),
+                                  static_cast<QWidget *>(m_warningText)})
+        tallest = qMax(tallest, widget->sizeHint().height());
+    activity->setMinimumHeight(tallest);
+    m_activityLabel->clear();
+    m_warningText->clear();
+    // Each container is exactly as wide as what it shows: the bar's layout
+    // shares its spare width with a widget that can grow, and neither may
+    activity->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+    warning->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
 
-    // Permanent widgets, at the right: a temporary message (a menu's status
-    // tip) hides the bar's normal widgets, never these
-    statusBar->addPermanentWidget(activity);
+    // The activity at the left, in the bar's normal area, where an
+    // application says what it is doing; the warning at the right, as a
+    // permanent widget, where state indicators sit. Nothing here shows a
+    // temporary message (no action has a status tip), so the normal area is
+    // never hidden under one.
+    statusBar->addWidget(activity);
     statusBar->addPermanentWidget(warning);
 
     // Follow the scheduler from now on: it has no query for its active task

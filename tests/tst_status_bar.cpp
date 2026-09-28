@@ -79,6 +79,7 @@ private slots:
     void warningAbsentWhenNothingFailedAndNotDismissable();
     void warningAfterRestart();
     void heightNeverChanges();
+    void activityLeftAndWarningRight();
     void survivesDemandDestroyedFirst();
 
 private:
@@ -139,6 +140,13 @@ private:
         QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
         QApplication::processEvents();
         return statusBar()->height();
+    }
+    /// A widget's geometry in the bar's coordinates, once the bar is laid out.
+    QRect inBar(QWidget *widget)
+    {
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+        QApplication::processEvents();
+        return QRect(widget->mapTo(statusBar(), QPoint(0, 0)), widget->size());
     }
 
     // ---- Driving ---------------------------------------------------------------
@@ -948,6 +956,59 @@ void StatusBarTest::warningAfterRestart()
 }
 
 // ---- The bar ------------------------------------------------------------------------
+
+// Spec 5 and 11: the activity sits at the left of the bar, label then a
+// compact bar then the cancel button, and the warning at the right; nothing
+// keeps its width while hidden, so no gap is left where a hidden widget was.
+void StatusBarTest::activityLeftAndWarningRight()
+{
+    QVERIFY(activityEmpty());
+    QVERIFY(!warningShown());
+    QVERIFY(!warning()->sizePolicy().retainSizeWhenHidden());
+    QVERIFY(!cancelButton()->sizePolicy().retainSizeWhenHidden());
+
+    // Wide enough for the label and the warning text at any font
+    m_window->resize(1600, 240);
+    reportTask(SessionModel::LoadTask, true, 1, 3);
+    QVERIFY(cancelButton()->isVisible());
+    const int width = statusBar()->width();
+    QVERIFY(width >= 1500);
+    const QRect labelRect = inBar(label());
+    const QRect barRect = inBar(bar());
+    const QRect buttonRect = inBar(cancelButton());
+    const QRect activityRect = inBar(part<QWidget>("statusActivity"));
+    const QString geometry = QStringLiteral("width %1 label %2-%3 bar %4-%5 button %6-%7 activity %8-%9")
+                                 .arg(width).arg(labelRect.left()).arg(labelRect.right()).arg(barRect.left())
+                                 .arg(barRect.right()).arg(buttonRect.left()).arg(buttonRect.right())
+                                 .arg(activityRect.left()).arg(activityRect.right());
+    QVERIFY2(labelRect.left() < width / 8, qPrintable(geometry));
+    QVERIFY2(barRect.left() > labelRect.right(), qPrintable(geometry));
+    QVERIFY2(barRect.left() - labelRect.right() < barRect.width(), qPrintable(geometry));   // beside its label
+    QVERIFY2(barRect.width() <= 160, qPrintable(geometry));
+    QVERIFY2(buttonRect.left() > barRect.right(), qPrintable(geometry));
+    // The activity is as wide as its widgets, not stretched across the bar
+    QVERIFY2(activityRect.width() <= label()->sizeHint().width() + barRect.width() + buttonRect.width() + 3 * 20,
+             qPrintable(geometry));
+
+    // The warning at the right, and the activity where it was
+    QVERIFY(giveInput({"s1"}, "EA_IN", -1));
+    m_model->flushPendingInvalidations();
+    enableColumns({QStringLiteral("EA1")});
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(warningShown());
+    reportTask(SessionModel::LoadTask, true, 1, 3);
+    const QRect warningRect = inBar(warning());
+    QVERIFY2(warningRect.left() > buttonRect.right() + 200, qPrintable(QString::number(warningRect.left())));
+    QVERIFY2(width - warningRect.right() < 60, qPrintable(QString::number(width - warningRect.right())));
+    QCOMPARE(inBar(label()), labelRect);
+    QCOMPARE(inBar(bar()), barRect);
+
+    // Idle again: the activity's widgets and container take no width
+    emit scheduler().schedulerIdle();
+    QVERIFY(activityEmpty());
+    QCOMPARE(inBar(part<QWidget>("statusActivity")).width(), 0);
+}
 
 // Decision 7: the bar has one height idle, with a task, with the cancel
 // button, with the warning, and with the warning beside a task and beside

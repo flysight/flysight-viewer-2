@@ -28,7 +28,9 @@ computed only once.
 ## 2. What the status bar shows
 
 The status bar at the bottom of the main window is where FlySight Viewer shows
-the work it does in the background. It is empty while nothing is running and
+the work it does in the background. What is running is shown at its left, with
+a small bar and, when the work can be stopped, a cancel button; what could not
+be done is shown at its right. It is empty while nothing is running and
 nothing has failed, and it is always there, so the window's layout does not
 jump when work starts or ends.
 
@@ -92,8 +94,8 @@ that needs no computing ("Computing columns: k / n"), saving or loading, goes
 first and is shown first (section 8).
 
 A column header looks as any other header while its column fills. A recording
-that could not be computed shows the warning triangle at the left of its row
-(section 7).
+that could not be computed shows the warning triangle right after the text in
+the first cell of its row (section 7).
 
 A cell whose value is still to come shows a grey "…". A blank cell means the
 value does not exist for that recording (for sensor fusion, a recording

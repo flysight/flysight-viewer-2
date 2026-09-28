@@ -22,10 +22,14 @@ struct AppContext;
 /// failures, and decides nothing: what it shows follows from the values it
 /// reads and one rule.
 ///
-/// It adds two things to the bar, once each, as permanent widgets (a temporary
-/// message never hides them):
-///  - the ACTIVITY AREA: a label "<label>: <done> / <total>", a progress bar
-///    showing the same, and a cancel button. Its items are the scheduler's
+/// It adds two things to the bar, once each: the activity area at the left,
+/// in the bar's normal area, where an application says what it is doing, and
+/// the warning at the right, as a permanent widget, where state indicators
+/// sit. Nothing in the application shows a temporary message, so the normal
+/// area is never hidden under one.
+///  - the ACTIVITY AREA: a label "<label>: <done> / <total>", a compact
+///    progress bar beside it showing the same, and a cancel button after the
+///    bar. Its items are the scheduler's
 ///    save, load, bulk edit and column tasks, each under a label of its own,
 ///    and the computations, while the demand layer's progress counts a
 ///    session (done = high-water mark - count, out of the high-water mark).
@@ -38,7 +42,10 @@ struct AppContext;
 ///  - the WARNING: the style's warning icon and the number of recordings the
 ///    demand layer lists as failed, with SessionFailures::listText() as its
 ///    hover; shown exactly while that list is not empty. It is not a control.
-/// Hidden widgets keep their size, so the bar's height never changes.
+/// Widgets take width only while they are shown: nothing is reserved for a
+/// hidden cancel button or a hidden warning. The bar's height never changes,
+/// because the activity container is always shown and keeps the height of
+/// the tallest thing the bar can show.
 ///
 /// The scheduler has no query for its active task: the component follows
 /// activeTaskChanged, progressChanged (the last report for the active task's

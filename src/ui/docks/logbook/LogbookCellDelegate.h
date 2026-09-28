@@ -42,18 +42,19 @@ class SessionModel;
 /// header each time a cell is painted, never cached, so the glyph follows a
 /// moved or hidden section and a rebuild of the columns without a signal of
 /// its own. A row that is not loaded shows it from the record set, without a
-/// load. The glyph is the item's decoration on a copy of the option, so the
-/// style places it at the leading edge of the text rectangle (after the check
-/// box) and elides the text into what is left; its side is at most one text
-/// line. It takes room only while it is shown, and sizeHint() never sees it,
-/// so no row height changes. Cells over the failed calculation are blank, as
-/// any cell without a value: the glyph explains them. A first visual cell may
-/// carry both the glyph and the pending ellipsis.
+/// load. The glyph follows the text, as a badge follows a name: the text is
+/// drawn where it always is, elided into what the text rectangle leaves once
+/// the glyph's room is taken from its trailing end, and the glyph sits right
+/// after the drawn text, attached to what it annotates rather than pinned to
+/// the cell's edge beside the next column; its side is at most one text line.
+/// It takes room only while it is shown, and sizeHint() never sees it, so no
+/// row height changes and no text moves. Cells over the failed calculation
+/// are blank, as any cell without a value: the glyph explains them. A first
+/// visual cell may carry both the pending ellipsis and, after it, the glyph.
 ///
-/// HOVER. Over the glyph (the decoration rect the style computes for the
-/// cell), the session's failures, SessionFailures::text(), exactly. Elsewhere
-/// in the cell, the cell's own tooltip: the pending one, else the base
-/// class's (the model's).
+/// HOVER. Over the glyph, the session's failures, SessionFailures::text(),
+/// exactly. Elsewhere in the cell, the cell's own tooltip: the pending one,
+/// else the base class's (the model's).
 ///
 /// NO GESTURE. No event of its own: a click on the glyph is a click on the
 /// cell (selection, the check box) and starts or cancels nothing.
@@ -99,9 +100,18 @@ private:
     /// The logical index of the first section in visual order that is not
     /// hidden; -1 when there is none.
     int firstVisualColumn() const;
-    /// Makes the row warning the decoration of `opt`, an option the base
-    /// class has initialized.
-    static void addWarning(QStyleOptionViewItem &opt);
+    /// The option the cell is painted with: the base class's for `index`,
+    /// with the pending ellipsis and its muted colour when `pending`
+    /// (showsPending(index), which the caller has asked already).
+    QStyleOptionViewItem cellOption(const QStyleOptionViewItem &option, const QModelIndex &index,
+                                    bool pending) const;
+    /// Where a warning cell's text and glyph go, for an option cellOption() built.
+    struct WarningLayout {
+        QRect textArea;     ///< the text's rect: the text rectangle less the glyph's room at its trailing end
+        QString elided;     ///< the text as drawn, elided into textArea
+        QRect glyph;        ///< the glyph, one spacing after the drawn text
+    };
+    static WarningLayout layoutWarning(const QStyleOptionViewItem &opt);
     /// The glyph's rect for the view's `option` of `index`, clipped to the cell.
     QRect glyphRect(const QStyleOptionViewItem &option, const QModelIndex &index) const;
     /// Repaints the visible part of the column `column` of the viewport.

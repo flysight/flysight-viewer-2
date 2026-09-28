@@ -1538,7 +1538,7 @@
 
 # 537 - (10, as amended) the status bar's warning counts the recordings that could not be computed, a result that could not be stored included, as soon as a failure is current: beside the computations while they continue, alone once they end; its hover lists them with reasons
 537 tst_calculation_demand failuresListedWhileWorking
-537 tst_logbook_indicators rowWarningAtLeftOfFirstCell
+537 tst_logbook_indicators rowWarningFollowsTheText
 537 tst_status_bar warningBesideComputationsThenAlone
 537 tst_fusion_rows rejectedTrackShowsBadge
 537 tst_logbook_indicators failedLoadSessionShowsRowWarningNotPending
@@ -1692,7 +1692,7 @@
 # 557 - (13, as amended) test: progress and failures reflect waiting, running, done and failed tracks of plots and columns alike; plot rows and column headers show nothing; no control to refresh or cancel a calculation exists
 557 tst_calculation_demand columnProgressAndPendingCells
 557 tst_logbook_indicators headerIsPlainAndNothingAnimates
-557 tst_logbook_indicators rowWarningAtLeftOfFirstCell
+557 tst_logbook_indicators rowWarningFollowsTheText
 557 tst_logbook_indicators rowWarningHoverIsTheSessionsFailures
 557 tst_logbook_indicators clickOnRowWarningIsAClickOnTheCell
 557 tst_logbook_indicators failedLoadSessionShowsRowWarningNotPending
@@ -2005,7 +2005,7 @@
 
 # 644 - (12, as amended) a plot row and a logbook column header show nothing about computing: no glyph, no label, no count and no room reserved for one, so they look as any other; progress is shown once, in the status bar, and a failure on the recording's logbook row
 644 tst_logbook_indicators headerIsPlainAndNothingAnimates
-644 tst_logbook_indicators rowWarningAtLeftOfFirstCell
+644 tst_logbook_indicators rowWarningFollowsTheText
 644 audit demand
 644 tst_status_bar computationsAreOneItem
 644 manual M34
@@ -2129,6 +2129,7 @@
 
 # 701 - (5) the main window has a status bar, always present, empty when nothing is in progress and nothing has failed; it never appears or disappears, so the layout does not jump
 701 tst_status_bar heightNeverChanges
+701 tst_status_bar activityLeftAndWarningRight
 701 tst_status_bar schedulerTasksShowTheirLabelsAndCounts
 701 tst_status_bar warningAbsentWhenNothingFailedAndNotDismissable
 701 audit demand
@@ -2212,8 +2213,8 @@
 717 tst_calculation_demand failuresFollowWhatIsSwitchedOn
 717 manual M38
 
-# 718 - (8) a recording with a current failure shows one warning glyph on its logbook row, at the left of its first cell, whatever column that is
-718 tst_logbook_indicators rowWarningAtLeftOfFirstCell
+# 718 - (8) a recording with a current failure shows one warning glyph on its logbook row, right after the text of its first cell, whatever column that is
+718 tst_logbook_indicators rowWarningFollowsTheText
 718 tst_logbook_indicators rowWarningFollowsTheFirstVisualColumn
 718 manual M36
 
@@ -2223,16 +2224,16 @@
 719 tst_logbook_indicators failedLoadSessionShowsRowWarningNotPending
 
 # 720 - (8) a row that is not loaded shows the glyph from the record set, without loading
-720 tst_logbook_indicators rowWarningAtLeftOfFirstCell
+720 tst_logbook_indicators rowWarningFollowsTheText
 720 tst_calculation_demand storedRejectionIsAFailureWithoutLoad
 
 # 721 - (8) the cells over the failed calculation are blank; the pending cell is unchanged
-721 tst_logbook_indicators rowWarningAtLeftOfFirstCell
+721 tst_logbook_indicators rowWarningFollowsTheText
 721 tst_logbook_indicators pendingCellsAreDistinctFromUnavailable
 721 tst_logbook_indicators pendingCellBecomesValueWhenRecordIsWritten
 
 # 722 - (8) the glyph takes room in the first cell's text rectangle only while it is shown: a logbook without failures looks exactly as before
-722 tst_logbook_indicators rowWarningAtLeftOfFirstCell
+722 tst_logbook_indicators rowWarningFollowsTheText
 722 tst_logbook_indicators plainHeaderAndCellsAreIdenticalToBase
 
 # 723 - (9) the working indicator and the warning badge on plot rows and column headers go, with the room reserved for them and the header's hover: such a row or header looks as any other
@@ -2247,7 +2248,7 @@
 
 # 725 - (9, as settled) the shared glyph painting and its hover helper go; one drawing of the warning glyph exists, the style's standard warning icon, used by the status bar and the logbook row
 725 tst_status_bar warningCountsRecordingsAndListsThem
-725 tst_logbook_indicators rowWarningAtLeftOfFirstCell
+725 tst_logbook_indicators rowWarningFollowsTheText
 725 audit demand
 
 # 726 - (9) the logbook's progress line, its cancel button, the dock feature's scheduler wiring and the fixed minimum size hint go
@@ -2284,6 +2285,7 @@
 
 # 733 - (11) the status bar is the one place background work is shown: a label naming the work and its count, a bar showing the same, a hover listing everything in progress, a cancel control only for work that can be stopped, and nothing when the application is idle
 733 tst_status_bar schedulerTasksShowTheirLabelsAndCounts
+733 tst_status_bar activityLeftAndWarningRight
 733 tst_status_bar computationsAreOneItem
 733 tst_status_bar cancelOnlyForACancellableShownTask
 733 manual M34
@@ -2295,7 +2297,7 @@
 
 # 735 - (11) the logbook row of a recording that could not be computed carries one glyph whose hover says what failed and why; its cells over the failed calculation are blank; a cell still to come shows the pending ellipsis
 735 tst_logbook_indicators rowWarningHoverIsTheSessionsFailures
-735 tst_logbook_indicators rowWarningAtLeftOfFirstCell
+735 tst_logbook_indicators rowWarningFollowsTheText
 735 manual M34
 735 manual M36
 
@@ -2330,7 +2332,7 @@
 740 audit demand
 
 # 741 - (12) the logbook view presents the row glyph from the demand layer's per-session failures and the pending cell, and no task progress; its dock feature connects nothing of the scheduler
-741 tst_logbook_indicators rowWarningAtLeftOfFirstCell
+741 tst_logbook_indicators rowWarningFollowsTheText
 741 tst_logbook_indicators headerIsPlainAndNothingAnimates
 741 audit demand
 
@@ -2375,8 +2377,8 @@
 750 tst_status_bar warningAbsentWhenNothingFailedAndNotDismissable
 750 tst_logbook_indicators rowWarningFollowsFailures
 
-# 751 - (13) test: the logbook row of a recording with a current failure shows one glyph at the left of its first cell, for a loaded row and for one that is not loaded; its hover lists the failed calculations with reasons; the cells over the failed calculation are blank; a row without a failure takes no room for the glyph; the pending cell is unchanged
-751 tst_logbook_indicators rowWarningAtLeftOfFirstCell
+# 751 - (13) test: the logbook row of a recording with a current failure shows one glyph right after the text of its first cell, for a loaded row and for one that is not loaded; its hover lists the failed calculations with reasons; the cells over the failed calculation are blank; a row without a failure takes no room for the glyph; the pending cell is unchanged
+751 tst_logbook_indicators rowWarningFollowsTheText
 751 tst_logbook_indicators rowWarningHoverIsTheSessionsFailures
 751 tst_logbook_indicators failedLoadSessionShowsRowWarningNotPending
 751 tst_logbook_indicators plainHeaderAndCellsAreIdenticalToBase

@@ -143,7 +143,7 @@ private slots:
 
     void plainHeaderAndCellsAreIdenticalToBase();
     void headerIsPlainAndNothingAnimates();
-    void rowWarningAtLeftOfFirstCell();
+    void rowWarningFollowsTheText();
     void rowWarningHoverIsTheSessionsFailures();
     void rowWarningFollowsTheFirstVisualColumn();
     void rowWarningFollowsFailures();
@@ -615,13 +615,19 @@ void LogbookIndicatorsTest::headerIsPlainAndNothingAnimates()
 
 // ---- The row warning -------------------------------------------------------------------
 
-// Spec 8: one glyph, the style's warning icon, at the leading edge of the
-// failed row's first visual cell, after its check box; every other cell, the
-// failed calculation's blank cell included, is the base delegate's, and no
-// size changes. The same for a row that is not loaded, which stays unloaded.
-void LogbookIndicatorsTest::rowWarningAtLeftOfFirstCell()
+// Spec 8: one glyph, the style's warning icon, right after the text of the
+// failed row's first visual cell, attached to it rather than pinned to the
+// cell's edge, with the text itself where the base delegate puts it; every
+// other cell, the failed calculation's blank cell included, is the base
+// delegate's, and no size changes. The same for a row that is not loaded,
+// which stays unloaded.
+void LogbookIndicatorsTest::rowWarningFollowsTheText()
 {
     QVERIFY(makeFailedRow());
+    // Room for the text and the glyph: the glyph follows the text only when
+    // the text fits; in a narrow cell the text is elided to make room for it
+    tree()->setColumnWidth(descriptionSection(), 200);
+    spin();
     QVERIFY(!cells()->showsPending(cell("s1", "EA1")));
     QVERIFY(cell("s1", "EA1").data().toString().isEmpty());
 
@@ -631,10 +637,11 @@ void LogbookIndicatorsTest::rowWarningAtLeftOfFirstCell()
         if (QTest::currentTestFailed())
             return;
         const QRect glyph = cells()->warningRect(first);
-        QVERIFY(glyph.height() <= QFontMetrics(tree()->font()).height());
+        const QFontMetrics metrics = tree()->fontMetrics();     // the view's, device-aware, as the delegate's
+        QVERIFY(glyph.height() <= metrics.height());
+        QVERIFY(cellRect(first).contains(glyph));
 
-        // Where the style puts the check box and the text without the glyph,
-        // and the text with it
+        // Where the style puts the check box and the text without the glyph
         QStyleOptionViewItem opt;
         opt.initFrom(tree());
         opt.widget = tree();
@@ -643,13 +650,25 @@ void LogbookIndicatorsTest::rowWarningAtLeftOfFirstCell()
         opt.text = first.data().toString();
         QStyle *style = tree()->style();
         const QRect check = style->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &opt, tree());
-        const QRect textBefore = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, tree());
-        opt.features |= QStyleOptionViewItem::HasDecoration;
-        opt.decorationSize = glyph.size();
-        const QRect textAfter = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, tree());
+        const QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, tree());
+        const int textStart = textRect.left() + style->pixelMetric(QStyle::PM_FocusFrameHMargin, nullptr, tree()) + 1;
+        const int textEnd = textStart + metrics.horizontalAdvance(opt.text);
+        QVERIFY(!opt.text.isEmpty());
+        QVERIFY2(textEnd < glyph.left(),
+                 qPrintable(QStringLiteral("text '%1' start %2 end %3, textRect %4-%5, glyph %6-%7, cell %8-%9")
+                                .arg(opt.text).arg(textStart).arg(textEnd).arg(textRect.left()).arg(textRect.right())
+                                .arg(glyph.left()).arg(glyph.right()).arg(cellRect(first).left()).arg(cellRect(first).right())));
+
+        // After the text, and attached to it: nearer than its own width
         QVERIFY(glyph.left() > check.right());
-        QVERIFY(glyph.left() >= textBefore.left());
-        QVERIFY(glyph.right() < textAfter.left());
+        QVERIFY(glyph.left() >= textEnd);
+        QVERIFY(glyph.left() - textEnd < glyph.width());
+
+        // The text has not moved: up to the glyph, the cell is the base
+        // delegate's, check box and text included
+        const QRect cell = cellRect(first);
+        const QRect upToGlyph(cell.left(), cell.top(), glyph.left() - cell.left(), cell.height());
+        QVERIFY(cut(grabCells(), upToGlyph) == cut(grabCellsWithBaseDelegate(), upToGlyph));
 
         verifySizesAreTheBase();
     };

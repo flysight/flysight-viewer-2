@@ -1817,13 +1817,15 @@ fills the main window's `QStatusBar`. `MainWindow` creates it from the
 run the event loop; it is not a dock. The scheduler has no query for its
 active task, so the component follows `activeTaskChanged`, `progressChanged`
 (the last report for the active task's id; a report for another id changes
-nothing) and `schedulerIdle` from its construction. It adds two permanent
-widgets to the bar, which a temporary message (a menu's status tip) never
-hides:
+nothing) and `schedulerIdle` from its construction. It adds two things to
+the bar: the activity area at the left, in the bar's normal area, where an
+application says what it is doing, and the warning at the right, as a
+permanent widget, where state indicators sit (nothing in the application
+shows a temporary message, so the normal area is never hidden under one):
 
-- **The activity area:** a label "<label>: <done> / <total>", a progress bar
-  showing the same (its own text hidden: the label carries the count) and a
-  cancel button. Its items are the scheduler's tasks under their labels -
+- **The activity area:** a label "<label>: <done> / <total>", a compact
+  progress bar beside it showing the same (its own text hidden: the label
+  carries the count) and a cancel button after the bar. Its items are the scheduler's tasks under their labels -
   "Saving sessions" (`SaveTask`), "Loading sessions" (`LoadTask`), "Updating
   sessions" (`BulkEditTask`), "Computing columns" (`ColumnTask`), done being
   the scheduler's total minus its remaining - and the computations,
@@ -1849,8 +1851,12 @@ hides:
   list is not empty: beside the computations while they continue, alone once
   nothing is computing. It is not a control, and nothing dismisses it.
 
-Hidden widgets keep their size, so the bar's height never changes: idle, with
-a task, with the cancel button, with the warning and with both. The component
+A widget takes width only while it is shown, so nothing is reserved for a
+hidden cancel button or a hidden warning, and each container is exactly as
+wide as what it shows. The bar's height never changes, idle, with a task,
+with the cancel button, with the warning and with both, because the activity
+container is always shown and keeps the height of the tallest thing the bar
+can show. The component
 reads the demand layer at construction and again on `progressChanged` and
 `failuresChanged`. It holds the demand layer weakly and learns of its end
 itself (`destroyed`): the computations and the warning are gone at once, and
@@ -1864,13 +1870,15 @@ failure (`sessionFailures(id)` lists a calculation): the cell of the first
 section in visual order that is not hidden, asked of the tree's header each
 time a cell is painted, never cached, so the glyph follows a moved or hidden
 section, a sort and a rebuild of the columns. A row that is not loaded shows
-it from the record set, without a load (16.1). The glyph is the item's
-decoration on a copy of the style option, so the style places it at the
-leading edge of the text rectangle (after the check box) and elides the text
-into what is left; its side is at most one text line. It takes room only
-while it is shown, and `sizeHint()` never sees it, so no row height changes
-and a logbook without failures looks exactly as before. Hovering the glyph
-(the decoration rect the style computes for the cell) shows exactly
+it from the record set, without a load (16.1). The glyph follows the text,
+as a badge follows a name: the text is drawn where it always is, elided into
+what the text rectangle leaves once the glyph's room is taken from its
+trailing end, and the glyph sits right after the drawn text, attached to what
+it annotates rather than pinned to the cell's edge beside the next column;
+its side is at most one text line. It takes room only while it is shown, and
+`sizeHint()` never sees it, so no row height changes, no text moves, and a
+logbook without failures looks exactly as before. Hovering the glyph shows
+exactly
 `SessionFailures::text()` of the session; elsewhere in the cell the cell's own
 tooltip. The cells over the failed calculation are blank, as any cell without
 a value: the glyph explains them. A click on the glyph is a click on the cell:
