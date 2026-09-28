@@ -1936,7 +1936,6 @@ void CalculationDemandTest::sharedJobSameProgress()
     gate().open(2);
     QVERIFY(waitDemandIdle());
     QVERIFY(nothingToShow());
-    QVERIFY(nothingToShow());
     QCOMPARE(values("s1", "g2"), QVector<double>({10.0}));
     QCOMPARE(m_queue->model()->rowCount(), 2);
 }
@@ -1963,7 +1962,6 @@ void CalculationDemandTest::plotCheckedDuringAJobJoinsIt()
     QVERIFY(waitDemandIdle());
     QCOMPARE(jobCount("gated"), 1);
     QCOMPARE(jobCount("afterG"), 1);
-    QVERIFY(nothingToShow());
     QVERIFY(nothingToShow());
     QCOMPARE(values("s1", "h"), QVector<double>({6.0}));
 }
@@ -4824,15 +4822,30 @@ void CalculationDemandTest::failuresNameEachCalculationOnce()
 }
 
 // Spec 10: one element per recording, in session-model row order, and each
-// pair once however many sources fail it; a sort reorders the list.
+// pair once however many sources fail it; a change of a listed recording's
+// entry alone is announced; a sort reorders the list.
 void CalculationDemandTest::failuresAreOnePerSessionInRowOrder()
 {
     QVERIFY(giveInput({"s2"}, "T_IN", 1));
     QVERIFY(giveInput({"s2"}, "EA_IN", -1));
     show({"s2"});
     check("ea");
-    enableColumns({"T_OUT", "EA1"});
+    enableColumns({"EA1"});
     QVERIFY(waitDemandIdle());
+    QCOMPARE(failureLines(), QStringList({"s2 (Jump 2) expA [Explicit A] negative input"}));
+
+    // A second failed calculation of the listed recording: the recordings
+    // listed stay the same, its entry changes, in one announcement
+    {
+        QSignalSpy failuresSpy(m_demand.get(), &CalculationDemand::failuresChanged);
+        enableColumns({"T_OUT", "EA1"});
+        QVERIFY(waitDemandIdle());
+        QCOMPARE(failedSessions(), QStringList({"s2"}));
+        QCOMPARE(failuresSpy.count(), 1);
+        const QStringList s2Entries = failureLinesOf("s2");
+        QCOMPARE(s2Entries.size(), 2);
+        QVERIFY(s2Entries.contains(QStringLiteral("s2 (Jump 2) thrower [Thrower] synthetic failure +retry")));
+    }
 
     // The plot is the first source: expA, from the plot and EA1 alike, then
     // thrower

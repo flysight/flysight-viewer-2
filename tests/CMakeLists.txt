@@ -151,7 +151,7 @@ flysight_add_test(tst_result_columns SOURCES tst_result_columns.cpp)
 flysight_add_test(tst_jobqueue SOURCES tst_jobqueue.cpp)
 flysight_add_test(tst_jobmodel SOURCES tst_jobmodel.cpp)
 
-# Demand layer (plot demand, priority, the input-settle wait, failure memory, per-plot state; no widgets)
+# Demand layer (plot demand, priority, the input-settle wait, failure memory, progress, failures, pending cells; no widgets)
 flysight_add_test(tst_calculation_demand SOURCES tst_calculation_demand.cpp)
 
 # The views of the demand layer in offscreen widgets. tst_logbook_indicators
