@@ -1801,7 +1801,9 @@ void ResultColumnsTest::columnWorkerIsUnchangedByDemand()
     QCOMPARE(indexRecordStamp("s2"), stampOf({{kCalcX, QString()}}));
     QVERIFY(!isLoaded("s1"));
     QCOMPARE(cached("s1", kX), QVariant(QStringLiteral("x:d1")));
-    QVERIFY(demand->columnState(CalculationDemand::columnId(xColumn())).isPlain());
+    demand->flush();
+    QCOMPARE(demand->progress().count, 0);
+    QVERIFY(demand->failures().isEmpty());
 }
 
 // A bulk edit on a stub leaves its X record stale. Until the column worker's
@@ -1823,8 +1825,12 @@ void ResultColumnsTest::staleRecordDeletedByWorkerCreatesDemand()
     {
         const Quiet quiet(*m_queue);
         demand->flush();
-        QVERIFY(demand->columnState(x).isPlain());
-        QCOMPARE(demand->columnState(x).doneCount, 2);
+        // Both sessions done from their records: nothing to compute, no
+        // failure, no pending cell
+        QCOMPARE(demand->progress().count, 0);
+        QVERIFY(demand->failures().isEmpty());
+        QVERIFY(!demand->isCellPending(QStringLiteral("s1"), x));
+        QVERIFY(!demand->isCellPending(QStringLiteral("s2"), x));
         PlotFixture::spin(demand.get());
         QVERIFY(quiet.holds());
     }
@@ -1847,7 +1853,7 @@ void ResultColumnsTest::staleRecordDeletedByWorkerCreatesDemand()
         if (id == QLatin1String("s1") && calculationId == kCalcX)
             sequence.append(QStringLiteral("changed:loads=%1").arg(loadedSpy.count()));
     });
-    connect(demand.get(), &CalculationDemand::columnStateChanged, &scope, [&](const QString &) {
+    connect(demand.get(), &CalculationDemand::pendingCellsChanged, &scope, [&](const QString &) {
         if (demand->isCellPending(QStringLiteral("s1"), x) && !sequence.contains(QStringLiteral("pending")))
             sequence.append(QStringLiteral("pending"));
     });
@@ -1879,7 +1885,10 @@ void ResultColumnsTest::staleRecordDeletedByWorkerCreatesDemand()
     m_model->flushDirtySessions();
     QCOMPARE(indexValue("s1", xColumn()), QJsonValue(QStringLiteral("x:bulk")));
     QCOMPARE(indexRecordStamp("s1"), stampOf({{kCalcX, QString()}}));
-    QVERIFY(demand->columnState(x).isPlain());
+    demand->flush();
+    QCOMPARE(demand->progress().count, 0);
+    QVERIFY(demand->failures().isEmpty());
+    QVERIFY(!demand->isCellPending(QStringLiteral("s1"), x));
 }
 
 FLYSIGHT_TEST_MAIN(ResultColumnsTest)

@@ -1321,7 +1321,7 @@
 513 tst_logbook_index recordReasonsRoundTrip
 513 tst_result_store recordReasonRecordedAtWriteAndRestore
 513 tst_calculation_demand passOverManyStubsReadsEachRecordSetOnce
-513 tst_calculation_demand columnStateCountsAndPendingCells
+513 tst_calculation_demand columnProgressAndPendingCells
 513 tst_result_columns staleRecordDeletedByWorkerCreatesDemand
 513 audit demand
 513 tst_calculation_demand recordReasonReachesDemandThroughRecordChange
@@ -1504,7 +1504,6 @@
 # 535 - (10, as amended) a plot row and a logbook column header show one small animated working indicator at the right of their name while any of their demand is waiting or running, with no label or count beside it; the indicators of the plot list and the logbook turn on one clock
 535 tst_logbook_indicators headerIsPlainAndNothingAnimates
 535 audit demand
-535 tst_calculation_demand workingIdsFollowStates
 535 tst_logbook_indicators plainHeaderAndCellsAreIdenticalToBase
 535 manual M3
 535 manual M23
@@ -1512,11 +1511,10 @@
 535 manual M30
 
 # 536 - (10, as amended) hovering the indicator, the row or the header shows how many sessions are done of how many are wanted (the only place the numbers are shown), the session being computed with its progress text, and the sessions that could not be computed with their reasons, a result that could not be stored included
-536 tst_calculation_demand tooltipText
-536 tst_calculation_demand toolTipListsAtMostTenFailures
+536 tst_calculation_demand failureTextAndItsLimit
 536 tst_calculation_demand sharedJobSameProgress
-536 tst_calculation_demand progressUpdatesWithoutInspection
-536 tst_calculation_demand columnStateCountsAndPendingCells
+536 tst_calculation_demand progressTextWithoutAPass
+536 tst_calculation_demand columnProgressAndPendingCells
 536 tst_logbook_indicators rowWarningHoverIsTheSessionsFailures
 536 tst_status_bar taskShownOverComputationsAndHoverListsBoth
 536 tst_calculation_demand visibleFailedLoadIsSettledAsFailed
@@ -1541,7 +1539,7 @@
 538 tst_logbook_indicators sortingTreatsPendingAsUnavailable
 538 tst_logbook_indicators unreadableRecordPendingIsNotDemandPending
 538 tst_logbook_indicators pendingCellsChangeRepaintsOnlyThatColumn
-538 tst_calculation_demand columnStateCountsAndPendingCells
+538 tst_calculation_demand columnProgressAndPendingCells
 538 audit demand
 538 manual M25
 
@@ -1678,7 +1676,7 @@
 556 manual M2
 
 # 557 - (13, as amended) test: the working indicator and hover detail reflect waiting, running, done and failed counts on plot rows and column headers, the plot row showing one glyph and no label or count; no control to refresh or cancel a calculation exists
-557 tst_calculation_demand columnStateCountsAndPendingCells
+557 tst_calculation_demand columnProgressAndPendingCells
 557 tst_logbook_indicators headerIsPlainAndNothingAnimates
 557 tst_logbook_indicators rowWarningAtLeftOfFirstCell
 557 tst_logbook_indicators rowWarningHoverIsTheSessionsFailures
@@ -1751,7 +1749,7 @@
 604 tst_calculation_demand runningColumnTrackFilesItsOtherBlockers
 604 tst_calculation_demand focusedSessionFirstThenRowOrder
 604 tst_calculation_demand columnPriorityFollowsRowOrderAfterPlots
-604 tst_calculation_demand columnStateCountsAndPendingCells
+604 tst_calculation_demand columnProgressAndPendingCells
 604 audit demand
 
 # 605 - (2) what no product code uses is removed, unless a named later feature needs it, in which case it is kept and says so: the executor's cancel operation and job history stay for the jobs dock
@@ -1880,10 +1878,9 @@
 626 tst_jobqueue duplicateOffersCreateNoDuplicates
 
 # 627 - (9) a track has no settling flag and no job id, and a source's state no list of waiting tracks; the counts stay, and nothing the user sees changes
-627 tst_calculation_demand columnStateCountsAndPendingCells
-627 tst_calculation_demand tooltipText
+627 tst_calculation_demand columnProgressAndPendingCells
 627 tst_calculation_demand changeSignalsAreMinimal
-627 tst_calculation_demand progressUpdatesWithoutInspection
+627 tst_calculation_demand progressTextWithoutAPass
 627 audit demand
 
 # 628 - (9) the executor has no idle signal, no queued signal, no query of both active jobs and no busy-period bookkeeping; its job model, its idle and running queries and its other signals carry the same facts
@@ -1907,8 +1904,7 @@
 
 # 631 - (10.1) one walk over the session rows derives every source's state, counts, listed tracks, pending cells and candidates, for plots and columns at once, under one row stability guard, returning plain values; offers, withdrawals, holds, loads and signals happen after it
 631 tst_calculation_demand changeSignalsAreMinimal
-631 tst_calculation_demand columnStateCountsAndPendingCells
-631 tst_calculation_demand workingIdsFollowStates
+631 tst_calculation_demand columnProgressAndPendingCells
 631 tst_calculation_demand passOverManyStubsReadsEachRecordSetOnce
 631 audit demand
 
@@ -1916,7 +1912,7 @@
 632 tst_calculation_demand hiddenAndStubRowsAreNotTracks
 632 tst_calculation_demand ordinaryPlotsAreNeverInspected
 632 tst_calculation_demand uncheckedPlotsAreNeverInspected
-632 tst_calculation_demand progressUpdatesWithoutInspection
+632 tst_calculation_demand progressTextWithoutAPass
 632 tst_calculation_demand chainedBlockersContinue
 632 tst_calculation_demand registryChangeReclassifies
 
@@ -2000,7 +1996,6 @@
 
 # 645 - (12) the hover carries both numbers, on a plot row as on a column header
 645 tst_status_bar taskShownOverComputationsAndHoverListsBoth
-645 tst_calculation_demand tooltipText
 645 manual M29
 
 # 646 - (12) one working-indicator clock per application, created beside the demand layer and handed to the views as the demand layer is: the arcs of the plot list and the logbook's headers turn in step, the clock runs only while any plot or column is working, and each view repaints its own working rows or sections on its frames
@@ -2078,7 +2073,7 @@
 657 tst_calculation_demand columnFailuresAreBadgedNotReloaded
 657 tst_calculation_demand notApplicableSessionIsSettledWithoutAJob
 657 tst_calculation_demand chainedBlockersContinue
-657 tst_calculation_demand columnStateCountsAndPendingCells
+657 tst_calculation_demand columnProgressAndPendingCells
 657 tst_calculation_demand runningColumnTrackFilesItsOtherBlockers
 657 tst_fusion_rows realRowScript
 

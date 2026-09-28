@@ -73,9 +73,6 @@ private:
     QStringList m_ids;
 };
 
-/// The session ids of a state's track list, in list order.
-QStringList sessionIdsOf(const QList<FlySight::DemandTrack> &tracks);
-
 /// Spins the event loop, flushing `demand` on every poll, until the executor
 /// is idle, no pass is pending, no session is settling and the column fill has
 /// no work (the executor is idle between one held session's job and the next

@@ -124,14 +124,6 @@ void PlotFixture::spin(CalculationDemand *demand)
         demand->flush();
 }
 
-QStringList sessionIdsOf(const QList<DemandTrack> &tracks)
-{
-    QStringList ids;
-    for (const DemandTrack &track : tracks)
-        ids.append(track.sessionId);
-    return ids;
-}
-
 bool waitDemandIdle(JobQueue &executor, CalculationDemand &demand, int timeoutMs)
 {
     return QTest::qWaitFor([&executor, &demand] {

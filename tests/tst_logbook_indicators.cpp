@@ -195,12 +195,14 @@ private:
     int descriptionSection() const { return section(SessionKeys::Description); }
     int row(const char *id) const { return m_model->getSessionRow(QString::fromLatin1(id)); }
     static QString colId(const char *key) { return CalculationDemand::columnId(attributeColumn(QString::fromLatin1(key))); }
-    /// The current state of the column over `key`: a pending pass runs first.
-    DemandState col(const char *key)
+    /// The current progress of the computations: a pending pass runs first.
+    DemandProgress progressNow()
     {
         m_demand->flush();
-        return m_demand->columnState(colId(key));
+        return m_demand->progress();
     }
+    /// The session of the executor's running job; empty when none runs.
+    QString runningSession() const { return m_queue->job(m_queue->runningJob()).sessionId; }
     QModelIndex cell(const char *id, const char *key) const
     {
         return m_model->index(row(id), section(key));
@@ -251,12 +253,11 @@ private:
         enableColumns({QStringLiteral("G_OUT")});
         if (!gate().waitEntered())
             return false;
-        if (!QTest::qWaitFor([this] {
-                return col("G_OUT").running.value(0).progressText == QStringLiteral("step 1");
-            }))
+        if (!QTest::qWaitFor([this] { return progressNow().progressText == QStringLiteral("step 1"); }))
             return false;
-        const DemandState state = col("G_OUT");
-        if (!state.isWorking() || state.wantedCount != 3 || sessionIdsOf(state.running) != QStringList({"s1"}))
+        const DemandProgress progress = progressNow();
+        if (progress.count != 3 || progress.sessionName != QStringLiteral("Jump 1")
+            || runningSession() != QStringLiteral("s1"))
             return false;
         spin();
         return true;
@@ -979,7 +980,7 @@ void LogbookIndicatorsTest::clickOnRowWarningIsAClickOnTheCell()
 void LogbookIndicatorsTest::pendingCellsAreDistinctFromUnavailable()
 {
     QVERIFY(makeWorkingColumn());
-    QCOMPARE(sessionIdsOf(col("G_OUT").running), QStringList({"s1"}));
+    QCOMPARE(runningSession(), QStringLiteral("s1"));
     const int g = section("G_OUT");
     const int d = descriptionSection();
 
@@ -1206,7 +1207,7 @@ void LogbookIndicatorsTest::unreadableRecordPendingIsNotDemandPending()
     QVERIFY(!cells()->showsPending(s1));
     QVERIFY(s1.data().toString().isEmpty());
     QCOMPARE(cut(grabCells(), cellRect(s1)), cut(grabCellsWithBaseDelegate(), cellRect(s1)));
-    QVERIFY(!col("G_OUT").isWorking());
+    QCOMPARE(progressNow().count, 0);
     QVERIFY(quiet.holds());
     QVERIFY(unreadable.release());
 }

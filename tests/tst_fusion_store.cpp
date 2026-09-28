@@ -6,8 +6,8 @@
 //
 //  - a fit survives unload and restart bit for bit (the seventeen channels,
 //    the derived values, the diagnostics and the detail equal the fresh
-//    publish, and the goldens), with no job, no run and a plain row;
-//  - a rejection and a solver failure come back with their reason and badge;
+//    publish, and the goldens), with no job, no run and nothing to compute;
+//  - a rejection and a solver failure come back listed with their reason;
 //  - validity follows the inputs (an unrelated edit keeps the record, a
 //    dependency edit or an IMU merge drops it), what the fit looked up and the
 //    code stamps; nothing unrelated to what it reached (altitude markers,
@@ -80,7 +80,6 @@ Q_DECLARE_METATYPE(FlySight::DependencyKey)
 namespace {
 
 const QString kFit = QString::fromLatin1(Fusion::FitCalculationId);     // "builtin.fusion.fit"
-const QString kRoll = QStringLiteral("Fusion/roll");
 const QString kDiagnostics = QStringLiteral("_FUSION_DIAGNOSTICS");
 const QString kRecordSuffix = QStringLiteral(".builtin%2Efusion%2Efit.fvresult");
 const QString kExtra = QStringLiteral("test.store.extra");
@@ -234,11 +233,32 @@ private:
     {
         m_plots->setPlotEnabled(QStringLiteral("Fusion"), measurement, enabled);
     }
-    /// The current plot state: a pending pass runs first.
-    DemandState row(const QString &plotId)
+    /// The current progress: a pending pass runs first.
+    DemandProgress progressNow()
     {
         m_demand->flush();
-        return m_demand->plotState(plotId);
+        return m_demand->progress();
+    }
+    /// Nothing to compute and nothing failed: a pending pass runs first.
+    bool nothingToShow()
+    {
+        return progressNow().count == 0 && m_demand->failures().isEmpty();
+    }
+    /// Empty when r1, and r1 alone, is listed among the failures with the
+    /// stored rejection `reason` of the fit (not tried again at the next
+    /// start) and nothing is to compute; else what differs. A pending pass
+    /// runs first.
+    QString listedFailure(const QString &reason)
+    {
+        const DemandProgress progress = progressNow();
+        const QList<SessionFailures> failures = m_demand->failures();
+        const FailedCalculation expected{kFit, QStringLiteral("Sensor fusion"), reason, false};
+        if (failures.size() != 1 || failures.at(0).sessionId != QLatin1String("r1")
+            || failures.at(0).calculations != QList<FailedCalculation>({expected}))
+            return QStringLiteral("the failures are not r1's stored rejection: ") + SessionFailures::listText(failures);
+        if (progress.count != 0)
+            return QStringLiteral("%1 sessions are counted").arg(progress.count);
+        return QString();
     }
     const CalculationResultStore::Stats &stats() const { return m_model->storedResultStats(); }
 
@@ -570,9 +590,10 @@ QString FusionStoreTest::fitDirectly(const QString &id)
 
 QString FusionStoreTest::offeredFitIsDroppedByUncheck(const QString &id, const QSignalSpy &queued, int jobsBefore)
 {
-    const DemandState state = row(kRoll);
-    if (state.waitingCount != 1 || state.runningCount != 0)
-        return QStringLiteral("the row waits on %1 and runs %2 tracks").arg(state.waitingCount).arg(state.runningCount);
+    const DemandProgress progress = progressNow();
+    if (progress.count != 1 || !progress.sessionName.isEmpty())
+        return QStringLiteral("the progress counts %1 sessions and names \"%2\"")
+            .arg(progress.count).arg(progress.sessionName);
     if (queued.count() != 1 || m_queue->model()->rowCount() != jobsBefore + 1)
         return QStringLiteral("%1 jobs were offered, %2 created")
             .arg(queued.count()).arg(m_queue->model()->rowCount() - jobsBefore);
@@ -596,14 +617,15 @@ QString FusionStoreTest::offeredFitIsDroppedByUncheck(const QString &id, const Q
         return QStringLiteral("the executor is not idle");
     if (engine(id).runCount(kFit) != 0)
         return QStringLiteral("the fit ran");
-    if (row(kRoll) != DemandState())
-        return QStringLiteral("the unchecked row is not plain");
+    if (!nothingToShow())
+        return QStringLiteral("something is still to compute or failed after the uncheck");
     return QString();
 }
 
 // ---- Bit-identical restores ------------------------------------------------------------
 
-// Spec 8: fitted, saved, unloaded, reloaded: the goldens, no job, a plain row.
+// Spec 8: fitted, saved, unloaded, reloaded: the goldens, no job, nothing to
+// compute.
 void FusionStoreTest::restoredAfterEvictionIsBitIdentical()
 {
     const auto restoreCapacity = qScopeGuard([] {
@@ -657,8 +679,7 @@ void FusionStoreTest::restoredAfterEvictionIsBitIdentical()
     QCOMPARE(m_queue->model()->rowCount(), 1);      // only the first job
     QVERIFY(quiet.holds());
 
-    const DemandState state = row(kRoll);
-    QVERIFY(state.isPlain());
+    QVERIFY(nothingToShow());
     PlotFixture::spin(m_demand.get());
     QVERIFY(quiet.holds());
     QCOMPARE(m_queue->model()->rowCount(), 1);
@@ -724,9 +745,7 @@ void FusionStoreTest::restoredAfterRestartIsBitIdentical()
     QCOMPARE(m_queue->model()->rowCount(), 0);
     QVERIFY(quiet.holds());
 
-    const DemandState state = row(kRoll);
-    QVERIFY(state.isPlain());
-    QCOMPARE(state.doneCount, 1);
+    QVERIFY(nothingToShow());
     PlotFixture::spin(m_demand.get());
     QCOMPARE(m_queue->model()->rowCount(), 0);
     QVERIFY(quiet.holds());
@@ -740,10 +759,10 @@ void FusionStoreTest::restoredAfterRestartIsBitIdentical()
     QCOMPARE(stats().recordsWritten, 0);
 }
 
-// ---- Failures keep their badge -----------------------------------------------------------
+// ---- Failures keep their reason ----------------------------------------------------------
 
-// Spec 8: a rejection is restored with its reason; the row shows the warning
-// badge; no job runs.
+// Spec 8: a rejection is restored with its reason and listed among the
+// failures; no job runs.
 void FusionStoreTest::restoredRejectionShowsBadge()
 {
     const auto restoreCapacity = qScopeGuard([] {
@@ -765,13 +784,9 @@ void FusionStoreTest::restoredRejectionShowsBadge()
     const Quiet quiet(*m_queue);
     QCOMPARE(unloadAndReload("r1"), QString());
 
-    const DemandState state = row(kRoll);
-    QCOMPARE(state.failedCount, 1);
-    QVERIFY(state.showsWarning());
-    QVERIFY(!state.isWorking());
-    QVERIFY(!state.failed.at(0).jobFailure);
-    QCOMPARE(state.failed.at(0).reason,
-             QStringLiteral("Sensor fusion: Local origin index outside GNSS samples"));
+    const QString rejection = QStringLiteral("Local origin index outside GNSS samples");
+    QString listed = listedFailure(rejection);
+    QVERIFY2(listed.isEmpty(), qPrintable(listed));
 
     const BlockerReport blockers = engine("r1").blockers(fusionKey(QStringLiteral("roll")));
     QCOMPARE(blockers.state, BlockerReport::State::NotProduced);
@@ -788,7 +803,8 @@ void FusionStoreTest::restoredRejectionShowsBadge()
     for (int i = 0; i < 3; ++i)
         PlotFixture::spin(m_demand.get());
     QVERIFY(quiet.holds());
-    QVERIFY(row(kRoll).showsWarning());
+    listed = listedFailure(rejection);
+    QVERIFY2(listed.isEmpty(), qPrintable(listed));
     QCOMPARE(engine("r1").runCount(kFit), 0);
     QCOMPARE(stats().recordsRestored, 1);
 }
@@ -822,11 +838,8 @@ void FusionStoreTest::restoredSolverFailureShowsBadge()
     const Quiet quiet(*m_queue);
     QCOMPARE(unloadAndReload("r1"), QString());
 
-    const DemandState state = row(kRoll);
-    QCOMPARE(state.failedCount, 1);
-    QVERIFY(state.showsWarning());
-    QVERIFY(!state.failed.at(0).jobFailure);
-    QCOMPARE(state.failed.at(0).reason, QStringLiteral("Sensor fusion: ") + kSolverFailureReason);
+    QString listed = listedFailure(kSolverFailureReason);
+    QVERIFY2(listed.isEmpty(), qPrintable(listed));
 
     const BlockerReport blockers = engine("r1").blockers(fusionKey(QStringLiteral("roll")));
     QCOMPARE(blockers.state, BlockerReport::State::NotProduced);
@@ -837,7 +850,8 @@ void FusionStoreTest::restoredSolverFailureShowsBadge()
     // No rerun: a stored failure is a result
     for (int i = 0; i < 3; ++i)
         PlotFixture::spin(m_demand.get());
-    QVERIFY(row(kRoll).showsWarning());
+    listed = listedFailure(kSolverFailureReason);
+    QVERIFY2(listed.isEmpty(), qPrintable(listed));
     QCOMPARE(engine("r1").runCount(kFit), 0);
     QVERIFY(quiet.holds());
 }
@@ -921,9 +935,8 @@ void FusionStoreTest::dependencyEditDropsRecord()
     QVERIFY(isNotRequested(engine("a").resultStatus(kFit)));
     QVERIFY2(availableIn("a").isEmpty(), qPrintable(availableIn("a")));
 
-    const DemandState state = row(kRoll);
-    QCOMPARE(state.waitingCount, 1);
-    QCOMPARE(state.runningCount, 0);
+    QCOMPARE(progressNow().count, 1);
+    QVERIFY(progressNow().sessionName.isEmpty());
     QCOMPARE(m_queue->chosenNextJob(), JobId(0));
     QVERIFY(m_demand->isSettling(QStringLiteral("a")));
     PlotFixture::spin(m_demand.get());
@@ -931,7 +944,7 @@ void FusionStoreTest::dependencyEditDropsRecord()
 
     // Unchecked: nothing to drop (nothing was offered)
     check(QStringLiteral("roll"), false);
-    QVERIFY(row(kRoll) == DemandState());
+    QVERIFY(nothingToShow());
     QVERIFY(quiet.holds());
 
     QVERIFY(waitForIdle(*m_model));
@@ -1265,7 +1278,7 @@ void FusionStoreTest::runtimeRegistryChangeDropsFitAndRecord()
         QCOMPARE(engine("a").resultStatus(kFit), std::optional<ResultStatus>(ResultStatus::Ok));
         QCOMPARE(bytesOf(path), r0);
         QCOMPARE(stats().droppedRecordsDeleted, 0);
-        QVERIFY(row(kRoll).isPlain());
+        QVERIFY(nothingToShow());
         PlotFixture::spin(m_demand.get());
         QVERIFY(quiet.holds());
     }
@@ -1280,10 +1293,8 @@ void FusionStoreTest::runtimeRegistryChangeDropsFitAndRecord()
 
     // The checked plot wants the fit again; unchecking drops whatever was
     // offered for it before it can start
-    const DemandState state = row(kRoll);
-    QCOMPARE(state.waitingCount, 1);
-    QCOMPARE(state.runningCount, 0);
-    QCOMPARE(state.wantedCount, 1);
+    QCOMPARE(progressNow().count, 1);
+    QVERIFY(progressNow().sessionName.isEmpty());
     check(QStringLiteral("roll"), false);
     PlotFixture::spin(m_demand.get());
     QVERIFY(m_queue->isIdle());
@@ -1532,7 +1543,7 @@ void FusionStoreTest::columnOverFusionFillsUnloadedSessions()
     LogbookColumnStore::instance().setColumns({descriptionColumn(), roll});
     const QString column = CalculationDemand::columnId(roll);
     m_demand->flush();
-    QCOMPARE(m_demand->columnState(column).waitingCount, 2);
+    QCOMPARE(m_demand->progress().count, 2);
     QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
     QVERIFY(waitForIdle(*m_model));
 
@@ -1540,10 +1551,7 @@ void FusionStoreTest::columnOverFusionFillsUnloadedSessions()
     QCOMPARE(m_queue->model()->record(0).sessionId, QStringLiteral("a"));
     QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
     QVERIFY(QFileInfo(recordPath("a")).isFile());
-    const DemandState state = m_demand->columnState(column);
-    QVERIFY(state.isPlain());
-    QCOMPARE(state.wantedCount, 1);
-    QCOMPARE(state.doneCount, 1);
+    QVERIFY(nothingToShow());
     QVERIFY(!isLoaded("a"));
     QVERIFY(!isLoaded("n1"));
 
@@ -1601,17 +1609,16 @@ void FusionStoreTest::fusionColumnWithStoredFitsRunsNothing()
     QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
     {
         const Quiet quiet(*m_queue);
-        m_demand->flush();
-        const DemandState state = m_demand->columnState(column);
-        QCOMPARE(state.doneCount, 1);
-        QVERIFY(state.isPlain());
+        QVERIFY(nothingToShow());
+        QVERIFY(!m_demand->isCellPending(QStringLiteral("a"), column));
         PlotFixture::spin(m_demand.get());
         QVERIFY(waitForIdle(*m_model));
         PlotFixture::spin(m_demand.get());
         QVERIFY(quiet.holds());
     }
     QCOMPARE(loadedSpy.count(), 0);
-    QCOMPARE(m_demand->columnState(column).doneCount, 1);
+    QVERIFY(nothingToShow());
+    QVERIFY(!m_demand->isCellPending(QStringLiteral("a"), column));
     QVERIFY(!m_demand->hasFillWork());
     int section = -1;
     for (int c = 0; c < m_model->columnCount(); ++c) {

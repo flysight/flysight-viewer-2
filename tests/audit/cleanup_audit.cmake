@@ -815,7 +815,7 @@ expect_none("the fill and the settle clock never call the executor"
 # They expose nothing of the walk, and present nothing: session ids in,
 # session ids and times out. Allow: none expected.
 expect_none("the fill and the settle clock know nothing of the walk"
-  "BlockerReport|blockers\\(|DemandTrack|DemandState|DemandCondition|RowStabilityGuard|PairMemory|LearnedFact|DemandProgress|SessionFailures|FailedCalculation"
+  "BlockerReport|blockers\\(|TrackCondition|RowStabilityGuard|PairMemory|LearnedFact|DemandProgress|SessionFailures|FailedCalculation"
   "src/demandfill.*" "src/demandsettleclock.*")
 # One bound of simultaneous jobs, and the load bound follows it: the running
 # job's session and the chosen next job's (docs/CALCULATIONS.md 16.8).
@@ -911,12 +911,22 @@ expect_none("no view keeps a label, a cluster or a clock"
 # warning. Allow: a new view that holds the demand layer is added.
 expect_only("each view that holds the demand layer learns of its end itself" "&QObject::destroyed"
   "^src/ui/docks/logbook/LogbookCellDelegate\\.cpp$|^src/ui/statusbar/StatusBarFeature\\.cpp$" src/ui)
-# The views read progress, failures and the pending cells, never the
-# per-source state, its queries, its lists of working ids or its signals.
-# Allow: none expected.
-expect_none("the views read no per-source state"
-  "[.>](plotState|columnState|workingPlotIds|workingColumnIds)\\(|::(plotStateChanged|columnStateChanged|statesChanged)"
-  src/ui "src/mainwindow.*")
+# The demand layer presents progress, failures and the pending cells: the
+# per-source state, its track and condition types, its counts, lists and
+# tooltip, the queries that returned it, its signals and the lists of working
+# ids are gone, and no test reads them either (a test asserts through the
+# values and the executor). The logbook cell delegate's own showsWarning(index)
+# is not the state's showsWarning(). Allow: none expected (tests/README.md is
+# excluded: its tables name the removed tests).
+expect_none("the per-source presentation stays gone"
+  "DemandState|DemandTrack|DemandCondition|kToolTipListLimit|buildToolTip|workingPlotIds|workingColumnIds|plotStateChanged|columnStateChanged|statesChanged|${WB_START}(plotState|columnState)\\(|sessionIdsOf|wantedCount|doneCount|waitingCount|failedCount|showsWarning\\(\\)"
+  src tests ":!tests/README.md")
+# Counts that no view reads are not kept: the walk tallies no track per
+# source, keeps no list of running or failed tracks and builds no text of its
+# own. Allow: none expected.
+expect_none("the demand layer keeps no per-source state"
+  "m_columnStates|m_states${WB_END}|addTrack|runningCount|jobFailure|calculationTitles|isWorking\\(|isPlain\\(|toolTip${WB_END}"
+  ${DEMAND_LAYER})
 # The plot rows' and column headers' glyphs, their shared painting, geometry
 # and hover helper, and the header view that drew them are gone with the
 # per-source presentation. Allow: none expected (tests/README.md is excluded:

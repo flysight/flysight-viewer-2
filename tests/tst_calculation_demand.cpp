@@ -6,16 +6,18 @@
 // start work with no other call; unchecking and hiding drop the waiting pair;
 // priority (the focused session, then row order, upstream first); the
 // input-settle wait; the memory of job-level failures and not-applicable pairs;
-// the per-plot state and its signals.
+// the progress, the failures and their signals.
 // Column demand: every enabled logbook column over a requested calculation,
 // for every session, loaded or not; the column fill's hidden loads, the bound
-// on holds and their release; the pair memory; tier (c); the per-column state and
-// the pending cells; the ordering against saves and bulk edits.
+// on holds and their release; the pair memory; tier (c); the column's progress
+// and the pending cells; the ordering against saves and bulk edits.
+// What a plot or a column is doing is asserted through what the demand layer
+// presents (progress, failures, pending cells) and the executor's jobs.
 //
 // Synchronization: Gate::waitEntered() proves the worker is inside a compute
 // function; QTRY_*, waitIdle() and waitDemandIdle() spin the event loop for
 // main-thread effects; CalculationDemand::flush() runs a pending pass before a
-// state is read; settle() ends the input-settle waits. There are no sleeps.
+// value is read; settle() ends the input-settle waits. There are no sleeps.
 
 #include <algorithm>
 #include <memory>
@@ -119,10 +121,8 @@ private slots:
     void changingDemandReplacesChosenNext();
     void executorHoldsAtMostRunningAndChosenNext();
     void chosenNextJobFollowsTheExecutorsAnswer();
-    void tooltipText();
     void changeSignalsAreMinimal();
     void dependencyBurstIsCoalesced();
-    void progressUpdatesWithoutInspection();
     void removedSessionLeavesNoTrace();
     void registryChangeReclassifies();
     void survivesExecutorShutdown();
@@ -155,7 +155,7 @@ private slots:
     void heldSessionShownStaysLoaded();
     void removedOrRepopulatedHeldSessionIsReleased();
     void identityStubIsOfferedUnderItsRealId();
-    void columnStateCountsAndPendingCells();
+    void columnProgressAndPendingCells();
     void profileStyleColumnsCreateDemand();
     void startupWithEnabledColumnLoadsAfterColumnWorker();
     void savesAndBulkEditsPrecedeLoadStep();
@@ -174,10 +174,6 @@ private slots:
 
     // Parts
     void settleClockAnswersItsQuestions();
-
-    // Presentation
-    void workingIdsFollowStates();
-    void toolTipListsAtMostTenFailures();
 
     // Progress and failures
     void progressCountsEachSessionOnce();
@@ -220,12 +216,6 @@ private:
     void check(const char *measurement, bool enabled = true)
     {
         m_plots->setPlotEnabled(QStringLiteral("Syn"), QString::fromLatin1(measurement), enabled);
-    }
-    /// The current state: a pending pass runs first.
-    DemandState row(const char *plotId)
-    {
-        m_demand->flush();
-        return m_demand->plotState(QString::fromLatin1(plotId));
     }
     QVector<double> values(const QString &sessionId, const char *measurement)
     {
@@ -308,12 +298,6 @@ private:
 
     // ---- Column demand ------------------------------------------------------
     static QString colId(const char *key) { return CalculationDemand::columnId(attributeColumn(QString::fromLatin1(key))); }
-    /// The current state of the column over attribute `key`: a pending pass runs first.
-    DemandState col(const char *key)
-    {
-        m_demand->flush();
-        return m_demand->columnState(colId(key));
-    }
     /// The column index of the attribute column over `key` in m_model; -1 when none.
     int section(const char *key) const
     {
@@ -400,8 +384,9 @@ private:
         }
         return QString();
     }
-    /// Checks holdViolation() on every load, job start, jobsChanged and column
-    /// state change while `scope` lives; the first violation lands in `violation`.
+    /// Checks holdViolation() on every load, job start, jobsChanged and change
+    /// of a column's pending cells (the holds follow the pending sessions)
+    /// while `scope` lives; the first violation lands in `violation`.
     void watchHolds(QObject *scope, QString *violation)
     {
         const auto check = [this, violation](bool pinnedHidden) {
@@ -411,7 +396,7 @@ private:
         connect(m_model.get(), &SessionModel::sessionLoaded, scope, [check](const QString &) { check(true); });
         connect(m_queue.get(), &JobQueue::jobStarted, scope, [check](JobId) { check(true); });
         connect(m_queue.get(), &JobQueue::jobsChanged, scope, [check] { check(false); });
-        connect(m_demand.get(), &CalculationDemand::columnStateChanged, scope, [check](const QString &) { check(false); });
+        connect(m_demand.get(), &CalculationDemand::pendingCellsChanged, scope, [check](const QString &) { check(false); });
     }
     /// The logbook's cached value of (session, column over `key`) as the row holds it.
     QVariant cachedValue(const QString &id, const char *key) const
@@ -511,6 +496,26 @@ private:
         m_demand->flush();
         return m_demand->progress();
     }
+    /// progress() as one line: "<count> of <highWater>", then ", <session
+    /// name>" while a job is described, then ": <progress text>" when it has
+    /// one. A pending pass runs first.
+    QString progressLine()
+    {
+        const DemandProgress progress = progressNow();
+        QString line = QStringLiteral("%1 of %2").arg(progress.count).arg(progress.highWater);
+        if (!progress.sessionName.isEmpty())
+            line += QStringLiteral(", ") + progress.sessionName;
+        if (!progress.progressText.isEmpty())
+            line += QStringLiteral(": ") + progress.progressText;
+        return line;
+    }
+    /// Nothing to compute and nothing failed: what a plain plot or column
+    /// stood for. A pending pass runs first.
+    bool nothingToShow()
+    {
+        const DemandProgress progress = progressNow();
+        return progress.count == 0 && m_demand->failures().isEmpty();
+    }
     /// One entry as one line: "<session id> (<session name>) <calculation id>
     /// [<title>] <reason>", ending " +retry" when the next start tries it again.
     static QString entryLine(const SessionFailures &session, const FailedCalculation &entry)
@@ -529,6 +534,16 @@ private:
             for (const FailedCalculation &entry : session.calculations)
                 lines.append(entryLine(session, entry));
         }
+        return lines;
+    }
+    /// sessionFailures(id) as entryLine()s: a pending pass runs first.
+    QStringList failureLinesOf(const char *sessionId)
+    {
+        m_demand->flush();
+        QStringList lines;
+        const SessionFailures session = m_demand->sessionFailures(QString::fromLatin1(sessionId));
+        for (const FailedCalculation &entry : session.calculations)
+            lines.append(entryLine(session, entry));
         return lines;
     }
     /// The session ids of failures(), in list order: a pending pass runs first.
@@ -671,8 +686,9 @@ void CalculationDemandTest::ordinaryPlotsAreNeverInspected()
     QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 4));
     show({"s1", "s2", "s3"});
 
-    QSignalSpy changedSpy(m_demand.get(), &CalculationDemand::plotStateChanged);
-    QSignalSpy anySpy(m_demand.get(), &CalculationDemand::statesChanged);
+    QSignalSpy progressSpy(m_demand.get(), &CalculationDemand::progressChanged);
+    QSignalSpy failuresSpy(m_demand.get(), &CalculationDemand::failuresChanged);
+    QSignalSpy pendingSpy(m_demand.get(), &CalculationDemand::pendingCellsChanged);
     const Quiet quiet(*m_queue);
     const int runsBefore = totalRuns();
 
@@ -685,13 +701,12 @@ void CalculationDemandTest::ordinaryPlotsAreNeverInspected()
     spin();
     QVERIFY(m_demand->passCount() >= 5);
     QCOMPARE(totalRuns(), runsBefore);
-    QCOMPARE(changedSpy.count(), 0);
-    QCOMPARE(anySpy.count(), 0);
+    QCOMPARE(progressSpy.count(), 0);
+    QCOMPARE(failuresSpy.count(), 0);
+    QCOMPARE(pendingSpy.count(), 0);
 
-    const DemandState state = row("Syn/plain");
-    QVERIFY(state == DemandState());
-    QVERIFY(!state.requested);
-    QVERIFY(state.isPlain());
+    QVERIFY(progressNow() == DemandProgress());
+    QVERIFY(m_demand->failures().isEmpty());
     QVERIFY(quiet.holds());
     QVERIFY(m_queue->isIdle());
 
@@ -709,7 +724,8 @@ void CalculationDemandTest::uncheckedPlotsAreNeverInspected()
     QCOMPARE(engine("s1").request(QStringLiteral("gated")).status, ResultStatus::Ok);
     QVERIFY(gate().waitEntered());
 
-    QSignalSpy changedSpy(m_demand.get(), &CalculationDemand::plotStateChanged);
+    QSignalSpy progressSpy(m_demand.get(), &CalculationDemand::progressChanged);
+    QSignalSpy failuresSpy(m_demand.get(), &CalculationDemand::failuresChanged);
     const Quiet quiet(*m_queue);
     const int runsBefore = totalRuns();
     for (int pass = 0; pass < 5; ++pass) {
@@ -718,9 +734,10 @@ void CalculationDemandTest::uncheckedPlotsAreNeverInspected()
     }
     spin();
     QCOMPARE(totalRuns(), runsBefore);
-    QCOMPARE(changedSpy.count(), 0);
-    QVERIFY(row("Syn/g") == DemandState());
-    QVERIFY(row("No/such") == DemandState());
+    QCOMPARE(progressSpy.count(), 0);
+    QCOMPARE(failuresSpy.count(), 0);
+    QVERIFY(progressNow() == DemandProgress());
+    QVERIFY(m_demand->failures().isEmpty());
     QVERIFY(quiet.holds());
 }
 
@@ -745,20 +762,19 @@ void CalculationDemandTest::hiddenAndStubRowsAreNotTracks()
     QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
     check("g");
     QVERIFY(gate().waitEntered());      // s3 is the only wanted track: s4 has no input
-    DemandState state = row("Syn/g");
-    QCOMPARE(sessionIdsOf(state.running), QStringList({"s3"}));
-    QCOMPARE(state.wantedCount, 1);
-    QCOMPARE(state.waitingCount, 0);
+    QCOMPARE(progressNow().count, 1);
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 3"));
+    QCOMPARE(running().sessionId, QStringLiteral("s3"));
     QCOMPARE(m_queue->model()->rowCount(), 1);
 
     // More passes, none of which touches the LRU
     const int passes = m_demand->passCount();
     for (int i = 0; i < 4; ++i) {
         check("plain", i % 2 == 0);
-        state = row("Syn/g");
+        m_demand->flush();
     }
     QCOMPARE(m_demand->passCount(), passes + 4);
-    QCOMPARE(state.wantedCount, 1);
+    QCOMPARE(progressNow().count, 1);
     QCOMPARE(loadedSpy.count(), 0);
     QVERIFY(!isLoaded("s1"));
     QVERIFY(isLoaded("s2"));            // had a pass touched the LRU, s2 would be gone
@@ -766,7 +782,7 @@ void CalculationDemandTest::hiddenAndStubRowsAreNotTracks()
 
     gate().open(1);
     QVERIFY(waitDemandIdle());
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
     QCOMPARE(loadedSpy.count(), 0);
     QVERIFY(!isLoaded("s1"));
 }
@@ -805,17 +821,17 @@ void CalculationDemandTest::failedLoadPlaceholderIsNotATrack()
     QVERIFY(std::as_const(*m_model).rowAt(s1Row).visible);
     check("g");
     QVERIFY(gate().waitEntered());
-    DemandState state = row("Syn/g");
-    QCOMPARE(sessionIdsOf(state.running), QStringList({"s2"}));
-    QCOMPARE(state.wantedCount, 1);
-    QCOMPARE(state.failedCount, 0);
+    QCOMPARE(progressNow().count, 1);
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 2"));
+    QCOMPARE(running().sessionId, QStringLiteral("s2"));
+    QVERIFY(m_demand->failures().isEmpty());
     QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), enginesBefore);
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(jobOf("s1", "gated").id, JobId(0));
 
     gate().open(1);
     QVERIFY(waitDemandIdle());
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QVERIFY(std::as_const(*m_model).rowAt(s1Row).loadFailed);
 }
@@ -824,7 +840,6 @@ void CalculationDemandTest::failedLoadPlaceholderIsNotATrack()
 
 void CalculationDemandTest::rowScript()
 {
-    const QString plot = QStringLiteral("Syn/g");
     QVERIFY(giveInput({"s1", "s2", "s3", "s4"}, "G_IN", 4));
 
     // 1. Three visible tracks; checking the plot starts the first with no other
@@ -836,30 +851,18 @@ void CalculationDemandTest::rowScript()
     QVERIFY(job1 != 0);
     QCOMPARE(stateOf(job1), JobState::Running);
     QTRY_COMPARE(m_queue->job(job1).progressText, QStringLiteral("step 1"));
-    DemandState state = row("Syn/g");
     const JobId job2 = jobOf("s2", "gated").id;
     QVERIFY(job2 != 0);
     QCOMPARE(m_queue->chosenNextJob(), job2);
     QCOMPARE(activeJobIds(*m_queue).size(), 2);
-    QVERIFY(state.requested);
-    QCOMPARE(state.sourceId, plot);
-    QCOMPARE(state.wantedCount, 3);
-    QCOMPARE(state.doneCount, 0);
-    QCOMPARE(state.runningCount, 1);
-    QCOMPARE(state.waitingCount, 2);
-    QCOMPARE(state.failedCount, 0);
-    QVERIFY(state.isWorking());
-    QVERIFY(!state.showsWarning());
-    QCOMPARE(sessionIdsOf(state.running), QStringList({"s1"}));
+    // Three to compute, none done: s1 runs, s2 and s3 wait
+    QCOMPARE(progressLine(), QStringLiteral("3 of 3, Jump 1: step 1"));
+    QVERIFY(m_demand->failures().isEmpty());
     QCOMPARE(running().id, job1);
-    QCOMPARE(state.running.at(0).calculationTitles, QStringList({"Gated"}));
+    QCOMPARE(running().calculationTitle, QStringLiteral("Gated"));
     QCOMPARE(chosenNext().sessionId, QStringLiteral("s2"));     // the chosen next job is s2's
     QCOMPARE(jobOf("s3", "gated").id, JobId(0));
     QVERIFY(!m_demand->isSettling("s2"));
-    QCOMPARE(state.doneCount, 0);
-    QCOMPARE(state.wantedCount, 3);
-    QCOMPARE(state.toolTip, QStringLiteral("Computing: 0 of 3 done\n"
-                                           "  Jump 1 - Gated: step 1"));
 
     // 2. Each end starts the next
     gate().open(1);
@@ -867,22 +870,25 @@ void CalculationDemandTest::rowScript()
     QVERIFY(stored("s1", "gated"));
     QVERIFY(gate().waitEntered());
     QCOMPARE(stateOf(job2), JobState::Running);
-    state = row("Syn/g");
+    m_demand->flush();
     const JobId job3 = jobOf("s3", "gated").id;
     QVERIFY(job3 != 0);
     QCOMPARE(m_queue->chosenNextJob(), job3);
-    QCOMPARE(state.doneCount, 1);
-    QCOMPARE(state.wantedCount, 3);
+    QCOMPARE(progressNow().count, 2);
+    QCOMPARE(progressNow().highWater, 3);
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 2"));
     QCOMPARE(values("s1", "g"), QVector<double>({5.0}));
 
-    // 3. Unchecking drops the waiting pair at once and lets the running job finish
+    // 3. Unchecking drops the waiting pair at once and lets the running job
+    //    finish, for no source: nothing is left to compute
     check("g", false);
     QCOMPARE(stateOf(job3), JobState::Cancelled);
     QCOMPARE(m_queue->job(job3).reason, QString::fromLatin1(kNoLongerNeeded));
     QVERIFY(!m_queue->job(job3).startedAt.isValid());
     QCOMPARE(stateOf(job2), JobState::Running);
     QVERIFY(!m_queue->job(job2).cancelRequested);
-    QVERIFY(row("Syn/g") == DemandState());
+    QCOMPARE(progressNow().count, 0);
+    QVERIFY(nothingToShow());
 
     gate().open(1);
     QVERIFY(waitDemandIdle());
@@ -897,26 +903,25 @@ void CalculationDemandTest::rowScript()
     const JobId job4 = jobOf("s3", "gated").id;
     QVERIFY(job4 != job3);
     QCOMPARE(stateOf(job4), JobState::Running);
-    state = row("Syn/g");
-    QCOMPARE(state.doneCount, 2);
-    QCOMPARE(state.wantedCount, 3);
+    QCOMPARE(progressNow().count, 1);
+    QCOMPARE(progressNow().highWater, 1);
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 3"));
 
     // 5. A fourth track shown while s3 runs becomes the chosen next job
     show({"s4"});
-    state = row("Syn/g");
+    m_demand->flush();
     const JobId job5 = jobOf("s4", "gated").id;
     QVERIFY(job5 != 0);
     QCOMPARE(m_queue->chosenNextJob(), job5);
-    QCOMPARE(state.wantedCount, 4);
-    QCOMPARE(state.doneCount, 2);
+    QCOMPARE(progressNow().count, 2);
+    QCOMPARE(progressNow().highWater, 2);
     QCOMPARE(m_queue->job(job5).sessionName, QStringLiteral("Jump 4"));
     gate().open(2);
     QVERIFY(waitDemandIdle());
-    state = row("Syn/g");
-    QVERIFY(state.isPlain());
-    QVERIFY(state.toolTip.isEmpty());
-    QVERIFY(!state.isWorking());
-    QCOMPARE(state.doneCount, 4);
+    QVERIFY(nothingToShow());
+    QVERIFY(progressNow() == DemandProgress());
+    for (const char *id : {"s1", "s2", "s3", "s4"})
+        QVERIFY2(stored(QString::fromLatin1(id), "gated"), id);
     QCOMPARE(values("s4", "g"), QVector<double>({5.0}));
 
     // 6. The history
@@ -929,17 +934,15 @@ void CalculationDemandTest::rowScript()
 
 void CalculationDemandTest::chainedBlockersContinue()
 {
-    const QString plot = QStringLiteral("Syn/db");
     QVERIFY(giveInput({"s1"}, "EA_IN", 4));
     QVERIFY(giveInput({"s1"}, "EB_IN", 10));
     show({"s1"});
 
-    // Every announced state until the last is working
-    QList<DemandState> announced;
+    // Every announced progress until the last counts s1
+    QList<DemandProgress> announced;
     QObject scope;      // owns the connection: it cannot outlive `announced`
-    connect(m_demand.get(), &CalculationDemand::plotStateChanged, &scope, [&](const QString &id) {
-        if (id == plot)
-            announced.append(m_demand->plotState(id));
+    connect(m_demand.get(), &CalculationDemand::progressChanged, &scope, [&] {
+        announced.append(m_demand->progress());
     });
     // At the first link's end, after the demand layer's own slot (connected
     // before this one): the executor is not idle, the next link is chosen
@@ -952,7 +955,6 @@ void CalculationDemandTest::chainedBlockersContinue()
 
     check("db");
     QVERIFY(waitDemandIdle());
-    const DemandState state = row("Syn/db");
 
     const JobModel *jobs = m_queue->model();
     QCOMPARE(jobs->rowCount(), 2);
@@ -968,16 +970,15 @@ void CalculationDemandTest::chainedBlockersContinue()
     QCOMPARE(values("s1", "db"), QVector<double>({19.0}));
     QCOMPARE(engine("s1").runCount("expA"), 1);
     QCOMPARE(engine("s1").runCount("expB"), 1);
-    QVERIFY(state.isPlain());
+    QVERIFY(nothingToShow());
     QVERIFY(!m_demand->isSettling("s1"));       // a publication is not an input change
 
     QVERIFY(announced.size() >= 2);
     for (int i = 0; i < announced.size() - 1; ++i) {
-        QVERIFY(announced.at(i).isWorking());
-        QCOMPARE(announced.at(i).wantedCount, 1);
-        QCOMPARE(announced.at(i).doneCount, 0);
+        QCOMPARE(announced.at(i).count, 1);
+        QCOMPARE(announced.at(i).highWater, 1);
     }
-    QVERIFY(announced.last().isPlain());
+    QVERIFY(announced.last() == DemandProgress());
 }
 
 void CalculationDemandTest::heldChainContinues()
@@ -993,12 +994,11 @@ void CalculationDemandTest::heldChainContinues()
 
     check("h");
     QVERIFY(gate().waitEntered());
-    DemandState state = row("Syn/h");
-    QCOMPARE(state.runningCount, 1);
-    QCOMPARE(state.running.at(0).calculationTitles, QStringList({"Gated"}));
-    QCOMPARE(state.running.at(0).condition, DemandCondition::Running);
+    QCOMPARE(progressNow().count, 1);
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 1"));
     QCOMPARE(running().id, jobOf("s1", "gated").id);
-    QCOMPARE(state.running.at(0).sessionId, QStringLiteral("s1"));
+    QCOMPARE(running().sessionId, QStringLiteral("s1"));
+    QCOMPARE(running().calculationTitle, QStringLiteral("Gated"));
     QCOMPARE(jobCount("afterG"), 0);
 
     gate().open(1);
@@ -1008,7 +1008,7 @@ void CalculationDemandTest::heldChainContinues()
     QCOMPARE(jobOf("s1", "afterG").state, JobState::Succeeded);
     QCOMPARE(idleAtEnd, QList<bool>({false, true}));
     QCOMPARE(values("s1", "h"), QVector<double>({6.0}));
-    QVERIFY(row("Syn/h").isPlain());
+    QVERIFY(nothingToShow());
 }
 
 void CalculationDemandTest::chainCompletesAfterFirstJobDoesNotSucceed_data()
@@ -1038,9 +1038,9 @@ void CalculationDemandTest::chainCompletesAfterFirstJobDoesNotSucceed()
         // Still in demand: offered again at once, as a new job behind the one
         // that winds down
         QVERIFY(m_queue->cancel(first));
-        const DemandState state = row("Syn/h");
-        QCOMPARE(state.runningCount, 0);
-        QCOMPARE(state.waitingCount, 1);
+        // Waiting again: counted, and the job winding down is described by nothing
+        QCOMPARE(progressNow().count, 1);
+        QVERIFY(progressNow().sessionName.isEmpty());
         const JobId again = m_queue->chosenNextJob();
         QVERIFY(again != 0 && again != first);
         QTRY_COMPARE(int(stateOf(first)), endState);
@@ -1052,9 +1052,8 @@ void CalculationDemandTest::chainCompletesAfterFirstJobDoesNotSucceed()
         // Still running, but the engine has marked the ticket and the executor
         // has asked the job to stop: the track waits for its inputs to settle
         QCOMPARE(stateOf(first), JobState::Running);
-        const DemandState state = row("Syn/h");
-        QCOMPARE(state.runningCount, 0);
-        QCOMPARE(state.waitingCount, 1);
+        QCOMPARE(progressNow().count, 1);
+        QVERIFY(progressNow().sessionName.isEmpty());
         QVERIFY(m_demand->isSettling("s1"));
         QTRY_COMPARE(int(stateOf(first)), endState);
         spin();
@@ -1068,7 +1067,7 @@ void CalculationDemandTest::chainCompletesAfterFirstJobDoesNotSucceed()
     QCOMPARE(jobCount("gated"), 2);
     QCOMPARE(jobCount("afterG"), 1);
     QCOMPARE(values("s1", "h"), QVector<double>({finalValue}));
-    QVERIFY(row("Syn/h").isPlain());
+    QVERIFY(nothingToShow());
 }
 
 void CalculationDemandTest::chainStopsForHiddenTrackOrUncheckedPlot_data()
@@ -1115,7 +1114,7 @@ void CalculationDemandTest::chainStopsForHiddenTrackOrUncheckedPlot()
     QCOMPARE(jobOf("s1", "afterG").state, JobState::Succeeded);
     QCOMPARE(jobCount("gated"), 1);
     QCOMPARE(values("s1", "h"), QVector<double>({6.0}));
-    QVERIFY(row("Syn/h").isPlain());
+    QVERIFY(nothingToShow());
 }
 
 // ---- Every way of checking is the same (item 116, as amended) --------------------------------------
@@ -1155,14 +1154,14 @@ void CalculationDemandTest::programmaticCheckCreatesDemand()
         QCOMPARE(running().sessionId, QStringLiteral("s1"));
         const JobRecord next = chosenNext();
         QCOMPARE(next.sessionId, QStringLiteral("s2"));
-        QCOMPARE(row("Syn/g").wantedCount, 3);
+        QCOMPARE(progressNow().count, 3);
 
         // Unchecking in between drops the waiting pair
         setChecked(false);
         QVERIFY2(!m_plots->isPlotEnabled("Syn", "g"), qPrintable(path));
         QCOMPARE(stateOf(next.id), JobState::Cancelled);
         QCOMPARE(m_queue->job(next.id).reason, QString::fromLatin1(kNoLongerNeeded));
-        QVERIFY(row("Syn/g") == DemandState());
+        QVERIFY(nothingToShow());
 
         gate().open(1);
         QVERIFY(waitDemandIdle());
@@ -1192,15 +1191,10 @@ void CalculationDemandTest::profileStyleApplyCreatesDemand()
         m_plots->setPlotEnabled(plot.sensorID, plot.measurementID, profile.contains(CalculationDemand::plotId(plot)));
     QVERIFY(waitDemandIdle());
 
-    for (const char *id : {"Syn/g", "Syn/g2", "Syn/db", "Syn/h"}) {
-        const DemandState state = row(id);
-        QVERIFY2(state.requested, id);
-        QVERIFY2(state.isPlain(), id);
-        QCOMPARE(state.wantedCount, 2);
-        QCOMPARE(state.doneCount, 2);
-    }
-    QVERIFY(row("Syn/plain") == DemandState());
-    QVERIFY(row("Syn/ea") == DemandState());       // unchecked by the profile
+    // Every requested plot of the profile was computed for both sessions;
+    // Syn/ea, unchecked by the profile, created no job
+    QVERIFY(nothingToShow());
+    QCOMPARE(jobCount("expA"), 2);
     for (const char *id : {"s1", "s2"}) {
         QCOMPARE(values(id, "g"), QVector<double>({5.0}));
         QCOMPARE(values(id, "h"), QVector<double>({6.0}));
@@ -1227,8 +1221,8 @@ void CalculationDemandTest::profileStyleApplyCreatesDemand()
 }
 
 // Plots restored as checked from the settings come up through modelReset. At
-// start-up every session is hidden: no job, a plain row. Work starts when a
-// session is shown.
+// start-up every session is hidden: no job, nothing to compute. Work starts
+// when a session is shown.
 void CalculationDemandTest::startupRestoreWithHiddenSessionsStartsNothing()
 {
     QVERIFY(giveInput({"s1", "s2", "s3"}, "G_IN", 4));
@@ -1254,10 +1248,9 @@ void CalculationDemandTest::startupRestoreWithHiddenSessionsStartsNothing()
         QVERIFY(m_plots->isPlotEnabled("Syn", "g"));
         spin();
 
-        DemandState state = row("Syn/g");
-        QVERIFY(state.requested);
-        QVERIFY(state.isPlain());
-        QCOMPARE(state.wantedCount, 0);
+        // Checked and requested, but with no track: nothing to compute
+        QVERIFY(progressNow() == DemandProgress());
+        QVERIFY(nothingToShow());
         QVERIFY(quiet.holds());
 
         // ... and the other order: the plots are there when the layer is created
@@ -1265,8 +1258,7 @@ void CalculationDemandTest::startupRestoreWithHiddenSessionsStartsNothing()
         m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
         QVERIFY(m_demand->hasPendingUpdate());      // the initial pass needs no event
         spin();
-        state = row("Syn/g");
-        QVERIFY(state.isPlain());
+        QVERIFY(nothingToShow());
         QVERIFY(quiet.holds());
         QVERIFY(m_queue->isIdle());
     }
@@ -1290,7 +1282,7 @@ void CalculationDemandTest::showingASessionStartsIt()
     QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
     check("g");
     spin();
-    QVERIFY(row("Syn/g").isPlain());        // no track at all
+    QVERIFY(nothingToShow());        // no track at all
     QCOMPARE(m_queue->model()->rowCount(), 0);
 
     show({"s1"});
@@ -1301,14 +1293,14 @@ void CalculationDemandTest::showingASessionStartsIt()
     show({"s2"});
     m_demand->flush();
     QCOMPARE(chosenNext().sessionId, QStringLiteral("s2"));
-    QCOMPARE(row("Syn/g").wantedCount, 2);
+    QCOMPARE(progressNow().count, 2);
 
     gate().open(2);
     QVERIFY(waitDemandIdle());
     QCOMPARE(history(), QList<JobState>({JobState::Succeeded, JobState::Succeeded}));
     QVERIFY(stored("s1", "gated"));
     QVERIFY(stored("s2", "gated"));
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
 }
 
 void CalculationDemandTest::hidingASessionDropsItsWaitingPair()
@@ -1340,7 +1332,7 @@ void CalculationDemandTest::hidingASessionDropsItsWaitingPair()
     QCOMPARE(stateOf(runningJob), JobState::Succeeded);
     QVERIFY(stored("s1", "gated"));
     QCOMPARE(m_queue->model()->rowCount(), 2);
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
 }
 
 void CalculationDemandTest::uncheckingDropsWaitingPairsKeepsRunning()
@@ -1359,7 +1351,7 @@ void CalculationDemandTest::uncheckingDropsWaitingPairsKeepsRunning()
     QCOMPARE(m_queue->job(waitingJob).reason, QString::fromLatin1(kNoLongerNeeded));
     QCOMPARE(stateOf(runningJob), JobState::Running);
     QVERIFY(!m_queue->job(runningJob).cancelRequested);
-    QVERIFY(row("Syn/g") == DemandState());
+    QVERIFY(nothingToShow());
 
     gate().open(1);
     QVERIFY(waitDemandIdle());
@@ -1367,7 +1359,7 @@ void CalculationDemandTest::uncheckingDropsWaitingPairsKeepsRunning()
     QVERIFY(stored("s1", "gated"));
     QCOMPARE(values("s1", "g"), QVector<double>({5.0}));
     QCOMPARE(m_queue->model()->rowCount(), 2);
-    QVERIFY(row("Syn/g") == DemandState());
+    QVERIFY(nothingToShow());
 }
 
 void CalculationDemandTest::waitingPairNeededByAnotherPlotSurvives()
@@ -1384,11 +1376,12 @@ void CalculationDemandTest::waitingPairNeededByAnotherPlotSurvives()
     check("g", false);
     QCOMPARE(stateOf(waitingJob), JobState::Queued);
     QCOMPARE(m_queue->chosenNextJob(), waitingJob);
-    QCOMPARE(row("Syn/g2").waitingCount, 1);
+    QCOMPARE(progressNow().count, 2);       // s1 running, s2 waiting, for g2
 
     check("g2", false);                     // now nothing needs it
     QCOMPARE(stateOf(waitingJob), JobState::Cancelled);
     QCOMPARE(jobOf("s1", "gated").state, JobState::Running);
+    QCOMPARE(progressNow().count, 0);
 
     gate().open(1);
     QVERIFY(waitDemandIdle());
@@ -1416,7 +1409,8 @@ void CalculationDemandTest::loadingAVisibleSessionStartsIt()
     check("g");
     QVERIFY(waitDemandIdle());
     QVERIFY(gate().waitEntered());          // s2's run, which the open gate let through
-    QCOMPARE(sessionIdsOf(row("Syn/g").running), QStringList());
+    QCOMPARE(progressNow().count, 0);
+    QVERIFY(progressNow().sessionName.isEmpty());
     QCOMPARE(jobOf("s2", "gated").state, JobState::Succeeded);
     QCOMPARE(m_queue->model()->rowCount(), 1);
 
@@ -1429,7 +1423,7 @@ void CalculationDemandTest::loadingAVisibleSessionStartsIt()
     gate().open(1);
     QVERIFY(waitDemandIdle());
     QCOMPARE(values("s1", "g"), QVector<double>({5.0}));
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
 }
 
 // A merge into a session whose names are all irrelevant to the checked plots
@@ -1463,7 +1457,7 @@ void CalculationDemandTest::mergeCreatesDemandForShownSessions()
     QVERIFY(waitDemandIdle());
     QCOMPARE(values("s1", "g"), QVector<double>({5.0}));
     QCOMPARE(values("s5", "g"), QVector<double>({5.0}));
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
     QVERIFY(!m_model->isSessionPinned("s5"));
 }
 
@@ -1480,27 +1474,23 @@ void CalculationDemandTest::inputBurstRunsOneJob()
     check("g");
     QVERIFY(waitDemandIdle());
     QCOMPARE(jobCount("gated"), 1);
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
 
     m_demand->setInputSettleDelay(60000);
     {
         const Quiet quiet(*m_queue);
         QVERIFY(giveInput({"s1"}, "G_IN", 5));
-        // In demand from the first change: working, but not started
+        // In demand from the first change: counted, but not started
         QVERIFY(m_demand->isSettling("s1"));
-        DemandState state = row("Syn/g");
-        QVERIFY(state.isWorking());
-        QCOMPARE(state.waitingCount, 1);
-        QVERIFY(m_demand->isSettling("s1"));
+        QCOMPARE(progressNow().count, 1);
+        QCOMPARE(jobCount("gated"), 1);
         QCOMPARE(m_queue->chosenNextJob(), JobId(0));
-        QCOMPARE(state.doneCount, 0);
-        QCOMPARE(state.wantedCount, 1);
         spin();
         QVERIFY(giveInput({"s1"}, "G_IN", 6));
         spin();
         QVERIFY(giveInput({"s1"}, "G_IN", 7));
         spin();
-        state = row("Syn/g");
+        QCOMPARE(progressNow().count, 1);
         QVERIFY(m_demand->isSettling("s1"));
         QVERIFY(quiet.holds());
     }
@@ -1510,7 +1500,7 @@ void CalculationDemandTest::inputBurstRunsOneJob()
     QVERIFY(waitDemandIdle());
     QCOMPARE(jobCount("gated"), 2);         // exactly one new job
     QCOMPARE(values("s1", "g"), QVector<double>({8.0}));
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
 }
 
 // The executor stops a running job whose inputs went stale. From that moment
@@ -1524,7 +1514,8 @@ void CalculationDemandTest::staleRunningJobIsWaitingAtOnce()
     check("g2");                            // a second row waiting on the same job
     QVERIFY(gate().waitEntered());
     const JobId stale = jobOf("s1", "gated").id;
-    QCOMPARE(row("Syn/g").runningCount, 1);
+    QCOMPARE(progressNow().count, 1);
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 1"));
 
     m_demand->setInputSettleDelay(60000);
     QVERIFY(giveInput({"s1"}, "G_IN", 7));
@@ -1532,13 +1523,11 @@ void CalculationDemandTest::staleRunningJobIsWaitingAtOnce()
     // Before the worker has returned; the gate is never opened for this job
     QCOMPARE(stateOf(stale), JobState::Running);
     QVERIFY(m_queue->job(stale).cancelRequested);
-    for (const char *id : {"Syn/g", "Syn/g2"}) {
-        const DemandState state = row(id);
-        QCOMPARE(state.runningCount, 0);
-        QCOMPARE(state.waitingCount, 1);
-        QVERIFY(m_demand->isSettling("s1"));
-        QVERIFY(state.isWorking());
-    }
+    // Waiting for both plots, which is one session: counted, and the job
+    // winding down is described by nothing
+    QCOMPARE(progressNow().count, 1);
+    QVERIFY(progressNow().sessionName.isEmpty());
+    QVERIFY(m_demand->isSettling("s1"));
     QCOMPARE(stateOf(stale), JobState::Running);
     QCOMPARE(m_queue->model()->rowCount(), 1);      // nothing offered
 
@@ -1553,8 +1542,7 @@ void CalculationDemandTest::staleRunningJobIsWaitingAtOnce()
     const JobId again = jobOf("s1", "gated").id;
     QVERIFY(again != stale);
     QCOMPARE(stateOf(again), JobState::Succeeded);
-    QVERIFY(row("Syn/g").isPlain());
-    QVERIFY(row("Syn/g2").isPlain());
+    QVERIFY(nothingToShow());
     QCOMPARE(values("s1", "g"), QVector<double>({8.0}));
     QCOMPARE(m_queue->model()->rowCount(), 2);
 }
@@ -1598,28 +1586,30 @@ void CalculationDemandTest::sessionWithoutInputIsNeverListed()
     QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));      // s3 has no input: nothing to compute
     show({"s1", "s2", "s3"});
 
-    const auto neverListed = [this](const char *plotId) {
-        const DemandState state = row(plotId);
-        return !sessionIdsOf(state.running).contains("s3") && state.wantedCount == 2
-            && !sessionIdsOf(state.failed).contains("s3");
+    // s3 is never counted, never the running recording and never failed
+    const auto neverListed = [this] {
+        const DemandProgress progress = progressNow();
+        return progress.count <= 2 && progress.highWater <= 2 && progress.sessionName != QLatin1String("Jump 3")
+            && m_demand->sessionFailures(QStringLiteral("s3")).calculations.isEmpty();
     };
 
     check("g");
     check("g2");
     QVERIFY(gate().waitEntered());
-    QCOMPARE(row("Syn/g").wantedCount, 2);
-    QVERIFY(neverListed("Syn/g"));
-    QVERIFY(neverListed("Syn/g2"));
+    QCOMPARE(progressNow().count, 2);
+    QCOMPARE(progressNow().highWater, 2);
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 1"));
+    QVERIFY(neverListed());
 
     gate().open(1);
     QVERIFY(gate().waitEntered());
-    QVERIFY(neverListed("Syn/g"));
+    QCOMPARE(progressNow().count, 1);
+    QVERIFY(neverListed());
     gate().open(1);
     QVERIFY(waitDemandIdle());
 
-    QVERIFY(row("Syn/g").isPlain());
-    QVERIFY(row("Syn/g2").isPlain());
-    QVERIFY(neverListed("Syn/g"));
+    QVERIFY(nothingToShow());
+    QVERIFY(neverListed());
     QCOMPARE(m_queue->model()->rowCount(), 2);
     QCOMPARE(jobOf("s3", "gated").id, JobId(0));
 
@@ -1646,12 +1636,9 @@ void CalculationDemandTest::onlyRequestableCalculationsAreOffered()
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(jobOf("s1", "expA").state, JobState::Succeeded);
 
-    const DemandState state = row("Syn/ea");
-    QVERIFY(state.running.isEmpty());
-    QCOMPARE(state.waitingCount, 0);
-    QCOMPARE(sessionIdsOf(state.failed), QStringList({"s4"}));
-    QCOMPARE(state.wantedCount, 3);
-    QCOMPARE(state.doneCount, 3);
+    // s1 and s3 are done, s4 is failed, and s2 is not counted
+    QCOMPARE(progressNow().count, 0);
+    QCOMPARE(failureLines(), QStringList({"s4 (Jump 4) expA [Explicit A] negative input"}));
     QCOMPARE(values("s1", "ea"), QVector<double>({5.0}));
     QCOMPARE(values("s3", "ea"), QVector<double>({5.0}));
 }
@@ -1672,8 +1659,7 @@ void CalculationDemandTest::resultAppearingWhileWaitingDropsThePair()
     const JobId waiting = m_queue->chosenNextJob();
     QCOMPARE(m_queue->job(waiting).sessionId, QStringLiteral("s2"));
     QCOMPARE(m_queue->job(waiting).calculationId, QStringLiteral("expA"));
-    DemandState state = row("Syn/ea");
-    QCOMPARE(state.waitingCount, 1);
+    QCOMPARE(progressNow().count, 2);        // s1 for g, s2 for ea
 
     // Installed without the demand layer or the executor; ungated, and the
     // held worker is not touched
@@ -1691,10 +1677,8 @@ void CalculationDemandTest::resultAppearingWhileWaitingDropsThePair()
         QVERIFY(m_queue->job(started.at(0).value<JobId>()).sessionId != QLatin1String("s2"));
     QVERIFY(!m_model->isSessionPinned("s2"));
 
-    state = row("Syn/ea");
-    QCOMPARE(state.wantedCount, 1);
-    QCOMPARE(state.doneCount, 1);
-    QVERIFY(state.isPlain());
+    QVERIFY(nothingToShow());
+    QCOMPARE(values("s2", "ea"), QVector<double>({5.0}));
 }
 
 // ---- Failures -----------------------------------------------------------------------------------------
@@ -1708,18 +1692,10 @@ void CalculationDemandTest::inputDeterminedFailureIsStoredBadgedNeverRerun()
     QCOMPARE(jobOf("s1", "expA").state, JobState::Succeeded);      // a rejection is a result
     QVERIFY(stored("s1", "expA"));
 
-    DemandState state = row("Syn/ea");
-    QCOMPARE(state.failedCount, 1);
-    QVERIFY(state.showsWarning());
-    QVERIFY(!state.isWorking());
-    QVERIFY(!state.isPlain());
-    QCOMPARE(state.doneCount, 1);
-    QCOMPARE(state.failed.at(0).sessionId, QStringLiteral("s1"));
-    QCOMPARE(state.failed.at(0).calculationTitles, QStringList({"Explicit A"}));
-    QCOMPARE(state.failed.at(0).reason, QStringLiteral("Explicit A: negative input"));
-    QVERIFY(!state.failed.at(0).jobFailure);
-    QCOMPARE(state.toolTip, QStringLiteral("Could not be computed:\n"
-                                           "  Jump 1 - Explicit A: negative input"));
+    // Listed with its reason, stored, so not tried again at the next start
+    QCOMPARE(progressNow().count, 0);
+    QCOMPARE(failureLines(), QStringList({"s1 (Jump 1) expA [Explicit A] negative input"}));
+    QCOMPARE(m_demand->sessionFailures(QStringLiteral("s1")).text(), QStringLiteral("Explicit A: negative input"));
 
     // Never run again with the same inputs
     {
@@ -1731,28 +1707,24 @@ void CalculationDemandTest::inputDeterminedFailureIsStoredBadgedNeverRerun()
 
     // Its inputs change: offered once they settle, and available
     QVERIFY(giveInput({"s1"}, "EA_IN", 4));
-    state = row("Syn/ea");
-    QCOMPARE(state.failedCount, 0);
-    QCOMPARE(state.waitingCount, 1);
+    QCOMPARE(failureLines(), QStringList());
+    QCOMPARE(progressNow().count, 1);
     settle();
     QVERIFY(waitDemandIdle());
-    QVERIFY(row("Syn/ea").isPlain());
+    QVERIFY(nothingToShow());
     QCOMPARE(values("s1", "ea"), QVector<double>({5.0}));
     QCOMPARE(jobCount("expA"), 2);
 
-    // An exception is an engine-cached failed result: badged, not offered
-    // again in this run, and never stored
+    // An exception is an engine-cached failed result: listed among the
+    // failures, not offered again in this run, and never stored
     QVERIFY(giveInput({"s2"}, "T_IN", 1));
     show({"s2"});
     check("t");
     QVERIFY(waitDemandIdle());
     QCOMPARE(jobOf("s2", "thrower").state, JobState::Succeeded);
     QCOMPARE(jobOf("s2", "thrower").resultStatus, std::optional<ResultStatus>(ResultStatus::Failed));
-    state = row("Syn/t");
-    QCOMPARE(state.failedCount, 1);
-    QCOMPARE(state.failed.at(0).sessionId, QStringLiteral("s2"));
-    QCOMPARE(state.failed.at(0).reason, QStringLiteral("Thrower: synthetic failure"));
-    QVERIFY(state.showsWarning());
+    QCOMPARE(progressNow().count, 0);
+    QCOMPARE(failureLines(), QStringList({"s2 (Jump 2) thrower [Thrower] synthetic failure +retry"}));
     {
         const Quiet quiet(*m_queue);
         for (int i = 0; i < 3; ++i)
@@ -1768,25 +1740,27 @@ void CalculationDemandTest::jobLevelFailureIsBadgedNotRerunUntilRestart_data()
     QTest::addColumn<QString>("calculation");
     QTest::addColumn<QString>("input");
     QTest::addColumn<bool>("failWorkerStart");
+    QTest::addColumn<QString>("title");
     QTest::addColumn<QString>("reason");
     QTest::addColumn<double>("value");
     QTest::newRow("worker start failure") << "ea" << "expA" << "EA_IN" << true
-                                          << "Explicit A: The worker thread could not be started" << 5.0;
+                                          << "Explicit A" << "The worker thread could not be started" << 5.0;
     QTest::newRow("out of memory") << "x" << "exhausted" << "X_IN" << false
-                                   << "Exhausted: Out of memory" << 5.0;
+                                   << "Exhausted" << "Out of memory" << 5.0;
 }
 
-// A failure of the job itself is not a result: it is badged, not offered again
-// in this run and not stored. The next start (a new demand layer) tries again.
+// A failure of the job itself is not a result: it is listed among the
+// failures as tried again at the next start, not offered again in this run
+// and not stored. The next start (a new demand layer) tries again.
 void CalculationDemandTest::jobLevelFailureIsBadgedNotRerunUntilRestart()
 {
     QFETCH(QString, plot);
     QFETCH(QString, calculation);
     QFETCH(QString, input);
     QFETCH(bool, failWorkerStart);
+    QFETCH(QString, title);
     QFETCH(QString, reason);
     QFETCH(double, value);
-    const QByteArray plotId = QByteArray("Syn/") + plot.toLatin1();
     const QByteArray calculationId = calculation.toLatin1();
 
     QVERIFY(giveInput({"s1"}, input.toLatin1().constData(), 4));
@@ -1798,12 +1772,11 @@ void CalculationDemandTest::jobLevelFailureIsBadgedNotRerunUntilRestart()
     const JobRecord failed = jobOf("s1", calculationId.constData());
     QCOMPARE(failed.state, JobState::Failed);
 
-    DemandState state = row(plotId.constData());
-    QCOMPARE(state.failedCount, 1);
-    QVERIFY(state.showsWarning());
-    QVERIFY(state.failed.at(0).jobFailure);
-    QCOMPARE(state.failed.at(0).reason, reason);
-    QCOMPARE(state.toolTip, QStringLiteral("Could not be computed:\n  Jump 1 - ") + reason);
+    QCOMPARE(progressNow().count, 0);
+    QCOMPARE(failureLines(), QStringList({QStringLiteral("s1 (Jump 1) %1 [%2] %3 +retry")
+                                              .arg(calculation, title, reason)}));
+    QCOMPARE(m_demand->sessionFailures(QStringLiteral("s1")).text(),
+             title + QStringLiteral(": ") + reason + QStringLiteral(" (tried again at the next start)"));
     {
         const Quiet quiet(*m_queue);
         for (int i = 0; i < 3; ++i)
@@ -1817,15 +1790,13 @@ void CalculationDemandTest::jobLevelFailureIsBadgedNotRerunUntilRestart()
     QVERIFY(waitDemandIdle());
     QCOMPARE(jobOf("s1", calculationId.constData()).state, JobState::Succeeded);
     QCOMPARE(jobCount(calculationId.constData()), 2);
-    state = row(plotId.constData());
-    QVERIFY(state.isPlain());
+    QVERIFY(nothingToShow());
     QCOMPARE(values("s1", plot.toLatin1().constData()), QVector<double>({value}));
     QVERIFY(stored("s1", calculationId.constData()));
 }
 
-// s1 was rejected, s2 waits behind another plot's held job: while working the
-// indicator shows and the failure is listed in the tooltip only; afterwards
-// the badge shows.
+// s1 was rejected, s2 waits behind another plot's held job: the failure is
+// listed while the computations continue, and afterwards.
 void CalculationDemandTest::failuresListedWhileWorking()
 {
     QVERIFY(giveInput({"s1"}, "EA_IN", -1));
@@ -1834,32 +1805,24 @@ void CalculationDemandTest::failuresListedWhileWorking()
     show({"s1"});
     check("ea");
     QVERIFY(waitDemandIdle());
-    QCOMPARE(row("Syn/ea").failedCount, 1);
+    const QStringList rejection{"s1 (Jump 1) expA [Explicit A] negative input"};
+    QCOMPARE(failureLines(), rejection);
 
     show({"s3"});
     check("g");                             // holds the worker
     QVERIFY(gate().waitEntered());
     show({"s2"});
-    DemandState state = row("Syn/ea");
+    m_demand->flush();
     QCOMPARE(chosenNext().sessionId, QStringLiteral("s2"));
-    QVERIFY(state.isWorking());
-    QCOMPARE(state.failedCount, 1);
-    QCOMPARE(state.waitingCount, 1);
-    QCOMPARE(state.runningCount, 0);
-    QCOMPARE(state.wantedCount, 2);
-    QCOMPARE(state.doneCount, 1);
-    QVERIFY(!state.showsWarning());
-    QCOMPARE(state.toolTip, QStringLiteral("Computing: 1 of 2 done\n"
-                                           "Could not be computed:\n"
-                                           "  Jump 1 - Explicit A: negative input"));
+    QCOMPARE(running().sessionId, QStringLiteral("s3"));
+    // s3 runs for g and s2 waits for ea: s1 is listed while they continue
+    QCOMPARE(progressNow().count, 2);
+    QCOMPARE(failureLines(), rejection);
 
     gate().open(1);
     QVERIFY(waitDemandIdle());
-    state = row("Syn/ea");
-    QCOMPARE(state.failedCount, 1);
-    QVERIFY(!state.isWorking());
-    QVERIFY(state.showsWarning());
-    QCOMPARE(state.doneCount, 2);
+    QCOMPARE(progressNow().count, 0);
+    QCOMPARE(failureLines(), rejection);
     QCOMPARE(values("s2", "ea"), QVector<double>({5.0}));
 }
 
@@ -1923,7 +1886,7 @@ void CalculationDemandTest::merelyUncomputedIsNotWorthAWarning()
     QVERIFY(!merelyUncomputed("s4", "Syn", "plain"));
 
     // NotProduced: computed, and rejected its input (a result), or threw (a
-    // cached failure). The row carries the badge; the plot widget is silent.
+    // cached failure). It is listed among the failures; the plot widget is silent.
     QCOMPARE(engine("s2").request(QStringLiteral("expA")).status, ResultStatus::Ok);
     QCOMPARE(engine("s2").request(QStringLiteral("thrower")).status, ResultStatus::Failed);
     // ... and Available: computed and installed
@@ -1962,29 +1925,18 @@ void CalculationDemandTest::sharedJobSameProgress()
     check("g");
     check("g2");
     QVERIFY(gate().waitEntered());
-    QTRY_COMPARE(row("Syn/g").running.value(0).progressText, QStringLiteral("step 1"));
+    QTRY_COMPARE(progressNow().progressText, QStringLiteral("step 1"));
     QCOMPARE(m_queue->model()->rowCount(), 2);      // one job per session
 
-    const DemandState g = row("Syn/g");
-    const DemandState g2 = row("Syn/g2");
-    QCOMPARE(g.runningCount, 1);
-    QCOMPARE(g.waitingCount, 1);
-    QCOMPARE(g2.runningCount, g.runningCount);
-    QCOMPARE(g2.waitingCount, g.waitingCount);
-    QCOMPARE(g2.wantedCount, g.wantedCount);
-    QCOMPARE(g2.doneCount, g.doneCount);
-    QCOMPARE(g.doneCount, 0);
-    QCOMPARE(g.wantedCount, 2);
-    QCOMPARE(g2.running.at(0).progressText, QStringLiteral("step 1"));
-    QCOMPARE(g2.toolTip, g.toolTip);
-    QCOMPARE(g2.running.at(0).sessionId, g.running.at(0).sessionId);
-    QCOMPARE(g.running.at(0).sessionId, running().sessionId);
+    // Both plots wait on the same two jobs: one progress, each session once
+    QCOMPARE(progressLine(), QStringLiteral("2 of 2, Jump 1: step 1"));
+    QCOMPARE(running().sessionId, QStringLiteral("s1"));
     QCOMPARE(chosenNext().sessionId, QStringLiteral("s2"));
 
     gate().open(2);
     QVERIFY(waitDemandIdle());
-    QVERIFY(row("Syn/g").isPlain());
-    QVERIFY(row("Syn/g2").isPlain());
+    QVERIFY(nothingToShow());
+    QVERIFY(nothingToShow());
     QCOMPARE(values("s1", "g2"), QVector<double>({10.0}));
     QCOMPARE(m_queue->model()->rowCount(), 2);
 }
@@ -2000,20 +1952,19 @@ void CalculationDemandTest::plotCheckedDuringAJobJoinsIt()
     const JobId gated = jobOf("s1", "gated").id;
 
     check("h");
-    const DemandState state = row("Syn/h");
-    QCOMPARE(state.runningCount, 1);
+    // Its track runs in g's job: the count stays 1 and no second job is made
+    QCOMPARE(progressNow().count, 1);
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 1"));
     QCOMPARE(running().id, gated);
-    QCOMPARE(state.running.at(0).sessionId, QStringLiteral("s1"));
-    QCOMPARE(state.doneCount, 0);
-    QCOMPARE(state.wantedCount, 1);
+    QCOMPARE(running().sessionId, QStringLiteral("s1"));
     QCOMPARE(m_queue->model()->rowCount(), 1);
 
     gate().open(1);
     QVERIFY(waitDemandIdle());
     QCOMPARE(jobCount("gated"), 1);
     QCOMPARE(jobCount("afterG"), 1);
-    QVERIFY(row("Syn/g").isPlain());
-    QVERIFY(row("Syn/h").isPlain());
+    QVERIFY(nothingToShow());
+    QVERIFY(nothingToShow());
     QCOMPARE(values("s1", "h"), QVector<double>({6.0}));
 }
 
@@ -2030,7 +1981,7 @@ void CalculationDemandTest::focusedSessionFirstThenRowOrder()
     QVERIFY(waitDemandIdle());
     QCOMPARE(gate().startOrder(), QList<int>({3, 1, 2, 4}));
     QCOMPARE(history(), QList<JobState>(4, JobState::Succeeded));
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
 }
 
 // While a job runs, the chosen next job is the demand layer's current choice:
@@ -2060,7 +2011,7 @@ void CalculationDemandTest::changingDemandReplacesChosenNext()
     QCOMPARE(gate().startOrder(), QList<int>({4, 4, 4}));       // every input is 4
     for (const char *id : {"s1", "s3", "s4"})
         QCOMPARE(jobOf(id, "gated").state, JobState::Succeeded);
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
 }
 
 // Over the whole flow of focusedSessionFirstThenRowOrder: never more than the
@@ -2152,68 +2103,7 @@ void CalculationDemandTest::chosenNextJobFollowsTheExecutorsAnswer()
     QCOMPARE(gate().maxRunning.load(), 1);
 }
 
-// ---- Tooltip, signals, coalescing ------------------------------------------------------------------------
-
-void CalculationDemandTest::tooltipText()
-{
-    // The live tooltip: s1 running, s2 waiting
-    QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
-    show({"s1", "s2"});
-    check("g");
-    QVERIFY(gate().waitEntered());
-    QTRY_COMPARE(row("Syn/g").toolTip, QStringLiteral("Computing: 0 of 2 done\n"
-                                                      "  Jump 1 - Gated: step 1"));
-    gate().open(2);
-    QVERIFY(waitDemandIdle());
-    QVERIFY(row("Syn/g").toolTip.isEmpty());
-
-    // The pure function
-    DemandState state;
-    QCOMPARE(DemandState::buildToolTip(state), QString());
-
-    // A running track without progress text, several titles
-    DemandTrack withoutText;
-    withoutText.sessionName = QStringLiteral("Morning");
-    withoutText.condition = DemandCondition::Running;
-    withoutText.calculationTitles = {QStringLiteral("Sensor fusion"), QStringLiteral("Other")};
-    DemandTrack withText = withoutText;
-    withText.sessionName = QStringLiteral("Noon");
-    withText.calculationTitles = {QStringLiteral("Sensor fusion")};
-    withText.progressText = QStringLiteral("iteration 3");
-    state.running = {withoutText, withText};
-    state.runningCount = 2;
-    state.wantedCount = 5;
-    state.doneCount = 3;
-    QCOMPARE(DemandState::buildToolTip(state),
-             QStringLiteral("Computing: 3 of 5 done\n"
-                            "  Morning - Sensor fusion, Other: running\n"
-                            "  Noon - Sensor fusion: iteration 3"));
-
-    // A job-level failure, while working and afterwards
-    DemandTrack failed;
-    failed.sessionName = QStringLiteral("Evening");
-    failed.condition = DemandCondition::Failed;
-    failed.jobFailure = true;
-    failed.calculationTitles = {QStringLiteral("Sensor fusion")};
-    failed.reason = QStringLiteral("Sensor fusion: Out of memory");
-    state.failed = {failed};
-    state.failedCount = 1;
-    QCOMPARE(DemandState::buildToolTip(state),
-             QStringLiteral("Computing: 3 of 5 done\n"
-                            "  Morning - Sensor fusion, Other: running\n"
-                            "  Noon - Sensor fusion: iteration 3\n"
-                            "Could not be computed:\n"
-                            "  Evening - Sensor fusion: Out of memory"));
-    DemandState finished;
-    finished.wantedCount = 1;
-    finished.doneCount = 1;
-    finished.failed = {failed};
-    finished.failedCount = 1;
-    QVERIFY(finished.showsWarning());
-    QCOMPARE(DemandState::buildToolTip(finished),
-             QStringLiteral("Could not be computed:\n"
-                            "  Evening - Sensor fusion: Out of memory"));
-}
+// ---- Signals, coalescing ------------------------------------------------------------------------
 
 void CalculationDemandTest::changeSignalsAreMinimal()
 {
@@ -2222,44 +2112,41 @@ void CalculationDemandTest::changeSignalsAreMinimal()
     show({"s1"});
     m_demand->flush();
 
-    QSignalSpy changedSpy(m_demand.get(), &CalculationDemand::plotStateChanged);
-    QSignalSpy anySpy(m_demand.get(), &CalculationDemand::statesChanged);
+    QSignalSpy progressSpy(m_demand.get(), &CalculationDemand::progressChanged);
+    QSignalSpy failuresSpy(m_demand.get(), &CalculationDemand::failuresChanged);
+    QSignalSpy pendingSpy(m_demand.get(), &CalculationDemand::pendingCellsChanged);
 
-    // Only requested plots are announced, once each, in one pass
+    // Three plots checked in one pass: one announcement of the progress
     check("plain");
     check("g");
     check("g2");
     m_demand->flush();
-    QCOMPARE(changedSpy.count(), 2);
-    QCOMPARE(changedSpy.at(0).at(0).toString(), QStringLiteral("Syn/g"));
-    QCOMPARE(changedSpy.at(1).at(0).toString(), QStringLiteral("Syn/g2"));
-    QCOMPARE(anySpy.count(), 1);
+    QCOMPARE(progressSpy.count(), 1);
+    QCOMPARE(m_demand->progress().count, 1);
+    QCOMPARE(failuresSpy.count(), 0);
+    QCOMPARE(pendingSpy.count(), 0);
     QVERIFY(m_queue->chosenNextJob() != 0);         // offered, not started yet
 
     // A pass that changes nothing announces nothing (s2 has no input)
     show({"s2"});
     QVERIFY(m_demand->hasPendingUpdate());
     m_demand->flush();
-    QCOMPARE(changedSpy.count(), 2);
-    QCOMPARE(anySpy.count(), 1);
+    QCOMPARE(progressSpy.count(), 1);
 
-    // Unchecked: reset to the default state, announced once; the waiting job
-    // stays, the other plot still needs it
+    // Unchecked while g still wants the job: the waiting job stays, and
+    // nothing presented changes, so nothing is announced
     const JobId waiting = m_queue->chosenNextJob();
     check("g2", false);
     m_demand->flush();
-    QCOMPARE(changedSpy.count(), 3);
-    QCOMPARE(changedSpy.last().at(0).toString(), QStringLiteral("Syn/g2"));
-    QCOMPARE(anySpy.count(), 2);
-    m_demand->flush();
-    QCOMPARE(changedSpy.count(), 3);
+    QCOMPARE(progressSpy.count(), 1);
+    QCOMPARE(m_demand->progress().count, 1);
     QCOMPARE(m_queue->chosenNextJob(), waiting);
+    QCOMPARE(failuresSpy.count(), 0);
+    QCOMPARE(pendingSpy.count(), 0);
 
     gate().open(1);
     QVERIFY(waitDemandIdle());
-    for (const QList<QVariant> &emission : std::as_const(changedSpy))
-        QVERIFY(emission.at(0).toString() != QLatin1String("Syn/plain"));
-    QVERIFY(row("Syn/plain") == DemandState());
+    QVERIFY(nothingToShow());
 }
 
 void CalculationDemandTest::dependencyBurstIsCoalesced()
@@ -2269,7 +2156,7 @@ void CalculationDemandTest::dependencyBurstIsCoalesced()
     gate().open(3);
     check("g");
     QVERIFY(waitDemandIdle());
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
     m_demand->setInputSettleDelay(60000);
 
     // An irrelevant name schedules nothing and starts no wait
@@ -2292,54 +2179,15 @@ void CalculationDemandTest::dependencyBurstIsCoalesced()
         QVERIFY(quiet.holds());                     // settling: nothing offered
     }
 
-    const DemandState state = row("Syn/g");
-    QCOMPARE(state.waitingCount, 3);
+    QCOMPARE(progressNow().count, 3);
     QVERIFY(m_demand->isSettling("s1"));
 
     // The name is read live at the next pass: s1, first in row order, runs
-    // first and is held at the gate while its running track is read
+    // first and is held at the gate while the progress is read
     settle();
     QVERIFY(gate().waitEntered());
-    QTRY_COMPARE(row("Syn/g").running.value(0).sessionName, QStringLiteral("Renamed"));
+    QTRY_COMPARE(progressNow().sessionName, QStringLiteral("Renamed"));
     gate().open(3);
-    QVERIFY(waitDemandIdle());
-}
-
-void CalculationDemandTest::progressUpdatesWithoutInspection()
-{
-    QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
-    show({"s1", "s2"});
-    check("g");
-    check("g2");
-    QVERIFY(gate().waitEntered());
-    const JobId runningJob = jobOf("s1", "gated").id;
-    QTRY_COMPARE(m_queue->job(runningJob).progressText, QStringLiteral("step 1"));
-    spin();
-
-    QSignalSpy changedSpy(m_demand.get(), &CalculationDemand::plotStateChanged);
-    const int passes = m_demand->passCount();
-    const int runs = totalRuns();
-
-    // The executor's own signal, delivered by hand: the text alone changes
-    emit m_queue->jobProgress(runningJob, QStringLiteral("iteration 7"));
-    QVERIFY(!m_demand->hasPendingUpdate());
-    QCOMPARE(m_demand->passCount(), passes);
-    QCOMPARE(totalRuns(), runs);
-    QCOMPARE(changedSpy.count(), 2);
-    for (const char *id : {"Syn/g", "Syn/g2"}) {
-        const DemandState state = m_demand->plotState(QString::fromLatin1(id));
-        QCOMPARE(state.running.at(0).progressText, QStringLiteral("iteration 7"));
-        QCOMPARE(state.toolTip, QStringLiteral("Computing: 0 of 2 done\n"
-                                               "  Jump 1 - Gated: iteration 7"));
-    }
-
-    // The same text again announces nothing; a job no plot waits on neither
-    emit m_queue->jobProgress(runningJob, QStringLiteral("iteration 7"));
-    emit m_queue->jobProgress(JobId(999), QStringLiteral("elsewhere"));
-    QCOMPARE(changedSpy.count(), 2);
-    QCOMPARE(m_demand->passCount(), passes);
-
-    gate().open(2);
     QVERIFY(waitDemandIdle());
 }
 
@@ -2355,9 +2203,9 @@ void CalculationDemandTest::removedSessionLeavesNoTrace()
     check("g");
     QVERIFY(waitDemandIdle());
     QCOMPARE(jobOf("s4", "gated").state, JobState::Failed);
-    QCOMPARE(row("Syn/g").failedCount, 1);
+    QCOMPARE(failedSessions(), QStringList({"s4"}));
     QVERIFY(m_model->removeSessions({"s4"}));
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
     const QList<MergeResult> created = m_model->mergeSessions(newSessionWithInput("s4"));
     QCOMPARE(created.at(0).outcome, MergeResult::Outcome::Created);
     show({"s4"});
@@ -2366,7 +2214,7 @@ void CalculationDemandTest::removedSessionLeavesNoTrace()
     gate().open(1);
     QVERIFY(waitDemandIdle());
     QCOMPARE(jobOf("s4", "gated").state, JobState::Succeeded);
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
 
     // The chosen next session is removed: the executor supersedes its job and
     // the demand layer offers the next
@@ -2382,23 +2230,21 @@ void CalculationDemandTest::removedSessionLeavesNoTrace()
 
     QVERIFY(m_model->removeSessions({"s2"}));
     QCOMPARE(stateOf(queued), JobState::Superseded);
-    DemandState state = row("Syn/g");
     QCOMPARE(chosenNext().sessionId, QStringLiteral("s3"));
-    QCOMPARE(sessionIdsOf(state.running), QStringList({"s1"}));
-    QCOMPARE(state.waitingCount, 1);
+    QCOMPARE(progressNow().count, 2);            // s1 running, s3 waiting
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 1"));
 
     // The running session is removed: its job is abandoned, and s3 runs next
     QVERIFY(m_model->removeSessions({"s1"}));
-    state = row("Syn/g");
-    QCOMPARE(sessionIdsOf(state.running), QStringList());
-    QCOMPARE(state.waitingCount, 1);
+    QCOMPARE(progressNow().count, 1);            // s3 waiting
+    QVERIFY(progressNow().sessionName.isEmpty());
     QCOMPARE(chosenNext().sessionId, QStringLiteral("s3"));
     QTRY_COMPARE(stateOf(runningJob), JobState::Superseded);
 
     QVERIFY(gate().waitEntered());                  // s3 runs next
     gate().open(1);
     QVERIFY(waitDemandIdle());
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
     QCOMPARE(values("s3", "g"), QVector<double>({5.0}));
 }
 
@@ -2409,11 +2255,11 @@ void CalculationDemandTest::registryChangeReclassifies()
     // change; this test is about the registry, not the wait
     m_demand->setInputSettleDelay(0);
 
-    // Syn/db is two on-demand levels above an explicit output (plotDB <- derivB <- expB)
+    // Two plots with no track that wants anything of s1: Syn/db (two on-demand
+    // levels above an explicit output, plotDB <- derivB <- expB; s1 has no
+    // input) and Syn/plain (not requested)
     check("db");
     check("plain");
-    QVERIFY(row("Syn/db").requested);
-    QVERIFY(!row("Syn/plain").requested);
 
     // A plot of the test's own: Syn/rx <- RX_OUT <- regX (explicit)
     CalculationDescriptor regX;
@@ -2451,39 +2297,42 @@ void CalculationDemandTest::registryChangeReclassifies()
     show({"s1"});
 
     // Not requested yet: nothing to compute, nothing offered
-    QVERIFY(!row("Syn/rx").requested);
     spin();
+    QCOMPARE(progressNow().count, 0);
     QCOMPARE(jobCount("regX"), 0);
 
-    // Registered: requested, and started with no other call (regX is not gated)
+    // Registered: requested, in demand, and started with no other call (regX
+    // is not gated)
     QVERIFY(registry.registerCalculation(regX));
     QVERIFY(m_demand->hasPendingUpdate());
-    QVERIFY(row("Syn/rx").requested);
+    QCOMPARE(progressNow().count, 1);
     QVERIFY(waitDemandIdle());
     QCOMPARE(jobCount("regX"), 1);
     QCOMPARE(jobOf("s1", "regX").state, JobState::Succeeded);
-    QVERIFY(row("Syn/rx").isPlain());
+    QVERIFY(nothingToShow());
     QCOMPARE(values("s1", "rx"), QVector<double>({2.0}));
 
-    // Unregistered: the default state, announced once, and nothing offered
-    QSignalSpy changedSpy(m_demand.get(), &CalculationDemand::plotStateChanged);
+    // Unregistered: nothing to compute, nothing announced, nothing offered
+    QSignalSpy progressSpy(m_demand.get(), &CalculationDemand::progressChanged);
+    QSignalSpy failuresSpy(m_demand.get(), &CalculationDemand::failuresChanged);
     {
         const Quiet quiet(*m_queue);
         QVERIFY(registry.unregister(QStringLiteral("regX"), CalculationRegistry::Removal::Change));
-        QVERIFY(row("Syn/rx") == DemandState());
-        QCOMPARE(changedSpy.count(), 1);
-        QCOMPARE(changedSpy.at(0).at(0).toString(), QStringLiteral("Syn/rx"));
+        QVERIFY(nothingToShow());
         spin();
+        QCOMPARE(progressNow().count, 0);
+        QCOMPARE(progressSpy.count(), 0);
+        QCOMPARE(failuresSpy.count(), 0);
         QVERIFY(quiet.holds());
     }
 
     // Registered again: the result went with the registration, so there is
     // demand again
     QVERIFY(registry.registerCalculation(regX));
-    QVERIFY(row("Syn/rx").requested);
+    QCOMPARE(progressNow().count, 1);
     QVERIFY(waitDemandIdle());
     QCOMPARE(jobCount("regX"), 2);
-    QVERIFY(row("Syn/rx").isPlain());
+    QVERIFY(nothingToShow());
     m_model->flushPendingInvalidations();
 }
 
@@ -2496,19 +2345,20 @@ void CalculationDemandTest::survivesExecutorShutdown()
 
     m_queue->shutdown();
     QVERIFY(m_queue->isIdle());
-    DemandState state = row("Syn/g");
-    QCOMPARE(state.runningCount, 0);
-    QCOMPARE(state.waitingCount, 2);        // still wanted: waiting, never offered
+    // Still wanted: waiting, never offered
+    QCOMPARE(progressNow().count, 2);
+    QVERIFY(progressNow().sessionName.isEmpty());
 
     {
         const Quiet quiet(*m_queue);
         check("g", false);
-        QVERIFY(row("Syn/g") == DemandState());
+        QCOMPARE(progressNow().count, 0);
+        QVERIFY(nothingToShow());
         check("g");
         show({"s1"}, false);
         spin();
-        state = row("Syn/g");
-        QCOMPARE(state.waitingCount, 1);
+        QCOMPARE(progressNow().count, 1);
+        QVERIFY(progressNow().sessionName.isEmpty());
         show({"s1"});
         spin();
         QVERIFY(quiet.holds());
@@ -2518,10 +2368,12 @@ void CalculationDemandTest::survivesExecutorShutdown()
     m_queue.reset();
     show({"s1"}, false);                    // schedules a pass
     m_demand->flush();
-    QVERIFY(m_demand->plotState(QStringLiteral("Syn/g")) == DemandState());
+    QVERIFY(m_demand->progress() == DemandProgress());
+    QVERIFY(m_demand->failures().isEmpty());
     show({"s1"});
     m_demand->flush();
-    QVERIFY(m_demand->plotState(QStringLiteral("Syn/g")) == DemandState());
+    QVERIFY(m_demand->progress() == DemandProgress());
+    QVERIFY(m_demand->failures().isEmpty());
 }
 
 void CalculationDemandTest::nullCollaborators()
@@ -2539,14 +2391,16 @@ void CalculationDemandTest::nullCollaborators()
         QTest::qWait(0);
         demand.flush();
         QVERIFY(!demand.hasPendingUpdate());
-        QVERIFY(demand.plotState(QStringLiteral("Syn/g")) == DemandState());
+        QVERIFY(demand.progress() == DemandProgress());
+        QVERIFY(demand.failures().isEmpty());
         demand.setInputSettleDelay(10);
         QCOMPARE(demand.inputSettleDelay(), 10);
         demand.endInputSettleWaits();
         demand.flush();
         QVERIFY(!demand.isSettling(QStringLiteral("s1")));
         QVERIFY(!demand.hasSettlingSessions());
-        QVERIFY(demand.plotState(QStringLiteral("Syn/g")) == DemandState());
+        QVERIFY(demand.progress() == DemandProgress());
+        QVERIFY(demand.failures().isEmpty());
     };
 
     const Quiet quiet(*m_queue);
@@ -2581,16 +2435,17 @@ void CalculationDemandTest::nullCollaborators()
     // A real one works
     restartDemand();
     QVERIFY(gate().waitEntered());
-    QCOMPARE(row("Syn/g").runningCount, 1);
+    QCOMPARE(progressNow().count, 1);
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 1"));
     gate().open(1);
     QVERIFY(waitDemandIdle());
-    QVERIFY(row("Syn/g").isPlain());
+    QVERIFY(nothingToShow());
 }
 
 // ---- Column demand ----------------------------------------------------------------
 
-// A column's id is its definition key. A column that is not enabled, not
-// requested or unknown has the default state, and no cell of it is pending.
+// A column's id is its definition key. No cell of a column that is not
+// enabled, not requested or unknown is pending.
 void CalculationDemandTest::columnIdIsTheDefinitionKey()
 {
     const LogbookColumn g = attributeColumn(QStringLiteral("G_OUT"));
@@ -2598,13 +2453,11 @@ void CalculationDemandTest::columnIdIsTheDefinitionKey()
     QCOMPARE(CalculationDemand::columnId(descriptionColumn()), logbookColumnDefinitionKey(descriptionColumn()));
 
     m_demand->flush();
-    QVERIFY(m_demand->columnState(CalculationDemand::columnId(descriptionColumn())) == DemandState());
-    QVERIFY(m_demand->columnState(colId("G_OUT")) == DemandState());      // not enabled
-    QVERIFY(m_demand->columnState(QStringLiteral("nope")) == DemandState());
     QVERIFY(!m_demand->isCellPending(-1, 0));
     QVERIFY(!m_demand->isCellPending(0, 99));
     QVERIFY(!m_demand->isCellPending(0, section("_DESCRIPTION")));
-    QVERIFY(!m_demand->isCellPending(QStringLiteral("s1"), colId("G_OUT")));
+    QVERIFY(!m_demand->isCellPending(QStringLiteral("s1"), colId("G_OUT")));     // not enabled
+    QVERIFY(!m_demand->isCellPending(QStringLiteral("s1"), QStringLiteral("nope")));
 }
 
 // The description column reads stored data only: no row is walked, nothing is
@@ -2616,7 +2469,9 @@ void CalculationDemandTest::ordinaryColumnsCreateNoDemand()
     QVERIFY(waitForIdle(*m_model));
 
     QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
-    QSignalSpy columnSpy(m_demand.get(), &CalculationDemand::columnStateChanged);
+    QSignalSpy progressSpy(m_demand.get(), &CalculationDemand::progressChanged);
+    QSignalSpy failuresSpy(m_demand.get(), &CalculationDemand::failuresChanged);
+    QSignalSpy pendingSpy(m_demand.get(), &CalculationDemand::pendingCellsChanged);
     const Quiet quiet(*m_queue);
     enableColumns({});
     spin();
@@ -2626,9 +2481,11 @@ void CalculationDemandTest::ordinaryColumnsCreateNoDemand()
     QVERIFY(quiet.holds());
     QCOMPARE(loadedSpy.count(), 0);
     QCOMPARE(m_demand->recordSetLookups(), 0);
-    QCOMPARE(columnSpy.count(), 0);
+    QCOMPARE(progressSpy.count(), 0);
+    QCOMPARE(failuresSpy.count(), 0);
+    QCOMPARE(pendingSpy.count(), 0);
     QVERIFY(!m_demand->hasFillWork());
-    QVERIFY(m_demand->columnState(CalculationDemand::columnId(descriptionColumn())) == DemandState());
+    QVERIFY(nothingToShow());
 }
 
 void CalculationDemandTest::enablingColumnFillsEveryUnloadedSession_data()
@@ -2660,11 +2517,7 @@ void CalculationDemandTest::enablingColumnFillsEveryUnloadedSession()
     QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
 
     enableColumns({"G_OUT"});
-    DemandState state = col("G_OUT");
-    QVERIFY(state.requested);
-    QCOMPARE(state.sourceId, colId("G_OUT"));
-    QCOMPARE(state.wantedCount, 4);
-    QCOMPARE(state.waitingCount, 4);
+    QCOMPARE(progressLine(), QStringLiteral("4 of 4"));
     for (const char *id : {"s1", "s2", "s3", "s4"})
         QVERIFY2(isCellPending(QString::fromLatin1(id), "G_OUT"), id);
 
@@ -2690,10 +2543,8 @@ void CalculationDemandTest::enablingColumnFillsEveryUnloadedSession()
     }
     QVERIFY(isCachedUnavailable(QStringLiteral("s2"), "G_OUT"));
 
-    state = col("G_OUT");
-    QCOMPARE(state.wantedCount, 3);
-    QCOMPARE(state.doneCount, 3);
-    QVERIFY(state.isPlain());
+    // s1, s3 and s4 are computed and s2 is not applicable: nothing is left
+    QVERIFY(nothingToShow());
     for (const char *id : {"s1", "s2", "s3", "s4"})
         QVERIFY2(!isCellPending(QString::fromLatin1(id), "G_OUT"), id);
     QCOMPARE(m_demand->heldSessionIds(), QStringList());
@@ -2739,15 +2590,16 @@ void CalculationDemandTest::loadedHiddenSessionsNeedNoLoad()
         everHeld = everHeld || !m_demand->heldSessionIds().isEmpty();
     });
     enableColumns({"G_OUT"});
-    QCOMPARE(col("G_OUT").waitingCount, 4);
+    QCOMPARE(progressNow().count, 4);
     QVERIFY(waitDemandIdle());
 
     QCOMPARE(gate().startOrder(), QList<int>({1, 2, 3, 4}));
     QVERIFY(!everHeld);
     QCOMPARE(m_demand->heldSessionIds(), QStringList());
     QCOMPARE(loadedSpy.count(), 0);
-    QCOMPARE(col("G_OUT").doneCount, 4);
-    QVERIFY(col("G_OUT").isPlain());
+    QVERIFY(nothingToShow());
+    for (const char *id : {"s1", "s2", "s3", "s4"})
+        QVERIFY2(stored(QString::fromLatin1(id), "gated"), id);
 }
 
 // Spec 13: a session made visible while column demand is being worked through
@@ -2783,8 +2635,9 @@ void CalculationDemandTest::sessionShownDuringColumnDemandRunsNext()
     QVERIFY(waitDemandIdle());
     QCOMPARE(gate().startOrder(), QList<int>({1, 4, 2, 3}));
     QVERIFY2(violation.isEmpty(), qPrintable(violation));
-    QVERIFY(col("G_OUT").isPlain());
-    QCOMPARE(col("G_OUT").doneCount, 4);
+    QVERIFY(nothingToShow());
+    for (const char *id : {"s1", "s2", "s3", "s4"})
+        QVERIFY2(stored(QString::fromLatin1(id), "gated"), id);
 }
 
 // Within column demand, loaded sessions are offered in row order and sessions
@@ -2893,9 +2746,7 @@ void CalculationDemandTest::chainedColumnWithUpstreamRecordIsCompleted()
     QVERIFY(waitForIdle(*m_model));
 
     enableColumns({"H_OUT"});
-    DemandState state = col("H_OUT");
-    QCOMPARE(state.waitingCount, 4);
-    QCOMPARE(state.doneCount, 0);
+    QCOMPARE(progressLine(), QStringLiteral("4 of 4"));
     QVERIFY(isCellPending(QStringLiteral("s1"), "H_OUT"));
 
     QVERIFY(waitDemandIdle());
@@ -2906,10 +2757,8 @@ void CalculationDemandTest::chainedColumnWithUpstreamRecordIsCompleted()
     QVERIFY(stored("s1", "gated"));
     QVERIFY(stored("s1", "afterG"));
     QCOMPARE(cachedValue(QStringLiteral("s1"), "H_OUT").toInt(), 6);
-    state = col("H_OUT");
-    QVERIFY(state.isPlain());
-    QCOMPARE(state.wantedCount, 1);
-    QCOMPARE(state.doneCount, 1);
+    QVERIFY(nothingToShow());
+    QVERIFY(!isCellPending(QStringLiteral("s1"), "H_OUT"));
 }
 
 // Spec 13: a stored rejection of a session that is not loaded is listed as
@@ -2924,13 +2773,10 @@ void CalculationDemandTest::storedRejectionIsBadgedAfterRestartWithoutLoad()
     QCOMPARE(LogbookManager::instance().calculationRecordReason(QStringLiteral("s2"), QStringLiteral("expA")),
              QStringLiteral("negative input"));
 
-    const auto verifyBadged = [this] {
-        const DemandState state = col("EA1");
-        QCOMPARE(sessionIdsOf(state.failed), QStringList({"s2"}));
-        QCOMPARE(state.failed.at(0).reason, QStringLiteral("Explicit A: negative input"));
-        QCOMPARE(state.failed.at(0).calculationTitles, QStringList({"Explicit A"}));
-        QVERIFY(!state.failed.at(0).jobFailure);
-        QCOMPARE(state.failed.at(0).sessionName, QStringLiteral("Jump 2"));
+    const QStringList rejection{"s2 (Jump 2) expA [Explicit A] negative input"};
+    const auto verifyListed = [this, &rejection] {
+        QCOMPARE(failureLines(), rejection);
+        QCOMPARE(failureLinesOf("s2"), rejection);
         QVERIFY(!isCellPending(QStringLiteral("s2"), "EA1"));
     };
 
@@ -2942,14 +2788,14 @@ void CalculationDemandTest::storedRejectionIsBadgedAfterRestartWithoutLoad()
     {
         const Quiet quiet(*m_queue);
         QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
-        verifyBadged();
+        verifyListed();
         if (QTest::currentTestFailed())
             return;
         QVERIFY(waitDemandIdle());     // s1, s3 and s4 are loaded to find they do not apply
-        verifyBadged();
+        verifyListed();
         if (QTest::currentTestFailed())
             return;
-        QVERIFY(col("EA1").showsWarning());
+        QCOMPARE(progressNow().count, 0);
         QCOMPARE(loadsOf(loadedSpy, "s2"), 0);
         QVERIFY(quiet.holds());
     }
@@ -2961,11 +2807,11 @@ void CalculationDemandTest::storedRejectionIsBadgedAfterRestartWithoutLoad()
     {
         const Quiet quiet(*m_queue);
         QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
-        verifyBadged();
+        verifyListed();
         if (QTest::currentTestFailed())
             return;
         QVERIFY(waitDemandIdle());
-        verifyBadged();
+        verifyListed();
         if (QTest::currentTestFailed())
             return;
         QCOMPARE(loadsOf(loadedSpy, "s2"), 0);
@@ -2984,9 +2830,8 @@ void CalculationDemandTest::storedRejectionIsBadgedAfterRestartWithoutLoad()
         const Quiet quiet(*m_queue);
         QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
         QSignalSpy recordSpy(&logbook, &LogbookManager::calculationRecordsChanged);
-        DemandState state = col("EA1");
-        QCOMPARE(state.failedCount, 0);
-        QCOMPARE(state.doneCount, 1);
+        QCOMPARE(failureLinesOf("s2"), QStringList());
+        QVERIFY(!isCellPending(QStringLiteral("s2"), "EA1"));
         m_model->startColumnWorker();
         QTRY_COMPARE(logbook.calculationRecordReason(QStringLiteral("s2"), QStringLiteral("expA")),
                      QStringLiteral("negative input"));
@@ -2995,7 +2840,7 @@ void CalculationDemandTest::storedRejectionIsBadgedAfterRestartWithoutLoad()
                 && arguments.at(1).toString() == QLatin1String("expA");
         }));
         QVERIFY(waitDemandIdle());
-        verifyBadged();
+        verifyListed();
         if (QTest::currentTestFailed())
             return;
         QCOMPARE(loadsOf(loadedSpy, "s2"), 0);
@@ -3020,9 +2865,10 @@ void CalculationDemandTest::recordReasonReachesDemandThroughRecordChange()
     LogbookManager &logbook = LogbookManager::instance();
     const Quiet quiet(*m_queue);
     QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
-    DemandState state = col("EA1");     // the record set is read now, without a reason
-    QCOMPARE(state.failedCount, 0);
-    QCOMPARE(state.doneCount, 1);
+    // The record set is read now, without a reason: done, neither failed nor
+    // pending
+    QCOMPARE(failureLinesOf("s2"), QStringList());
+    QVERIFY(!isCellPending(QStringLiteral("s2"), "EA1"));
 
     // The worker's pass with the manager's signals blocked: the reason is
     // learned, and nothing tells the demand layer
@@ -3033,18 +2879,12 @@ void CalculationDemandTest::recordReasonReachesDemandThroughRecordChange()
     }
     QCOMPARE(logbook.calculationRecordReason(QStringLiteral("s2"), QStringLiteral("expA")),
              QStringLiteral("negative input"));
-    m_demand->flush();
-    state = col("EA1");
-    QCOMPARE(state.failedCount, 0);
+    QCOMPARE(failureLinesOf("s2"), QStringList());
 
     // The record change that the manager emits when it learns a reason
     emit logbook.calculationRecordsChanged(QStringLiteral("s2"), QStringLiteral("expA"));
-    m_demand->flush();
-    state = col("EA1");
-    QCOMPARE(sessionIdsOf(state.failed), QStringList({"s2"}));
-    QCOMPARE(state.failed.at(0).reason, QStringLiteral("Explicit A: negative input"));
-    QCOMPARE(state.failed.at(0).sessionName, QStringLiteral("Jump 2"));
-    QVERIFY(!state.failed.at(0).jobFailure);
+    QCOMPARE(failureLinesOf("s2"), QStringList({"s2 (Jump 2) expA [Explicit A] negative input"}));
+    QVERIFY(!isCellPending(QStringLiteral("s2"), "EA1"));
     QCOMPARE(loadsOf(loadedSpy, "s2"), 0);
     QVERIFY(quiet.holds());
 }
@@ -3061,7 +2901,8 @@ void CalculationDemandTest::columnKnowledgeComesFromTheSessionModel()
     QVERIFY(giveInput({"s1"}, "LATE_IN", 1));
     QVERIFY(giveInput({"s1"}, "PLAIN_ATTR", 1));
     QVERIFY(waitForIdle(*m_model));
-    QVERIFY(!col("LATE_OUT").requested);
+    QCOMPARE(progressNow().count, 0);
+    QVERIFY(!isCellPending(QStringLiteral("s1"), "LATE_OUT"));
     QVERIFY(!m_demand->isSettling(QStringLiteral("s1")));
 
     CalculationDescriptor late;
@@ -3077,9 +2918,9 @@ void CalculationDemandTest::columnKnowledgeComesFromTheSessionModel()
     QVERIFY(m_extra->add(late));
     // At once, without a turn of the event loop
     m_demand->flush();
-    QVERIFY(m_demand->columnState(colId("LATE_OUT")).requested);
     QVERIFY(m_demand->isCellPending(rowOf(QStringLiteral("s1")), section("LATE_OUT")));
-    QVERIFY(!m_demand->columnState(colId("PLAIN_ATTR")).requested);
+    QVERIFY(!m_demand->isCellPending(rowOf(QStringLiteral("s1")), section("PLAIN_ATTR")));
+    QCOMPARE(m_demand->progress().count, 1);
 
     // (b) An edit of an attribute only an ordinary column reads starts no
     // wait; an edit of the requested column's input does
@@ -3286,17 +3127,17 @@ void CalculationDemandTest::storedResultsCreateNoJob()
     const auto verifyNothingRuns = [this] {
         const Quiet quiet(*m_queue);
         QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
-        DemandState state = col("G_OUT");
-        QCOMPARE(state.doneCount, 4);
-        QCOMPARE(state.wantedCount, 4);
-        QVERIFY(state.isPlain());
+        // Every cell done from its record: nothing to compute, none pending
+        QVERIFY(nothingToShow());
+        for (const char *id : {"s1", "s2", "s3", "s4"})
+            QVERIFY2(!isCellPending(QString::fromLatin1(id), "G_OUT"), id);
         QVERIFY(!m_demand->hasFillWork());
         spin();
         QVERIFY(waitForIdle(*m_model));     // the worker's copies may read the records
         spin();
         QCOMPARE(loadedSpy.count(), 0);
         QVERIFY(quiet.holds());
-        QVERIFY(col("G_OUT").isPlain());
+        QVERIFY(nothingToShow());
     };
 
     enableColumns({"G_OUT"});
@@ -3311,8 +3152,8 @@ void CalculationDemandTest::storedResultsCreateNoJob()
 
     // A loaded session with its record restored reads Done as well
     session("s1");
-    QCOMPARE(col("G_OUT").doneCount, 4);
-    QVERIFY(col("G_OUT").isPlain());
+    QVERIFY(nothingToShow());
+    QVERIFY(!isCellPending(QStringLiteral("s1"), "G_OUT"));
     QCOMPARE(m_queue->model()->rowCount(), 0);
 }
 
@@ -3332,9 +3173,8 @@ void CalculationDemandTest::notApplicableSessionIsSettledWithoutAJob()
     QVERIFY(!isCellPending(QStringLiteral("s2"), "G_OUT"));
     QCOMPARE(m_demand->heldSessionIds(), QStringList());
     QVERIFY(!m_model->isSessionPinned(QStringLiteral("s2")));
-    DemandState state = col("G_OUT");
-    QCOMPARE(state.wantedCount, 0);
-    QVERIFY(state.isPlain());
+    // Not applicable for every session: not counted, not failed, not pending
+    QVERIFY(nothingToShow());
 
     // Evicted: the remembered verdict keeps it from being loaded again
     QVERIFY(makeStubs());
@@ -3342,12 +3182,13 @@ void CalculationDemandTest::notApplicableSessionIsSettledWithoutAJob()
         spin();
     QCOMPARE(loadsOf(loadedSpy, "s2"), 1);
     QVERIFY(!m_demand->hasFillWork());
-    QCOMPARE(col("G_OUT").wantedCount, 0);
+    QVERIFY(nothingToShow());
+    QVERIFY(!isCellPending(QStringLiteral("s2"), "G_OUT"));
     QVERIFY(quiet.holds());
 }
 
-// A Failed-status result (not stored) and a stored rejection are badged, and
-// neither session is loaded again after its eviction.
+// A Failed-status result (not stored) and a stored rejection are listed among
+// the failures, and neither session is loaded again after its eviction.
 void CalculationDemandTest::columnFailuresAreBadgedNotReloaded()
 {
     QVERIFY(giveInput({"s1"}, "T_IN", 1));
@@ -3364,19 +3205,15 @@ void CalculationDemandTest::columnFailuresAreBadgedNotReloaded()
     QCOMPARE(jobOf(QStringLiteral("s2"), "expA").state, JobState::Succeeded);
     QVERIFY(stored("s2", "expA"));
 
-    const auto verifyBadged = [this] {
-        DemandState t = col("T_OUT");
-        QCOMPARE(sessionIdsOf(t.failed), QStringList({"s1"}));
-        QCOMPARE(t.failed.at(0).reason, QStringLiteral("Thrower: synthetic failure"));
-        QCOMPARE(t.failed.at(0).sessionName, QStringLiteral("Jump 1"));
-        QVERIFY(t.showsWarning());
-        DemandState ea = col("EA1");
-        QCOMPARE(sessionIdsOf(ea.failed), QStringList({"s2"}));
-        QCOMPARE(ea.failed.at(0).reason, QStringLiteral("Explicit A: negative input"));
-        QCOMPARE(ea.failed.at(0).sessionName, QStringLiteral("Jump 2"));
-        QVERIFY(ea.showsWarning());
+    // s1 then s2, in row order, each with its reason
+    const auto verifyListed = [this] {
+        QCOMPARE(failureLines(), QStringList({"s1 (Jump 1) thrower [Thrower] synthetic failure +retry",
+                                              "s2 (Jump 2) expA [Explicit A] negative input"}));
+        QCOMPARE(progressNow().count, 0);
+        QVERIFY(!isCellPending(QStringLiteral("s1"), "T_OUT"));
+        QVERIFY(!isCellPending(QStringLiteral("s2"), "EA1"));
     };
-    verifyBadged();
+    verifyListed();
     if (QTest::currentTestFailed())
         return;
 
@@ -3385,7 +3222,7 @@ void CalculationDemandTest::columnFailuresAreBadgedNotReloaded()
     for (int i = 0; i < 3; ++i)
         spin();
     QVERIFY(waitDemandIdle());
-    verifyBadged();
+    verifyListed();
     if (QTest::currentTestFailed())
         return;
     QCOMPARE(loadsOf(loadedSpy, "s1"), 1);
@@ -3393,7 +3230,7 @@ void CalculationDemandTest::columnFailuresAreBadgedNotReloaded()
     QCOMPARE(m_queue->model()->rowCount(), jobs);
 }
 
-// A job-level failure is badged, the session released and not loaded again
+// A job-level failure is listed among the failures, the session released and not loaded again
 // in the run; the next start (a new demand layer) computes it.
 void CalculationDemandTest::columnJobLevelFailureIsNotReloadedUntilRestart()
 {
@@ -3405,11 +3242,9 @@ void CalculationDemandTest::columnJobLevelFailureIsNotReloadedUntilRestart()
     enableColumns({"X_OUT"});
     QVERIFY(waitDemandIdle());
     QCOMPARE(jobOf(QStringLiteral("s1"), "exhausted").state, JobState::Failed);
-    DemandState state = col("X_OUT");
-    QCOMPARE(sessionIdsOf(state.failed), QStringList({"s1"}));
-    QVERIFY(state.failed.at(0).jobFailure);
-    QCOMPARE(state.failed.at(0).reason, QStringLiteral("Exhausted: Out of memory"));
-    QVERIFY(state.showsWarning());
+    const QStringList outOfMemory{"s1 (Jump 1) exhausted [Exhausted] Out of memory +retry"};
+    QCOMPARE(failureLines(), outOfMemory);
+    QCOMPARE(progressNow().count, 0);
     QCOMPARE(m_demand->heldSessionIds(), QStringList());
 
     QVERIFY(makeStubs());
@@ -3417,16 +3252,14 @@ void CalculationDemandTest::columnJobLevelFailureIsNotReloadedUntilRestart()
         spin();
     QCOMPARE(loadsOf(loadedSpy, "s1"), 1);
     QCOMPARE(jobCount("exhausted"), 1);
-    QVERIFY(col("X_OUT").failed.at(0).jobFailure);
+    QCOMPARE(failureLines(), outOfMemory);
 
     restartDemand();
     QVERIFY(waitDemandIdle());
     QCOMPARE(loadsOf(loadedSpy, "s1"), 2);
     QCOMPARE(jobOf(QStringLiteral("s1"), "exhausted").state, JobState::Succeeded);
     QVERIFY(stored("s1", "exhausted"));
-    state = col("X_OUT");
-    QVERIFY(state.isPlain());
-    QCOMPARE(state.doneCount, 1);
+    QVERIFY(nothingToShow());
 }
 
 // A column pair the executor refuses at offer time is remembered, and a pass
@@ -3459,9 +3292,7 @@ void CalculationDemandTest::columnOfferRefusalIsNotLeftPending()
     m_demand->setInputSettleDelay(60000);
     enableColumns({"PP_OUT"});
     QVERIFY(giveInput({"s1"}, "PP_IN", 1));
-    DemandState state = col("PP_OUT");
-    QCOMPARE(state.wantedCount, 1);
-    QCOMPARE(state.waitingCount, 1);
+    QCOMPARE(progressNow().count, 1);
     QVERIFY(m_demand->isSettling(QStringLiteral("s1")));
     QVERIFY(isCellPending(QStringLiteral("s1"), "PP_OUT"));
 
@@ -3476,10 +3307,8 @@ void CalculationDemandTest::columnOfferRefusalIsNotLeftPending()
     QVERIFY(quiet.holds());
     spin();
 
-    state = col("PP_OUT");
-    QCOMPARE(state.waitingCount, 0);
-    QCOMPARE(state.wantedCount, 0);
-    QVERIFY(state.isPlain());
+    // Refused: not applicable, so neither counted, failed nor pending
+    QVERIFY(nothingToShow());
     QVERIFY(!isCellPending(QStringLiteral("s1"), "PP_OUT"));
     // The fill has no pending cell left: it has no work, and the scheduler
     // completes it
@@ -3507,13 +3336,9 @@ void CalculationDemandTest::unloadableSessionIsSettledAsFailed()
     enableColumns({"G_OUT"});
     QVERIFY(waitDemandIdle());
 
-    DemandState state = col("G_OUT");
-    QCOMPARE(sessionIdsOf(state.failed), QStringList({"s3"}));
-    QVERIFY(state.failed.at(0).jobFailure);
-    QCOMPARE(state.failed.at(0).reason, QStringLiteral("The session file could not be loaded"));
-    QCOMPARE(state.failed.at(0).sessionName, QStringLiteral("Jump 3"));
-    QCOMPARE(state.doneCount, 4);
-    QVERIFY(state.showsWarning());
+    const QStringList loadFailure{"s3 (Jump 3) gated [Gated] The session file could not be loaded +retry"};
+    QCOMPARE(failureLines(), loadFailure);
+    QCOMPARE(progressNow().count, 0);
     QVERIFY(!s3Held);
     QVERIFY(!m_demand->heldSessionIds().contains(QStringLiteral("s3")));
     QVERIFY(!m_model->isSessionPinned(QStringLiteral("s3")));
@@ -3525,7 +3350,7 @@ void CalculationDemandTest::unloadableSessionIsSettledAsFailed()
         spin();
     QCOMPARE(loadsOf(loadedSpy, "s3"), 1);
     QVERIFY(!m_demand->hasFillWork());
-    QCOMPARE(sessionIdsOf(col("G_OUT").failed), QStringList({"s3"}));
+    QCOMPARE(failureLines(), loadFailure);
 }
 
 // A visible failed-load placeholder is settled failed as well: it is never
@@ -3555,19 +3380,12 @@ void CalculationDemandTest::visibleFailedLoadIsSettledAsFailed()
 
     QVERIFY(waitDemandIdle());
     QVERIFY(waitForIdle(*m_model));
-    DemandState state = col("G_OUT");
-    QCOMPARE(sessionIdsOf(state.failed), QStringList({"s2"}));
-    QVERIFY(state.failed.at(0).jobFailure);
-    QCOMPARE(state.failed.at(0).reason, QStringLiteral("The session file could not be loaded"));
-    QCOMPARE(state.failed.at(0).sessionName, QStringLiteral("Jump 2"));
-    QVERIFY(state.toolTip.contains(QStringLiteral("  Jump 2 - The session file could not be loaded")));
+    const QStringList loadFailure{"s2 (Jump 2) gated [Gated] The session file could not be loaded +retry"};
+    QCOMPARE(failureLines(), loadFailure);
+    QCOMPARE(m_demand->sessionFailures(QStringLiteral("s2")).text(),
+             QStringLiteral("Gated: The session file could not be loaded (tried again at the next start)"));
     QVERIFY(!m_demand->isCellPending(rowOf(QStringLiteral("s2")), section("G_OUT")));
-    QCOMPARE(state.waitingCount, 0);
-    QCOMPARE(state.runningCount, 0);
-    QVERIFY(!state.isWorking());
-    QVERIFY(state.showsWarning());
-    QCOMPARE(state.failedCount, 1);
-    QCOMPARE(state.doneCount, 4);
+    QCOMPARE(progressNow().count, 0);
     for (const char *id : {"s1", "s3", "s4"})
         QCOMPARE(jobOf(QString::fromLatin1(id), "gated").state, JobState::Succeeded);
     QCOMPARE(jobOf(QStringLiteral("s2"), "gated").id, JobId(0));
@@ -3582,7 +3400,7 @@ void CalculationDemandTest::visibleFailedLoadIsSettledAsFailed()
     for (int i = 0; i < 3; ++i)
         spin();
     QCOMPARE(loadsOf(loadedSpy, "s2"), 0);
-    QCOMPARE(sessionIdsOf(col("G_OUT").failed), QStringList({"s2"}));
+    QCOMPARE(failureLines(), loadFailure);
     QVERIFY(!m_demand->hasFillWork());
 }
 
@@ -3774,8 +3592,8 @@ void CalculationDemandTest::identityStubIsOfferedUnderItsRealId()
     QVERIFY(!m_model->isSessionPinned(stem));
 }
 
-// The per-column state and the pending cells while a column fills.
-void CalculationDemandTest::columnStateCountsAndPendingCells()
+// The progress and the pending cells while a column fills.
+void CalculationDemandTest::columnProgressAndPendingCells()
 {
     QVERIFY(giveInput({"s1"}, "G_IN", 1));
     QVERIFY(giveInput({"s3"}, "G_IN", 3));
@@ -3783,48 +3601,48 @@ void CalculationDemandTest::columnStateCountsAndPendingCells()
     QVERIFY(makeStubs());
     QVERIFY(waitForIdle(*m_model));
 
-    QSignalSpy columnSpy(m_demand.get(), &CalculationDemand::columnStateChanged);
+    QSignalSpy pendingSpy(m_demand.get(), &CalculationDemand::pendingCellsChanged);
     enableColumns({"G_OUT"});
-    DemandState state = col("G_OUT");
-    QCOMPARE(state.wantedCount, 4);
-    QCOMPARE(state.waitingCount, 4);
-    QCOMPARE(state.doneCount, 0);
+    QCOMPARE(progressLine(), QStringLiteral("4 of 4"));
+    for (const char *id : {"s1", "s2", "s3", "s4"})
+        QVERIFY2(isCellPending(QString::fromLatin1(id), "G_OUT"), id);
 
     QVERIFY(gate().waitEntered());
-    QTRY_COMPARE(col("G_OUT").running.value(0).progressText, QStringLiteral("step 1"));
-    state = col("G_OUT");
-    QCOMPARE(state.runningCount, 1);
-    QCOMPARE(sessionIdsOf(state.running), QStringList({"s1"}));
-    QCOMPARE(state.running.at(0).sessionName, QStringLiteral("Jump 1"));
+    QTRY_COMPARE(progressNow().progressText, QStringLiteral("step 1"));
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 1"));
     QCOMPARE(running().sessionId, QStringLiteral("s1"));
-    QVERIFY(state.toolTip.startsWith(QStringLiteral("Computing: 0 of ")));
-    QVERIFY(state.toolTip.contains(QStringLiteral("  Jump 1 - Gated: step 1")));
-    QCOMPARE(state.waitingCount, state.wantedCount - 1);
-    QVERIFY(state.wantedCount == 4 || state.wantedCount == 3);
+    QCOMPARE(progressNow().highWater, 4);
+    QVERIFY(progressNow().count == 4 || progressNow().count == 3);
     QVERIFY(isCellPending(QStringLiteral("s1"), "G_OUT"));
     QVERIFY(isCachedUnavailable(QStringLiteral("s1"), "G_OUT"));
 
-    // s2 is loaded and found not applicable while s1 runs
-    QTRY_COMPARE(col("G_OUT").wantedCount, 3);
+    // s2 is loaded and found not applicable while s1 runs: no longer counted,
+    // and its cell is not pending
+    QTRY_COMPARE(progressNow().count, 3);
+    QCOMPARE(progressNow().highWater, 4);
     QVERIFY(!isCellPending(QStringLiteral("s2"), "G_OUT"));
 
     gate().open(3);
     QVERIFY(waitDemandIdle());
-    state = col("G_OUT");
-    QVERIFY(!state.isWorking());
-    QVERIFY(state.isPlain());
-    QCOMPARE(state.doneCount, 3);
-    for (const QList<QVariant> &arguments : std::as_const(columnSpy))
+    QVERIFY(progressNow() == DemandProgress());
+    QVERIFY(m_demand->failures().isEmpty());
+    for (const char *id : {"s1", "s2", "s3", "s4"})
+        QVERIFY2(!isCellPending(QString::fromLatin1(id), "G_OUT"), id);
+    for (const QList<QVariant> &arguments : std::as_const(pendingSpy))
         QCOMPARE(arguments.at(0).toString(), colId("G_OUT"));
-    QVERIFY(!columnSpy.isEmpty());
+    QVERIFY(!pendingSpy.isEmpty());
 
     // A pass that changes nothing announces nothing
-    columnSpy.clear();
+    QSignalSpy progressSpy(m_demand.get(), &CalculationDemand::progressChanged);
+    QSignalSpy failuresSpy(m_demand.get(), &CalculationDemand::failuresChanged);
+    pendingSpy.clear();
     check("plain");
     m_demand->flush();
     check("plain", false);
     m_demand->flush();
-    QCOMPARE(columnSpy.count(), 0);
+    QCOMPARE(progressSpy.count(), 0);
+    QCOMPARE(failuresSpy.count(), 0);
+    QCOMPARE(pendingSpy.count(), 0);
 }
 
 // Spec 13: a profile's column list (applyProfile step 7: a new list, some
@@ -3844,14 +3662,14 @@ void CalculationDemandTest::profileStyleColumnsCreateDemand()
     g.customLabel = QStringLiteral("G out");
     LogbookColumnStore::instance().setColumns({descriptionColumn(), exitTime, g});
 
-    QCOMPARE(col("G_OUT").waitingCount, 4);
+    QCOMPARE(progressNow().count, 4);
     QVERIFY(waitDemandIdle());
     for (const char *id : {"s1", "s2", "s3", "s4"}) {
         QCOMPARE(jobOf(QString::fromLatin1(id), "gated").state, JobState::Succeeded);
         QVERIFY2(stored(QString::fromLatin1(id), "gated"), id);
     }
     QCOMPARE(m_queue->model()->rowCount(), 4);
-    QVERIFY(col("G_OUT").isPlain());
+    QVERIFY(nothingToShow());
 }
 
 // At start-up with an enabled column over a requested calculation, demand
@@ -3916,9 +3734,7 @@ void CalculationDemandTest::startupWithEnabledColumnLoadsAfterColumnWorker()
     m_model->startColumnWorker();
     m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
 
-    const DemandState state = col("G_OUT");
-    QVERIFY(state.requested);
-    QCOMPARE(state.waitingCount, 4);
+    QCOMPARE(progressNow().count, 4);
     QVERIFY(order.isEmpty());
 
     gate().open(4);
@@ -4026,7 +3842,7 @@ void CalculationDemandTest::savesAndBulkEditsPrecedeLoadStep()
     QVERIFY(s1Description == QLatin1String("bulk") || s1Description == QLatin1String("edited"));
     QVERIFY(fileHas(QStringLiteral("s1"), "$VAR,_DESCRIPTION," + s1Description.toUtf8()));
     QCOMPARE(cachedValue(QStringLiteral("s1"), "DESC_OUT").toString(), QStringLiteral("x:") + s1Description);
-    QVERIFY(col("DESC_OUT").isPlain());
+    QVERIFY(nothingToShow());
 }
 
 // A settled session becomes applicable by a bulk edit of its stub: the edit is
@@ -4047,8 +3863,11 @@ void CalculationDemandTest::bulkEditMakesSettledSessionApplicable()
     enableColumns({"DESC_OUT", mass});
     QVERIFY(waitDemandIdle());
     QCOMPARE(loadsOf(loadedSpy, "s2"), 1);
+    // s2 has no description: not applicable, so neither counted, failed nor
+    // pending, and it has no job
     QCOMPARE(jobOf(QStringLiteral("s2"), "test.demand.desc").id, JobId(0));
-    QCOMPARE(col("DESC_OUT").wantedCount, 3);
+    QVERIFY(nothingToShow());
+    QVERIFY(!isCellPending(QStringLiteral("s2"), "DESC_OUT"));
 
     QVERIFY(makeStubs());
     for (int i = 0; i < 3; ++i)
@@ -4066,8 +3885,7 @@ void CalculationDemandTest::bulkEditMakesSettledSessionApplicable()
     QCOMPARE(jobOf(QStringLiteral("s2"), "test.demand.desc").state, JobState::Succeeded);
     QVERIFY(stored("s2", "test.demand.desc"));
     QCOMPARE(cachedValue(QStringLiteral("s2"), "DESC_OUT").toString(), QStringLiteral("x:bulk"));
-    QCOMPARE(col("DESC_OUT").wantedCount, 4);
-    QVERIFY(col("DESC_OUT").isPlain());
+    QVERIFY(nothingToShow());
 
     // A bulk edit of the stub's jumper mass, which no requested closure reads
     QVERIFY(makeStubs());
@@ -4082,11 +3900,11 @@ void CalculationDemandTest::bulkEditMakesSettledSessionApplicable()
     QCOMPARE(loadedSpy.count(), loadsBefore);
     QVERIFY(!m_demand->isSettling(QStringLiteral("s2")));
     QVERIFY(!m_demand->hasFillWork());
-    QVERIFY(col("DESC_OUT").isPlain());
+    QVERIFY(nothingToShow());
 }
 
 // Spec 7, a session that is not loaded: a record that could not be written is
-// a failure of the run, shown on the column header with the reason. It is not
+// a failure of the run, listed among the failures with the reason. It is not
 // loaded or offered again after its eviction (which makes the column worker
 // process the stub), a sort or the column worker; the next start tries again,
 // and a later successful write clears it.
@@ -4115,17 +3933,19 @@ void CalculationDemandTest::failedRecordWriteIsShownAndNotRetried()
 
     QString reason;
     const auto verifyFailed = [this, &reason, &loadedSpy](int loads) {
-        const DemandState state = col("G_OUT");
-        QCOMPARE(sessionIdsOf(state.failed), QStringList({"s1"}));
-        const DemandTrack &failed = state.failed.at(0);
-        QVERIFY2(failed.reason.startsWith(QStringLiteral("Gated: Couldn't write file")), qPrintable(failed.reason));
+        QCOMPARE(failedSessions(), QStringList({"s1"}));
+        const SessionFailures s1 = m_demand->sessionFailures(QStringLiteral("s1"));
+        QCOMPARE(s1.sessionName, QStringLiteral("Jump 1"));
+        QCOMPARE(s1.calculations.size(), 1);
+        const FailedCalculation &failed = s1.calculations.at(0);
+        QCOMPARE(failed.calculationId, QStringLiteral("gated"));
+        QCOMPARE(failed.title, QStringLiteral("Gated"));
+        QVERIFY2(failed.reason.startsWith(QStringLiteral("Couldn't write file")), qPrintable(failed.reason));
         if (reason.isEmpty())
             reason = failed.reason;
         QCOMPARE(failed.reason, reason);
-        QVERIFY(failed.jobFailure);
-        QCOMPARE(failed.calculationTitles, QStringList({"Gated"}));
-        QCOMPARE(failed.sessionName, QStringLiteral("Jump 1"));
-        QVERIFY(state.showsWarning());
+        QVERIFY(failed.retriedAtNextStart);
+        QCOMPARE(progressNow().count, 0);
         QVERIFY(!isCellPending(QStringLiteral("s1"), "G_OUT"));
         QCOMPARE(loadsOf(loadedSpy, "s1"), loads);
     };
@@ -4211,16 +4031,13 @@ void CalculationDemandTest::failedRecordWriteIsShownAndNotRetried()
     gate().open(1);
     QCOMPARE(engine("s1").request(QStringLiteral("gated")).status, ResultStatus::Ok);
     QVERIFY(stored("s1", "gated"));
-    m_demand->flush();
-    const DemandState state = col("G_OUT");
-    QCOMPARE(state.failedCount, 0);
-    QCOMPARE(state.doneCount, 1);
-    QCOMPARE(state.wantedCount, 1);
-    QVERIFY(state.isPlain());
+    // Done: neither failed, counted nor pending
+    QVERIFY(nothingToShow());
+    QVERIFY(!isCellPending(QStringLiteral("s1"), "G_OUT"));
 }
 
-// Spec 7, a loaded session: the plot row lists the failed write although the
-// engine holds the result, nothing is offered again, and the failure survives
+// Spec 7, a loaded session: the failed write of a plot's track is listed
+// among the failures although the engine holds the result, nothing is offered again, and the failure survives
 // the session's eviction and a load of a fresh engine without the result.
 void CalculationDemandTest::failedRecordWriteIsShownOnThePlotRow()
 {
@@ -4239,14 +4056,14 @@ void CalculationDemandTest::failedRecordWriteIsShownOnThePlotRow()
         QCOMPARE(warnings.count(QStringLiteral("not written")), 1);
     }
 
-    DemandState state = row("Syn/g");
-    QCOMPARE(state.failedCount, 1);
-    QCOMPARE(state.failed.at(0).sessionId, QStringLiteral("s1"));
-    const QString reason = state.failed.at(0).reason;
-    QVERIFY2(reason.startsWith(QStringLiteral("Gated: Couldn't write file")), qPrintable(reason));
-    QVERIFY(state.failed.at(0).jobFailure);
-    QVERIFY(state.showsWarning());
-    QVERIFY2(state.toolTip.contains(QStringLiteral("  Jump 1 - Gated: Couldn't write file")), qPrintable(state.toolTip));
+    QCOMPARE(progressNow().count, 0);
+    const QStringList lines = failureLines();
+    QCOMPARE(lines.size(), 1);
+    QVERIFY2(lines.at(0).startsWith(QStringLiteral("s1 (Jump 1) gated [Gated] Couldn't write file")),
+             qPrintable(lines.at(0)));
+    QVERIFY2(lines.at(0).endsWith(QStringLiteral(" +retry")), qPrintable(lines.at(0)));
+    const QString text = m_demand->sessionFailures(QStringLiteral("s1")).text();
+    QVERIFY2(text.startsWith(QStringLiteral("Gated: Couldn't write file")), qPrintable(text));
     QCOMPARE(values(QStringLiteral("s1"), "g"), QVector<double>({5.0}));       // installed; the write failed
 
     const Quiet quiet(*m_queue);
@@ -4259,10 +4076,8 @@ void CalculationDemandTest::failedRecordWriteIsShownOnThePlotRow()
     QVERIFY(makeStubs({"s1"}));
     show({"s1"});
     QVERIFY(waitForIdle(*m_model));
-    state = row("Syn/g");
-    QCOMPARE(sessionIdsOf(state.failed), QStringList({"s1"}));
-    QCOMPARE(state.failed.at(0).reason, reason);
-    QVERIFY(state.showsWarning());
+    QCOMPARE(failureLines(), lines);
+    QCOMPARE(progressNow().count, 0);
     spin();
     QVERIFY(quiet.holds());
 }
@@ -4297,35 +4112,32 @@ void CalculationDemandTest::settledPairsSurviveEvictionSortAndColumnWorker()
         QCOMPARE(warnings.count(QStringLiteral("not written")), 1);
     }
 
-    // Both states, the failures in session order (a sort reorders the rows)
+    // The failures, the progress and every pending cell; the failures sorted,
+    // since a sort reorders the rows and with them failures()
     const auto snapshot = [this] {
-        QStringList lines;
+        QStringList lines = failureLines();
+        lines.sort();
+        lines.append(progressLine());
         for (const char *key : {"G_OUT", "X_OUT"}) {
-            const DemandState state = col(key);
-            lines.append(QStringLiteral("%1 wanted %2 done %3 waiting %4 running %5 failed %6")
-                             .arg(QLatin1String(key)).arg(state.wantedCount).arg(state.doneCount)
-                             .arg(state.waitingCount).arg(state.runningCount).arg(state.failedCount));
-            QStringList failed;
-            for (const DemandTrack &track : state.failed) {
-                failed.append(QStringLiteral("%1 %2: %3 (%4)").arg(QLatin1String(key), track.sessionId, track.reason,
-                                                                  track.jobFailure ? QStringLiteral("job") : QString()));
+            for (const char *id : {"s1", "s2", "s3", "s4"}) {
+                if (isCellPending(QString::fromLatin1(id), key))
+                    lines.append(QStringLiteral("pending %1 %2").arg(QLatin1String(key), QLatin1String(id)));
             }
-            failed.sort();
-            lines.append(failed);
         }
         return lines;
     };
     const QStringList baseline = snapshot();
-    const DemandState g = col("G_OUT");
-    QCOMPARE(sessionIdsOf(g.failed), QStringList({"s1", "s3"}));
-    QVERIFY(g.failed.at(0).reason.startsWith(QStringLiteral("Gated: Couldn't write file")));
-    QCOMPARE(g.failed.at(1).reason, QStringLiteral("The session file could not be loaded"));
-    QCOMPARE(g.wantedCount, 2);
-    const DemandState x = col("X_OUT");
-    QCOMPARE(sessionIdsOf(x.failed), QStringList({"s3", "s4"}));
-    QCOMPARE(x.failed.at(0).reason, QStringLiteral("The session file could not be loaded"));
-    QCOMPARE(x.failed.at(1).reason, QStringLiteral("Exhausted: Out of memory"));
-    QCOMPARE(x.wantedCount, 2);
+    QCOMPARE(failedSessions(), QStringList({"s1", "s3", "s4"}));
+    const QStringList s1Lines = failureLinesOf("s1");
+    QCOMPARE(s1Lines.size(), 1);
+    QVERIFY2(s1Lines.at(0).startsWith(QStringLiteral("s1 (Jump 1) gated [Gated] Couldn't write file")),
+             qPrintable(s1Lines.at(0)));
+    QCOMPARE(failureLinesOf("s3"),
+             QStringList({"s3 (Jump 3) gated [Gated] The session file could not be loaded +retry",
+                          "s3 (Jump 3) exhausted [Exhausted] The session file could not be loaded +retry"}));
+    QCOMPARE(failureLinesOf("s4"), QStringList({"s4 (Jump 4) exhausted [Exhausted] Out of memory +retry"}));
+    // Every other track is done or not applicable: nothing is counted or pending
+    QCOMPARE(baseline.mid(4), QStringList({"0 of 0"}));
     QCOMPARE(jobOf(QStringLiteral("s4"), "exhausted").state, JobState::Failed);
     for (const char *id : {"s1", "s2", "s3", "s4"})
         QCOMPARE(loadsOf(loadedSpy, id), 1);
@@ -4373,14 +4185,12 @@ void CalculationDemandTest::settledPairsSurviveEvictionSortAndColumnWorker()
 // an input change of the session and a registry change, and by nothing else.
 void CalculationDemandTest::pairMemoryIsClearedByRecordInputAndRegistryChanges()
 {
-    const QString reason = QStringLiteral("Gated: The worker thread could not be started");
-    const auto verifyFailedNotOffered = [this, &reason](int jobs) {
+    const QStringList failed{"s1 (Jump 1) gated [Gated] The worker thread could not be started +retry"};
+    const auto verifyFailedNotOffered = [this, &failed](int jobs) {
         QCOMPARE(jobOf(QStringLiteral("s1"), "gated").state, JobState::Failed);
         QCOMPARE(jobCount("gated"), jobs);
-        const DemandState state = row("Syn/g");
-        QCOMPARE(state.failedCount, 1);
-        QVERIFY(state.failed.at(0).jobFailure);
-        QCOMPARE(state.failed.at(0).reason, reason);
+        QCOMPARE(failureLines(), failed);
+        QCOMPARE(progressNow().count, 0);
         const Quiet quiet(*m_queue);
         for (int i = 0; i < 3; ++i)
             spin();
@@ -4389,7 +4199,7 @@ void CalculationDemandTest::pairMemoryIsClearedByRecordInputAndRegistryChanges()
     const auto verifySucceeded = [this](int jobs) {
         QCOMPARE(jobCount("gated"), jobs);
         QCOMPARE(jobOf(QStringLiteral("s1"), "gated").state, JobState::Succeeded);
-        QVERIFY(row("Syn/g").isPlain());
+        QVERIFY(nothingToShow());
     };
 
     QVERIFY(giveInput({"s1"}, "G_IN", 4));
@@ -4478,10 +4288,9 @@ void CalculationDemandTest::columnVerdictDoesNotSuppressAnotherColumn()
     QVERIFY(m_demand->isSettling(QStringLiteral("s1")));
     m_demand->flush();
     m_demand->flush();
-    DemandState g = col("G_OUT");
-    QCOMPARE(g.wantedCount, 1);
-    QCOMPARE(g.waitingCount, 1);
-    QCOMPARE(col("Z_OUT").wantedCount, 0);
+    QVERIFY(isCellPending(QStringLiteral("s1"), "G_OUT"));
+    QVERIFY(!isCellPending(QStringLiteral("s1"), "Z_OUT"));
+    QCOMPARE(progressNow().count, 1);
 
     // Offered once the wait ends
     m_demand->endInputSettleWaits();
@@ -4490,20 +4299,18 @@ void CalculationDemandTest::columnVerdictDoesNotSuppressAnotherColumn()
     gate().open(1);
     QVERIFY(waitDemandIdle());
     QCOMPARE(jobOf(QStringLiteral("s1"), "gated").state, JobState::Succeeded);
-    g = col("G_OUT");
-    QCOMPARE(g.doneCount, 1);
-    QVERIFY(g.isPlain());
-    QCOMPARE(col("Z_OUT").wantedCount, 0);
+    QVERIFY(nothingToShow());
+    QVERIFY(!isCellPending(QStringLiteral("s1"), "G_OUT"));
+    QVERIFY(!isCellPending(QStringLiteral("s1"), "Z_OUT"));
 
     // Evicted: G_OUT is done from the record, Z_OUT not applicable, no load
     QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
     QVERIFY(makeStubs());
     for (int i = 0; i < 3; ++i)
         spin();
-    g = col("G_OUT");
-    QCOMPARE(g.doneCount, 1);
-    QCOMPARE(g.wantedCount, 1);
-    QCOMPARE(col("Z_OUT").wantedCount, 0);
+    QVERIFY(nothingToShow());
+    QVERIFY(!isCellPending(QStringLiteral("s1"), "G_OUT"));
+    QVERIFY(!isCellPending(QStringLiteral("s1"), "Z_OUT"));
     QCOMPARE(loadedSpy.count(), 0);
 }
 
@@ -4532,7 +4339,9 @@ void CalculationDemandTest::runningColumnTrackFilesItsOtherBlockers()
     m_demand->flush();
     QCOMPARE(running().sessionId, QStringLiteral("s1"));
     QCOMPARE(running().calculationId, QStringLiteral("gated"));
-    QCOMPARE(col("PAIR_OUT").runningCount, 1);
+    QCOMPARE(progressNow().count, 1);
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 1"));
+    QVERIFY(isCellPending(QStringLiteral("s1"), "PAIR_OUT"));
     QCOMPARE(chosenNext().sessionId, QStringLiteral("s1"));
     QCOMPARE(chosenNext().calculationId, QStringLiteral("stubborn"));
 
@@ -4540,10 +4349,8 @@ void CalculationDemandTest::runningColumnTrackFilesItsOtherBlockers()
     QVERIFY(waitDemandIdle());
     QCOMPARE(jobOf(QStringLiteral("s1"), "gated").state, JobState::Succeeded);
     QCOMPARE(jobOf(QStringLiteral("s1"), "stubborn").state, JobState::Succeeded);
-    const DemandState state = col("PAIR_OUT");
-    QCOMPARE(state.doneCount, 1);
-    QCOMPARE(state.wantedCount, 1);
-    QVERIFY(state.isPlain());
+    QVERIFY(nothingToShow());
+    QVERIFY(!isCellPending(QStringLiteral("s1"), "PAIR_OUT"));
 }
 
 // Spec 10.2: a load of the session that succeeds forgets its failed-load
@@ -4567,9 +4374,8 @@ void CalculationDemandTest::successfulLoadForgetsFailedLoadFacts()
     QVERIFY(rowState(QStringLiteral("s2")).loadFailed);
     QVERIFY(waitDemandIdle());
     QVERIFY(waitForIdle(*m_model));
-    DemandState state = col("G_OUT");
-    QCOMPARE(sessionIdsOf(state.failed), QStringList({"s2"}));
-    QCOMPARE(state.failed.at(0).reason, QStringLiteral("The session file could not be loaded"));
+    QCOMPARE(failureLines(),
+             QStringList({"s2 (Jump 2) gated [Gated] The session file could not be loaded +retry"}));
 
     // The file is back; hidden and evicted, the placeholder is a stub again,
     // and showing the session loads it
@@ -4582,10 +4388,9 @@ void CalculationDemandTest::successfulLoadForgetsFailedLoadFacts()
     QVERIFY(!rowState(QStringLiteral("s2")).loadFailed);
     QVERIFY(waitDemandIdle());
     QVERIFY(waitForIdle(*m_model));
-    state = col("G_OUT");
-    QCOMPARE(sessionIdsOf(state.failed), QStringList());
+    QCOMPARE(failureLines(), QStringList());
     QCOMPARE(jobOf(QStringLiteral("s2"), "gated").state, JobState::Succeeded);
-    QCOMPARE(state.failedCount, 0);
+    QVERIFY(nothingToShow());
 }
 
 // The fill is the lowest-priority task, active once per fill, not cancellable;
@@ -4642,7 +4447,7 @@ void CalculationDemandTest::fillTaskIsLowestAndNotCancellable()
     QVERIFY(waitDemandIdle());
     for (int i = 1; i <= 4; ++i)
         QCOMPARE(jobOf(QStringLiteral("s%1").arg(i), "gated").state, JobState::Succeeded);
-    QVERIFY(col("G_OUT").isPlain());
+    QVERIFY(nothingToShow());
 
     // The total is the high-water mark while sessions remain; the count
     // falls by one per finished session
@@ -4731,8 +4536,7 @@ void CalculationDemandTest::passOverManyStubsReadsEachRecordSetOnce()
     m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
     m_demand->flush();
     QCOMPARE(m_demand->recordSetLookups(), 2000);
-    const DemandState state = m_demand->columnState(colId("G_OUT"));
-    QCOMPARE(state.waitingCount, 2000);
+    QCOMPARE(m_demand->progress().count, 2000);
     QCOMPARE(m_model->storedResultStats().recordsRead, 0);
     QCOMPARE(loadedSpy.count(), 0);
 
@@ -4791,123 +4595,6 @@ void CalculationDemandTest::settleClockAnswersItsQuestions()
 
     clock.setDelay(-5);
     QCOMPARE(clock.delay(), 0);
-}
-
-// ---- Presentation -------------------------------------------------------------------
-
-// The ids the one clock follows: exactly the plots and columns whose state
-// is working, and statesChanged() says when they change.
-void CalculationDemandTest::workingIdsFollowStates()
-{
-    m_demand->flush();
-    QVERIFY(m_demand->workingPlotIds().isEmpty());
-    QVERIFY(m_demand->workingColumnIds().isEmpty());
-
-    // Every statesChanged(): whether anything is working then
-    QObject scope;
-    QList<bool> working;
-    connect(m_demand.get(), &CalculationDemand::statesChanged, &scope, [this, &working] {
-        working.append(!m_demand->workingPlotIds().isEmpty() || !m_demand->workingColumnIds().isEmpty());
-    });
-
-    QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
-    show({"s1", "s2"});
-    check("g");
-    QVERIFY(gate().waitEntered());
-    QVERIFY(row("Syn/g").isWorking());
-    QCOMPARE(m_demand->workingPlotIds(), QStringList({"Syn/g"}));
-    QVERIFY(m_demand->workingColumnIds().isEmpty());
-
-    enableColumns({"G_OUT"});
-    m_demand->flush();
-    QVERIFY(col("G_OUT").isWorking());
-    QCOMPARE(m_demand->workingColumnIds(), QStringList({colId("G_OUT")}));
-    QCOMPARE(m_demand->workingPlotIds(), QStringList({"Syn/g"}));
-
-    // Unchecked: at once
-    check("g", false);
-    m_demand->flush();
-    QVERIFY(m_demand->workingPlotIds().isEmpty());
-    QCOMPARE(m_demand->workingColumnIds(), QStringList({colId("G_OUT")}));
-
-    gate().open(4);
-    QVERIFY(waitDemandIdle());
-    QVERIFY(m_demand->workingPlotIds().isEmpty());
-    QVERIFY(m_demand->workingColumnIds().isEmpty());
-    QVERIFY(working.contains(true));
-    QCOMPARE(working.last(), false);
-}
-
-// A tooltip lists at most DemandState::kToolTipListLimit tracks per section;
-// the state's own lists stay complete.
-void CalculationDemandTest::toolTipListsAtMostTenFailures()
-{
-    QCOMPARE(DemandState::kToolTipListLimit, 10);
-    const auto failures = [](int n) {
-        QList<DemandTrack> tracks;
-        for (int k = 1; k <= n; ++k) {
-            DemandTrack track;
-            track.sessionName = QStringLiteral("Jump %1").arg(k);
-            track.condition = DemandCondition::Failed;
-            track.calculationTitles = {QStringLiteral("Explicit A")};
-            track.reason = QStringLiteral("r");
-            tracks.append(track);
-        }
-        return tracks;
-    };
-    const auto finished = [&failures](int n) {
-        DemandState state;
-        state.requested = true;
-        state.failed = failures(n);
-        state.failedCount = n;
-        state.wantedCount = n;
-        state.doneCount = n;
-        return state;
-    };
-    QStringList tenLines{QStringLiteral("Could not be computed:")};
-    for (int k = 1; k <= 10; ++k)
-        tenLines.append(QStringLiteral("  Jump %1 - r").arg(k));
-
-    // Twelve: ten, then how many more
-    DemandState twelve = finished(12);
-    QVERIFY(twelve.showsWarning());
-    QCOMPARE(DemandState::buildToolTip(twelve),
-             (tenLines + QStringList{QStringLiteral("  and 2 more")}).join(QLatin1Char('\n')));
-    QCOMPARE(twelve.failed.size(), 12);
-
-    // Exactly ten: no "more" line
-    QCOMPARE(DemandState::buildToolTip(finished(10)), tenLines.join(QLatin1Char('\n')));
-
-    // Working with twelve failures: the "Computing" line first, then the capped section
-    DemandState working = twelve;
-    DemandTrack running;
-    running.sessionName = QStringLiteral("Noon");
-    running.condition = DemandCondition::Running;
-    running.calculationTitles = {QStringLiteral("Sensor fusion")};
-    running.progressText = QStringLiteral("iteration 3");
-    working.running = {running};
-    working.runningCount = 1;
-    working.wantedCount = 13;
-    QVERIFY(working.isWorking());
-    QCOMPARE(DemandState::buildToolTip(working),
-             (QStringList{QStringLiteral("Computing: 12 of 13 done"),
-                          QStringLiteral("  Noon - Sensor fusion: iteration 3")}
-              + tenLines + QStringList{QStringLiteral("  and 2 more")})
-                 .join(QLatin1Char('\n')));
-
-    // The running list is capped the same way
-    DemandState manyRunning;
-    for (int k = 1; k <= 11; ++k) {
-        DemandTrack track = running;
-        track.sessionName = QStringLiteral("Run %1").arg(k);
-        manyRunning.running.append(track);
-    }
-    manyRunning.runningCount = 11;
-    manyRunning.wantedCount = 11;
-    const QStringList lines = DemandState::buildToolTip(manyRunning).split(QLatin1Char('\n'));
-    QCOMPARE(lines.size(), 1 + 10 + 1);
-    QCOMPARE(lines.at(10), QStringLiteral("  Run 10 - Sensor fusion: iteration 3"));
-    QCOMPARE(lines.last(), QStringLiteral("  and 1 more"));
 }
 
 // ---- Progress and failures ----------------------------------------------------------
@@ -5443,7 +5130,7 @@ void CalculationDemandTest::pendingCellsChangedPerColumn()
     QVERIFY(giveInput({"s1"}, "G_IN", 4));
     const QString gOut = colId("G_OUT");
     QSignalSpy pendingSpy(m_demand.get(), &CalculationDemand::pendingCellsChanged);
-    QSignalSpy columnSpy(m_demand.get(), &CalculationDemand::columnStateChanged);
+    QSignalSpy progressSpy(m_demand.get(), &CalculationDemand::progressChanged);
     const auto announced = [&pendingSpy] {
         QStringList ids;
         for (const QList<QVariant> &arguments : std::as_const(pendingSpy))
@@ -5457,14 +5144,16 @@ void CalculationDemandTest::pendingCellsChangedPerColumn()
     QCOMPARE(announced(), QStringList({gOut}));
     QVERIFY(gate().waitEntered());
     m_demand->flush();
-    QCOMPARE(col("G_OUT").runningCount, 1);
+    QCOMPARE(running().sessionId, QStringLiteral("s1"));
+    QVERIFY(isCellPending(QStringLiteral("s1"), "G_OUT"));
     QCOMPARE(announced(), QStringList({gOut}));      // running is pending too
 
-    // A progress text changes the column's state, not its cells
+    // A progress text changes the progress, not the cells
     pendingSpy.clear();
-    columnSpy.clear();
+    progressSpy.clear();
     emit m_queue->jobProgress(running().id, QStringLiteral("iteration 7"));
-    QVERIFY(!columnSpy.isEmpty());
+    QCOMPARE(progressSpy.count(), 1);
+    QCOMPARE(m_demand->progress().progressText, QStringLiteral("iteration 7"));
     QCOMPARE(pendingSpy.count(), 0);
 
     // The job's end

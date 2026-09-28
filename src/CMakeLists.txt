@@ -298,8 +298,8 @@ add_library(flysight_core STATIC
   # Plot check state (widget-free) and the demand layer: what requested
   # calculations the checked plots need for the visible sessions and the
   # enabled logbook columns for every session, which runs next, hidden loads
-  # for column demand, and the per-plot and per-column state (in parts: the
-  # presentation values, the column fill and the settle clock beside it)
+  # for column demand, and the progress, failures and pending cells (in parts:
+  # the presentation values, the column fill and the settle clock beside it)
   plotmodel.cpp              plotmodel.h
   calculationdemand.cpp      calculationdemand.h
   demandstate.cpp            demandstate.h
