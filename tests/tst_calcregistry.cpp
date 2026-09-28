@@ -657,8 +657,9 @@ void CalcRegistryTest::staticDependenciesClosure()
     QCOMPARE(state.readCount(), 0);
 }
 
-// The one authority for "explicit-backed" (plot rows and the logbook column
-// cache): a function of the registrations alone, seen through on-demand levels.
+// The one authority for "explicit-backed" (the demand layer, for plots, and
+// the logbook column cache): a function of the registrations alone, seen
+// through on-demand levels.
 void CalcRegistryTest::dependsOnExplicit()
 {
     CalculationRegistry registry;

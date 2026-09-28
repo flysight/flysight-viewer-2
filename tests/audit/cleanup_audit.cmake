@@ -465,8 +465,9 @@ expect_none("the demand layer keeps no memory of its own offer" "m_offeredJob|wi
 expect_only("no jobs window, no view of the queue" "[Jj]ob[Qq]ueue|JobModel"
   "^src/ui/docks/AppContext\\.h$" src/ui)
 # CalculationRegistry::explicitDependencies() is the one definition of
-# "explicit-backed" (dependsOnExplicit() is its non-emptiness): plot rows ask
-# dependsOnExplicit(), the logbook column cache asks explicitDependencies()
+# "explicit-backed" (dependsOnExplicit() is its non-emptiness): the demand
+# layer asks dependsOnExplicit() for plots, the logbook column cache asks
+# explicitDependencies()
 # through logbookColumnExplicitCalculations(); the session model hands each
 # enabled column's requested calculations to the demand layer
 # (columnRequestedCalculations()), and the demand layer asks
@@ -904,7 +905,7 @@ expect_none("the demand layer's replaced machinery stays gone"
 # ─────────────────────────────── one status bar for background work (items 701-754)
 # No view keeps a progress label, a cluster of glyphs or an animation clock:
 # progress is the status bar's bar, and nothing turns. Allow: none expected
-# (tests/README.md is excluded: its tables name the removed tests).
+# (tests/README.md is excluded: its section 10 lists these names).
 expect_none("no view keeps a label, a cluster or a clock"
   "progressLabel|clusterRect|syncAnimation|WorkingAnimation|followDemand|workingClock|frameAdvanced"
   src tests ":!tests/README.md")
@@ -919,7 +920,7 @@ expect_only("each view that holds the demand layer learns of its end itself" "&Q
 # ids are gone, and no test reads them either (a test asserts through the
 # values and the executor). The logbook cell delegate's own showsWarning(index)
 # is not the state's showsWarning(). Allow: none expected (tests/README.md is
-# excluded: its tables name the removed tests).
+# excluded: its section 10 lists these names).
 expect_none("the per-source presentation stays gone"
   "DemandState|DemandTrack|DemandCondition|kToolTipListLimit|buildToolTip|workingPlotIds|workingColumnIds|plotStateChanged|columnStateChanged|statesChanged|${WB_START}(plotState|columnState)\\(|sessionIdsOf|wantedCount|doneCount|waitingCount|failedCount|showsWarning\\(\\)"
   src tests ":!tests/README.md")
@@ -932,7 +933,7 @@ expect_none("the demand layer keeps no per-source state"
 # The plot rows' and column headers' glyphs, their shared painting, geometry
 # and hover helper, and the header view that drew them are gone with the
 # per-source presentation. Allow: none expected (tests/README.md is excluded:
-# its tables name the removed tests).
+# its section 10 lists these names).
 expect_none("the per-source indicators and their plumbing stay gone"
   "DemandIndicator|drawWarningGlyph|drawWorkingGlyph|drawDemandGlyph|[Gg]lyphMetrics|glyphColor|showIndicatorToolTip|repaintWhenDemandDestroyed|PlotRowDelegate|PlotRowLayout|layoutPlotRow|LogbookHeaderView|indicatorRect|toolTipForSection"
   src tests ":!tests/README.md")

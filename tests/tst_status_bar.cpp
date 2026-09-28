@@ -1043,7 +1043,7 @@ void StatusBarTest::survivesDemandDestroyedFirst()
     QVERIFY(activityEmpty());
 }
 
-// A Widgets test writes its own main() (see tst_plot_row_delegate): the same
+// A Widgets test writes its own main() (tests/README.md section 8): the same
 // order as FLYSIGHT_TEST_MAIN, with a QApplication and the application's style.
 int main(int argc, char **argv)
 {

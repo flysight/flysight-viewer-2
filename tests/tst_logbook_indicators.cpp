@@ -280,11 +280,6 @@ private:
         return failures.size() == 1 && failures.at(0).sessionId == QStringLiteral("s1");
     }
 
-    QRect sectionRect(int logical) const
-    {
-        return QRect(header()->sectionViewportPosition(logical), 0, header()->sectionSize(logical),
-                     header()->viewport()->height());
-    }
     /// The visible part of a column of the tree's viewport.
     QRect columnRect(int column) const
     {
@@ -592,8 +587,12 @@ void LogbookIndicatorsTest::headerIsPlainAndNothingAnimates()
     for (int l = 0; l < header()->count(); ++l)
         QCOMPARE(header()->sectionSizeHint(l), m_reference->header()->sectionSizeHint(l));
 
-    // No clock: neither the header nor the cells repaint while the job runs
+    // No clock: neither the header nor the cells repaint while the job runs.
+    // The scheduler rests first (every row is loaded, so the fill has nothing
+    // to step and waits on the job), so no tick of the column worker paints
+    // inside the window.
     spin();
+    QTRY_VERIFY(!m_model->scheduler().isTicking());
     const auto *headerPaints = new PaintCounter(header()->viewport());
     const auto *cellPaints = new PaintCounter(tree()->viewport());
     QTest::qWait(400);

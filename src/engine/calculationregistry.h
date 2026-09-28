@@ -169,10 +169,10 @@ public:
     /// Whether `name` is backed by an explicitly requested calculation: some
     /// name in staticDependencies(name).names (the name itself included) has a
     /// candidate - or, for a measurement, a source conversion - whose policy
-    /// is explicit. The one authority for "explicit-backed": the plot rows ask
-    /// here; the logbook column cache asks explicitDependencies(), of which
-    /// this is the non-emptiness. An observer must not call it from inside its
-    /// callback; a later pass may.
+    /// is explicit. The one authority for "explicit-backed": the demand layer
+    /// asks here for plots; the logbook column cache asks
+    /// explicitDependencies(), of which this is the non-emptiness. An observer
+    /// must not call it from inside its callback; a later pass may.
     bool dependsOnExplicit(const DependencyKey &name) const;
 
     /// Preference keys declared as inputs, sorted and unique. Plain
