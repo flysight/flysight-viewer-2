@@ -70,7 +70,7 @@ StatusBarFeature::StatusBarFeature(const AppContext &ctx, QStatusBar *statusBar,
     // its widgets and the warning take width only while they are shown.
     // Measured with texts in place: an empty label is shorter than one line.
     m_activityLabel->setText(countText(tr("Computing results"), 100, 100));
-    m_warningText->setText(tr("%1 recordings could not be computed").arg(100));
+    m_warningText->setText(tr("%1 sessions could not be computed").arg(100));
     int tallest = 0;
     for (const QWidget *widget : {static_cast<QWidget *>(m_activityLabel), static_cast<QWidget *>(m_activityBar),
                                   static_cast<QWidget *>(m_cancelButton), static_cast<QWidget *>(warningIcon),
@@ -245,9 +245,9 @@ void StatusBarFeature::showWarning()
     if (count == 0)
         m_warningText->clear();
     else if (count == 1)
-        m_warningText->setText(tr("1 recording could not be computed"));
+        m_warningText->setText(tr("1 session could not be computed"));
     else
-        m_warningText->setText(tr("%1 recordings could not be computed").arg(count));
+        m_warningText->setText(tr("%1 sessions could not be computed").arg(count));
     m_warning->setToolTip(SessionFailures::listText(failures));
     m_warning->setVisible(count > 0);
 }

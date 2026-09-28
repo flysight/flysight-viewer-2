@@ -435,7 +435,7 @@ QString CalculationDemand::failureDetail(const QString &detail, bool computation
 {
     if (!detail.isEmpty())
         return detail;
-    return computationFailed ? tr("Calculation failed") : tr("No result for this recording");
+    return computationFailed ? tr("Calculation failed") : tr("No result for this session");
 }
 
 QString CalculationDemand::noteDetail(const UnproducedNote &note)

@@ -38,7 +38,7 @@ jump when work starts or ends.
 | --- | --- |
 | "Computing results: k / n" and a bar | Computing. n recordings have been waiting to be computed since the status bar last had none, and k of them are done. Each recording counts once, however many plots and logbook columns want it |
 | "Saving sessions", "Loading sessions", "Updating sessions" or "Computing columns", with its count and bar | Other background work of the logbook (section 8) |
-| A warning triangle and, for example, "2 recordings could not be computed" | Some recordings could not be computed (section 7). It is shown beside "Computing results" while computing continues, and alone once it ends |
+| A warning triangle and, for example, "2 sessions could not be computed" | Some recordings could not be computed (section 7). It is shown beside "Computing results" while computing continues, and alone once it ends |
 | Nothing | Nothing is running and nothing has failed |
 
 Hover over the label or the bar for details: it lists everything in progress,
@@ -159,7 +159,7 @@ gap in its sensor data. As soon as such a failure is found, not once the work
 is done, two things show it:
 
 - the status bar shows a warning triangle and the number of recordings that
-  could not be computed ("1 recording could not be computed"). A recording
+  could not be computed ("1 session could not be computed"). A recording
   with two calculations that failed counts once. While computing continues
   the warning stands beside "Computing results", so a failure found early in
   a long fill is visible at once; when nothing is computing it stands alone;

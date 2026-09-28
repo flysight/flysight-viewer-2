@@ -731,7 +731,7 @@ void StatusBarTest::warningBesideComputationsThenAlone()
     QVERIFY(waitDemandIdle());
     QVERIFY(waitForIdle(*m_model));
     QVERIFY(stored("s1", "expA"));
-    QCOMPARE(warningShownText(), QStringLiteral("1 recording could not be computed"));
+    QCOMPARE(warningShownText(), QStringLiteral("1 session could not be computed"));
     QVERIFY(activityEmpty());
 
     // G_OUT with the gate held: the warning beside "Computing results"
@@ -739,7 +739,7 @@ void StatusBarTest::warningBesideComputationsThenAlone()
     QVERIFY(gate().waitEntered());
     QTRY_VERIFY(shownText().startsWith(QStringLiteral("Computing results: ")));
     QVERIFY(warningShown());
-    QCOMPARE(warningText()->text(), QStringLiteral("1 recording could not be computed"));
+    QCOMPARE(warningText()->text(), QStringLiteral("1 session could not be computed"));
     QVERIFY(label()->isVisible() && bar()->isVisible());
 
     // The gate opens: the warning alone
@@ -747,7 +747,7 @@ void StatusBarTest::warningBesideComputationsThenAlone()
     QVERIFY(waitDemandIdle());
     QVERIFY(waitForIdle(*m_model));
     QVERIFY(activityEmpty());
-    QCOMPARE(warningShownText(), QStringLiteral("1 recording could not be computed"));
+    QCOMPARE(warningShownText(), QStringLiteral("1 session could not be computed"));
     QCOMPARE(warning()->toolTip(), SessionFailures::listText(m_demand->failures()));
 }
 
@@ -766,7 +766,7 @@ void StatusBarTest::warningCountsRecordingsAndListsThem()
     m_demand->flush();
     QCOMPARE(m_demand->failures().size(), 1);
     QCOMPARE(m_demand->failures().at(0).calculations.size(), 2);
-    QCOMPARE(warningShownText(), QStringLiteral("1 recording could not be computed"));
+    QCOMPARE(warningShownText(), QStringLiteral("1 session could not be computed"));
     QCOMPARE(warning()->toolTip(), SessionFailures::listText(m_demand->failures()));
     QCOMPARE(warning()->toolTip(), QStringLiteral("Jump 1\n"
                                                   "  Explicit A: negative input\n"
@@ -786,7 +786,7 @@ void StatusBarTest::warningCountsRecordingsAndListsThem()
     settle();
     QVERIFY(waitDemandIdle());
     QVERIFY(waitForIdle(*m_model));
-    QCOMPARE(warningShownText(), QStringLiteral("2 recordings could not be computed"));
+    QCOMPARE(warningShownText(), QStringLiteral("2 sessions could not be computed"));
     QCOMPARE(warning()->toolTip(), SessionFailures::listText(m_demand->failures()));
     QVERIFY(warning()->toolTip().startsWith(QStringLiteral("Jump 1\n")));
     QVERIFY(warning()->toolTip().endsWith(QStringLiteral("\nJump 2\n  Explicit A: negative input")));
@@ -807,7 +807,7 @@ void StatusBarTest::warningListsAtMostTenRecordings()
 
     m_demand->flush();
     QCOMPARE(m_demand->failures().size(), 12);
-    QCOMPARE(warningShownText(), QStringLiteral("12 recordings could not be computed"));
+    QCOMPARE(warningShownText(), QStringLiteral("12 sessions could not be computed"));
     const QString hover = warning()->toolTip();
     QCOMPARE(hover, SessionFailures::listText(m_demand->failures()));
     QVERIFY2(hover.endsWith(QStringLiteral("\nand 2 more")), qPrintable(hover));
@@ -852,7 +852,7 @@ void StatusBarTest::warningAbsentWhenNothingFailedAndNotDismissable()
     }
     QVERIFY(warningShown());
     QVERIFY(m_demand->failures() == failures);
-    QCOMPARE(warningShownText(), QStringLiteral("1 recording could not be computed"));
+    QCOMPARE(warningShownText(), QStringLiteral("1 session could not be computed"));
 
     // The last source over the calculation disabled: gone
     enableColumns({QStringLiteral("G_OUT")});
@@ -881,7 +881,7 @@ void StatusBarTest::warningAfterRestart()
     QVERIFY(waitForIdle(*m_model));
     QVERIFY(stored("s1", "expA"));
     QVERIFY(!stored("s2", "thrower"));
-    QCOMPARE(warningShownText(), QStringLiteral("2 recordings could not be computed"));
+    QCOMPARE(warningShownText(), QStringLiteral("2 sessions could not be computed"));
 
     // The next start, the plot still checked and every session hidden: the
     // first pass counts the stored rejection only
@@ -893,7 +893,7 @@ void StatusBarTest::warningAfterRestart()
         {
             const Quiet quiet(*m_queue);
             m_demand->flush();
-            QCOMPARE(warningShownText(), QStringLiteral("1 recording could not be computed"));
+            QCOMPARE(warningShownText(), QStringLiteral("1 session could not be computed"));
             QCOMPARE(warning()->toolTip(), QStringLiteral("Jump 1\n  Explicit A: negative input"));
             QCOMPARE(warning()->toolTip(), SessionFailures::listText(m_demand->failures()));
             QCOMPARE(loadedSpy.count(), 0);
@@ -903,7 +903,7 @@ void StatusBarTest::warningAfterRestart()
             m_model->startColumnWorker();
             QVERIFY(waitDemandIdle());
             QVERIFY(waitForIdle(*m_model));
-            QCOMPARE(warningShownText(), QStringLiteral("1 recording could not be computed"));
+            QCOMPARE(warningShownText(), QStringLiteral("1 session could not be computed"));
             QVERIFY(quiet.holds());
         }
 
@@ -911,7 +911,7 @@ void StatusBarTest::warningAfterRestart()
         PlotFixture::show(*m_model, {"s2"});
         QVERIFY(waitDemandIdle());
         QVERIFY(waitForIdle(*m_model));
-        QCOMPARE(warningShownText(), QStringLiteral("2 recordings could not be computed"));
+        QCOMPARE(warningShownText(), QStringLiteral("2 sessions could not be computed"));
         QCOMPARE(warning()->toolTip(), SessionFailures::listText(m_demand->failures()));
         QCOMPARE(loadsOf(loadedSpy, "s1"), 0);
     }
@@ -923,7 +923,7 @@ void StatusBarTest::warningAfterRestart()
     PlotFixture::show(*m_model, {"s2"}, false);
     QVERIFY(waitDemandIdle());
     QVERIFY(waitForIdle(*m_model));
-    QCOMPARE(warningShownText(), QStringLiteral("1 recording could not be computed"));
+    QCOMPARE(warningShownText(), QStringLiteral("1 session could not be computed"));
     bool edited = false;
     QVERIFY(restart([&edited](QJsonObject &root) {
         QJsonObject sessions = root[QStringLiteral("sessions")].toObject();
@@ -945,10 +945,10 @@ void StatusBarTest::warningAfterRestart()
         m_demand->flush();
         QVERIFY(!warningShown());
         m_model->startColumnWorker();
-        QTRY_COMPARE(warningShownText(), QStringLiteral("1 recording could not be computed"));
+        QTRY_COMPARE(warningShownText(), QStringLiteral("1 session could not be computed"));
         QVERIFY(waitDemandIdle());
         QVERIFY(waitForIdle(*m_model));
-        QCOMPARE(warningShownText(), QStringLiteral("1 recording could not be computed"));
+        QCOMPARE(warningShownText(), QStringLiteral("1 session could not be computed"));
         QCOMPARE(warning()->toolTip(), QStringLiteral("Jump 1\n  Explicit A: negative input"));
         QCOMPARE(loadsOf(loadedSpy, "s1"), 0);
         QVERIFY(quiet.holds());

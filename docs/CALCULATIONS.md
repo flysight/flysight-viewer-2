@@ -1850,8 +1850,8 @@ shows a temporary message, so the normal area is never hidden under one):
   never saving, the fill or the computations - and asks the scheduler to
   `cancel()` that task.
 - **The warning:** the style's standard warning icon
-  (`QStyle::SP_MessageBoxWarning`) and "1 recording could not be computed" or
-  "<n> recordings could not be computed", n being the number of elements of
+  (`QStyle::SP_MessageBoxWarning`) and "1 session could not be computed" or
+  "<n> sessions could not be computed", n being the number of elements of
   `failures()`, so recordings are counted, not pairs. Its tooltip is
   `SessionFailures::listText(failures())`. It is shown exactly while that
   list is not empty: beside the computations while they continue, alone once
