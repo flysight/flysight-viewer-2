@@ -59,6 +59,7 @@ class CalcEngineTest : public QObject {
 
 private slots:
     void storedWins();
+    void constantCalculationIsADefault();
     void threeOutputsRunOnce();
     void declaredInputChangeRunsOnceMore();
     void unrelatedChangeRunsNothing();
@@ -117,6 +118,65 @@ void CalcEngineTest::storedWins()
     QVERIFY(w.engine.dependenciesOf(GraphNode::resolution(measKey("S", "d")))
                 .contains(GraphNode::sourceMeasurement("S", "d")));
     QCOMPARE(w.engine.totalRunCount(), 0);
+}
+
+// A calculation with no inputs is a constant: the data-derived default of an
+// attribute the user may set. It runs once and is cached; a stored value wins
+// over it and invalidates what read the attribute; removing the stored value
+// falls back to the constant; a dependent calculation follows every change.
+void CalcEngineTest::constantCalculationIsADefault()
+{
+    World w(false);
+
+    CalculationDescriptor constant;
+    constant.id = QStringLiteral("constant");
+    constant.outputs = {attr("K")};
+    constant.compute = [](const EvaluationContext &) -> CalculationResult {
+        return CalculationResult().setAttribute("K", QStringLiteral("+y,+z"));
+    };
+    QVERIFY(constant.inputs.isEmpty());
+    QVERIFY(w.registry.registerCalculation(constant));
+
+    CalculationDescriptor dependent;
+    dependent.id = QStringLiteral("dependent");
+    dependent.inputs = {CalcInput::attribute("K")};
+    dependent.outputs = {attr("L")};
+    dependent.compute = [](const EvaluationContext &ctx) -> CalculationResult {
+        return CalculationResult().setAttribute("L", ctx.attribute("K").toString() + QStringLiteral("!"));
+    };
+    QVERIFY(w.registry.registerCalculation(dependent));
+
+    // The constant, once, then from the cache
+    QCOMPARE(w.engine.attribute("K"), QVariant(QStringLiteral("+y,+z")));
+    QCOMPARE(w.engine.attribute("L"), QVariant(QStringLiteral("+y,+z!")));
+    QVERIFY(w.engine.isAvailable(attr("K")));
+    const int reads = w.state.readCount();
+    for (int i = 0; i < 3; ++i) {
+        QCOMPARE(w.engine.attribute("K"), QVariant(QStringLiteral("+y,+z")));
+        QCOMPARE(w.engine.attribute("L"), QVariant(QStringLiteral("+y,+z!")));
+    }
+    QCOMPARE(w.engine.runCount("constant"), 1);
+    QCOMPARE(w.engine.runCount("dependent"), 1);
+    QCOMPARE(w.state.readCount(), reads);
+    QCOMPARE(w.engine.resultStatus("constant"), std::optional<ResultStatus>(ResultStatus::Ok));
+
+    // A stored value wins, and the dependent follows it
+    const Names invalidated = w.state.setAttribute(w.engine, "K", QStringLiteral("+x,+z"));
+    QVERIFY(invalidated.contains(attr("K")));
+    QVERIFY(invalidated.contains(attr("L")));
+    QCOMPARE(w.engine.attribute("K"), QVariant(QStringLiteral("+x,+z")));
+    QCOMPARE(w.engine.attribute("L"), QVariant(QStringLiteral("+x,+z!")));
+    QCOMPARE(w.engine.runCount("constant"), 1);      // not consulted for a stored value
+    QCOMPARE(w.engine.runCount("dependent"), 2);
+
+    // Removing the stored value falls back to the constant
+    const Names removed = w.state.removeAttribute(w.engine, "K");
+    QVERIFY(removed.contains(attr("K")));
+    QVERIFY(removed.contains(attr("L")));
+    QCOMPARE(w.engine.attribute("K"), QVariant(QStringLiteral("+y,+z")));
+    QCOMPARE(w.engine.attribute("L"), QVariant(QStringLiteral("+y,+z!")));
+    QCOMPARE(w.engine.runCount("dependent"), 3);
+    QVERIFY(w.engine.runCount("constant") <= 2);      // at most once more, after its result was dropped
 }
 
 // Acceptance 9: a multi-output calculation runs once whichever output is read
