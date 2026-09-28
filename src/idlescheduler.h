@@ -23,7 +23,11 @@ struct TaskDef {
     int        priority;
     StepFn     step;
     BoolFn     hasWork;
+    /// The task's progress; null means the task reports none, so no
+    /// progressChanged is emitted for it (activeTaskChanged still is).
     ProgressFn progress;
+    /// Called when the task completes (see the class comment); null means the
+    /// task has nothing to do on completion.
     CompleteFn onComplete;
     bool       cancellable = false;
     /// Whether the task can take a step right now; null means always. A task
@@ -43,22 +47,24 @@ using TaskId = int;
 ///
 /// The ACTIVE task is the highest-priority task whose hasWork() is true: a
 /// change of it emits activeTaskChanged and its progress, and its progress is
-/// what every tick reports. The STEP of a tick goes to the highest-priority
-/// task that has work and can step (TaskDef::canStep), which may be a lower
-/// one than the active task. A task may have work it cannot step right now
-/// (it waits on something outside the scheduler): it is reported as active
-/// with its progress, is not stepped, and the scheduler rests until woken
-/// rather than spinning. schedulerIdle is emitted only when no task has work.
+/// what every tick reports (nothing, for a task registered without a progress
+/// function). The STEP of a tick goes to the highest-priority task that has
+/// work and can step (TaskDef::canStep), which may be a lower one than the
+/// active task. A task may have work it cannot step right now (it waits on
+/// something outside the scheduler): it is reported as active with its
+/// progress, is not stepped, and the scheduler rests until woken rather than
+/// spinning. schedulerIdle is emitted only when no task has work.
 ///
 /// COMPLETION. A task completes (onComplete(false)) when its hasWork() is
 /// false after its step, or as cancelled (onComplete(true)) through cancel().
 /// A task registered with canStep may also lose its work outside the
 /// scheduler, without a step: when the task last reported active is such a
 /// task and has no work any more, the next tick reports its progress one last
-/// time and calls its onComplete(false), before it reports the next active
-/// task or goes idle. Every other task is completed only through its step or
-/// through cancel(). Whoever takes a resting waiting task's work away wakes
-/// the scheduler, as for a change of its canStep.
+/// time (if it has a progress function) and calls its onComplete(false) (if it
+/// has one), before it reports the next active task or goes idle. Every other
+/// task is completed only through its step or through cancel(). Whoever takes
+/// a resting waiting task's work away wakes the scheduler, as for a change of
+/// its canStep.
 class IdleScheduler : public QObject
 {
     Q_OBJECT
