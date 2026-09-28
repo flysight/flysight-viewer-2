@@ -35,9 +35,13 @@
 #   - a fact is computed by the component that owns it and announced by it:
 #     the session model alone computes a column's requested calculations
 #     (with the index, below it), the demand layer keeps one memory and one
-#     walk in parts of its own, one working-indicator clock turns every
-#     view, and the executor's unused signals and queries stay gone
-#     (items 601-662).
+#     walk in parts of its own, and the executor's unused signals and queries
+#     stay gone (items 601-662);
+#   - background work is shown in the status bar and a failure on its
+#     recording's logbook row: the per-source indicators, their shared
+#     painting and the working-indicator clock stay gone, the plot list
+#     presents nothing of the demand layer, and one drawing of the warning
+#     glyph remains, the style's.
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -475,8 +479,7 @@ expect_only("one authority: explicit-backed" "EvaluationPolicy::Explicit"
 audit_group(widget-free-core)
 expect_none("the logic components see no widget"
   "QtWidgets|#include <Q(Widget|TreeView|AbstractItemView|StyledItemDelegate|Application|ToolTip|Style[A-Za-z]*|HeaderView)>"
-  "src/jobqueue.*" "src/jobmodel.*" ${DEMAND_LAYER} "src/plotmodel.*"
-  src/ui/docks/plotselection/PlotRowLayout.h "src/ui/docks/DemandIndicator.*")
+  "src/jobqueue.*" "src/jobmodel.*" ${DEMAND_LAYER} "src/plotmodel.*")
 
 # =============================================================================
 # Sensor fusion improvements (acceptance items 201-247): the segmented
@@ -746,20 +749,21 @@ audit_group(demand)
 # Allow: a new view that presents the demand layer is added to the allowed-file
 # regex; nothing below the demand layer (the executor, the session model, the
 # scheduler, the logbook) ever is. Elsewhere a comment says "the demand layer".
-# The shared indicator's view half (DemandIndicatorView.*) is one of its views;
-# DemandIndicator.* is not.
+# Its views are the logbook's view, dock feature and cell delegate, the status
+# bar and the plot widget (which asks isMerelyUncomputed()); the plot list is
+# not one of them.
 expect_only("only the application and its views know the demand layer" "CalculationDemand"
-  "^src/${DEMAND_FILES}\\.(cpp|h)$|^src/mainwindow\\.(cpp|h)$|^src/ui/docks/AppContext\\.h$|^src/ui/docks/DemandIndicatorView\\.(cpp|h)$|^src/ui/docks/plotselection/(PlotRowDelegate\\.(cpp|h)|PlotSelectionDockFeature\\.cpp)$|^src/ui/docks/logbook/(LogbookView|LogbookHeaderView|LogbookCellDelegate)\\.(cpp|h)$|^src/ui/docks/logbook/LogbookDockFeature\\.cpp$|^src/ui/docks/plot/PlotWidget\\.cpp$|^src/ui/statusbar/StatusBarFeature\\.(cpp|h)$"
+  "^src/${DEMAND_FILES}\\.(cpp|h)$|^src/mainwindow\\.(cpp|h)$|^src/ui/docks/AppContext\\.h$|^src/ui/docks/logbook/(LogbookView|LogbookCellDelegate)\\.(cpp|h)$|^src/ui/docks/logbook/LogbookDockFeature\\.cpp$|^src/ui/docks/plot/PlotWidget\\.cpp$|^src/ui/statusbar/StatusBarFeature\\.(cpp|h)$"
   src)
-# Allow: none expected. The layers below the demand layer, the shared glyphs
-# and the row layout never include it (so they can use none of its types).
+# Allow: none expected. The layers below the demand layer never include it
+# (so they can use none of its types).
 expect_none("nothing below the demand layer includes it" "#include [\"<](\\.\\./)*${DEMAND_FILES}\\.h"
   "src/jobqueue.*" "src/jobmodel.*" "src/sessionmodel.*" "src/idlescheduler.*" "src/logbookmanager.*"
   "src/logbookcolumn.*" "src/plotmodel.*" "src/profilestatebridge.*" "src/calculationresultstore.*"
-  src/engine "src/ui/docks/DemandIndicator.*" src/ui/docks/plotselection/PlotRowLayout.h)
-# Allow: none expected. The views read plotState, columnState, isCellPending
-# and working*Ids; a pass, the load step and the settle seams belong to the
-# demand layer and to tests.
+  src/engine)
+# Allow: none expected. The views read progress, failures and the pending
+# cells; a pass, the load step and the settle seams belong to the demand
+# layer and to tests.
 expect_none("the views only read the demand layer" "[.>](flush|runLoadStep|endInputSettleWaits|setInputSettleDelay)\\("
   src/ui "src/mainwindow.*")
 # Allow: none expected. Nothing the demand views paint is a control: the base
@@ -768,9 +772,7 @@ expect_none("the views only read the demand layer" "[.>](flush|runLoadStep|endIn
 # a comment instead of naming a handler.
 expect_none("the demand views handle no event of their own"
   "editorEvent|mouse(Press|Release|DoubleClick|Move)Event|keyPressEvent"
-  "src/ui/docks/plotselection/PlotRowDelegate.*" "src/ui/docks/logbook/LogbookHeaderView.*"
-  "src/ui/docks/logbook/LogbookCellDelegate.*" "src/ui/docks/DemandIndicator.*"
-  "src/ui/docks/DemandIndicatorView.*" "src/ui/statusbar/StatusBarFeature.*")
+  "src/ui/docks/logbook/LogbookCellDelegate.*" "src/ui/statusbar/StatusBarFeature.*")
 # Pending is a presentation of demand: the demand layer answers it and the cell
 # delegate paints it; the model, its cached values and index.json never see it.
 # Allow: none expected.
@@ -898,34 +900,40 @@ expect_count("the one walk reads the rows under one guard" "RowStabilityGuard +[
 expect_none("the demand layer's replaced machinery stays gone"
   "isFillEnding|m_fillEnding|[Ss]ettlement|m_settled|CellKey|ColumnWalk|walkColumns|ColumnInfo|plotCandidates|inspectUnderGuard|inspectedPlots|syncColumns|m_columnReports|buildState|finishState|rebuildRelevantNames|m_relevantNames|m_columnsDirty|rowDisplayName|onSessionDataChanged|JobFailed|CalculationDemand::(buildToolTip|kToolTipListLimit|kMaxHeldSessions)|\\.(settling|waiting)${WB_END}"
   src tests ":!tests/README.md")
-# One indicator: a plot row shows the arc or the badge and nothing else;
-# the hover carries the numbers. Allow: none expected.
-expect_none("the views keep no label, no cluster and no clock logic of their own"
-  "progressLabel|clusterRect|syncAnimation" src tests ":!tests/README.md")
-expect_none("the plot row shows one glyph" "warningCount|warningIcon|indicatorIcon|drawText\\("
-  src/ui/docks/plotselection)
-# One working-indicator clock per application: MainWindow creates it beside
-# the demand layer and hands it to the views through AppContext, and
-# followDemand() (DemandIndicatorView.h) makes it follow the demand layer.
-# The followDemand pattern needs an argument, so a comment that names
-# "followDemand()" does not match. Allow: none expected (tests make their
-# own clock; tests are not searched).
-expect_count("one working-indicator clock" "new WorkingAnimation${WB_END}|make_unique<WorkingAnimation>" 1 src)
-expect_only("one working-indicator clock" "new WorkingAnimation${WB_END}|make_unique<WorkingAnimation>"
-  "^src/mainwindow\\.cpp$" src)
-expect_only("the clock follows the demand layer in one place" "followDemand\\([^)]"
-  "^src/ui/docks/DemandIndicatorView\\.(cpp|h)$|^src/mainwindow\\.cpp$" src)
-# The glyph's colour, size and spacing, the choice of glyph, the tooltip
-# display and the repaint when the demand layer goes are written once
-# (DemandIndicator.*, DemandIndicatorView.*). The cell delegate's pending
-# colour and tooltip are its own. Allow: none expected.
-expect_none("the plot rows and the headers share the glyph plumbing"
-  "QPalette::ColorGroup|QToolTip::|qMax\\(2|drawWorkingGlyph|drawWarningGlyph|[.>]setActive\\("
-  "src/ui/docks/plotselection/PlotRowDelegate.*" "src/ui/docks/logbook/LogbookHeaderView.*")
-# The status bar is the second view of the demand layer's end: it shows no
-# computation and no warning once the demand layer is gone.
-expect_only("the views learn of the demand layer's end in one place" "&QObject::destroyed"
-  "^src/ui/docks/DemandIndicatorView\\.cpp$|^src/ui/statusbar/StatusBarFeature\\.cpp$" src/ui)
+# No view keeps a progress label, a cluster of glyphs or an animation clock:
+# progress is the status bar's bar, and nothing turns. Allow: none expected
+# (tests/README.md is excluded: its tables name the removed tests).
+expect_none("no view keeps a label, a cluster or a clock"
+  "progressLabel|clusterRect|syncAnimation|WorkingAnimation|followDemand|workingClock|frameAdvanced"
+  src tests ":!tests/README.md")
+# Each view that holds the demand layer weakly learns of its end itself: the
+# logbook's cells turn plain, and the status bar shows no computation and no
+# warning. Allow: a new view that holds the demand layer is added.
+expect_only("each view that holds the demand layer learns of its end itself" "&QObject::destroyed"
+  "^src/ui/docks/logbook/LogbookCellDelegate\\.cpp$|^src/ui/statusbar/StatusBarFeature\\.cpp$" src/ui)
+# The views read progress, failures and the pending cells, never the
+# per-source state, its queries, its lists of working ids or its signals.
+# Allow: none expected.
+expect_none("the views read no per-source state"
+  "[.>](plotState|columnState|workingPlotIds|workingColumnIds)\\(|::(plotStateChanged|columnStateChanged|statesChanged)"
+  src/ui "src/mainwindow.*")
+# The plot rows' and column headers' glyphs, their shared painting, geometry
+# and hover helper, and the header view that drew them are gone with the
+# per-source presentation. Allow: none expected (tests/README.md is excluded:
+# its tables name the removed tests).
+expect_none("the per-source indicators and their plumbing stay gone"
+  "DemandIndicator|drawWarningGlyph|drawWorkingGlyph|drawDemandGlyph|[Gg]lyphMetrics|glyphColor|showIndicatorToolTip|repaintWhenDemandDestroyed|PlotRowDelegate|PlotRowLayout|layoutPlotRow|LogbookHeaderView|indicatorRect|toolTipForSection"
+  src tests ":!tests/README.md")
+# One drawing of the warning glyph: the style's standard icon, in the status
+# bar and on the logbook row. Allow: none expected; a comment says "the
+# style's warning icon".
+expect_only("one drawing of the warning glyph: the style's" "SP_MessageBoxWarning"
+  "^src/ui/statusbar/StatusBarFeature\\.cpp$|^src/ui/docks/logbook/LogbookCellDelegate\\.cpp$" src)
+# The plot list presents nothing of the demand layer: a plot row over a
+# requested calculation looks as any other row, with the tree's own
+# delegate. Allow: none expected.
+expect_none("the plot list presents nothing of the demand layer"
+  "[Cc]alculation[Dd]emand|demandstate|DemandState|setItemDelegate" src/ui/docks/plotselection)
 # One place shows background work: the status bar names the scheduler's
 # tasks and the computations, and it alone follows the scheduler's reports;
 # the main window makes it. The logbook presents no task progress, and the

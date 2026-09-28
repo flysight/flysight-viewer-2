@@ -13,10 +13,9 @@
 #     (FLYSIGHT_BUILD_PYTHON_TESTS).
 #   - tst_map_models: the two map models and their two helpers, which need Qt
 #     Core and Gui only, so the test needs no Widgets, WebEngine or Quick.
-#   - tst_plot_row_delegate, tst_logbook_indicators and tst_status_bar: the
-#     plot list's row delegate, the logbook view with its header view and cell
-#     delegate, and the main window's status bar, the only tests that link Qt
-#     Widgets (FLYSIGHT_BUILD_WIDGET_TESTS).
+#   - tst_logbook_indicators and tst_status_bar: the logbook view with its
+#     cell delegate, and the main window's status bar, the only tests that
+#     link Qt Widgets (FLYSIGHT_BUILD_WIDGET_TESTS).
 # The FLYSIGHT_BUILD_FUSION_TESTS block near the end of this file is the only
 # place a test may link GTSAM.
 #
@@ -155,40 +154,20 @@ flysight_add_test(tst_jobmodel SOURCES tst_jobmodel.cpp)
 # Demand layer (plot demand, priority, the input-settle wait, failure memory, per-plot state; no widgets)
 flysight_add_test(tst_calculation_demand SOURCES tst_calculation_demand.cpp)
 
-# Plot-list rows: pure geometry (no widgets) ...
-flysight_add_test(tst_plot_row_layout SOURCES tst_plot_row_layout.cpp)
-
-# ... and the delegate in an offscreen QTreeView. tst_plot_row_delegate,
-# tst_logbook_indicators and tst_status_bar (below) are the only tests that
-# link Qt Widgets; they compile the plot list's row delegate, the logbook view
-# with its header view and cell delegate, and the status bar's component from
-# the application sources (pattern: tst_python_bridge). The first two compile
-# the shared indicator (DemandIndicator.*, DemandIndicatorView.*).
-# QT_QPA_PLATFORM=offscreen is already set by flysight_add_test().
+# The views of the demand layer in offscreen widgets. tst_logbook_indicators
+# and tst_status_bar are the only tests that link Qt Widgets; they compile the
+# logbook view with its cell delegate and the status bar's component from the
+# application sources (pattern: tst_python_bridge), and nothing else: no view
+# shares an indicator with another. QT_QPA_PLATFORM=offscreen is already set
+# by flysight_add_test().
 option(FLYSIGHT_BUILD_WIDGET_TESTS "Build and run the tests that need Qt Widgets" ON)
 if(FLYSIGHT_BUILD_WIDGET_TESTS)
-  flysight_add_test(tst_plot_row_delegate
-    SOURCES tst_plot_row_delegate.cpp
-            "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowDelegate.cpp"
-            "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowDelegate.h"
-            "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicator.cpp"
-            "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicator.h"
-            "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicatorView.cpp"
-            "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicatorView.h"
-    LIBS Qt${QT_VERSION_MAJOR}::Widgets)
-  set_tests_properties(tst_plot_row_delegate PROPERTIES LABELS "core;widgets")
-  # ... and tst_logbook_indicators: the logbook's column headers and pending
-  # cells in a real LogbookView, beside a plot list with the row delegate, on
-  # one working-indicator clock, compiled from the application sources.
+  # tst_logbook_indicators: the logbook's row warning and pending cells in a
+  # real LogbookView beside a reference tree.
   flysight_add_test(tst_logbook_indicators
     SOURCES tst_logbook_indicators.cpp
             "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookView.cpp"          "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookView.h"
-            "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookHeaderView.cpp"    "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookHeaderView.h"
             "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookCellDelegate.cpp"  "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookCellDelegate.h"
-            "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowDelegate.cpp" "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowDelegate.h"
-            "${FLYSIGHT_SRC_DIR}/ui/docks/plotselection/PlotRowLayout.h"
-            "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicator.cpp"              "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicator.h"
-            "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicatorView.cpp"          "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicatorView.h"
     LIBS Qt${QT_VERSION_MAJOR}::Widgets)
   set_tests_properties(tst_logbook_indicators PROPERTIES LABELS "core;widgets")
   # ... and tst_status_bar: the main window's status bar (the scheduler's

@@ -9,21 +9,19 @@
 namespace FlySight {
 
 class CalculationDemand;
-class WorkingAnimation;
 
-/// The logbook table: the session model in a tree with a header that shows
-/// each column's working indicator or warning badge and its hover detail
-/// (LogbookHeaderView), and cells that read pending while their value is
-/// being computed (LogbookCellDelegate). The demand layer and the working-indicator
-/// clock may be null: then header and cells are plain (without a clock, the
-/// header's arc does not turn). Background work is shown in the main window's
-/// status bar, not here.
+/// The logbook table: the session model in a tree with the tree's own
+/// header, whose cells present the demand layer (LogbookCellDelegate): a
+/// row whose recording could not be computed carries one warning glyph in
+/// its first visual cell, with the failures in its hover, and a cell whose
+/// value is being computed reads pending. The demand layer may be null: then
+/// the cells are plain. Background work is shown in the main window's status
+/// bar, not here.
 class LogbookView : public QWidget
 {
     Q_OBJECT
 public:
-    LogbookView(SessionModel *model, CalculationDemand *demand, WorkingAnimation *clock,
-                QWidget *parent = nullptr);
+    LogbookView(SessionModel *model, CalculationDemand *demand, QWidget *parent = nullptr);
     QList<QModelIndex> selectedRows() const;
 
 signals:
@@ -47,7 +45,7 @@ private:
     QTreeView *treeView;
     SessionModel *model;
 
-    void setupView(CalculationDemand *demand, WorkingAnimation *clock);
+    void setupView(CalculationDemand *demand);
 };
 
 } // namespace FlySight

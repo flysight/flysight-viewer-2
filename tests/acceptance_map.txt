@@ -352,9 +352,6 @@
 116 tst_calculation_demand startupRestoreWithHiddenSessionsStartsNothing
 116 tst_calculation_demand profileStyleApplyCreatesDemand
 116 tst_calculation_demand programmaticCheckCreatesDemand
-116 tst_plot_row_delegate programmaticCheckIsTheSameAsAClick
-116 tst_plot_row_delegate startupRestoreWithHiddenSessionsStartsNothingWithViewAttached
-116 tst_plot_row_delegate checkBoxClickChecksThroughTheModel
 116 tst_calculation_demand merelyUncomputedIsNotWorthAWarning
 116 audit gestures
 116 manual M1
@@ -1337,8 +1334,6 @@
 514 tst_calculation_demand startupRestoreWithHiddenSessionsStartsNothing
 514 tst_calculation_demand profileStyleColumnsCreateDemand
 514 tst_calculation_demand startupWithEnabledColumnLoadsAfterColumnWorker
-514 tst_plot_row_delegate programmaticCheckIsTheSameAsAClick
-514 tst_plot_row_delegate startupRestoreWithHiddenSessionsStartsNothingWithViewAttached
 514 manual M1
 514 manual M2
 
@@ -1362,8 +1357,7 @@
 517 tst_calculation_demand plotCheckedDuringAJobJoinsIt
 517 tst_calculation_demand enablingColumnFillsEveryUnloadedSession
 517 tst_calculation_demand inputBurstRunsOneJob
-517 tst_plot_row_delegate checkBoxClickChecksThroughTheModel
-517 tst_plot_row_delegate spaceKeyChecksThroughTheModel
+517 tst_calculation_demand programmaticCheckCreatesDemand
 
 # 518 - (6) a pair that leaves demand (plot unchecked, session hidden, column disabled, result appeared by other means) is dropped before it starts; there is no queue of accepted requests to prune
 518 tst_calculation_demand hidingASessionDropsItsWaitingPair
@@ -1374,7 +1368,6 @@
 518 tst_calculation_demand onlyRequestableCalculationsAreOffered
 518 tst_calculation_demand resultAppearingWhileWaitingDropsThePair
 518 tst_jobqueue withdrawEndsChosenNext
-518 tst_plot_row_delegate uncheckByClickDropsWaitingWork
 518 audit demand
 518 manual M6
 518 manual M26
@@ -1437,7 +1430,7 @@
 526 tst_calculation_demand columnJobLevelFailureIsNotReloadedUntilRestart
 526 tst_calculation_demand unloadableSessionIsSettledAsFailed
 526 tst_calculation_demand visibleFailedLoadIsSettledAsFailed
-526 tst_logbook_indicators failedLoadSessionShowsBadgeNotPending
+526 tst_logbook_indicators failedLoadSessionShowsRowWarningNotPending
 526 tst_jobqueue workerStartFailureFails
 526 tst_jobqueue resourceExhaustionFails
 526 manual M28
@@ -1447,8 +1440,7 @@
 526 manual M32
 
 # 527 - (8) there is no retry control
-527 tst_plot_row_delegate clickOnClusterIsAClickOnTheRow
-527 tst_logbook_indicators clickOnIndicatorIsAClickOnTheSection
+527 tst_logbook_indicators clickOnRowWarningIsAClickOnTheCell
 527 audit gestures
 527 audit demand
 
@@ -1502,8 +1494,7 @@
 533 audit demand
 
 # 534 - (10) no refresh and no cancel for requested calculations anywhere; unchecking a plot, hiding sessions or disabling a column is how the user changes what is wanted
-534 tst_plot_row_delegate clickOnClusterIsAClickOnTheRow
-534 tst_logbook_indicators clickOnIndicatorIsAClickOnTheSection
+534 tst_logbook_indicators clickOnRowWarningIsAClickOnTheCell
 534 tst_status_bar cancelOnlyForACancellableShownTask
 534 audit gestures
 534 audit demand
@@ -1511,20 +1502,12 @@
 534 manual M6
 
 # 535 - (10, as amended) a plot row and a logbook column header show one small animated working indicator at the right of their name while any of their demand is waiting or running, with no label or count beside it; the indicators of the plot list and the logbook turn on one clock
-535 tst_plot_row_delegate workingRowPaintsIndicator
-535 tst_plot_row_delegate workingIndicatorAnimatesOnlyWhileWorking
-535 tst_plot_row_delegate workingAnimationClock
-535 tst_logbook_indicators workingColumnShowsIndicatorRightOfText
-535 tst_logbook_indicators indicatorAnimatesOnlyWhileWorking
-535 tst_logbook_indicators indicatorFollowsColumnWhenMovedHiddenOrReordered
-535 tst_logbook_indicators indicatorClearsSortArrowAndNarrowSections
+535 tst_logbook_indicators headerIsPlainAndNothingAnimates
+535 audit demand
 535 tst_calculation_demand workingIdsFollowStates
-535 tst_plot_row_delegate plotStateChangeRepaintsRow
 535 tst_logbook_indicators plainHeaderAndCellsAreIdenticalToBase
 535 manual M3
 535 manual M23
-535 tst_logbook_indicators plotRowsAndHeaderTurnOnOneClock
-535 tst_plot_row_layout indicatorOnly
 535 manual M29
 535 manual M30
 
@@ -1534,21 +1517,19 @@
 536 tst_calculation_demand sharedJobSameProgress
 536 tst_calculation_demand progressUpdatesWithoutInspection
 536 tst_calculation_demand columnStateCountsAndPendingCells
-536 tst_plot_row_delegate hoverDetailFollowsDemandState
-536 tst_plot_row_delegate toolTipComesFromPlotState
-536 tst_logbook_indicators headerToolTipFollowsDemandState
+536 tst_logbook_indicators rowWarningHoverIsTheSessionsFailures
+536 tst_status_bar taskShownOverComputationsAndHoverListsBoth
 536 tst_calculation_demand visibleFailedLoadIsSettledAsFailed
 536 manual M23
 536 tst_logbook_indicators failedWriteIsListedInTheHover
-536 tst_plot_row_delegate sharedGlyphPlumbing
 536 manual M29
 
 # 537 - (10, as amended) the warning badge, with no count, replaces the indicator once work is finished and some sessions could not be computed, a result that could not be stored included; its hover lists them with reasons
 537 tst_calculation_demand failuresListedWhileWorking
-537 tst_plot_row_delegate badgeReplacesIndicatorOnceFinished
-537 tst_logbook_indicators badgeReplacesIndicatorWhenFinished
+537 tst_logbook_indicators rowWarningAtLeftOfFirstCell
+537 tst_status_bar warningBesideComputationsThenAlone
 537 tst_fusion_rows rejectedTrackShowsBadge
-537 tst_logbook_indicators failedLoadSessionShowsBadgeNotPending
+537 tst_logbook_indicators failedLoadSessionShowsRowWarningNotPending
 537 manual M7
 537 tst_logbook_indicators failedWriteIsListedInTheHover
 537 tst_calculation_demand failedRecordWriteIsShownOnThePlotRow
@@ -1559,7 +1540,7 @@
 538 tst_logbook_indicators pendingCellBecomesValueWhenRecordIsWritten
 538 tst_logbook_indicators sortingTreatsPendingAsUnavailable
 538 tst_logbook_indicators unreadableRecordPendingIsNotDemandPending
-538 tst_logbook_indicators columnStateChangeRepaintsOnlyThatColumn
+538 tst_logbook_indicators pendingCellsChangeRepaintsOnlyThatColumn
 538 tst_calculation_demand columnStateCountsAndPendingCells
 538 audit demand
 538 manual M25
@@ -1594,7 +1575,6 @@
 # 543 - (12) the demand layer is the only caller of the executor; nothing calls back into it: it observes the models and the executor's signals
 543 tst_calculation_demand survivesExecutorShutdown
 543 tst_calculation_demand nullCollaborators
-543 tst_plot_row_delegate survivesDemandDestroyedFirst
 543 tst_logbook_indicators survivesDemandDestroyedFirst
 543 audit gestures
 543 audit demand
@@ -1695,22 +1675,15 @@
 556 tst_calculation_demand profileStyleColumnsCreateDemand
 556 tst_calculation_demand profileStyleApplyCreatesDemand
 556 tst_calculation_demand startupRestoreWithHiddenSessionsStartsNothing
-556 tst_plot_row_delegate startupRestoreWithHiddenSessionsStartsNothingWithViewAttached
 556 manual M2
 
 # 557 - (13, as amended) test: the working indicator and hover detail reflect waiting, running, done and failed counts on plot rows and column headers, the plot row showing one glyph and no label or count; no control to refresh or cancel a calculation exists
 557 tst_calculation_demand columnStateCountsAndPendingCells
-557 tst_plot_row_delegate workingIndicatorAnimatesOnlyWhileWorking
-557 tst_plot_row_delegate badgeReplacesIndicatorOnceFinished
-557 tst_plot_row_delegate hoverDetailFollowsDemandState
-557 tst_plot_row_delegate clickOnClusterIsAClickOnTheRow
-557 tst_logbook_indicators workingColumnShowsIndicatorRightOfText
-557 tst_logbook_indicators badgeReplacesIndicatorWhenFinished
-557 tst_logbook_indicators headerToolTipFollowsDemandState
-557 tst_logbook_indicators clickOnIndicatorIsAClickOnTheSection
-557 tst_logbook_indicators failedLoadSessionShowsBadgeNotPending
-557 tst_plot_row_delegate workingRowPaintsIndicator
-557 tst_plot_row_delegate sharedGlyphPlumbing
+557 tst_logbook_indicators headerIsPlainAndNothingAnimates
+557 tst_logbook_indicators rowWarningAtLeftOfFirstCell
+557 tst_logbook_indicators rowWarningHoverIsTheSessionsFailures
+557 tst_logbook_indicators clickOnRowWarningIsAClickOnTheCell
+557 tst_logbook_indicators failedLoadSessionShowsRowWarningNotPending
 557 tst_logbook_indicators failedWriteIsListedInTheHover
 
 # 558 - (13) test: a pending column cell is distinguishable from an unavailable one, is not written to the logbook index, and becomes the value when the record is written
@@ -1744,7 +1717,6 @@
 562 tst_fusion_rows realRowScript
 562 tst_fusion_store dependencyEditDropsRecord
 562 tst_fusion_store codeStampChangeDropsRecordOnLoad
-562 tst_plot_row_layout indicatorOnly
 562 audit gestures
 
 # 563 - (14) docs/ describe the executor, the demand layer, logbook columns over requested results, what the user sees (no refresh, the working indicator, pending cells, failures) and where a column over a requested calculation stays unavailable or pending
@@ -1954,7 +1926,7 @@
 633 tst_calculation_demand failedRecordWriteIsShownAndNotRetried
 633 tst_calculation_demand columnVerdictDoesNotSuppressAnotherColumn
 633 tst_calculation_demand passOverManyStubsReadsEachRecordSetOnce
-633 tst_logbook_indicators failedLoadSessionShowsBadgeNotPending
+633 tst_logbook_indicators failedLoadSessionShowsRowWarningNotPending
 
 # 634 - (10.1, as settled) candidates are filed in the walk by tier: the focused session's plot pairs, the other visible sessions' plot pairs, then the column pairs of visible loaded sessions, then of hidden loaded sessions, each in row order; within a session source order, then blocker order; a pair once, in its first tier; never a pair with a remembered failure or refusal, the running job not asked to stop, or a pair of a settling session; a column track running or failed on one blocker files its other blockers, as a plot track does
 634 tst_calculation_demand focusedSessionFirstThenRowOrder
@@ -2021,30 +1993,18 @@
 643 tst_calculation_demand supersededJobIsRunAgainAfterInputsSettle
 
 # 644 - (12) a plot row and a logbook column header show the same one glyph: the turning arc while any of the source's demand is waiting or running, the warning badge once the work is finished and some sessions could not be computed, and nothing else; the plot row has no "k of n" label and no count, and its layout keeps room for one glyph
-644 tst_plot_row_layout indicatorOnly
-644 tst_plot_row_layout nothingShown
-644 tst_plot_row_layout rightToLeftIsMirrorImage
-644 tst_plot_row_delegate workingRowPaintsIndicator
-644 tst_plot_row_delegate badgeReplacesIndicatorOnceFinished
-644 tst_plot_row_delegate longNameIsElidedNotTheCluster
-644 tst_logbook_indicators workingColumnShowsIndicatorRightOfText
-644 tst_logbook_indicators badgeReplacesIndicatorWhenFinished
+644 tst_logbook_indicators headerIsPlainAndNothingAnimates
+644 tst_logbook_indicators rowWarningAtLeftOfFirstCell
 644 audit demand
 644 manual M29
 
 # 645 - (12) the hover carries both numbers, on a plot row as on a column header
-645 tst_plot_row_delegate hoverDetailFollowsDemandState
-645 tst_plot_row_delegate toolTipComesFromPlotState
-645 tst_logbook_indicators headerToolTipFollowsDemandState
+645 tst_status_bar taskShownOverComputationsAndHoverListsBoth
 645 tst_calculation_demand tooltipText
 645 manual M29
 
 # 646 - (12) one working-indicator clock per application, created beside the demand layer and handed to the views as the demand layer is: the arcs of the plot list and the logbook's headers turn in step, the clock runs only while any plot or column is working, and each view repaints its own working rows or sections on its frames
-646 tst_logbook_indicators plotRowsAndHeaderTurnOnOneClock
-646 tst_logbook_indicators indicatorAnimatesOnlyWhileWorking
-646 tst_plot_row_delegate workingIndicatorAnimatesOnlyWhileWorking
-646 tst_plot_row_delegate workingAnimationClock
-646 tst_plot_row_delegate survivesDemandDestroyedFirst
+646 tst_logbook_indicators headerIsPlainAndNothingAnimates
 646 audit demand
 646 manual M30
 
@@ -2064,16 +2024,11 @@
 649 tst_logbook_indicators pendingCellsAreDistinctFromUnavailable
 649 tst_logbook_indicators pendingCellBecomesValueWhenRecordIsWritten
 649 tst_logbook_indicators plainHeaderAndCellsAreIdenticalToBase
-649 tst_logbook_indicators clickOnIndicatorIsAClickOnTheSection
-649 tst_plot_row_delegate plainRowsAreIdenticalToBaseDelegate
-649 tst_plot_row_delegate clickOnClusterIsAClickOnTheRow
+649 tst_logbook_indicators clickOnRowWarningIsAClickOnTheCell
 649 audit demand
 
 # 650 - (12, as settled) the shared glyph plumbing owns the glyph's colour for a style option and its side and spacing beside a line of text, and the repaint when the demand layer is destroyed and the tooltip display are written once; the views compute none of them; the part that needs Qt Widgets is the views' half of the shared indicator, beside the widget-free glyphs, and a state carries no progress label, which no view reads
-650 tst_plot_row_delegate sharedGlyphPlumbing
-650 tst_plot_row_delegate survivesDemandDestroyedFirst
 650 tst_logbook_indicators survivesDemandDestroyedFirst
-650 tst_logbook_indicators indicatorClearsSortArrowAndNarrowSections
 650 audit demand
 650 audit widget-free-core
 
@@ -2142,11 +2097,7 @@
 659 audit demand
 
 # 660 - (14) test: the plot row shows the arc or the badge and no label or count; the two views' clocks are one; the fill's progress text is its own; a stored result that could not be written is listed in the hover
-660 tst_plot_row_delegate workingRowPaintsIndicator
-660 tst_plot_row_delegate badgeReplacesIndicatorOnceFinished
-660 tst_plot_row_delegate sharedGlyphPlumbing
-660 tst_plot_row_layout indicatorOnly
-660 tst_logbook_indicators plotRowsAndHeaderTurnOnOneClock
+660 tst_logbook_indicators headerIsPlainAndNothingAnimates
 660 tst_status_bar schedulerTasksShowTheirLabelsAndCounts
 660 tst_logbook_indicators failedWriteIsListedInTheHover
 

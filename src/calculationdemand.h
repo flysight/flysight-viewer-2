@@ -35,10 +35,11 @@ struct SessionRow;
 /// The demand layer: the widget-free component that derives what requested
 /// calculations are wanted from what the user has switched on, keeps the
 /// executor's chosen next job equal to its current choice, has sessions that
-/// are not loaded loaded for column demand, and publishes the per-plot and
-/// per-column state, the progress of the computations and the failures of
-/// each recording, which the views present. The views read the values that
-/// PRESENTATION lists; they decide nothing and call nothing else here.
+/// are not loaded loaded for column demand, and publishes the progress of the
+/// computations, the failures of each recording and the pending cells, which
+/// the views present. The views read the values that PRESENTATION lists; they
+/// decide nothing and call nothing else here. It also still publishes a
+/// per-plot and per-column state, which no view reads.
 ///
 /// WHAT IS WANTED. (a) Plot demand: every checked plot whose value is a
 /// requested output (the plot is REQUESTED), for every track: a session that
@@ -190,7 +191,7 @@ struct SessionRow;
 ///    that is not loaded: it never makes another source's track not applicable
 ///    and never keeps a pair from being offered. Plots remember no verdict:
 ///    they have no track that is not loaded.
-///  - Failed, with its reason, shown with the warning badge: a job that ended
+///  - Failed, with its reason, shown as a failure (PRESENTATION): a job that ended
 ///    Failed (the worker could not start, out of memory); a load of the
 ///    session that failed ("The session file could not be loaded", the fill's
 ///    load or a failed-load placeholder); a record that the result store could
@@ -236,11 +237,13 @@ struct SessionRow;
 /// between its links - and before the fill's load when a pass is pending.
 /// jobProgress updates texts only, without inspection.
 ///
-/// PRESENTATION. The views read plotState(), columnState(), isCellPending(),
-/// workingPlotIds() and workingColumnIds(), and repaint on plotStateChanged(),
-/// columnStateChanged() and statesChanged(). Three further values are direct
-/// projections of what the one walk classifies and the pair memory holds,
-/// each with an announcement of its own:
+/// PRESENTATION. The views read three values, each a direct projection of
+/// what the one walk classifies and the pair memory holds, with an
+/// announcement of its own: the status bar reads progress() and failures(),
+/// and the logbook's cells read isCellPending() and sessionFailures(). No view
+/// reads the per-plot and per-column state (plotState(), columnState(),
+/// workingPlotIds(), workingColumnIds(), and their signals plotStateChanged(),
+/// columnStateChanged() and statesChanged()).
 ///  - progress() (DemandProgress): the sessions with a Waiting or Running
 ///    track in any source, plot and column tracks alike, each session once;
 ///    the high-water mark of that count since it was last 0; and the display
@@ -265,7 +268,7 @@ struct SessionRow;
 /// value and there are no failures. The views never run a pass (flush() is
 /// a test seam), never offer, and never write. "Pending" exists only here and
 /// in the view that paints it: never in SessionModel, the cached column values
-/// or the logbook index. The values the views read, the tooltip and its
+/// or the logbook index. The values, the per-source state's tooltip and its
 /// limit (DemandState::kToolTipListLimit tracks per section, then how many more
 /// there are; the state's own lists stay complete) and the one text form of a
 /// recording's failures and of the capped list (SessionFailures::text(),
@@ -329,9 +332,7 @@ public:
     bool isCellPending(int row, int column) const;
 
     /// Ids of the plots / logbook columns whose state isWorking(), in no
-    /// particular order; empty when nothing is working. What the application's
-    /// one working-indicator clock follows (followDemand(),
-    /// DemandIndicatorView.h), and what the views repaint on its frames
+    /// particular order; empty when nothing is working. No view reads them
     /// (statesChanged() says when to ask again).
     QStringList workingPlotIds() const;
     QStringList workingColumnIds() const;
@@ -348,8 +349,9 @@ public:
 
     /// True when a plot value that was just read as empty is absent only
     /// because a requested calculation has not produced it: it is waiting to be
-    /// computed (BlockerReport::State::Blocked; the row shows it working) or
-    /// rejected by a requested calculation (NotProduced; the warning badge).
+    /// computed (BlockerReport::State::Blocked; the status bar counts it among
+    /// the computations) or rejected by a requested calculation (NotProduced; a
+    /// failure of the recording, which the status bar and the logbook row show).
     /// That is an ordinary, supported state, and the plot widget does not warn
     /// "No data available" about it. False for NotApplicable (a missing input,
     /// an unknown sensor: the warning stays) and for Available.
@@ -418,7 +420,7 @@ private:
     struct PairMemory {
         enum class Kind {
             NotApplicable,  ///< there is nothing to run for it: not shown
-            Failed          ///< shown with the warning badge and `reason`
+            Failed          ///< shown as a failure, with `reason`
         };
         enum class Origin {
             Refused,        ///< NotApplicable: the executor refused an offer of the pair

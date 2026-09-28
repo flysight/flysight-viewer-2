@@ -1,28 +1,28 @@
-// The logbook's column headers and cells over the demand layer, in a real
-// LogbookView (LogbookHeaderView, LogbookCellDelegate) over a real
+// The logbook's row warning and pending cells over the demand layer, in a real
+// LogbookView (LogbookCellDelegate on the tree's own header) over a real
 // SessionModel, executor (JobQueue) and CalculationDemand, with the synthetic
 // calculations of jobfixture.h and the plots of plotfixture.h, offscreen.
 // Beside it, in the same window, a reference QTreeView configured as the
-// logbook's tree but with QTreeView's own header, over the same model: what
-// the logbook looked like before it presented demand.
+// logbook's tree but with the base delegate, over the same model: what the
+// logbook looks like without the demand layer.
 //
-// What is proved here is what the view owns: plain sections and cells are the
-// base classes', a working column's header shows the turning indicator at the
-// right of its text and a finished column with failures the badge, the hover
-// detail, the application's one working-indicator clock, shared with the plot
-// list's rows (a plot list with the row delegate, beside the window), that a
-// click on the glyph is a click on the section, cells that read pending
-// (distinct from unavailable and from the row's unreadable-record pending
-// state) without a trace in the model, its cached values or index.json.
-// State, counts and what is computed are CalculationDemand's
-// (tst_calculation_demand); background work is shown in the status bar
-// (tst_status_bar).
+// What is proved here is what the view owns: cells without a failure or a
+// pending value are the base delegate's; a row whose recording could not be
+// computed shows one glyph, the style's standard warning icon, at the leading
+// edge of its first visual cell, whatever column that is, loaded or not,
+// without changing any size; its hover is the recording's failures; a click on
+// it is a click on the cell; it appears and goes with the failure; the header
+// is the tree's own and nothing animates; cells read pending (distinct from
+// unavailable and from the row's unreadable-record pending state) without a
+// trace in the model, its cached values or index.json; each announcement
+// repaints one column. Progress and failures, and what is computed, are
+// CalculationDemand's (tst_calculation_demand); background work and the list
+// of failures are shown in the status bar (tst_status_bar).
 //
 // Synchronization: Gate::waitEntered() proves the worker is inside a compute
 // function; QTRY_*, waitDemandIdle() and waitForIdle() spin the event loop;
-// CalculationDemand::flush() runs a pending pass before a state is read. The
-// header's clock is frozen at frame 0 unless a test unfreezes it; the only
-// waits are those that prove the clock stays still.
+// CalculationDemand::flush() runs a pending pass before a value is read. The
+// only wait is the one that proves nothing repaints by itself.
 
 #include <functional>
 #include <memory>
@@ -37,18 +37,22 @@
 #include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLineEdit>
 #include <QPaintEvent>
+#include <QProgressBar>
 #include <QRegion>
 #include <QSignalSpy>
+#include <QStyle>
 #include <QStyleFactory>
-#include <QStyleOptionHeader>
 #include <QStyledItemDelegate>
+#include <QToolButton>
 #include <QToolTip>
 #include <QTreeView>
 #include <QtTest>
 
 #include "calculationdemand.h"
 #include "calculationrecord.h"
+#include "demandstate.h"
 #include "engine/calculationregistry.h"
 #include "jobfixture.h"
 #include "jobmodel.h"
@@ -64,23 +68,17 @@
 #include "sessionmodel.h"
 #include "testenvironment.h"
 #include "testutil.h"
-#include "ui/docks/DemandIndicator.h"
-#include "ui/docks/DemandIndicatorView.h"
 #include "ui/docks/logbook/LogbookCellDelegate.h"
-#include "ui/docks/logbook/LogbookHeaderView.h"
 #include "ui/docks/logbook/LogbookView.h"
-#include "ui/docks/plotselection/PlotRowDelegate.h"
 
 using namespace FlySight;
 using namespace FlySightTest;
 
 namespace {
 
-const QRgb kAmber = qRgb(0xE6, 0x9F, 0x00);
-
 /// Counts the paint events of a widget. With an `area`, only those confined to
-/// it: what a repaint of one section or row causes (a frame of the working
-/// clock, a state change), not a stray expose of the whole widget.
+/// it: what a repaint of one column causes, not a stray expose of the whole
+/// widget.
 class PaintCounter : public QObject {
 public:
     explicit PaintCounter(QWidget *watched, const QRect &area = QRect())
@@ -126,19 +124,6 @@ QImage cut(const QImage &image, const QRect &rect)
                             qRound(rect.width() * ratio), qRound(rect.height() * ratio)));
 }
 
-/// Whether some pixel of `rect` in `image` has the colour `rgb` (alpha ignored).
-bool hasPixel(const QImage &image, const QRect &rect, QRgb rgb)
-{
-    const QImage part = cut(image, rect);
-    for (int y = 0; y < part.height(); ++y) {
-        for (int x = 0; x < part.width(); ++x) {
-            if ((part.pixel(x, y) & 0x00FFFFFF) == (rgb & 0x00FFFFFF))
-                return true;
-        }
-    }
-    return false;
-}
-
 /// index.json as its bytes on disk.
 QByteArray indexBytes()
 {
@@ -157,38 +142,35 @@ private slots:
     void cleanup();
 
     void plainHeaderAndCellsAreIdenticalToBase();
-    void workingColumnShowsIndicatorRightOfText();
-    void indicatorAnimatesOnlyWhileWorking();
-    void plotRowsAndHeaderTurnOnOneClock();
-    void badgeReplacesIndicatorWhenFinished();
-    void failedLoadSessionShowsBadgeNotPending();
+    void headerIsPlainAndNothingAnimates();
+    void rowWarningAtLeftOfFirstCell();
+    void rowWarningHoverIsTheSessionsFailures();
+    void rowWarningFollowsTheFirstVisualColumn();
+    void rowWarningFollowsFailures();
+    void failedLoadSessionShowsRowWarningNotPending();
     void failedWriteIsListedInTheHover();
-    void headerToolTipFollowsDemandState();
-    void indicatorFollowsColumnWhenMovedHiddenOrReordered();
-    void indicatorClearsSortArrowAndNarrowSections();
-    void clickOnIndicatorIsAClickOnTheSection();
+    void clickOnRowWarningIsAClickOnTheCell();
     void pendingCellsAreDistinctFromUnavailable();
     void pendingCellBecomesValueWhenRecordIsWritten_data();
     void pendingCellBecomesValueWhenRecordIsWritten();
     void sortingTreatsPendingAsUnavailable();
     void unreadableRecordPendingIsNotDemandPending_data();
     void unreadableRecordPendingIsNotDemandPending();
-    void columnStateChangeRepaintsOnlyThatColumn();
+    void pendingCellsChangeRepaintsOnlyThatColumn();
     void survivesDemandDestroyedFirst();
 
 private:
     Gate &gate() { return m_world->gate(); }
 
     /// The logbook view and the reference tree in one window, as described at
-    /// the top of the file; the clock frozen. False when the window was never
-    /// exposed.
+    /// the top of the file. False when the window was never exposed.
     [[nodiscard]] bool buildUi();
     void destroyUi();
     /// The executor, the demand layer and the UI over the current model.
     [[nodiscard]] bool buildServices();
 
     QTreeView *tree() const { return m_logbook->findChild<QTreeView *>(); }
-    LogbookHeaderView *header() const { return qobject_cast<LogbookHeaderView *>(tree()->header()); }
+    QHeaderView *header() const { return tree()->header(); }
     LogbookCellDelegate *cells() const { return qobject_cast<LogbookCellDelegate *>(tree()->itemDelegate()); }
 
     /// The description column plus attribute columns over `keys`, through
@@ -211,6 +193,7 @@ private:
         return -1;
     }
     int descriptionSection() const { return section(SessionKeys::Description); }
+    int row(const char *id) const { return m_model->getSessionRow(QString::fromLatin1(id)); }
     static QString colId(const char *key) { return CalculationDemand::columnId(attributeColumn(QString::fromLatin1(key))); }
     /// The current state of the column over `key`: a pending pass runs first.
     DemandState col(const char *key)
@@ -220,7 +203,16 @@ private:
     }
     QModelIndex cell(const char *id, const char *key) const
     {
-        return m_model->index(m_model->getSessionRow(QString::fromLatin1(id)), section(key));
+        return m_model->index(row(id), section(key));
+    }
+    /// The session's cell in the description column, the first visual one
+    /// unless a test moves or hides it.
+    QModelIndex firstCell(const char *id) const { return m_model->index(row(id), descriptionSection()); }
+    /// The session has a current failure: a pending pass runs first.
+    bool failed(const char *id)
+    {
+        m_demand->flush();
+        return !m_demand->sessionFailures(QString::fromLatin1(id)).calculations.isEmpty();
     }
     static bool stored(const char *sessionId, const char *calculationId)
     {
@@ -246,6 +238,12 @@ private:
     {
         return FlySightTest::waitDemandIdle(*m_queue, *m_demand, timeoutMs);
     }
+    /// Every session's wait ends and everything the demand layer wanted has run.
+    [[nodiscard]] bool settleAndWait()
+    {
+        m_demand->endInputSettleWaits();
+        return waitDemandIdle() && waitForIdle(*m_model);
+    }
     /// G_OUT enabled with the gate held: s1 running with its progress text
     /// delivered, s2 and s4 waiting. False on any other outcome.
     [[nodiscard]] bool makeWorkingColumn()
@@ -263,19 +261,22 @@ private:
         spin();
         return true;
     }
-    /// EA_IN -1 on s1, 4 on s2 and s4; EA1 enabled and finished: s1 failed.
-    [[nodiscard]] bool makeBadgedColumn()
+    /// EA_IN -1 on s1, 4 on s2 and s4; the columns over `keys` (EA1 among
+    /// them) enabled and finished: s1, and only s1, has a current failure (a
+    /// stored rejection of Explicit A).
+    [[nodiscard]] bool makeFailedRow(const QStringList &keys = {QStringLiteral("EA1")})
     {
         for (const auto &[id, value] : {std::pair{"s1", -1.0}, std::pair{"s2", 4.0}, std::pair{"s4", 4.0}}) {
             if (!PlotFixture::giveInput(*m_model, QString::fromLatin1(id), QStringLiteral("EA_IN"), value))
                 return false;
         }
         m_model->flushPendingInvalidations();
-        enableColumns({QStringLiteral("EA1")});
-        if (!waitDemandIdle())
+        enableColumns(keys);
+        if (!waitDemandIdle() || !waitForIdle(*m_model))
             return false;
         spin();
-        return col("EA1").showsWarning();
+        const QList<SessionFailures> failures = m_demand->failures();
+        return failures.size() == 1 && failures.at(0).sessionId == QStringLiteral("s1");
     }
 
     QRect sectionRect(int logical) const
@@ -283,10 +284,22 @@ private:
         return QRect(header()->sectionViewportPosition(logical), 0, header()->sectionSize(logical),
                      header()->viewport()->height());
     }
+    /// The visible part of a column of the tree's viewport.
+    QRect columnRect(int column) const
+    {
+        return QRect(tree()->columnViewportPosition(column), 0, tree()->columnWidth(column),
+                     tree()->viewport()->height());
+    }
     QRect cellRect(const QModelIndex &index) const { return tree()->visualRect(index); }
     QImage grabHeader() const { return header()->viewport()->grab().toImage(); }
     QImage grabReferenceHeader() const { return m_reference->header()->viewport()->grab().toImage(); }
-    QImage grabCells() const { return tree()->viewport()->grab().toImage(); }
+    /// The tree's viewport, laid out afresh as a change of its delegate lays it
+    /// out: hiding a section does not recompute the uniform row height.
+    QImage grabCells() const
+    {
+        tree()->doItemsLayout();
+        return tree()->viewport()->grab().toImage();
+    }
     /// The tree's viewport, same size, selection and focus, with a default delegate.
     QImage grabCellsWithBaseDelegate()
     {
@@ -299,58 +312,69 @@ private:
         QApplication::processEvents();
         return image;
     }
-    /// Sends a tooltip event to the header's viewport at `pos`; whether it was accepted.
-    bool headerHelp(const QPoint &pos)
+    /// Sends a tooltip event to the tree's viewport at `pos` (the centre of
+    /// the cell when null), as the application receives one: the view builds
+    /// the option and asks the delegate. Whether it was accepted.
+    bool cellHelp(const QModelIndex &index, QPoint pos = QPoint())
     {
-        QHelpEvent event(QEvent::ToolTip, pos, header()->viewport()->mapToGlobal(pos));
-        QApplication::sendEvent(header()->viewport(), &event);
+        if (pos.isNull())
+            pos = cellRect(index).center();
+        QHelpEvent event(QEvent::ToolTip, pos, tree()->viewport()->mapToGlobal(pos));
+        QApplication::sendEvent(tree()->viewport(), &event);
         return event.isAccepted();
     }
-    /// The cell delegate's helpEvent() over `index`, as the view calls it.
-    bool cellHelp(const QModelIndex &index)
+    /// A point of the cell far from its leading edge, where no glyph is.
+    QPoint trailingPoint(const QModelIndex &index) const
     {
-        QStyleOptionViewItem opt;
-        opt.initFrom(tree()->viewport());
-        opt.widget = tree();
-        opt.rect = cellRect(index);
-        const QPoint pos = opt.rect.center();
-        QHelpEvent event(QEvent::ToolTip, pos, tree()->viewport()->mapToGlobal(pos));
-        return cells()->helpEvent(&event, tree(), opt, index);
-    }
-    /// A plot list over m_plots as PlotSelectionDockFeature configures it, with
-    /// the row delegate on the demand layer and the one clock, shown as a
-    /// window of its own; `delegate` is set to its delegate. Null when the
-    /// window was never exposed. The caller destroys it before returning.
-    [[nodiscard]] std::unique_ptr<QTreeView> makePlotList(PlotRowDelegate **delegate)
-    {
-        auto tree = std::make_unique<QTreeView>();
-        tree->setModel(m_plots.get());
-        tree->setHeaderHidden(true);
-        tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        auto *rows = new PlotRowDelegate(m_demand.get(), m_clock.get(), tree.get());
-        tree->setItemDelegate(rows);
-        tree->expandAll();
-        tree->resize(300, 300);
-        tree->show();
-        if (!QTest::qWaitForWindowExposed(tree.get()))
-            return nullptr;
-        if (delegate)
-            *delegate = rows;
-        return tree;
-    }
-    /// The plot list's row of a plot id (the delegate's lookup).
-    QModelIndex plotIndex(const char *plotId) const
-    {
-        const QModelIndexList found = m_plots->match(m_plots->index(0, 0), PlotModel::PlotValueIdRole,
-                                                     QString::fromLatin1(plotId), 1,
-                                                     Qt::MatchExactly | Qt::MatchRecursive);
-        return found.isEmpty() ? QModelIndex() : found.first();
+        const QRect rect = cellRect(index);
+        return QPoint(rect.right() - 4, rect.center().y());
     }
     /// Hides any tooltip and waits until it is gone.
     [[nodiscard]] static bool hideToolTip()
     {
         QToolTip::hideText();
         return QTest::qWaitFor([] { return !QToolTip::isVisible(); }, 2000);
+    }
+    /// Row heights equal the reference tree's, and every cell's sizeHint()
+    /// the base delegate's.
+    void verifySizesAreTheBase()
+    {
+        QStyleOptionViewItem opt;
+        opt.initFrom(tree()->viewport());
+        opt.widget = tree();
+        opt.font = tree()->font();
+        const QStyledItemDelegate base;
+        for (int r = 0; r < m_model->rowCount(); ++r) {
+            QCOMPARE(tree()->visualRect(m_model->index(r, 0)).height(),
+                     m_reference->visualRect(m_model->index(r, 0)).height());
+            for (int c = 0; c < m_model->columnCount(); ++c)
+                QCOMPARE(cells()->sizeHint(opt, m_model->index(r, c)), base.sizeHint(opt, m_model->index(r, c)));
+        }
+    }
+    /// The glyph is painted in exactly one cell, `index`, inside it, and every
+    /// other visible cell that is not pending is the base delegate's.
+    void verifyOnlyGlyphAt(const QModelIndex &index)
+    {
+        QVERIFY(index.isValid());
+        const QImage with = grabCells();
+        const QImage base = grabCellsWithBaseDelegate();
+        for (int r = 0; r < m_model->rowCount(); ++r) {
+            for (int c = 0; c < m_model->columnCount(); ++c) {
+                const QModelIndex other = m_model->index(r, c);
+                const QRect glyph = cells()->warningRect(other);
+                if (other == index) {
+                    QVERIFY2(!glyph.isNull(), qPrintable(QStringLiteral("row %1 column %2").arg(r).arg(c)));
+                    QVERIFY(cellRect(other).contains(glyph));
+                    QVERIFY(cut(with, glyph) != cut(base, glyph));
+                    continue;
+                }
+                QVERIFY2(glyph.isNull(), qPrintable(QStringLiteral("row %1 column %2").arg(r).arg(c)));
+                if (!tree()->isColumnHidden(c) && !cells()->showsPending(other)) {
+                    QVERIFY2(cut(with, cellRect(other)) == cut(base, cellRect(other)),
+                             qPrintable(QStringLiteral("row %1 column %2").arg(r).arg(c)));
+                }
+            }
+        }
     }
 
     std::unique_ptr<JobWorld> m_world;
@@ -359,7 +383,6 @@ private:
     std::unique_ptr<JobQueue> m_queue;
     std::unique_ptr<PlotModel> m_plots;
     std::unique_ptr<CalculationDemand> m_demand;
-    std::unique_ptr<WorkingAnimation> m_clock;  // the application's one clock, as MainWindow makes it
     std::unique_ptr<QWidget> m_window;
     LogbookView *m_logbook = nullptr;          // children of the window
     QTreeView *m_reference = nullptr;
@@ -409,8 +432,6 @@ bool LogbookIndicatorsTest::buildServices()
 {
     m_queue = std::make_unique<JobQueue>(m_model.get());
     m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
-    m_clock = std::make_unique<WorkingAnimation>();
-    followDemand(m_clock.get(), m_demand.get());
     return buildUi();
 }
 
@@ -418,11 +439,11 @@ bool LogbookIndicatorsTest::buildUi()
 {
     m_window = std::make_unique<QWidget>();
     auto *layout = new QHBoxLayout(m_window.get());
-    m_logbook = new LogbookView(m_model.get(), m_demand.get(), m_clock.get(), m_window.get());
+    m_logbook = new LogbookView(m_model.get(), m_demand.get(), m_window.get());
     m_logbook->setFixedWidth(460);
     layout->addWidget(m_logbook);
 
-    // As LogbookView::setupView() configures its tree, with QTreeView's own header
+    // As LogbookView::setupView() configures its tree, with the base delegate
     m_reference = new QTreeView(m_window.get());
     m_reference->setModel(m_model.get());
     m_reference->setRootIsDecorated(false);
@@ -443,9 +464,8 @@ bool LogbookIndicatorsTest::buildUi()
     tree()->sortByColumn(descriptionSection(), Qt::AscendingOrder);
     m_reference->sortByColumn(descriptionSection(), Qt::AscendingOrder);
 
-    header()->animation()->setFrozen(true);       // m_clock
     spin();
-    return header() && cells() && m_model->rowAt(0).sessionId == QStringLiteral("s1");
+    return cells() && m_model->rowAt(0).sessionId == QStringLiteral("s1");
 }
 
 void LogbookIndicatorsTest::destroyUi()
@@ -456,8 +476,9 @@ void LogbookIndicatorsTest::destroyUi()
     m_window.reset();
 }
 
-// Note what is to be checked, tear everything down, and only then check (see
-// tst_plot_row_delegate). The views go before the demand layer.
+// Note what is to be checked, tear everything down, and only then check: a
+// failed check returns at once, and must not leave the next test a live
+// world. The views go before the demand layer.
 void LogbookIndicatorsTest::cleanup()
 {
     if (m_world)
@@ -470,7 +491,6 @@ void LogbookIndicatorsTest::cleanup()
 
     destroyUi();
     m_demand.reset();
-    m_clock.reset();
     QStringList stillPinned;
     if (m_model) {
         for (const char *id : {"s1", "s2", "s3", "s4"}) {
@@ -501,207 +521,346 @@ void LogbookIndicatorsTest::cleanup()
     QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
 }
 
-// ---- The header -----------------------------------------------------------------------
+// ---- Plain -----------------------------------------------------------------------------
 
-// No column over a requested calculation: header and cells are exactly the
-// base classes', pixel for pixel.
+// Without a failure the logbook is the reference tree: its header, with no
+// column over a requested calculation, while one works and once it has
+// finished; its cells the base delegate's outside the pending ones; its sizes.
 void LogbookIndicatorsTest::plainHeaderAndCellsAreIdenticalToBase()
 {
     enableColumns({QStringLiteral("G_IN")});
     spin();
     QCOMPARE(m_model->columnCount(), 2);
-
     QCOMPARE(grabHeader(), grabReferenceHeader());
     QCOMPARE(grabCells(), grabCellsWithBaseDelegate());
-    for (int l = 0; l < header()->count(); ++l) {
-        QCOMPARE(header()->indicatorRect(l), QRect());
-        QVERIFY(header()->toolTipForSection(l).isEmpty());
+    for (int l = 0; l < header()->count(); ++l)
         QCOMPARE(header()->sectionSizeHint(l), m_reference->header()->sectionSizeHint(l));
-    }
-    QVERIFY(!header()->animation()->isActive());
-    QVERIFY(m_demand->workingColumnIds().isEmpty());
-}
+    verifySizesAreTheBase();
+    if (QTest::currentTestFailed())
+        return;
 
-void LogbookIndicatorsTest::workingColumnShowsIndicatorRightOfText()
-{
-    const int plainHeight = header()->height();
+    // Working: only the pending cells differ
     QVERIFY(makeWorkingColumn());
-    const int g = section("G_OUT");
-    QVERIFY(g >= 0);
-
-    const QRect r = header()->indicatorRect(g);
-    QVERIFY(!r.isNull());
-    const QRect sr = sectionRect(g);
-    QVERIFY(sr.contains(r));
-    QVERIFY(r.left() > sr.center().x());
-    QVERIFY(header()->viewport()->rect().contains(r));
-
-    const QImage with = grabHeader();
-    const QImage reference = grabReferenceHeader();
-    QCOMPARE(with.size(), reference.size());
-    QVERIFY(cut(with, r) != cut(reference, r));
-    for (int l = 0; l < header()->count(); ++l) {
-        if (l != g)
-            QCOMPARE(cut(with, sectionRect(l)), cut(reference, sectionRect(l)));
+    QVERIFY(m_demand->failures().isEmpty());
+    QCOMPARE(grabHeader(), grabReferenceHeader());
+    for (int l = 0; l < header()->count(); ++l)
+        QCOMPARE(header()->sectionSizeHint(l), m_reference->header()->sectionSizeHint(l));
+    {
+        const QImage with = grabCells();
+        const QImage base = grabCellsWithBaseDelegate();
+        int pending = 0;
+        for (int r = 0; r < m_model->rowCount(); ++r) {
+            for (int c = 0; c < m_model->columnCount(); ++c) {
+                const QModelIndex index = m_model->index(r, c);
+                QCOMPARE(cells()->warningRect(index), QRect());
+                if (cells()->showsPending(index))
+                    ++pending;
+                else
+                    QCOMPARE(cut(with, cellRect(index)), cut(base, cellRect(index)));
+            }
+        }
+        QCOMPARE(pending, 3);
     }
+    verifySizesAreTheBase();
+    if (QTest::currentTestFailed())
+        return;
 
-    QCOMPARE(header()->height(), plainHeight);
-    QCOMPARE(header()->height(), m_reference->header()->height());
-    QVERIFY(header()->sectionSizeHint(g) > m_reference->header()->sectionSizeHint(g));
-}
-
-// The clock runs exactly while a column works; each frame repaints, and once
-// nothing works nothing is repainted.
-void LogbookIndicatorsTest::indicatorAnimatesOnlyWhileWorking()
-{
-    QVERIFY(makeWorkingColumn());
-    WorkingAnimation *clock = header()->animation();
-    QVERIFY(clock->isActive());
-    QVERIFY(!clock->isTicking());       // frozen
-    const int g = section("G_OUT");
-    const QRect r = header()->indicatorRect(g);
-    QVERIFY(!r.isNull());
-
-    const QImage frame0 = grabHeader();
-    auto *paints = new PaintCounter(header()->viewport());
-    const int before = paints->count;
-    clock->advance();
-    QTRY_VERIFY(paints->count > before);
-    const QImage frame1 = grabHeader();
-    QVERIFY(cut(frame1, r) != cut(frame0, r));
-    // Only the working section changed
-    for (int l = 0; l < header()->count(); ++l) {
-        if (l != g)
-            QCOMPARE(cut(frame1, sectionRect(l)), cut(frame0, sectionRect(l)));
-    }
-
-    clock->setFrozen(false);
-    QVERIFY(clock->isTicking());
-    gate().open(3);
-    QVERIFY(waitDemandIdle());
-    QVERIFY(waitForIdle(*m_model));
-    spin();
-    QVERIFY(col("G_OUT").isPlain());
-    QVERIFY(!clock->isActive());
-    QVERIFY(!clock->isTicking());
-    QCOMPARE(clock->frame(), 0);
-    QCOMPARE(header()->indicatorRect(g), QRect());
-
-    // No idle repaint: the clock is stopped (above), and the section is not
-    // repainted by itself
-    const auto *sectionPaints = new PaintCounter(header()->viewport(), sectionRect(g));
-    QTest::qWait(4 * WorkingAnimation::kFrameIntervalMs);
-    QCOMPARE(sectionPaints->count, 0);
-}
-
-// Spec 12, "One clock": the plot list's rows and the logbook's column headers
-// turn on the application's one clock. One frame turns both; each view
-// repaints only its own working items; the clock stops when nothing works.
-void LogbookIndicatorsTest::plotRowsAndHeaderTurnOnOneClock()
-{
-    PlotRowDelegate *rows = nullptr;
-    auto plotList = makePlotList(&rows);
-    QVERIFY(plotList);
-
-    // Syn/g over s1 and the column G_OUT: one job (s1, gated), which both share
-    PlotFixture::show(*m_model, {"s1"});
-    m_plots->setPlotEnabled(QStringLiteral("Syn"), QStringLiteral("g"), true);
-    enableColumns({QStringLiteral("G_OUT")});
-    QVERIFY(gate().waitEntered());
-    QTRY_VERIFY(m_demand->plotState(QStringLiteral("Syn/g")).isWorking() && col("G_OUT").isWorking());
-    spin();
-
-    // One clock: the one both views were given; neither made its own
-    QCOMPARE(rows->animation(), m_clock.get());
-    QCOMPARE(header()->animation(), m_clock.get());
-    QVERIFY(m_window->findChildren<WorkingAnimation *>().isEmpty());
-    QVERIFY(plotList->findChildren<WorkingAnimation *>().isEmpty());
-    QVERIFY(m_clock->isActive());
-    QVERIFY(!m_clock->isTicking());         // frozen by buildUi()
-
-    // One frame turns both: each paints the one clock's angle
-    const QModelIndex row = plotIndex("Syn/g");
-    QVERIFY(row.isValid());
-    const QRect rowCell = plotList->visualRect(row);
-    const QRect rowRect(0, rowCell.top(), plotList->viewport()->width(), rowCell.height());
-    const int g = section("G_OUT");
-    const QRect rowGlyph = rows->indicatorRect(row);
-    const QRect sectionGlyph = header()->indicatorRect(g);
-    QVERIFY(!rowGlyph.isNull());
-    QVERIFY(!sectionGlyph.isNull());
-    const QImage rowsBefore = plotList->viewport()->grab().toImage();
-    const QImage headerBefore = grabHeader();
-    auto *rowPaints = new PaintCounter(plotList->viewport(), rowRect);
-    auto *sectionPaints = new PaintCounter(header()->viewport(), sectionRect(g));
-    m_clock->advance();
-    QTRY_VERIFY(rowPaints->count > 0 && sectionPaints->count > 0);
-    QVERIFY(cut(plotList->viewport()->grab().toImage(), rowGlyph) != cut(rowsBefore, rowGlyph));
-    QVERIFY(cut(grabHeader(), sectionGlyph) != cut(headerBefore, sectionGlyph));
-
-    // Each view repaints only its own working items: s1 done, s2 running, so
-    // the plot row is finished and the column still works
-    gate().open(1);
-    QVERIFY(gate().waitEntered());
-    QTRY_VERIFY(!m_demand->plotState(QStringLiteral("Syn/g")).isWorking());
-    spin();
-    QVERIFY(col("G_OUT").isWorking());
-    QVERIFY(m_clock->isActive());
-    // The finished row does not turn: its pixels are the same after the frame
-    // (an expose of the window may repaint it, so paints are not counted)
-    const QImage rowsBeforeFrame = plotList->viewport()->grab().toImage();
-    sectionPaints = new PaintCounter(header()->viewport(), sectionRect(g));
-    m_clock->advance();
-    spin();
-    QTRY_VERIFY(sectionPaints->count > 0);
-    QCOMPARE(cut(plotList->viewport()->grab().toImage(), rowRect), cut(rowsBeforeFrame, rowRect));
-
-    // Nothing works: the clock stops, back at frame 0
+    // Finished without a failure: nothing differs
     gate().open(16);
     QVERIFY(waitDemandIdle());
     QVERIFY(waitForIdle(*m_model));
     spin();
-    QVERIFY(!m_clock->isActive());
-    QCOMPARE(m_clock->frame(), 0);
-
-    plotList.reset();
+    QVERIFY(m_demand->failures().isEmpty());
+    QCOMPARE(grabHeader(), grabReferenceHeader());
+    QCOMPARE(grabCells(), grabCellsWithBaseDelegate());
+    verifySizesAreTheBase();
 }
 
-void LogbookIndicatorsTest::badgeReplacesIndicatorWhenFinished()
+// Spec 9: the header is the tree's own and shows nothing of the demand layer,
+// while a column works and after one has failed; nothing repaints by itself
+// while a column works; the view has no progress line and no cancel button.
+void LogbookIndicatorsTest::headerIsPlainAndNothingAnimates()
 {
-    QVERIFY(makeBadgedColumn());
-    const DemandState state = col("EA1");
-    QVERIFY(state.showsWarning());
-    QCOMPARE(state.failedCount, 1);
-    const int ea = section("EA1");
-    const QRect r = header()->indicatorRect(ea);
-    QVERIFY(!r.isNull());
-    QVERIFY(sectionRect(ea).contains(r));
+    QCOMPARE(header()->metaObject(), &QHeaderView::staticMetaObject);
+    QVERIFY(m_logbook->findChildren<QProgressBar *>().isEmpty());
+    QVERIFY(m_logbook->findChildren<QToolButton *>().isEmpty());
 
-    const QImage with = grabHeader();
-    QVERIFY(hasPixel(with, r, kAmber));
-    QVERIFY(!hasPixel(grabReferenceHeader(), sectionRect(ea), kAmber));
-    QVERIFY(!header()->animation()->isActive());
+    // Working
+    QVERIFY(makeWorkingColumn());
+    QCOMPARE(grabHeader(), grabReferenceHeader());
+    for (int l = 0; l < header()->count(); ++l)
+        QCOMPARE(header()->sectionSizeHint(l), m_reference->header()->sectionSizeHint(l));
 
-    // The badge is not a control
-    const Quiet quiet(*m_queue);
-    QTest::mouseClick(header()->viewport(), Qt::LeftButton, {}, r.center());
+    // No clock: neither the header nor the cells repaint while the job runs
     spin();
-    QVERIFY(quiet.holds());
-    QVERIFY(col("EA1") == state);
+    const auto *headerPaints = new PaintCounter(header()->viewport());
+    const auto *cellPaints = new PaintCounter(tree()->viewport());
+    QTest::qWait(400);
+    QCOMPARE(headerPaints->count, 0);
+    QCOMPARE(cellPaints->count, 0);
+    QVERIFY(gate().running.load() == 1);    // still working
+
+    // Failed
+    gate().open(16);
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(makeFailedRow());
+    QCOMPARE(grabHeader(), grabReferenceHeader());
+    for (int l = 0; l < header()->count(); ++l)
+        QCOMPARE(header()->sectionSizeHint(l), m_reference->header()->sectionSizeHint(l));
+    QCOMPARE(header()->metaObject(), &QHeaderView::staticMetaObject);
+    QVERIFY(m_logbook->findChildren<QProgressBar *>().isEmpty());
+    QVERIFY(m_logbook->findChildren<QToolButton *>().isEmpty());
+}
+
+// ---- The row warning -------------------------------------------------------------------
+
+// Spec 8: one glyph, the style's warning icon, at the leading edge of the
+// failed row's first visual cell, after its check box; every other cell, the
+// failed calculation's blank cell included, is the base delegate's, and no
+// size changes. The same for a row that is not loaded, which stays unloaded.
+void LogbookIndicatorsTest::rowWarningAtLeftOfFirstCell()
+{
+    QVERIFY(makeFailedRow());
+    QVERIFY(!cells()->showsPending(cell("s1", "EA1")));
+    QVERIFY(cell("s1", "EA1").data().toString().isEmpty());
+
+    const auto verifyGlyph = [this] {
+        const QModelIndex first = firstCell("s1");
+        verifyOnlyGlyphAt(first);
+        if (QTest::currentTestFailed())
+            return;
+        const QRect glyph = cells()->warningRect(first);
+        QVERIFY(glyph.height() <= QFontMetrics(tree()->font()).height());
+
+        // Where the style puts the check box and the text without the glyph,
+        // and the text with it
+        QStyleOptionViewItem opt;
+        opt.initFrom(tree());
+        opt.widget = tree();
+        opt.rect = cellRect(first);
+        opt.features = QStyleOptionViewItem::HasCheckIndicator | QStyleOptionViewItem::HasDisplay;
+        opt.text = first.data().toString();
+        QStyle *style = tree()->style();
+        const QRect check = style->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &opt, tree());
+        const QRect textBefore = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, tree());
+        opt.features |= QStyleOptionViewItem::HasDecoration;
+        opt.decorationSize = glyph.size();
+        const QRect textAfter = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, tree());
+        QVERIFY(glyph.left() > check.right());
+        QVERIFY(glyph.left() >= textBefore.left());
+        QVERIFY(glyph.right() < textAfter.left());
+
+        verifySizesAreTheBase();
+    };
+
+    // Loaded
+    QVERIFY(m_model->rowAt(row("s1")).isLoaded());
+    verifyGlyph();
+    if (QTest::currentTestFailed())
+        return;
+
+    // Not loaded: the record set says so, and nothing loads the row
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
+    QVERIFY(waitForIdle(*m_model));
+    for (const char *id : {"s1", "s2", "s3", "s4"})
+        QVERIFY2(!m_model->rowAt(row(id)).isLoaded(), id);
+    QVERIFY(waitDemandIdle());
+    spin();
+    QVERIFY(failed("s1"));
+    QVERIFY(!m_model->rowAt(row("s1")).isLoaded());
+    verifyGlyph();
+    QVERIFY(!m_model->rowAt(row("s1")).isLoaded());
+}
+
+// Spec 8: the hover over the glyph is the recording's failures, exactly;
+// elsewhere in the cell the cell's own tooltip applies.
+void LogbookIndicatorsTest::rowWarningHoverIsTheSessionsFailures()
+{
+    // s1 fails two calculations, a stored rejection and a computation that
+    // throws, before its G_OUT runs and holds the gate
+    QVERIFY(PlotFixture::giveInput(*m_model, QStringLiteral("s1"), QStringLiteral("EA_IN"), -1));
+    QVERIFY(PlotFixture::giveInput(*m_model, QStringLiteral("s1"), QStringLiteral("T_IN"), 1));
+    m_model->flushPendingInvalidations();
+    enableColumns({QStringLiteral("EA1"), QStringLiteral("T_OUT"), QStringLiteral("G_OUT")});
+    QVERIFY(gate().waitEntered());
+    QTRY_COMPARE(m_demand->sessionFailures(QStringLiteral("s1")).calculations.size(), 2);
+    spin();
+    const QString failures = m_demand->sessionFailures(QStringLiteral("s1")).text();
+    QCOMPARE(failures, QStringLiteral("Explicit A: negative input\n"
+                                      "Thrower: synthetic failure (tried again at the next start)"));
+
+    // Over the glyph: the failures
+    const QModelIndex first = firstCell("s1");
+    const QRect glyph = cells()->warningRect(first);
+    QVERIFY(!glyph.isNull());
+    QVERIFY(hideToolTip());
+    QVERIFY(cellHelp(first, glyph.center()));
+    QCOMPARE(QToolTip::text(), failures);
+
+    // Elsewhere in the description cell: its own tooltip, which is none
+    QVERIFY(hideToolTip());
+    QVERIFY(!cellHelp(first, trailingPoint(first)));
+
+    // A row without a failure accepts nothing where the glyph would be
+    const QModelIndex s2First = firstCell("s2");
+    QVERIFY(hideToolTip());
+    QVERIFY(!cellHelp(s2First, QPoint(glyph.center().x(), cellRect(s2First).center().y())));
+    spin();
+    QVERIFY(!QToolTip::isVisible());
+
+    // A pending first cell: G_OUT at the front, s1's still running. The glyph
+    // shows the failures, the rest of the cell the pending tooltip.
+    const int g = section("G_OUT");
+    header()->moveSection(header()->visualIndex(g), 0);
+    spin();
+    const QModelIndex pendingFirst = cell("s1", "G_OUT");
+    QVERIFY(cells()->showsPending(pendingFirst));
+    const QRect pendingGlyph = cells()->warningRect(pendingFirst);
+    QVERIFY(!pendingGlyph.isNull());
+    QCOMPARE(cells()->warningRect(first), QRect());
+    QVERIFY(hideToolTip());
+    QVERIFY(cellHelp(pendingFirst, pendingGlyph.center()));
+    QCOMPARE(QToolTip::text(), failures);
+    QVERIFY(hideToolTip());
+    QVERIFY(cellHelp(pendingFirst, trailingPoint(pendingFirst)));
+    QCOMPARE(QToolTip::text(), LogbookCellDelegate::pendingToolTip());
+
+    // s2's pending first cell has no glyph: the pending tooltip throughout
+    const QModelIndex s2Pending = cell("s2", "G_OUT");
+    QVERIFY(cells()->showsPending(s2Pending));
+    QVERIFY(hideToolTip());
+    QVERIFY(cellHelp(s2Pending, QPoint(pendingGlyph.center().x(), cellRect(s2Pending).center().y())));
+    QCOMPARE(QToolTip::text(), LogbookCellDelegate::pendingToolTip());
+    QVERIFY(hideToolTip());
+}
+
+// Spec 8: the glyph belongs to the row, in whatever cell is first: moving a
+// section to the front, hiding the first section, sorting and rebuilding the
+// columns put it in the new first visual cell, and only there.
+void LogbookIndicatorsTest::rowWarningFollowsTheFirstVisualColumn()
+{
+    QVERIFY(makeFailedRow({QStringLiteral("G_IN"), QStringLiteral("EA1")}));
+    const int d = descriptionSection();
+    const int ea = section("EA1");
+    QCOMPARE(d, 0);
+    verifyOnlyGlyphAt(firstCell("s1"));
+    if (QTest::currentTestFailed())
+        return;
+
+    // EA1 moved to the front
+    header()->moveSection(header()->visualIndex(ea), 0);
+    spin();
+    verifyOnlyGlyphAt(cell("s1", "EA1"));
+    if (QTest::currentTestFailed())
+        return;
+
+    // The first section hidden: the next in visual order, then the one after
+    header()->hideSection(ea);
+    spin();
+    verifyOnlyGlyphAt(firstCell("s1"));
+    if (QTest::currentTestFailed())
+        return;
+    header()->hideSection(d);
+    spin();
+    verifyOnlyGlyphAt(cell("s1", "G_IN"));
+    if (QTest::currentTestFailed())
+        return;
+    header()->showSection(d);
+    header()->showSection(ea);
+    spin();
+    verifyOnlyGlyphAt(cell("s1", "EA1"));
+    if (QTest::currentTestFailed())
+        return;
+
+    // Sorted: the glyph goes with the row
+    tree()->sortByColumn(d, Qt::DescendingOrder);
+    spin();
+    QCOMPARE(row("s1"), 3);
+    verifyOnlyGlyphAt(cell("s1", "EA1"));
+    if (QTest::currentTestFailed())
+        return;
+
+    // Rebuilt columns (a reset), in the logical order again: EA1 first, as a
+    // new logical index
+    header()->moveSection(header()->visualIndex(ea), ea);
+    spin();
+    QCOMPARE(header()->logicalIndex(0), d);
+    LogbookColumnStore::instance().setColumns({attributeColumn(QStringLiteral("EA1")), descriptionColumn(),
+                                               attributeColumn(QStringLiteral("G_IN"))});
+    QVERIFY(waitForIdle(*m_model));
+    spin();
+    QCOMPARE(section("EA1"), 0);
+    QCOMPARE(header()->logicalIndex(0), 0);
+    QVERIFY(failed("s1"));
+    verifyOnlyGlyphAt(cell("s1", "EA1"));
+}
+
+// Spec 7 and 8: the glyph appears when a failure becomes current and goes
+// when it clears: a successful retry after an input change, and the last
+// source over the calculation disabled.
+void LogbookIndicatorsTest::rowWarningFollowsFailures()
+{
+    const auto shown = [this] { return !cells()->warningRect(firstCell("s1")).isNull(); };
+    const auto painted = [this] {
+        const QRect rect = cellRect(firstCell("s1"));
+        return cut(grabCells(), rect) != cut(grabCellsWithBaseDelegate(), rect);
+    };
+
+    // s1's job runs out of memory once: the glyph appears when it fails
+    QVERIFY(PlotFixture::giveInput(*m_model, QStringLiteral("s1"), QStringLiteral("X_IN"), 1));
+    m_model->flushPendingInvalidations();
+    QVERIFY(!shown());
+    enableColumns({QStringLiteral("X_OUT")});
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+    spin();
+    QVERIFY(failed("s1"));
+    QVERIFY(shown());
+    QVERIFY(painted());
+    verifyOnlyGlyphAt(firstCell("s1"));
+    if (QTest::currentTestFailed())
+        return;
+
+    // An input change: the retry succeeds, and the glyph goes
+    QVERIFY(PlotFixture::giveInput(*m_model, QStringLiteral("s1"), QStringLiteral("X_IN"), 2));
+    m_model->flushPendingInvalidations();
+    QVERIFY(settleAndWait());
+    spin();
+    QTRY_COMPARE(cell("s1", "X_OUT").data().toString(), QStringLiteral("3"));
+    QVERIFY(!failed("s1"));
+    QVERIFY(!shown());
+    QVERIFY(!painted());
+
+    // A failure again, then the last source over its calculation disabled
+    QVERIFY(PlotFixture::giveInput(*m_model, QStringLiteral("s1"), QStringLiteral("EA_IN"), -1));
+    m_model->flushPendingInvalidations();
+    enableColumns({QStringLiteral("X_OUT"), QStringLiteral("EA1")});
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+    spin();
+    QVERIFY(failed("s1"));
+    QVERIFY(shown());
+    QVERIFY(painted());
+    enableColumns({QStringLiteral("X_OUT")});
+    spin();
+    QVERIFY(!failed("s1"));
+    QVERIFY(!shown());
+    QVERIFY(!painted());
 }
 
 // Presentation half of tst_calculation_demand's
 // visibleFailedLoadIsSettledAsFailed: a visible session whose file cannot be
-// loaded is failed, never pending, and the column finishes with the badge.
-void LogbookIndicatorsTest::failedLoadSessionShowsBadgeNotPending()
+// loaded is failed, never pending, and its row warns.
+void LogbookIndicatorsTest::failedLoadSessionShowsRowWarningNotPending()
 {
     PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
     QVERIFY(waitForIdle(*m_model));
     for (const char *id : {"s1", "s2", "s3", "s4"})
-        QVERIFY2(!m_model->rowAt(m_model->getSessionRow(QString::fromLatin1(id))).isLoaded(), id);
+        QVERIFY2(!m_model->rowAt(row(id)).isLoaded(), id);
     QVERIFY(QFile::remove(sessionFilePath(QStringLiteral("s2"))));
     PlotFixture::show(*m_model, {"s2"});
-    const SessionRow &s2 = m_model->rowAt(m_model->getSessionRow(QStringLiteral("s2")));
+    const SessionRow &s2 = m_model->rowAt(row("s2"));
     QVERIFY(s2.isLoaded());
     QVERIFY(s2.loadFailed);
     QVERIFY(s2.visible);
@@ -716,27 +875,29 @@ void LogbookIndicatorsTest::failedLoadSessionShowsBadgeNotPending()
     QVERIFY(!cells()->showsPending(s2Cell));
     QCOMPARE(cut(grabCells(), cellRect(s2Cell)), cut(grabCellsWithBaseDelegate(), cellRect(s2Cell)));
 
-    const int g = section("G_OUT");
-    QVERIFY(col("G_OUT").showsWarning());
-    const QRect r = header()->indicatorRect(g);
-    QVERIFY(!r.isNull());
-    QVERIFY(hasPixel(grabHeader(), r, kAmber));
-    QVERIFY(!header()->animation()->isActive());
-    const QString text = header()->toolTipForSection(g);
-    QVERIFY(text.contains(QStringLiteral("Could not be computed:")));
-    QVERIFY(text.contains(QStringLiteral("The session file could not be loaded")));
+    QVERIFY(failed("s2"));
+    const QModelIndex first = firstCell("s2");
+    verifyOnlyGlyphAt(first);
+    if (QTest::currentTestFailed())
+        return;
+    const QString text = m_demand->sessionFailures(QStringLiteral("s2")).text();
+    QVERIFY2(text.contains(QStringLiteral("The session file could not be loaded")), qPrintable(text));
+    QVERIFY(hideToolTip());
+    QVERIFY(cellHelp(first, cells()->warningRect(first).center()));
+    QCOMPARE(QToolTip::text(), text);
+    QVERIFY(hideToolTip());
 
-    // Settled: nothing repaints the section any more
-    const auto *paints = new PaintCounter(header()->viewport(), sectionRect(g));
+    // Settled: nothing repaints the first column any more
+    const auto *paints = new PaintCounter(tree()->viewport(), columnRect(descriptionSection()));
     for (int i = 0; i < 3; ++i)
         spin();
     QCOMPARE(paints->count, 0);
 }
 
 // Spec 12, "A stored result that could not be written" (the presentation
-// half; the demand side is tst_calculation_demand's): the plot row and the
-// column header show the badge, and the hover lists the session with the
-// store's reason.
+// half; the demand side is tst_calculation_demand's): the row warns, and its
+// hover names the calculation with the store's reason, tried again at the
+// next start.
 void LogbookIndicatorsTest::failedWriteIsListedInTheHover()
 {
     // A directory where s1's record would be written
@@ -745,12 +906,6 @@ void LogbookIndicatorsTest::failedWriteIsListedInTheHover()
     QVERIFY(QDir().mkpath(path));
     const auto removeDirectory = qScopeGuard([path] { QDir(path).removeRecursively(); });
 
-    PlotRowDelegate *rows = nullptr;
-    auto plotList = makePlotList(&rows);
-    QVERIFY(plotList);
-
-    PlotFixture::show(*m_model, {"s1"});
-    m_plots->setPlotEnabled(QStringLiteral("Syn"), QStringLiteral("g"), true);
     enableColumns({QStringLiteral("G_OUT")});
     gate().open(16);
     {
@@ -760,232 +915,61 @@ void LogbookIndicatorsTest::failedWriteIsListedInTheHover()
     }
     spin();
 
-    // The plot row
-    const DemandState plot = m_demand->plotState(QStringLiteral("Syn/g"));
-    QVERIFY(plot.showsWarning());
-    QCOMPARE(plot.failedCount, 1);
-    QVERIFY2(plot.toolTip.startsWith(QStringLiteral("Could not be computed:")), qPrintable(plot.toolTip));
-    QString failedLine;
-    for (const QString &line : plot.toolTip.split(QLatin1Char('\n'))) {
-        if (line.startsWith(QStringLiteral("  Jump 1 - ")))
-            failedLine = line;
-    }
-    QVERIFY2(failedLine.contains(QStringLiteral("Couldn't write file")), qPrintable(plot.toolTip));
-    const QModelIndex row = plotIndex("Syn/g");
-    QCOMPARE(rows->toolTipFor(row), plot.toolTip);
-    const QRect rowGlyph = rows->indicatorRect(row);
-    QVERIFY(!rowGlyph.isNull());
-    QVERIFY(hasPixel(plotList->viewport()->grab().toImage(), rowGlyph, kAmber));
-    QVERIFY(hideToolTip());
-    {
-        QStyleOptionViewItem opt;
-        opt.initFrom(plotList->viewport());
-        opt.widget = plotList.get();
-        opt.rect = plotList->visualRect(row);
-        const QPoint pos = rowGlyph.center();
-        QHelpEvent event(QEvent::ToolTip, pos, plotList->viewport()->mapToGlobal(pos));
-        QVERIFY(rows->helpEvent(&event, plotList.get(), opt, row));
-        QCOMPARE(QToolTip::text(), plot.toolTip);
-    }
+    // s2 and s4 were written, s3 is not applicable
+    QCOMPARE(m_demand->failures().size(), 1);
+    QCOMPARE(m_demand->sessionFailures(QStringLiteral("s1")).calculations.size(), 1);
+    const QString text = m_demand->sessionFailures(QStringLiteral("s1")).text();
+    QVERIFY2(text.contains(QStringLiteral("Gated: Couldn't write file")), qPrintable(text));
+    QVERIFY2(text.endsWith(QStringLiteral("(tried again at the next start)")), qPrintable(text));
 
-    // The column header: s2 and s4 were written, s3 is not applicable
-    const DemandState column = col("G_OUT");
-    QVERIFY(column.showsWarning());
-    QCOMPARE(column.failedCount, 1);
-    QCOMPARE(column.wantedCount, 3);
-    QVERIFY2(column.toolTip.split(QLatin1Char('\n')).contains(failedLine), qPrintable(column.toolTip));
-    const int g = section("G_OUT");
-    QCOMPARE(header()->toolTipForSection(g), column.toolTip);
-    const QRect sectionGlyph = header()->indicatorRect(g);
-    QVERIFY(!sectionGlyph.isNull());
-    QVERIFY(hasPixel(grabHeader(), sectionGlyph, kAmber));
+    const QModelIndex first = firstCell("s1");
+    verifyOnlyGlyphAt(first);
+    if (QTest::currentTestFailed())
+        return;
     QVERIFY(hideToolTip());
-    QVERIFY(headerHelp(sectionGlyph.center()));
-    QCOMPARE(QToolTip::text(), column.toolTip);
-
+    QVERIFY(cellHelp(first, cells()->warningRect(first).center()));
+    QCOMPARE(QToolTip::text(), text);
     QVERIFY(hideToolTip());
-    plotList.reset();
 }
 
-void LogbookIndicatorsTest::headerToolTipFollowsDemandState()
+// No gesture: a click on the glyph selects the row as a click elsewhere in
+// the cell does, toggles no check box, and starts or cancels nothing.
+void LogbookIndicatorsTest::clickOnRowWarningIsAClickOnTheCell()
 {
-    QVERIFY(makeWorkingColumn());
-    const int g = section("G_OUT");
-    DemandState state = col("G_OUT");
-    QCOMPARE(header()->toolTipForSection(g), state.toolTip);
-    QCOMPARE(state.toolTip, DemandState::buildToolTip(state));
-    QVERIFY(state.toolTip.startsWith(QStringLiteral("Computing: 0 of 3 done")));
-    QVERIFY(state.toolTip.contains(QStringLiteral("  Jump 1 - Gated: step 1")));
-
-    // The whole section shows it: the indicator and the section's left edge
-    const QRect r = header()->indicatorRect(g);
-    QVERIFY(!r.isNull());
-    for (const QPoint &pos : {r.center(), QPoint(sectionRect(g).left() + 4, sectionRect(g).center().y())}) {
-        QVERIFY(hideToolTip());
-        QVERIFY(headerHelp(pos));
-        QCOMPARE(QToolTip::text(), state.toolTip);
-    }
-
-    // s1 done, s2 running
-    gate().open(1);
-    QVERIFY(gate().waitEntered());
-    QTRY_VERIFY(header()->toolTipForSection(g).contains(QStringLiteral("Jump 2 - Gated: step 1")));
-    state = col("G_OUT");
-    QVERIFY(state.toolTip.startsWith(QStringLiteral("Computing: 1 of 3 done")));
-    QCOMPARE(header()->toolTipForSection(g), state.toolTip);
-
-    // Failed
-    gate().open(16);
-    QVERIFY(waitDemandIdle());
-    QVERIFY(makeBadgedColumn());
-    const int ea = section("EA1");
-    QCOMPARE(header()->toolTipForSection(ea),
-             QStringLiteral("Could not be computed:\n  Jump 1 - Explicit A: negative input"));
-    QVERIFY(hideToolTip());
-    QVERIFY(headerHelp(header()->indicatorRect(ea).center()));
-    QCOMPARE(QToolTip::text(), header()->toolTipForSection(ea));
-
-    // A plain section shows nothing of its own
-    QVERIFY(hideToolTip());
-    const int d = descriptionSection();
-    QVERIFY(!headerHelp(sectionRect(d).center()));
-    spin();
-    QVERIFY(!QToolTip::isVisible());
-}
-
-// Logical indices throughout: moving, hiding and rebuilding the columns keep
-// the indicator on the right section.
-void LogbookIndicatorsTest::indicatorFollowsColumnWhenMovedHiddenOrReordered()
-{
-    enableColumns({QStringLiteral("G_IN"), QStringLiteral("G_OUT")});
-    QVERIFY(gate().waitEntered());
-    QTRY_VERIFY(col("G_OUT").isWorking());
-    spin();
-    int g = section("G_OUT");
-    QCOMPARE(g, 2);
-
-    // Moved to the front
-    header()->moveSection(header()->visualIndex(g), 0);
-    m_reference->header()->moveSection(m_reference->header()->visualIndex(g), 0);
-    spin();
-    QCOMPARE(header()->visualIndex(g), 0);
-    QVERIFY(!header()->indicatorRect(g).isNull());
-    QVERIFY(sectionRect(g).contains(header()->indicatorRect(g)));
-    QCOMPARE(sectionRect(g).left(), 0);
-    for (int l = 0; l < header()->count(); ++l) {
-        if (l != g)
-            QCOMPARE(header()->indicatorRect(l), QRect());
-    }
-    {
-        const QImage with = grabHeader();
-        const QImage reference = grabReferenceHeader();
-        QVERIFY(cut(with, sectionRect(g)) != cut(reference, sectionRect(g)));
-        for (int l = 0; l < header()->count(); ++l) {
-            if (l != g)
-                QCOMPARE(cut(with, sectionRect(l)), cut(reference, sectionRect(l)));
-        }
-    }
-
-    // Hidden: nothing is painted for it
-    header()->hideSection(g);
-    m_reference->header()->hideSection(g);
-    spin();
-    QCOMPARE(header()->indicatorRect(g), QRect());
-    QCOMPARE(grabHeader(), grabReferenceHeader());
-    header()->showSection(g);
-    m_reference->header()->showSection(g);
-    spin();
-    QVERIFY(!header()->indicatorRect(g).isNull());
-
-    // Rebuilt columns (a reset): new logical indices
-    enableColumns({QStringLiteral("G_OUT"), QStringLiteral("G_IN")});
-    spin();
-    g = section("G_OUT");
-    QCOMPARE(g, 1);
-    QVERIFY(col("G_OUT").isWorking());
-    QVERIFY(!header()->indicatorRect(g).isNull());
-    QVERIFY(sectionRect(g).contains(header()->indicatorRect(g)));
-    QVERIFY(header()->toolTipForSection(section("G_IN")).isEmpty());
-    QCOMPARE(header()->indicatorRect(section("G_IN")), QRect());
-    QCOMPARE(header()->toolTipForSection(g), col("G_OUT").toolTip);
-}
-
-void LogbookIndicatorsTest::indicatorClearsSortArrowAndNarrowSections()
-{
-    // G_OUT not the last (stretched) section, so that it can be resized
-    enableColumns({QStringLiteral("G_OUT"), QStringLiteral("G_IN")});
-    QVERIFY(gate().waitEntered());
-    QTRY_VERIFY(col("G_OUT").isWorking());
-    const int g = section("G_OUT");
-    tree()->sortByColumn(g, Qt::AscendingOrder);
-    spin();
-    QCOMPARE(header()->sortIndicatorSection(), g);
-
-    const auto arrowRect = [this, g] {
-        QStyleOptionHeader opt;
-        opt.initFrom(header());
-        opt.rect = sectionRect(g);
-        opt.state |= QStyle::State_Horizontal;
-        opt.orientation = Qt::Horizontal;
-        opt.section = g;
-        opt.sortIndicator = QStyleOptionHeader::SortUp;
-        return header()->style()->subElementRect(QStyle::SE_HeaderArrow, &opt, header());
-    };
-
-    QRect r = header()->indicatorRect(g);
-    QVERIFY(!r.isNull());
-    QVERIFY(sectionRect(g).contains(r));
-    QVERIFY(!r.intersects(arrowRect()));
-
-    header()->resizeSection(g, 60);
-    spin();
-    QCOMPARE(header()->sectionSize(g), 60);
-    r = header()->indicatorRect(g);
-    QVERIFY(!r.isNull());
-    QVERIFY(sectionRect(g).contains(r));
-    QVERIFY(!r.intersects(arrowRect()));
-
-    header()->resizeSection(g, 12);
-    spin();
-    QCOMPARE(header()->indicatorRect(g), QRect());
-    QVERIFY(!grabHeader().isNull());        // painted without a glyph, and without a crash
-    QVERIFY(!header()->toolTipForSection(g).isEmpty());
-}
-
-// No gesture: a click on the badge sorts as a click elsewhere in the section
-// does, and starts or cancels nothing. (A finished column with a failure: a
-// finished column without one has no glyph.)
-void LogbookIndicatorsTest::clickOnIndicatorIsAClickOnTheSection()
-{
-    QVERIFY(makeBadgedColumn());
-    const int ea = section("EA1");
-    const QRect r = header()->indicatorRect(ea);
-    QVERIFY(!r.isNull());
+    QVERIFY(makeFailedRow());
+    const QModelIndex first = firstCell("s1");
+    const QRect glyph = cells()->warningRect(first);
+    QVERIFY(!glyph.isNull());
+    const bool visible = m_model->rowAt(first.row()).visible;
 
     const Quiet quiet(*m_queue);
     QSignalSpy cancelSpy(m_queue.get(), &JobQueue::jobCancelRequested);
+    QItemSelectionModel *selection = tree()->selectionModel();
 
-    QTest::mouseClick(header()->viewport(), Qt::LeftButton, {}, r.center());
+    QTest::mouseClick(tree()->viewport(), Qt::LeftButton, {}, glyph.center());
     spin();
-    QCOMPARE(header()->sortIndicatorSection(), ea);
-    const Qt::SortOrder first = header()->sortIndicatorOrder();
+    QCOMPARE(tree()->currentIndex(), first);
+    QVERIFY(selection->isRowSelected(first.row(), QModelIndex()));
+    const QModelIndexList afterGlyph = selection->selectedRows();
+    QCOMPARE(afterGlyph.size(), 1);
 
-    // Again on the glyph: the order flips
-    QTest::mouseClick(header()->viewport(), Qt::LeftButton, {}, header()->indicatorRect(ea).center());
+    // Another row, then s1's cell away from the glyph: the same selection.
+    // (s1 is not selected when it is clicked again, so no edit starts.)
+    const QModelIndex s2First = firstCell("s2");
+    QTest::mouseClick(tree()->viewport(), Qt::LeftButton, {}, trailingPoint(s2First));
     spin();
-    QCOMPARE(header()->sortIndicatorSection(), ea);
-    QVERIFY(header()->sortIndicatorOrder() != first);
-
-    // ... as it does on the section's left edge
-    QTest::mouseClick(header()->viewport(), Qt::LeftButton, {},
-                      QPoint(sectionRect(ea).left() + 4, sectionRect(ea).center().y()));
+    QVERIFY(selection->isRowSelected(s2First.row(), QModelIndex()));
+    QTest::mouseClick(tree()->viewport(), Qt::LeftButton, {}, trailingPoint(first));
     spin();
-    QCOMPARE(header()->sortIndicatorSection(), ea);
-    QCOMPARE(header()->sortIndicatorOrder(), first);
+    QCOMPARE(tree()->currentIndex(), first);
+    QCOMPARE(selection->selectedRows(), afterGlyph);
 
+    QCOMPARE(m_model->rowAt(first.row()).visible, visible);
+    QVERIFY(!tree()->findChild<QLineEdit *>());
     QVERIFY(quiet.holds());
     QCOMPARE(cancelSpy.count(), 0);
-    QVERIFY(col("EA1").showsWarning());
+    QVERIFY(failed("s1"));
+    QVERIFY(!cells()->warningRect(first).isNull());
 }
 
 // ---- The cells ------------------------------------------------------------------------
@@ -1204,8 +1188,6 @@ void LogbookIndicatorsTest::unreadableRecordPendingIsNotDemandPending()
     m_queue = std::make_unique<JobQueue>(m_model.get());
     const Quiet quiet(*m_queue);
     m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
-    m_clock = std::make_unique<WorkingAnimation>();
-    followDemand(m_clock.get(), m_demand.get());
     QVERIFY(buildUi());
 
     {
@@ -1229,8 +1211,11 @@ void LogbookIndicatorsTest::unreadableRecordPendingIsNotDemandPending()
     QVERIFY(unreadable.release());
 }
 
-// One repaint of the visible part of one column, and no model signal.
-void LogbookIndicatorsTest::columnStateChangeRepaintsOnlyThatColumn()
+// Criterion 6 of the row warning and the pending cells: one repaint of the
+// visible part of one column per announcement, and no model signal.
+// pendingCellsChanged(id) repaints that column; failuresChanged() the first
+// visual column, wherever it is.
+void LogbookIndicatorsTest::pendingCellsChangeRepaintsOnlyThatColumn()
 {
     enableColumns({QStringLiteral("G_OUT"), QStringLiteral("G_IN")});
     gate().open(16);
@@ -1247,47 +1232,71 @@ void LogbookIndicatorsTest::columnStateChangeRepaintsOnlyThatColumn()
     QSignalSpy layoutSpy(m_model.get(), &QAbstractItemModel::layoutChanged);
     QSignalSpy headerDataSpy(m_model.get(), &QAbstractItemModel::headerDataChanged);
 
-    emit m_demand->columnStateChanged(colId("G_OUT"));
+    emit m_demand->pendingCellsChanged(colId("G_OUT"));
     QTRY_VERIFY(!treeRegion->region.isEmpty());
-    QTRY_VERIFY(!headerRegion->region.isEmpty());
-    const QRect columnRect(tree()->columnViewportPosition(g), 0, tree()->columnWidth(g),
-                           tree()->viewport()->height());
-    QVERIFY((treeRegion->region - QRegion(columnRect)).isEmpty());
-    QVERIFY((headerRegion->region - QRegion(sectionRect(g))).isEmpty());
+    QVERIFY((treeRegion->region - QRegion(columnRect(g))).isEmpty());
+    spin();
+    QVERIFY(headerRegion->region.isEmpty());
+
+    // The first visual column, the description ...
+    treeRegion->region = QRegion();
+    emit m_demand->failuresChanged();
+    QTRY_VERIFY(!treeRegion->region.isEmpty());
+    QVERIFY((treeRegion->region - QRegion(columnRect(descriptionSection()))).isEmpty());
+
+    // ... or whatever is first
+    header()->moveSection(header()->visualIndex(section("G_IN")), 0);
+    spin();
+    spin();
+    treeRegion->region = QRegion();
+    emit m_demand->failuresChanged();
+    QTRY_VERIFY(!treeRegion->region.isEmpty());
+    QVERIFY((treeRegion->region - QRegion(columnRect(section("G_IN")))).isEmpty());
+
     QCOMPARE(dataSpy.count(), 0);
     QCOMPARE(resetSpy.count(), 0);
     QCOMPARE(layoutSpy.count(), 0);
     QCOMPARE(headerDataSpy.count(), 0);
 
     // An unknown id is harmless
-    emit m_demand->columnStateChanged(QStringLiteral("no such column"));
+    emit m_demand->pendingCellsChanged(QStringLiteral("no such column"));
     spin();
 }
 
-// MainWindow deletes the demand layer before the docks: header and cells then
-// are the base classes'.
+// MainWindow deletes the demand layer before the docks: with a row warning
+// and pending cells shown, the viewport is repainted, the cells then are the
+// base delegate's, no failure tooltip remains, and sorting works.
 void LogbookIndicatorsTest::survivesDemandDestroyedFirst()
 {
-    QVERIFY(makeWorkingColumn());
+    // s1 failed (a stored rejection) before its G_OUT runs and holds the gate
+    QVERIFY(PlotFixture::giveInput(*m_model, QStringLiteral("s1"), QStringLiteral("EA_IN"), -1));
+    m_model->flushPendingInvalidations();
+    enableColumns({QStringLiteral("EA1"), QStringLiteral("G_OUT")});
+    QVERIFY(gate().waitEntered());
+    QTRY_VERIFY(failed("s1") && cells()->showsPending(cell("s2", "G_OUT")));
+    spin();
     const int g = section("G_OUT");
-    const QPoint inIndicator = header()->indicatorRect(g).center();
-    QVERIFY(header()->animation()->isActive());
+    const QModelIndex first = firstCell("s1");
+    const QRect glyph = cells()->warningRect(first);
+    QVERIFY(!glyph.isNull());
+    QVERIFY(cells()->showsPending(cell("s1", "G_OUT")));
 
+    auto *repainted = new RegionRecorder(tree()->viewport());
     m_demand.reset();
+    QTRY_VERIFY(!repainted->region.isEmpty());
     spin();
 
     QCOMPARE(grabHeader(), grabReferenceHeader());
     QCOMPARE(grabCells(), grabCellsWithBaseDelegate());
-    for (int l = 0; l < header()->count(); ++l) {
-        QCOMPARE(header()->indicatorRect(l), QRect());
-        QVERIFY(header()->toolTipForSection(l).isEmpty());
+    for (int r = 0; r < m_model->rowCount(); ++r) {
+        for (int c = 0; c < m_model->columnCount(); ++c) {
+            QCOMPARE(cells()->warningRect(m_model->index(r, c)), QRect());
+            QVERIFY(!cells()->showsPending(m_model->index(r, c)));
+        }
     }
-    QVERIFY(!header()->animation()->isActive());
-    for (int r = 0; r < m_model->rowCount(); ++r)
-        QVERIFY(!cells()->showsPending(m_model->index(r, g)));
 
     QVERIFY(hideToolTip());
-    QVERIFY(!headerHelp(inIndicator));
+    QVERIFY(!cellHelp(first, glyph.center()));
     QVERIFY(!cellHelp(cell("s2", "G_OUT")));
     spin();
     QVERIFY(!QToolTip::isVisible());
@@ -1297,7 +1306,7 @@ void LogbookIndicatorsTest::survivesDemandDestroyedFirst()
     QCOMPARE(header()->sortIndicatorSection(), g);
 }
 
-// A Widgets test writes its own main() (see tst_plot_row_delegate): the same
+// A Widgets test writes its own main() (tests/README.md section 8): the same
 // order as FLYSIGHT_TEST_MAIN, with a QApplication and the application's style.
 int main(int argc, char **argv)
 {

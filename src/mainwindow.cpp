@@ -27,8 +27,6 @@
 #include "ui/docks/DockRegistry.h"
 #include "ui/docks/DockFeature.h"
 #include "ui/docks/AppContext.h"
-#include "ui/docks/DemandIndicator.h"
-#include "ui/docks/DemandIndicatorView.h"
 #include "ui/docks/logbook/LogbookDockFeature.h"
 #include "ui/docks/plot/PlotDockFeature.h"
 #include "ui/docks/plotselection/PlotSelectionDockFeature.h"
@@ -214,13 +212,10 @@ MainWindow::MainWindow(QWidget *parent)
     // at start-up. An enabled logbook column over a requested calculation does
     // create demand at once. Its hidden loads are the idle scheduler's
     // lowest-priority task, so they wait for the column worker's start-up pass.
-    // The working indicator's one clock follows the demand layer, so the plot
-    // list's rows and the logbook's column headers turn in step. The views and
-    // the status bar hold the demand layer weakly.
+    // The logbook's cell delegate and the status bar hold the demand layer
+    // weakly.
     m_jobQueue = new JobQueue(model, this);
     m_calculationDemand = new CalculationDemand(model, m_plotModel, m_jobQueue, this);
-    m_workingClock = new WorkingAnimation(this);
-    followDemand(m_workingClock, m_calculationDemand);
 
     // Create all docks via registry
     AppContext ctx;
@@ -233,7 +228,6 @@ MainWindow::MainWindow(QWidget *parent)
     ctx.measureModel = m_measureModel;
     ctx.jobQueue = m_jobQueue;
     ctx.calculationDemand = m_calculationDemand;
-    ctx.workingClock = m_workingClock;
     ctx.settings = m_settings;
 
     m_features = DockRegistry::createAll(ctx, this);
@@ -362,15 +356,11 @@ MainWindow::~MainWindow()
     // down and joins the worker), then everything else - also when closeEvent()
     // never ran. The demand layer also goes before the session model it
     // registered a scheduler task with (the column fill) and pinned sessions in.
-    // The plot list's delegate, the logbook's header and cell delegate and the
-    // status bar hold the demand layer weakly: the views turn plain and the
-    // status bar shows no computation and no warning once it is gone. The
-    // clock follows the demand layer and stops when it goes; it is deleted
-    // next, and the views hold it weakly, as they hold the demand layer.
+    // The logbook's cell delegate and the status bar hold the demand layer
+    // weakly: the cells turn plain and the status bar shows no computation and
+    // no warning once it is gone.
     delete m_calculationDemand;
     m_calculationDemand = nullptr;
-    delete m_workingClock;
-    m_workingClock = nullptr;
     delete m_jobQueue;
     m_jobQueue = nullptr;
 

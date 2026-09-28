@@ -421,17 +421,12 @@ set(PROJECT_SOURCES
   plotrangemodel.cpp         plotrangemodel.h
   markermodel.cpp            markermodel.h
   ui/docks/AppContext.h
-  ui/docks/DemandIndicator.h    ui/docks/DemandIndicator.cpp
-  ui/docks/DemandIndicatorView.h    ui/docks/DemandIndicatorView.cpp
   ui/docks/DockFeature.h
   ui/docks/DockRegistry.h    ui/docks/DockRegistry.cpp
   ui/docks/plotselection/PlotSelectionDockFeature.h    ui/docks/plotselection/PlotSelectionDockFeature.cpp
-  ui/docks/plotselection/PlotRowLayout.h
-  ui/docks/plotselection/PlotRowDelegate.h    ui/docks/plotselection/PlotRowDelegate.cpp
   ui/docks/markerselection/MarkerSelectionDockFeature.h    ui/docks/markerselection/MarkerSelectionDockFeature.cpp
   ui/docks/logbook/LogbookDockFeature.h    ui/docks/logbook/LogbookDockFeature.cpp
   ui/docks/logbook/LogbookView.h    ui/docks/logbook/LogbookView.cpp
-  ui/docks/logbook/LogbookHeaderView.h    ui/docks/logbook/LogbookHeaderView.cpp
   ui/docks/logbook/LogbookCellDelegate.h    ui/docks/logbook/LogbookCellDelegate.cpp
   ui/docks/legend/LegendDockFeature.h    ui/docks/legend/LegendDockFeature.cpp
   ui/docks/legend/LegendWidget.h    ui/docks/legend/LegendWidget.cpp

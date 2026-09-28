@@ -1,6 +1,7 @@
 #include "LogbookCellDelegate.h"
 
 #include <QApplication>
+#include <QHeaderView>
 #include <QHelpEvent>
 #include <QStyle>
 #include <QToolTip>
@@ -8,7 +9,6 @@
 
 #include "calculationdemand.h"
 #include "sessionmodel.h"
-#include "ui/docks/DemandIndicatorView.h"
 
 namespace FlySight {
 
@@ -19,10 +19,14 @@ LogbookCellDelegate::LogbookCellDelegate(SessionModel *model, CalculationDemand 
     , m_view(view)
 {
     if (m_demand && m_view) {
-        connect(m_demand, &CalculationDemand::columnStateChanged,
-                this, &LogbookCellDelegate::onColumnStateChanged);
-        // Without the demand layer no cell is pending any more
-        repaintWhenDemandDestroyed(m_demand, m_view->viewport());
+        connect(m_demand, &CalculationDemand::pendingCellsChanged,
+                this, &LogbookCellDelegate::onPendingCellsChanged);
+        connect(m_demand, &CalculationDemand::failuresChanged,
+                this, &LogbookCellDelegate::onFailuresChanged);
+        // Without the demand layer no cell is pending and no row warns any
+        // more. The viewport is the context, so nothing happens once it is gone.
+        QWidget *viewport = m_view->viewport();
+        connect(m_demand, &QObject::destroyed, viewport, [viewport] { viewport->update(); });
     }
 }
 
@@ -46,9 +50,84 @@ bool LogbookCellDelegate::showsPending(const QModelIndex &index) const
         && m_demand->isCellPending(index.row(), index.column());
 }
 
+// The column is checked first: only one cell of a row can carry the glyph,
+// and then the demand layer is asked once per row
+bool LogbookCellDelegate::showsWarning(const QModelIndex &index) const
+{
+    return m_demand && m_model && m_view && index.isValid() && index.model() == m_model.data()
+        && index.column() == firstVisualColumn()
+        && !m_demand->sessionFailures(m_model->rowAt(index.row()).sessionId).calculations.isEmpty();
+}
+
+// Asked of the header every time: moving, hiding and rebuilding the columns
+// all repaint the tree, so the answer is current without a signal
+int LogbookCellDelegate::firstVisualColumn() const
+{
+    if (!m_view)
+        return -1;
+    const QHeaderView *header = m_view->header();
+    for (int visual = 0; visual < header->count(); ++visual) {
+        const int logical = header->logicalIndex(visual);
+        if (logical >= 0 && !header->isSectionHidden(logical))
+            return logical;
+    }
+    return -1;
+}
+
+// The style lays the decoration out: at the leading edge of the text
+// rectangle, after the check box, mirrored right to left, in the selection's
+// icon mode, with the text elided into what is left. At most one text line
+// tall, so it fits the row that sizeHint() gave without it.
+void LogbookCellDelegate::addWarning(QStyleOptionViewItem &opt)
+{
+    const QWidget *widget = opt.widget;
+    QStyle *style = widget ? widget->style() : QApplication::style();
+    const int side = qMin(opt.decorationSize.height(), opt.fontMetrics.height());
+    opt.features |= QStyleOptionViewItem::HasDecoration;
+    opt.icon = style->standardIcon(QStyle::SP_MessageBoxWarning, &opt, widget);
+    opt.decorationSize = QSize(side, side);
+}
+
+QRect LogbookCellDelegate::glyphRect(const QStyleOptionViewItem &option, const QModelIndex &index) const
+{
+    QStyleOptionViewItem opt = option;
+    initStyleOption(&opt, index);
+    addWarning(opt);
+    const QWidget *widget = opt.widget;
+    QStyle *style = widget ? widget->style() : QApplication::style();
+    return style->subElementRect(QStyle::SE_ItemViewItemDecoration, &opt, widget) & option.rect;
+}
+
+// The option QAbstractItemView::initViewItemOption() gives the cell, as far
+// as it places the decoration (a delegate cannot call it): the tree's font,
+// direction and icon size, the default alignments, and the cell's rect,
+// which is QTreeView::drawRow()'s for a tree without root decoration.
+QRect LogbookCellDelegate::warningRect(const QModelIndex &index) const
+{
+    if (!showsWarning(index))
+        return QRect();
+    QStyleOptionViewItem opt;
+    opt.initFrom(m_view);
+    opt.widget = m_view;
+    opt.font = m_view->font();
+    if (m_view->iconSize().isValid()) {
+        opt.decorationSize = m_view->iconSize();
+    } else {
+        const int extent = m_view->style()->pixelMetric(QStyle::PM_SmallIconSize, nullptr, m_view);
+        opt.decorationSize = QSize(extent, extent);
+    }
+    opt.decorationPosition = QStyleOptionViewItem::Left;
+    opt.decorationAlignment = Qt::AlignCenter;
+    opt.displayAlignment = Qt::AlignLeft | Qt::AlignVCenter;
+    opt.rect = m_view->visualRect(index);
+    return glyphRect(opt, index);
+}
+
 void LogbookCellDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
-    if (!showsPending(index)) {
+    const bool pending = showsPending(index);
+    const bool warning = showsWarning(index);
+    if (!pending && !warning) {
         // Exactly today's cell
         QStyledItemDelegate::paint(painter, option, index);
         return;
@@ -56,49 +135,80 @@ void LogbookCellDelegate::paint(QPainter *painter, const QStyleOptionViewItem &o
 
     QStyleOptionViewItem opt = option;
     initStyleOption(&opt, index);
-    opt.text = pendingText();
-    opt.features |= QStyleOptionViewItem::HasDisplay;
+    if (pending) {
+        opt.text = pendingText();
+        opt.features |= QStyleOptionViewItem::HasDisplay;
 
-    // Muted in every colour group: the placeholder colour, and the selection's
-    // text colour at 60 % on a selected row. The alignment is the cell's own,
-    // where the value will appear.
-    QPalette::ColorGroup group = QPalette::Normal;
-    if (!(opt.state & QStyle::State_Enabled))
-        group = QPalette::Disabled;
-    else if (!(opt.state & QStyle::State_Active))
-        group = QPalette::Inactive;
-    opt.palette.setColor(QPalette::Text, opt.palette.color(group, QPalette::PlaceholderText));
-    QColor selected = opt.palette.color(group, QPalette::HighlightedText);
-    selected.setAlphaF(0.6f);
-    opt.palette.setColor(QPalette::HighlightedText, selected);
+        // Muted in every colour group: the placeholder colour, and the
+        // selection's text colour at 60 % on a selected row. The alignment is
+        // the cell's own, where the value will appear.
+        QPalette::ColorGroup group = QPalette::Normal;
+        if (!(opt.state & QStyle::State_Enabled))
+            group = QPalette::Disabled;
+        else if (!(opt.state & QStyle::State_Active))
+            group = QPalette::Inactive;
+        opt.palette.setColor(QPalette::Text, opt.palette.color(group, QPalette::PlaceholderText));
+        QColor selected = opt.palette.color(group, QPalette::HighlightedText);
+        selected.setAlphaF(0.6f);
+        opt.palette.setColor(QPalette::HighlightedText, selected);
+    }
+    if (warning)
+        addWarning(opt);
 
     const QWidget *widget = opt.widget;
     QStyle *style = widget ? widget->style() : QApplication::style();
     style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
 }
 
+// The glyph's rect shows the failures, so that the rest of a pending first
+// cell keeps the pending tooltip
 bool LogbookCellDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view, const QStyleOptionViewItem &option,
                                     const QModelIndex &index)
 {
-    if (event && event->type() == QEvent::ToolTip && view && showsPending(index)) {
-        QToolTip::showText(event->globalPos(), pendingToolTip(), view->viewport(), option.rect);
-        return true;
+    if (event && event->type() == QEvent::ToolTip && view) {
+        if (showsWarning(index)) {
+            const QRect glyph = glyphRect(option, index);
+            if (glyph.contains(event->pos())) {
+                const QString text = m_demand->sessionFailures(m_model->rowAt(index.row()).sessionId).text();
+                QToolTip::showText(event->globalPos(), text, view->viewport(), glyph);
+                return true;
+            }
+        }
+        if (showsPending(index)) {
+            QToolTip::showText(event->globalPos(), pendingToolTip(), view->viewport(), option.rect);
+            return true;
+        }
     }
     return QStyledItemDelegate::helpEvent(event, view, option, index);
 }
 
+void LogbookCellDelegate::repaintColumn(int column)
+{
+    QWidget *viewport = m_view->viewport();
+    viewport->update(QRect(m_view->columnViewportPosition(column), 0, m_view->columnWidth(column),
+                           viewport->height()));
+}
+
 // One repaint of the visible part of one column per pass that changed it
-void LogbookCellDelegate::onColumnStateChanged(const QString &columnId)
+void LogbookCellDelegate::onPendingCellsChanged(const QString &columnId)
 {
     if (!m_view || !m_model)
         return;
-    QWidget *viewport = m_view->viewport();
     for (int column = 0; column < m_model->columnCount(); ++column) {
-        if (m_view->isColumnHidden(column) || CalculationDemand::columnId(m_model->column(column)) != columnId)
-            continue;
-        viewport->update(QRect(m_view->columnViewportPosition(column), 0, m_view->columnWidth(column),
-                               viewport->height()));
+        if (!m_view->isColumnHidden(column) && CalculationDemand::columnId(m_model->column(column)) == columnId)
+            repaintColumn(column);
     }
+}
+
+// The signal names no session: the whole first visual column is repainted
+// rather than keeping the previous list to find the rows that changed
+void LogbookCellDelegate::onFailuresChanged()
+{
+    if (!m_view)
+        return;
+    const int column = firstVisualColumn();
+    if (column >= 0)
+        repaintColumn(column);
 }
 
 } // namespace FlySight

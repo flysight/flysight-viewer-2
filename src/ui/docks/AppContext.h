@@ -14,7 +14,6 @@ class PlotViewSettingsModel;
 class MeasureModel;
 class JobQueue;
 class CalculationDemand;
-class WorkingAnimation;
 
 /**
  * Bundles all shared services that dock features may need.
@@ -30,8 +29,7 @@ struct AppContext {
     PlotViewSettingsModel* plotViewSettings = nullptr;
     MeasureModel* measureModel = nullptr;
     JobQueue* jobQueue = nullptr;             // background calculation jobs; JobQueue::model() is what a jobs view would show
-    CalculationDemand* calculationDemand = nullptr; // what the plot list's rows, the logbook's column headers and cells, and the status bar's computations and warning present (may be null: all plain)
-    WorkingAnimation* workingClock = nullptr;  // the working indicator's one clock (DemandIndicator.h); made to follow the demand layer (followDemand, DemandIndicatorView.h) (may be null: the indicator does not turn)
+    CalculationDemand* calculationDemand = nullptr; // what the logbook's cells and rows and the status bar's computations and warning present (may be null: all plain)
     QSettings* settings = nullptr;
 };
 

@@ -1,5 +1,4 @@
 #include "PlotSelectionDockFeature.h"
-#include "PlotRowDelegate.h"
 #include "ui/docks/AppContext.h"
 #include "plotmodel.h"
 #include <QAbstractItemView>
@@ -23,13 +22,6 @@ PlotSelectionDockFeature::PlotSelectionDockFeature(const AppContext& ctx, QObjec
     m_treeView->setModel(ctx.plotModel);
     m_treeView->setHeaderHidden(true);
     m_treeView->setEditTriggers(QAbstractItemView::NoEditTriggers);
-
-    // Rows of plots over requested calculations show one glyph: the turning
-    // working indicator while their demand is computed, or a warning badge for
-    // sessions that could not be computed. Hovering a row shows the counts and
-    // the detail. The indicator turns with the application's one clock (null
-    // demand layer: plain rows).
-    m_treeView->setItemDelegate(new PlotRowDelegate(ctx.calculationDemand, ctx.workingClock, m_treeView));
 
     // Preserve tree expansion state across model resets
     connect(m_plotModel, &QAbstractItemModel::modelAboutToBeReset,

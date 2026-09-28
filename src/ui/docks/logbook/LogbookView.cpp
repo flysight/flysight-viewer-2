@@ -11,12 +11,10 @@
 
 #include "attributeregistry.h"
 #include "LogbookCellDelegate.h"
-#include "LogbookHeaderView.h"
 
 namespace FlySight {
 
-LogbookView::LogbookView(SessionModel *model, CalculationDemand *demand, WorkingAnimation *clock,
-                         QWidget *parent)
+LogbookView::LogbookView(SessionModel *model, CalculationDemand *demand, QWidget *parent)
     : QWidget(parent),
       treeView(new QTreeView(this)),
       model(model)
@@ -25,7 +23,7 @@ LogbookView::LogbookView(SessionModel *model, CalculationDemand *demand, Working
     layout->addWidget(treeView);
     setLayout(layout);
 
-    setupView(demand, clock);
+    setupView(demand);
 
     treeView->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(treeView, &QTreeView::customContextMenuRequested, this, &LogbookView::onContextMenuRequested);
@@ -49,13 +47,9 @@ QList<QModelIndex> LogbookView::selectedRows() const {
     return treeView->selectionModel()->selectedRows();
 }
 
-// The demand layer and the clock are handed on, not kept: the header and the
-// delegate hold them weakly.
-void LogbookView::setupView(CalculationDemand *demand, WorkingAnimation *clock)
+// The demand layer is handed on, not kept: the cell delegate holds it weakly.
+void LogbookView::setupView(CalculationDemand *demand)
 {
-    // The header before the model: the tree hands it the model and its sort
-    // settings, and the lines below configure it
-    treeView->setHeader(new LogbookHeaderView(model, demand, clock, treeView));
     treeView->setModel(model);
     treeView->setItemDelegate(new LogbookCellDelegate(model, demand, treeView));
     treeView->setRootIsDecorated(false);
