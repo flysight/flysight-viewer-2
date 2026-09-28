@@ -1,6 +1,7 @@
 #ifndef FLYSIGHTTEST_FUSIONSESSIONS_H
 #define FLYSIGHTTEST_FUSIONSESSIONS_H
 
+#include <QHash>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -13,8 +14,8 @@
 #include "sessiondata.h"
 
 // The fusion fixtures as real sessions, for tests of sensor fusion as a
-// registered calculation (tst_fusion_session, tst_fusion_jobs, tst_fusion_rows),
-// and the helpers those tests share.
+// registered calculation (tst_fusion_session, tst_fusion_derived,
+// tst_fusion_jobs, tst_fusion_rows), and the helpers those tests share.
 //
 // "Stored data always wins": a measurement with source data is served by the
 // conversion layer, not by a registered calculation. A fixture session stores
@@ -77,6 +78,26 @@ FlySight::SessionData sessionWithoutImu(const FusionFixture &fixture, const QStr
 /// 100 + i*.01, i = 0..4000, az = -9.80665 m/s^2, temperature 25 degC, the rest 0; TIME pulses
 /// {100, 120, 140} with tow / tow+20 / tow+40. SCHEMA_VER = 2.
 FlySight::SessionData naturalSession(const QString &sessionId);
+
+/// The opposite premise to the fixture sessions: the fit's OUTPUTS stored as
+/// data, so that what is derived from them can be tested without the solver.
+///  - Each entry of `channels` becomes source data Fusion/<name>; only the
+///    seventeen names of fusionMeasurementNames() are allowed (Q_ASSERT).
+///  - Each is stored with the unit text of that output: _time "s";
+///    north|east|down "m"; velN|velE|velD "m/s"; accN|accE|accD "m/s^2";
+///    roll|pitch|yaw "deg"; qx..qw "". The conversion layer passes all of
+///    these through unchanged (no schema row names Fusion).
+///  - A reader of Fusion/<name> therefore gets exactly these samples, and
+///    resolution never reaches builtin.fusion.fit: a measurement with source
+///    data is served by the source conversions, and the engine never falls
+///    through from source data to a derived candidate.
+///  - The session also carries the identity attributes of the fixture
+///    sessions (SESSION_ID = sessionId, DEVICE_ID, SCHEMA_VER = 2) and nothing
+///    else; the test stores whatever attributes a derivation reads.
+///  - For engine-level tests only. It never goes into a SessionModel: its fit
+///    outputs are data, and the saver would write them into a session file.
+FlySight::SessionData syntheticFitSession(const QString &sessionId,
+                                          const QHash<QString, QVector<double>> &channels);
 
 QStringList fusionMeasurementNames();   ///< the 17 literal names, in output order
 

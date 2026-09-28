@@ -358,6 +358,9 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
     PUBLIC flysight_fusion_test_support flysight_test_support)
   flysight_add_fusion_test(tst_fusion_session SOURCES tst_fusion_session.cpp
     LIBS flysight_fusion_session_support)
+  # What is derived from the fit's outputs, on stored outputs: never the solver
+  flysight_add_fusion_test(tst_fusion_derived SOURCES tst_fusion_derived.cpp
+    LIBS flysight_fusion_session_support)
   flysight_add_fusion_test(tst_fusion_jobs SOURCES tst_fusion_jobs.cpp
     LIBS flysight_fusion_session_support)
 

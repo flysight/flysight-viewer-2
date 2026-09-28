@@ -2073,13 +2073,16 @@ through one file, `src/fusion/fusionregistration.cpp`, and one entry point,
 never references it: `MainWindow` calls the entry point directly after
 `registerBuiltInCalculations()`, and the fusion tests call it after
 `TestEnvironment::registerBuiltIns()` (`FlySightTest::registerFusionOnce()`).
-Three calculations are registered, in this order:
+Six calculations are registered, in this order:
 
 | Id | Policy | Inputs | Outputs |
 | --- | --- | --- | --- |
 | `builtin.fusion.fit` (title "Sensor fusion") | Explicit | the 22 below | the 18 below |
 | `builtin.fusion.accH` | OnDemand | `Fusion/accN`, `Fusion/accE` | `Fusion/accH` |
 | `builtin.fusion.systemTime` | OnDemand | `Fusion/_time`, `_TIME_FIT_A`, `_TIME_FIT_B` | `Fusion/_system_time` |
+| `builtin.fusion.z` | OnDemand | `Fusion/down`, `_LOCAL_ORIGIN_HMSL`, `_GROUND_ELEV` | `Fusion/z` |
+| `builtin.fusion.accAlongTrack` | OnDemand | `Fusion/accN`, `accE`, `accD`, `velN`, `velE`, `velD`, `_WIND_N`, `_WIND_E` | `Fusion/accAlongTrack` |
+| `builtin.fusion.accCrossTrack` | OnDemand | the same eight | `Fusion/accCrossTrack` |
 
 **Inputs of the fit** (all required; exactly the vector members of
 `Fusion::Channels`, in member order, then the four origin attributes):
@@ -2146,11 +2149,26 @@ and `b`, as `builtin.time.system.GNSS` (both call
 header-only because the fusion library does not link the built-in
 calculations); unavailable when `a == 0` or when any
 result is not finite. It is not a passthrough of `IMU/time`: the fused samples
-are a subset of the IMU samples. Both are on demand, but their inputs exist
-only once the fit has published, so they are blocked by the fit (section 13),
-appear with it through ordinary invalidation, and never start one. Together
-with `Fusion/_time` (an output of the fit) they satisfy the time-axis rule of
-section 16.1.
+are a subset of the IMU samples. `Fusion/z[i] = (_LOCAL_ORIGIN_HMSL -
+Fusion/down[i]) - _GROUND_ELEV`: elevation above the same ground as `GNSS/z`
+(`hMSL - _GROUND_ELEV`), unavailable when either attribute is not a number
+(it does not warn, as `GNSS/z` does: nothing in the fusion library logs).
+`Fusion/accAlongTrack` and `Fusion/accCrossTrack` are the GNSS along-track and
+cross-track accelerations of the fused acceleration against the fused
+velocity less the wind: both registrations and `builtin.gnss.accAlongTrack` /
+`accCrossTrack` call the one definition, `Calculations::alongTrackAcceleration()`
+and `crossTrackAcceleration()` in `src/calculations/trackhelper.h`
+(header-only for the reason given for `timefithelper.h`). The same header
+holds the one wind rule, `windComponent()`: a wind that is not a number counts
+as zero, for every calculation that reads wind. The fused track
+accelerations declare the inputs of the GNSS ones, in their order, so the
+wind's constant defaults (section 5) apply to both. Vertical
+acceleration is `Fusion/accD` itself, positive down like `GNSS/accD`; no
+calculation copies it. All five derived values are on demand, but their
+inputs exist only once the fit has published, so they are blocked by the fit
+(section 13), appear with it through ordinary invalidation, and never start
+one. Every one has the length of its inputs, so together with `Fusion/_time`
+(an output of the fit) they satisfy the time-axis rule of section 16.1.
 
 **Plots.** Seventeen plots in the category "Sensor fusion"
 (`MainWindow::registerBuiltInPlots`): the sixteen measurements other than
@@ -2231,7 +2249,8 @@ it.
 
 Tests (label `fusion`, behind `FLYSIGHT_BUILD_FUSION_TESTS`):
 `tests/tst_fusion_session.cpp` (real `SessionData` engines, the fit on the
-test's main thread), `tests/tst_fusion_jobs.cpp` (the executor's worker on a
+test's main thread), `tests/tst_fusion_derived.cpp` (the derived values on the
+fit's outputs stored as data, without the solver), `tests/tst_fusion_jobs.cpp` (the executor's worker on a
 real `SessionModel`), `tests/tst_fusion_rows.cpp` (the demand layer of
 section 16 with the seventeen real plots and real fits: fits
 start and are dropped with no gesture),

@@ -191,6 +191,32 @@ SessionData naturalSession(const QString &sessionId)
     return session;
 }
 
+SessionData syntheticFitSession(const QString &sessionId, const QHash<QString, QVector<double>> &channels)
+{
+    // The unit text of each fit output, as the kernel's Result documents it
+    const QHash<QString, QString> units{
+        {QStringLiteral("_time"), QStringLiteral("s")},
+        {QStringLiteral("north"), QStringLiteral("m")}, {QStringLiteral("east"), QStringLiteral("m")},
+        {QStringLiteral("down"), QStringLiteral("m")},
+        {QStringLiteral("velN"), QStringLiteral("m/s")}, {QStringLiteral("velE"), QStringLiteral("m/s")},
+        {QStringLiteral("velD"), QStringLiteral("m/s")},
+        {QStringLiteral("accN"), QStringLiteral("m/s^2")}, {QStringLiteral("accE"), QStringLiteral("m/s^2")},
+        {QStringLiteral("accD"), QStringLiteral("m/s^2")},
+        {QStringLiteral("roll"), QStringLiteral("deg")}, {QStringLiteral("pitch"), QStringLiteral("deg")},
+        {QStringLiteral("yaw"), QStringLiteral("deg")},
+        {QStringLiteral("qx"), QString()}, {QStringLiteral("qy"), QString()},
+        {QStringLiteral("qz"), QString()}, {QStringLiteral("qw"), QString()}};
+    Q_ASSERT(units.size() == fusionMeasurementNames().size());
+
+    SessionData session;
+    addIdentity(session, sessionId);
+    for (auto it = channels.cbegin(); it != channels.cend(); ++it) {
+        Q_ASSERT(fusionMeasurementNames().contains(it.key()));
+        session.setSourceMeasurement(QStringLiteral("Fusion"), it.key(), it.value(), units.value(it.key()));
+    }
+    return session;
+}
+
 QStringList fusionMeasurementNames()
 {
     return {

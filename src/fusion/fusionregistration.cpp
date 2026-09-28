@@ -1,6 +1,7 @@
 #include "fusion/fusionregistration.h"
 
 #include <cmath>
+#include <optional>
 
 #include <QCoreApplication>
 #include <QString>
@@ -8,6 +9,7 @@
 
 #include "calculations/registration.h"
 #include "calculations/timefithelper.h"
+#include "calculations/trackhelper.h"
 #include "engine/calculationprogress.h"
 #include "fusion/fusion.h"
 #include "fusion/solverthreads.h"
@@ -270,6 +272,86 @@ void registerSystemTime(CalculationRegistry &registry)
     Calculations::addCalculation(registry, d);
 }
 
+// Fusion/z: elevation above the ground, the origin's height less the fused
+// down position less the ground elevation, so that it reads as GNSS/z does
+// (hMSL - _GROUND_ELEV). On demand and waiting on the fit like accH. Unlike
+// GNSS/z it does not warn when an attribute is not a number: nothing in this
+// library logs, and the engine reports the value as unavailable.
+void registerElevation(CalculationRegistry &registry)
+{
+    CalculationDescriptor d;
+    d.id = QStringLiteral("builtin.fusion.z");
+    d.inputs = {
+        CalcInput::measurement(kSensor, "down"),
+        CalcInput::attribute(SessionKeys::LocalOriginHmsl),
+        CalcInput::attribute(SessionKeys::GroundElev)
+    };
+    d.outputs = { DependencyKey::measurement(kSensor, "z") };
+    d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
+        const QVector<double> down = ctx.measurement(kSensor, "down");
+        bool originOk = false;
+        bool groundOk = false;
+        const double originHmsl = ctx.attribute(SessionKeys::LocalOriginHmsl).toDouble(&originOk);
+        const double groundElev = ctx.attribute(SessionKeys::GroundElev).toDouble(&groundOk);
+        if (!originOk || !groundOk || down.isEmpty())
+            return CalculationResult::unavailable();
+
+        QVector<double> z;
+        z.reserve(down.size());
+        for (const double sample : down)
+            z.append((originHmsl - sample) - groundElev);
+        return CalculationResult().setMeasurement(kSensor, "z", z);
+    };
+    Calculations::addCalculation(registry, d);
+}
+
+// The fused velocity and acceleration with the wind, for the track-relative
+// accelerations of calculations/trackhelper.h, which also owns the wind rule.
+Calculations::TrackSamples trackSamples(const EvaluationContext &ctx)
+{
+    Calculations::TrackSamples s;
+    s.accN = ctx.measurement(kSensor, "accN");
+    s.accE = ctx.measurement(kSensor, "accE");
+    s.accD = ctx.measurement(kSensor, "accD");
+    s.velN = ctx.measurement(kSensor, "velN");
+    s.velE = ctx.measurement(kSensor, "velE");
+    s.velD = ctx.measurement(kSensor, "velD");
+    s.windN = Calculations::windComponent(ctx.attribute(SessionKeys::WindN));
+    s.windE = Calculations::windComponent(ctx.attribute(SessionKeys::WindE));
+    return s;
+}
+
+using TrackFunction = std::optional<QVector<double>> (*)(const Calculations::TrackSamples &);
+
+// Fusion/<name>: a track-relative acceleration of the fused velocity and
+// acceleration, by the GNSS definition, with the inputs of the GNSS ones in
+// their order. On demand and waiting on the fit like accH.
+void registerTrackAcceleration(CalculationRegistry &registry, const char *name, TrackFunction track)
+{
+    const QString measurement = QString::fromLatin1(name);
+
+    CalculationDescriptor d;
+    d.id = QStringLiteral("builtin.fusion.") + measurement;
+    d.inputs = {
+        CalcInput::measurement(kSensor, "accN"),
+        CalcInput::measurement(kSensor, "accE"),
+        CalcInput::measurement(kSensor, "accD"),
+        CalcInput::measurement(kSensor, "velN"),
+        CalcInput::measurement(kSensor, "velE"),
+        CalcInput::measurement(kSensor, "velD"),
+        CalcInput::attribute(SessionKeys::WindN),
+        CalcInput::attribute(SessionKeys::WindE)
+    };
+    d.outputs = { DependencyKey::measurement(kSensor, measurement) };
+    d.compute = [measurement, track](const EvaluationContext &ctx) -> CalculationResult {
+        const std::optional<QVector<double>> values = track(trackSamples(ctx));
+        if (!values)
+            return CalculationResult::unavailable();
+        return CalculationResult().setMeasurement(kSensor, measurement, *values);
+    };
+    Calculations::addCalculation(registry, d);
+}
+
 } // namespace
 
 void Fusion::registerFusionCalculations(CalculationRegistry &registry)
@@ -277,4 +359,7 @@ void Fusion::registerFusionCalculations(CalculationRegistry &registry)
     registerFit(registry);
     registerHorizontalAcceleration(registry);
     registerSystemTime(registry);
+    registerElevation(registry);
+    registerTrackAcceleration(registry, "accAlongTrack", Calculations::alongTrackAcceleration);
+    registerTrackAcceleration(registry, "accCrossTrack", Calculations::crossTrackAcceleration);
 }

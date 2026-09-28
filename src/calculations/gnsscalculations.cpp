@@ -5,6 +5,7 @@
 #include "../sessiondata.h"
 #include "../dependencykey.h"
 #include "registration.h"
+#include "trackhelper.h"
 #include <QVector>
 #include <algorithm>
 #include <cmath>
@@ -60,13 +61,20 @@ void registerGnssDerivative(CalculationRegistry &registry, const char *name, con
         });
 }
 
-// A wind component; a stored non-numeric value counts as no wind.
-double windComponent(const EvaluationContext &ctx, const char *key)
+// The GNSS velocity and acceleration with the wind, for the track-relative
+// accelerations of trackhelper.h, which also owns the wind rule.
+Calculations::TrackSamples trackSamples(const EvaluationContext &ctx)
 {
-    bool ok;
-    double wind = ctx.attribute(key).toDouble(&ok);
-    if (!ok) wind = 0.0;
-    return wind;
+    Calculations::TrackSamples s;
+    s.accN = ctx.measurement("GNSS", "accN");
+    s.accE = ctx.measurement("GNSS", "accE");
+    s.accD = ctx.measurement("GNSS", "accD");
+    s.velN = ctx.measurement("GNSS", "velN");
+    s.velE = ctx.measurement("GNSS", "velE");
+    s.velD = ctx.measurement("GNSS", "velD");
+    s.windN = Calculations::windComponent(ctx.attribute(SessionKeys::WindN));
+    s.windE = Calculations::windComponent(ctx.attribute(SessionKeys::WindE));
+    return s;
 }
 
 enum class AeroCoefficient { Lift, Drag };
@@ -103,8 +111,8 @@ std::optional<QVector<double>> computeAeroCoefficient(const EvaluationContext &c
         return std::nullopt;
     }
 
-    const double windN = windComponent(ctx, SessionKeys::WindN);
-    const double windE = windComponent(ctx, SessionKeys::WindE);
+    const double windN = Calculations::windComponent(ctx.attribute(SessionKeys::WindN));
+    const double windE = Calculations::windComponent(ctx.attribute(SessionKeys::WindE));
 
     QVariant massVar = ctx.attribute(SessionKeys::JumperMass);
     QVariant areaVar = ctx.attribute(SessionKeys::PlanformArea);
@@ -258,8 +266,8 @@ void Calculations::registerGnssCalculations(CalculationRegistry &registry)
             return std::nullopt;
         }
 
-        const double windN = windComponent(ctx, SessionKeys::WindN);
-        const double windE = windComponent(ctx, SessionKeys::WindE);
+        const double windN = Calculations::windComponent(ctx.attribute(SessionKeys::WindN));
+        const double windE = Calculations::windComponent(ctx.attribute(SessionKeys::WindE));
 
         QVector<double> result;
         result.reserve(velN.size());
@@ -416,8 +424,8 @@ void Calculations::registerGnssCalculations(CalculationRegistry &registry)
             return std::nullopt;
         }
 
-        const double windN = windComponent(ctx, SessionKeys::WindN);
-        const double windE = windComponent(ctx, SessionKeys::WindE);
+        const double windN = Calculations::windComponent(ctx.attribute(SessionKeys::WindN));
+        const double windE = Calculations::windComponent(ctx.attribute(SessionKeys::WindE));
 
         QVector<double> result;
         result.reserve(velN.size());
@@ -436,99 +444,17 @@ void Calculations::registerGnssCalculations(CalculationRegistry &registry)
         CalcInput::attribute(SessionKeys::WindN), CalcInput::attribute(SessionKeys::WindE)
     };
 
-    // GNSS along-track acceleration (accAlongTrack)
+    // GNSS along-track and cross-track acceleration (accAlongTrack,
+    // accCrossTrack): the one definition of trackhelper.h
     registerGnss(registry, "accAlongTrack", trackInputs,
-        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
-        QVector<double> accN = ctx.measurement("GNSS", "accN");
-        QVector<double> accE = ctx.measurement("GNSS", "accE");
-        QVector<double> accD = ctx.measurement("GNSS", "accD");
-        QVector<double> velN = ctx.measurement("GNSS", "velN");
-        QVector<double> velE = ctx.measurement("GNSS", "velE");
-        QVector<double> velD = ctx.measurement("GNSS", "velD");
+        [](const EvaluationContext &ctx) {
+            return Calculations::alongTrackAcceleration(trackSamples(ctx));
+        });
 
-        if (accN.isEmpty() || accE.isEmpty() || accD.isEmpty() ||
-            velN.isEmpty() || velE.isEmpty() || velD.isEmpty()) {
-            return std::nullopt;
-        }
-
-        int n = accN.size();
-        if (accE.size() != n || accD.size() != n ||
-            velN.size() != n || velE.size() != n || velD.size() != n) {
-            return std::nullopt;
-        }
-
-        const double windN = windComponent(ctx, SessionKeys::WindN);
-        const double windE = windComponent(ctx, SessionKeys::WindE);
-
-        QVector<double> result;
-        result.reserve(n);
-        for (int i = 0; i < n; ++i) {
-            double wcN = velN[i] - windN;
-            double wcE = velE[i] - windE;
-            double wcD = velD[i];
-            double wcMag = std::sqrt(wcN * wcN + wcE * wcE + wcD * wcD);
-
-            if (wcMag < 1e-9) {
-                result.append(0.0);
-            } else {
-                double uN = wcN / wcMag;
-                double uE = wcE / wcMag;
-                double uD = wcD / wcMag;
-                double dot = accN[i] * uN + accE[i] * uE + accD[i] * uD;
-                result.append(dot);
-            }
-        }
-        return result;
-    });
-
-    // GNSS cross-track acceleration (accCrossTrack)
     registerGnss(registry, "accCrossTrack", trackInputs,
-        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
-        QVector<double> accN = ctx.measurement("GNSS", "accN");
-        QVector<double> accE = ctx.measurement("GNSS", "accE");
-        QVector<double> accD = ctx.measurement("GNSS", "accD");
-        QVector<double> velN = ctx.measurement("GNSS", "velN");
-        QVector<double> velE = ctx.measurement("GNSS", "velE");
-        QVector<double> velD = ctx.measurement("GNSS", "velD");
-
-        if (accN.isEmpty() || accE.isEmpty() || accD.isEmpty() ||
-            velN.isEmpty() || velE.isEmpty() || velD.isEmpty()) {
-            return std::nullopt;
-        }
-
-        int n = accN.size();
-        if (accE.size() != n || accD.size() != n ||
-            velN.size() != n || velE.size() != n || velD.size() != n) {
-            return std::nullopt;
-        }
-
-        const double windN = windComponent(ctx, SessionKeys::WindN);
-        const double windE = windComponent(ctx, SessionKeys::WindE);
-
-        QVector<double> result;
-        result.reserve(n);
-        for (int i = 0; i < n; ++i) {
-            double wcN = velN[i] - windN;
-            double wcE = velE[i] - windE;
-            double wcD = velD[i];
-            double wcMag = std::sqrt(wcN * wcN + wcE * wcE + wcD * wcD);
-
-            double alongTrack;
-            if (wcMag < 1e-9) {
-                alongTrack = 0.0;
-            } else {
-                double uN = wcN / wcMag;
-                double uE = wcE / wcMag;
-                double uD = wcD / wcMag;
-                double dot = accN[i] * uN + accE[i] * uE + accD[i] * uD;
-                alongTrack = -dot;
-            }
-
-            double aMag2 = accN[i] * accN[i] + accE[i] * accE[i] + accD[i] * accD[i];
-            result.append(std::sqrt(std::max(0.0, aMag2 - alongTrack * alongTrack)));
-        }
-        return result;
-    });
+        [](const EvaluationContext &ctx) {
+            return Calculations::crossTrackAcceleration(trackSamples(ctx));
+        });
 
     // GNSS lift and drag coefficients
     const QList<CalcInput> aeroInputs = {

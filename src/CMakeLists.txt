@@ -339,6 +339,7 @@ add_library(flysight_core STATIC
   calculations/derivativehelper.cpp            calculations/derivativehelper.h
   calculations/anglehelper.h
   calculations/timefithelper.h
+  calculations/trackhelper.h
   calculations/isadensity.cpp                  calculations/isadensity.h
 )
 target_link_libraries(flysight_core

@@ -226,9 +226,12 @@ void FusionSessionTest::registrationShape()
 {
     const CalculationRegistry &registry = CalculationRegistry::instance();
 
-    // Registered after every built-in, in this order
-    QCOMPARE(registry.registeredIds().mid(registry.registeredIds().size() - 3),
-             QStringList({kFit, kAccH, kSystemTime}));
+    // Registered after every built-in, in this order; the derived values'
+    // descriptors are tst_fusion_derived's
+    QCOMPARE(registry.registeredIds().mid(registry.registeredIds().size() - 6),
+             QStringList({kFit, kAccH, kSystemTime, QStringLiteral("builtin.fusion.z"),
+                          QStringLiteral("builtin.fusion.accAlongTrack"),
+                          QStringLiteral("builtin.fusion.accCrossTrack")}));
     QCOMPARE(QString::fromLatin1(Fusion::FitCalculationId), kFit);
     QCOMPARE(registry.title(kFit), QStringLiteral("Sensor fusion"));
 

@@ -57,6 +57,18 @@ QList<FitOutputChannel> fitOutputChannels(const Result &result);
 ///    of accN and accE.
 ///  - builtin.fusion.systemTime (on demand): Fusion/_system_time, the inverse
 ///    time fit of Fusion/_time.
+///  - builtin.fusion.z (on demand): Fusion/z, the elevation above the ground,
+///    _LOCAL_ORIGIN_HMSL less down less _GROUND_ELEV, as GNSS/z is hMSL less
+///    _GROUND_ELEV; unavailable when either attribute is not a number.
+///  - builtin.fusion.accAlongTrack (on demand): Fusion/accAlongTrack, the
+///    GNSS along-track acceleration (calculations/trackhelper.h) of accN,
+///    accE, accD against the wind-corrected velN, velE, velD.
+///  - builtin.fusion.accCrossTrack (on demand): Fusion/accCrossTrack, the
+///    GNSS cross-track acceleration of the same inputs.
+///
+/// The derived values' inputs exist only once the fit has published, so they
+/// appear with it and never start it. Vertical acceleration is Fusion/accD
+/// itself (positive down, like GNSS/accD) and has no calculation of its own.
 ///
 /// The application's one entry point into this library: it calls this directly
 /// after Calculations::registerBuiltInCalculations(). The three helpers above

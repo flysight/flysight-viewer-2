@@ -191,9 +191,23 @@ adding or subtracting 360 degrees, with the same rule as the GNSS course
 turns over the whole fit, independently of zoom or markers. That removes
 wrap-boundary jumps; Euler-angle singularities remain.
 
-Two values are derived from the outputs on demand, and appear with them:
-`Fusion/accH`, the horizontal magnitude of `accN` and `accE`, and
-`Fusion/_system_time`, the device-time axis of `Fusion/_time`.
+These values are derived from the outputs on demand, under the same sensor,
+and appear with them; none of them starts a fit:
+
+| Measurement | Meaning |
+| --- | --- |
+| `accH` | horizontal acceleration, m/s^2: the magnitude of `accN` and `accE` |
+| `_system_time` | the device-time axis of `_time` (the inverse time fit) |
+| `z` | elevation above the ground, metres: `_LOCAL_ORIGIN_HMSL - down - _GROUND_ELEV`, the same ground as `GNSS/z`; unavailable when either attribute is not a number |
+| `accAlongTrack`, `accCrossTrack` | along-track and cross-track acceleration, m/s^2: the GNSS definitions, relative to the wind-corrected velocity (`_WIND_N`, `_WIND_E`), applied to the fused velocity and acceleration |
+
+Vertical acceleration is `accD` itself, positive down like `GNSS/accD`; it has
+no derived measurement of its own. `z` and `GNSS/z` stand on the same ground
+elevation but can differ away from the origin: `down` is measured along the
+origin's vertical, so a point at constant height lies lower in the frame by
+about d^2/2R at a distance d from the origin (R the Earth's radius), some
+0.08 m at 1 km and 2 m at 5 km (the frame is that of
+[LOCAL_COORDINATES.md](LOCAL_COORDINATES.md), section 7).
 
 The attribute `_FUSION_DIAGNOSTICS` is compact JSON. After a successful fit
 its top-level keys are, grouped:
@@ -443,6 +457,7 @@ demonstrated by tests, all labelled `fusion`:
 | `tst_fusion_golden` | the kernel through its public API reproduces its goldens for twelve synthetic fixtures (three fits, nine rejections), the progress texts at its boundaries, cancellation at each kind of boundary (prefix, segment and full-fit iterations included), determinism and thread independence |
 | `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the two stopping rules forced through the tuning, the per-step covariance, the temperature factor's Jacobians and the three temperature cases, and the fit trace iteration by iteration against the goldens |
 | `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
+| `tst_fusion_derived` | what is derived from the outputs, without the solver: the outputs stored as data, elevation and the track accelerations held to exact known answers, the track accelerations equal to the GNSS ones on the same samples, and each derived value waiting on the fit and never starting it |
 | `tst_fusion_jobs` | the real fit through the executor: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result and kept, for an unloaded session, through an altitude marker added at run time or at the next start |
 | `tst_fusion_rows` | the demand layer with the real fusion plots, end to end: fits started and dropped by what is checked and visible, with no gesture; progress and failures as each fit ends |
 | `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), a rejection and a solver failure listed among the recordings that could not be computed, with their reasons, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a logbook column over roll filled for recordings that are not loaded, and nothing fitted again after a restart |
@@ -456,8 +471,9 @@ degrees; ten times the largest difference measured between compilers in CI:
 the numbers are in the tolerance policy of `tests/README.md`). Exact mode is
 not opt-in on the capture configuration: where the compiler matches
 `tests/data/fusion/capture.json` (64-bit MSVC 19.44, as the capture tool
-recorded it) and the configuration is Release, CTest runs each of these seven
-tests a second time as `tst_fusion_*_exact` (label `exact`; CMake option
+recorded it) and the configuration is Release, CTest runs each of these
+tests but `tst_fusion_derived`, which compares with no golden, a second time
+as `tst_fusion_*_exact` (label `exact`; CMake option
 `FLYSIGHT_FUSION_EXACT_TESTS`, `AUTO` by default). With any other compiler the
 configure log says that they were not registered, and only the portable mode
 runs. The fixtures, the two modes and the capture procedure are described in
