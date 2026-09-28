@@ -308,7 +308,7 @@ public:
     std::optional<SessionData> loadSessionRaw(const QString &sessionId, QString *error = nullptr);
 
     // Compatibility shim for session files written by Viewer versions that
-    // predate `_JUMPER_MASS` / `_PLANFORM_AREA` / `_WIND_N` / `_WIND_E`. It is
+    // predate `_JUMPER_MASS` / `_PLANFORM_AREA`. It is
     // not an import default: it never runs on an incoming file, never runs
     // before a merge has been decided, only fills keys that are absent, and
     // does not mark the session dirty (pinned by

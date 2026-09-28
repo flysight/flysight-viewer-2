@@ -175,7 +175,7 @@ QList<OracleAttributeEdit> oracleAttributeEdits()
         {QStringLiteral("_WSP_ENTRY_TIME"),      {T0 + 45.0, remove}},
         {QStringLiteral("_SP_WINDOW_START_ALT"), {3000.0, remove}},
         {QStringLiteral("_M"),                   {T0 + 15.0, T0 + 25.0, T0 + 500.0, remove}},
-        {QStringLiteral("_WIND_N"),              {0.0, 5.0}},
+        {QStringLiteral("_WIND_N"),              {0.0, 5.0, remove}},
         {QStringLiteral("_JUMPER_MASS"),         {80.0, 1.0}},
         {QStringLiteral("_DESCRIPTION"),         {QStringLiteral("x"), QStringLiteral("y")}},
     };

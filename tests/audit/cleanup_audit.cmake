@@ -7,7 +7,9 @@
 #     removed rather than living alongside their replacements (acceptance 19);
 #   - each fact has exactly one authority (one gyro factor, one schema-version
 #     attribute name, one compatibility marker, one number formatter, one
-#     emitter of dependencyChanged, one saver, one import path);
+#     emitter of dependencyChanged, one saver, one import path, one helper
+#     that registers every constant attribute default, which the importer
+#     and the legacy backfill no longer write for wind);
 #   - the mechanisms of sensor-fusion-clean-port that have no successor stay
 #     absent (acceptance 120), and the structure that replaced them stays in
 #     place: one worker thread and no locks, GTSAM confined to the fusion
@@ -226,6 +228,26 @@ expect_only("one authority: SCHEMA_VER literal" "\"SCHEMA_VER\"" "^src/conversio
 expect_count("one authority: compatibility marker" "CalculationCompatibilityVersion *=" 1 src)
 expect_only("one authority: number formatting" "FloatingPointShortest" "^src/csvformat\\.cpp$" src)
 expect_none("one authority: number formatting" "<charconv>" src)
+
+# ─────────────────────────────── constant defaults
+# A default that stands in for a value the user has not set is a registered
+# calculation. A constant one is registered by Calculations::addConstantDefault
+# and by nothing else, so one search finds them all; the importer and the
+# legacy backfill write no wind.
+audit_group(constant-defaults)
+# A compute that ignores its context is a constant, and only the helper writes
+# one. Allow: a calculation that genuinely needs no context but is not an
+# attribute default names its parameter (and says why it ignores it), or
+# registers through the helper; never add a file to the allowed regex.
+expect_only("one authority: constant defaults" "\\]\\(const EvaluationContext *&\\)"
+  "^src/calculations/attributecalculations\\.h$" src)
+# The local copies the helper replaced. Allow: none; the helper is the one way.
+expect_none("the replaced default helpers stay gone" "register(Sp|Wsp)Default" src tests)
+# Wind is a constant default, not an import default or a backfill. Allow: none;
+# a wind the user sets is stored by the logbook's edit, not by these files.
+expect_none("no wind default in the importer or the backfill" "_WIND_|WindN|WindE"
+  src/dataimporter.cpp src/dataimporter.h src/logbookmanager.cpp src/logbookmanager.h)
+
 # The recording-wide local frame is the only projection: the simplified track
 # (and anything else that needs metres) consumes Local/..., never its own.
 # Allow: a second legitimate user of LocalCartesian is added to the

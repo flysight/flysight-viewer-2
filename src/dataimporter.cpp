@@ -227,20 +227,14 @@ void DataImporter::applyCreationDefaults(const ParsedFile& file, SessionData& se
         session.setAttribute(SessionKeys::ImportTime, now);
     }
 
-    // 5. Wind defaults (placeholder; will be calculated per-track in future)
-    if (!session.hasStoredAttribute(SessionKeys::WindN))
-        session.setAttribute(SessionKeys::WindN, 0.0);
-    if (!session.hasStoredAttribute(SessionKeys::WindE))
-        session.setAttribute(SessionKeys::WindE, 0.0);
-
-    // 6. Aerodynamic defaults from preferences
+    // 5. Aerodynamic defaults from preferences
     PreferencesManager &prefs = PreferencesManager::instance();
     if (!session.hasStoredAttribute(SessionKeys::JumperMass))
         session.setAttribute(SessionKeys::JumperMass, prefs.getValue(PreferenceKeys::AeroMass));
     if (!session.hasStoredAttribute(SessionKeys::PlanformArea))
         session.setAttribute(SessionKeys::PlanformArea, prefs.getValue(PreferenceKeys::AeroArea));
 
-    // 7. For fixed ground elevation mode, bake the value at creation time
+    // 6. For fixed ground elevation mode, bake the value at creation time
     if (!session.hasStoredAttribute(SessionKeys::GroundElev)) {
         const QString groundMode = prefs.getValue(PreferenceKeys::ImportGroundReferenceMode).toString();
         if (groundMode == "Fixed") {

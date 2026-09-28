@@ -93,8 +93,6 @@ SessionData recording(const QString &id, const QString &key, const std::optional
     s.setAttribute(QStringLiteral("_DESCRIPTION"), QStringLiteral("Jump ") + id);
     s.setAttribute(QStringLiteral("_JUMPER_MASS"), 80.0);
     s.setAttribute(QStringLiteral("_PLANFORM_AREA"), 2.0);
-    s.setAttribute(QStringLiteral("_WIND_N"), 0.0);
-    s.setAttribute(QStringLiteral("_WIND_E"), 0.0);
     if (token.has_value())
         s.setAttribute(key, *token);
     return s;

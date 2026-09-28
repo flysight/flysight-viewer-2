@@ -42,7 +42,7 @@ using namespace FlySightTest;
 
 namespace {
 
-// A small session that already carries the four attributes loadSession()
+// A small session that already carries the two attributes loadSession()
 // would otherwise backfill.
 SessionData makeSession(const QString &id, const QString &description = QStringLiteral("first"))
 {
@@ -52,8 +52,6 @@ SessionData makeSession(const QString &id, const QString &description = QStringL
     s.setAttribute("_DESCRIPTION", description);
     s.setAttribute("_JUMPER_MASS", 80.0);
     s.setAttribute("_PLANFORM_AREA", 2.0);
-    s.setAttribute("_WIND_N", 0.0);
-    s.setAttribute("_WIND_E", 0.0);
     s.setSourceMeasurement("IMU", "time", {10.0, 20.0, 30.0}, "s");
     s.setSourceMeasurement("IMU", "wx", {1.0, 2.0, 3.0}, "deg/s");
     return s;
@@ -614,7 +612,7 @@ void LogbookIndexTest::remapAndRemoveCarryMarks()
     QVERIFY(logbook.lastSaveError().isEmpty());
 }
 
-// A session file written before the mass / area / wind attributes existed.
+// A session file written before the mass / area attributes existed.
 void LogbookIndexTest::rawLoadSkipsBackfill()
 {
     LogbookManager &logbook = LogbookManager::instance();
@@ -636,9 +634,11 @@ void LogbookIndexTest::rawLoadSkipsBackfill()
     QVERIFY(ordinary.has_value());
     QCOMPARE(ordinary->attributeKeys(),
              QStringList({"DEVICE_ID", "SESSION_ID", "_DESCRIPTION",
-                          "_JUMPER_MASS", "_PLANFORM_AREA", "_WIND_E", "_WIND_N"}));
+                          "_JUMPER_MASS", "_PLANFORM_AREA"}));
     QCOMPARE(ordinary->storedAttribute("_JUMPER_MASS").toDouble(), 1.0);
-    QCOMPARE(ordinary->storedAttribute("_WIND_N").toDouble(), 0.0);
+    // Wind is not backfilled: its constant default gives zero.
+    QVERIFY(!ordinary->hasStoredAttribute("_WIND_N"));
+    QCOMPARE(ordinary->getAttribute("_WIND_N").toDouble(), 0.0);
 
     // The shim only fills what is absent
     SessionData partial;
@@ -646,7 +646,7 @@ void LogbookIndexTest::rawLoadSkipsBackfill()
     LogbookManager::applyLegacyBackfill(partial);
     QCOMPARE(partial.storedAttribute("_JUMPER_MASS").toString(), QStringLiteral("80"));
     QCOMPARE(partial.attributeKeys(),
-             QStringList({"_JUMPER_MASS", "_PLANFORM_AREA", "_WIND_E", "_WIND_N"}));
+             QStringList({"_JUMPER_MASS", "_PLANFORM_AREA"}));
 }
 
 void LogbookIndexTest::rawLoadReportsReason()

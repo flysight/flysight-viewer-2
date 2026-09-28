@@ -79,6 +79,7 @@ private slots:
     void goldenOnEngine_data();
     void goldenOnEngine();
     void noUndeclaredReads();
+    void constantDefaults();
 
     void timeFitRunsOnce();
 
@@ -137,6 +138,8 @@ void BuiltinsEngineTest::inventory()
         "builtin.attr.exitTime",
         "builtin.attr.syncTime",
         "builtin.attr.courseRef",
+        "builtin.default._WIND_N",
+        "builtin.default._WIND_E",
         "builtin.attr.manoeuvreStart",
         "builtin.attr.flare",
         "builtin.attr.landingTime",
@@ -198,16 +201,16 @@ void BuiltinsEngineTest::inventory()
         // simplificationcalculations
         "builtin.simplified.track",
         // wspcalculations
-        "builtin.wsp.default.version",
-        "builtin.wsp.default.topAlt",
-        "builtin.wsp.default.bottomAlt",
-        "builtin.wsp.default.task",
+        "builtin.default._WSP_VERSION",
+        "builtin.default._WSP_TOP_ALT",
+        "builtin.default._WSP_BOTTOM_ALT",
+        "builtin.default._WSP_TASK",
         "builtin.wsp.ref1Time",
         "builtin.wsp.results",
         // spcalculations
-        "builtin.sp.default.perfWindowHeight",
-        "builtin.sp.default.valWindowHeight",
-        "builtin.sp.default.breakoffAlt",
+        "builtin.default._SP_PERF_WINDOW_HEIGHT",
+        "builtin.default._SP_VAL_WINDOW_HEIGHT",
+        "builtin.default._SP_BREAKOFF_ALT",
         "builtin.sp.windowStart",
         "builtin.sp.results",
         // synthesized interpolation, last
@@ -216,7 +219,7 @@ void BuiltinsEngineTest::inventory()
 
     const QStringList ids = m_world->registry.registeredIds();
     QCOMPARE(ids, expected);
-    QCOMPARE(ids.size(), 73);   // 2 conversion families + 70 calculations + 1 family
+    QCOMPARE(ids.size(), 75);   // 2 conversion families + 72 calculations + 1 family
 
     const QStringList families = {"builtin.conversion.schema", "builtin.conversion.default",
                                   "builtin.interpolation"};
@@ -283,7 +286,7 @@ void BuiltinsEngineTest::noUndeclaredReads()
         QVERIFY2(status.has_value(), qPrintable(id));
         QVERIFY2(*status == ResultStatus::Ok || *status == ResultStatus::MissingInput, qPrintable(id));
     }
-    QCOMPARE(plain, 70);
+    QCOMPARE(plain, 72);
 
     QCOMPARE(engine.undeclaredReadCount(), 0);
     QCOMPARE(engine.cycleCount(), 0);
@@ -294,6 +297,71 @@ void BuiltinsEngineTest::noUndeclaredReads()
         if (!m_world->registry.isFamily(id))
             QVERIFY2(engine.resultStatus(id) == ResultStatus::Ok, qPrintable(id));
     }
+}
+
+// Every constant default is registered by Calculations::addConstantDefault:
+// the id builtin.default.<key>, no inputs, the attribute as its one output.
+// The engine's proof that such a calculation serves as a default is
+// tst_calcengine::constantCalculationIsADefault; this pins the built-in ones.
+void BuiltinsEngineTest::constantDefaults()
+{
+    const QString prefix = QStringLiteral("builtin.default.");
+    const QHash<QString, QVariant> expected = {
+        {QStringLiteral("_WIND_N"), QVariant(0.0)},
+        {QStringLiteral("_WIND_E"), QVariant(0.0)},
+        {QStringLiteral("_WSP_VERSION"), QVariant(QStringLiteral("1.0"))},
+        {QStringLiteral("_WSP_TOP_ALT"), QVariant(2500.0)},
+        {QStringLiteral("_WSP_BOTTOM_ALT"), QVariant(1500.0)},
+        {QStringLiteral("_WSP_TASK"), QVariant(QStringLiteral("Time"))},
+        {QStringLiteral("_SP_PERF_WINDOW_HEIGHT"), QVariant(7400.0 / 3.28084)},
+        {QStringLiteral("_SP_VAL_WINDOW_HEIGHT"), QVariant(3300.0 / 3.28084)},
+        {QStringLiteral("_SP_BREAKOFF_ALT"), QVariant(5600.0 / 3.28084)},
+    };
+
+    // The shape of every registration under the prefix, and exactly these nine.
+    QSet<QString> found;
+    for (const QString &id : m_world->registry.registeredIds()) {
+        if (!id.startsWith(prefix))
+            continue;
+        const QString key = id.mid(prefix.size());
+        found.insert(key);
+        const std::optional<CalculationInstance> instance = m_world->registry.instance(id);
+        QVERIFY2(instance.has_value(), qPrintable(id));
+        QVERIFY2(instance->descriptor->inputs.isEmpty(), qPrintable(id));
+        QCOMPARE(instance->descriptor->outputs.size(), 1);
+        QVERIFY2(instance->descriptor->outputs.first() == DependencyKey::attribute(key), qPrintable(id));
+    }
+    QCOMPARE(found, QSet<QString>(expected.keyBegin(), expected.keyEnd()));
+
+    // Their values and value types, on a session that stores none of them.
+    World empty;
+    for (auto it = expected.cbegin(); it != expected.cend(); ++it) {
+        const QVariant value = empty.engine->attribute(it.key());
+        QCOMPARE(value.userType(), it.value().userType());
+        QCOMPARE(value, it.value());
+        QVERIFY(empty.engine->resultStatus(prefix + it.key()) == ResultStatus::Ok);
+    }
+
+    // The descent fixture is imported and stores no wind: wind reads zero from
+    // its default. A stored value wins and moves the wind-corrected speed;
+    // removing it returns both to the default.
+    QVERIFY(!m_fixture.hasStoredAttribute(SessionKeys::WindN));
+    QVERIFY(!m_fixture.hasStoredAttribute(SessionKeys::WindE));
+    CalculationEngine &engine = *m_world->engine;
+    QCOMPARE(engine.attribute("_WIND_N"), QVariant(0.0));
+    const QVector<double> calm = engine.measurement("GNSS", "wcVel");
+    QVERIFY(!calm.isEmpty());
+
+    QVERIFY(m_world->state.setAttribute(engine, "_WIND_N", 5.0).contains(measKey("GNSS", "wcVel")));
+    QCOMPARE(engine.attribute("_WIND_N"), QVariant(5.0));
+    const QVector<double> windy = engine.measurement("GNSS", "wcVel");
+    QCOMPARE(windy.size(), calm.size());
+    QVERIFY(windy != calm);
+
+    QVERIFY(m_world->state.removeAttribute(engine, "_WIND_N").contains(measKey("GNSS", "wcVel")));
+    QCOMPARE(engine.attribute("_WIND_N"), QVariant(0.0));
+    QCOMPARE(engine.measurement("GNSS", "wcVel"), calm);
+    QCOMPARE(engine.undeclaredReadCount(), 0);
 }
 
 void BuiltinsEngineTest::timeFitRunsOnce()

@@ -108,6 +108,20 @@ The application then registers sensor fusion from its own library
 (`Fusion::registerFusionCalculations`, `src/fusion/fusionregistration.cpp`);
 `flysight_core` does not know it.
 
+**Defaults are calculations.** The importer stores only what is a fact of the
+import: identity, provenance, and a choice the user made at import (jumper
+mass, planform area, the fixed ground elevation). Anything that stands in for
+a value the user has not set is a calculation. It is derived from the data
+where possible (the ground elevation, the video sync time, the course
+reference). Otherwise it is constant: a calculation with no inputs whose one
+output is the attribute, registered with `Calculations::addConstantDefault`
+(`src/calculations/attributecalculations.h`) under the id
+`builtin.default.<key>`. Every constant default is found by searching for that
+name; wind north and east (zero) and the SP and WS-P parameters are constant
+defaults. A stored value wins even when it is invalid or empty (step 1 of the
+resolution below), so returning a session to its default removes the stored
+attribute; it never stores a blank.
+
 The engine records everything a resolution looked at, including the candidates
 it rejected, so a cached fallback is replaced when a preferred candidate
 becomes viable. A dependency cycle makes every calculation on the ring

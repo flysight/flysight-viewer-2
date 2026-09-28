@@ -413,8 +413,7 @@ void ImportMergeTest::newSessionGetsDefaults()
     QCOMPARE(s.storedAttribute("_DESCRIPTION").toString(), QStringLiteral("24-01-01/12-00-00"));
     QCOMPARE(s.storedAttribute("_JUMPER_MASS").toDouble(), 1.0);
     QCOMPARE(s.storedAttribute("_PLANFORM_AREA").toDouble(), 1.0);
-    QVERIFY(s.hasStoredAttribute("_WIND_N"));
-    QCOMPARE(s.storedAttribute("_WIND_N").toDouble(), 0.0);
+    QVERIFY(!s.hasStoredAttribute("_WIND_N"));    // a calculated default, not written
     QVERIFY(s.storedAttribute("_IMPORT_TIME").toDouble() > 0.0);
     QCOMPARE(s.storedAttribute("DEVICE_ID").toString(), QStringLiteral("test-device"));
     QVERIFY(!s.hasStoredAttribute("_GROUND_ELEV"));
@@ -426,7 +425,9 @@ void ImportMergeTest::newSessionGetsDefaults()
     QVERIFY(waitForIdle(*m_model));
     QVERIFY(!m_model->rowAt(0).dirty);
     QCOMPARE(sessionCsvFiles().size(), 1);
-    QVERIFY(readFileBytes(sessionFilePath(kId)).contains("$VAR,_DESCRIPTION,24-01-01/12-00-00\n"));
+    const QByteArray saved = readFileBytes(sessionFilePath(kId));
+    QVERIFY(saved.contains("$VAR,_DESCRIPTION,24-01-01/12-00-00\n"));
+    QVERIFY(!saved.contains("$VAR,_WIND_"));
 }
 
 // ─────────────────────────────── order independence (acceptance 7)

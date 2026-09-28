@@ -212,10 +212,14 @@ a `SESSION_ID`.
   or not the session is currently loaded. An unloaded session is loaded first;
   if it cannot be loaded the import fails and the stored file is untouched.
 
-Import-time defaults (`_DESCRIPTION`, `_IMPORT_TIME`, `_WIND_N`, `_WIND_E`,
-`_JUMPER_MASS`, `_PLANFORM_AREA`, a fixed `_GROUND_ELEV`, and a synthesized
-`SESSION_ID` / `DEVICE_ID` when the file records none) are applied only when a
-session is created. A merge never applies them.
+Import-time defaults (`_DESCRIPTION`, `_IMPORT_TIME`, `_JUMPER_MASS`,
+`_PLANFORM_AREA`, a fixed `_GROUND_ELEV`, and a synthesized `SESSION_ID` /
+`DEVICE_ID` when the file records none) are applied only when a session is
+created. A merge never applies them.
+
+Wind (`_WIND_N`, `_WIND_E`) is not written at import. A session without stored
+wind reads zero from a constant default calculation (`docs/CALCULATIONS.md`
+section 5), and a file that carries wind keeps it.
 
 **Attribute conflict rule**, for header attributes (keys without a leading
 `_`):
@@ -293,8 +297,10 @@ receives the legacy correction once, at read time. Saving such a session does
 not rescale or relabel it and does not add `SCHEMA_VER`. There is no
 migration.
 
-Very old session files gain `_JUMPER_MASS`, `_PLANFORM_AREA`, `_WIND_N`, and
-`_WIND_E` lines on their next save (a legacy backfill; purely additive).
+Very old session files gain `_JUMPER_MASS` and `_PLANFORM_AREA` lines on their
+next save (a legacy backfill; purely additive). Wind is no longer backfilled: a
+session without it reads zero from its constant default, and a file that
+carries wind keeps it.
 
 ## 11. Logbook column cache
 

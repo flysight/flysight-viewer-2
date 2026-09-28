@@ -303,6 +303,12 @@ void Calculations::registerAttributeCalculations(CalculationRegistry &registry)
         addCalculation(registry, d);
     }
 
+    // Wind stands in for a value the user has not set: zero means no wind
+    // correction, and a stored value wins. Nothing derives wind from the data,
+    // so its default is a constant.
+    addConstantDefault(registry, QString::fromLatin1(SessionKeys::WindN), 0.0);
+    addConstantDefault(registry, QString::fromLatin1(SessionKeys::WindE), 0.0);
+
     // Manoeuvre start time: walk backward from the last 10 m/s crossing
     // to the local minimum in vertical speed
     {

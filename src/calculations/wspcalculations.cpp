@@ -4,6 +4,7 @@
 #include "../markerregistry.h"
 #include "../attributeregistry.h"
 #include "../units/unitdefinitions.h"
+#include "attributecalculations.h"
 #include "registration.h"
 #include <GeographicLib/Geodesic.hpp>
 #include <QColor>
@@ -156,36 +157,21 @@ WspResults computeWspResults(double topAlt, double bottomAlt, double exitTime,
     return results;
 }
 
-// Registers a parameter default: no inputs, one constant output. A stored
-// attribute of the same name (the user's choice) takes precedence.
-void registerWspDefault(CalculationRegistry &registry, const QString &id,
-                        const char *key, const QVariant &value)
-{
-    const QString outputKey = QString::fromLatin1(key);
-
-    CalculationDescriptor d;
-    d.id = id;
-    d.outputs = { DependencyKey::attribute(outputKey) };
-    d.compute = [outputKey, value](const EvaluationContext &) -> CalculationResult {
-        return CalculationResult().setAttribute(outputKey, value);
-    };
-    Calculations::addCalculation(registry, d);
-}
-
 } // namespace
 
 void Calculations::registerWspCalculations(CalculationRegistry &registry)
 {
     // ── Group A: Parameter defaults ────────────────────────────────────
+    // Constant defaults: a stored attribute (the user's choice) wins.
 
-    registerWspDefault(registry, QStringLiteral("builtin.wsp.default.version"),
-                       SessionKeys::WspVersion, QVariant(QStringLiteral("1.0")));
-    registerWspDefault(registry, QStringLiteral("builtin.wsp.default.topAlt"),
-                       SessionKeys::WspTopAlt, QVariant(2500.0));
-    registerWspDefault(registry, QStringLiteral("builtin.wsp.default.bottomAlt"),
-                       SessionKeys::WspBottomAlt, QVariant(1500.0));
-    registerWspDefault(registry, QStringLiteral("builtin.wsp.default.task"),
-                       SessionKeys::WspTask, QVariant(QStringLiteral("Time")));
+    addConstantDefault(registry, QString::fromLatin1(SessionKeys::WspVersion),
+                       QVariant(QStringLiteral("1.0")));
+    addConstantDefault(registry, QString::fromLatin1(SessionKeys::WspTopAlt),
+                       QVariant(2500.0));
+    addConstantDefault(registry, QString::fromLatin1(SessionKeys::WspBottomAlt),
+                       QVariant(1500.0));
+    addConstantDefault(registry, QString::fromLatin1(SessionKeys::WspTask),
+                       QVariant(QStringLiteral("Time")));
 
     // ── Group A2: Lane Reference 1 (Ref1) ─────────────────────────────
     // Ref1 = 9 seconds after the competitor's vertical speed first

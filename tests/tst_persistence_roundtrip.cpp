@@ -13,9 +13,9 @@
 // fresh-evaluation oracle.
 //
 // Exporter-level tests reload with DataImporter::readFile, never with
-// LogbookManager::loadSession, so the legacy mass / area / wind backfill of
+// LogbookManager::loadSession, so the legacy mass / area backfill of
 // loadSession cannot interfere; logbook-level tests use fixtures that already
-// carry those four attributes, except the one test that pins the backfill.
+// carry those two attributes, except the one test that pins the backfill.
 
 #include <QtTest>
 
@@ -136,11 +136,12 @@ Fs2FileBuilder awkwardFile()
 
 // A file as a released Viewer version wrote it (exporter order, physical
 // units, no SCHEMA_VER), with the lossy six-digit _IMPORT_TIME those versions
-// produced. withAeroAndWind = the four attributes loadSession() backfills.
+// produced. withAero = the two attributes loadSession() backfills; withWind =
+// the wind those versions wrote, which a load keeps and never backfills.
 // magX = the text of the one MAG/x sample (in tesla). The default, 0.25, has
 // the same text in the released 15-significant-digit form and in the shortest
 // round-trip form; "0.0001" does not (see releasedValueWithDifferentText).
-QByteArray releasedFile(bool withAeroAndWind, const QByteArray &magX = "0.25")
+QByteArray releasedFile(bool withAero, bool withWind, const QByteArray &magX = "0.25")
 {
     QByteArray r =
         "$FLYS,1\n"
@@ -149,10 +150,12 @@ QByteArray releasedFile(bool withAeroAndWind, const QByteArray &magX = "0.25")
         "$VAR,SESSION_ID,rel\n"
         "$VAR,_DESCRIPTION,old jump\n"
         "$VAR,_IMPORT_TIME,1.7189e+09\n";
-    if (withAeroAndWind) {
+    if (withAero) {
         r += "$VAR,_JUMPER_MASS,80\n"
-             "$VAR,_PLANFORM_AREA,2\n"
-             "$VAR,_WIND_E,0\n"
+             "$VAR,_PLANFORM_AREA,2\n";
+    }
+    if (withWind) {
+        r += "$VAR,_WIND_E,0\n"
              "$VAR,_WIND_N,0\n";
     }
     r += "$COL,MAG,time,x\n"
@@ -793,7 +796,7 @@ void PersistenceRoundTripTest::releasedLogbookSaveKeepsBytes()
     LogbookManager &logbook = LogbookManager::instance();
     logbook.initialize();
 
-    const QByteArray released = releasedFile(true);
+    const QByteArray released = releasedFile(true, true);
     const QString path = installReleasedFile(released);
     QVERIFY(!path.isEmpty());
 
@@ -833,7 +836,7 @@ void PersistenceRoundTripTest::releasedValueWithDifferentText()
     LogbookManager &logbook = LogbookManager::instance();
     logbook.initialize();
 
-    const QString path = installReleasedFile(releasedFile(true, "0.0001"));
+    const QString path = installReleasedFile(releasedFile(true, true, "0.0001"));
     QVERIFY(!path.isEmpty());
 
     std::optional<SessionData> loaded = logbook.loadSession(QStringLiteral("rel"));
@@ -841,7 +844,7 @@ void PersistenceRoundTripTest::releasedValueWithDifferentText()
     QVERIFY(logbook.saveSession(*loaded));
 
     const QByteArray saved = readFileBytes(path);
-    QCOMPARE(saved, releasedFile(true, "1e-04"));
+    QCOMPARE(saved, releasedFile(true, true, "1e-04"));
 
     std::optional<SessionData> again = logbook.loadSession(QStringLiteral("rel"));
     QVERIFY(again.has_value());
@@ -856,8 +859,9 @@ void PersistenceRoundTripTest::releasedValueWithDifferentText()
 }
 
 // Acceptance 6 / the loadSession backfill: a released file older than the
-// per-session mass / area / wind attributes gains exactly those four lines on
-// its next save and nothing else changes.
+// per-session mass / area attributes gains exactly those two lines on its next
+// save and nothing else changes. Wind is not backfilled: a session without it
+// reads zero from its constant default.
 // The legacy backfill (LogbookManager::applyLegacyBackfill) is additive and idempotent.
 void PersistenceRoundTripTest::releasedLogbookBackfillIsAdditive()
 {
@@ -868,7 +872,7 @@ void PersistenceRoundTripTest::releasedLogbookBackfillIsAdditive()
     LogbookManager &logbook = LogbookManager::instance();
     logbook.initialize();
 
-    const QByteArray released = releasedFile(false);
+    const QByteArray released = releasedFile(false, false);
     const QString path = installReleasedFile(released);
     QVERIFY(!path.isEmpty());
 
@@ -877,10 +881,10 @@ void PersistenceRoundTripTest::releasedLogbookBackfillIsAdditive()
     QVERIFY2(logbook.saveSession(*loaded), qPrintable(logbook.lastSaveError()));
 
     const QByteArray saved = readFileBytes(path);
-    const QList<QByteArray> added = {
-        "$VAR,_JUMPER_MASS,1", "$VAR,_PLANFORM_AREA,1", "$VAR,_WIND_E,0", "$VAR,_WIND_N,0"};
+    const QList<QByteArray> added = {"$VAR,_JUMPER_MASS,1", "$VAR,_PLANFORM_AREA,1"};
+    QVERIFY(!saved.contains("$VAR,_WIND_"));
 
-    // Exactly the four lines were added ...
+    // Exactly the two lines were added ...
     QList<QByteArray> savedLines = lines(saved);
     for (const QByteArray &line : added) {
         QCOMPARE(savedLines.count(line), 1);
@@ -888,8 +892,8 @@ void PersistenceRoundTripTest::releasedLogbookBackfillIsAdditive()
     }
     // ... and without them the file is the released file, line for line.
     QCOMPARE(savedLines, lines(released));
-    QCOMPARE(saved, releasedFile(true).replace("_JUMPER_MASS,80", "_JUMPER_MASS,1")
-                                      .replace("_PLANFORM_AREA,2", "_PLANFORM_AREA,1"));
+    QCOMPARE(saved, releasedFile(true, false).replace("_JUMPER_MASS,80", "_JUMPER_MASS,1")
+                                             .replace("_PLANFORM_AREA,2", "_PLANFORM_AREA,1"));
 
     // Idempotent: a further load + save changes nothing
     std::optional<SessionData> again = logbook.loadSession(QStringLiteral("rel"));
@@ -906,7 +910,7 @@ void PersistenceRoundTripTest::logbookSaveReloadCycle()
     logbook.initialize();
 
     // importFile, so that the creation defaults (import time as a double,
-    // mass, area, wind) exist and loadSession has nothing to backfill.
+    // mass, area) exist and loadSession has nothing to backfill.
     const QString source = tempFile(QStringLiteral("awkward"));
     QVERIFY(awkwardFile().write(source));
     DataImporter importer;

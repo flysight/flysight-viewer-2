@@ -660,14 +660,6 @@ void LogbookManager::applyLegacyBackfill(SessionData &session)
         session.setAttribute(SessionKeys::PlanformArea,
             PreferencesManager::instance().getValue(PreferenceKeys::AeroArea));
     }
-
-    // Backfill wind defaults for sessions saved before wind attributes existed
-    if (!session.hasAttribute(SessionKeys::WindN)) {
-        session.setAttribute(SessionKeys::WindN, 0.0);
-    }
-    if (!session.hasAttribute(SessionKeys::WindE)) {
-        session.setAttribute(SessionKeys::WindE, 0.0);
-    }
 }
 
 std::optional<SessionData> LogbookManager::loadSession(const QString &sessionId)

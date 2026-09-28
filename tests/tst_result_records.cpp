@@ -68,7 +68,7 @@ const char kExtraId[] = "test.resultrecords.extra";
 const char kFitId[] = "builtin.fusion.fit";
 const char kFitSuffix[] = ".builtin%2Efusion%2Efit.fvresult";
 
-// A small session that already carries the four attributes loadSession()
+// A small session that already carries the two attributes loadSession()
 // would otherwise backfill (as tst_logbook_index).
 SessionData makeSession(const QString &id)
 {
@@ -78,8 +78,6 @@ SessionData makeSession(const QString &id)
     s.setAttribute("_DESCRIPTION", QStringLiteral("first"));
     s.setAttribute("_JUMPER_MASS", 80.0);
     s.setAttribute("_PLANFORM_AREA", 2.0);
-    s.setAttribute("_WIND_N", 0.0);
-    s.setAttribute("_WIND_E", 0.0);
     s.setSourceMeasurement("IMU", "time", {10.0, 20.0, 30.0}, "s");
     s.setSourceMeasurement("IMU", "wx", {1.0, 2.0, 3.0}, "deg/s");
     return s;

@@ -4,6 +4,7 @@
 #include "../markerregistry.h"
 #include "../attributeregistry.h"
 #include "../units/unitdefinitions.h"
+#include "attributecalculations.h"
 #include "registration.h"
 #include <QColor>
 #include <algorithm>
@@ -178,39 +179,24 @@ SpResults computeSpResults(double perfWindowHeight, double valWindowHeight, doub
     return results;
 }
 
-// Registers a parameter default: no inputs, one constant output. A stored
-// attribute of the same name (the user's choice) takes precedence.
-void registerSpDefault(CalculationRegistry &registry, const QString &id,
-                       const char *key, double value)
-{
-    const QString outputKey = QString::fromLatin1(key);
-
-    CalculationDescriptor d;
-    d.id = id;
-    d.outputs = { DependencyKey::attribute(outputKey) };
-    d.compute = [outputKey, value](const EvaluationContext &) -> CalculationResult {
-        return CalculationResult().setAttribute(outputKey, value);
-    };
-    Calculations::addCalculation(registry, d);
-}
-
 } // namespace
 
 void Calculations::registerSpCalculations(CalculationRegistry &registry)
 {
     // ── Group A: Parameter defaults ──────────────────────────────────────
+    // Constant defaults: a stored attribute (the user's choice) wins.
 
     // Performance window height in metres (default 7400 ft = 2255.52 m)
-    registerSpDefault(registry, QStringLiteral("builtin.sp.default.perfWindowHeight"),
-                      SessionKeys::SpPerfWindowHeight, 7400.0 / 3.28084);
+    addConstantDefault(registry, QString::fromLatin1(SessionKeys::SpPerfWindowHeight),
+                       7400.0 / 3.28084);
 
     // Validation window height in metres (default 3300 ft = 1005.84 m)
-    registerSpDefault(registry, QStringLiteral("builtin.sp.default.valWindowHeight"),
-                      SessionKeys::SpValWindowHeight, 3300.0 / 3.28084);
+    addConstantDefault(registry, QString::fromLatin1(SessionKeys::SpValWindowHeight),
+                       3300.0 / 3.28084);
 
     // Breakoff altitude AGL in metres (default 5600 ft = 1706.88 m)
-    registerSpDefault(registry, QStringLiteral("builtin.sp.default.breakoffAlt"),
-                      SessionKeys::SpBreakoffAlt, 5600.0 / 3.28084);
+    addConstantDefault(registry, QString::fromLatin1(SessionKeys::SpBreakoffAlt),
+                       5600.0 / 3.28084);
 
     // ── Group A2: Performance window start ───────────────────────────────
     // One computation, two outputs: the crossing time and the altitude there.

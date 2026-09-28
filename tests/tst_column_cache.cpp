@@ -73,8 +73,6 @@ SessionData gyroSession(const QString &id = QStringLiteral("g1"))
     // What LogbookManager::loadSession would otherwise backfill
     s.setAttribute("_JUMPER_MASS", 80.0);
     s.setAttribute("_PLANFORM_AREA", 2.0);
-    s.setAttribute("_WIND_N", 0.0);
-    s.setAttribute("_WIND_E", 0.0);
     s.setSourceMeasurement("TIME", "time", {10.0, 20.0, 30.0}, "s");
     s.setSourceMeasurement("TIME", "tow", {129610.0, 129620.0, 129630.0}, "s");
     s.setSourceMeasurement("TIME", "week", {2295.0, 2295.0, 2295.0}, "");

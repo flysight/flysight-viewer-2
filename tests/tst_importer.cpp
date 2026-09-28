@@ -743,10 +743,12 @@ void ImporterTest::parseFailureLeavesResultEmpty()
 
 void ImporterTest::creationDefaultsOnlyFillAbsent()
 {
-    // A Viewer-saved file imported as a new session keeps its own values.
+    // A Viewer-saved file imported as a new session keeps its own values,
+    // wind included.
     const QString path = writeTemp(Fixtures::sensorFile()
                                        .var("_DESCRIPTION", "kept")
                                        .var("_JUMPER_MASS", "80")
+                                       .var("_WIND_N", "3")
                                        .toBytes());
     DataImporter importer;
     ParsedFile file;
@@ -758,9 +760,10 @@ void ImporterTest::creationDefaultsOnlyFillAbsent()
     QCOMPARE(session.storedAttribute("_DESCRIPTION").toString(), QStringLiteral("kept"));
     QCOMPARE(session.storedAttribute("_JUMPER_MASS").toString(), QStringLiteral("80"));
     QCOMPARE(session.storedAttribute("_PLANFORM_AREA").toDouble(), 1.0);
-    QVERIFY(session.hasStoredAttribute("_WIND_N"));
-    QCOMPARE(session.storedAttribute("_WIND_N").toDouble(), 0.0);
-    QCOMPARE(session.storedAttribute("_WIND_E").toDouble(), 0.0);
+    // Wind is not an import default: the recorded value is kept, and nothing
+    // is written for the one the file does not carry.
+    QCOMPARE(session.storedAttribute("_WIND_N").toString(), QStringLiteral("3"));
+    QVERIFY(!session.hasStoredAttribute("_WIND_E"));
     QVERIFY(session.storedAttribute("_IMPORT_TIME").toDouble() > 0.0);
     QCOMPARE(session.storedAttribute("DEVICE_ID").toString(), QStringLiteral("test-device"));
     QCOMPARE(session.storedAttribute("SESSION_ID").toString(), QStringLiteral("test-session"));
@@ -769,7 +772,8 @@ void ImporterTest::creationDefaultsOnlyFillAbsent()
 
     // The parse result itself was not touched
     QCOMPARE(file.data.attributeKeys(),
-             QStringList({"DEVICE_ID", "FIRMWARE_VER", "SESSION_ID", "_DESCRIPTION", "_JUMPER_MASS"}));
+             QStringList({"DEVICE_ID", "FIRMWARE_VER", "SESSION_ID", "_DESCRIPTION", "_JUMPER_MASS",
+                          "_WIND_N"}));
 }
 
 void ImporterTest::creationDefaultsDeviceId()

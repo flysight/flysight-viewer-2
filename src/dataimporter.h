@@ -21,7 +21,7 @@ namespace FlySight {
 ///
 /// Parsing is separate from session creation. parseFile() yields a ParsedFile:
 /// what the file says plus a match id. Viewer's import-time defaults
-/// (description, import time, wind, mass, area, fixed ground elevation, and the
+/// (description, import time, mass, area, fixed ground elevation, and the
 /// synthesized SESSION_ID / DEVICE_ID) are written by applyCreationDefaults()
 /// and by nothing else; SessionModel::mergeSessions calls it only when a file
 /// creates a new session, never for a merge.
@@ -61,7 +61,7 @@ public:
     /// (the synthesized match id, when none was recorded), DEVICE_ID (from
     /// FLYSIGHT.TXT above file.filePath, else SessionKeys::DeviceIdUnknown;
     /// skipped entirely when file.filePath is empty), _DESCRIPTION,
-    /// _IMPORT_TIME, _WIND_N / _WIND_E, _JUMPER_MASS / _PLANFORM_AREA, and
+    /// _IMPORT_TIME, _JUMPER_MASS / _PLANFORM_AREA, and
     /// _GROUND_ELEV when the ground reference mode is "Fixed".
     static void applyCreationDefaults(const ParsedFile& file, SessionData& session);
 

@@ -546,9 +546,7 @@ bool SessionRun::operation()
 bool SessionRun::endState(Subject &s)
 {
     for (const OracleAttributeEdit &edit : oracleAttributeEdits()) {
-        if (edit.key == QLatin1String("_WIND_N"))
-            s.data.setAttribute(edit.key, 0.0);
-        else if (edit.key == QLatin1String("_JUMPER_MASS"))
+        if (edit.key == QLatin1String("_JUMPER_MASS"))
             s.data.setAttribute(edit.key, 1.0);
         else
             s.data.removeAttribute(edit.key);

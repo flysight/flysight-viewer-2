@@ -156,8 +156,10 @@ void SmokeTest::importAppliesCreationDefaults()
     QVERIFY(session.hasAttribute("_IMPORT_TIME"));
     QVERIFY(session.getAttribute("_IMPORT_TIME").toDouble() > 0.0);
 
-    QVERIFY(session.hasAttribute("_WIND_N"));
-    QVERIFY(session.hasAttribute("_WIND_E"));
+    // Wind is not an import default: nothing is stored, and the constant
+    // default calculation gives zero.
+    QVERIFY(!session.hasAttribute("_WIND_N"));
+    QVERIFY(!session.hasAttribute("_WIND_E"));
     QCOMPARE(session.getAttribute("_WIND_N").toDouble(), 0.0);
     QCOMPARE(session.getAttribute("_WIND_E").toDouble(), 0.0);
 
