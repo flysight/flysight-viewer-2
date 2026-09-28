@@ -2190,6 +2190,7 @@
 713 tst_status_bar warningListsAtMostTenRecordings
 713 tst_calculation_demand failureTextAndItsLimit
 713 tst_calculation_demand failuresNameEachCalculationOnce
+713 tst_calculation_demand failuresAreOnePerSessionInRowOrder
 
 # 714 - (7) it persists across restarts with nothing new written: a stored rejection is counted at the next start without loading the recording, once its source is restored and the column worker's pass has reported the record set
 714 tst_status_bar warningAfterRestart
