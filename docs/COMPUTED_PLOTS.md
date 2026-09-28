@@ -72,7 +72,9 @@ Anything that switches such a value on:
 Tracks whose result was kept from earlier (section 6) are drawn at once and
 are not computed again. As each other track finishes, its graph appears by
 itself, the legend and any logbook column that uses the value fill in, and the
-count of "Computing results" in the status bar advances.
+count of "Computing results" in the status bar advances. Until then the legend
+shows "···" for the value under the cursor, as a logbook cell does (section 4),
+where "--" means there is no value at all.
 
 When you start FlySight Viewer every track is hidden, so checked plots start
 nothing until you show tracks. A logbook column over such a value continues
@@ -97,14 +99,14 @@ A column header looks as any other header while its column fills. A recording
 that could not be computed shows the warning triangle right after the text in
 the first cell of its row (section 7).
 
-A cell whose value is still to come shows a grey "…". A blank cell means the
+A cell whose value is still to come shows a grey "···". A blank cell means the
 value does not exist for that recording (for sensor fusion, a recording
 without IMU data). FlySight Viewer learns that only by loading the recording:
-until the fill has loaded it, such a recording shows "…" and is counted in
+until the fill has loaded it, such a recording shows "···" and is counted in
 "Computing results" in the status bar, and then turns blank and leaves the
 count.
 Only computed results are kept, so it is loaded again, once, at every start.
-Sorting by the column puts "…" and blank cells together at the bottom.
+Sorting by the column puts "···" and blank cells together at the bottom.
 
 Visible tracks go first: a track you show while a column fills is computed
 next, after the computation that is running. Removing or disabling the column

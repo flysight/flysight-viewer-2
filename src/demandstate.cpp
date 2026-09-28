@@ -4,6 +4,11 @@
 
 namespace FlySight {
 
+QString pendingMark()
+{
+    return QString(3, QChar(0x00B7));
+}
+
 QString SessionFailures::text() const
 {
     QStringList lines;

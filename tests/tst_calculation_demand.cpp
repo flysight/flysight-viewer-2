@@ -1829,13 +1829,20 @@ void CalculationDemandTest::failuresListedWhileWorking()
 // CalculationDemand::isMerelyUncomputed() decides whether the plot widget
 // keeps quiet about a track it could not draw ("No data available for plot"):
 // yes for a value that waits on a requested calculation or was rejected by one,
-// no for everything else. One case per BlockerReport state. It inspects only:
-// no explicit calculation runs and no job appears, however often it is asked.
+// no for everything else. isNotYetComputed(), which the legend asks before it
+// shows the pending mark, is true for the waiting case only: a rejection is a
+// failure, not a value on its way. One case per BlockerReport state. Both
+// inspect only: no explicit calculation runs and no job appears, however often
+// they are asked.
 void CalculationDemandTest::merelyUncomputedIsNotWorthAWarning()
 {
     const auto merelyUncomputed = [this](const char *sessionId, const char *sensor, const char *measurement) {
         return CalculationDemand::isMerelyUncomputed(session(QString::fromLatin1(sessionId)),
                                                      QString::fromLatin1(sensor), QString::fromLatin1(measurement));
+    };
+    const auto notYetComputed = [this](const char *sessionId, const char *sensor, const char *measurement) {
+        return CalculationDemand::isNotYetComputed(session(QString::fromLatin1(sessionId)),
+                                                   QString::fromLatin1(sensor), QString::fromLatin1(measurement));
     };
     const auto explicitRuns = [this](const char *sessionId) {
         int runs = 0;
@@ -1859,6 +1866,8 @@ void CalculationDemandTest::merelyUncomputedIsNotWorthAWarning()
             QVERIFY(values("s1", "ea").isEmpty());
             QVERIFY(merelyUncomputed("s1", "Syn", "ea"));
             QVERIFY(merelyUncomputed("s1", "Syn", "db"));
+            QVERIFY(notYetComputed("s1", "Syn", "ea"));
+            QVERIFY(notYetComputed("s1", "Syn", "db"));
         }
         QCOMPARE(engine("s1").blockers(Synthetic::measKey("Syn", "ea")).state, BlockerReport::State::Blocked);
         QCOMPARE(explicitRuns("s1"), 0);
@@ -1875,6 +1884,8 @@ void CalculationDemandTest::merelyUncomputedIsNotWorthAWarning()
         QVERIFY(!merelyUncomputed("s3", "Syn", "plain"));
         QVERIFY(!merelyUncomputed("s3", "NoSuchSensor", "nothing"));
         QVERIFY(!merelyUncomputed("s1", "NoSuchSensor", "nothing"));
+        QVERIFY(!notYetComputed("s3", "Syn", "ea"));
+        QVERIFY(!notYetComputed("s1", "NoSuchSensor", "nothing"));
         QCOMPARE(engine("s3").blockers(Synthetic::measKey("Syn", "ea")).state,
                  BlockerReport::State::NotApplicable);
         QCOMPARE(explicitRuns("s3"), 0);
@@ -1884,6 +1895,7 @@ void CalculationDemandTest::merelyUncomputedIsNotWorthAWarning()
     // Available: ordinary data ...
     QCOMPARE(values("s4", "plain"), QVector<double>({7.0}));
     QVERIFY(!merelyUncomputed("s4", "Syn", "plain"));
+    QVERIFY(!notYetComputed("s4", "Syn", "plain"));
 
     // NotProduced: computed, and rejected its input (a result), or threw (a
     // cached failure). It is listed among the failures; the plot widget is silent.
@@ -1901,12 +1913,17 @@ void CalculationDemandTest::merelyUncomputedIsNotWorthAWarning()
             QVERIFY(merelyUncomputed("s2", "Syn", "ea"));
             QVERIFY(values("s2", "t").isEmpty());
             QVERIFY(merelyUncomputed("s2", "Syn", "t"));
+            // Rejected: a failure, not a value on its way
+            QVERIFY(!notYetComputed("s2", "Syn", "ea"));
+            QVERIFY(!notYetComputed("s2", "Syn", "t"));
 
             QCOMPARE(values("s1", "ea"), QVector<double>({5.0}));
             QVERIFY(!merelyUncomputed("s1", "Syn", "ea"));
+            QVERIFY(!notYetComputed("s1", "Syn", "ea"));
             // The chain's second link is still not computed
             QVERIFY(values("s1", "db").isEmpty());
             QVERIFY(merelyUncomputed("s1", "Syn", "db"));
+            QVERIFY(notYetComputed("s1", "Syn", "db"));
         }
         QCOMPARE(engine("s2").blockers(Synthetic::measKey("Syn", "ea")).state, BlockerReport::State::NotProduced);
         QCOMPARE(engine("s1").blockers(Synthetic::measKey("Syn", "ea")).state, BlockerReport::State::Available);

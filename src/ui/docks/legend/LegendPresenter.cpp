@@ -11,6 +11,8 @@
 #include "plotutils.h"
 #include "plotregistry.h"
 #include "calculations/timecalculations.h"
+#include "calculationdemand.h"
+#include "demandstate.h"
 
 #include <QHash>
 #include <QDateTime>
@@ -346,9 +348,16 @@ LegendContent legendContentForMoment(const SessionModel &sessionModel,
             const double v = interpolateSessionMeasurement(*session, pv.sensorID, xVariable, pv.measurementID, rawX);
             if (!std::isnan(v)) {
                 hasData = true;
+                row.value = formatValue(v, pv.measurementID, pv.measurementType);
+            } else if (CalculationDemand::isNotYetComputed(*session, pv.sensorID, pv.measurementID)) {
+                // The value is on its way (a requested calculation has not
+                // produced it yet): the pending mark, as the logbook shows it,
+                // where "--" means there is no value at all
+                hasData = true;
+                row.value = pendingMark();
+            } else {
+                row.value = formatValue(v, pv.measurementID, pv.measurementType);
             }
-
-            row.value = formatValue(v, pv.measurementID, pv.measurementType);
             rows.push_back(row);
         }
 

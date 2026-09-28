@@ -2295,7 +2295,7 @@
 734 tst_status_bar warningAfterRestart
 734 manual M37
 
-# 735 - (11) the logbook row of a recording that could not be computed carries one glyph whose hover says what failed and why; its cells over the failed calculation are blank; a cell still to come shows the pending ellipsis
+# 735 - (11) the logbook row of a recording that could not be computed carries one glyph whose hover says what failed and why; its cells over the failed calculation are blank; a cell still to come shows the pending mark
 735 tst_logbook_indicators rowWarningHoverIsTheSessionsFailures
 735 tst_logbook_indicators rowWarningFollowsTheText
 735 manual M34

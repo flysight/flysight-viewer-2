@@ -1744,7 +1744,7 @@ column worker, has the sessions of column demand loaded.
     apply (for sensor fusion, a recording without IMU data) is loaded once
     per run to find that out: "not applicable" is a verdict this run
     remembers for the column (16.7), not a record, so the next start loads it
-    again. Until the fill has loaded it, its cell is `Waiting` ("…") and its
+    again. Until the fill has loaded it, its cell is `Waiting` ("···") and its
     session counted in progress; then it is not applicable, blank and not
     counted.
   - A column whose value reaches a requested calculation only through one of
@@ -1809,7 +1809,13 @@ Two views present the demand layer, and both only read it: the status bar
 row warning). The plot list and the logbook's column headers present nothing
 of the demand layer: a plot row or a column header over a requested
 calculation looks exactly as any other, with the tree's own delegate and
-header.
+header. Two more views ask the demand layer one question about a value they
+could not read, through its static queries: the plot widget asks
+`isMerelyUncomputed()` before it warns "No data available", and the legend
+asks `isNotYetComputed()` and shows the pending mark (`pendingMark()` of
+`demandstate.h`: three middle dots, U+00B7) instead of "--" for a value that
+a requested calculation has not produced yet; a rejected value stays "--",
+because it is a failure, not a value on its way.
 
 **The status bar.** `StatusBarFeature` (`src/ui/statusbar/StatusBarFeature.h`)
 fills the main window's `QStatusBar`. `MainWindow` creates it from the
@@ -1886,11 +1892,11 @@ the delegate handles no event of its own. `failuresChanged` repaints the
 visible part of the first visual column, with no model signal and no reset.
 
 **Pending cells.** The same delegate paints a cell whose pair is in demand
-(`isCellPending`) and whose model value is empty as a muted "…" (U+2026, in
+(`isCellPending`) and whose model value is empty as a muted "···" (`pendingMark()`: three middle dots, U+00B7, in
 the palette's placeholder colour), with the tooltip "Pending: this value is
 being computed". A value always wins. The three looks of a cell: a value;
 empty (unavailable, or a value over a record that could not be read, which is
-not cached); "…" (in demand). Pending is a presentation of demand: the model,
+not cached); "···" (in demand). Pending is a presentation of demand: the model,
 its cached values, `pendingColumns`, `index.json` and `SessionModel::sort()`
 never see it; the cached value underneath stays unavailable until the record
 is written, so sorting treats a pending cell as unavailable. A
@@ -2181,7 +2187,7 @@ record of it; otherwise the column worker loads a temporary copy, restores
 the session's records into it with the checks of a load (15.8: a stale record
 deleted, an unreadable one skipped) and caches the value computed from it with
 the stamp, exactly as for a loaded row. A value over a record the copy skipped
-is not cached (the cell is empty, not the "…" of 16.10) until the session is
+is not cached (the cell is empty, not the "···" of 16.10) until the session is
 loaded; the worker does not come back to it. The copy never writes a record
 and never requests or runs a calculation, and the row is not loaded. A bulk edit on a
 stub reads no record: it leaves such values missing for the worker. The

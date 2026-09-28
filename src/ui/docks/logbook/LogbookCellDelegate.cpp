@@ -10,6 +10,7 @@
 #include <QTreeView>
 
 #include "calculationdemand.h"
+#include "demandstate.h"
 #include "sessionmodel.h"
 
 namespace FlySight {
@@ -34,7 +35,7 @@ LogbookCellDelegate::LogbookCellDelegate(SessionModel *model, CalculationDemand 
 
 QString LogbookCellDelegate::pendingText()
 {
-    return QString(QChar(0x2026));
+    return pendingMark();
 }
 
 QString LogbookCellDelegate::pendingToolTip()
@@ -77,7 +78,7 @@ int LogbookCellDelegate::firstVisualColumn() const
 }
 
 // The option the cell is painted with: the base class's, and for a pending
-// cell the ellipsis in the muted colour
+// cell the pending mark in the muted colour
 QStyleOptionViewItem LogbookCellDelegate::cellOption(const QStyleOptionViewItem &option,
                                                      const QModelIndex &index, bool pending) const
 {

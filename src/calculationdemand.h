@@ -350,6 +350,15 @@ public:
     /// calculation.
     static bool isMerelyUncomputed(const SessionData &session, const QString &sensorId,
                                    const QString &measurementId);
+    /// True when a plot value that was just read as empty is absent only
+    /// because a requested calculation has not produced it yet
+    /// (BlockerReport::State::Blocked): what a view shows as pending, with
+    /// pendingMark(). False for a rejection (NotProduced), which is a failure
+    /// and not a value on its way, and for NotApplicable and Available. The
+    /// legend asks it for the value under the cursor. Same reading rules as
+    /// isMerelyUncomputed().
+    static bool isNotYetComputed(const SessionData &session, const QString &sensorId,
+                                 const QString &measurementId);
 
     // ---- test seams ------------------------------------------------------------
     void flush();                                    ///< runs a pending pass now

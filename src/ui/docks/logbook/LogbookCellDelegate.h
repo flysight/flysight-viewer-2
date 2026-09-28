@@ -21,7 +21,8 @@ class SessionModel;
 ///  - empty: "unavailable" (the cached value is invalid), and the row's own
 ///    pending state for a record that could not be read
 ///    (SessionRow::pendingColumns: not cached, no value), exactly as before;
-///  - a muted ellipsis, U+2026 (pendingText(), in the placeholder colour):
+///  - a muted pending mark, three middle dots (pendingText(), which is
+///    pendingMark() of demandstate.h, in the placeholder colour):
 ///    the cell's pair is in demand (CalculationDemand::isCellPending()), so
 ///    the value is being computed - "not yet", where empty means "never". A
 ///    cell of the row's own pending state is never in demand: its record is
@@ -50,7 +51,7 @@ class SessionModel;
 /// It takes room only while it is shown, and sizeHint() never sees it, so no
 /// row height changes and no text moves. Cells over the failed calculation
 /// are blank, as any cell without a value: the glyph explains them. A first
-/// visual cell may carry both the pending ellipsis and, after it, the glyph.
+/// visual cell may carry both the pending mark and, after it, the glyph.
 ///
 /// HOVER. Over the glyph, the session's failures, SessionFailures::text(),
 /// exactly. Elsewhere in the cell, the cell's own tooltip: the pending one,
@@ -86,7 +87,7 @@ public:
     /// `index` is its row's first visual cell and the row's session has a
     /// current failure, else a null rect. Tests only.
     QRect warningRect(const QModelIndex &index) const;
-    static QString pendingText();       ///< U+2026, a horizontal ellipsis
+    static QString pendingText();       ///< pendingMark(): three middle dots, U+00B7
     static QString pendingToolTip();    ///< tr("Pending: this value is being computed")
 
 private slots:
@@ -101,7 +102,7 @@ private:
     /// hidden; -1 when there is none.
     int firstVisualColumn() const;
     /// The option the cell is painted with: the base class's for `index`,
-    /// with the pending ellipsis and its muted colour when `pending`
+    /// with the pending mark and its muted colour when `pending`
     /// (showsPending(index), which the caller has asked already).
     QStyleOptionViewItem cellOption(const QStyleOptionViewItem &option, const QModelIndex &index,
                                     bool pending) const;

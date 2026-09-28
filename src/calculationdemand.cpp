@@ -323,13 +323,27 @@ bool CalculationDemand::isPending(TrackCondition condition)
     return condition == TrackCondition::Waiting || condition == TrackCondition::Running;
 }
 
+namespace {
+
+BlockerReport::State blockerState(const SessionData &session, const QString &sensorId, const QString &measurementId)
+{
+    return session.calculationEngine().blockers(DependencyKey::measurement(sensorId, measurementId)).state;
+}
+
+} // namespace
+
 bool CalculationDemand::isMerelyUncomputed(const SessionData &session, const QString &sensorId,
                                            const QString &measurementId)
 {
     using State = BlockerReport::State;
-    const State state = session.calculationEngine()
-        .blockers(DependencyKey::measurement(sensorId, measurementId)).state;
+    const State state = blockerState(session, sensorId, measurementId);
     return state == State::Blocked || state == State::NotProduced;
+}
+
+bool CalculationDemand::isNotYetComputed(const SessionData &session, const QString &sensorId,
+                                         const QString &measurementId)
+{
+    return blockerState(session, sensorId, measurementId) == BlockerReport::State::Blocked;
 }
 
 // Call under the walk's RowStabilityGuard: `session` is a row of the model read

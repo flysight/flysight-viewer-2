@@ -77,6 +77,12 @@ struct SessionFailures {
     Q_DECLARE_TR_FUNCTIONS(SessionFailures)
 };
 
+/// The mark a view shows for a value that is still being computed: three
+/// middle dots (U+00B7), which sit at mid height like the "--" of a value
+/// that does not exist, so the two read as one family. The logbook's pending
+/// cell and the legend show it.
+QString pendingMark();
+
 } // namespace FlySight
 
 #endif // DEMANDSTATE_H

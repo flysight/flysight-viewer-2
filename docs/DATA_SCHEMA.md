@@ -391,7 +391,7 @@ result, loading sessions that are not loaded two at a time without showing
 them ([COMPUTED_PLOTS.md](COMPUTED_PLOTS.md), section 4); the cached value
 stays unavailable until the record is written, which drops it, and the value
 is then computed from the result like any other. Until then the logbook shows
-the cell as pending ("…"): that is a presentation of the view, never a cached
+the cell as pending ("···"): that is a presentation of the view, never a cached
 value, and never written to `index.json`. When the session has a stored
 result, the logbook's background worker reads the session's stored results
 into a temporary copy of the session, with the same checks as a load (a stale
@@ -407,7 +407,7 @@ that failed, or a record that could not be read when the session was loaded,
 section 12) is kept out of `index.json` until the record is written or deleted
 again or the session is unloaded. An unloaded session whose record was skipped
 (when it was loaded, or by the background worker) shows such a column empty
-(not cached; this is not the "…" of a value being computed) until it is
+(not cached; this is not the "···" of a value being computed) until it is
 loaded again, when the record is read again. An index written before stamps
 existed keeps such a value only for a session without a
 record.

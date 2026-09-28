@@ -426,7 +426,7 @@ cancellation boundary: at most one solver step.
 recording, and for an unloaded one the value cached from its stored result.
 While such a column is enabled, every recording without a stored result is
 fitted in the background (recordings that are not loaded are loaded two at a
-time, as hidden recordings); its cell shows "…" until then. A recording
+time, as hidden recordings); its cell shows "···" until then. A recording
 without IMU data shows none. One with a stored result whose
 value is not cached yet (after an update, say) stays empty until it is loaded.
 

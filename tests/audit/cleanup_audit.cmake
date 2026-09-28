@@ -752,10 +752,11 @@ audit_group(demand)
 # regex; nothing below the demand layer (the executor, the session model, the
 # scheduler, the logbook) ever is. Elsewhere a comment says "the demand layer".
 # Its views are the logbook's view, dock feature and cell delegate, the status
-# bar and the plot widget (which asks isMerelyUncomputed()); the plot list is
-# not one of them.
+# bar, and the plot widget and the legend (which ask isMerelyUncomputed() and
+# isNotYetComputed() about a value they could not read); the plot list is not
+# one of them.
 expect_only("only the application and its views know the demand layer" "CalculationDemand"
-  "^src/${DEMAND_FILES}\\.(cpp|h)$|^src/mainwindow\\.(cpp|h)$|^src/ui/docks/AppContext\\.h$|^src/ui/docks/logbook/(LogbookView|LogbookCellDelegate)\\.(cpp|h)$|^src/ui/docks/logbook/LogbookDockFeature\\.cpp$|^src/ui/docks/plot/PlotWidget\\.cpp$|^src/ui/statusbar/StatusBarFeature\\.(cpp|h)$"
+  "^src/${DEMAND_FILES}\\.(cpp|h)$|^src/mainwindow\\.(cpp|h)$|^src/ui/docks/AppContext\\.h$|^src/ui/docks/logbook/(LogbookView|LogbookCellDelegate)\\.(cpp|h)$|^src/ui/docks/logbook/LogbookDockFeature\\.cpp$|^src/ui/docks/plot/PlotWidget\\.cpp$|^src/ui/docks/legend/LegendPresenter\\.cpp$|^src/ui/statusbar/StatusBarFeature\\.(cpp|h)$"
   src)
 # Allow: none expected. The layers below the demand layer never include it
 # (so they can use none of its types).
