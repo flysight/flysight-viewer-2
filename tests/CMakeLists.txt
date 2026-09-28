@@ -13,9 +13,9 @@
 #     (FLYSIGHT_BUILD_PYTHON_TESTS).
 #   - tst_map_models: the two map models and their two helpers, which need Qt
 #     Core and Gui only, so the test needs no Widgets, WebEngine or Quick.
-#   - tst_logbook_indicators and tst_status_bar: the logbook view with its
-#     cell delegate, and the main window's status bar, the only tests that
-#     link Qt Widgets (FLYSIGHT_BUILD_WIDGET_TESTS).
+#   - tst_logbook_indicators, tst_status_bar and tst_choice_attribute: the
+#     logbook view with its cell delegate, and the main window's status bar,
+#     the only tests that link Qt Widgets (FLYSIGHT_BUILD_WIDGET_TESTS).
 # The FLYSIGHT_BUILD_FUSION_TESTS block near the end of this file is the only
 # place a test may link GTSAM.
 #
@@ -54,6 +54,7 @@ add_library(flysight_test_support STATIC
   support/asyncdriver.h
   support/jobfixture.cpp      support/jobfixture.h
   support/plotfixture.cpp     support/plotfixture.h
+  support/choicefixture.cpp   support/choicefixture.h
 )
 target_include_directories(flysight_test_support PUBLIC "${CMAKE_CURRENT_LIST_DIR}/support")
 # Threads::Threads is a usage requirement only: asyncdriver.h is header-only, so
@@ -154,12 +155,13 @@ flysight_add_test(tst_jobmodel SOURCES tst_jobmodel.cpp)
 # Demand layer (plot demand, priority, the input-settle wait, failure memory, progress, failures, pending cells; no widgets)
 flysight_add_test(tst_calculation_demand SOURCES tst_calculation_demand.cpp)
 
-# The views of the demand layer in offscreen widgets. tst_logbook_indicators
-# and tst_status_bar are the only tests that link Qt Widgets; they compile the
-# logbook view with its cell delegate and the status bar's component from the
-# application sources (pattern: tst_python_bridge), and nothing else: no view
-# shares an indicator with another. QT_QPA_PLATFORM=offscreen is already set
-# by flysight_add_test().
+# The views of the demand layer, and the logbook's editors, in offscreen
+# widgets. tst_logbook_indicators, tst_status_bar and tst_choice_attribute are
+# the only tests that link Qt Widgets; they compile the logbook view with its
+# cell delegate and the status bar's component from the application sources
+# (pattern: tst_python_bridge), and nothing else: no view shares an indicator
+# with another. QT_QPA_PLATFORM=offscreen is already set by
+# flysight_add_test().
 option(FLYSIGHT_BUILD_WIDGET_TESTS "Build and run the tests that need Qt Widgets" ON)
 if(FLYSIGHT_BUILD_WIDGET_TESTS)
   # tst_logbook_indicators: the logbook's row warning and pending cells in a
@@ -178,6 +180,15 @@ if(FLYSIGHT_BUILD_WIDGET_TESTS)
             "${FLYSIGHT_SRC_DIR}/ui/statusbar/StatusBarFeature.cpp"        "${FLYSIGHT_SRC_DIR}/ui/statusbar/StatusBarFeature.h"
     LIBS Qt${QT_VERSION_MAJOR}::Widgets)
   set_tests_properties(tst_status_bar PROPERTIES LABELS "core;widgets")
+  # ... and tst_choice_attribute: the Choice attribute type through the
+  # session model (support/choicefixture.h), the cell delegate's list editor
+  # and the logbook view's "Set ..." list, without a demand layer.
+  flysight_add_test(tst_choice_attribute
+    SOURCES tst_choice_attribute.cpp
+            "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookView.cpp"          "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookView.h"
+            "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookCellDelegate.cpp"  "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookCellDelegate.h"
+    LIBS Qt${QT_VERSION_MAJOR}::Widgets)
+  set_tests_properties(tst_choice_attribute PROPERTIES LABELS "core;widgets")
 endif()
 
 # Source layer and conversion layer: the schema and unit tables, the conversion

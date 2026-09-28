@@ -1,6 +1,7 @@
 #include "LogbookCellDelegate.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QHeaderView>
 #include <QHelpEvent>
 #include <QIcon>
@@ -9,11 +10,19 @@
 #include <QToolTip>
 #include <QTreeView>
 
+#include "attributeregistry.h"
 #include "calculationdemand.h"
 #include "demandstate.h"
 #include "sessionmodel.h"
 
 namespace FlySight {
+
+namespace {
+
+// The entry of the choice editor it opened on (setEditorData()), -1 for none
+constexpr char kOpeningEntry[] = "openingEntry";
+
+} // namespace
 
 LogbookCellDelegate::LogbookCellDelegate(SessionModel *model, CalculationDemand *demand, QTreeView *view)
     : QStyledItemDelegate(view)
@@ -235,6 +244,81 @@ bool LogbookCellDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view, 
         }
     }
     return QStyledItemDelegate::helpEvent(event, view, option, index);
+}
+
+// ---- The choice editor -------------------------------------------------------
+
+QVector<LogbookCellDelegate::ChoiceEntry> LogbookCellDelegate::choiceEntries(const AttributeDefinition &definition)
+{
+    QVector<ChoiceEntry> entries;
+    entries.reserve(definition.choices.size() + 1);
+    entries.append({tr("Default"), QVariant()});
+    for (const AttributeChoice &choice : definition.choices)
+        entries.append({choice.label, choice.token});
+    return entries;
+}
+
+const AttributeDefinition *LogbookCellDelegate::choiceDefinition(const QModelIndex &index) const
+{
+    if (!m_model || !index.isValid() || index.model() != m_model.data())
+        return nullptr;
+    const LogbookColumn &column = m_model->column(index.column());
+    if (column.type != ColumnType::SessionAttribute)
+        return nullptr;
+    const AttributeDefinition *definition = AttributeRegistry::instance().findByKey(column.attributeKey);
+    return definition && definition->formatType == AttributeFormatType::Choice ? definition : nullptr;
+}
+
+QWidget *LogbookCellDelegate::createEditor(QWidget *parent, const QStyleOptionViewItem &option,
+                                           const QModelIndex &index) const
+{
+    const AttributeDefinition *definition = choiceDefinition(index);
+    if (!definition)
+        return QStyledItemDelegate::createEditor(parent, option, index);
+
+    auto *editor = new QComboBox(parent);
+    editor->setEditable(false);     // a value outside the list cannot be typed
+    for (const ChoiceEntry &entry : choiceEntries(*definition))
+        editor->addItem(entry.label, entry.value);
+    return editor;
+}
+
+// Opens on the entry whose label the cell shows. "Default" is never a label,
+// so it is not searched: a raw token, or no value, opens on no entry, and
+// choosing "Default" there is a change.
+void LogbookCellDelegate::setEditorData(QWidget *editor, const QModelIndex &index) const
+{
+    auto *combo = qobject_cast<QComboBox *>(editor);
+    if (!combo || !choiceDefinition(index)) {
+        QStyledItemDelegate::setEditorData(editor, index);
+        return;
+    }
+    const QString text = index.data(Qt::DisplayRole).toString();
+    int opening = -1;
+    for (int i = 1; i < combo->count(); ++i) {
+        if (combo->itemText(i) == text) {
+            opening = i;
+            break;
+        }
+    }
+    combo->setCurrentIndex(opening);
+    combo->setProperty(kOpeningEntry, opening);
+}
+
+// Nothing is written when the editor closes on the entry it opened on: see
+// CHOICE EDITOR in the class comment
+void LogbookCellDelegate::setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const
+{
+    auto *combo = qobject_cast<QComboBox *>(editor);
+    if (!combo || !choiceDefinition(index)) {
+        QStyledItemDelegate::setModelData(editor, model, index);
+        return;
+    }
+    const int chosen = combo->currentIndex();
+    const QVariant opening = combo->property(kOpeningEntry);
+    if (chosen < 0 || (opening.isValid() && chosen == opening.toInt()))
+        return;
+    model->setData(index, combo->itemData(chosen), Qt::EditRole);
 }
 
 void LogbookCellDelegate::repaintColumn(int column)

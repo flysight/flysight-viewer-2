@@ -2,6 +2,15 @@
 
 using namespace FlySight;
 
+const AttributeChoice *AttributeDefinition::findChoice(const QString &token) const
+{
+    for (const AttributeChoice &choice : choices) {
+        if (choice.token == token)
+            return &choice;
+    }
+    return nullptr;
+}
+
 AttributeRegistry& AttributeRegistry::instance() {
     static AttributeRegistry R;
     return R;

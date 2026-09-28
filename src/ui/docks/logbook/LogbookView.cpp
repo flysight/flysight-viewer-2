@@ -115,11 +115,12 @@ void LogbookView::onContextMenuRequested(const QPoint &pos)
     QAction *hideSelectedAction = menu.addAction(tr("Hide Selected Tracks"));
     QAction *hideOthersAction = menu.addAction(tr("Hide Others"));
 
-    // The menu and the input dialog below each run a nested event loop, during
-    // which rows can be reordered, added or removed and columns rebuilt. Row
-    // and column indices are therefore not kept across them: the selection is
-    // captured as session ids and the column as its attribute key, and both are
-    // resolved to indices again once the dialogs have closed.
+    // The menu and the input dialog of askAndSetAttribute() each run a nested
+    // event loop, during which rows can be reordered, added or removed and
+    // columns rebuilt. Row and column indices are therefore not kept across
+    // them: the selection is captured as session ids and the column as its
+    // attribute key, and both are resolved to indices again once the dialogs
+    // have closed.
     QStringList selectedSessionIds;
     for (const QModelIndex &idx : treeView->selectionModel()->selectedRows())
         selectedSessionIds.append(model->rowAt(idx.row()).sessionId);
@@ -157,46 +158,71 @@ void LogbookView::onContextMenuRequested(const QPoint &pos)
     } else if (chosenAction == deleteAction) {
         emit deleteRequested();
     } else if (editActions.contains(chosenAction)) {
-        const QString attributeKey = chosenAction->data().toString();
-        const QString columnLabel = chosenAction->property("columnLabel").toString();
-        if (selectedSessionIds.isEmpty())
+        askAndSetAttribute(chosenAction->data().toString(),
+                           chosenAction->property("columnLabel").toString(),
+                           selectedSessionIds);
+    }
+}
+
+void LogbookView::askAndSetAttribute(const QString &attributeKey, const QString &columnLabel,
+                                     const QStringList &sessionIds)
+{
+    if (sessionIds.isEmpty())
+        return;
+    const AttributeDefinition *def = AttributeRegistry::instance().findByKey(attributeKey);
+    if (!def)
+        return;
+
+    // Everything the dialog needs is copied out of the definition before its
+    // nested event loop runs (see onContextMenuRequested()), and nothing held
+    // across that loop is used after it: the column and the sessions are
+    // resolved again below.
+    const QString title = tr("Set %1").arg(columnLabel);
+    const QString prompt = tr("New value for %n session(s):", "", sessionIds.size());
+    bool ok = false;
+    QVariant value;
+    if (def->formatType == AttributeFormatType::Choice) {
+        const QVector<LogbookCellDelegate::ChoiceEntry> entries = LogbookCellDelegate::choiceEntries(*def);
+        QStringList labels;
+        labels.reserve(entries.size());
+        for (const LogbookCellDelegate::ChoiceEntry &entry : entries)
+            labels.append(entry.label);
+        // Opens on "Default": the sessions may hold different values, so
+        // there is no one current value to open on
+        const QString chosen = QInputDialog::getItem(this, title, prompt, labels, 0, false, &ok);
+        const qsizetype chosenIndex = labels.indexOf(chosen);
+        if (!ok || chosenIndex < 0)
             return;
-
-        bool ok = false;
-        const QString value = QInputDialog::getText(
-            this,
-            tr("Set %1").arg(columnLabel),
-            tr("New value for %n session(s):", "", selectedSessionIds.size()),
-            QLineEdit::Normal,
-            QString(),
-            &ok);
-
+        value = entries.at(chosenIndex).value;     // a token, or invalid for "Default"
+    } else {
+        const QString text = QInputDialog::getText(this, title, prompt, QLineEdit::Normal, QString(), &ok);
         if (!ok)
             return;
-
-        // Resolve the column and the sessions as they are now. A session that
-        // is gone, or a column that was removed, is skipped rather than
-        // letting the value land somewhere else.
-        int colIndex = -1;
-        for (int i = 0; i < model->columnCount(); ++i) {
-            const LogbookColumn &col = model->column(i);
-            if (col.type == ColumnType::SessionAttribute && col.attributeKey == attributeKey) {
-                colIndex = i;
-                break;
-            }
-        }
-        if (colIndex < 0)
-            return;
-
-        QList<int> rowIndices;
-        rowIndices.reserve(selectedSessionIds.size());
-        for (const QString &sessionId : selectedSessionIds) {
-            const int row = model->getSessionRow(sessionId);
-            if (row >= 0)
-                rowIndices.append(row);
-        }
-        model->startBulkEdit(rowIndices, colIndex, value);
+        value = text;
     }
+
+    // Resolve the column and the sessions as they are now. A session that
+    // is gone, or a column that was removed, is skipped rather than
+    // letting the value land somewhere else.
+    int colIndex = -1;
+    for (int i = 0; i < model->columnCount(); ++i) {
+        const LogbookColumn &col = model->column(i);
+        if (col.type == ColumnType::SessionAttribute && col.attributeKey == attributeKey) {
+            colIndex = i;
+            break;
+        }
+    }
+    if (colIndex < 0)
+        return;
+
+    QList<int> rowIndices;
+    rowIndices.reserve(sessionIds.size());
+    for (const QString &sessionId : sessionIds) {
+        const int row = model->getSessionRow(sessionId);
+        if (row >= 0)
+            rowIndices.append(row);
+    }
+    model->startBulkEdit(rowIndices, colIndex, value);
 }
 
 void LogbookView::selectSessions(const QList<QString> &sessionIds)

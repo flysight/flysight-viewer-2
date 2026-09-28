@@ -257,7 +257,13 @@ public:
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     int columnCount(const QModelIndex &parent = QModelIndex()) const override;
 
+    /// A Choice attribute's cell displays the label of the effective token,
+    /// or the raw text of a token that has none.
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
+    /// Qt::EditRole on a Choice attribute's cell: a token of the list is
+    /// stored, false when it is the stored value already; an invalid QVariant
+    /// removes the stored attribute ("Default"), false when nothing is
+    /// stored; any other value is refused (false) before a stub is loaded.
     bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
 
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
@@ -413,6 +419,12 @@ public:
     void startColumnWorker();
     void cancelColumnWorker();
     void cancelLoader();
+    /// Queues the edit of column `columnIndex`'s attribute to `value` for the
+    /// sessions of `rows`, applied and saved one session per step of the idle
+    /// scheduler. For a Choice attribute `value` is a token of its list, or an
+    /// invalid QVariant, which removes the stored attribute ("Default"), as
+    /// setData() takes them; any other value is refused before anything is
+    /// queued.
     void startBulkEdit(const QList<int> &rows, int columnIndex, const QVariant &value);
     void cancelBulkEdit();
 

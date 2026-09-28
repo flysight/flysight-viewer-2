@@ -1958,7 +1958,7 @@ computations, the one rule, the hover, the cancel button, the warning, its
 height and a restart) and `tests/tst_logbook_indicators.cpp` (the logbook
 view beside a reference tree: the plain header, the cell delegate's pending
 cells and row warning, a failed load and a failed write in the row's hover),
-in offscreen views: the only tests that link Qt Widgets, behind
+in offscreen views: two of the tests that link Qt Widgets, behind
 `FLYSIGHT_BUILD_WIDGET_TESTS`; and the manual script in `tests/README.md`,
 section 12 (steps M1-M9, M24-M28 and M31-M38). That nothing but the demand layer
 offers work, and that the views only read it, are rules of the cleanup audit
