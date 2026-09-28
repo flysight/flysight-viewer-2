@@ -61,6 +61,12 @@ void IdleScheduler::cancel(TaskId id)
     }
 }
 
+bool IdleScheduler::hasWork() const
+{
+    return std::any_of(m_tasks.cbegin(), m_tasks.cend(),
+                       [](const Entry &entry) { return entry.def.hasWork && entry.def.hasWork(); });
+}
+
 IdleScheduler::Entry *IdleScheduler::find(TaskId id)
 {
     for (auto &entry : m_tasks) {

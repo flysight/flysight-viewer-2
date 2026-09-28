@@ -1473,7 +1473,7 @@
 530 tst_calculation_demand savesAndBulkEditsPrecedeLoadStep
 530 tst_calculation_demand startupWithEnabledColumnLoadsAfterColumnWorker
 530 tst_calculation_demand fillTaskIsLowestAndNotCancellable
-530 tst_calculation_demand fillTaskReportsProgressWhileWaiting
+530 tst_calculation_demand fillTaskRestsWhileWaiting
 530 tst_session_model_engine schedulerWaitingTaskDoesNotSpin
 530 tst_calculation_demand bulkEditMakesSettledSessionApplicable
 530 tst_session_model_engine schedulerTaskCanBeUnregistered
@@ -1504,7 +1504,7 @@
 # 534 - (10) no refresh and no cancel for requested calculations anywhere; unchecking a plot, hiding sessions or disabling a column is how the user changes what is wanted
 534 tst_plot_row_delegate clickOnClusterIsAClickOnTheRow
 534 tst_logbook_indicators clickOnIndicatorIsAClickOnTheSection
-534 tst_logbook_indicators pendingCellBecomesValueWhenRecordIsWritten
+534 tst_status_bar cancelOnlyForACancellableShownTask
 534 audit gestures
 534 audit demand
 534 manual M4
@@ -1566,10 +1566,9 @@
 
 # 539 - (10, as amended) the logbook's progress line for background work is unchanged in form and reports a column fill for its whole duration, remaining of wanted, with no cancel, under a text of its own ("Computing results: k / n") distinct from the column worker's ("Computing columns: k / n")
 539 tst_calculation_demand fillTaskIsLowestAndNotCancellable
-539 tst_calculation_demand fillTaskReportsProgressWhileWaiting
-539 tst_logbook_indicators pendingCellBecomesValueWhenRecordIsWritten
+539 tst_status_bar computationsAreOneItem
 539 manual M24
-539 tst_logbook_indicators fillProgressLineHasItsOwnText
+539 tst_status_bar schedulerTasksShowTheirLabelsAndCounts
 539 manual M31
 
 # 540 - (11) the executor's worker thread runs below normal priority, so that the user interface stays responsive
@@ -1723,10 +1722,10 @@
 # 559 - (13, as amended) test: saves and bulk edits still precede the fill's loads; no result is computed from a file being rewritten; the progress line reports the fill from its first load to its last result without any step that loads nothing, and the scheduler does not spin while the fill waits on a job
 559 tst_calculation_demand savesAndBulkEditsPrecedeLoadStep
 559 tst_calculation_demand startupWithEnabledColumnLoadsAfterColumnWorker
-559 tst_calculation_demand fillTaskReportsProgressWhileWaiting
+559 tst_calculation_demand fillTaskRestsWhileWaiting
 559 tst_session_model_engine schedulerCompletesWaitingTaskWhoseWorkIsGone
 559 tst_session_model_engine schedulerWaitingTaskDoesNotSpin
-559 tst_logbook_indicators fillProgressLineHasItsOwnText
+559 tst_status_bar computationsAreOneItem
 
 # 560 - (13) test: the executor never holds more than the running job and one chosen next job; changing demand replaces the chosen next job
 560 tst_jobqueue holdsAtMostRunningAndChosenNext
@@ -1816,7 +1815,7 @@
 
 # 609 - (5) a task registered as one that can wait (TaskDef::canStep) which the scheduler last reported active and which has no work any more is completed at the next tick whether or not it was stepped: its progress is reported one last time and its completion is called, not cancelled, before the next active task is reported or the scheduler goes idle; whoever takes a resting task's work away wakes the scheduler
 609 tst_session_model_engine schedulerCompletesWaitingTaskWhoseWorkIsGone
-609 tst_calculation_demand fillTaskReportsProgressWhileWaiting
+609 tst_calculation_demand fillTaskRestsWhileWaiting
 
 # 610 - (5) a task that lost its work because it was cancelled completes once, as cancelled; a task unregistered while active is never completed
 610 tst_session_model_engine schedulerCompletesWaitingTaskWhoseWorkIsGone
@@ -1829,7 +1828,7 @@
 611 tst_calculation_demand startupWithEnabledColumnLoadsAfterColumnWorker
 
 # 612 - (5) the fill has no ending state and no step that loads nothing; its progress is the sessions with a pending column cell of its high-water mark, which resets when the task completes and starts afresh when the sessions with a pending cell rise from none
-612 tst_calculation_demand fillTaskReportsProgressWhileWaiting
+612 tst_calculation_demand fillTaskRestsWhileWaiting
 612 tst_calculation_demand fillEndingBehindAnotherTaskStartsNextCountFresh
 612 tst_calculation_demand fillTaskIsLowestAndNotCancellable
 612 audit demand
@@ -2014,7 +2013,7 @@
 642 tst_calculation_demand removedOrRepopulatedHeldSessionIsReleased
 642 tst_calculation_demand noLoadsAfterExecutorShutdown
 642 tst_calculation_demand demandDestroyedReleasesHoldsAndTask
-642 tst_calculation_demand fillTaskReportsProgressWhileWaiting
+642 tst_calculation_demand fillTaskRestsWhileWaiting
 
 # 643 - (11) the settle clock holds the per-session deadlines of the input-settle wait and one timer for the earliest, answers whether a session is settling and when the next wait ends, and calls its owner when a wait ends
 643 tst_calculation_demand settleClockAnswersItsQuestions
@@ -2050,7 +2049,7 @@
 646 manual M30
 
 # 647 - (12) the logbook's progress line says "Computing results: k / n" while the fill is the active task, distinct from the column worker's "Computing columns: k / n"; the fill is not cancellable, and saves, loads, bulk edits and column work still come first
-647 tst_logbook_indicators fillProgressLineHasItsOwnText
+647 tst_status_bar schedulerTasksShowTheirLabelsAndCounts
 647 tst_calculation_demand fillTaskIsLowestAndNotCancellable
 647 tst_calculation_demand savesAndBulkEditsPrecedeLoadStep
 647 audit demand
@@ -2095,7 +2094,7 @@
 
 # 653 - (14) test: a task with work it cannot step loses its work without a step and is completed once, not cancelled, after a final progress report, before the next active task is reported or the scheduler goes idle; the existing tasks complete at the same moments as before; the fill's progress line reports the fill from its first load to its last result without any step that loads nothing
 653 tst_session_model_engine schedulerCompletesWaitingTaskWhoseWorkIsGone
-653 tst_calculation_demand fillTaskReportsProgressWhileWaiting
+653 tst_calculation_demand fillTaskRestsWhileWaiting
 653 tst_calculation_demand fillEndingBehindAnotherTaskStartsNextCountFresh
 653 tst_calculation_demand savesAndBulkEditsPrecedeLoadStep
 
@@ -2148,7 +2147,7 @@
 660 tst_plot_row_delegate sharedGlyphPlumbing
 660 tst_plot_row_layout indicatorOnly
 660 tst_logbook_indicators plotRowsAndHeaderTurnOnOneClock
-660 tst_logbook_indicators fillProgressLineHasItsOwnText
+660 tst_status_bar schedulerTasksShowTheirLabelsAndCounts
 660 tst_logbook_indicators failedWriteIsListedInTheHover
 
 # 661 - (14) the audit's demand and gestures groups keep the removed and moved names out, and a rule forbids a second computation of a column's requested calculations outside the session model and the registry

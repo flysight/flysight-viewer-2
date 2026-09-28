@@ -30,7 +30,7 @@ struct AppContext {
     PlotViewSettingsModel* plotViewSettings = nullptr;
     MeasureModel* measureModel = nullptr;
     JobQueue* jobQueue = nullptr;             // background calculation jobs; JobQueue::model() is what a jobs view would show
-    CalculationDemand* calculationDemand = nullptr; // what the plot list's rows and the logbook's column headers and cells present (may be null: all plain)
+    CalculationDemand* calculationDemand = nullptr; // what the plot list's rows, the logbook's column headers and cells, and the status bar's computations and warning present (may be null: all plain)
     WorkingAnimation* workingClock = nullptr;  // the working indicator's one clock (DemandIndicator.h); made to follow the demand layer (followDemand, DemandIndicatorView.h) (may be null: the indicator does not turn)
     QSettings* settings = nullptr;
 };

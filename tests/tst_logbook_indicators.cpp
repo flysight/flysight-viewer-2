@@ -13,9 +13,10 @@
 // list's rows (a plot list with the row delegate, beside the window), that a
 // click on the glyph is a click on the section, cells that read pending
 // (distinct from unavailable and from the row's unreadable-record pending
-// state) without a trace in the model, its cached values or index.json, and
-// the progress line's texts. State, counts and what is computed are
-// CalculationDemand's (tst_calculation_demand).
+// state) without a trace in the model, its cached values or index.json.
+// State, counts and what is computed are CalculationDemand's
+// (tst_calculation_demand); background work is shown in the status bar
+// (tst_status_bar).
 //
 // Synchronization: Gate::waitEntered() proves the worker is inside a compute
 // function; QTRY_*, waitDemandIdle() and waitForIdle() spin the event loop;
@@ -37,13 +38,11 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPaintEvent>
-#include <QProgressBar>
 #include <QRegion>
 #include <QSignalSpy>
 #include <QStyleFactory>
 #include <QStyleOptionHeader>
 #include <QStyledItemDelegate>
-#include <QToolButton>
 #include <QToolTip>
 #include <QTreeView>
 #include <QtTest>
@@ -51,7 +50,6 @@
 #include "calculationdemand.h"
 #include "calculationrecord.h"
 #include "engine/calculationregistry.h"
-#include "idlescheduler.h"
 #include "jobfixture.h"
 #include "jobmodel.h"
 #include "jobqueue.h"
@@ -172,7 +170,6 @@ private slots:
     void pendingCellsAreDistinctFromUnavailable();
     void pendingCellBecomesValueWhenRecordIsWritten_data();
     void pendingCellBecomesValueWhenRecordIsWritten();
-    void fillProgressLineHasItsOwnText();
     void sortingTreatsPendingAsUnavailable();
     void unreadableRecordPendingIsNotDemandPending_data();
     void unreadableRecordPendingIsNotDemandPending();
@@ -1047,8 +1044,8 @@ void LogbookIndicatorsTest::pendingCellBecomesValueWhenRecordIsWritten_data()
     QTest::newRow("stub") << true;
 }
 
-// Spec 13: the pending cell becomes the value when the record is written; the
-// progress line reports the fill without a cancel button.
+// Spec 13: the pending cell becomes the value when the record is written, and
+// nothing of it reaches index.json.
 void LogbookIndicatorsTest::pendingCellBecomesValueWhenRecordIsWritten()
 {
     QFETCH(bool, stubs);
@@ -1059,22 +1056,6 @@ void LogbookIndicatorsTest::pendingCellBecomesValueWhenRecordIsWritten()
             QVERIFY2(!m_model->rowAt(m_model->getSessionRow(QString::fromLatin1(id))).isLoaded(), id);
     }
 
-    // The scheduler wired to the view as LogbookDockFeature wires it
-    IdleScheduler &scheduler = m_model->scheduler();
-    connect(&scheduler, &IdleScheduler::activeTaskChanged, m_logbook, &LogbookView::onActiveTaskChanged);
-    connect(&scheduler, &IdleScheduler::progressChanged, m_logbook, &LogbookView::onProgressChanged);
-    connect(&scheduler, &IdleScheduler::schedulerIdle, m_logbook, &LogbookView::onSchedulerIdle);
-    auto *cancelButton = m_logbook->findChild<QToolButton *>();
-    QVERIFY(cancelButton);
-    QObject scope;
-    int fillActivations = 0;
-    bool cancelEverShown = false;
-    connect(&scheduler, &IdleScheduler::activeTaskChanged, &scope, [&](int id, bool) {
-        if (id != SessionModel::ColumnFillTask)
-            return;
-        ++fillActivations;
-        cancelEverShown = cancelEverShown || cancelButton->isVisibleTo(m_logbook);
-    });
     QSignalSpy resetSpy(m_model.get(), &QAbstractItemModel::modelAboutToBeReset);
     QStringList indexSnapshots;
     const auto noteIndex = [&indexSnapshots] {
@@ -1123,86 +1104,9 @@ void LogbookIndicatorsTest::pendingCellBecomesValueWhenRecordIsWritten()
     for (const QString &snapshot : std::as_const(indexSnapshots))
         QVERIFY(!snapshot.contains(LogbookCellDelegate::pendingText()));
 
-    // No cancel for requested calculations
-    QVERIFY(!cancelEverShown);
-    if (stubs)
-        QVERIFY(fillActivations > 0);
-    else
+    // A loaded session's value arrives without a reset of the model
+    if (!stubs)
         QCOMPARE(resetSpy.count(), 0);
-}
-
-// Spec 12, "The fill's own progress text": the progress line says "Computing
-// results" for the demand layer's fill and "Computing columns" for the column
-// worker, and the other tasks' texts are as before.
-void LogbookIndicatorsTest::fillProgressLineHasItsOwnText()
-{
-    auto *bar = m_logbook->findChild<QProgressBar *>();
-    auto *cancel = m_logbook->findChild<QToolButton *>();
-    QVERIFY(bar);
-    QVERIFY(cancel);
-
-    // Direct: each task's text, and its cancel button
-    struct Expected {
-        int id;
-        bool cancellable;
-        const char *text;
-    };
-    const QList<Expected> expected = {
-        {SessionModel::SaveTask, false, "Saving sessions: 1 / 3"},
-        {SessionModel::LoadTask, true, "Loading sessions: 1 / 3"},
-        {SessionModel::BulkEditTask, false, "Updating sessions: 1 / 3"},
-        {SessionModel::ColumnTask, true, "Computing columns: 1 / 3"},
-        {SessionModel::ColumnFillTask, false, "Computing results: 1 / 3"},
-    };
-    for (const Expected &e : expected) {
-        m_logbook->onActiveTaskChanged(e.id, e.cancellable);
-        m_logbook->onProgressChanged(e.id, 2, 3);
-        QVERIFY2(bar->isVisibleTo(m_logbook), e.text);
-        QCOMPARE(bar->text(), QString::fromLatin1(e.text));
-        QCOMPARE(cancel->isVisibleTo(m_logbook), e.cancellable);
-    }
-    QCOMPARE(bar->format(), QStringLiteral("Computing results: %v / %m"));
-    // A report for another task than the active one changes nothing
-    m_logbook->onProgressChanged(SessionModel::ColumnTask, 0, 5);
-    QCOMPARE(bar->text(), QStringLiteral("Computing results: 1 / 3"));
-    QCOMPARE(bar->format(), QStringLiteral("Computing results: %v / %m"));
-    m_logbook->onSchedulerIdle();
-    QVERIFY(!bar->isVisibleTo(m_logbook));
-    QVERIFY(!cancel->isVisibleTo(m_logbook));
-
-    // Live: a fill over unloaded sessions, wired as LogbookDockFeature wires it
-    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
-    QVERIFY(waitForIdle(*m_model));
-    for (const char *id : {"s1", "s2", "s3", "s4"})
-        QVERIFY2(!m_model->rowAt(m_model->getSessionRow(QString::fromLatin1(id))).isLoaded(), id);
-    IdleScheduler &scheduler = m_model->scheduler();
-    connect(&scheduler, &IdleScheduler::activeTaskChanged, m_logbook, &LogbookView::onActiveTaskChanged);
-    connect(&scheduler, &IdleScheduler::progressChanged, m_logbook, &LogbookView::onProgressChanged);
-    connect(&scheduler, &IdleScheduler::schedulerIdle, m_logbook, &LogbookView::onSchedulerIdle);
-    // Connected after the view's slot, so it sees the format that slot set
-    QObject scope;
-    QList<std::pair<int, QString>> reports;
-    connect(&scheduler, &IdleScheduler::progressChanged, &scope, [&](int id, int, int) {
-        if (id == SessionModel::ColumnFillTask || id == SessionModel::ColumnTask)
-            reports.append({id, bar->format()});
-    });
-
-    gate().open(16);
-    enableColumns({QStringLiteral("G_OUT")});
-    QVERIFY(waitDemandIdle());
-    QVERIFY(waitForIdle(*m_model));
-
-    int fillReports = 0;
-    for (const auto &[id, format] : std::as_const(reports)) {
-        if (id == SessionModel::ColumnFillTask) {
-            ++fillReports;
-            QCOMPARE(format, QStringLiteral("Computing results: %v / %m"));
-        } else {
-            QCOMPARE(format, QStringLiteral("Computing columns: %v / %m"));
-        }
-    }
-    QVERIFY(fillReports > 0);
-    QTRY_VERIFY(!bar->isVisible());
 }
 
 // Sorting treats a pending cell as unavailable: missing values go to the

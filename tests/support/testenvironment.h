@@ -71,8 +71,12 @@ private:
     QStringList m_corePreferenceKeys;
 };
 
-/// Spins the event loop until the model's idle scheduler has no work left.
-/// Returns false if that does not happen within timeoutMs.
+/// Wakes the model's idle scheduler and spins the event loop until no task has
+/// work, the column fill included (a task the scheduler rests on has work),
+/// and no tick is due (IdleScheduler::hasWork(), isTicking()). Returns false if
+/// that does not happen within timeoutMs. Registers nothing and emits nothing
+/// on the scheduler: a test that spies on it across the wait sees only what
+/// the tasks cause.
 bool waitForIdle(FlySight::SessionModel &model, int timeoutMs = 5000);
 
 } // namespace FlySightTest

@@ -454,6 +454,7 @@ set(PROJECT_SOURCES
   ui/docks/map/MapPreferencesBridge.h    ui/docks/map/MapPreferencesBridge.cpp
   ui/docks/plot/PlotDockFeature.h    ui/docks/plot/PlotDockFeature.cpp
   ui/docks/plot/PlotWidget.h    ui/docks/plot/PlotWidget.cpp
+  ui/statusbar/StatusBarFeature.h    ui/statusbar/StatusBarFeature.cpp
   resources.qrc
 )
 

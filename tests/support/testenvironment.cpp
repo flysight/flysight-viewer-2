@@ -5,9 +5,7 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QSettings>
-#include <QSignalSpy>
 #include <QStandardPaths>
-#include <QTimer>
 
 #include "calculations/attributeregistration.h"
 #include "calculations/builtincalculations.h"
@@ -229,27 +227,21 @@ bool waitForIdle(SessionModel &model, int timeoutMs)
 {
     IdleScheduler &scheduler = model.scheduler();
 
-    // A tick that finds work emits progressChanged; the tick that finds none
-    // emits schedulerIdle, unless the scheduler was idle already, in which
-    // case it emits nothing. IdleScheduler exposes no "is idle" query, so the
-    // already-idle case is recognised by a sentinel timer that is queued
-    // after the scheduler's own zero-interval timer.
-    QSignalSpy idleSpy(&scheduler, &IdleScheduler::schedulerIdle);
-    QSignalSpy progressSpy(&scheduler, &IdleScheduler::progressChanged);
-
+    // A wake makes a tick due. A tick completes a waiting task whose work is
+    // gone, steps what can step and re-arms while it did, and emits
+    // schedulerIdle when no task has work; a task that waits on something
+    // outside the scheduler has work, whether or not the scheduler rests on
+    // it. So once no task has work and no tick is due, every tick the wake
+    // caused has run and nothing is left. Only the scheduler's queries are
+    // read: nothing is registered or connected, so the only scheduler signals
+    // during the wait are those the tasks cause.
     scheduler.wake();
-
-    bool sentinelFired = false;
-    QTimer::singleShot(0, &scheduler, [&sentinelFired]() { sentinelFired = true; });
 
     QDeadlineTimer deadline(timeoutMs);
     while (!deadline.hasExpired()) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
-
-        if (idleSpy.count() > 0)
+        if (!scheduler.hasWork() && !scheduler.isTicking())
             return true;
-        if (sentinelFired && progressSpy.count() == 0)
-            return true;    // at least one tick ran and found nothing to do
     }
     return false;
 }

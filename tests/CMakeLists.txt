@@ -13,9 +13,10 @@
 #     (FLYSIGHT_BUILD_PYTHON_TESTS).
 #   - tst_map_models: the two map models and their two helpers, which need Qt
 #     Core and Gui only, so the test needs no Widgets, WebEngine or Quick.
-#   - tst_plot_row_delegate and tst_logbook_indicators: the plot list's row
-#     delegate, and the logbook view with its header view and cell delegate,
-#     the only tests that link Qt Widgets (FLYSIGHT_BUILD_WIDGET_TESTS).
+#   - tst_plot_row_delegate, tst_logbook_indicators and tst_status_bar: the
+#     plot list's row delegate, the logbook view with its header view and cell
+#     delegate, and the main window's status bar, the only tests that link Qt
+#     Widgets (FLYSIGHT_BUILD_WIDGET_TESTS).
 # The FLYSIGHT_BUILD_FUSION_TESTS block near the end of this file is the only
 # place a test may link GTSAM.
 #
@@ -157,13 +158,13 @@ flysight_add_test(tst_calculation_demand SOURCES tst_calculation_demand.cpp)
 # Plot-list rows: pure geometry (no widgets) ...
 flysight_add_test(tst_plot_row_layout SOURCES tst_plot_row_layout.cpp)
 
-# ... and the delegate in an offscreen QTreeView. tst_plot_row_delegate and
-# tst_logbook_indicators (below) are the only tests that link Qt Widgets; they
-# compile the plot list's row delegate, and the logbook view with its header
-# view and cell delegate, from the application sources (pattern:
-# tst_python_bridge). Both compile the shared indicator (DemandIndicator.*,
-# DemandIndicatorView.*). QT_QPA_PLATFORM=offscreen is already set by
-# flysight_add_test().
+# ... and the delegate in an offscreen QTreeView. tst_plot_row_delegate,
+# tst_logbook_indicators and tst_status_bar (below) are the only tests that
+# link Qt Widgets; they compile the plot list's row delegate, the logbook view
+# with its header view and cell delegate, and the status bar's component from
+# the application sources (pattern: tst_python_bridge). The first two compile
+# the shared indicator (DemandIndicator.*, DemandIndicatorView.*).
+# QT_QPA_PLATFORM=offscreen is already set by flysight_add_test().
 option(FLYSIGHT_BUILD_WIDGET_TESTS "Build and run the tests that need Qt Widgets" ON)
 if(FLYSIGHT_BUILD_WIDGET_TESTS)
   flysight_add_test(tst_plot_row_delegate
@@ -176,10 +177,9 @@ if(FLYSIGHT_BUILD_WIDGET_TESTS)
             "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicatorView.h"
     LIBS Qt${QT_VERSION_MAJOR}::Widgets)
   set_tests_properties(tst_plot_row_delegate PROPERTIES LABELS "core;widgets")
-  # ... and tst_logbook_indicators: the logbook's column headers, pending cells
-  # and progress line in a real LogbookView, beside a plot list with the row
-  # delegate, on one working-indicator clock, compiled from the application
-  # sources.
+  # ... and tst_logbook_indicators: the logbook's column headers and pending
+  # cells in a real LogbookView, beside a plot list with the row delegate, on
+  # one working-indicator clock, compiled from the application sources.
   flysight_add_test(tst_logbook_indicators
     SOURCES tst_logbook_indicators.cpp
             "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookView.cpp"          "${FLYSIGHT_SRC_DIR}/ui/docks/logbook/LogbookView.h"
@@ -191,6 +191,14 @@ if(FLYSIGHT_BUILD_WIDGET_TESTS)
             "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicatorView.cpp"          "${FLYSIGHT_SRC_DIR}/ui/docks/DemandIndicatorView.h"
     LIBS Qt${QT_VERSION_MAJOR}::Widgets)
   set_tests_properties(tst_logbook_indicators PROPERTIES LABELS "core;widgets")
+  # ... and tst_status_bar: the main window's status bar (the scheduler's
+  # tasks, the computations, the cancel button and the warning) in a real
+  # QMainWindow, compiled from the application sources.
+  flysight_add_test(tst_status_bar
+    SOURCES tst_status_bar.cpp
+            "${FLYSIGHT_SRC_DIR}/ui/statusbar/StatusBarFeature.cpp"        "${FLYSIGHT_SRC_DIR}/ui/statusbar/StatusBarFeature.h"
+    LIBS Qt${QT_VERSION_MAJOR}::Widgets)
+  set_tests_properties(tst_status_bar PROPERTIES LABELS "core;widgets")
 endif()
 
 # Source layer and conversion layer: the schema and unit tables, the conversion

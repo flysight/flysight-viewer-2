@@ -141,7 +141,7 @@ private slots:
     void storedRejectionIsBadgedAfterRestartWithoutLoad();
     void recordReasonReachesDemandThroughRecordChange();
     void columnKnowledgeComesFromTheSessionModel();
-    void fillTaskReportsProgressWhileWaiting();
+    void fillTaskRestsWhileWaiting();
     void fillEndingBehindAnotherTaskStartsNextCountFresh();
     void storedResultsCreateNoJob();
     void notApplicableSessionIsSettledWithoutAJob();
@@ -3091,9 +3091,11 @@ void CalculationDemandTest::columnKnowledgeComesFromTheSessionModel()
     QVERIFY(m_demand->isSettling(QStringLiteral("s1")));
 }
 
-// Spec 13: the progress line reports the fill for its whole duration, and the
-// scheduler rests while the fill waits on a job with both holds taken.
-void CalculationDemandTest::fillTaskReportsProgressWhileWaiting()
+// Spec 13: the scheduler reports the fill as its active task for the fill's
+// whole duration, rests while the fill waits on a job with both holds taken,
+// and completes it when its work is gone. The fill reports no progress of its
+// own: the computations' count is the demand layer's progress().
+void CalculationDemandTest::fillTaskRestsWhileWaiting()
 {
     for (int i = 1; i <= 4; ++i)
         QVERIFY(giveInput({QStringLiteral("s%1").arg(i)}, "G_IN", i));
@@ -3101,53 +3103,64 @@ void CalculationDemandTest::fillTaskReportsProgressWhileWaiting()
     QVERIFY(waitForIdle(*m_model));
 
     IdleScheduler &scheduler = m_model->scheduler();
-    QList<QPair<int, int>> fillProgress;      // (remaining, total) of ColumnFillTask
-    QStringList events;                         // "P r/t", "I" (idle), "L <id>"
+    int fillReports = 0;                        // progressChanged carrying ColumnFillTask
+    QStringList events;                         // "F" the fill activated, "I" idle, "L <id>" a load, "E" a job's end
     QObject scope;
-    connect(&scheduler, &IdleScheduler::progressChanged, &scope, [&](int id, int remaining, int total) {
-        if (id != SessionModel::ColumnFillTask)
-            return;
-        fillProgress.append({remaining, total});
-        events.append(QStringLiteral("P %1/%2").arg(remaining).arg(total));
+    connect(&scheduler, &IdleScheduler::progressChanged, &scope, [&](int id, int, int) {
+        if (id == SessionModel::ColumnFillTask)
+            ++fillReports;
     });
-    connect(&scheduler, &IdleScheduler::schedulerIdle, &scope, [&] { events.append(QStringLiteral("I")); });
+    int activeTask = -1;                        // the task the scheduler last reported active
+    connect(&scheduler, &IdleScheduler::activeTaskChanged, &scope, [&](int id, bool) {
+        activeTask = id;
+        if (id == SessionModel::ColumnFillTask)
+            events.append(QStringLiteral("F"));
+    });
+    connect(&scheduler, &IdleScheduler::schedulerIdle, &scope, [&] {
+        activeTask = -1;
+        events.append(QStringLiteral("I"));
+    });
     connect(m_model.get(), &SessionModel::sessionLoaded, &scope,
             [&](const QString &id) { events.append(QStringLiteral("L ") + id); });
-    int activeTask = -1;                        // the task the scheduler last reported active
-    connect(&scheduler, &IdleScheduler::activeTaskChanged, &scope, [&](int id, bool) { activeTask = id; });
     // At each job's end, after the demand layer's own slot (connected first)
     QList<bool> fillWorkAtEnd;
-    connect(m_queue.get(), &JobQueue::jobFinished, &scope,
-            [&](JobId, JobState) { fillWorkAtEnd.append(m_demand->hasFillWork()); });
+    connect(m_queue.get(), &JobQueue::jobFinished, &scope, [&](JobId, JobState) {
+        fillWorkAtEnd.append(m_demand->hasFillWork());
+        events.append(QStringLiteral("E"));
+    });
 
     enableColumns({"G_OUT"});
     QVERIFY(gate().waitEntered());
     QTRY_COMPARE(m_demand->heldSessionIds().size(), 2);
     QTRY_VERIFY(!scheduler.isTicking());
-    QVERIFY(fillProgress.contains(progressOf(4, 4)));
+    QCOMPARE(activeTask, int(SessionModel::ColumnFillTask));
+    QCOMPARE(events.count(QStringLiteral("F")), 1);
+    QCOMPARE(progressNow().count, 4);
+    QCOMPARE(progressNow().highWater, 4);
     QVERIFY(m_demand->hasFillWork());
     QVERIFY(!m_demand->canLoad());
+    QVERIFY(scheduler.hasWork());
 
     // Resting: no tick, no idle, no load
     const int eventsBefore = int(events.size());
-    const int progressBefore = int(fillProgress.size());
     QTest::qWait(200);
     QVERIFY(!scheduler.isTicking());
     QCOMPARE(int(events.size()), eventsBefore);
-    QCOMPARE(int(fillProgress.size()), progressBefore);
 
-    // A wake reports once and rests again
+    // A wake ticks once and rests again, the fill still the active task
     scheduler.wake();
     QTRY_VERIFY(!scheduler.isTicking());
     QTest::qWait(50);
-    QCOMPARE(int(fillProgress.size()), progressBefore + 1);
-    QCOMPARE(fillProgress.last(), progressOf(4, 4));
+    QVERIFY(!scheduler.isTicking());
+    QCOMPARE(int(events.size()), eventsBefore);
+    QCOMPARE(activeTask, int(SessionModel::ColumnFillTask));
 
-    // One job ends: its release wakes the scheduler, which reports and loads
+    // One job ends: its release wakes the scheduler, which loads
     gate().open(1);
-    QTRY_VERIFY(fillProgress.contains(progressOf(3, 4)));
     QTRY_VERIFY(events.contains(QStringLiteral("L s3")));
     QVERIFY(!events.contains(QStringLiteral("I")));
+    QCOMPARE(progressNow().highWater, 4);
+    QVERIFY(progressNow().count <= 3);
 
     // The other jobs one at a time, each let through while the scheduler rests
     // on the fill, so that each ends with the fill the active task. (A job's
@@ -3165,45 +3178,42 @@ void CalculationDemandTest::fillTaskReportsProgressWhileWaiting()
     }
     QVERIFY(waitDemandIdle());
     // The pass in the last job's end found no pending cell left: the fill had
-    // no work from then on, and the scheduler completed it
+    // no work from then on, and the scheduler completed it and went idle
     QCOMPARE(fillWorkAtEnd.size(), 4);
     QVERIFY(!fillWorkAtEnd.last());
     QTRY_VERIFY(events.contains(QStringLiteral("I")));
-    const int end = int(events.lastIndexOf(QStringLiteral("P 0/4")));
-    QVERIFY(end >= 0);
-    QCOMPARE(events.indexOf(QStringLiteral("I"), end), end + 1);
-    QVERIFY(!events.mid(0, end).contains(QStringLiteral("I")));
+    QCOMPARE(events.count(QStringLiteral("I")), 1);
+    QVERIFY(events.indexOf(QStringLiteral("I")) > events.lastIndexOf(QStringLiteral("E")));
+    QCOMPARE(events.last(), QStringLiteral("I"));
     QCOMPARE(events.count(QStringLiteral("L s1")) + events.count(QStringLiteral("L s2"))
                  + events.count(QStringLiteral("L s3")) + events.count(QStringLiteral("L s4")), 4);
-    // The remaining count never rose within the fill, and the total was 4 throughout
-    for (int i = 0; i < fillProgress.size(); ++i) {
-        QCOMPARE(fillProgress.at(i).second, 4);
-        if (i > 0)
-            QVERIFY(fillProgress.at(i).first <= fillProgress.at(i - 1).first);
-    }
+    QVERIFY(!scheduler.hasWork());
+    QVERIFY(progressNow() == DemandProgress());
 
-    // The next fill starts its own count. Its job is held, so the fill waits on
-    // it and must report. (A job that is let through at once may end before
-    // the fill's first tick, because the save of the edit takes the ticks
-    // before it; that fill then reports only its end, "0 / 1".)
+    // The next fill starts after an edit. Its job is held, so the fill waits
+    // on it as the active task; the computations count one session of one.
     QCOMPARE(gate().proceed.available(), 0);
-    fillProgress.clear();
+    events.clear();
     QVERIFY(giveInput({"s2"}, "G_IN", 20));
     settle();
-    QTRY_VERIFY(!fillProgress.isEmpty());
-    QCOMPARE(fillProgress.first(), progressOf(1, 1));
+    QTRY_VERIFY(events.contains(QStringLiteral("F")));
+    QTRY_COMPARE(activeTask, int(SessionModel::ColumnFillTask));
+    QCOMPARE(progressNow().count, 1);
+    QCOMPARE(progressNow().highWater, 1);
     gate().open(1);
     QVERIFY(waitDemandIdle());
     // waitDemandIdle() returns once the fill has no work, which may be before
-    // the scheduler's tick that reports its end
-    QTRY_COMPARE(fillProgress.last(), progressOf(0, 1));
-    for (const QPair<int, int> &progress : std::as_const(fillProgress))
-        QCOMPARE(progress.second, 1);
+    // the scheduler's tick that completes it
+    QTRY_COMPARE(events.last(), QStringLiteral("I"));
+    QVERIFY(progressNow() == DemandProgress());
+
+    // Never a report of its own
+    QCOMPARE(fillReports, 0);
 }
 
 // A fill that loses its work while another task is active is not completed
 // by the scheduler (it completes only the task it last reported active); the
-// next fill still starts its own count.
+// next burst of computations still starts its own count.
 void CalculationDemandTest::fillEndingBehindAnotherTaskStartsNextCountFresh()
 {
     QVERIFY(giveInput({"s1"}, "G_IN", 1));
@@ -3214,11 +3224,11 @@ void CalculationDemandTest::fillEndingBehindAnotherTaskStartsNextCountFresh()
 
     IdleScheduler &scheduler = m_model->scheduler();
     const auto removeProbe = qScopeGuard([&scheduler] { scheduler.unregisterTask(96); });
-    QList<QPair<int, int>> fillProgress;
+    QList<QPair<int, int>> counts;              // (count, highWater) of progress() at each progressChanged
     QObject scope;
-    connect(&scheduler, &IdleScheduler::progressChanged, &scope, [&fillProgress](int id, int remaining, int total) {
-        if (id == SessionModel::ColumnFillTask)
-            fillProgress.append({remaining, total});
+    connect(m_demand.get(), &CalculationDemand::progressChanged, &scope, [&counts, this] {
+        const DemandProgress progress = m_demand->progress();
+        counts.append({progress.count, progress.highWater});
     });
 
     // Both stubs held, the fill resting on the running job
@@ -3226,7 +3236,7 @@ void CalculationDemandTest::fillEndingBehindAnotherTaskStartsNextCountFresh()
     QVERIFY(gate().waitEntered());
     QTRY_COMPARE(m_demand->heldSessionIds().size(), 2);
     QTRY_VERIFY(!scheduler.isTicking());
-    QVERIFY(fillProgress.contains(progressOf(2, 2)));
+    QVERIFY(counts.contains(progressOf(2, 2)));
 
     // A higher task becomes the active one while the fill's jobs end
     bool probeHasWork = true;
@@ -3246,14 +3256,15 @@ void CalculationDemandTest::fillEndingBehindAnotherTaskStartsNextCountFresh()
     probeHasWork = false;
     QVERIFY(waitForIdle(*m_model));
     scheduler.unregisterTask(96);
+    QVERIFY(progressNow() == DemandProgress());
 
-    // A fill of one session: its first report is its own count
+    // A burst of one session: its first value is its own count
     drainEntered();
-    fillProgress.clear();
+    counts.clear();
     QVERIFY(giveInput({"s2"}, "G_IN", 20));
     settle();
-    QTRY_VERIFY(!fillProgress.isEmpty());
-    QCOMPARE(fillProgress.first(), progressOf(1, 1));
+    QTRY_VERIFY(!counts.isEmpty());
+    QCOMPARE(counts.first(), progressOf(1, 1));
     QVERIFY(gate().waitEntered());
 }
 
@@ -4578,8 +4589,8 @@ void CalculationDemandTest::successfulLoadForgetsFailedLoadFacts()
 }
 
 // The fill is the lowest-priority task, active once per fill, not cancellable;
-// its remaining count falls by one per finished session; a cancel() changes
-// nothing.
+// the computations' count falls by one per finished session; a cancel()
+// changes nothing.
 void CalculationDemandTest::fillTaskIsLowestAndNotCancellable()
 {
     for (int i = 1; i <= 4; ++i)
@@ -4589,13 +4600,13 @@ void CalculationDemandTest::fillTaskIsLowestAndNotCancellable()
 
     IdleScheduler &scheduler = m_model->scheduler();
     QList<QPair<int, bool>> activations;
-    QList<QPair<int, int>> fillProgress;
+    QList<QPair<int, int>> counts;              // (count, highWater) of progress() at each progressChanged
     QObject scope;
     connect(&scheduler, &IdleScheduler::activeTaskChanged, &scope,
             [&activations](int id, bool cancellable) { activations.append({id, cancellable}); });
-    connect(&scheduler, &IdleScheduler::progressChanged, &scope, [&fillProgress](int id, int remaining, int total) {
-        if (id == SessionModel::ColumnFillTask)
-            fillProgress.append({remaining, total});
+    connect(m_demand.get(), &CalculationDemand::progressChanged, &scope, [&counts, this] {
+        const DemandProgress progress = m_demand->progress();
+        counts.append({progress.count, progress.highWater});
     });
 
     enableColumns({"G_OUT"});
@@ -4622,25 +4633,22 @@ void CalculationDemandTest::fillTaskIsLowestAndNotCancellable()
 
     scheduler.cancel(SessionModel::ColumnFillTask);
     QVERIFY(m_demand->hasFillWork());
-    // One session at a time, so that every count is reported. The scheduler
-    // reports the active task once per tick: with every job let through, a
-    // job can end before the fill's next tick (the column worker's step for
-    // the record just written may take the tick before it), and the count
-    // then falls by two between reports.
+    // One session at a time, so that every count is seen: the count 0 has
+    // no high-water mark
     for (int left = 3; left >= 0; --left) {
         gate().open(1);
-        QTRY_VERIFY2(fillProgress.contains(progressOf(left, 4)), qPrintable(QString::number(left)));
+        QTRY_VERIFY2(counts.contains(progressOf(left, left > 0 ? 4 : 0)), qPrintable(QString::number(left)));
     }
     QVERIFY(waitDemandIdle());
     for (int i = 1; i <= 4; ++i)
         QCOMPARE(jobOf(QStringLiteral("s%1").arg(i), "gated").state, JobState::Succeeded);
     QVERIFY(col("G_OUT").isPlain());
 
-    // The total is the fill's high-water mark; the remaining count falls by
-    // one per finished session
+    // The total is the high-water mark while sessions remain; the count
+    // falls by one per finished session
     QList<int> remaining;
-    for (const QPair<int, int> &progress : std::as_const(fillProgress)) {
-        QCOMPARE(progress.second, 4);
+    for (const QPair<int, int> &progress : std::as_const(counts)) {
+        QCOMPARE(progress.second, progress.first > 0 ? 4 : 0);
         if (remaining.isEmpty() || remaining.last() != progress.first)
             remaining.append(progress.first);
     }

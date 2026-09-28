@@ -36,6 +36,7 @@
 #include "ui/docks/plot/PlotWidget.h"
 #include "ui/docks/logbook/LogbookView.h"
 #include "ui/docks/video/VideoWidget.h"
+#include "ui/statusbar/StatusBarFeature.h"
 #include "preferences/preferencesdialog.h"
 #include "preferences/preferencesmanager.h"
 #include "preferences/preferencekeys.h"
@@ -214,7 +215,8 @@ MainWindow::MainWindow(QWidget *parent)
     // create demand at once. Its hidden loads are the idle scheduler's
     // lowest-priority task, so they wait for the column worker's start-up pass.
     // The working indicator's one clock follows the demand layer, so the plot
-    // list's rows and the logbook's column headers turn in step.
+    // list's rows and the logbook's column headers turn in step. The views and
+    // the status bar hold the demand layer weakly.
     m_jobQueue = new JobQueue(model, this);
     m_calculationDemand = new CalculationDemand(model, m_plotModel, m_jobQueue, this);
     m_workingClock = new WorkingAnimation(this);
@@ -239,6 +241,12 @@ MainWindow::MainWindow(QWidget *parent)
     for (auto* feature : m_features) {
         addDockWidget(feature->dock(), feature->defaultLocation());
     }
+
+    // The status bar, the one place background work is shown. Made here,
+    // before anything below can run the event loop: it learns the scheduler's
+    // active task only from the scheduler's signals, so it must follow the
+    // scheduler from its first tick.
+    new StatusBarFeature(ctx, statusBar(), this);
 
     // Find feature instances for signal connections
     auto* logbookFeature = findFeature<LogbookDockFeature>();
@@ -354,10 +362,11 @@ MainWindow::~MainWindow()
     // down and joins the worker), then everything else - also when closeEvent()
     // never ran. The demand layer also goes before the session model it
     // registered a scheduler task with (the column fill) and pinned sessions in.
-    // The plot list's delegate and the logbook's header and cell delegate hold
-    // the demand layer weakly and turn plain once it is gone. The clock follows
-    // the demand layer and stops when it goes; it is deleted next, and the views
-    // hold it weakly, as they hold the demand layer.
+    // The plot list's delegate, the logbook's header and cell delegate and the
+    // status bar hold the demand layer weakly: the views turn plain and the
+    // status bar shows no computation and no warning once it is gone. The
+    // clock follows the demand layer and stops when it goes; it is deleted
+    // next, and the views hold it weakly, as they hold the demand layer.
     delete m_calculationDemand;
     m_calculationDemand = nullptr;
     delete m_workingClock;

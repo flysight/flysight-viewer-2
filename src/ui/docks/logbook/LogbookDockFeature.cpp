@@ -1,6 +1,5 @@
 #include "LogbookDockFeature.h"
 #include "ui/docks/AppContext.h"
-#include "idlescheduler.h"
 #include "LogbookView.h"
 #include "sessionmodel.h"
 
@@ -33,22 +32,6 @@ LogbookDockFeature::LogbookDockFeature(const AppContext& ctx, QObject* parent)
     // Forward focused session changes to the model
     connect(m_logbookView, &LogbookView::currentSessionChanged,
             ctx.sessionModel, &SessionModel::setFocusedSessionId);
-
-    // Connect scheduler signals directly to unified progress slots
-    IdleScheduler &sched = ctx.sessionModel->scheduler();
-
-    connect(&sched, &IdleScheduler::activeTaskChanged,
-            m_logbookView, &LogbookView::onActiveTaskChanged);
-    connect(&sched, &IdleScheduler::progressChanged,
-            m_logbookView, &LogbookView::onProgressChanged);
-    connect(&sched, &IdleScheduler::schedulerIdle,
-            m_logbookView, &LogbookView::onSchedulerIdle);
-
-    // Cancel button connection (delegate through scheduler)
-    connect(m_logbookView, &LogbookView::cancelRequested,
-            ctx.sessionModel, [model = ctx.sessionModel](int taskId) {
-        model->scheduler().cancel(taskId);
-    });
 }
 
 QString LogbookDockFeature::id() const

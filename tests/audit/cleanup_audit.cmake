@@ -321,8 +321,10 @@ expect_none("jobs never touch the idle scheduler" "[Ii]dle[Ss]cheduler"
   "src/jobqueue.*" "src/jobmodel.*" src/fusion)
 # m_pendingRebuildLevel is master's own and is not part of this rule.
 expect_none("no plot rebuild guard" "m_rebuildingPlot|QScopedValueRollback" src/ui/docks/plot)
-# Allow: none expected. A calculation outcome is reported by the plot row
-# (badge and tooltip), never by a dialog, a message box or the status bar.
+# Allow: none expected. A calculation outcome is reported by the views of the
+# demand layer (the plot row's badge and tooltip, the status bar's warning),
+# never by a dialog or a message box, and the calculation code and the plot
+# list never reach for the status bar themselves.
 expect_none("no dialog or message box for a calculation outcome"
   "QMessageBox|QProgressDialog|QDialog|QErrorMessage|statusBar\\("
   ${FUSION_CORE} src/engine src/calculations src/ui/docks/plotselection)
@@ -747,7 +749,7 @@ audit_group(demand)
 # The shared indicator's view half (DemandIndicatorView.*) is one of its views;
 # DemandIndicator.* is not.
 expect_only("only the application and its views know the demand layer" "CalculationDemand"
-  "^src/${DEMAND_FILES}\\.(cpp|h)$|^src/mainwindow\\.(cpp|h)$|^src/ui/docks/AppContext\\.h$|^src/ui/docks/DemandIndicatorView\\.(cpp|h)$|^src/ui/docks/plotselection/(PlotRowDelegate\\.(cpp|h)|PlotSelectionDockFeature\\.cpp)$|^src/ui/docks/logbook/(LogbookView|LogbookHeaderView|LogbookCellDelegate)\\.(cpp|h)$|^src/ui/docks/logbook/LogbookDockFeature\\.cpp$|^src/ui/docks/plot/PlotWidget\\.cpp$"
+  "^src/${DEMAND_FILES}\\.(cpp|h)$|^src/mainwindow\\.(cpp|h)$|^src/ui/docks/AppContext\\.h$|^src/ui/docks/DemandIndicatorView\\.(cpp|h)$|^src/ui/docks/plotselection/(PlotRowDelegate\\.(cpp|h)|PlotSelectionDockFeature\\.cpp)$|^src/ui/docks/logbook/(LogbookView|LogbookHeaderView|LogbookCellDelegate)\\.(cpp|h)$|^src/ui/docks/logbook/LogbookDockFeature\\.cpp$|^src/ui/docks/plot/PlotWidget\\.cpp$|^src/ui/statusbar/StatusBarFeature\\.(cpp|h)$"
   src)
 # Allow: none expected. The layers below the demand layer, the shared glyphs
 # and the row layout never include it (so they can use none of its types).
@@ -768,7 +770,7 @@ expect_none("the demand views handle no event of their own"
   "editorEvent|mouse(Press|Release|DoubleClick|Move)Event|keyPressEvent"
   "src/ui/docks/plotselection/PlotRowDelegate.*" "src/ui/docks/logbook/LogbookHeaderView.*"
   "src/ui/docks/logbook/LogbookCellDelegate.*" "src/ui/docks/DemandIndicator.*"
-  "src/ui/docks/DemandIndicatorView.*")
+  "src/ui/docks/DemandIndicatorView.*" "src/ui/statusbar/StatusBarFeature.*")
 # Pending is a presentation of demand: the demand layer answers it and the cell
 # delegate paints it; the model, its cached values and index.json never see it.
 # Allow: none expected.
@@ -784,11 +786,11 @@ expect_none("the model, the logbook and the scheduler know nothing of the execut
 # the load step is one more task and tells it nothing.
 expect_none("the idle scheduler learns nothing about jobs or demand" "[Dd]emand|[Cc]alculation|[Jj]ob|[Ee]xecutor"
   src/idlescheduler.cpp src/idlescheduler.h)
-# The load step is the demand layer's task: the enum names it, the progress
-# line labels it, and the session model never registers or runs it.
-# Allow: none expected.
+# The load step is the demand layer's task: the enum names it, the status
+# bar maps it to the computations (the fill is never an item of its own), and
+# the session model never registers or runs it. Allow: none expected.
 expect_only("the load step is the demand layer's scheduler task" "ColumnFillTask"
-  "^src/(calculationdemand|demandfill)\\.(cpp|h)$|^src/sessionmodel\\.h$|^src/ui/docks/logbook/LogbookView\\.cpp$" src)
+  "^src/(calculationdemand|demandfill)\\.(cpp|h)$|^src/sessionmodel\\.h$|^src/ui/statusbar/StatusBarFeature\\.cpp$" src)
 # Hidden loads for column demand go through the one entry that loads without
 # showing and pins under the corrected id. Allow: none expected.
 expect_only("hidden loads go through loadPinnedSession" "loadPinnedSession\\("
@@ -920,12 +922,24 @@ expect_only("the clock follows the demand layer in one place" "followDemand\\([^
 expect_none("the plot rows and the headers share the glyph plumbing"
   "QPalette::ColorGroup|QToolTip::|qMax\\(2|drawWorkingGlyph|drawWarningGlyph|[.>]setActive\\("
   "src/ui/docks/plotselection/PlotRowDelegate.*" "src/ui/docks/logbook/LogbookHeaderView.*")
+# The status bar is the second view of the demand layer's end: it shows no
+# computation and no warning once the demand layer is gone.
 expect_only("the views learn of the demand layer's end in one place" "&QObject::destroyed"
-  "^src/ui/docks/DemandIndicatorView\\.cpp$" src/ui)
-# The fill's progress text is its own, distinct from the column worker's.
-# Allow: reword, never duplicate.
-expect_count("the fill has a progress text of its own" "\"Computing results: %v / %m\"" 1
-  src/ui/docks/logbook/LogbookView.cpp)
+  "^src/ui/docks/DemandIndicatorView\\.cpp$|^src/ui/statusbar/StatusBarFeature\\.cpp$" src/ui)
+# One place shows background work: the status bar names the scheduler's
+# tasks and the computations, and it alone follows the scheduler's reports;
+# the main window makes it. The logbook presents no task progress, and the
+# fill reports none of its own (the status bar shows the computations for
+# it). Allow: none expected; a comment names a label without its opening
+# quote, and a signal without the class qualifier.
+expect_only("the status bar names background work" "\"(Saving|Loading|Updating) sessions|\"Computing (columns|results)"
+  "^src/ui/statusbar/StatusBarFeature\\.cpp$" src)
+expect_only("the status bar is the one view of the scheduler's tasks" "IdleScheduler::(activeTaskChanged|progressChanged|schedulerIdle)"
+  "^src/ui/statusbar/StatusBarFeature\\.cpp$" src)
+expect_only("the main window makes the status bar" "new StatusBarFeature" "^src/mainwindow\\.cpp$" src)
+expect_none("the logbook presents no task progress" "QProgressBar|IdleScheduler|minimumSizeHint|cancelRequested"
+  src/ui/docks/logbook)
+expect_none("the fill reports no progress of its own" "Progress\\{|[Hh]igh[-]?[Ww]ater" "src/demandfill.*")
 # The documents describe the refined demand layer. Allow: say "the pair
 # memory", "a remembered failure", "the scheduler completes it"; never name
 # the removed API or the per-cell memory.

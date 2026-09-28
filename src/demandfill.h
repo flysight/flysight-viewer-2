@@ -19,20 +19,19 @@ class SessionModel;
 /// fill keeps at most kMaxHeldSessions hidden sessions loaded and pinned for
 /// column demand, releases a hold when its session has no pending cell or no
 /// loaded row, loads the next candidate when a hold is free and the scheduler
-/// steps it, reports progress as the sessions remaining of the high-water
-/// mark, loads nothing more once the executor is shut down (the owner's
+/// steps it, loads nothing more once the executor is shut down (the owner's
 /// `enabled` hook; the next update(), when a pass runs, releases every hold)
 /// and holds nothing once the component goes (detach()).
 ///
 /// It is the idle scheduler's lowest-priority task
 /// (SessionModel::ColumnFillTask, priority 5), registered by registerTask(). It
-/// has work while some session has a pending cell, and reports the number of
-/// sessions that have one out of the fill's high-water mark, so the logbook's
-/// progress line shows the fill for its whole duration; the scheduler completes
-/// the fill when it has no pending cell left, reporting its final progress (a
-/// fill that starts while no session had a pending cell starts its own count).
-/// Its steps are loads: it can step while fewer than kMaxHeldSessions sessions
-/// are held and a candidate waits, taking the candidates in the order given;
+/// has work while some session has a pending cell, and the scheduler completes
+/// it when it has none left. It reports no progress of its own: its loads serve
+/// the computations, whose count (CalculationDemand::progress()) contains the
+/// sessions it loads, and the status bar shows the computations while the fill
+/// is the scheduler's active task. Its steps are loads: it can step while fewer
+/// than kMaxHeldSessions sessions are held and a candidate waits, taking the
+/// candidates in the order given;
 /// otherwise the scheduler rests until update() wakes it. A load is
 /// SessionModel::loadPinnedSession(): the real load (the session-id correction
 /// included, so every pair offered carries the row's corrected id) and a pin,
@@ -94,14 +93,13 @@ public:
     /// After each pass: releases every hold whose row is gone or not loaded,
     /// or whose session is not in `pendingSessions` (every hold when the model
     /// is gone or `enabled` is false); takes `loadCandidates` (row order, at
-    /// most kMaxHeldSessions); remaining = pendingSessions.size(), and the
-    /// total is the high-water mark, started afresh when remaining rises from
-    /// 0; wakes the scheduler when hasWork(), the counts, the candidates or the
-    /// number of holds changed.
+    /// most kMaxHeldSessions); has work while `pendingSessions` is not empty;
+    /// wakes the scheduler when hasWork(), the candidates or the number of
+    /// holds changed.
     void update(const QSet<QString> &pendingSessions, const QStringList &loadCandidates);
 
     QStringList heldSessionIds() const { return m_held; }   ///< in load order
-    bool hasWork() const;           ///< O(1): enabled() and remaining > 0
+    bool hasWork() const;           ///< O(1): enabled() and some session has a pending cell
     bool canLoad() const;           ///< hasWork(), a hold is free and a candidate waits
     void step();                    ///< the task's step: at most one hidden load
 
@@ -110,8 +108,7 @@ private:
     Hooks m_hooks;
     QStringList m_held;             // sessions pinned by loadPinnedSession(), in load order
     QStringList m_candidates;       // the next loads, in row order
-    int m_remaining = 0;            // sessions with a pending cell
-    int m_highWater = 0;            // the fill's total; 0 between fills
+    bool m_pending = false;         // some session has a pending cell
     bool m_registered = false;
 };
 

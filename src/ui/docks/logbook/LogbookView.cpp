@@ -1,6 +1,5 @@
 // LogbookView.cpp
 #include "LogbookView.h"
-#include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QMouseEvent>
 #include <QDebug>
@@ -9,7 +8,6 @@
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QMenu>
-#include <QStyle>
 
 #include "attributeregistry.h"
 #include "LogbookCellDelegate.h"
@@ -23,27 +21,8 @@ LogbookView::LogbookView(SessionModel *model, CalculationDemand *demand, Working
       treeView(new QTreeView(this)),
       model(model)
 {
-    QIcon closeIcon = style()->standardIcon(QStyle::SP_TitleBarCloseButton);
-
-    m_progressBar = new QProgressBar(this);
-    m_progressBar->setVisible(false);
-    m_progressBar->setTextVisible(true);
-
-    m_cancelButton = new QToolButton(this);
-    m_cancelButton->setIcon(closeIcon);
-    m_cancelButton->setAutoRaise(true);
-    m_cancelButton->setVisible(false);
-    connect(m_cancelButton, &QToolButton::clicked, this, [this]() {
-        emit cancelRequested(m_activeTaskId);
-    });
-
-    QHBoxLayout *progressLayout = new QHBoxLayout();
-    progressLayout->addWidget(m_progressBar, 1);
-    progressLayout->addWidget(m_cancelButton);
-
     QVBoxLayout *layout = new QVBoxLayout(this);
     layout->addWidget(treeView);
-    layout->addLayout(progressLayout);
     setLayout(layout);
 
     setupView(demand, clock);
@@ -263,62 +242,6 @@ void LogbookView::selectSessions(const QList<QString> &sessionIds)
             treeView->scrollTo(firstIndex, QAbstractItemView::PositionAtCenter);
         }
     }
-}
-
-QSize LogbookView::minimumSizeHint() const
-{
-    // Return a constant to prevent KDDockWidgets from resizing the dock
-    // when progress bars are shown or hidden.
-    return QSize(0, 0);
-}
-
-void LogbookView::onActiveTaskChanged(int id, bool cancellable)
-{
-    m_activeTaskId = id;
-    m_cancelButton->setVisible(cancellable);
-    m_progressBar->setVisible(true);
-}
-
-void LogbookView::onProgressChanged(int id, int remaining, int total)
-{
-    if (id != m_activeTaskId)
-        return;
-
-    m_progressBar->setRange(0, total);
-    m_progressBar->setValue(total - remaining);
-
-    QString label;
-    switch (id) {
-    case SessionModel::SaveTask:
-        label = tr("Saving sessions: %v / %m");
-        break;
-    case SessionModel::LoadTask:
-        label = tr("Loading sessions: %v / %m");
-        break;
-    case SessionModel::BulkEditTask:
-        label = tr("Updating sessions: %v / %m");
-        break;
-    case SessionModel::ColumnTask:
-        label = tr("Computing columns: %v / %m");
-        break;
-    case SessionModel::ColumnFillTask:
-        // The demand layer's fill has a total of its own (the sessions still
-        // to compute), so it has a text of its own: the line never shows two
-        // totals under one label when the fill follows a column pass
-        label = tr("Computing results: %v / %m");
-        break;
-    default:
-        label = tr("Working: %v / %m");
-        break;
-    }
-    m_progressBar->setFormat(label);
-}
-
-void LogbookView::onSchedulerIdle()
-{
-    m_activeTaskId = -1;
-    m_progressBar->setVisible(false);
-    m_cancelButton->setVisible(false);
 }
 
 } // namespace FlySight

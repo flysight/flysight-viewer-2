@@ -79,6 +79,11 @@ public:
     /// A tick is due (test seam): false while the scheduler rests, idle or
     /// waiting on a task that cannot step.
     bool isTicking() const { return m_timer.isActive(); }
+    /// Some registered task has work (test seam): true while any task's
+    /// hasWork() is true, whether or not it can step now, so a task that waits
+    /// on something outside the scheduler counts; false once no task has any.
+    /// It only asks the tasks: it neither ticks nor wakes, and emits nothing.
+    bool hasWork() const;
 
 signals:
     void activeTaskChanged(int id, bool cancellable);

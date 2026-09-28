@@ -27,13 +27,8 @@ void DemandFill::registerTask()
         /*priority*/    5,          // below save (1), load (2), bulk edit (3), column work (4)
         /*step*/        [this] { step(); },
         /*hasWork*/     [this] { return hasWork(); },
-        /*progress*/    [this] { return Progress{m_remaining, m_highWater}; },
-        /*onComplete*/  [this](bool) {
-                            // The next fill starts its own count. A cancel()
-                            // changes nothing while sessions remain.
-                            if (m_remaining == 0)
-                                m_highWater = 0;
-                        },
+        /*progress*/    nullptr,    // none of its own: the status bar shows the computations
+        /*onComplete*/  nullptr,    // nothing to reset; a cancel() changes nothing while cells are pending
         /*cancellable*/ false,      // what is wanted changes only by disabling the column
         /*canStep*/     [this] { return canLoad(); }});
     m_registered = true;
@@ -56,10 +51,10 @@ void DemandFill::detach()
 // O(1): the scheduler asks on every tick. The fill has work while a session
 // has a pending cell. A fill ends with a job, not with a step: the pass that
 // finds the last pending cell resolved wakes the scheduler (update()), which
-// reports the fill's final progress and completes it.
+// completes it.
 bool DemandFill::hasWork() const
 {
-    return m_hooks.enabled && m_hooks.enabled() && m_remaining > 0;
+    return m_hooks.enabled && m_hooks.enabled() && m_pending;
 }
 
 bool DemandFill::canLoad() const
@@ -70,7 +65,7 @@ bool DemandFill::canLoad() const
 void DemandFill::update(const QSet<QString> &pendingSessions, const QStringList &loadCandidates)
 {
     const auto snapshot = [this] {
-        return std::make_tuple(hasWork(), m_remaining, m_highWater, m_candidates, m_held.size());
+        return std::make_tuple(hasWork(), m_candidates, m_held.size());
     };
     const auto before = snapshot();
 
@@ -97,21 +92,11 @@ void DemandFill::update(const QSet<QString> &pendingSessions, const QStringList 
 
     m_candidates = loadCandidates;
 
-    // Remaining = sessions with a pending cell; the total is the fill's
-    // high-water mark, reset when the scheduler completes the fill (the task's
-    // onComplete). The scheduler completes only the task it last reported
-    // active, so a fill that lost its work behind another task keeps its
-    // mark: a fill that starts while no session had a pending cell starts its
-    // own count.
-    const int remaining = int(pendingSessions.size());
-    if (m_remaining == 0 && remaining > 0)
-        m_highWater = remaining;
-    else
-        m_highWater = qMax(m_highWater, remaining);
-    m_remaining = remaining;
+    m_pending = !pendingSessions.isEmpty();
 
-    // The scheduler reports the active task's progress on its tick even when
-    // nothing can step, and steps the load again when it can
+    // The scheduler learns of new work, of lost work (it completes the fill
+    // when the fill was its active task) and of a load it can step now. A
+    // change of the number of pending sessions alone is nothing it reports.
     if (m_model && snapshot() != before)
         m_model->scheduler().wake();
 }

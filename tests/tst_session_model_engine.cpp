@@ -92,6 +92,7 @@ private slots:
     void schedulerTaskCanBeUnregistered();
     void schedulerWaitingTaskDoesNotSpin();
     void schedulerCompletesWaitingTaskWhoseWorkIsGone();
+    void schedulerHasWorkFollowsItsTasks();
     void bulkEditAnnouncesADependencyChange();
 
 private:
@@ -1064,6 +1065,88 @@ void SessionModelEngineTest::schedulerCompletesWaitingTaskWhoseWorkIsGone()
         QTRY_VERIFY(!scheduler.isTicking());
     }
     QCOMPARE(events, QStringList({"P93 0/3", "A93", "P93 2/3"}));
+    QCOMPARE(waitingSteps, 0);
+}
+
+// The scheduler's one query: some task has work, whether or not it can step
+// now. Asking neither ticks nor wakes: a scheduler that rests on a waiting
+// task still rests, and nothing is emitted.
+void SessionModelEngineTest::schedulerHasWorkFollowsItsTasks()
+{
+    // No task at all
+    IdleScheduler bare;
+    QVERIFY(!bare.hasWork());
+    QVERIFY(!bare.isTicking());
+
+    // The model's own tasks, none with work
+    QVERIFY(waitForIdle(*m_model));
+    IdleScheduler &scheduler = m_model->scheduler();
+    QVERIFY(!scheduler.hasWork());
+    const auto removeProbes = qScopeGuard([&scheduler] {
+        scheduler.unregisterTask(97);
+        scheduler.unregisterTask(98);
+    });
+    QSignalSpy activeSpy(&scheduler, &IdleScheduler::activeTaskChanged);
+    QSignalSpy progressSpy(&scheduler, &IdleScheduler::progressChanged);
+    QSignalSpy idleSpy(&scheduler, &IdleScheduler::schedulerIdle);
+
+    // A task that has work and can step: true, and asking does not wake
+    int remaining = 2;
+    scheduler.registerTask(97, TaskDef{9,
+                                       [&remaining] { --remaining; },
+                                       [&remaining] { return remaining > 0; },
+                                       [&remaining] { return Progress{remaining, 2}; },
+                                       [](bool) {},
+                                       false});
+    QVERIFY(scheduler.hasWork());
+    QVERIFY(scheduler.hasWork());
+    QVERIFY(!scheduler.isTicking());
+    QCoreApplication::processEvents();
+    QCOMPARE(remaining, 2);
+    QCOMPARE(activeSpy.count(), 0);
+
+    // Its work gone through its steps: false
+    scheduler.wake();
+    QTRY_COMPARE(idleSpy.count(), 1);
+    QCOMPARE(remaining, 0);
+    QVERIFY(!scheduler.hasWork());
+
+    // A task that has work and cannot step: true while the scheduler rests on
+    // it, and asking leaves it resting
+    bool waiting = true;
+    int waitingSteps = 0;
+    scheduler.registerTask(98, TaskDef{8,
+                                       [&waitingSteps] { ++waitingSteps; },
+                                       [&waiting] { return waiting; },
+                                       [] { return Progress{1, 1}; },
+                                       [](bool) {},
+                                       false,
+                                       [] { return false; }});
+    QVERIFY(scheduler.hasWork());
+    scheduler.wake();
+    QTRY_VERIFY(!scheduler.isTicking());
+    QCOMPARE(activeSpy.count(), 2);
+    QCOMPARE(activeSpy.last().at(0).toInt(), 98);
+    const int reports = int(progressSpy.count());
+    for (int i = 0; i < 3; ++i) {
+        QVERIFY(scheduler.hasWork());
+        QVERIFY(!scheduler.isTicking());
+    }
+    QTest::qWait(50);
+    QVERIFY(!scheduler.isTicking());
+    QCOMPARE(int(progressSpy.count()), reports);
+    QCOMPARE(activeSpy.count(), 2);
+    QCOMPARE(idleSpy.count(), 1);
+    QCOMPARE(waitingSteps, 0);
+
+    // Its work gone outside the scheduler: false at once, before any tick;
+    // the wake its owner owes completes it and the scheduler goes idle
+    waiting = false;
+    QVERIFY(!scheduler.hasWork());
+    QVERIFY(!scheduler.isTicking());
+    scheduler.wake();
+    QTRY_COMPARE(idleSpy.count(), 2);
+    QVERIFY(!scheduler.hasWork());
     QCOMPARE(waitingSteps, 0);
 }
 
