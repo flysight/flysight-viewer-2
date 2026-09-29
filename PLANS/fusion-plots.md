@@ -222,9 +222,15 @@ ordinary invalidation and never refits.
 - **How it is edited.** As any editable attribute: a logbook column the
   user can add (not in the default columns), edited in place, and set for
   the selected sessions from the logbook's context menu. Both offer the
-  list, not free text; both offer a "Default" entry that removes the
-  stored value rather than storing anything. A value outside the list is
-  refused.
+  list, not free text, and nothing but the 24 orientations: no entry
+  returns a recording to the default, since the user has no reason to know
+  what the default is. A value outside the list is refused.
+- **An import preference** (Preferences > Import) chooses the orientation
+  stored into each newly imported recording, a fact of the import like the
+  fixed ground elevation, with the same default as the constant; a batch
+  recorded with the unit mounted another way is set once there. The constant
+  calculated default stays fixed at the helmet default for recordings that
+  have no stored orientation.
 
 ## 9. The choice attribute type
 
@@ -234,8 +240,7 @@ list of allowed values, each a stored token and a display label. From the
 type alone follow: display and sorting by label; a list editor in place of
 the line edit for in-place editing; a list in place of the text prompt in
 the context menu's "Set ..." action; the same bulk edit with the chosen
-token; a "Default" entry that removes the stored attribute; refusal of a
-token outside the list. Nothing about the type is specific to orientation;
+token; refusal of a token outside the list, an empty and an invalid value. Nothing about the type is specific to orientation;
 a later enumerated attribute reuses it.
 
 ## 10. Constant defaults
@@ -276,8 +281,9 @@ stores a blank.
   orientation attribute describes; heading continuous through turns.
 - **The orientation column**, once added, shows "forward +y, up +z" for
   every recording that has not been set, and the chosen label for one that
-  has; editing it offers the list and "Default". Changing it redraws the
-  attitude plots without a fit.
+  has; editing it offers the 24 orientations. Changing it redraws the
+  attitude plots without a fit. Preferences > Import offers the same list for
+  new imports.
 - **Profiles** that name removed plots apply without complaint.
 - **Wind** columns show zero where nothing was stored, as before.
 
@@ -323,9 +329,10 @@ stores a blank.
   the axis permutation predicts; the rotation is proper for all 24 pairs.
 - The orientation attribute: every recording reads the default without a
   stored value and without any write to its file; a stored token wins and
-  the attitude recomputes without a fit; "Default" removes the stored
-  value; a token outside the list is refused by the model, the editor and
-  the bulk edit; the labels and tokens come from one enumeration of 24.
+  the attitude recomputes without a fit; a token outside the list, an empty
+  and an invalid value are refused by the model, the editor and the bulk
+  edit; the labels and tokens come from one enumeration of 24; a new import
+  stores the preference's orientation.
 - The choice type: display and sort by label; the in-place editor and the
   context menu offer the list; the bulk edit sets the token for the
   selected sessions.
