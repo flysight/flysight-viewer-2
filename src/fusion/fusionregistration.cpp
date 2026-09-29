@@ -310,22 +310,6 @@ void registerElevation(CalculationRegistry &registry)
     Calculations::addCalculation(registry, d);
 }
 
-// The fused velocity and acceleration with the wind, for the track-relative
-// accelerations of calculations/trackhelper.h, which also owns the wind rule.
-Calculations::TrackSamples trackSamples(const EvaluationContext &ctx)
-{
-    Calculations::TrackSamples s;
-    s.accN = ctx.measurement(kSensor, "accN");
-    s.accE = ctx.measurement(kSensor, "accE");
-    s.accD = ctx.measurement(kSensor, "accD");
-    s.velN = ctx.measurement(kSensor, "velN");
-    s.velE = ctx.measurement(kSensor, "velE");
-    s.velD = ctx.measurement(kSensor, "velD");
-    s.windN = Calculations::windComponent(ctx.attribute(SessionKeys::WindN));
-    s.windE = Calculations::windComponent(ctx.attribute(SessionKeys::WindE));
-    return s;
-}
-
 using TrackFunction = std::optional<QVector<double>> (*)(const Calculations::TrackSamples &);
 
 // Fusion/<name>: a track-relative acceleration of the fused velocity and
@@ -349,7 +333,7 @@ void registerTrackAcceleration(CalculationRegistry &registry, const char *name, 
     };
     d.outputs = { DependencyKey::measurement(kSensor, measurement) };
     d.compute = [measurement, track](const EvaluationContext &ctx) -> CalculationResult {
-        const std::optional<QVector<double>> values = track(trackSamples(ctx));
+        const std::optional<QVector<double>> values = track(Calculations::trackSamples(ctx, kSensor));
         if (!values)
             return CalculationResult::unavailable();
         return CalculationResult().setMeasurement(kSensor, measurement, *values);

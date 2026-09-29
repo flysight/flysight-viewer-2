@@ -35,7 +35,7 @@ Profile captureCurrentState(MainWindow *mainWindow)
         PlotModel *pm = mainWindow->plotModel();
         for (const PlotValue &pv : allPlots) {
             if (pm->isPlotEnabled(pv.sensorID, pv.measurementID))
-                enabledList.append(pv.sensorID + QStringLiteral("/") + pv.measurementID);
+                enabledList.append(PlotModel::makePlotId(pv));
         }
         profile.enabledPlots = enabledList;
     }

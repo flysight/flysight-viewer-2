@@ -19,6 +19,12 @@ class PlotModel : public QAbstractItemModel
     Q_OBJECT
 
 public:
+    /// A plot's id, sensorID + "/" + measurementID: the PlotValueIdRole form,
+    /// what a profile stores and what setEnabledPlotIds() reads. The one
+    /// spelling of it; nothing else joins the two names.
+    static QString makePlotId(const QString& sensorId, const QString& measurementId);
+    static QString makePlotId(const PlotValue& pv);
+
     enum PlotRoles {
         DefaultColorRole = Qt::UserRole + 1,
         SensorIDRole,
@@ -94,8 +100,6 @@ private:
         int row = -1;
     };
 
-    static QString makePlotId(const QString& sensorId, const QString& measurementId);
-    static QString makePlotId(const PlotValue& pv);
     static QString settingsKey(const QString& plotId);
 
     Node* nodeFromIndex(const QModelIndex& index) const;

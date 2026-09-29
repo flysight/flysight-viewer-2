@@ -134,7 +134,7 @@ CalculationDemand::~CalculationDemand()
 
 QString CalculationDemand::plotId(const QString &sensorId, const QString &measurementId)
 {
-    return sensorId + QLatin1Char('/') + measurementId;
+    return PlotModel::makePlotId(sensorId, measurementId);   // the one spelling
 }
 
 QString CalculationDemand::plotId(const PlotValue &plot)

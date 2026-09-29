@@ -8,6 +8,9 @@
 #include <QVariant>
 #include <QVector>
 
+#include "../engine/evaluationcontext.h"
+#include "../sessiondata.h"
+
 namespace FlySight {
 namespace Calculations {
 
@@ -40,6 +43,24 @@ struct TrackSamples {
     double windN = 0.0;
     double windE = 0.0;
 };
+
+/// The samples of one sensor, read from `ctx` as every track-relative
+/// acceleration reads them: the sensor's six north-east-down arrays and the
+/// two wind attributes. The GNSS calculations read "GNSS", the sensor
+/// fusion's "Fusion"; the calculation declares the same eight inputs.
+inline TrackSamples trackSamples(const EvaluationContext &ctx, const char *sensor)
+{
+    TrackSamples s;
+    s.accN = ctx.measurement(sensor, "accN");
+    s.accE = ctx.measurement(sensor, "accE");
+    s.accD = ctx.measurement(sensor, "accD");
+    s.velN = ctx.measurement(sensor, "velN");
+    s.velE = ctx.measurement(sensor, "velE");
+    s.velD = ctx.measurement(sensor, "velD");
+    s.windN = windComponent(ctx.attribute(SessionKeys::WindN));
+    s.windE = windComponent(ctx.attribute(SessionKeys::WindE));
+    return s;
+}
 
 /// Whether every array of `s` has samples and all six have the same length:
 /// otherwise there is no track to project on.

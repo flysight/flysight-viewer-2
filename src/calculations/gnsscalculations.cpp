@@ -61,22 +61,6 @@ void registerGnssDerivative(CalculationRegistry &registry, const char *name, con
         });
 }
 
-// The GNSS velocity and acceleration with the wind, for the track-relative
-// accelerations of trackhelper.h, which also owns the wind rule.
-Calculations::TrackSamples trackSamples(const EvaluationContext &ctx)
-{
-    Calculations::TrackSamples s;
-    s.accN = ctx.measurement("GNSS", "accN");
-    s.accE = ctx.measurement("GNSS", "accE");
-    s.accD = ctx.measurement("GNSS", "accD");
-    s.velN = ctx.measurement("GNSS", "velN");
-    s.velE = ctx.measurement("GNSS", "velE");
-    s.velD = ctx.measurement("GNSS", "velD");
-    s.windN = Calculations::windComponent(ctx.attribute(SessionKeys::WindN));
-    s.windE = Calculations::windComponent(ctx.attribute(SessionKeys::WindE));
-    return s;
-}
-
 enum class AeroCoefficient { Lift, Drag };
 
 // Lift / drag coefficient.
@@ -423,12 +407,12 @@ void Calculations::registerGnssCalculations(CalculationRegistry &registry)
     // accCrossTrack): the one definition of trackhelper.h
     registerGnss(registry, "accAlongTrack", trackInputs,
         [](const EvaluationContext &ctx) {
-            return Calculations::alongTrackAcceleration(trackSamples(ctx));
+            return Calculations::alongTrackAcceleration(Calculations::trackSamples(ctx, "GNSS"));
         });
 
     registerGnss(registry, "accCrossTrack", trackInputs,
         [](const EvaluationContext &ctx) {
-            return Calculations::crossTrackAcceleration(trackSamples(ctx));
+            return Calculations::crossTrackAcceleration(Calculations::trackSamples(ctx, "GNSS"));
         });
 
     // GNSS lift and drag coefficients
