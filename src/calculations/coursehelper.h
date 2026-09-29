@@ -53,7 +53,9 @@ inline double courseReferenceAngle(const QVector<double> &course, const QVector<
 {
     bool ok = false;
     const double refTime = referenceTime.toDouble(&ok);
-    if (!ok || refTime < time.first() || refTime > time.last())
+    // Written as "not inside" so that a reference that is not a number, for
+    // which every comparison is false, gives zero too
+    if (!ok || !(refTime >= time.first() && refTime <= time.last()))
         return 0.0;
     // One sample: the reference is that sample (there is no interval to
     // interpolate in)

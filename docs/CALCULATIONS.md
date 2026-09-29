@@ -2087,9 +2087,9 @@ The entry point also registers the definition of the orientation attribute
 "Orientation", editable, a Choice of the 24 orientations of
 `Fusion::Orientation`, `src/fusion/orientation.h`) in the attribute registry
 (`AttributeRegistry`, in `flysight_model` so that the fusion library can reach
-it), once per process: the tests and `fusion_runner` call the entry point for
-more than one registry, so it skips the definition when `findByKey()` already
-finds it. Eight calculations are registered, in this order:
+it), once per process: the tests call the entry point for more than one
+registry, so it skips the definition when `findByKey()` already finds it.
+Eight calculations are registered, in this order:
 
 | Id | Policy | Inputs | Outputs |
 | --- | --- | --- | --- |

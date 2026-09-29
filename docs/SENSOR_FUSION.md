@@ -216,7 +216,7 @@ reconstruction is not a full IMU-rate smoothing posterior.
 | `velN`, `velE`, `velD` | velocity, m/s, interpolated the same way |
 | `accN`, `accE`, `accD` | acceleration, m/s^2 (the display layer may show g) |
 | `roll`, `pitch`, `yaw` | degrees, unwrapped |
-| `qx`, `qy`, `qz`, `qw` | the body-to-NED quaternion in x/y/z/w order |
+| `qx`, `qy`, `qz`, `qw` | the device-to-NED quaternion in x/y/z/w order (the fit's own device frame, where "body" means the device; it does not follow the Orientation attribute of section 2) |
 
 All arrays align with `_time`. Roll, pitch and yaw unwrap successive angles by
 adding or subtracting 360 degrees, with the same rule as the GNSS course
@@ -515,7 +515,8 @@ the numbers are in the tolerance policy of `tests/README.md`). Exact mode is
 not opt-in on the capture configuration: where the compiler matches
 `tests/data/fusion/capture.json` (64-bit MSVC 19.44, as the capture tool
 recorded it) and the configuration is Release, CTest runs each of these
-tests but `tst_fusion_derived`, which compares with no golden, a second time
+tests but `tst_fusion_derived`, which holds nothing to a golden bit for bit
+(the one golden it reads is compared within `1e-6`), a second time
 as `tst_fusion_*_exact` (label `exact`; CMake option
 `FLYSIGHT_FUSION_EXACT_TESTS`, `AUTO` by default). With any other compiler the
 configure log says that they were not registered, and only the portable mode

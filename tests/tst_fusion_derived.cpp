@@ -992,8 +992,11 @@ void FusionDerivedTest::headingUnwrapsThroughAFullTurn()
     }
 
     // Outside the range, before or after it, or not a number: no offset
+    // (a NaN, stored as a number or as the text "nan", which converts to one).
+    // GNSS/course is checked here too: the two share the one reference angle.
     for (const QVariant &courseRef : {QVariant(kFixtureEpochUtc - 0.5), QVariant(kFixtureEpochUtc + 100.0),
-                                      QVariant(QStringLiteral("later"))}) {
+                                      QVariant(QStringLiteral("later")), QVariant(qQNaN()),
+                                      QVariant(QStringLiteral("nan"))}) {
         const SessionData outside = session(QStringLiteral("h3"), courseRef);
         QVERIFY2(sameBitsEverywhere(heading(outside), h0), qPrintable(courseRef.toString()));
         QVERIFY2(sameBitsEverywhere(outside.getMeasurement("GNSS", "course"), courseBare),

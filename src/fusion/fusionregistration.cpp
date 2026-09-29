@@ -359,8 +359,8 @@ void registerTrackAcceleration(CalculationRegistry &registry, const char *name, 
 }
 
 // The orientation attribute. Its definition goes into the attribute registry
-// once per process: the tests and fusion_runner call the entry point for more
-// than one calculation registry, the attribute registry cannot remove a
+// once per process: the tests call the entry point for more than one
+// calculation registry, the attribute registry cannot remove a
 // definition, and a second one would list the attribute twice in the Add
 // Column dialog. Its constant default goes into every registry given. The
 // choices and the default come from Fusion::Orientation, so nothing here
