@@ -59,7 +59,7 @@ MapSettingsPage::MapSettingsPage(QWidget *parent)
 
 QGroupBox* MapSettingsPage::createTrackAppearanceGroup()
 {
-    QGroupBox *group = new QGroupBox(tr("Track Appearance"), this);
+    QGroupBox *group = new QGroupBox(tr("Track appearance"), this);
     QFormLayout *layout = new QFormLayout(group);
 
     // Line thickness spin box
@@ -96,7 +96,7 @@ QGroupBox* MapSettingsPage::createTrackAppearanceGroup()
 
 QGroupBox* MapSettingsPage::createCursorMarkerGroup()
 {
-    QGroupBox *group = new QGroupBox(tr("Cursor Dots"), this);
+    QGroupBox *group = new QGroupBox(tr("Cursor dots"), this);
     QFormLayout *layout = new QFormLayout(group);
 
     m_largeDotSizeSpinBox = new QSpinBox(this);

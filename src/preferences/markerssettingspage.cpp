@@ -15,14 +15,13 @@ MarkersSettingsPage::MarkersSettingsPage(QWidget *parent)
 {
     QVBoxLayout *layout = new QVBoxLayout(this);
 
-    layout->addWidget(createMarkerColorsGroup());
+    layout->addWidget(createMarkerColorsGroup(), 1); // the tree takes the stretch
     layout->addWidget(createResetSection());
-    layout->addStretch();
 }
 
 QGroupBox* MarkersSettingsPage::createMarkerColorsGroup()
 {
-    QGroupBox *group = new QGroupBox(tr("Marker Colors"), this);
+    QGroupBox *group = new QGroupBox(tr("Marker colors"), this);
     QVBoxLayout *groupLayout = new QVBoxLayout(group);
 
     m_markerTree = new QTreeWidget(this);

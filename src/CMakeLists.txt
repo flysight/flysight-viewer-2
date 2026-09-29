@@ -409,6 +409,7 @@ set(PROJECT_SOURCES
   plottool/measuretool.h     plottool/measuretool.cpp
   measuremodel.h
   preferences/preferencesdialog.h  preferences/preferencesdialog.cpp
+  preferences/preferencepagestyle.h
   preferences/generalsettingspage.h preferences/generalsettingspage.cpp
   preferences/importsettingspage.h  preferences/importsettingspage.cpp
   preferences/legendsettingspage.h  preferences/legendsettingspage.cpp

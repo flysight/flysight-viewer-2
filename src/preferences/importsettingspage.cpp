@@ -1,8 +1,10 @@
 #include <QCheckBox>
+#include <QFormLayout>
+#include <QHBoxLayout>
 #include <QLabel>
-#include <QSpacerItem>
 #include "importsettingspage.h"
 #include "preferencekeys.h"
+#include "preferencepagestyle.h"
 #include "preferencesmanager.h"
 #include "../fusion/orientation.h"
 
@@ -33,15 +35,12 @@ ImportSettingsPage::ImportSettingsPage(QWidget *parent)
 // token is none of them.
 QGroupBox* ImportSettingsPage::createOrientationGroup() {
     QGroupBox *group = new QGroupBox(tr("Orientation"), this);
-    QHBoxLayout *groupLayout = new QHBoxLayout(group);
+    QFormLayout *form = new QFormLayout(group);
 
-    QLabel *label = new QLabel(tr("Device orientation"), this);
     orientationComboBox = new QComboBox(this);
     for (const Fusion::Orientation &orientation : Fusion::Orientation::all())
         orientationComboBox->addItem(orientation.label(), orientation.token());
-
-    groupLayout->addWidget(label);
-    groupLayout->addWidget(orientationComboBox);
+    form->addRow(tr("Device orientation:"), orientationComboBox);
 
     const QString stored = PreferencesManager::instance().getValue(PreferenceKeys::ImportOrientation).toString();
     int index = orientationComboBox->findData(stored);
@@ -52,67 +51,69 @@ QGroupBox* ImportSettingsPage::createOrientationGroup() {
     return group;
 }
 
+// Two modes; the elevation belongs to the fixed one, so its row sits under
+// that button and is enabled only while that button is chosen.
 QGroupBox* ImportSettingsPage::createGroundReferenceGroup() {
-    QGroupBox *groundReferenceGroup = new QGroupBox(tr("Ground reference"), this);
-    QVBoxLayout *groupLayout = new QVBoxLayout(groundReferenceGroup);
+    QGroupBox *group = new QGroupBox(tr("Ground reference"), this);
+    QFormLayout *form = new QFormLayout(group);
 
     automaticRadioButton = new QRadioButton(tr("Automatic"), this);
     fixedRadioButton = new QRadioButton(tr("Fixed"), this);
 
-    QHBoxLayout *fixedLayout = new QHBoxLayout();
+    // A line edit has no suffix, so its unit follows it as a label
+    QWidget *elevation = new QWidget(this);
+    QHBoxLayout *elevationLayout = new QHBoxLayout(elevation);
+    elevationLayout->setContentsMargins(0, 0, 0, 0);
     fixedElevationLineEdit = new QLineEdit(this);
-    QLabel *metersLabel = new QLabel(tr("m"), this);
+    elevationLayout->addWidget(fixedElevationLineEdit);
+    elevationLayout->addWidget(new QLabel(tr("m"), this));
 
-    fixedLayout->addWidget(fixedRadioButton);
-    fixedLayout->addWidget(fixedElevationLineEdit);
-    fixedLayout->addWidget(metersLabel);
-
-    groupLayout->addWidget(automaticRadioButton);
-    groupLayout->addLayout(fixedLayout);
+    form->addRow(automaticRadioButton);
+    form->addRow(fixedRadioButton);
+    form->addRow(PreferencePage::subordinateLabel(tr("Elevation:"), this), elevation);
 
     // Initialize settings
     PreferencesManager &prefs = PreferencesManager::instance();
     QString groundRefMode = prefs.getValue(PreferenceKeys::ImportGroundReferenceMode).toString();
-    double elevation = prefs.getValue(PreferenceKeys::ImportFixedElevation).toDouble();
+    double elevationValue = prefs.getValue(PreferenceKeys::ImportFixedElevation).toDouble();
 
     if (groundRefMode == "Automatic") {
         automaticRadioButton->setChecked(true);
     } else {
         fixedRadioButton->setChecked(true);
     }
-    fixedElevationLineEdit->setText(QString::number(elevation));
+    fixedElevationLineEdit->setText(QString::number(elevationValue));
 
-    return groundReferenceGroup;
+    elevation->setEnabled(fixedRadioButton->isChecked());
+    connect(fixedRadioButton, &QRadioButton::toggled, elevation, &QWidget::setEnabled);
+
+    return group;
 }
 
 QGroupBox* ImportSettingsPage::createDescentPauseGroup() {
-    QGroupBox *descentPauseGroup = new QGroupBox(tr("Descent detection"), this);
-    QHBoxLayout *groupLayout = new QHBoxLayout(descentPauseGroup);
+    QGroupBox *group = new QGroupBox(tr("Descent detection"), this);
+    QFormLayout *form = new QFormLayout(group);
 
-    QLabel *label = new QLabel(tr("Descent pause timeout"), this);
     descentPauseSpinBox = new QDoubleSpinBox(this);
     descentPauseSpinBox->setRange(1.0, 300.0);
     descentPauseSpinBox->setSingleStep(1.0);
     descentPauseSpinBox->setDecimals(1);
-    QLabel *unitLabel = new QLabel(tr("s"), this);
-
-    groupLayout->addWidget(label);
-    groupLayout->addWidget(descentPauseSpinBox);
-    groupLayout->addWidget(unitLabel);
+    descentPauseSpinBox->setSuffix(tr(" s"));
+    form->addRow(tr("Pause timeout:"), descentPauseSpinBox);
 
     // Initialize from preferences
     PreferencesManager &prefs = PreferencesManager::instance();
     descentPauseSpinBox->setValue(prefs.getValue(PreferenceKeys::ImportDescentPauseSeconds).toDouble());
 
-    return descentPauseGroup;
+    return group;
 }
 
 QGroupBox* ImportSettingsPage::createTrackVisibilityGroup() {
     QGroupBox *group = new QGroupBox(tr("Track visibility"), this);
-    QVBoxLayout *groupLayout = new QVBoxLayout(group);
+    QFormLayout *form = new QFormLayout(group);
 
     hideOthersCheckBox = new QCheckBox(tr("Hide other tracks on import"), this);
-    groupLayout->addWidget(hideOthersCheckBox);
+    form->addRow(hideOthersCheckBox);
 
     // Initialize from preferences
     PreferencesManager &prefs = PreferencesManager::instance();

@@ -1,8 +1,8 @@
-#include <QLabel>
+#include <QFormLayout>
 #include <QVBoxLayout>
-#include <QHBoxLayout>
 #include "zoomsettingspage.h"
 #include "preferencekeys.h"
+#include "preferencepagestyle.h"
 #include "preferencesmanager.h"
 #include "markerregistry.h"
 
@@ -13,8 +13,7 @@ ZoomSettingsPage::ZoomSettingsPage(QWidget *parent)
 {
     QVBoxLayout *layout = new QVBoxLayout(this);
 
-    layout->addWidget(createExtentModeGroup());
-    layout->addWidget(createMarginGroup());
+    layout->addWidget(createExtentGroup());
     layout->addStretch();
 
     // Wire up saves
@@ -28,31 +27,29 @@ ZoomSettingsPage::ZoomSettingsPage(QWidget *parent)
     connect(m_allDataRadio, &QRadioButton::toggled, this, &ZoomSettingsPage::updateMarkerCombosEnabled);
 }
 
-QGroupBox* ZoomSettingsPage::createExtentModeGroup()
+// Two modes; the two markers belong to the marker-range one, so their rows
+// sit under that button; the margin applies in both, so it follows them.
+QGroupBox* ZoomSettingsPage::createExtentGroup()
 {
-    QGroupBox *group = new QGroupBox(tr("Zoom to extent mode"), this);
-    QVBoxLayout *groupLayout = new QVBoxLayout(group);
+    QGroupBox *group = new QGroupBox(tr("Zoom to extent"), this);
+    QFormLayout *form = new QFormLayout(group);
 
     m_allDataRadio = new QRadioButton(tr("All data"), this);
     m_markerRangeRadio = new QRadioButton(tr("Marker range"), this);
-
-    groupLayout->addWidget(m_allDataRadio);
-    groupLayout->addWidget(m_markerRangeRadio);
-
-    // Marker combo boxes
-    QHBoxLayout *startLayout = new QHBoxLayout();
-    startLayout->addSpacing(20);
-    startLayout->addWidget(new QLabel(tr("Start marker:"), this));
     m_startMarkerCombo = new QComboBox(this);
-    startLayout->addWidget(m_startMarkerCombo, 1);
-    groupLayout->addLayout(startLayout);
-
-    QHBoxLayout *endLayout = new QHBoxLayout();
-    endLayout->addSpacing(20);
-    endLayout->addWidget(new QLabel(tr("End marker:"), this));
     m_endMarkerCombo = new QComboBox(this);
-    endLayout->addWidget(m_endMarkerCombo, 1);
-    groupLayout->addLayout(endLayout);
+
+    m_marginSpinBox = new QDoubleSpinBox(this);
+    m_marginSpinBox->setRange(0.0, 25.0);
+    m_marginSpinBox->setSingleStep(1.0);
+    m_marginSpinBox->setDecimals(1);
+    m_marginSpinBox->setSuffix(tr("%"));
+
+    form->addRow(m_allDataRadio);
+    form->addRow(m_markerRangeRadio);
+    form->addRow(PreferencePage::subordinateLabel(tr("Start marker:"), this), m_startMarkerCombo);
+    form->addRow(PreferencePage::subordinateLabel(tr("End marker:"), this), m_endMarkerCombo);
+    form->addRow(tr("Margin:"), m_marginSpinBox);
 
     // Populate combos from MarkerRegistry
     populateMarkerCombos();
@@ -76,29 +73,9 @@ QGroupBox* ZoomSettingsPage::createExtentModeGroup()
     int endIdx = m_endMarkerCombo->findData(endKey);
     if (endIdx >= 0) m_endMarkerCombo->setCurrentIndex(endIdx);
 
-    updateMarkerCombosEnabled();
-
-    return group;
-}
-
-QGroupBox* ZoomSettingsPage::createMarginGroup()
-{
-    QGroupBox *group = new QGroupBox(tr("Margin"), this);
-    QHBoxLayout *groupLayout = new QHBoxLayout(group);
-
-    QLabel *label = new QLabel(tr("Margin"), this);
-    m_marginSpinBox = new QDoubleSpinBox(this);
-    m_marginSpinBox->setRange(0.0, 25.0);
-    m_marginSpinBox->setSingleStep(1.0);
-    m_marginSpinBox->setDecimals(1);
-    m_marginSpinBox->setSuffix(tr("%"));
-
-    groupLayout->addWidget(label);
-    groupLayout->addWidget(m_marginSpinBox);
-
-    // Initialize from preferences
-    PreferencesManager &prefs = PreferencesManager::instance();
     m_marginSpinBox->setValue(prefs.getValue(PreferenceKeys::ZoomExtentMarginPct).toDouble());
+
+    updateMarkerCombosEnabled();
 
     return group;
 }

@@ -38,7 +38,7 @@ PlotsSettingsPage::PlotsSettingsPage(QWidget *parent)
 
 QGroupBox* PlotsSettingsPage::createGlobalSettingsGroup()
 {
-    QGroupBox *group = new QGroupBox(tr("Plot Appearance"), this);
+    QGroupBox *group = new QGroupBox(tr("Plot appearance"), this);
     QFormLayout *formLayout = new QFormLayout(group);
 
     // Line thickness
@@ -85,7 +85,7 @@ QGroupBox* PlotsSettingsPage::createGlobalSettingsGroup()
 
 QGroupBox* PlotsSettingsPage::createPerPlotSettingsGroup()
 {
-    QGroupBox *group = new QGroupBox(tr("Per-Plot Settings"), this);
+    QGroupBox *group = new QGroupBox(tr("Per-plot settings"), this);
     QVBoxLayout *layout = new QVBoxLayout(group);
 
     plotsTreeWidget = new QTreeWidget(this);

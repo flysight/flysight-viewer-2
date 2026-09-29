@@ -33,8 +33,8 @@ QGroupBox* AerodynamicsSettingsPage::createBodyGroup() {
     m_areaSpinBox->setSuffix(QString::fromUtf8(" m\u00B2"));
     m_areaSpinBox->setSingleStep(0.01);
 
-    formLayout->addRow(tr("Mass"), m_massSpinBox);
-    formLayout->addRow(tr("Planform area"), m_areaSpinBox);
+    formLayout->addRow(tr("Mass:"), m_massSpinBox);
+    formLayout->addRow(tr("Planform area:"), m_areaSpinBox);
 
     // Initialize from preferences
     PreferencesManager &prefs = PreferencesManager::instance();

@@ -3,9 +3,9 @@
 #include "preferencekeys.h"
 #include "preferencesmanager.h"
 
+#include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
-#include <QLabel>
 #include <QListWidget>
 #include <QPushButton>
 #include <QSpinBox>
@@ -17,9 +17,8 @@ LogbookSettingsPage::LogbookSettingsPage(QWidget *parent)
     : QWidget(parent)
 {
     QVBoxLayout *layout = new QVBoxLayout(this);
-    layout->addWidget(createColumnsGroup());
+    layout->addWidget(createColumnsGroup(), 1); // the list takes the stretch
     layout->addWidget(createCacheGroup());
-    layout->addStretch();
 
     loadSettings();
 }
@@ -68,15 +67,11 @@ QGroupBox* LogbookSettingsPage::createColumnsGroup()
 QGroupBox* LogbookSettingsPage::createCacheGroup()
 {
     QGroupBox *group = new QGroupBox(tr("Cache"), this);
-    QHBoxLayout *groupLayout = new QHBoxLayout(group);
+    QFormLayout *form = new QFormLayout(group);
 
-    QLabel *label = new QLabel(tr("Maximum cached sessions:"), this);
     m_cacheSizeSpinBox = new QSpinBox(this);
     m_cacheSizeSpinBox->setRange(0, 1000);
-
-    groupLayout->addWidget(label);
-    groupLayout->addWidget(m_cacheSizeSpinBox);
-    groupLayout->addStretch();
+    form->addRow(tr("Maximum cached sessions:"), m_cacheSizeSpinBox);
 
     return group;
 }

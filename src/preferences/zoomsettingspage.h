@@ -25,8 +25,7 @@ private:
     QComboBox *m_endMarkerCombo;
     QDoubleSpinBox *m_marginSpinBox;
 
-    QGroupBox* createExtentModeGroup();
-    QGroupBox* createMarginGroup();
+    QGroupBox* createExtentGroup();
     void populateMarkerCombos();
     void updateMarkerCombosEnabled();
 };

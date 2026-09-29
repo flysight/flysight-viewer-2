@@ -1,7 +1,7 @@
 #include "altitudemarkerssettingspage.h"
 #include "preferencesmanager.h"
 #include "preferencekeys.h"
-#include <QLabel>
+#include <QFormLayout>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QGroupBox>
@@ -19,39 +19,27 @@ AltitudeMarkersSettingsPage::AltitudeMarkersSettingsPage(QWidget *parent)
     : QWidget(parent)
 {
     QVBoxLayout *layout = new QVBoxLayout(this);
-    layout->addWidget(createUnitsGroup());
-    layout->addWidget(createColorGroup());
-    layout->addWidget(createAltitudesGroup());
-    layout->addStretch();
+    layout->addWidget(createMarkersGroup());
+    layout->addWidget(createAltitudesGroup(), 1); // the list takes the stretch
 
     loadSettings();
 }
 
-QGroupBox* AltitudeMarkersSettingsPage::createUnitsGroup()
+QGroupBox* AltitudeMarkersSettingsPage::createMarkersGroup()
 {
-    QGroupBox *group = new QGroupBox(tr("Units"), this);
-    QVBoxLayout *groupLayout = new QVBoxLayout(group);
+    QGroupBox *group = new QGroupBox(tr("Markers"), this);
+    QFormLayout *form = new QFormLayout(group);
 
     m_unitsComboBox = new QComboBox(this);
     m_unitsComboBox->addItem(tr("Imperial (feet)"));
     m_unitsComboBox->addItem(tr("Metric (metres)"));
+    form->addRow(tr("Units:"), m_unitsComboBox);
 
-    groupLayout->addWidget(m_unitsComboBox);
-
-    return group;
-}
-
-QGroupBox* AltitudeMarkersSettingsPage::createColorGroup()
-{
-    QGroupBox *group = new QGroupBox(tr("Marker Colour"), this);
-    QHBoxLayout *groupLayout = new QHBoxLayout(group);
-
+    // A colour swatch, not a text field: it keeps its size
     m_colorButton = new QPushButton(this);
     m_colorButton->setFixedSize(60, 24);
     connect(m_colorButton, &QPushButton::clicked, this, &AltitudeMarkersSettingsPage::onColorButtonClicked);
-
-    groupLayout->addWidget(m_colorButton);
-    groupLayout->addStretch();
+    form->addRow(tr("Colour:"), m_colorButton);
 
     return group;
 }

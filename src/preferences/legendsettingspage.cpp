@@ -1,7 +1,7 @@
 #include "legendsettingspage.h"
 #include "preferencesmanager.h"
 
-#include <QLabel>
+#include <QFormLayout>
 #include <QHBoxLayout>
 #include <QMessageBox>
 
@@ -40,19 +40,14 @@ LegendSettingsPage::LegendSettingsPage(QWidget *parent)
 
 QGroupBox* LegendSettingsPage::createTextSettingsGroup()
 {
-    QGroupBox *group = new QGroupBox(tr("Legend Text"), this);
-    QHBoxLayout *groupLayout = new QHBoxLayout(group);
-
-    QLabel *label = new QLabel(tr("Text size:"), this);
+    QGroupBox *group = new QGroupBox(tr("Legend text"), this);
+    QFormLayout *form = new QFormLayout(group);
 
     m_textSizeSpinBox = new QSpinBox(this);
     m_textSizeSpinBox->setRange(6, 24);
     m_textSizeSpinBox->setSuffix(tr(" pt"));
     m_textSizeSpinBox->setToolTip(tr("Font size for legend text (6-24 points)"));
-
-    groupLayout->addWidget(label);
-    groupLayout->addWidget(m_textSizeSpinBox);
-    groupLayout->addStretch();
+    form->addRow(tr("Text size:"), m_textSizeSpinBox);
 
     return group;
 }

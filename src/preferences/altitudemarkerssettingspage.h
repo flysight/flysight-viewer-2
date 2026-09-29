@@ -31,8 +31,7 @@ private:
     QListWidget *m_altitudeList;
     QColor       m_currentColor;
 
-    QGroupBox* createUnitsGroup();
-    QGroupBox* createColorGroup();
+    QGroupBox* createMarkersGroup();
     QGroupBox* createAltitudesGroup();
 
     void updateColorButtonStyle(const QColor &color);
