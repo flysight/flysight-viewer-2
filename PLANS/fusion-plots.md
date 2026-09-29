@@ -178,20 +178,17 @@ signs, a proper rotation, never a reflection.
 
 **The angles.** From the fit's body-to-north-east-down quaternion composed
 with that constant, heading, pitch and roll are the aircraft Euler angles:
-heading is the direction of the forward axis measured clockwise from north
-(then referenced as below), pitch is the elevation of the forward axis above
-the horizontal, and roll is the rotation about the forward axis, positive
-right side down. They are
+heading is the direction of the forward axis measured clockwise from north,
+pitch is the elevation of the forward axis above the horizontal, and roll is
+the rotation about the forward axis, positive right side down. They are
 computed when read, from the quaternion channels and the orientation
 attribute, never by the fit.
 
-- **Heading is referenced and unwrapped as the GNSS course is.** The GNSS
-  course is not measured from north: it subtracts the course at the course
-  reference time (by default the exit). Heading is unwrapped by the
-  application's one unwrap rule and then offset by that same angle, computed
-  in one place for both. Heading and course then overlay exactly when the
-  body points where it travels, and heading minus course reads as sideslip.
-  Heading and course have the same inputs and the same availability.
+- **Heading is a compass heading**, unwrapped by the application's one
+  unwrap rule and referenced to nothing. The GNSS course is relative to its
+  course reference, so the two are not meant to overlay, and the
+  documentation says so. The attitude reads the quaternion and the
+  orientation only: every fitted recording has heading, pitch and roll.
 - **Pitch and roll** are reported in their natural ranges.
 - **Where the forward axis is vertical**, heading and roll are not defined;
   the derivation reports what the standard formulas give, and the
@@ -276,8 +273,7 @@ stores a blank.
   the fit as it does today; the status bar shows it; a stored fit draws at
   once.
 - **Attitude** plots in the aircraft convention for the mount the
-  orientation attribute describes; heading continuous through turns and
-  referenced as course is, so the two overlay in straight flight.
+  orientation attribute describes; heading continuous through turns.
 - **The orientation column**, once added, shows "forward +y, up +z" for
   every recording that has not been set, and the chosen label for one that
   has; editing it offers the list and "Default". Changing it redraws the
@@ -322,9 +318,8 @@ stores a blank.
 - Attitude, on synthetic quaternions with known answers: for the default
   orientation, heading, pitch and roll of a level, north-facing body are
   zero; a known yaw, pitch and roll come back; heading unwraps through a
-  full turn; a stored course reference offsets heading by exactly the angle
-  it offsets the GNSS course, and heading is unavailable exactly when course
-  is; a different orientation (a side mount) changes the angles as
+  full turn and is measured from north, unchanged by a GNSS track or a stored
+  course reference and available without GNSS data; a different orientation (a side mount) changes the angles as
   the axis permutation predicts; the rotation is proper for all 24 pairs.
 - The orientation attribute: every recording reads the default without a
   stored value and without any write to its file; a stored token wins and
