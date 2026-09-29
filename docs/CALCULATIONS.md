@@ -2199,19 +2199,15 @@ rotation, the signed permutation whose columns are forward, right = forward x
 up and down = -up in device coordinates; M = R C, and
 `heading = atan2(M10, M00)`, `pitch = asin(clamp(-M20, -1, 1))`,
 `roll = atan2(M21, M22)`, in degrees, roll in (-180, 180]. Heading is then
-unwrapped over the whole array with `unwrapDegrees()` and less the course
-reference angle, the value `GNSS/course` subtracts: the unwrapped raw GNSS
-course interpolated at `_COURSE_REF`, zero when the reference is not a number
-or lies outside the GNSS time. Both calculations get it from
-`Calculations::unwrappedCourse()` and `courseReferenceAngle()`
-(`src/calculations/coursehelper.h`, header-only for the reason given for
-`timefithelper.h`), and the attitude declares the GNSS course's four inputs,
-so heading is available exactly when the course is. Since the three angles
-are one calculation, pitch and roll share that availability: a recording
-whose `_COURSE_REF` is unavailable (none stored and no exit time for its
-default) has no course, and no heading, pitch or roll either. With the orientation
-forward +x, up -z (C = I) the angles are the fit's own yaw, pitch and roll,
-modulo the unwrap and the course reference. The orientation's default,
+unwrapped over the whole array with `unwrapDegrees()`. It is a compass
+heading: it is not referenced to `_COURSE_REF`, where `GNSS/course` is (the
+unwrapped course less the course at the reference time,
+`Calculations::unwrappedCourse()` and `courseReferenceAngle()` in
+`src/calculations/coursehelper.h`), so the two are not meant to overlay, and
+the attitude's inputs are the quaternion and `_ORIENTATION` only: every fitted
+recording has heading, pitch and roll, with or without a course reference.
+With the orientation forward +x, up -z (C = I) the angles are the fit's own
+yaw, pitch and roll, modulo the unwrap. The orientation's default,
 forward +y, up +z, is a constant default registered with
 `Calculations::addConstantDefault` (section 5); the fit does not read
 `_ORIENTATION`, so an orientation edit recomputes the angles and never
@@ -2317,7 +2313,8 @@ Tests (label `fusion`, behind `FLYSIGHT_BUILD_FUSION_TESTS`):
 `tests/tst_fusion_session.cpp` (real `SessionData` engines, the fit on the
 test's main thread), `tests/tst_fusion_derived.cpp` (the derived values on the
 fit's outputs stored as data, without the solver; among them the attitude:
-known angles, side mounts, the course reference and the unwrap, the forward
+known angles, side mounts, the unwrap, a course reference that changes
+nothing, the forward
 axis exactly vertical (finite angles, pitch at +90 or -90, the later samples
 unharmed), the fit's own angles for the device frame, an invalid stored
 orientation, an orientation edit without a fit; and the orientation

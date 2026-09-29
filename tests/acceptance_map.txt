@@ -2475,7 +2475,7 @@
 813 tst_fusion_derived storedOrientationRecomputesWithoutAFit
 813 tst_fusion_session registrationShape
 
-# 814 - (7, as settled) heading is unwrapped by the application's one unwrap rule, the course's, and less the course reference angle the GNSS course subtracts, computed in one place for both (zero for a stored reference that is not a number or lies outside the GNSS time), so heading and course overlay in straight flight and heading minus course reads as sideslip; heading has the course's inputs and availability, so a recording without a course reference has neither
+# 814 - (7, as settled) heading is unwrapped by the application's one unwrap rule, the course's, and measured from north: a compass heading, not referenced to the course reference (GNSS course is relative to its reference, so the two are not meant to overlay); the attitude reads the quaternion and the orientation only, so heading, pitch and roll are available for every fitted recording
 814 tst_fusion_derived headingUnwrapsThroughAFullTurn
 814 tst_fusion_derived attitudeRegistrationShape
 814 manual M40
@@ -2694,7 +2694,7 @@
 856 tst_fusion_derived derivedRegistrationShape
 856 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
 
-# 857 - (13) test: attitude, on synthetic quaternions with known answers: for the default orientation, heading, pitch and roll of a level, north-facing body are zero; a known heading, pitch and roll come back; heading unwraps through a full turn; a stored course reference offsets heading by exactly the angle it offsets the GNSS course, and heading is unavailable exactly when the course is; a different orientation (a side mount) changes the angles as the axis permutation predicts; the rotation is proper for all 24 pairs
+# 857 - (13) test: attitude, on synthetic quaternions with known answers: for the default orientation, heading, pitch and roll of a level, north-facing body are zero; a known heading, pitch and roll come back; heading unwraps through a full turn and is measured from north, unchanged by a GNSS track or a stored course reference of any kind and available without GNSS data; a different orientation (a side mount) changes the angles as the axis permutation predicts; the rotation is proper for all 24 pairs
 857 tst_fusion_derived levelNorthFacingBodyReadsZero
 857 tst_fusion_derived knownAnglesComeBack
 857 tst_fusion_derived headingUnwrapsThroughAFullTurn

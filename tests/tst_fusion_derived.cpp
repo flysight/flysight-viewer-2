@@ -190,16 +190,10 @@ QHash<QString, QVector<double>> quaternionChannels(const QList<Quat> &samples)
     return channels;
 }
 
-/// A course reference before every GNSS track of this file: outside the
-/// range, so the course reference angle is zero and heading is measured from
-/// north. The GNSS course, and with it the attitude, needs _COURSE_REF to be
-/// available: a synthetic session has no exit for it to default to.
-constexpr double kCourseRefBeforeTrack = kFixtureEpochUtc - 1000.0;
-
 /// Stores a GNSS track on `session` whose raw course at fix j is courseDeg[j]
-/// (at 10 m/s), one fix a second from kFixtureEpochUtc, and the course
-/// reference kCourseRefBeforeTrack. GNSS/_time is the passthrough of
-/// GNSS/time.
+/// (at 10 m/s), one fix a second from kFixtureEpochUtc, and a course
+/// reference before it. Only headingUnwrapsThroughAFullTurn uses it, to show
+/// that neither the track nor the reference reaches the attitude.
 void addGnssCourse(SessionData &session, const QVector<double> &courseDeg)
 {
     QVector<double> time, velN, velE;
@@ -211,18 +205,14 @@ void addGnssCourse(SessionData &session, const QVector<double> &courseDeg)
     session.setSourceMeasurement("GNSS", "time", time, "s");
     session.setSourceMeasurement("GNSS", "velN", velN, "m/s");
     session.setSourceMeasurement("GNSS", "velE", velE, "m/s");
-    session.setAttribute(SessionKeys::CourseRef, kCourseRefBeforeTrack);
+    session.setAttribute(SessionKeys::CourseRef, kFixtureEpochUtc - 1000.0);
 }
 
-/// A synthetic session with these quaternions and, when `withCourse`, a
-/// northward GNSS track with a course reference outside it: heading is then
-/// measured from north.
-SessionData attitudeSession(const QString &id, const QList<Quat> &samples, bool withCourse = true)
+/// A synthetic session with these quaternions and nothing else: the attitude
+/// needs no GNSS data.
+SessionData attitudeSession(const QString &id, const QList<Quat> &samples)
 {
-    SessionData session = syntheticFitSession(id, quaternionChannels(samples));
-    if (withCourse)
-        addGnssCourse(session, {0.0, 0.0, 0.0});
-    return session;
+    return syntheticFitSession(id, quaternionChannels(samples));
 }
 
 QVector<double> heading(const SessionData &s) { return fusion(s, QStringLiteral("bodyHeading")); }
@@ -838,17 +828,11 @@ void FusionDerivedTest::attitudeRegistrationShape()
     QVERIFY(d.policy == EvaluationPolicy::OnDemand);
     QVERIFY(d.title.isEmpty());
     QVERIFY(d.resultVersion.isEmpty());
-    const QList<CalcInput> courseInputs{CalcInput::measurement("GNSS", "velN"), CalcInput::measurement("GNSS", "velE"),
-                                        CalcInput::measurement("GNSS", "_time"),
-                                        CalcInput::attribute("_COURSE_REF")};
+    // The quaternion and the orientation, and nothing of GNSS: a compass
+    // heading is not referenced to the course reference
     QVERIFY(d.inputs == QList<CalcInput>({CalcInput::measurement("Fusion", "qx"), CalcInput::measurement("Fusion", "qy"),
                                           CalcInput::measurement("Fusion", "qz"), CalcInput::measurement("Fusion", "qw"),
-                                          CalcInput::attribute("_ORIENTATION")})
-                          + courseInputs);
-    // The heading reference's inputs are exactly the GNSS course's
-    const std::optional<CalculationInstance> course = registry.instance(QStringLiteral("builtin.gnss.course"));
-    QVERIFY(course.has_value());
-    QVERIFY(course->descriptor->inputs == courseInputs);
+                                          CalcInput::attribute("_ORIENTATION")}));
 
     const QList<DependencyKey> outputs{fusionKey(QStringLiteral("bodyHeading")), fusionKey(QStringLiteral("bodyPitch")),
                                        fusionKey(QStringLiteral("bodyRoll"))};
@@ -938,10 +922,11 @@ void FusionDerivedTest::knownAnglesComeBack()
     QCOMPARE(session.calculationEngine().runCount(kFit), 0);
 }
 
-// Criterion 8 and decision 5: two full turns of heading read continuous, the
-// one unwrap rule over the wrapped headings, less the course reference angle,
-// which is exactly the angle GNSS/course is offset by; heading is available
-// exactly when the course is.
+// Criterion 8: two full turns of heading read continuous, the one unwrap rule
+// over the wrapped headings, measured from north. Heading is a compass
+// heading: a GNSS track and a course reference, inside or outside its time
+// range, stored as a number, as text or not at all, change nothing, and the
+// attitude is available without any GNSS data.
 void FusionDerivedTest::headingUnwrapsThroughAFullTurn()
 {
     QList<Quat> turn;
@@ -951,19 +936,10 @@ void FusionDerivedTest::headingUnwrapsThroughAFullTurn()
         wrapped.append(std::remainder(10.0 * k, 360.0));
     }
     const QVector<double> unwrapped = Calculations::unwrapDegrees(wrapped);
-    // The raw GNSS course at five fixes, one a second
-    const QVector<double> rawCourse{20, 30, 40, 50, 60};
-    const auto session = [&turn, &rawCourse](const QString &id, const QVariant &courseRef) {
-        SessionData s = syntheticFitSession(id, quaternionChannels(turn));
-        addGnssCourse(s, rawCourse);
-        if (courseRef.isValid())
-            s.setAttribute(SessionKeys::CourseRef, courseRef);
-        return s;
-    };
 
-    // A course reference before the track: no offset, heading from north
-    const SessionData bare = session(QStringLiteral("h1"), QVariant());
-    QCOMPARE(bare.getAttribute(SessionKeys::CourseRef).toDouble(), kCourseRefBeforeTrack);
+    // No GNSS data at all: heading from north, pitch and roll beside it
+    const SessionData bare = attitudeSession(QStringLiteral("h1"), turn);
+    QVERIFY(bare.getMeasurement("GNSS", "course").isEmpty());
     const QVector<double> h0 = heading(bare);
     QCOMPARE(h0.size(), turn.size());
     for (int k = 0; k <= 72; ++k) {
@@ -972,67 +948,23 @@ void FusionDerivedTest::headingUnwrapsThroughAFullTurn()
         QVERIFY(std::abs(pitch(bare)[k]) <= kAngleTolerance);
         QVERIFY(sameAngle(roll(bare)[k], 0.0));
     }
-    const QVector<double> courseBare = bare.getMeasurement("GNSS", "course");
-    QCOMPARE(courseBare.size(), rawCourse.size());
 
-    // A stored reference inside the GNSS time range: both are offset by the
-    // course interpolated there, halfway between 30 and 40. The two libraries
-    // compute the one definition, one of them without contraction, hence the
-    // tolerance rather than bit equality.
-    const SessionData inside = session(QStringLiteral("h2"), QVariant(kFixtureEpochUtc + 1.5));
-    const QVector<double> courseInside = inside.getMeasurement("GNSS", "course");
-    QCOMPARE(courseInside.size(), rawCourse.size());
-    const double courseOffset = courseBare[0] - courseInside[0];
-    QVERIFY2(std::abs(courseOffset - 35.0) <= kAngleTolerance, qPrintable(QString::number(courseOffset, 'g', 17)));
-    const QVector<double> hInside = heading(inside);
-    QCOMPARE(hInside.size(), turn.size());
-    for (int k = 0; k <= 72; ++k) {
-        QVERIFY2(std::abs((h0[k] - hInside[k]) - courseOffset) <= kAngleTolerance, qPrintable(QString::number(k)));
-        QVERIFY2(std::abs(hInside[k] - (unwrapped[k] - 35.0)) <= kAngleTolerance, qPrintable(QString::number(k)));
-    }
-
-    // Outside the range, before or after it, or not a number: no offset
-    // (a NaN, stored as a number or as the text "nan", which converts to one).
-    // GNSS/course is checked here too: the two share the one reference angle.
-    for (const QVariant &courseRef : {QVariant(kFixtureEpochUtc - 0.5), QVariant(kFixtureEpochUtc + 100.0),
-                                      QVariant(QStringLiteral("later")), QVariant(qQNaN()),
-                                      QVariant(QStringLiteral("nan"))}) {
-        const SessionData outside = session(QStringLiteral("h3"), courseRef);
-        QVERIFY2(sameBitsEverywhere(heading(outside), h0), qPrintable(courseRef.toString()));
-        QVERIFY2(sameBitsEverywhere(outside.getMeasurement("GNSS", "course"), courseBare),
-                 qPrintable(courseRef.toString()));
-    }
-
-    // No course reference at all (nothing stored, and no exit for it to
-    // default to): the course is unavailable, and so is the attitude, whose
-    // inputs include the course's
-    {
-        SessionData none = session(QStringLiteral("h6"), QVariant());
-        none.removeAttribute(SessionKeys::CourseRef);
-        QVERIFY(!none.getAttribute(SessionKeys::CourseRef).isValid());
-        QVERIFY(none.getMeasurement("GNSS", "course").isEmpty());
-        QVERIFY(heading(none).isEmpty());
-        QVERIFY(pitch(none).isEmpty());
-        QVERIFY(roll(none).isEmpty());
-    }
-    // Without GNSS velocity there is no course, and no heading, pitch or roll:
-    // they are one calculation
-    {
-        SessionData noCourse = syntheticFitSession(QStringLiteral("h4"), quaternionChannels(turn));
-        noCourse.setAttribute(SessionKeys::CourseRef, kCourseRefBeforeTrack);
-        QVERIFY(noCourse.getMeasurement("GNSS", "course").isEmpty());
-        QVERIFY(heading(noCourse).isEmpty());
-        QVERIFY(pitch(noCourse).isEmpty());
-        QVERIFY(roll(noCourse).isEmpty());
-    }
-    // GNSS arrays of unequal length: neither
-    {
-        SessionData ragged = syntheticFitSession(QStringLiteral("h5"), quaternionChannels(turn));
-        addGnssCourse(ragged, rawCourse);
-        ragged.setSourceMeasurement("GNSS", "velE", QVector<double>{0.0, 0.0, 0.0, 0.0}, "m/s");
-        QVERIFY(ragged.getMeasurement("GNSS", "course").isEmpty());
-        QVERIFY(heading(ragged).isEmpty());
-        QVERIFY(pitch(ragged).isEmpty());
+    // A GNSS track with a course, and a course reference of every kind: the
+    // course is offset by its reference, the heading by nothing
+    const QVector<double> rawCourse{20, 30, 40, 50, 60};
+    for (const QVariant &courseRef : {QVariant(kFixtureEpochUtc + 1.5), QVariant(kFixtureEpochUtc - 0.5),
+                                      QVariant(kFixtureEpochUtc + 100.0), QVariant(QStringLiteral("later")),
+                                      QVariant(qQNaN()), QVariant()}) {
+        SessionData s = attitudeSession(QStringLiteral("h2"), turn);
+        addGnssCourse(s, rawCourse);
+        if (courseRef.isValid())
+            s.setAttribute(SessionKeys::CourseRef, courseRef);
+        else
+            s.removeAttribute(SessionKeys::CourseRef);
+        QCOMPARE(s.getMeasurement("GNSS", "course").isEmpty(), !courseRef.isValid());
+        QVERIFY2(sameBitsEverywhere(heading(s), h0), qPrintable(courseRef.toString()));
+        QCOMPARE(pitch(s).size(), turn.size());
+        QCOMPARE(roll(s).size(), turn.size());
     }
 
     QCOMPARE(bare.calculationEngine().runCount(kFit), 0);
@@ -1218,7 +1150,6 @@ void FusionDerivedTest::deviceFrameMountGivesTheFitsOwnAngles()
     for (const char *name : {"_time", "qx", "qy", "qz", "qw"})
         channels.insert(QString::fromLatin1(name), golden.channels.value(QString::fromLatin1(name)));
     SessionData session = syntheticFitSession(QStringLiteral("d1"), channels);
-    addGnssCourse(session, {0.0, 0.0, 0.0});
     session.setAttribute(SessionKeys::Orientation, QStringLiteral("+x,-z"));
 
     const QVector<double> h = heading(session);
@@ -1280,7 +1211,6 @@ void FusionDerivedTest::storedOrientationRecomputesWithoutAFit()
     channels.insert(QStringLiteral("pitch"), {-2.25});
     channels.insert(QStringLiteral("yaw"), {370.0});
     SessionData session = syntheticFitSession(QStringLiteral("r1"), channels);
-    addGnssCourse(session, {0.0, 0.0, 0.0});
     CalculationEngine &engine = session.calculationEngine();
 
     QVERIFY(!session.hasAttribute(SessionKeys::Orientation));

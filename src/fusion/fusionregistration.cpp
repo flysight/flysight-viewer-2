@@ -11,7 +11,6 @@
 #include "attributeregistry.h"
 #include "calculations/anglehelper.h"
 #include "calculations/attributecalculations.h"
-#include "calculations/coursehelper.h"
 #include "calculations/registration.h"
 #include "calculations/timefithelper.h"
 #include "calculations/trackhelper.h"
@@ -427,9 +426,10 @@ std::optional<BodyAngles> bodyAngles(double qx, double qy, double qz, double qw,
 // orientation attribute, published together. It may run on any thread while
 // another session evaluates the same descriptor, so it keeps no state, and
 // like everything in this library it logs nothing. Unavailable for a token
-// that is not an orientation, for empty or unequal quaternion arrays, for a
-// quaternion sample that is not finite or has no length, and, like
-// GNSS/course, without the GNSS course.
+// that is not an orientation, for empty or unequal quaternion arrays, and for
+// a quaternion sample that is not finite or has no length. Heading is a
+// compass heading: measured from north and not referenced to the course
+// reference (GNSS/course is), so the attitude needs nothing of GNSS.
 CalculationResult computeAttitude(const EvaluationContext &ctx)
 {
     const std::optional<Fusion::Orientation> orientation =
@@ -444,15 +444,6 @@ CalculationResult computeAttitude(const EvaluationContext &ctx)
     const qsizetype n = qx.size();
     if (n == 0 || qy.size() != n || qz.size() != n || qw.size() != n)
         return CalculationResult::unavailable();
-
-    // Heading is referenced as GNSS/course is, by the same angle
-    const QVector<double> gnssTime = ctx.measurement("GNSS", SessionKeys::Time);
-    const std::optional<QVector<double>> course = Calculations::unwrappedCourse(
-        ctx.measurement("GNSS", "velN"), ctx.measurement("GNSS", "velE"), gnssTime);
-    if (!course)
-        return CalculationResult::unavailable();
-    const double reference = Calculations::courseReferenceAngle(
-        *course, gnssTime, ctx.attribute(SessionKeys::CourseRef));
 
     const Fusion::Orientation::Matrix c = orientation->bodyToDevice();
     QVector<double> heading, pitch, roll;
@@ -469,8 +460,6 @@ CalculationResult computeAttitude(const EvaluationContext &ctx)
     }
 
     heading = Calculations::unwrapDegrees(heading);
-    for (double &h : heading)
-        h -= reference;
 
     return CalculationResult()
         .setMeasurement(kSensor, "bodyHeading", heading)
@@ -481,8 +470,8 @@ CalculationResult computeAttitude(const EvaluationContext &ctx)
 // Fusion/bodyHeading, bodyPitch, bodyRoll: the attitude of the body frame
 // that the orientation attribute defines. On demand and waiting on the fit
 // like accH. The fit does not read the attribute, so an orientation edit
-// recomputes the angles and never refits. The last four inputs are exactly
-// GNSS/course's, so heading is available exactly when course is.
+// recomputes the angles and never refits. The quaternion and the orientation
+// are its only inputs: every fitted recording has an attitude.
 void registerAttitude(CalculationRegistry &registry)
 {
     CalculationDescriptor d;
@@ -492,11 +481,7 @@ void registerAttitude(CalculationRegistry &registry)
         CalcInput::measurement(kSensor, "qy"),
         CalcInput::measurement(kSensor, "qz"),
         CalcInput::measurement(kSensor, "qw"),
-        CalcInput::attribute(SessionKeys::Orientation),
-        CalcInput::measurement("GNSS", "velN"),
-        CalcInput::measurement("GNSS", "velE"),
-        CalcInput::measurement("GNSS", SessionKeys::Time),
-        CalcInput::attribute(SessionKeys::CourseRef)
+        CalcInput::attribute(SessionKeys::Orientation)
     };
     d.outputs = {
         DependencyKey::measurement(kSensor, "bodyHeading"),

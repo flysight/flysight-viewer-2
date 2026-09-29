@@ -73,11 +73,12 @@ QList<FitOutputChannel> fitOutputChannels(const Result &result);
 ///  - builtin.fusion.attitude (on demand): Fusion/bodyHeading, bodyPitch and
 ///    bodyRoll, published together, in degrees: the aircraft Euler angles of
 ///    the body frame the orientation attribute defines, from the quaternion
-///    qx..qw. Heading is the forward axis clockwise from north, unwrapped and
-///    offset by the course reference angle exactly as GNSS/course is (its
-///    inputs include GNSS/velN, velE, _time and _COURSE_REF), pitch the
-///    forward axis above the horizontal in [-90, 90], roll about the forward
-///    axis, right side down positive, in (-180, 180]. Unavailable for a stored
+///    qx..qw. Heading is the forward axis clockwise from north, unwrapped by
+///    the one unwrap rule and not referenced to the course reference (a
+///    compass heading, where GNSS/course is relative to its reference), pitch
+///    the forward axis above the horizontal in [-90, 90], roll about the
+///    forward axis, right side down positive, in (-180, 180]. Its inputs are
+///    the quaternion and _ORIENTATION only. Unavailable for a stored
 ///    orientation that is not one of the 24.
 ///
 /// The derived values' inputs exist only once the fit has published, so they

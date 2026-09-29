@@ -15,12 +15,10 @@ namespace Calculations {
 
 /// The course and its reference as the application defines them.
 ///
-/// GNSS/course is the unwrapped course less the course reference angle. The
-/// heading of the body frame derived from the fused attitude is offset by the
-/// same angle, so that heading and course overlay when the body points where
-/// it travels. Both call the two functions below, so the reference is computed
-/// in one place. Header-only, so that a library that does not link the
-/// built-in calculations can share them.
+/// GNSS/course is the unwrapped course less the course reference angle, the
+/// two functions below. Header-only, so that a library that does not link the
+/// built-in calculations could share them; the fused heading, which once did,
+/// is a compass heading and is not referenced to anything.
 
 /// The course over ground in degrees, clockwise from north, sample by sample
 /// and unwrapped by the one unwrap rule (anglehelper.h). Nothing when an
