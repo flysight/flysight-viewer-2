@@ -537,13 +537,11 @@ void FusionJobsTest::noImuSessionCannotHaveAJob()
     QVERIFY(m_queue->isIdle());
     QVERIFY(!m_model->isSessionPinned("a"));
 
-    QStringList plots = fusionMeasurementNames();
-    plots.removeAll(QStringLiteral("_time"));
-    plots.append(QStringLiteral("accH"));
-    QCOMPARE(plots.size(), 17);
-    for (const QString &name : std::as_const(plots)) {
-        const BlockerReport report = engine("a").blockers(fusionKey(name));
-        QVERIFY2(report.state == BlockerState::NotApplicable, qPrintable(name));
+    const QVector<PlotValue> plots = fusionPlots();
+    QCOMPARE(plots.size(), 8);
+    for (const PlotValue &plot : plots) {
+        const BlockerReport report = engine("a").blockers(fusionKey(plot.measurementID));
+        QVERIFY2(report.state == BlockerState::NotApplicable, qPrintable(plot.measurementID));
         QVERIFY(report.blockers.isEmpty());
     }
     QCOMPARE(engine("a").runCount(kFit), 0);

@@ -56,8 +56,12 @@ FlySight::SessionData sessionFromFixture(const FusionFixture &fixture, const QSt
 constexpr double kFixtureEpochUtc = 1700000000.0;
 constexpr double kFixtureExitTime = kFixtureEpochUtc + 1.0;
 
-/// sessionFromFixture(fusionFixture(fixtureName), sessionId) with a stored
-/// exit marker at kFixtureExitTime.
+/// sessionFromFixture(fusionFixture(fixtureName), sessionId) with what the
+/// Heading, Pitch and Roll plots read besides the fit: a stored exit marker at
+/// kFixtureExitTime (the course reference's default) and the fixture's
+/// velocity stored again as GNSS/velN and velE ("m/s": the GNSS course their
+/// heading is referenced to). The fit reads neither. Elevation also needs a
+/// ground elevation, which a test stores when it wants that plot.
 FlySight::SessionData fixtureSession(const QString &fixtureName, const QString &sessionId = QStringLiteral("f1"));
 
 /// fixtureSession() with the GNSS/sAcc source data stored as GNSS/<storedAs>
@@ -101,11 +105,13 @@ FlySight::SessionData syntheticFitSession(const QString &sessionId,
 
 QStringList fusionMeasurementNames();   ///< the 17 literal names, in output order
 
-/// The seventeen "Sensor fusion" plots as PlotValues, for PlotModel::setPlots():
-/// the sixteen fit measurements other than _time, plus accH, in the
-/// application's order. Mirrors MainWindow::registerBuiltInPlots(), which is
-/// outside the test library boundary; audit_cleanup pins that list at
-/// seventeen rows. Colours are irrelevant here and left default.
+/// The eight "Sensor fusion" plots as PlotValues, for PlotModel::setPlots(),
+/// in the application's order: Elevation (z), the horizontal, vertical (accD),
+/// along-track and cross-track accelerations, and Heading, Pitch and Roll
+/// (bodyHeading, bodyPitch, bodyRoll). Mirrors the application's eight rows in
+/// MainWindow::registerBuiltInPlots(), which is outside the test library
+/// boundary; audit_cleanup pins that list at eight rows. Colours are
+/// irrelevant here and left default.
 QVector<FlySight::PlotValue> fusionPlots();
 
 /// "Everything": the 17 measurements, Fusion/accH, Fusion/_system_time,

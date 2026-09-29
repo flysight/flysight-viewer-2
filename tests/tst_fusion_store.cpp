@@ -1,8 +1,9 @@
 // Stored fusion results end to end (store-requested-calculations, spec section
 // 8): SessionModel + the executor + PlotModel +
 // CalculationDemand + Fusion::registerFusionCalculations on a real temporary
-// logbook, with real fits. Where the roll plot is checked for a visible
-// session, the demand layer starts the fit; restoring is not requesting.
+// logbook, with real fits. Where the Roll plot (Fusion/bodyRoll) is checked
+// for a visible session, the demand layer starts the fit; restoring is not
+// requesting.
 //
 //  - a fit survives unload and restart bit for bit (the seventeen channels,
 //    the derived values, the diagnostics and the detail equal the fresh
@@ -296,11 +297,11 @@ private:
                                        const FitValues &fresh);
     /// Empty when the blocker reports agree in state, blockers and notes.
     static QString reportDifference(const BlockerReport &got, const BlockerReport &expected);
-    /// For a visible track whose fit has just become missing while roll is
-    /// checked: the roll row waits on it, and exactly one job has been offered
-    /// since `queued` (a spy on the job model's rowsInserted: one per created
-    /// job) was made, when the executor held `jobsBefore` records - the fit of
-    /// `id`, still Queued. Unchecking roll
+    /// For a visible track whose fit has just become missing while the Roll
+    /// plot is checked: the Roll row waits on it, and exactly one job has been
+    /// offered since `queued` (a spy on the job model's rowsInserted: one per
+    /// created job) was made, when the executor held `jobsBefore` records - the
+    /// fit of `id`, still Queued. Unchecking Roll
     /// ends it Cancelled ("No longer needed") at once, before it ever started,
     /// and nothing else is offered. Empty when all of that held.
     [[nodiscard]] QString offeredFitIsDroppedByUncheck(const QString &id, const QSignalSpy &queued, int jobsBefore);
@@ -526,7 +527,7 @@ QString FusionStoreTest::restartCheck(const std::function<void()> &whileClosed, 
                                       const FitValues &fresh)
 {
     restart(whileClosed);
-    check(QStringLiteral("roll"));
+    check(QStringLiteral("bodyRoll"));
     const Quiet quiet(*m_queue);
     show({"a"});
     if (!isLoaded("a"))
@@ -603,7 +604,7 @@ QString FusionStoreTest::offeredFitIsDroppedByUncheck(const QString &id, const Q
     if (m_queue->chosenNextJob() != offered.id)
         return QStringLiteral("the offered job is not the chosen next job the row waits on");
 
-    check(QStringLiteral("roll"), false);
+    check(QStringLiteral("bodyRoll"), false);
     const JobRecord dropped = m_queue->job(offered.id);     // at once, before any event-loop turn
     if (dropped.state != JobState::Cancelled || dropped.reason != QStringLiteral("No longer needed"))
         return QStringLiteral("unchecking left the job %1 (%2)").arg(int(dropped.state)).arg(dropped.reason);
@@ -633,7 +634,7 @@ void FusionStoreTest::restoredAfterEvictionIsBitIdentical()
     });
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a"))}), QString());
     show({"a"});
-    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    check(QStringLiteral("bodyRoll"));      // the demand layer starts the fit
     QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
@@ -719,7 +720,7 @@ void FusionStoreTest::restoredAfterRestartIsBitIdentical()
     const QSet<GraphNode> dependencies = engine("a").dependenciesOf(GraphNode::result(kFit));
 
     restart();
-    check(QStringLiteral("roll"));
+    check(QStringLiteral("bodyRoll"));
     QObject scope;
     LoadWatch atLoad;
     watchLoad(&scope, "a", &atLoad);
@@ -768,10 +769,9 @@ void FusionStoreTest::restoredRejectionShowsBadge()
     const auto restoreCapacity = qScopeGuard([] {
         PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
     });
-    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("reject_origin")), QStringLiteral("r1"))}),
-             QString());
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("reject_origin"), QStringLiteral("r1"))}), QString());
     show({"r1"});
-    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    check(QStringLiteral("bodyRoll"));      // the demand layer starts the fit
     QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);    // a rejection is a result
@@ -818,10 +818,9 @@ void FusionStoreTest::restoredSolverFailureShowsBadge()
     const auto restoreCapacity = qScopeGuard([] {
         PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
     });
-    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("reject_origin")), QStringLiteral("r1"))}),
-             QString());
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("reject_origin"), QStringLiteral("r1"))}), QString());
     show({"r1"});
-    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    check(QStringLiteral("bodyRoll"));      // the demand layer starts the fit
     QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QVERIFY(waitForIdle(*m_model));
@@ -917,7 +916,7 @@ void FusionStoreTest::dependencyEditDropsRecord()
     });
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a"))}), QString());
     show({"a"});
-    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    check(QStringLiteral("bodyRoll"));      // the demand layer starts the fit
     QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QVERIFY(waitForIdle(*m_model));
@@ -943,7 +942,7 @@ void FusionStoreTest::dependencyEditDropsRecord()
     QVERIFY(quiet.holds());
 
     // Unchecked: nothing to drop (nothing was offered)
-    check(QStringLiteral("roll"), false);
+    check(QStringLiteral("bodyRoll"), false);
     QVERIFY(nothingToShow());
     QVERIFY(quiet.holds());
 
@@ -1086,7 +1085,7 @@ void FusionStoreTest::codeStampChangeDropsRecordOnLoad()
 
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
     show({"a"});
-    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    check(QStringLiteral("bodyRoll"));      // the demand layer starts the fit
     QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QVERIFY(waitForIdle(*m_model));
@@ -1159,7 +1158,7 @@ void FusionStoreTest::storedFitSurvivesUnrelatedChanges()
     });
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
     show({"a"});
-    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    check(QStringLiteral("bodyRoll"));      // the demand layer starts the fit
     QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QVERIFY(waitForIdle(*m_model));
@@ -1254,7 +1253,7 @@ void FusionStoreTest::runtimeRegistryChangeDropsFitAndRecord()
                                                          QStringLiteral("testSAcc"))}),
              QString());
     show({"a"});
-    check(QStringLiteral("roll"));      // the demand layer starts the fit
+    check(QStringLiteral("bodyRoll"));      // the demand layer starts the fit
     QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
@@ -1295,7 +1294,7 @@ void FusionStoreTest::runtimeRegistryChangeDropsFitAndRecord()
     // offered for it before it can start
     QCOMPARE(progressNow().count, 1);
     QVERIFY(progressNow().sessionName.isEmpty());
-    check(QStringLiteral("roll"), false);
+    check(QStringLiteral("bodyRoll"), false);
     PlotFixture::spin(m_demand.get());
     QVERIFY(m_queue->isIdle());
     QVERIFY(m_queue->model()->rowCount() <= jobs + 1);
@@ -1348,7 +1347,7 @@ void FusionStoreTest::lookupResolvingDifferentlyAtLoadDeletesFit()
     bool reordered = false;
     restart([&] { reordered = m_extra->add(sAccFrom(sacc0)) && m_extra->remove(sacc1) && m_extra->add(sAccFrom(sacc1)); });
     QVERIFY(reordered);
-    check(QStringLiteral("roll"));
+    check(QStringLiteral("bodyRoll"));
     const QSignalSpy queued(m_queue->model(), &QAbstractItemModel::rowsInserted);
     show({"a"});
     QVERIFY(isLoaded("a"));
@@ -1475,7 +1474,7 @@ void FusionStoreTest::deletedCacheFolderReadsNotRequested()
     QVERIFY(removed);
     QVERIFY(LogbookManager::instance().knownCalculationRecords("a").isEmpty());
 
-    check(QStringLiteral("roll"));
+    check(QStringLiteral("bodyRoll"));
     const QSignalSpy queued(m_queue->model(), &QAbstractItemModel::rowsInserted);
     show({"a"});
     QVERIFY(isLoaded("a"));
@@ -1499,17 +1498,16 @@ void FusionStoreTest::deletedCacheFolderReadsNotRequested()
 
 namespace {
 
-/// Fusion/roll at the exit marker, the way the column editor makes it.
+/// Fusion/roll at the exit marker: a column kept from before, over a fit
+/// channel that has no plot, so its type is the one the column editor gave it
+/// when the fit's roll was a plot.
 LogbookColumn rollAtExitColumn()
 {
     LogbookColumn column;
     column.type = ColumnType::MeasurementAtMarker;
     column.sensorID = QStringLiteral("Fusion");
     column.measurementID = QStringLiteral("roll");
-    for (const PlotValue &plot : fusionPlots()) {
-        if (plot.measurementID == column.measurementID)
-            column.measurementType = plot.measurementType;
-    }
+    column.measurementType = QStringLiteral("angle");
     column.markerAttributeKey = QString::fromLatin1(SessionKeys::ExitTime);
     return column;
 }

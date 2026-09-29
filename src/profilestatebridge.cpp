@@ -157,16 +157,10 @@ Profile captureCurrentState(MainWindow *mainWindow)
 
 void applyProfile(const Profile &profile, MainWindow *mainWindow)
 {
-    // 1. Enabled plots
-    if (profile.enabledPlots.has_value()) {
-        const QSet<QString> enabledSet(profile.enabledPlots->begin(), profile.enabledPlots->end());
-        const QVector<PlotValue> allPlots = PlotRegistry::instance().dependentPlots();
-        PlotModel *pm = mainWindow->plotModel();
-        for (const PlotValue &pv : allPlots) {
-            QString plotId = pv.sensorID + QStringLiteral("/") + pv.measurementID;
-            pm->setPlotEnabled(pv.sensorID, pv.measurementID, enabledSet.contains(plotId));
-        }
-    }
+    // 1. Enabled plots. The rule, including that a listed plot the
+    // application no longer has is ignored silently, is the plot model's.
+    if (profile.enabledPlots.has_value())
+        mainWindow->plotModel()->setEnabledPlotIds(*profile.enabledPlots);
 
     // 2. Altitude markers (must come before enabled-markers so the markers exist)
     if (profile.altitudeMarkers.has_value()) {

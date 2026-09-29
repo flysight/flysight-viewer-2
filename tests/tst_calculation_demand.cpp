@@ -73,6 +73,37 @@ QPair<int, int> progressOf(int remaining, int total)
     return {remaining, total};
 }
 
+/// Collects every message of every type (debug, info, warning, critical) for
+/// as long as it lives, instead of the installed handler. WarningCapture
+/// counts warnings and criticals only; the profile rule promises silence of
+/// every kind. Not nestable.
+class MessageCapture {
+public:
+    MessageCapture()
+    {
+        messagesRef().clear();
+        m_previous = qInstallMessageHandler(handler);
+    }
+    ~MessageCapture() { qInstallMessageHandler(m_previous); }
+
+    QStringList messages() const { return messagesRef(); }
+
+private:
+    Q_DISABLE_COPY_MOVE(MessageCapture)
+
+    static QStringList &messagesRef()
+    {
+        static QStringList messages;
+        return messages;
+    }
+    static void handler(QtMsgType, const QMessageLogContext &, const QString &message)
+    {
+        messagesRef().append(message);
+    }
+
+    QtMessageHandler m_previous = nullptr;
+};
+
 } // namespace
 
 class CalculationDemandTest : public QObject {
@@ -97,6 +128,7 @@ private slots:
     void chainStopsForHiddenTrackOrUncheckedPlot();
     void programmaticCheckCreatesDemand();
     void profileStyleApplyCreatesDemand();
+    void profileNamingRemovedPlotsAppliesWithoutThem();
     void startupRestoreWithHiddenSessionsStartsNothing();
     void showingASessionStartsIt();
     void hidingASessionDropsItsWaitingPair();
@@ -1176,7 +1208,8 @@ void CalculationDemandTest::programmaticCheckCreatesDemand()
     QCOMPARE(gate().maxRunning.load(), 1);
 }
 
-// The loop of applyProfile(): setPlotEnabled over all plots.
+// applyProfile()'s real step 1: the profile's enabled plots, applied by the
+// plot model's rule.
 void CalculationDemandTest::profileStyleApplyCreatesDemand()
 {
     QVERIFY(giveInput({"s1", "s2"}, "G_IN", 4));
@@ -1185,10 +1218,7 @@ void CalculationDemandTest::profileStyleApplyCreatesDemand()
     show({"s1", "s2"});
     gate().open(2);
 
-    const QSet<QString> profile = {"Syn/g", "Syn/g2", "Syn/db", "Syn/h", "Syn/plain"};
-    const QVector<PlotValue> plots = PlotFixture::plots();
-    for (const PlotValue &plot : plots)
-        m_plots->setPlotEnabled(plot.sensorID, plot.measurementID, profile.contains(CalculationDemand::plotId(plot)));
+    m_plots->setEnabledPlotIds({"Syn/g", "Syn/g2", "Syn/db", "Syn/h", "Syn/plain"});
     QVERIFY(waitDemandIdle());
 
     // Every requested plot of the profile was computed for both sessions;
@@ -1218,6 +1248,48 @@ void CalculationDemandTest::profileStyleApplyCreatesDemand()
             QCOMPARE(succeeded.value(QString::fromLatin1(id) + QLatin1Char('/') + QString::fromLatin1(calculation)), 1);
     }
     QCOMPARE(succeeded.size(), 8);
+}
+
+// The profile rule (PlotModel::setEnabledPlotIds()): a profile that names
+// plots the model does not have (the fusion and local-frame plots the
+// application no longer lists, and a plug-in's that is not loaded) enables the
+// listed plots the model has, disables its others, adds no row and says
+// nothing of any kind. No session is shown, so no demand is involved.
+void CalculationDemandTest::profileNamingRemovedPlotsAppliesWithoutThem()
+{
+    const QVector<PlotValue> plots = PlotFixture::plots();
+    const auto rowCounts = [this] {
+        QList<int> counts{m_plots->rowCount()};
+        for (int category = 0; category < m_plots->rowCount(); ++category)
+            counts.append(m_plots->rowCount(m_plots->index(category, 0)));
+        return counts;
+    };
+    const QList<int> before = rowCounts();
+    QCOMPARE(before, QList<int>({1, int(plots.size())}));
+
+    // Enabled beforehand, and not listed by the profile
+    m_plots->setPlotEnabled(QStringLiteral("Syn"), QStringLiteral("ea"), true);
+    QVERIFY(m_plots->isPlotEnabled(QStringLiteral("Syn"), QStringLiteral("ea")));
+
+    const QStringList listed = {"Syn/g", "Syn/db"};
+    const QStringList absent = {"Fusion/qx", "Fusion/roll", "Local/north", "NotLoadedPlugin/speed"};
+    QStringList messages;
+    {
+        const MessageCapture capture;
+        m_plots->setEnabledPlotIds(listed + absent);
+        messages = capture.messages();
+    }
+    QVERIFY2(messages.isEmpty(), qPrintable(messages.join(QStringLiteral(" | "))));
+
+    for (const PlotValue &plot : plots) {
+        const QString id = CalculationDemand::plotId(plot);
+        QVERIFY2(m_plots->isPlotEnabled(plot.sensorID, plot.measurementID) == listed.contains(id), qPrintable(id));
+    }
+    for (const QString &id : absent) {
+        const QStringList parts = id.split(QLatin1Char('/'));
+        QVERIFY2(!m_plots->isPlotEnabled(parts.at(0), parts.at(1)), qPrintable(id));
+    }
+    QCOMPARE(rowCounts(), before);
 }
 
 // Plots restored as checked from the settings come up through modelReset. At

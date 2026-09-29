@@ -420,7 +420,7 @@ flysight-viewer-2/
 
 - [docs/COMPUTED_PLOTS.md](docs/COMPUTED_PLOTS.md): plots and logbook columns that are computed in the background - what starts and stops a computation, the status bar and its warning, the row warning, pending logbook cells, what stays visible after a restart
 - [docs/SENSOR_FUSION.md](docs/SENSOR_FUSION.md): the "Sensor fusion" plots - what the GNSS/IMU fit computes, what it needs, what it rejects, and how far to trust it
-- [docs/LOCAL_COORDINATES.md](docs/LOCAL_COORDINATES.md): the "GNSS (Local frame)" plots - the recording-wide north/east/down frame and the simplified map track
+- [docs/LOCAL_COORDINATES.md](docs/LOCAL_COORDINATES.md): the recording-wide north/east/down frame that sensor fusion and the simplified map track build on
 - [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md): the recorded file format, `SCHEMA_VER`, source versus effective values, the conversion layer, import / merge rules, what saved files contain, and the stored results of requested calculations
 
 ## Developer Documentation

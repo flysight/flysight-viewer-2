@@ -87,15 +87,13 @@ QList<DependencyKey> valueNames()
     return names;
 }
 
-/// The measurement behind each of the seventeen "Sensor fusion" plots.
+/// The measurement behind each of the eight "Sensor fusion" plots
+/// (fusionPlots()): the fit's own accD, and the derivations that wait on it.
 QList<DependencyKey> plotNames()
 {
     QList<DependencyKey> names;
-    for (const QString &name : fusionMeasurementNames()) {
-        if (name != QStringLiteral("_time"))
-            names.append(fusionKey(name));
-    }
-    names.append(fusionKey(QStringLiteral("accH")));
+    for (const PlotValue &plot : fusionPlots())
+        names.append(fusionKey(plot.measurementID));
     return names;
 }
 

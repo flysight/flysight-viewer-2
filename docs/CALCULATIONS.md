@@ -1472,10 +1472,17 @@ demand until a session is shown; enabled columns create demand at once, and
 their hidden loads wait behind the start-up work by scheduler priority (16.8).
 Nothing about demand is persisted.
 
-**Profiles.** Applying a profile that carries a column over a requested output
-computes that calculation for every session of the logbook that lacks a
-result. That is intended, and it is why no default profile carries such a
-column; the cleanup audit (group `demand`) checks the profiles shipped in
+**Profiles.** A profile's enabled plots are applied by one rule, owned by the
+plot model: `PlotModel::setEnabledPlotIds()` enables every plot of the model
+whose id (`sensorID/measurementID`) the profile lists and disables the others,
+each through `setPlotEnabled()`, so the demand layer sees a profile exactly as
+it sees clicks. An id the model has no plot for (a plot the application no
+longer has, or one of a plugin that is not loaded) is ignored silently: no
+message, no failure, no row added, and nothing rewrites the profile. Applying a
+profile that carries a column over a requested output computes that
+calculation for every session of the logbook that lacks a result. That is
+intended, and it is why no default profile carries such a column; the cleanup
+audit (group `demand`) checks the profiles shipped in
 `src/resources/profiles/`.
 
 **What drops demand:** unchecking the plot, hiding the session, disabling the
@@ -2215,11 +2222,19 @@ it through ordinary invalidation, and never start one. Every one has the
 length of its inputs, so together with `Fusion/_time` (an output of the fit)
 they satisfy the time-axis rule of section 16.1.
 
-**Plots.** Seventeen plots in the category "Sensor fusion"
-(`MainWindow::registerBuiltInPlots`): the sixteen measurements other than
-`_time`, and `accH`. They are requested (16.3): a checked fusion plot has the
-fit computed for the visible sessions, and nothing else about a plot starts
-one (section 16).
+**Plots.** Eight plots in the category "Sensor fusion"
+(`MainWindow::registerBuiltInPlots`), in this order: Elevation (`Fusion/z`),
+Horizontal acceleration (`Fusion/accH`), Vertical acceleration
+(`Fusion/accD`), Along-track and Cross-track acceleration
+(`Fusion/accAlongTrack`, `Fusion/accCrossTrack`), Heading, Pitch and Roll
+(`Fusion/bodyHeading`, `bodyPitch`, `bodyRoll`). `accD` is an output of the
+fit; the others are the on-demand calculations above, blocked by the fit. All
+eight are requested (16.3): a checked fusion plot has the fit computed for the
+visible sessions, and nothing else about a plot starts one (section 16). The
+rest of the fit's outputs (`north`, `east`, `down`, `velN`, `velE`, `velD`,
+`accN`, `accE`, `roll`, `pitch`, `yaw`, `qx`, `qy`, `qz`, `qw`) have no plot;
+they remain measurements that a logbook column, a plugin input and the stored
+record read.
 
 **Stored results.** The fit's result version is `Fusion::Algorithm`
 (`src/fusion/fusion.h`), the same string as the diagnostics' `"algorithm"`. The
@@ -2306,7 +2321,7 @@ edit without a fit; and the orientation vocabulary, the attribute's
 definition and the Orientation column through `ChoiceFixture`),
 `tests/tst_fusion_jobs.cpp` (the executor's worker on a
 real `SessionModel`), `tests/tst_fusion_rows.cpp` (the demand layer of
-section 16 with the seventeen real plots and real fits: fits
+section 16 with the eight real plots and real fits: fits
 start and are dropped with no gesture),
 `tests/tst_fusion_runner.cpp` (the command-line runner against the
 application's import path) and `tests/tst_fusion_store.cpp` (the fit's stored

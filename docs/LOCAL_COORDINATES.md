@@ -13,9 +13,10 @@
 
 ## 1. Summary
 
-Every recording has one recording-wide north/east/down (NED) frame. The
-**GNSS (Local frame)** plots show it, and other calculations that need metric
-coordinates build on it instead of projecting the track themselves.
+Every recording has one recording-wide north/east/down (NED) frame. It has no
+plots of its own: it is the input of sensor fusion and of the simplified map
+track, and a logbook column can read it, and other calculations that need
+metric coordinates build on it instead of projecting the track themselves.
 
 ## 2. Channels and attributes
 
@@ -51,7 +52,7 @@ One on-demand registered calculation, `builtin.local.coordinates`, produces
 the four attributes and the six channels together, in one atomic result, so the
 origin attributes and the channels always describe the same frame. It runs once
 per recording however many of its outputs are read. It is cheap: it needs no
-job and no request, and the plots that show it are ordinary plots.
+job and no request, and reads of it are ordinary reads.
 
 Its declared inputs are `GNSS/lat`, `GNSS/lon`, `GNSS/hMSL`, `GNSS/hAcc`,
 `GNSS/velN`, `GNSS/velE`, and `GNSS/velD`. All seven are required and must have
@@ -140,4 +141,5 @@ rows for the descent fixture are in `tests/support/builtinfixture.cpp`.
 The simplified map track (section 9) and sensor fusion read this frame and no
 other: the fusion outputs `Fusion/north`, `east`, `down` and the fused
 velocities use this same frame and origin, so they can be compared with
-`Local/...` directly. See [SENSOR_FUSION.md](SENSOR_FUSION.md).
+`Local/...` directly, and the fused elevation `Fusion/z` reads the origin's
+height, `_LOCAL_ORIGIN_HMSL`. See [SENSOR_FUSION.md](SENSOR_FUSION.md).

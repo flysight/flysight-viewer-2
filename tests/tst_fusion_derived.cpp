@@ -861,16 +861,11 @@ void FusionDerivedTest::attitudeRegistrationShape()
 }
 
 // Criterion 7: with the fit's inputs (and the GNSS velocity the heading
-// reference reads) and no fit, each angle waits on the fit alone, and nothing
-// starts it.
+// reference reads, which fixtureSession() stores) and no fit, each angle waits
+// on the fit alone, and nothing starts it.
 void FusionDerivedTest::attitudeWaitsOnTheFit()
 {
     SessionData session = fixtureSession(QStringLiteral("coarse_linear"));
-    // The fixture sessions store the local frame's velocity, which the fit
-    // reads; the course reference reads GNSS's
-    const FusionFixture fixture = fusionFixture(QStringLiteral("coarse_linear"));
-    session.setSourceMeasurement("GNSS", "velN", fixture.velN, "m/s");
-    session.setSourceMeasurement("GNSS", "velE", fixture.velE, "m/s");
     QVERIFY(!session.getMeasurement("GNSS", "course").isEmpty());
     CalculationEngine &engine = session.calculationEngine();
 

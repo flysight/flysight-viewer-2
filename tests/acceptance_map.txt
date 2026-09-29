@@ -352,10 +352,10 @@
 # 115 - (as amended) row behaviour without widgets, then with the real fusion plots: checking computes the visible tracks one after another, the sessions still to compute falling; unchecking mid-way drops the waiting ones and lets the running one finish; checking again resumes; a fourth track shown afterwards is computed with no other action; what the user sees
 115 tst_calculation_demand rowScript
 115 tst_fusion_rows realRowScript
-115 tst_fusion_rows rollPitchYawShareOneJob
+115 tst_fusion_rows headingPitchRollShareOneJob
 115 tst_fusion_rows accHRowIsBlockedByFusion
 115 tst_fusion_rows rejectedTrackShowsBadge
-115 tst_fusion_rows allSeventeenFusionPlotsAreExplicitBacked
+115 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
 115 manual M3
 115 manual M4
 115 manual M6
@@ -1302,7 +1302,7 @@
 509 tst_calculation_demand ordinaryPlotsAreNeverInspected
 509 tst_calculation_demand hiddenAndStubRowsAreNotTracks
 509 tst_calculation_demand failedLoadPlaceholderIsNotATrack
-509 tst_fusion_rows allSeventeenFusionPlotsAreExplicitBacked
+509 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
 509 tst_calculation_demand plotIdMatchesPlotModelRole
 509 tst_calculation_demand uncheckedPlotsAreNeverInspected
 

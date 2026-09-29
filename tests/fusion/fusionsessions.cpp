@@ -61,6 +61,17 @@ void addImuSide(SessionData &session, const FusionFixture &f)
         session.setSourceMeasurement("IMU", "temperature", f.imuTemperature, "deg C");
 }
 
+// What the Heading, Pitch and Roll plots read besides the fit's outputs: the
+// GNSS course their heading is referenced to, from the fixture's velocity
+// stored again under GNSS, and the exit marker, the course reference's
+// default. The fit reads neither, so its inputs stay the fixture's.
+void addPlotInputs(SessionData &session, const FusionFixture &f)
+{
+    session.setSourceMeasurement("GNSS", "velN", f.velN, "m/s");
+    session.setSourceMeasurement("GNSS", "velE", f.velE, "m/s");
+    session.setAttribute(SessionKeys::ExitTime, kFixtureExitTime);
+}
+
 bool sameSamples(const QVector<double> &a, const QVector<double> &b)
 {
     return a.size() == b.size()
@@ -129,8 +140,9 @@ SessionData sessionWithoutImu(const FusionFixture &fixture, const QString &sessi
 
 SessionData fixtureSession(const QString &fixtureName, const QString &sessionId)
 {
-    SessionData session = sessionFromFixture(fusionFixture(fixtureName), sessionId);
-    session.setAttribute(SessionKeys::ExitTime, kFixtureExitTime);
+    const FusionFixture fixture = fusionFixture(fixtureName);
+    SessionData session = sessionFromFixture(fixture, sessionId);
+    addPlotInputs(session, fixture);
     return session;
 }
 
@@ -142,7 +154,7 @@ SessionData fixtureSessionWithSAccStoredAs(const QString &fixtureName, const QSt
     addIdentity(session, sessionId);
     addGnssSide(session, fixture, storedAs);
     addImuSide(session, fixture);
-    session.setAttribute(SessionKeys::ExitTime, kFixtureExitTime);
+    addPlotInputs(session, fixture);
     return session;
 }
 
@@ -233,23 +245,14 @@ QVector<PlotValue> fusionPlots()
 {
     struct Row { const char *name; const char *units; const char *measurement; const char *type; };
     static const Row rows[] = {
-        {"North position",          "m",     "north", "distance"},
-        {"East position",           "m",     "east",  "distance"},
-        {"Down position",           "m",     "down",  "distance"},
-        {"North velocity",          "m/s",   "velN",  "speed"},
-        {"East velocity",           "m/s",   "velE",  "speed"},
-        {"Down velocity",           "m/s",   "velD",  "vertical_speed"},
-        {"North acceleration",      "m/s^2", "accN",  "acceleration"},
-        {"East acceleration",       "m/s^2", "accE",  "acceleration"},
-        {"Down acceleration",       "m/s^2", "accD",  "acceleration"},
-        {"Horizontal acceleration", "m/s^2", "accH",  "acceleration"},
-        {"Roll",                    "deg",   "roll",  "angle"},
-        {"Pitch",                   "deg",   "pitch", "angle"},
-        {"Yaw",                     "deg",   "yaw",   "angle"},
-        {"Quaternion X",            "",      "qx",    "ratio"},
-        {"Quaternion Y",            "",      "qy",    "ratio"},
-        {"Quaternion Z",            "",      "qz",    "ratio"},
-        {"Quaternion W",            "",      "qw",    "ratio"},
+        {"Elevation",                "m",     "z",             "altitude"},
+        {"Horizontal acceleration",  "m/s^2", "accH",          "acceleration"},
+        {"Vertical acceleration",    "m/s^2", "accD",          "acceleration"},
+        {"Along-track acceleration", "m/s^2", "accAlongTrack", "acceleration"},
+        {"Cross-track acceleration", "m/s^2", "accCrossTrack", "acceleration"},
+        {"Heading",                  "deg",   "bodyHeading",   "angle"},
+        {"Pitch",                    "deg",   "bodyPitch",     "angle"},
+        {"Roll",                     "deg",   "bodyRoll",      "angle"},
     };
 
     QVector<PlotValue> plots;

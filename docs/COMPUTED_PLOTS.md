@@ -14,9 +14,10 @@
 
 Most plots and logbook columns are instant: check a plot and it is drawn for
 every visible track, add a column and it fills in. A few take from seconds to
-several minutes per recording to work out. Today these are the plots of the
-"Sensor fusion" category and any logbook column over a Sensor fusion value
-([what they are](SENSOR_FUSION.md)).
+several minutes per recording to work out. Today these are the eight plots of
+the "Sensor fusion" category (Elevation, Horizontal, Vertical, Along-track and
+Cross-track acceleration, Heading, Pitch and Roll) and any logbook column over
+a Sensor fusion value ([what they are](SENSOR_FUSION.md)).
 
 FlySight Viewer computes them in the background for what you have switched
 on: a checked plot for the tracks that are visible, and a logbook column for
@@ -50,9 +51,9 @@ Plot rows show nothing about computing: a row over a computed plot looks
 exactly as any other row. A track whose result is still to come is absent
 from the plot until it arrives, and appears by itself when it does.
 
-One computation per recording can serve several plots. Roll, pitch and yaw,
-for example, come from one and the same computation, so one computation fills
-them all in, and the recording is counted once.
+One computation per recording can serve several plots. Heading, pitch and
+roll, for example, come from one and the same computation, so one computation
+fills them all in, and the recording is counted once.
 
 A track whose recording lacks the needed sensor data is never listed among
 the recordings that could not be computed. A plot never counts it; a logbook

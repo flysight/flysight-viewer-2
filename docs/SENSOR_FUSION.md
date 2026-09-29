@@ -34,9 +34,22 @@ document describes what is computed, from what, and how far to trust it.
 
 ## 2. Using it
 
-- The plot list has a "Sensor fusion" category with seventeen plots: north,
-  east and down position, velocity and acceleration, horizontal acceleration,
-  roll, pitch and yaw, and the four quaternion components.
+- The plot list has a "Sensor fusion" category with eight plots: Elevation,
+  Horizontal acceleration, Vertical acceleration, Along-track acceleration,
+  Cross-track acceleration, Heading, Pitch and Roll. Each is named, united and
+  typed as its GNSS counterpart (Heading as the GNSS Course), so that the two
+  overlay on one axis, in a colour of its own. Elevation is the origin's
+  height less the fused down position above the ground, as the GNSS elevation
+  is; horizontal acceleration is the magnitude of the fused north and east
+  acceleration; vertical acceleration is the fused down acceleration; the
+  along-track and cross-track accelerations are the GNSS definitions applied
+  to the fused velocity and acceleration; heading, pitch and roll are the
+  body's attitude, as below (section 4 has the detail of each). The fit's
+  other outputs (position, velocity, north and east acceleration, the device
+  frame's roll, pitch and yaw, and the quaternion) have no plot and remain
+  measurements: a logbook column kept from an earlier version still shows
+  them, Python plugins read them, and the stored fit keeps them. A profile
+  saved with a plot the list no longer has applies without it, silently.
 - Heading, pitch and roll of the body the FlySight is mounted on are derived
   from the fit's attitude (its quaternion) in the aircraft convention.
   Heading is the direction of the body's forward axis, clockwise from north;
@@ -65,8 +78,8 @@ document describes what is computed, from what, and how far to trust it.
   one after another; a logbook column over a fusion value (roll at the exit
   marker, say) fits every recording of the logbook in the background. A fit
   takes from seconds to several minutes, depending on the length of the
-  recording. All seventeen plots and every fusion column of one recording
-  come from the same fit, so it runs once.
+  recording. All eight plots and every fusion column of one recording come
+  from the same fit, so it runs once.
 - Results are stored with the recording in the logbook (in a file in the
   logbook's `cache/` folder, never in the session file) and come back when the
   recording is loaded again, after hiding it or after a restart. A fitted

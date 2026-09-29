@@ -18,7 +18,9 @@
 #     widget-free core; the stationary-window initializer, its silent poll and the
 #     constant-bias algorithm strings retired by the sensor fusion improvements
 #     stay absent, and the fusion tools stay isolated (items 212, 218, 231,
-#     233, 234, 247);
+#     233, 234, 247); the sensor fusion category is the eight plots of the
+#     tests' mirror, and no removed fusion plot, no local-frame plot and no
+#     document describing either remains;
 #   - the stored results of requested calculations live in the logbook's
 #     cache/ folder, never in the session file: they are named, written, read,
 #     restored and deleted in one place each, and the documents describe them
@@ -383,11 +385,24 @@ set(NAMING_PATHS src tests docs python_plugins cmake CMakeLists.txt README.md
     ":!tests/README.md")
 expect_none("nothing is named after a filter" "EKF|[Ee]kf" ${NAMING_PATHS})
 expect_none("branch output names are gone" "posN|posE|posD|_IMU_GNSS_EKF|ImuGnssEkf" ${NAMING_PATHS})
-# Allow: these two counts pin the application's plot list to the list the
-# tests use (tests/fusion/fusionsessions.cpp, fusionPlots()). Adding a plot
-# means changing both, and the number here.
-expect_count("seventeen fusion plots" "^ *\\{\"Sensor fusion\", " 17 src/mainwindow.cpp)
-expect_count("six local-frame plots" "^ *\\{\"GNSS \\(Local frame\\)\", " 6 src/mainwindow.cpp)
+# Allow: this count pins the application's plot list to the list the tests
+# use (tests/fusion/fusionsessions.cpp, fusionPlots()). Adding a plot means
+# changing both, and the number here (PLANS/fusion-accuracy.md will).
+expect_count("eight fusion plots" "^ *\\{\"Sensor fusion\", " 8 src/mainwindow.cpp)
+# The local frame is the input of sensor fusion and of the simplified track,
+# and a column's source; it has no plots of its own. Allow: none expected in
+# code or tests (tests/README.md is excluded as above).
+expect_none("no local-frame plots" "GNSS \\(Local frame\\)|localFramePlots" src tests ":!tests/README.md")
+# A plot row names its measurement and then its type; the fit's own channels
+# have no row. The trailing `, "` matches a row's measurement followed by its
+# type, never a calculation's ("Fusion", "down"). Allow: none expected; a fit
+# channel is read as a measurement (a column, a plug-in input), not plotted.
+expect_none("the removed fusion plots stay out of the registry"
+  "\"Fusion\", *\"(north|east|down|velN|velE|velD|accN|accE|roll|pitch|yaw|q[xyzw])\", *\"" src)
+# Allow: describe the fit's outputs as outputs or measurements; name no removed
+# category or plot.
+expect_none("the documents describe the eight fusion plots"
+  "[Ss]eventeen( real)? plots|GNSS \\(Local frame\\)|Quaternion [WXYZ]|quaternion plots" docs README.md)
 
 # ─────────────────────────────── solver-confinement
 # Text half of "only the code that needs GTSAM links it". The link half is

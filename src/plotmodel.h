@@ -4,6 +4,7 @@
 #include <QAbstractItemModel>
 #include <QHash>
 #include <QSettings>
+#include <QStringList>
 #include <QVector>
 #include <memory>
 #include <vector>
@@ -41,6 +42,18 @@ public:
     bool togglePlot(const QString& sensorId, const QString& measurementId);
     void setPlotEnabled(const QString& sensorId, const QString& measurementId, bool enabled);
     bool isPlotEnabled(const QString& sensorId, const QString& measurementId) const;
+
+    // Applies a profile's list of enabled plots. Every plot of the model is
+    // enabled exactly when its id (sensorID + "/" + measurementID, the
+    // PlotValueIdRole form a profile stores) is in plotIds, and disabled
+    // otherwise. Each change goes through setPlotEnabled(), so the settings
+    // key and dataChanged follow as for a click, and whoever watches the
+    // model sees a profile exactly as a click. An id for which the model has
+    // no plot is ignored: no message, no failure, no row added, because a
+    // profile may name plots the application no longer has, or those of a
+    // plug-in that is not loaded, and applies without them. The list is
+    // only read; nothing rewrites the profile it came from.
+    void setEnabledPlotIds(const QStringList& plotIds);
 
     // QAbstractItemModel
     QModelIndex index(int row, int column, const QModelIndex& parent = QModelIndex()) const override;

@@ -1,5 +1,6 @@
 #include "plotmodel.h"
 
+#include <QSet>
 #include <QVariant>
 
 namespace FlySight {
@@ -162,6 +163,22 @@ void PlotModel::setPlotEnabled(const QString& sensorId, const QString& measureme
     if (idx.isValid()) {
         emit dataChanged(idx, idx, {Qt::CheckStateRole});
     }
+}
+
+void PlotModel::setEnabledPlotIds(const QStringList& plotIds)
+{
+    // The walk is over the model's own rows, so an id the model does not
+    // have is never looked up, let alone reported. The rows are copied
+    // first because each change emits dataChanged, and a watcher must not
+    // be able to pull the rows out from under the walk.
+    const QSet<QString> listed(plotIds.cbegin(), plotIds.cend());
+    QVector<PlotValue> rows;
+    for (const auto& cat : m_categories) {
+        for (const auto& plot : cat->plots)
+            rows.push_back(plot->value);
+    }
+    for (const PlotValue& pv : rows)
+        setPlotEnabled(pv.sensorID, pv.measurementID, listed.contains(makePlotId(pv)));
 }
 
 bool PlotModel::isPlotEnabled(const QString& sensorId, const QString& measurementId) const

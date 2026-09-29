@@ -1,7 +1,14 @@
-// The plot-row script with the REAL fusion plots: PlotModel + CalculationDemand +
-// the executor + SessionModel + Fusion::registerFusionCalculations, with real
-// fits on the executor's 64 MiB worker. Sensor-fusion-jobs acceptance 15 end to
-// end, and the real-plot halves of 9, 11 and 19. No widgets.
+// The plot-row script with the REAL fusion plots, the eight rows of the
+// application's "Sensor fusion" category (fusionPlots()): PlotModel +
+// CalculationDemand + the executor + SessionModel +
+// Fusion::registerFusionCalculations, with real fits on the executor's 64 MiB
+// worker. Sensor-fusion-jobs acceptance 15 end to end, and the real-plot halves
+// of 9, 11 and 19. Also what reads a fit channel that has no plot: a logbook
+// column kept from before, and the fit's stored record. No widgets.
+//
+// A row that creates demand here is the Roll row (Fusion/bodyRoll): a check of
+// a measurement the model has no row for creates none. The fixture sessions of
+// fixtureSession() carry what the attitude reads besides the fit.
 //
 // Work follows demand: a checked fusion plot with visible sessions starts their
 // fits, one after the other, with no other call.
@@ -24,6 +31,7 @@
 #include <functional>
 #include <memory>
 
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QtTest>
 
@@ -62,22 +70,20 @@ namespace {
 const QString kFit = QString::fromLatin1(Fusion::FitCalculationId);     // "builtin.fusion.fit"
 const QString kAccH = QStringLiteral("builtin.fusion.accH");
 const QString kTitle = QStringLiteral("Sensor fusion");
+const QString kRoll = QStringLiteral("bodyRoll");        // the Roll row
 
 constexpr int kFitTimeoutMs = 120000;
 
-/// The six "GNSS (Local frame)" plots: ordinary, on demand, never a job.
-QVector<PlotValue> localFramePlots()
+/// <sensor>/<measurement> at the exit marker, of the given measurement type.
+LogbookColumn atExitColumn(const QString &sensor, const QString &measurement, const QString &type)
 {
-    QVector<PlotValue> plots;
-    for (const char *measurement : {"north", "east", "down", "velN", "velE", "velD"}) {
-        PlotValue plot;
-        plot.category = QStringLiteral("GNSS (Local frame)");
-        plot.plotName = QString::fromLatin1(measurement);
-        plot.sensorID = QStringLiteral("Local");
-        plot.measurementID = QString::fromLatin1(measurement);
-        plots.append(plot);
-    }
-    return plots;
+    LogbookColumn column;
+    column.type = ColumnType::MeasurementAtMarker;
+    column.sensorID = sensor;
+    column.measurementID = measurement;
+    column.measurementType = type;
+    column.markerAttributeKey = QString::fromLatin1(SessionKeys::ExitTime);
+    return column;
 }
 
 } // namespace
@@ -90,13 +96,14 @@ private slots:
     void init();
     void cleanup();
 
-    void allSeventeenFusionPlotsAreExplicitBacked();
+    void allEightFusionPlotsAreExplicitBacked();
     void realRowScript();
-    void rollPitchYawShareOneJob();
+    void headingPitchRollShareOneJob();
     void accHRowIsBlockedByFusion();
     void noImuSessionIsNeverCounted();
     void rejectedTrackShowsBadge();
     void editsAndVisibilityDuringFit();
+    void removedPlotMeasurementsStayAvailable();
 
 private:
     /// Into the (empty) model, as the application adds them; empty when that
@@ -181,6 +188,11 @@ void FusionRowsTest::initTestCase()
     TestEnvironment::instance().registerBuiltIns();
     registerFusionOnce();
 
+    // The application's fusion rows, so that column labels resolve as there
+    // (nothing else in this executable reads the plot registry)
+    for (const PlotValue &plot : fusionPlots())
+        PlotRegistry::instance().registerPlot(plot);
+
     // One logbook column that reads stored data only
     PreferencesManager::instance().registerPreference(PreferenceKeys::LogbookColumnsVersion, 0);
     LogbookColumnStore::instance().setColumns({descriptionColumn()});
@@ -199,7 +211,7 @@ void FusionRowsTest::init()
     m_model = std::make_unique<SessionModel>();
     m_queue = std::make_unique<JobQueue>(m_model.get());
     m_plots = std::make_unique<PlotModel>();
-    m_plots->setPlots(fusionPlots() + localFramePlots());
+    m_plots->setPlots(fusionPlots());
     m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
 }
 
@@ -247,20 +259,50 @@ QString FusionRowsTest::offenceInRows(const QString &absent)
     return QString();
 }
 
-// Every real fusion plot is requested (its value waits on a requested
-// calculation); the local-frame plots are ordinary. Checking all of them with
-// one visible session starts ONE fit, which every fusion value waits on; the
-// computations count that one session.
-void FusionRowsTest::allSeventeenFusionPlotsAreExplicitBacked()
+// Every one of the eight fusion plots is requested: its value waits on the
+// fit, which is its only requested calculation. Checking all eight with one
+// visible session (with a ground elevation, which Elevation needs) starts ONE
+// fit, which every value waits on; the computations count that one session.
+// After it every row has a value on the fit's time axis.
+void FusionRowsTest::allEightFusionPlotsAreExplicitBacked()
 {
-    QCOMPARE(fusionPlots().size(), 17);
-    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2"))}),
-             QString());
+    // The mirror of the application's rows, literally
+    struct Row { const char *name; const char *units; const char *measurement; const char *type; };
+    const Row expected[] = {
+        {"Elevation",                "m",     "z",             "altitude"},
+        {"Horizontal acceleration",  "m/s^2", "accH",          "acceleration"},
+        {"Vertical acceleration",    "m/s^2", "accD",          "acceleration"},
+        {"Along-track acceleration", "m/s^2", "accAlongTrack", "acceleration"},
+        {"Cross-track acceleration", "m/s^2", "accCrossTrack", "acceleration"},
+        {"Heading",                  "deg",   "bodyHeading",   "angle"},
+        {"Pitch",                    "deg",   "bodyPitch",     "angle"},
+        {"Roll",                     "deg",   "bodyRoll",      "angle"},
+    };
+    const QVector<PlotValue> plots = fusionPlots();
+    QCOMPARE(plots.size(), 8);
+    for (int i = 0; i < plots.size(); ++i) {
+        const PlotValue &plot = plots.at(i);
+        QCOMPARE(plot.category, QStringLiteral("Sensor fusion"));
+        QCOMPARE(plot.plotName, QString::fromLatin1(expected[i].name));
+        QCOMPARE(plot.plotUnits, QString::fromLatin1(expected[i].units));
+        QCOMPARE(plot.sensorID, QStringLiteral("Fusion"));
+        QCOMPARE(plot.measurementID, QString::fromLatin1(expected[i].measurement));
+        QCOMPARE(plot.measurementType, QString::fromLatin1(expected[i].type));
+        QVERIFY(plot.role == PlotRole::Dependent);
+    }
+
+    // The registry: each row's one requested calculation is the fit
+    for (const PlotValue &plot : plots) {
+        QCOMPARE(CalculationRegistry::instance().explicitDependencies(fusionKey(plot.measurementID)),
+                 QStringList({kFit}));
+    }
+
+    SessionData s2 = fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s2"));
+    s2.setAttribute(SessionKeys::GroundElev, 100.0);
+    QCOMPARE(addSessions({s2}), QString());
     show({"s2"});
 
     checkAllFusionPlots();
-    for (const PlotValue &plot : localFramePlots())
-        m_plots->setPlotEnabled(plot.sensorID, plot.measurementID, true);
 
     // The first pass chose the fit; it starts from the event loop
     m_demand->flush();
@@ -272,13 +314,11 @@ void FusionRowsTest::allSeventeenFusionPlotsAreExplicitBacked()
     QCOMPARE(progressNow().count, 1);
     QVERIFY(m_demand->failures().isEmpty());
 
-    // Every fusion value waits on a requested calculation; no local-frame
-    // value does
-    for (const PlotValue &plot : fusionPlots())
+    // Every fusion value waits on a requested calculation
+    for (const PlotValue &plot : plots)
         QVERIFY2(merelyUncomputed(QStringLiteral("s2"), plot), qPrintable(plot.measurementID));
-    for (const PlotValue &plot : localFramePlots())
-        QVERIFY2(!merelyUncomputed(QStringLiteral("s2"), plot), qPrintable(plot.measurementID));
-    // The ordinary plots still read normally, next to the fit that has not run
+    // The local frame, which has no plot, still reads normally next to the
+    // fit that has not run
     QVERIFY(!session("s2").getMeasurement(QStringLiteral("Local"), QStringLiteral("north")).isEmpty());
 
     // While the fit runs, the computations are that one job
@@ -296,8 +336,12 @@ void FusionRowsTest::allSeventeenFusionPlotsAreExplicitBacked()
 
     QCOMPARE(m_queue->job(job).state, JobState::Succeeded);
     QVERIFY(nothingToShow());
-    for (const PlotValue &plot : fusionPlots())
+    const qsizetype samples = fusion("s2", QStringLiteral("_time")).size();
+    QVERIFY(samples > 0);
+    for (const PlotValue &plot : plots) {
         QVERIFY2(!merelyUncomputed(QStringLiteral("s2"), plot), qPrintable(plot.measurementID));
+        QVERIFY2(fusion("s2", plot.measurementID).size() == samples, qPrintable(plot.measurementID));
+    }
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(engine("s2").runCount(kFit), 1);
 }
@@ -308,10 +352,10 @@ void FusionRowsTest::allSeventeenFusionPlotsAreExplicitBacked()
 // showing another track compute what is missing.
 void FusionRowsTest::realRowScript()
 {
-    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_maneuver")), QStringLiteral("s1")),
-                          sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2")),
-                          sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s3")),
-                          sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s4"))}),
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("s1")),
+                          fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s2")),
+                          fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s3")),
+                          fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s4"))}),
              QString());
 
     // Records, on every job end, the progress at that moment (the demand
@@ -327,7 +371,7 @@ void FusionRowsTest::realRowScript()
     //    first track's fit is the chosen next job at once, and all three are
     //    to compute
     show({"s1", "s2", "s3"});
-    check(QStringLiteral("roll"));
+    check(kRoll);
     QCOMPARE(progressNow().count, 3);
     QCOMPARE(progressNow().highWater, 3);
     QCOMPARE(m_queue->model()->rowCount(), 1);
@@ -355,7 +399,7 @@ void FusionRowsTest::realRowScript()
         job3 = m_queue->chosenNextJob();
         uncheckedWhileRunning = m_queue->job(job2).state == JobState::Running
             && m_queue->job(job3).sessionId == QStringLiteral("s3");
-        check(QStringLiteral("roll"), false);
+        check(kRoll, false);
         job3AfterUncheck = m_queue->job(job3);          // at once, before any event-loop turn
         job2CancelRequested = m_queue->job(job2).cancelRequested;
         afterUncheck = m_demand->progress();
@@ -385,7 +429,7 @@ void FusionRowsTest::realRowScript()
     QVERIFY(nothingToShow());
 
     // 3. Checked again: only s3 is missing, and its fit is chosen at once
-    check(QStringLiteral("roll"));
+    check(kRoll);
     QCOMPARE(progressNow().count, 1);
     QCOMPARE(progressNow().highWater, 1);
     const JobId job4 = fitJobOf("s3").id;
@@ -449,16 +493,15 @@ void FusionRowsTest::realRowScript()
         QCOMPARE(engine(id).runCount(kFit), 1);
 }
 
-// Three rows, one fit: roll, pitch and yaw wait on the same job, and the
+// Three rows, one fit: Heading, Pitch and Roll wait on the same job, and the
 // computations are that one session and its progress.
-void FusionRowsTest::rollPitchYawShareOneJob()
+void FusionRowsTest::headingPitchRollShareOneJob()
 {
-    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2"))}),
-             QString());
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s2"))}), QString());
     show({"s2"});
-    check(QStringLiteral("roll"));
-    check(QStringLiteral("pitch"));
-    check(QStringLiteral("yaw"));
+    check(QStringLiteral("bodyHeading"));
+    check(QStringLiteral("bodyPitch"));
+    check(kRoll);
     QCOMPARE(progressNow().count, 1);
 
     QCOMPARE(m_queue->model()->rowCount(), 1);
@@ -483,6 +526,8 @@ void FusionRowsTest::rollPitchYawShareOneJob()
 
     QCOMPARE(m_queue->job(job).state, JobState::Succeeded);
     QVERIFY(nothingToShow());
+    for (const char *name : {"bodyHeading", "bodyPitch", "bodyRoll"})
+        QVERIFY2(!fusion("s2", QString::fromLatin1(name)).isEmpty(), name);
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(engine("s2").runCount(kFit), 1);
 }
@@ -517,7 +562,7 @@ void FusionRowsTest::accHRowIsBlockedByFusion()
     QCOMPARE(engine("s2").runCount(kFit), 1);
 }
 
-// Acceptance 11 on all seventeen real rows: a session without IMU data is
+// Acceptance 11 on all eight real rows: a session without IMU data is
 // never counted in progress nor listed among failures, and cannot have a job.
 void FusionRowsTest::noImuSessionIsNeverCounted()
 {
@@ -565,10 +610,9 @@ void FusionRowsTest::noImuSessionIsNeverCounted()
 // change it waits for them to settle and is then computed.
 void FusionRowsTest::rejectedTrackShowsBadge()
 {
-    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("reject_origin")), QStringLiteral("r1"))}),
-             QString());
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("reject_origin"), QStringLiteral("r1"))}), QString());
     show({"r1"});
-    check(QStringLiteral("roll"));
+    check(kRoll);
     QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(fitJobOf("r1").state, JobState::Succeeded);        // a rejection is a result
@@ -632,12 +676,12 @@ void FusionRowsTest::rejectedTrackShowsBadge()
 // computed after it with no other action.
 void FusionRowsTest::editsAndVisibilityDuringFit()
 {
-    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_maneuver")), QStringLiteral("s1")),
-                          sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2")),
-                          sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s3"))}),
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("s1")),
+                          fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s2")),
+                          fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s3"))}),
              QString());
     show({"s1"});
-    check(QStringLiteral("roll"));
+    check(kRoll);
     QCOMPARE(progressNow().count, 1);
     const JobId job = fitJobOf("s1").id;
     QVERIFY(job != 0);
@@ -702,6 +746,74 @@ void FusionRowsTest::editsAndVisibilityDuringFit()
     QCOMPARE(session("s2").getAttribute(SessionKeys::Description).toString(), QStringLiteral("edited"));
     QVERIFY(!std::as_const(*m_model).rowAt(m_model->getSessionRow("s2")).dirty);
     QCOMPARE(indexValue(QStringLiteral("s2"), descriptionColumn()).toString(), QStringLiteral("edited"));
+}
+
+// What reads a measurement behind a removed plot (the fit's own roll, the
+// local frame): a logbook column kept from before computes, labelled with the
+// measurement's name since no plot names it, while a column over the Roll row
+// takes the row's name; and the fit's stored record, the one place a fit
+// channel leaves the process, carries every channel that has no plot.
+void FusionRowsTest::removedPlotMeasurementsStayAvailable()
+{
+    const auto restore = qScopeGuard([] { LogbookColumnStore::instance().setColumns({descriptionColumn()}); });
+
+    const LogbookColumn roll = atExitColumn(QStringLiteral("Fusion"), QStringLiteral("roll"), QStringLiteral("angle"));
+    const LogbookColumn north = atExitColumn(QStringLiteral("Local"), QStringLiteral("north"), QStringLiteral("distance"));
+    const LogbookColumn bodyRoll = atExitColumn(QStringLiteral("Fusion"), kRoll, QStringLiteral("angle"));
+    const QString at = QStringLiteral(" @ ");
+    const QString rollLabel = logbookColumnLabel(roll);
+    const QString northLabel = logbookColumnLabel(north);
+    const QString bodyRollLabel = logbookColumnLabel(bodyRoll);
+    QVERIFY2(rollLabel.startsWith(QStringLiteral("Fusion/roll") + at), qPrintable(rollLabel));
+    QVERIFY2(northLabel.startsWith(QStringLiteral("Local/north") + at), qPrintable(northLabel));
+    QVERIFY2(bodyRollLabel.startsWith(QStringLiteral("Roll") + at), qPrintable(bodyRollLabel));
+    // The same marker name after " @ " in all three
+    const QString markerPart = bodyRollLabel.mid(bodyRollLabel.indexOf(at));
+    QVERIFY2(rollLabel.endsWith(markerPart), qPrintable(rollLabel));
+    QVERIFY2(northLabel.endsWith(markerPart), qPrintable(northLabel));
+
+    // One session, not shown, no plot checked
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s2"))}), QString());
+    QVERIFY(m_plots->enabledPlots().isEmpty());
+
+    // Column demand fits it
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), roll, north});
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(nothingToShow());
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(fitJobOf("s2").state, JobState::Succeeded);
+
+    const auto cell = [this](const LogbookColumn &column) {
+        const QString id = CalculationDemand::columnId(column);
+        for (int c = 0; c < m_model->columnCount(); ++c) {
+            if (CalculationDemand::columnId(m_model->column(c)) == id)
+                return std::as_const(*m_model).rowAt(m_model->getSessionRow("s2")).cachedValues.value(c);
+        }
+        return QVariant();
+    };
+    const QVariant rollCell = cell(roll);
+    const QVariant northCell = cell(north);
+    QCOMPARE(rollCell.typeId(), int(QMetaType::Double));
+    QCOMPARE(northCell.typeId(), int(QMetaType::Double));
+    const QVariant rollAtExit = session("s2").getAttribute(fusionRollAtExit());
+    QVERIFY(rollAtExit.isValid());
+    QVERIFY(sameBits(rollCell.toDouble(), rollAtExit.toDouble()));
+
+    // The fit's stored record carries every fit channel that has no plot, with
+    // the samples the session reads
+    const CalculationRecordRead read = LogbookManager::instance().readCalculationRecord(QStringLiteral("s2"), kFit);
+    QCOMPARE(read.status, CalculationRecordStatus::Ok);
+    QVERIFY(read.record.has_value());
+    const CalculationResult &bundle = read.record->result.bundle;
+    for (const char *name : {"north", "east", "down", "velN", "velE", "velD", "accN", "accE",
+                             "roll", "pitch", "yaw", "qx", "qy", "qz", "qw"}) {
+        const QString channel = QString::fromLatin1(name);
+        QVERIFY2(bundle.isAvailable(fusionKey(channel)), name);
+        QVERIFY2(sameBitsEverywhere(bundle.measurementValues(QStringLiteral("Fusion"), channel), fusion("s2", channel)),
+                 name);
+    }
+    QCOMPARE(engine("s2").runCount(kFit), 1);
 }
 
 FLYSIGHT_TEST_MAIN(FusionRowsTest)
