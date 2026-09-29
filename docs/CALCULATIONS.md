@@ -2315,10 +2315,12 @@ Tests (label `fusion`, behind `FLYSIGHT_BUILD_FUSION_TESTS`):
 `tests/tst_fusion_session.cpp` (real `SessionData` engines, the fit on the
 test's main thread), `tests/tst_fusion_derived.cpp` (the derived values on the
 fit's outputs stored as data, without the solver; among them the attitude:
-known angles, side mounts, the course reference and the unwrap, the fit's own
-angles for the device frame, an invalid stored orientation, an orientation
-edit without a fit; and the orientation vocabulary, the attribute's
-definition and the Orientation column through `ChoiceFixture`),
+known angles, side mounts, the course reference and the unwrap, the forward
+axis exactly vertical (finite angles, pitch at +90 or -90, the later samples
+unharmed), the fit's own angles for the device frame, an invalid stored
+orientation, an orientation edit without a fit; and the orientation
+vocabulary, the attribute's definition and the Orientation column through
+`ChoiceFixture`),
 `tests/tst_fusion_jobs.cpp` (the executor's worker on a
 real `SessionModel`), `tests/tst_fusion_rows.cpp` (the demand layer of
 section 16 with the eight real plots and real fits: fits

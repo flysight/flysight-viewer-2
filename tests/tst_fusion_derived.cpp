@@ -306,6 +306,7 @@ private slots:
     void knownAnglesComeBack();
     void headingUnwrapsThroughAFullTurn();
     void rollAndPitchStayInTheirNaturalRanges();
+    void forwardAxisVerticalGivesTheStandardFormulas();
     void sideMountPermutesTheAngles_data();
     void sideMountPermutesTheAngles();
     void deviceFrameMountGivesTheFitsOwnAngles();
@@ -1075,6 +1076,85 @@ void FusionDerivedTest::rollAndPitchStayInTheirNaturalRanges()
         QVERIFY2(sameAngle(heading(looping)[k], inverted ? 180.0 : 0.0), qPrintable(QString::number(a)));
         QVERIFY2(sameAngle(roll(looping)[k], inverted ? 180.0 : 0.0), qPrintable(QString::number(a)));
         QVERIFY(roll(looping)[k] > -180.0 && roll(looping)[k] <= 180.0);
+    }
+}
+
+// Criterion 8, the vertical clause: where the forward axis is vertical,
+// heading and roll are not defined and the derivation reports what the
+// standard formulas give. Whatever those are, all three angles are published,
+// finite, one per sample, pitch is exactly vertical, roll is in its range, and
+// the samples after a vertical one still read their own angles: one NaN would
+// reach every later heading through the unwrap.
+//
+// The vertical quaternions are exact on every platform. The loop's
+// construction at a = 90 and a = 270 is written with sqrt(0.5) for the
+// half-angle sine and cosine, and composed with the default mount each of its
+// components is a single product, so contraction in this file cannot change
+// its bits. The level device under a vertical mount is the sample for which
+// rounding takes -M20 past 1 (by 4e-16): without the clamp before the arcsine
+// its pitch is NaN.
+void FusionDerivedTest::forwardAxisVerticalGivesTheStandardFormulas()
+{
+    // Empty when all three angles of `session` are published, `n` values
+    // each, and every value is finite with roll in (-180, 180]
+    const auto published = [](const SessionData &session, qsizetype n) -> QString {
+        const QVector<double> hs = heading(session), ps = pitch(session), rs = roll(session);
+        if (hs.size() != n || ps.size() != n || rs.size() != n)
+            return QStringLiteral("sizes %1, %2, %3 of %4").arg(hs.size()).arg(ps.size()).arg(rs.size()).arg(n);
+        for (qsizetype i = 0; i < n; ++i) {
+            if (!std::isfinite(hs[i]) || !std::isfinite(ps[i]) || !std::isfinite(rs[i]))
+                return QStringLiteral("sample %1 not finite: (%2, %3, %4)").arg(i).arg(hs[i]).arg(ps[i]).arg(rs[i]);
+            if (!(rs[i] > -180.0 && rs[i] <= 180.0))
+                return QStringLiteral("sample %1 roll %2").arg(i).arg(rs[i], 0, 'g', 17);
+        }
+        return QString();
+    };
+
+    // The default orientation: the body pitched exactly up and exactly down,
+    // between ordinary samples
+    const double s = std::sqrt(0.5);
+    const Quat up = hamilton(Quat{0.0, s, 0.0, s}, kDefaultMount);
+    const Quat down = hamilton(Quat{0.0, s, 0.0, -s}, kDefaultMount);
+    const double r = s * s;
+    QVERIFY(up.x == r && up.y == r && up.z == -r && up.w == -r);
+    QVERIFY(down.x == -r && down.y == -r && down.z == -r && down.w == -r);
+
+    struct Ordinary {
+        qsizetype index;
+        double h, p, r;
+    };
+    const Ordinary ordinary[] = {{0, 20.0, 10.0, 5.0}, {2, -40.0, -20.0, 15.0}, {4, 100.0, 35.0, -120.0}};
+    const QList<Quat> samples{deviceQuaternion(20.0, 10.0, 5.0), up, deviceQuaternion(-40.0, -20.0, 15.0), down,
+                              deviceQuaternion(100.0, 35.0, -120.0)};
+    const SessionData session = attitudeSession(QStringLiteral("v1"), samples);
+    QCOMPARE(published(session, samples.size()), QString());
+    const QVector<double> hs = heading(session), ps = pitch(session), rs = roll(session);
+    QVERIFY2(std::abs(ps[1] - 90.0) <= kAngleTolerance, qPrintable(QString::number(ps[1], 'g', 17)));
+    QVERIFY2(std::abs(ps[3] + 90.0) <= kAngleTolerance, qPrintable(QString::number(ps[3], 'g', 17)));
+    // Heading modulo 360: the unwrap may carry a turn across the vertical
+    for (const Ordinary &o : ordinary) {
+        QVERIFY2(sameAngle(hs[o.index], o.h), qPrintable(QString::number(o.index)));
+        QVERIFY2(std::abs(ps[o.index] - o.p) <= kAngleTolerance, qPrintable(QString::number(o.index)));
+        QVERIFY2(sameAngle(rs[o.index], o.r), qPrintable(QString::number(o.index)));
+    }
+    QCOMPARE(session.calculationEngine().runCount(kFit), 0);
+    QCOMPARE(session.calculationEngine().undeclaredReadCount(), 0);
+
+    // A level device mounted with its forward axis straight up and straight
+    // down
+    const struct {
+        const char *token;
+        double p;
+    } mounts[] = {{"+z,+y", 90.0}, {"-z,+y", -90.0}};
+    for (const auto &mount : mounts) {
+        SessionData vertical = attitudeSession(QStringLiteral("v2"), {deviceQuaternion(0.0, 0.0, 0.0)});
+        vertical.setAttribute(SessionKeys::Orientation, QString::fromLatin1(mount.token));
+        QVERIFY2(published(vertical, 1).isEmpty(), qPrintable(QString::fromLatin1(mount.token) + QStringLiteral(": ")
+                                                             + published(vertical, 1)));
+        QVERIFY2(std::abs(pitch(vertical)[0] - mount.p) <= kAngleTolerance,
+                 qPrintable(QStringLiteral("%1: %2").arg(QString::fromLatin1(mount.token))
+                                .arg(pitch(vertical)[0], 0, 'g', 17)));
+        QCOMPARE(vertical.calculationEngine().runCount(kFit), 0);
     }
 }
 
