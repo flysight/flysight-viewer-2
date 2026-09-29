@@ -242,6 +242,16 @@ void DataImporter::applyCreationDefaults(const ParsedFile& file, SessionData& se
             session.setAttribute(SessionKeys::GroundElev, fixedElev);
         }
     }
+
+    // 7. The orientation the device was mounted in, from the Import
+    //    preferences: a fact of the import, stored verbatim (the page offers
+    //    only the valid tokens). Without a preference nothing is written, and
+    //    the recording reads the constant default.
+    if (!session.hasStoredAttribute(SessionKeys::Orientation)) {
+        const QString orientation = prefs.getValue(PreferenceKeys::ImportOrientation).toString();
+        if (!orientation.isEmpty())
+            session.setAttribute(SessionKeys::Orientation, orientation);
+    }
 }
 
 std::optional<QString> DataImporter::peekHeaderAttribute(const QString& fileName, const QString& key) {

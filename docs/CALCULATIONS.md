@@ -110,7 +110,8 @@ The application then registers sensor fusion from its own library
 
 **Defaults are calculations.** The importer stores only what is a fact of the
 import: identity, provenance, and a choice the user made at import (jumper
-mass, planform area, the fixed ground elevation). Anything that stands in for
+mass, planform area, the fixed ground elevation, the orientation the device
+was mounted in). Anything that stands in for
 a value the user has not set is a calculation. It is derived from the data
 where possible (the ground elevation, the video sync time, the course
 reference). Otherwise it is constant: a calculation with no inputs whose one

@@ -146,13 +146,9 @@ private slots:
     void choiceEditStoresAToken();
     void choiceEditRefusesATokenOutsideTheList_data();
     void choiceEditRefusesATokenOutsideTheList();
-    void choiceDefaultRemovesTheStoredValue_data();
-    void choiceDefaultRemovesTheStoredValue();
 
     void bulkEditSetsAToken_data();
     void bulkEditSetsAToken();
-    void bulkEditDefaultRemovesTheStoredValue_data();
-    void bulkEditDefaultRemovesTheStoredValue();
     void bulkEditRefusesATokenOutsideTheList_data();
     void bulkEditRefusesATokenOutsideTheList();
 
@@ -467,9 +463,10 @@ void ChoiceAttributeTest::choiceEditStoresAToken()
 
 void ChoiceAttributeTest::choiceEditRefusesATokenOutsideTheList_data() { addRowKinds(); }
 
-// Criterion 5: a token outside the list, a label, an empty string and a value
-// of another type are refused: false, nothing changed, nothing emitted, a stub
-// left a stub, the file untouched.
+// Criterion 5: a token outside the list, a label, an empty string, an invalid
+// value and a value of another type are refused: false, nothing changed,
+// nothing emitted, a stub left a stub, the file untouched. Nothing an edit
+// can carry removes a stored value.
 void ChoiceAttributeTest::choiceEditRefusesATokenOutsideTheList()
 {
     QFETCH(bool, stubs);
@@ -480,7 +477,8 @@ void ChoiceAttributeTest::choiceEditRefusesATokenOutsideTheList()
 
     for (const QVariant &value : {QVariant(QStringLiteral("zz")), QVariant(QStringLiteral("yy")),
                                   QVariant(QStringLiteral("Charlie")), QVariant(QStringLiteral("Alpha")),
-                                  QVariant(QString()), QVariant(QStringLiteral("")), QVariant(2.0)}) {
+                                  QVariant(QString()), QVariant(QStringLiteral("")), QVariant(2.0),
+                                  QVariant()}) {
         for (const QString &id : kIds)
             QVERIFY2(!m_fixture->setData(id, value), qPrintable(id + QLatin1Char(' ') + value.toString()));
     }
@@ -491,45 +489,6 @@ void ChoiceAttributeTest::choiceEditRefusesATokenOutsideTheList()
         QVERIFY2(!rowOf(id).dirty, qPrintable(id));
     QCOMPARE(m_fixture->displayText(QStringLiteral("s1")), QStringLiteral("Charlie"));
     QCOMPARE(m_fixture->displayText(QStringLiteral("s4")), QStringLiteral("zz"));
-    QVERIFY(waitForIdle(model()));
-    QCOMPARE(allFileBytes(), before);
-}
-
-void ChoiceAttributeTest::choiceDefaultRemovesTheStoredValue_data() { addRowKinds(); }
-
-// Criterion 6: an invalid value removes the stored attribute: no line in the
-// file, the default's label again, dependents notified. With nothing stored
-// it is refused and nothing is saved.
-void ChoiceAttributeTest::choiceDefaultRemovesTheStoredValue()
-{
-    QFETCH(bool, stubs);
-    QCOMPARE(startWorld(stubs), QString());
-    QSignalSpy dependencySpy(&model(), &SessionModel::dependencyChanged);
-
-    QVERIFY(m_fixture->setData(QStringLiteral("s1"), QVariant()));
-    QCOMPARE(m_fixture->displayText(QStringLiteral("s1")), QStringLiteral("Alpha"));
-    QVERIFY(spyHasAttribute(dependencySpy, QStringLiteral("s1"), QString::fromLatin1(kChoice)));
-    QVERIFY(waitForIdle(model()));
-    QCOMPARE(m_fixture->fileToken(QStringLiteral("s1")), std::optional<QString>());
-    QVERIFY(!fileBytes(QStringLiteral("s1")).contains("$VAR,_TEST_CHOICE,"));
-    QVERIFY(fileBytes(QStringLiteral("s1")).contains("$VAR,_DESCRIPTION,Jump s1\n"));
-    QCOMPARE(m_fixture->indexValue(QStringLiteral("s1")), QJsonValue(QStringLiteral("c")));
-
-    // The raw token too
-    QVERIFY(m_fixture->setData(QStringLiteral("s4"), QVariant()));
-    QCOMPARE(m_fixture->displayText(QStringLiteral("s4")), QStringLiteral("Alpha"));
-    QVERIFY(waitForIdle(model()));
-    QCOMPARE(m_fixture->fileToken(QStringLiteral("s4")), std::optional<QString>());
-
-    // Nothing stored: nothing to remove, nothing saved
-    const QMap<QString, QByteArray> before = allFileBytes();
-    QSignalSpy dataSpy(&model(), &QAbstractItemModel::dataChanged);
-    dependencySpy.clear();
-    for (const char *id : {"s1", "s3"})
-        QVERIFY2(!m_fixture->setData(QString::fromLatin1(id), QVariant()), id);
-    QCOMPARE(dataSpy.count(), 0);
-    QCOMPARE(dependencySpy.count(), 0);
-    QVERIFY(!rowOf(QStringLiteral("s3")).dirty);
     QVERIFY(waitForIdle(model()));
     QCOMPARE(allFileBytes(), before);
 }
@@ -565,34 +524,11 @@ void ChoiceAttributeTest::bulkEditSetsAToken()
     QCOMPARE(m_fixture->displayText(QStringLiteral("s2")), QStringLiteral("Charlie"));
 }
 
-void ChoiceAttributeTest::bulkEditDefaultRemovesTheStoredValue_data() { addRowKinds(); }
-
-// Criterion 8: an invalid value removes the stored attribute on loaded and
-// stub rows alike: no file keeps the line, and the cells and the index show
-// the default.
-void ChoiceAttributeTest::bulkEditDefaultRemovesTheStoredValue()
-{
-    QFETCH(bool, stubs);
-    QCOMPARE(startWorld(stubs), QString());
-    QSignalSpy dependencySpy(&model(), &SessionModel::dependencyChanged);
-    const QStringList edited{QStringLiteral("s1"), QStringLiteral("s2"), QStringLiteral("s4")};
-
-    QVERIFY(m_fixture->bulkEdit(edited, QVariant()));
-    for (const QString &id : kIds) {
-        QCOMPARE(m_fixture->fileToken(id), std::optional<QString>());
-        QVERIFY2(!fileBytes(id).contains("$VAR,_TEST_CHOICE,"), qPrintable(id));
-        QCOMPARE(m_fixture->displayText(id), QStringLiteral("Alpha"));
-        QCOMPARE(m_fixture->indexValue(id), QJsonValue(QStringLiteral("c")));
-    }
-    for (const QString &id : edited)
-        QVERIFY2(spyHasAttribute(dependencySpy, id, QString::fromLatin1(kChoice)), qPrintable(id));
-    QCOMPARE(allStubs(), stubs);
-}
-
 void ChoiceAttributeTest::bulkEditRefusesATokenOutsideTheList_data() { addRowKinds(); }
 
-// Criterion 9: a value outside the list queues nothing: the bulk edit task
-// never becomes active, no file changes, and a stub keeps its cached value.
+// Criterion 9: a value outside the list, or an invalid one, queues nothing:
+// the bulk edit task never becomes active, no file changes, and a stub keeps
+// its cached value.
 void ChoiceAttributeTest::bulkEditRefusesATokenOutsideTheList()
 {
     QFETCH(bool, stubs);
@@ -603,7 +539,7 @@ void ChoiceAttributeTest::bulkEditRefusesATokenOutsideTheList()
     BulkEditSignals bulk(model());
     QSignalSpy dataSpy(&model(), &QAbstractItemModel::dataChanged);
     for (const QVariant &value : {QVariant(QStringLiteral("zz")), QVariant(QStringLiteral("Bravo")),
-                                  QVariant(QString()), QVariant(2.0)})
+                                  QVariant(QString()), QVariant(2.0), QVariant()})
         model().startBulkEdit(rows, m_fixture->column(), value);
     for (int r : rows)
         QVERIFY(std::as_const(model()).rowAt(r).cachedValues.contains(m_fixture->column()));
@@ -626,11 +562,10 @@ void ChoiceAttributeTest::bulkEditRefusesATokenOutsideTheList()
 
 void ChoiceAttributeTest::cellEditorOffersTheList_data() { addRowKinds(); }
 
-// Criterion 10: a non-editable combo box of "Default" then the labels in
-// definition order, opening on the cell's label (on no entry for a raw
-// token); a label stores its token, "Default" removes the stored value, and
-// closing on the opening entry writes nothing. A Text cell keeps the base
-// class's line edit.
+// Criterion 10: a non-editable combo box of the labels in definition order,
+// opening on the cell's label (on no entry for a raw token); a label stores
+// its token, and closing on the opening entry writes nothing. A Text cell
+// keeps the base class's line edit.
 void ChoiceAttributeTest::cellEditorOffersTheList()
 {
     QFETCH(bool, stubs);
@@ -650,11 +585,10 @@ void ChoiceAttributeTest::cellEditorOffersTheList()
         labels.append(editor->itemText(i));
         values.append(editor->itemData(i));
     }
-    QCOMPARE(labels, QStringList({QStringLiteral("Default"), QStringLiteral("Charlie"), QStringLiteral("Alpha"),
-                                  QStringLiteral("Bravo")}));
-    QCOMPARE(values, QVariantList({QVariant(), QVariant(QStringLiteral("b,1")), QVariant(QStringLiteral("c")),
+    QCOMPARE(labels, QStringList({QStringLiteral("Charlie"), QStringLiteral("Alpha"), QStringLiteral("Bravo")}));
+    QCOMPARE(values, QVariantList({QVariant(QStringLiteral("b,1")), QVariant(QStringLiteral("c")),
                                    QVariant(QStringLiteral("a"))}));
-    QCOMPARE(editor->currentIndex(), 1);
+    QCOMPARE(editor->currentIndex(), 0);
 
     // Closed on the entry it opened on: nothing is written
     const QMap<QString, QByteArray> before = allFileBytes();
@@ -667,7 +601,7 @@ void ChoiceAttributeTest::cellEditorOffersTheList()
     // s3 shows the default: opens on "Alpha" and writes nothing left there ...
     editor = openChoiceEditor(m_fixture->cell(QStringLiteral("s3")));
     QVERIFY(editor);
-    QCOMPARE(editor->currentIndex(), 2);
+    QCOMPARE(editor->currentIndex(), 1);
     QVERIFY(commitWithEnter(editor));
     QCOMPARE(m_fixture->fileToken(QStringLiteral("s3")), std::optional<QString>());
     QCOMPARE(allFileBytes(), before);
@@ -675,28 +609,28 @@ void ChoiceAttributeTest::cellEditorOffersTheList()
     // ... and a label stores its token
     editor = openChoiceEditor(m_fixture->cell(QStringLiteral("s3")));
     QVERIFY(editor);
-    editor->setCurrentIndex(3);
+    editor->setCurrentIndex(2);
     QVERIFY(commitWithEnter(editor));
     QCOMPARE(m_fixture->fileToken(QStringLiteral("s3")), std::optional<QString>(QStringLiteral("a")));
     QCOMPARE(m_fixture->displayText(QStringLiteral("s3")), QStringLiteral("Bravo"));
 
-    // "Default" removes s1's stored value
+    // Choosing the default's own label stores its token: a pinned value
     editor = openChoiceEditor(m_fixture->cell(QStringLiteral("s1")));
     QVERIFY(editor);
-    QCOMPARE(editor->currentIndex(), 1);
-    editor->setCurrentIndex(0);
+    QCOMPARE(editor->currentIndex(), 0);
+    editor->setCurrentIndex(1);
     QVERIFY(commitWithEnter(editor));
-    QCOMPARE(m_fixture->fileToken(QStringLiteral("s1")), std::optional<QString>());
+    QCOMPARE(m_fixture->fileToken(QStringLiteral("s1")), std::optional<QString>(QStringLiteral("c")));
     QCOMPARE(m_fixture->displayText(QStringLiteral("s1")), QStringLiteral("Alpha"));
 
-    // A raw token opens on no entry; "Default" is then a change
+    // A raw token opens on no entry; every entry is then a change
     editor = openChoiceEditor(m_fixture->cell(QStringLiteral("s4")));
     QVERIFY(editor);
     QCOMPARE(editor->currentIndex(), -1);
     editor->setCurrentIndex(0);
     QVERIFY(commitWithEnter(editor));
-    QCOMPARE(m_fixture->fileToken(QStringLiteral("s4")), std::optional<QString>());
-    QCOMPARE(m_fixture->displayText(QStringLiteral("s4")), QStringLiteral("Alpha"));
+    QCOMPARE(m_fixture->fileToken(QStringLiteral("s4")), std::optional<QString>(QStringLiteral("b,1")));
+    QCOMPARE(m_fixture->displayText(QStringLiteral("s4")), QStringLiteral("Charlie"));
 
     // A Text cell: the base class's line edit, and no list
     int description = -1;
@@ -721,16 +655,15 @@ void ChoiceAttributeTest::cellEditorOffersTheList()
 void ChoiceAttributeTest::setDialogOffersTheList_data() { addRowKinds(); }
 
 // Criterion 11: the dialog of a Choice attribute is a list, not editable,
-// "Default" then the labels, opening on "Default"; a label bulk-edits its
-// token onto the captured sessions, "Default" removes the stored value, and
-// rejecting changes nothing. A Text attribute keeps the text prompt.
+// the labels in definition order, opening on the first; a label bulk-edits
+// its token onto the captured sessions, and rejecting changes nothing. A Text
+// attribute keeps the text prompt.
 void ChoiceAttributeTest::setDialogOffersTheList()
 {
     QFETCH(bool, stubs);
     QCOMPARE(startWorld(stubs), QString());
     QVERIFY(buildUi());
-    const QStringList list{QStringLiteral("Default"), QStringLiteral("Charlie"), QStringLiteral("Alpha"),
-                           QStringLiteral("Bravo")};
+    const QStringList list{QStringLiteral("Charlie"), QStringLiteral("Alpha"), QStringLiteral("Bravo")};
 
     // A label: its token onto s1 and s3
     DialogSeen seen = askWith(kChoice, {QStringLiteral("s1"), QStringLiteral("s3")}, [](QInputDialog *dialog) {
@@ -744,7 +677,7 @@ void ChoiceAttributeTest::setDialogOffersTheList()
     QVERIFY(!seen.comboEditable);
     QVERIFY(seen.comboShown);
     QVERIFY(!seen.lineEditShown);
-    QCOMPARE(seen.opening, QStringLiteral("Default"));
+    QCOMPARE(seen.opening, QStringLiteral("Charlie"));
     QVERIFY(waitForIdle(model()));
     for (const char *id : {"s1", "s3"}) {
         QCOMPARE(m_fixture->fileToken(QString::fromLatin1(id)), std::optional<QString>(QStringLiteral("a")));
@@ -753,16 +686,17 @@ void ChoiceAttributeTest::setDialogOffersTheList()
     QCOMPARE(m_fixture->fileToken(QStringLiteral("s4")), std::optional<QString>(QStringLiteral("zz")));
     QCOMPARE(allStubs(), stubs);
 
-    // "Default": s1's and s4's stored values removed
+    // The default's own label: its token stored onto s1 and s4, the raw
+    // token of s4 replaced
     seen = askWith(kChoice, {QStringLiteral("s1"), QStringLiteral("s4")}, [](QInputDialog *dialog) {
-        dialog->setTextValue(QStringLiteral("Default"));
+        dialog->setTextValue(QStringLiteral("Alpha"));
         dialog->accept();
     });
     QVERIFY(seen.seen);
     QCOMPARE(seen.items, list);
     QVERIFY(waitForIdle(model()));
     for (const char *id : {"s1", "s4"}) {
-        QCOMPARE(m_fixture->fileToken(QString::fromLatin1(id)), std::optional<QString>());
+        QCOMPARE(m_fixture->fileToken(QString::fromLatin1(id)), std::optional<QString>(QStringLiteral("c")));
         QCOMPARE(m_fixture->displayText(QString::fromLatin1(id)), QStringLiteral("Alpha"));
     }
     QCOMPARE(m_fixture->fileToken(QStringLiteral("s3")), std::optional<QString>(QStringLiteral("a")));

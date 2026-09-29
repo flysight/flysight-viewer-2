@@ -182,18 +182,18 @@ void LogbookView::askAndSetAttribute(const QString &attributeKey, const QString 
     bool ok = false;
     QVariant value;
     if (def->formatType == AttributeFormatType::Choice) {
-        const QVector<LogbookCellDelegate::ChoiceEntry> entries = LogbookCellDelegate::choiceEntries(*def);
+        const QVector<AttributeChoice> choices = def->choices;
         QStringList labels;
-        labels.reserve(entries.size());
-        for (const LogbookCellDelegate::ChoiceEntry &entry : entries)
-            labels.append(entry.label);
-        // Opens on "Default": the sessions may hold different values, so
-        // there is no one current value to open on
+        labels.reserve(choices.size());
+        for (const AttributeChoice &choice : choices)
+            labels.append(choice.label);
+        // Opens on the first choice: the sessions may hold different values,
+        // so there is no one current value to open on
         const QString chosen = QInputDialog::getItem(this, title, prompt, labels, 0, false, &ok);
         const qsizetype chosenIndex = labels.indexOf(chosen);
         if (!ok || chosenIndex < 0)
             return;
-        value = entries.at(chosenIndex).value;     // a token, or invalid for "Default"
+        value = choices.at(chosenIndex).token;
     } else {
         const QString text = QInputDialog::getText(this, title, prompt, QLineEdit::Normal, QString(), &ok);
         if (!ok)

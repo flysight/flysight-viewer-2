@@ -19,6 +19,10 @@ inline const QString ImportGroundReferenceMode = QStringLiteral("import/groundRe
 inline const QString ImportFixedElevation = QStringLiteral("import/fixedElevation");
 inline const QString ImportDescentPauseSeconds = QStringLiteral("import/descentPauseSeconds");
 inline const QString ImportHideOthersOnImport = QStringLiteral("import/hideOthersOnImport");
+/// The orientation token stored into each newly imported recording
+/// (SessionKeys::Orientation): a fact of the import, chosen on the Import
+/// preferences page from the 24 orientations of Fusion::Orientation.
+inline const QString ImportOrientation = QStringLiteral("import/orientation");
 
 // ============================================================================
 // Plots Preferences (global)

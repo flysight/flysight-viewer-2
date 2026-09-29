@@ -280,9 +280,12 @@ one space, booleans as `true` / `false`, integers exactly.
 
 A choice attribute, such as the Orientation (`_ORIENTATION`, which device axes
 point forward and up), is saved as its token, verbatim text, for example
-`$VAR,_ORIENTATION,+x,+z`, and only when the user set one; choosing "Default"
-removes the line. A recording without the line reads the constant default
-(`docs/CALCULATIONS.md` section 5), for the Orientation forward +y, up +z. A
+`$VAR,_ORIENTATION,+x,+z`: written at import from the Import preference (a
+fact of the import, which the user can change per recording afterwards) or
+when the user sets one. No edit removes the line. A recording without the
+line, imported before the preference existed or written by hand, reads the
+constant default (`docs/CALCULATIONS.md` section 5), for the Orientation
+forward +y, up +z. A
 hand-edited token outside the list is kept and shown as written, and for the
 Orientation heading, pitch and roll are then unavailable
 ([SENSOR_FUSION.md](SENSOR_FUSION.md), section 2).

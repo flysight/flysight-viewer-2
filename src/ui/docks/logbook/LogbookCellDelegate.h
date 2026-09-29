@@ -72,12 +72,11 @@ class SessionModel;
 /// CHOICE EDITOR. Sizes are the base class's, and so is editing, except for a
 /// Choice cell: a cell of an attribute column whose definition's format type
 /// is AttributeFormatType::Choice. Its editor is a non-editable QComboBox, so
-/// no free text can be typed, holding choiceEntries(): "Default" first, then
-/// the labels in definition order. It opens on the entry whose label is the
-/// cell's display text, and on no entry when the text is no label (a raw
-/// token, or no value). Committed by the base class's Enter and focus-out, it
-/// writes the chosen entry's value through SessionModel::setData(): a token,
-/// or an invalid value that removes the stored attribute. It writes nothing
+/// no free text can be typed, holding the definition's choices: the labels
+/// in definition order, each with its token. It opens on the entry whose
+/// label is the cell's display text, and on no entry when the text is no
+/// label (a raw token). Committed by the base class's Enter and focus-out, it
+/// writes the chosen token through SessionModel::setData(). It writes nothing
 /// when closed on the entry it opened on: an unset recording shows its
 /// default's label, and opening its editor and pressing Enter must not pin
 /// that value by accident (a stub's display cannot tell stored from
@@ -102,18 +101,6 @@ public:
                           const QModelIndex &index) const override;
     void setEditorData(QWidget *editor, const QModelIndex &index) const override;
     void setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const override;
-
-    /// One entry of a Choice attribute's editors: what is shown, and what is
-    /// written (SessionModel::setData(), startBulkEdit()).
-    struct ChoiceEntry {
-        QString label;
-        QVariant value;     ///< a token; invalid for "Default", which removes the stored attribute
-    };
-    /// The entries of a Choice attribute's editors, in order: "Default"
-    /// (tr("Default"), an invalid value) first, then each choice's label with
-    /// its token, in definition order. The one list of both editors: the
-    /// in-place editor and the logbook's "Set ..." dialog (LogbookView).
-    static QVector<ChoiceEntry> choiceEntries(const AttributeDefinition &definition);
 
     /// True when the cell is painted as pending: its pair is in demand
     /// (isCellPending) and the model has no value for it.

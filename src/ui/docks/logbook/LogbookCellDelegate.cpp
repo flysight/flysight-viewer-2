@@ -248,16 +248,6 @@ bool LogbookCellDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view, 
 
 // ---- The choice editor -------------------------------------------------------
 
-QVector<LogbookCellDelegate::ChoiceEntry> LogbookCellDelegate::choiceEntries(const AttributeDefinition &definition)
-{
-    QVector<ChoiceEntry> entries;
-    entries.reserve(definition.choices.size() + 1);
-    entries.append({tr("Default"), QVariant()});
-    for (const AttributeChoice &choice : definition.choices)
-        entries.append({choice.label, choice.token});
-    return entries;
-}
-
 const AttributeDefinition *LogbookCellDelegate::choiceDefinition(const QModelIndex &index) const
 {
     if (!m_model || !index.isValid() || index.model() != m_model.data())
@@ -278,14 +268,13 @@ QWidget *LogbookCellDelegate::createEditor(QWidget *parent, const QStyleOptionVi
 
     auto *editor = new QComboBox(parent);
     editor->setEditable(false);     // a value outside the list cannot be typed
-    for (const ChoiceEntry &entry : choiceEntries(*definition))
-        editor->addItem(entry.label, entry.value);
+    for (const AttributeChoice &choice : definition->choices)
+        editor->addItem(choice.label, choice.token);
     return editor;
 }
 
-// Opens on the entry whose label the cell shows. "Default" is never a label,
-// so it is not searched: a raw token, or no value, opens on no entry, and
-// choosing "Default" there is a change.
+// Opens on the entry whose label the cell shows; a raw token (a hand-edited
+// file) opens on no entry, and every entry is then a change.
 void LogbookCellDelegate::setEditorData(QWidget *editor, const QModelIndex &index) const
 {
     auto *combo = qobject_cast<QComboBox *>(editor);
@@ -295,7 +284,7 @@ void LogbookCellDelegate::setEditorData(QWidget *editor, const QModelIndex &inde
     }
     const QString text = index.data(Qt::DisplayRole).toString();
     int opening = -1;
-    for (int i = 1; i < combo->count(); ++i) {
+    for (int i = 0; i < combo->count(); ++i) {
         if (combo->itemText(i) == text) {
             opening = i;
             break;

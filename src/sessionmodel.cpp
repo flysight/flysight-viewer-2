@@ -22,7 +22,7 @@ namespace {
 
 // A Choice value is shown by its label. A token without one (a hand-edited
 // file) is shown as its raw text, so that the user sees it and can choose a
-// value or "Default" in its place. Display and sort both read this.
+// value in its place. Display and sort both read this.
 QString choiceText(const AttributeDefinition &def, const QVariant &value)
 {
     const QString token = value.toString();
@@ -30,15 +30,11 @@ QString choiceText(const AttributeDefinition &def, const QVariant &value)
     return choice ? choice->label : token;
 }
 
-// What an edit of a Choice attribute accepts: a token of the list, or an
-// invalid value, which removes the stored attribute ("Default"; a stored value
-// wins even when it is blank, so returning to the default never stores one).
-// A token outside the list, a label, an empty string and any other type are
-// refused.
+// What an edit of a Choice attribute accepts: a token of the list. A token
+// outside the list, a label, an empty or invalid value and any other type
+// are refused; nothing an edit can carry removes a stored value.
 bool isChoiceEditValue(const AttributeDefinition &def, const QVariant &value)
 {
-    if (!value.isValid())
-        return true;
     return value.typeId() == QMetaType::QString && def.findChoice(value.toString());
 }
 
@@ -590,18 +586,11 @@ bool SessionModel::setData(const QModelIndex &index, const QVariant &value, int 
             // a value pins it, so a recording that shows the default only
             // because nothing is stored can store the same token explicitly,
             // and a later change of the default does not move it.
-            if (!value.isValid()) {
-                // "Default": the stored attribute is removed, never blanked
-                if (!item.hasAttribute(col.attributeKey))
-                    return false;
-                changedNames = item.removeAttribute(col.attributeKey);
-            } else {
-                const QString token = value.toString();
-                const QVariant stored = item.storedAttribute(col.attributeKey);
-                if (stored.isValid() && stored.toString() == token)
-                    return false;
-                changedNames = item.setAttribute(col.attributeKey, token);
-            }
+            const QString token = value.toString();
+            const QVariant stored = item.storedAttribute(col.attributeKey);
+            if (stored.isValid() && stored.toString() == token)
+                return false;
+            changedNames = item.setAttribute(col.attributeKey, token);
             invalidateColumns(index.row(), {DependencyKey::attribute(col.attributeKey)});
             somethingChanged = true;
             attributeChanged = true;
@@ -2311,9 +2300,8 @@ void SessionModel::startBulkEdit(const QList<int> &rows, int columnIndex, const 
     const auto *def = AttributeRegistry::instance().findByKey(col.attributeKey);
     if (!def || !def->editable)
         return;
-    // A Choice attribute takes a token of its list, or an invalid value that
-    // removes the stored attribute. Anything else is refused here, before
-    // anything is queued, invalidated or woken.
+    // A Choice attribute takes a token of its list. Anything else is refused
+    // here, before anything is queued, invalidated or woken.
     if (def->formatType == AttributeFormatType::Choice && !isChoiceEditValue(*def, value))
         return;
 
@@ -2386,10 +2374,9 @@ void SessionModel::processNextBulkEdit()
     const QString &attributeKey = item.attributeKey;
     LogbookManager &logbook = LogbookManager::instance();
 
-    // Compute the value to store (with unit reverse-conversion for Double). An
-    // invalid value, which only a Choice item carries (startBulkEdit() refuses
-    // any other value of one), means the stored attribute is removed: Text and
-    // Double always compute a valid value.
+    // Compute the value to store (with unit reverse-conversion for Double).
+    // Every format type computes a valid value: startBulkEdit() refused
+    // anything else.
     QVariant newVal;
     switch (def->formatType) {
     case AttributeFormatType::Text:
@@ -2404,8 +2391,7 @@ void SessionModel::processNextBulkEdit()
         break;
     }
     case AttributeFormatType::Choice:
-        if (item.value.isValid())
-            newVal = item.value.toString();
+        newVal = item.value.toString();
         break;
     default:
         m_bulkEditRemaining--;
@@ -2422,8 +2408,7 @@ void SessionModel::processNextBulkEdit()
     } else if (sr.isLoaded()) {
         // --- LOADED PATH ---
         SessionData &session = sr.session.value();
-        changedNames = newVal.isValid() ? session.setAttribute(attributeKey, newVal)
-                                        : session.removeAttribute(attributeKey);
+        changedNames = session.setAttribute(attributeKey, newVal);
         invalidateColumns(row, {DependencyKey::attribute(attributeKey)});
 
         // Save inline. A row that was already queued for the idle saver
@@ -2449,14 +2434,10 @@ void SessionModel::processNextBulkEdit()
 
             m_columnWorkStats.sessionsLoaded++;
 
-            // Apply the edit (a removal for an invalid value, as above). No
-            // engine of the row reflects the temporary copy, so the
-            // attribute's own name is what is published: every static
-            // closure that reads the attribute contains it.
-            if (newVal.isValid())
-                loaded->setAttribute(attributeKey, newVal);
-            else
-                loaded->removeAttribute(attributeKey);
+            // Apply the edit. No engine of the row reflects the temporary
+            // copy, so the attribute's own name is what is published: every
+            // static closure that reads the attribute contains it.
+            loaded->setAttribute(attributeKey, newVal);
             invalidateColumns(row, {DependencyKey::attribute(attributeKey)});
             changedNames = QSet<DependencyKey>{DependencyKey::attribute(attributeKey)};
 

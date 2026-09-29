@@ -29,8 +29,7 @@ public:
     /// What the context menu's "Set <column>..." action does once chosen: asks
     /// for the value and bulk-edits the attribute of these sessions. A Choice
     /// attribute is asked with a list (QInputDialog::getItem(), not editable:
-    /// the delegate's LogbookCellDelegate::choiceEntries(), opening on
-    /// "Default", which removes the stored attribute); any other with a text
+    /// the definition's choices, opening on the first); any other with a text
     /// prompt. `columnLabel` titles the dialog. The dialog runs a nested event
     /// loop, so the column and the sessions are resolved again after it
     /// closes, and a session or column gone meanwhile is skipped. The context

@@ -3,6 +3,7 @@
 
 #include <QWidget>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QRadioButton>
 #include <QGroupBox>
 #include <QLineEdit>
@@ -27,10 +28,12 @@ private:
     QLineEdit *fixedElevationLineEdit;
     QDoubleSpinBox *descentPauseSpinBox;
     QCheckBox *hideOthersCheckBox;
+    QComboBox *orientationComboBox;
 
     QGroupBox* createGroundReferenceGroup();
     QGroupBox* createDescentPauseGroup();
     QGroupBox* createTrackVisibilityGroup();
+    QGroupBox* createOrientationGroup();
 };
 
 } // namespace FlySight

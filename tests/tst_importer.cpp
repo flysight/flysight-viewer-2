@@ -96,6 +96,7 @@ private slots:
     void creationDefaultsOnlyFillAbsent();
     void creationDefaultsDeviceId();
     void fixedGroundElevationOnlyInFixedMode();
+    void orientationFromThePreference();
     void peekHeaderAttributeReadsNoData();
 };
 
@@ -870,6 +871,39 @@ void ImporterTest::fixedGroundElevationOnlyInFixedMode()
         SessionData session;
         QVERIFY(importer.importFile(path, session));
         QVERIFY(!session.hasStoredAttribute("_GROUND_ELEV"));
+    }
+}
+
+// The orientation the device was mounted in is a fact of the import: the
+// Import preference's token is stored into a new recording, verbatim; a file
+// that carries one keeps its own; without a preference nothing is written,
+// and the recording reads the constant default instead.
+void ImporterTest::orientationFromThePreference()
+{
+    PreferencesManager &prefs = PreferencesManager::instance();
+    const QString path = writeTemp(Fixtures::trackFile().toBytes());
+
+    prefs.setValue(PreferenceKeys::ImportOrientation, QStringLiteral("+x,+z"));
+    {
+        DataImporter importer;
+        SessionData session;
+        QVERIFY(importer.importFile(path, session));
+        QCOMPARE(session.storedAttribute("_ORIENTATION").toString(), QStringLiteral("+x,+z"));
+    }
+    {
+        const QString own = writeTemp(Fixtures::trackFile().var("_ORIENTATION", "-y,+z").toBytes());
+        DataImporter importer;
+        SessionData session;
+        QVERIFY(importer.importFile(own, session));
+        QCOMPARE(session.storedAttribute("_ORIENTATION").toString(), QStringLiteral("-y,+z"));
+    }
+
+    prefs.setValue(PreferenceKeys::ImportOrientation, QString());
+    {
+        DataImporter importer;
+        SessionData session;
+        QVERIFY(importer.importFile(path, session));
+        QVERIFY(!session.hasStoredAttribute("_ORIENTATION"));
     }
 }
 

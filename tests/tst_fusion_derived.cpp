@@ -307,8 +307,6 @@ private slots:
     void orientationColumnShowsTheDefaultWithoutAWrite();
     void orientationEditStoresATokenAndRefusesOthers_data();
     void orientationEditStoresATokenAndRefusesOthers();
-    void orientationDefaultRemovesTheStoredValue_data();
-    void orientationDefaultRemovesTheStoredValue();
     void orientationBulkEdit_data();
     void orientationBulkEdit();
 
@@ -1281,8 +1279,9 @@ void FusionDerivedTest::orientationColumnShowsTheDefaultWithoutAWrite()
 void FusionDerivedTest::orientationEditStoresATokenAndRefusesOthers_data() { addRowKinds(); }
 
 // Criterion 13, setData(): a token of the list is stored and written
-// verbatim, comma included; a token outside the list, a label and an empty
-// string are refused; after a restart the stub shows the stored label.
+// verbatim, comma included; a token outside the list, a label, an empty
+// string and an invalid value are refused (nothing an edit can carry removes
+// a stored orientation); after a restart the stub shows the stored label.
 void FusionDerivedTest::orientationEditStoresATokenAndRefusesOthers()
 {
     QFETCH(bool, stubs);
@@ -1303,7 +1302,7 @@ void FusionDerivedTest::orientationEditStoresATokenAndRefusesOthers()
     for (const QVariant &value : {QVariant(QStringLiteral("+y,+y")), QVariant(QStringLiteral("+z,-z")),
                                   QVariant(QStringLiteral("y,z")), QVariant(QStringLiteral("+X,+Z")),
                                   QVariant(QStringLiteral("+x, +z")), QVariant(QStringLiteral("forward +y, up +x")),
-                                  QVariant(QString()), QVariant(QStringLiteral(""))}) {
+                                  QVariant(QString()), QVariant(QStringLiteral("")), QVariant()}) {
         for (const QString &id : {QStringLiteral("o1"), QStringLiteral("o2")})
             QVERIFY2(!m_fixture->setData(id, value), qPrintable(id + QLatin1Char(' ') + value.toString()));
     }
@@ -1320,32 +1319,10 @@ void FusionDerivedTest::orientationEditStoresATokenAndRefusesOthers()
     QCOMPARE(m_fixture->displayText(QStringLiteral("o2")), kDefaultLabel);
 }
 
-void FusionDerivedTest::orientationDefaultRemovesTheStoredValue_data() { addRowKinds(); }
-
-// Criterion 13, removal: setData(QVariant()) removes the stored value, and
-// the default shows again; with nothing stored there is nothing to remove.
-void FusionDerivedTest::orientationDefaultRemovesTheStoredValue()
-{
-    QFETCH(bool, stubs);
-    QCOMPARE(startOrientationWorld(stubs, QStringLiteral("-y,-x")), QString());
-    QCOMPARE(m_fixture->displayText(QStringLiteral("o1")), QStringLiteral("forward -y, up -x"));
-    QCOMPARE(m_fixture->fileToken(QStringLiteral("o1")), std::optional<QString>(QStringLiteral("-y,-x")));
-
-    QVERIFY(m_fixture->setData(QStringLiteral("o1"), QVariant()));
-    QCOMPARE(m_fixture->displayText(QStringLiteral("o1")), kDefaultLabel);
-    QVERIFY(waitForIdle(m_fixture->model()));
-    QCOMPARE(m_fixture->fileToken(QStringLiteral("o1")), std::optional<QString>());
-    QVERIFY(!fileBytes(QStringLiteral("o1")).contains("$VAR,_ORIENTATION"));
-    QCOMPARE(m_fixture->indexValue(QStringLiteral("o1")), QJsonValue(QStringLiteral("+y,+z")));
-
-    QVERIFY(!m_fixture->setData(QStringLiteral("o1"), QVariant()));
-    QVERIFY(!m_fixture->setData(QStringLiteral("o2"), QVariant()));
-}
-
 void FusionDerivedTest::orientationBulkEdit_data() { addRowKinds(); }
 
-// Criterion 13, the bulk edit: a token for every selected session, QVariant()
-// removes, and a token outside the list queues nothing.
+// Criterion 13, the bulk edit: a token for every selected session, and a
+// token outside the list, or an invalid value, queues nothing.
 void FusionDerivedTest::orientationBulkEdit()
 {
     QFETCH(bool, stubs);
@@ -1360,11 +1337,6 @@ void FusionDerivedTest::orientationBulkEdit()
         QCOMPARE(m_fixture->displayText(id), QStringLiteral("forward +y, up +x"));
     }
 
-    QVERIFY(m_fixture->bulkEdit({QStringLiteral("o1")}, QVariant()));
-    QCOMPARE(m_fixture->fileToken(QStringLiteral("o1")), std::optional<QString>());
-    QCOMPARE(m_fixture->displayText(QStringLiteral("o1")), kDefaultLabel);
-    QCOMPARE(m_fixture->indexValue(QStringLiteral("o1")), QJsonValue(QStringLiteral("+y,+z")));
-    QCOMPARE(m_fixture->fileToken(QStringLiteral("o2")), std::optional<QString>(QStringLiteral("+y,+x")));
 
     // Outside the list: refused before anything is queued
     const QByteArray o1Bytes = fileBytes(QStringLiteral("o1"));
@@ -1373,7 +1345,7 @@ void FusionDerivedTest::orientationBulkEdit()
     BulkEditSignals bulk(model);
     QSignalSpy dataSpy(&model, &QAbstractItemModel::dataChanged);
     for (const QVariant &value : {QVariant(QStringLiteral("+x,-x")), QVariant(QStringLiteral("forward +y, up +x")),
-                                  QVariant(QString()), QVariant(QStringLiteral("zz"))})
+                                  QVariant(QString()), QVariant(QStringLiteral("zz")), QVariant()})
         model.startBulkEdit(rows, m_fixture->column(), value);
     QVERIFY(waitForIdle(model));
     QCOMPARE(bulk.activations(), 0);

@@ -188,6 +188,10 @@ void TestEnvironment::registerCorePreferences()
         {PreferenceKeys::ImportFixedElevation,      0.0},
         {PreferenceKeys::ImportDescentPauseSeconds, 30.0},
         {PreferenceKeys::ImportHideOthersOnImport,  false},
+        // Empty here, not the application's helmet default: an import in a
+        // test writes no orientation unless the test sets the preference, so
+        // fixture files and attribute lists stay as they were
+        {PreferenceKeys::ImportOrientation,         QString()},
         {PreferenceKeys::AeroMass,                  1.0},
         {PreferenceKeys::AeroArea,                  1.0},
     };

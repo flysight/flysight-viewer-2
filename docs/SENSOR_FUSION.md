@@ -59,11 +59,13 @@ document describes what is computed, from what, and how far to trust it.
   the rule of the GNSS course and referenced to nothing; the GNSS course is
   relative to its course reference, so the two are not meant to overlay. The body is defined by the recording's **Orientation** attribute:
   which device axes point forward and which up. The default is forward +y,
-  up +z, a FlySight 2 on the back of a helmet with its label up. To change
-  it, add the Orientation column to the logbook (Add Column, "Session") and
-  edit its cell, or use "Set Orientation..." from the logbook's context menu
-  for the selected recordings; both offer the 24 possible orientations, and
-  "Default" removes the setting. The attribute describes how the unit is
+  up +z, a FlySight 2 on the back of a helmet with its label up. Preferences >
+  Import chooses the orientation stored into each newly imported recording,
+  for a batch recorded with the unit mounted some other way; to change one
+  recording, add the Orientation column to the logbook (Add Column,
+  "Session") and edit its cell, or use "Set Orientation..." from the
+  logbook's context menu for the selected recordings. Every list offers the
+  24 possible orientations and nothing else. The attribute describes how the unit is
   mounted and nothing about the posture of whoever wears it: the angles are
   those of the mount's body frame (for a helmet mount, of the head). A mount,
   or a posture, that points the forward axis straight up or down makes heading

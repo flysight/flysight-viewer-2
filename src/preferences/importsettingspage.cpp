@@ -4,6 +4,7 @@
 #include "importsettingspage.h"
 #include "preferencekeys.h"
 #include "preferencesmanager.h"
+#include "../fusion/orientation.h"
 
 namespace FlySight {
 
@@ -12,6 +13,7 @@ ImportSettingsPage::ImportSettingsPage(QWidget *parent)
     QVBoxLayout *layout = new QVBoxLayout(this);
 
     layout->addWidget(createGroundReferenceGroup());
+    layout->addWidget(createOrientationGroup());
     layout->addWidget(createDescentPauseGroup());
     layout->addWidget(createTrackVisibilityGroup());
     layout->addStretch();
@@ -21,6 +23,35 @@ ImportSettingsPage::ImportSettingsPage(QWidget *parent)
     connect(fixedElevationLineEdit, &QLineEdit::textChanged, this, &ImportSettingsPage::saveSettings);
     connect(descentPauseSpinBox, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &ImportSettingsPage::saveSettings);
     connect(hideOthersCheckBox, &QCheckBox::toggled, this, &ImportSettingsPage::saveSettings);
+    connect(orientationComboBox, &QComboBox::currentIndexChanged, this, &ImportSettingsPage::saveSettings);
+}
+
+// The orientation stored into each newly imported recording: which of the
+// device's axes point forward and up. The 24 orientations of the one
+// orientation type, labelled as the logbook's Orientation column labels
+// them; the current preference is selected, or the default when the stored
+// token is none of them.
+QGroupBox* ImportSettingsPage::createOrientationGroup() {
+    QGroupBox *group = new QGroupBox(tr("Orientation"), this);
+    QVBoxLayout *groupLayout = new QVBoxLayout(group);
+
+    QLabel *explanation = new QLabel(tr("Stored into each newly imported recording; change it later per "
+                                        "recording in the logbook's Orientation column."), this);
+    explanation->setWordWrap(true);
+    orientationComboBox = new QComboBox(this);
+    for (const Fusion::Orientation &orientation : Fusion::Orientation::all())
+        orientationComboBox->addItem(orientation.label(), orientation.token());
+
+    groupLayout->addWidget(explanation);
+    groupLayout->addWidget(orientationComboBox);
+
+    const QString stored = PreferencesManager::instance().getValue(PreferenceKeys::ImportOrientation).toString();
+    int index = orientationComboBox->findData(stored);
+    if (index < 0)
+        index = orientationComboBox->findData(Fusion::Orientation::defaultOrientation().token());
+    orientationComboBox->setCurrentIndex(index);
+
+    return group;
 }
 
 QGroupBox* ImportSettingsPage::createGroundReferenceGroup() {
@@ -103,6 +134,7 @@ void ImportSettingsPage::saveSettings() {
     prefs.setValue(PreferenceKeys::ImportFixedElevation, fixedElevationLineEdit->text().toDouble());
     prefs.setValue(PreferenceKeys::ImportDescentPauseSeconds, descentPauseSpinBox->value());
     prefs.setValue(PreferenceKeys::ImportHideOthersOnImport, hideOthersCheckBox->isChecked());
+    prefs.setValue(PreferenceKeys::ImportOrientation, orientationComboBox->currentData().toString());
 }
 
 } // namespace FlySight

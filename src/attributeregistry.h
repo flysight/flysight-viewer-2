@@ -26,9 +26,7 @@ struct AttributeChoice {
 ///
 /// A Choice definition lists its allowed values in `choices`, in presentation
 /// order. The list is not empty, its tokens are non-empty and unique, and its
-/// labels are unique and none is "Default", which the editors offer for
-/// removing the stored value. A definition of any other type has an empty
-/// list. The registry does not check any of this: the definitions are program
+/// labels are unique. A definition of any other type has an empty list. The registry does not check any of this: the definitions are program
 /// constants.
 struct AttributeDefinition {
     QString category;          // UI grouping (e.g., "Session", "Location")

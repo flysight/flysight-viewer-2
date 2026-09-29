@@ -51,6 +51,7 @@
 #include "units/unitconverter.h"
 #include "calculations/builtincalculations.h"
 #include "fusion/fusionregistration.h"
+#include "fusion/orientation.h"
 #include "preferences/enginepreferenceprovider.h"
 #include "calculations/attributeregistration.h"
 #include "altitudemarkerfeature.h"
@@ -1057,6 +1058,9 @@ void MainWindow::initializePreferences()
     prefs.registerPreference(PreferenceKeys::ImportFixedElevation, 0.0);
     prefs.registerPreference(PreferenceKeys::ImportDescentPauseSeconds, 30.0);
     prefs.registerPreference(PreferenceKeys::ImportHideOthersOnImport, false);
+    // The orientation stored into new imports: the same helmet default as the
+    // constant calculated attribute, spelled by the one orientation type
+    prefs.registerPreference(PreferenceKeys::ImportOrientation, Fusion::Orientation::defaultOrientation().token());
 
     // ========================================================================
     // Global Plot Preferences

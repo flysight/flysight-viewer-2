@@ -2494,15 +2494,16 @@
 818 tst_fusion_derived orientationVocabularyHasTwentyFourPairs
 818 tst_fusion_derived orientationDefinitionIsTheEnumeration
 
-# 819 - (8) its default, forward +y and up +z, is a constant calculated attribute: every recording has it, imported before or after, and nothing is written into any session file
+# 819 - (8, as amended) its constant default, forward +y and up +z, is a calculated attribute, so a recording without a stored orientation has one with nothing written to its file; a new import stores the orientation of the Import preferences (the same default), a fact of the import, editable afterwards
 819 tst_fusion_derived orientationColumnShowsTheDefaultWithoutAWrite
+819 tst_importer orientationFromThePreference
 819 tst_fusion_derived storedOrientationRecomputesWithoutAFit
 819 tst_fusion_derived attitudeRegistrationShape
 819 manual M41
 
-# 820 - (8) a stored value wins over the default, and removing it returns to the default
+# 820 - (8, as amended) a stored value wins over the default; nothing an edit can carry removes a stored orientation
 820 tst_fusion_derived storedOrientationRecomputesWithoutAFit
-820 tst_fusion_derived orientationDefaultRemovesTheStoredValue
+820 tst_fusion_derived orientationEditStoresATokenAndRefusesOthers
 
 # 821 - (8) one orientation type in the fusion module owns the vocabulary (the axis pair, token, label, body-frame rotation, default and enumeration); the derivation parses with it, the attribute's choices come from it, and nothing else spells a token
 821 tst_fusion_derived orientationDefinitionIsTheEnumeration
@@ -2523,10 +2524,9 @@
 823 manual M41
 823 manual M42
 
-# 824 - (8) both editors offer the list, not free text, and a "Default" entry that removes the stored value rather than storing anything
+# 824 - (8, as amended) both editors offer the 24 orientations and nothing else: no free text and no entry that removes the stored value
 824 tst_choice_attribute cellEditorOffersTheList
 824 tst_choice_attribute setDialogOffersTheList
-824 tst_fusion_derived orientationDefaultRemovesTheStoredValue
 824 tst_fusion_derived orientationBulkEdit
 824 manual M41
 824 manual M42
@@ -2563,9 +2563,7 @@
 831 tst_fusion_derived orientationBulkEdit
 831 manual M42
 
-# 832 - (9) "Default" removes the stored attribute on every edit path, and a token outside the list is refused
-832 tst_choice_attribute choiceDefaultRemovesTheStoredValue
-832 tst_choice_attribute bulkEditDefaultRemovesTheStoredValue
+# 832 - (9, as amended) a token outside the list, an empty and an invalid value are refused on every edit path; no edit removes a stored attribute
 832 tst_choice_attribute choiceEditRefusesATokenOutsideTheList
 832 tst_choice_attribute bulkEditRefusesATokenOutsideTheList
 
@@ -2609,11 +2607,11 @@
 840 tst_importer fixedGroundElevationOnlyInFixedMode
 840 tst_smoke importAppliesCreationDefaults
 
-# 841 - (10) a stored attribute wins even when invalid or empty, so returning to a default removes the stored attribute and never stores a blank
+# 841 - (10, as amended) a stored attribute wins even when invalid or empty, so no edit path stores a blank as a way back to a default; the engine's removal of a stored value falls back to the calculation
 841 tst_calcengine storedInvalidValueStillWins
 841 tst_calcengine removingStoredFallsBackToCalc
-841 tst_choice_attribute choiceDefaultRemovesTheStoredValue
-841 tst_choice_attribute bulkEditDefaultRemovesTheStoredValue
+841 tst_choice_attribute choiceEditRefusesATokenOutsideTheList
+841 tst_choice_attribute bulkEditRefusesATokenOutsideTheList
 
 # 842 - (11) the plot list shows "Sensor fusion" with eight plots named as the GNSS plots and no local-frame category; checking a fusion plot starts the fit as before, the status bar shows it, and a stored fit draws at once
 842 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
@@ -2626,7 +2624,7 @@
 843 tst_fusion_derived headingUnwrapsThroughAFullTurn
 843 manual M40
 
-# 844 - (11) the orientation column, once added, shows "forward +y, up +z" for every recording not set and the chosen label for one that is; editing offers the list and "Default"; changing it redraws the attitude plots without a fit
+# 844 - (11, as amended) the orientation column, once added, shows "forward +y, up +z" for every recording not set and the chosen label for one that is; editing offers the 24 orientations; changing it redraws the attitude plots without a fit; the Import preferences page offers the same list for new imports
 844 tst_fusion_derived orientationColumnShowsTheDefaultWithoutAWrite
 844 tst_fusion_derived orientationEditStoresATokenAndRefusesOthers
 844 tst_fusion_derived storedOrientationRecomputesWithoutAFit
@@ -2701,10 +2699,10 @@
 857 tst_fusion_derived sideMountPermutesTheAngles
 857 tst_fusion_derived orientationRotationIsProper
 
-# 858 - (13) test: the orientation attribute: every recording reads the default without a stored value and without any write to its file; a stored token wins and the attitude recomputes without a fit; "Default" removes the stored value; a token outside the list is refused by the model, the editor and the bulk edit; the labels and tokens come from one enumeration of 24
+# 858 - (13, as amended) test: the orientation attribute: every recording reads the default without a stored value and without any write to its file; a stored token wins and the attitude recomputes without a fit; a token outside the list, an empty and an invalid value are refused by the model, the editor and the bulk edit; the labels and tokens come from one enumeration of 24; a new import stores the preference's orientation
 858 tst_fusion_derived orientationColumnShowsTheDefaultWithoutAWrite
 858 tst_fusion_derived storedOrientationRecomputesWithoutAFit
-858 tst_fusion_derived orientationDefaultRemovesTheStoredValue
+858 tst_importer orientationFromThePreference
 858 tst_fusion_derived orientationEditStoresATokenAndRefusesOthers
 858 tst_fusion_derived orientationBulkEdit
 858 tst_fusion_derived orientationDefinitionIsTheEnumeration
