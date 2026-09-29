@@ -1,6 +1,8 @@
 #include "plotutils.h"
 #include "sessiondata.h"
 #include "plotregistry.h"
+#include "preferences/preferencekeys.h"
+#include "preferences/preferencesmanager.h"
 #include "units/unitconverter.h"
 #include "calculations/timecalculations.h"
 
@@ -43,6 +45,18 @@ QString seriesDisplayName(const PlotValue &pv)
     if (!displayUnits.isEmpty())
         return QStringLiteral("%1 (%2)").arg(pv.plotName, displayUnits);
     return pv.plotName;
+}
+
+QColor plotColor(const PlotValue &pv)
+{
+    const QVariant stored = PreferencesManager::instance().getValue(
+        PreferenceKeys::plotColorKey(pv.sensorID, pv.measurementID));
+    if (stored.isValid()) {
+        const QColor color = stored.value<QColor>();
+        if (color.isValid())
+            return color;
+    }
+    return pv.defaultColor;
 }
 
 double interpolateAtX(const QVector<double> &xData,

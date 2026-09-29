@@ -6,6 +6,7 @@
 #include "plotssettingspage.h"
 #include "preferencesmanager.h"
 #include "../plotregistry.h"
+#include "../plotutils.h"
 
 namespace FlySight {
 
@@ -261,14 +262,9 @@ void PlotsSettingsPage::loadPerPlotSettings()
         QString plotKey = getPlotKey(pv.sensorID, pv.measurementID);
         QString prefKeyBase = QString("plots/%1/%2").arg(pv.sensorID, pv.measurementID);
 
-        // Color
-        if (plotColorButtons.contains(plotKey)) {
-            QColor color(prefs.getValue(prefKeyBase + "/color").toString());
-            if (!color.isValid()) {
-                color = pv.defaultColor;
-            }
-            updateColorButtonStyle(plotColorButtons[plotKey], color);
-        }
+        // Color: the one the plot is drawn in (plotutils.h)
+        if (plotColorButtons.contains(plotKey))
+            updateColorButtonStyle(plotColorButtons[plotKey], plotColor(pv));
 
         // Y-axis mode - block signals during loading
         if (plotYAxisModeComboBoxes.contains(plotKey)) {

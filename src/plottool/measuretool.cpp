@@ -278,14 +278,14 @@ MeasureTool::Measurement MeasureTool::measure(double currentX,
             if (ipv.measurementID != xVariable) continue;
             MeasureModel::Row row;
             row.name  = seriesDisplayName(ipv);
-            row.color = ipv.defaultColor;
+            row.color = plotColor(ipv);
             rows.push_back(row);
         }
 
         for (const PlotValue &pv : enabledPlots) {
             MeasureModel::Row row;
             row.name  = seriesDisplayName(pv);
-            row.color = pv.defaultColor;
+            row.color = plotColor(pv);
 
             // Collect samples from ALL visible sessions.
             QVector<double> samples;
@@ -380,7 +380,7 @@ MeasureTool::Measurement MeasureTool::measure(double currentX,
         if (ipv.measurementID != xVariable) continue;
         MeasureModel::Row row;
         row.name  = seriesDisplayName(ipv);
-        row.color = ipv.defaultColor;
+        row.color = plotColor(ipv);
         row.deltaValue = formatValue(currentX - m_startX, ipv.measurementID, ipv.measurementType);
         row.finalValue = formatXAxisValue(currentX, xVariable, referenceMarkerKey);
         hasData = true;
@@ -390,7 +390,7 @@ MeasureTool::Measurement MeasureTool::measure(double currentX,
     for (const PlotValue &pv : enabledPlots) {
         MeasureModel::Row row;
         row.name  = seriesDisplayName(pv);
-        row.color = pv.defaultColor;
+        row.color = plotColor(pv);
 
         const QVector<double> xData = session->getMeasurement(pv.sensorID, xVariable);
         const QVector<double> yData = session->getMeasurement(pv.sensorID, pv.measurementID);

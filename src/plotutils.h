@@ -3,6 +3,7 @@
 
 #include "momentmodel.h"
 
+#include <QColor>
 #include <QString>
 #include <QVector>
 
@@ -30,6 +31,13 @@ std::optional<double> markerOffsetSeconds(const SessionData &session,
                                           const QString &xVariable);
 
 QString seriesDisplayName(const PlotValue &pv);
+
+/// The colour a plot is drawn in, everywhere it is drawn: the per-plot colour
+/// preference (PreferenceKeys::plotColorKey) when one is stored and valid,
+/// else the registry's default. The plot, the legend, the measure tool and
+/// the plot settings page all read it here, so a customized colour is the
+/// same colour in each.
+QColor plotColor(const PlotValue &pv);
 
 double interpolateAtX(const QVector<double> &xData,
                       const QVector<double> &yData,

@@ -437,18 +437,8 @@ void PlotWidget::updatePlot()
     // Add graphs for each enabled plot
     const QVector<PlotValue> plots = plotModel ? plotModel->enabledPlots() : QVector<PlotValue>{};
     for (const PlotValue &pv : plots) {
-        // Retrieve metadata for the graph
-        QColor color = pv.defaultColor;
-
-        // Check for user-configured color preference
-        QString colorKey = PreferenceKeys::plotColorKey(pv.sensorID, pv.measurementID);
-        QVariant colorPref = PreferencesManager::instance().getValue(colorKey);
-        if (colorPref.isValid()) {
-            QColor prefColor = colorPref.value<QColor>();
-            if (prefColor.isValid()) {
-                color = prefColor;
-            }
-        }
+        // The one colour of the plot: the stored preference, else the default
+        const QColor color = plotColor(pv);
 
         QString sensorID = pv.sensorID;
         QString measurementID = pv.measurementID;

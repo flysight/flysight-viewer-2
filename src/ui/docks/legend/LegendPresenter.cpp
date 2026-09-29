@@ -333,7 +333,7 @@ LegendContent legendContentForMoment(const SessionModel &sessionModel,
             if (ipv.measurementID != xVariable) continue;
             LegendWidget::Row row;
             row.name  = seriesDisplayName(ipv);
-            row.color = ipv.defaultColor;
+            row.color = plotColor(ipv);
             row.value = formatXAxisValue(plotX, xVariable, referenceMarkerKey);
             rows.push_back(row);
             hasData = true;
@@ -343,7 +343,7 @@ LegendContent legendContentForMoment(const SessionModel &sessionModel,
         for (const PlotValue &pv : enabledPlots) {
             LegendWidget::Row row;
             row.name = seriesDisplayName(pv);
-            row.color = pv.defaultColor;
+            row.color = plotColor(pv);
 
             const double v = interpolateSessionMeasurement(*session, pv.sensorID, xVariable, pv.measurementID, rawX);
             if (!std::isnan(v)) {
@@ -414,7 +414,7 @@ LegendContent legendContentForMoment(const SessionModel &sessionModel,
         if (ipv.measurementID != xVariable) continue;
         LegendWidget::Row row;
         row.name  = seriesDisplayName(ipv);
-        row.color = ipv.defaultColor;
+        row.color = plotColor(ipv);
         rows.push_back(row);
     }
 
@@ -422,7 +422,7 @@ LegendContent legendContentForMoment(const SessionModel &sessionModel,
     for (const PlotValue &pv : enabledPlots) {
         LegendWidget::Row row;
         row.name = seriesDisplayName(pv);
-        row.color = pv.defaultColor;
+        row.color = plotColor(pv);
 
         QVector<double> valuesAtCursor;
 

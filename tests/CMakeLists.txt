@@ -119,6 +119,9 @@ endfunction()
 
 # ─────────────────────────────── tests
 flysight_add_test(tst_harness SOURCES tst_harness.cpp)
+# plotColor() lives in the application's plotutils.cpp, compiled in here as
+# tst_python_bridge compiles its application sources
+flysight_add_test(tst_plot_color SOURCES tst_plot_color.cpp "${FLYSIGHT_SRC_DIR}/plotutils.cpp")
 flysight_add_test(tst_smoke   SOURCES tst_smoke.cpp)
 
 # Calculation engine (synthetic calculations against a fake session state)
