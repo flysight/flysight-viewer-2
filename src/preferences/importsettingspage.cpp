@@ -33,16 +33,14 @@ ImportSettingsPage::ImportSettingsPage(QWidget *parent)
 // token is none of them.
 QGroupBox* ImportSettingsPage::createOrientationGroup() {
     QGroupBox *group = new QGroupBox(tr("Orientation"), this);
-    QVBoxLayout *groupLayout = new QVBoxLayout(group);
+    QHBoxLayout *groupLayout = new QHBoxLayout(group);
 
-    QLabel *explanation = new QLabel(tr("Stored into each newly imported recording; change it later per "
-                                        "recording in the logbook's Orientation column."), this);
-    explanation->setWordWrap(true);
+    QLabel *label = new QLabel(tr("Device orientation"), this);
     orientationComboBox = new QComboBox(this);
     for (const Fusion::Orientation &orientation : Fusion::Orientation::all())
         orientationComboBox->addItem(orientation.label(), orientation.token());
 
-    groupLayout->addWidget(explanation);
+    groupLayout->addWidget(label);
     groupLayout->addWidget(orientationComboBox);
 
     const QString stored = PreferencesManager::instance().getValue(PreferenceKeys::ImportOrientation).toString();
