@@ -9,7 +9,8 @@
 #     attribute name, one compatibility marker, one number formatter, one
 #     emitter of dependencyChanged, one saver, one import path, one helper
 #     that registers every constant attribute default, which the importer
-#     and the legacy backfill no longer write for wind);
+#     and the legacy backfill no longer write for wind, one owner of the
+#     orientation tokens);
 #   - the mechanisms of sensor-fusion-clean-port that have no successor stay
 #     absent (acceptance 120), and the structure that replaced them stays in
 #     place: one worker thread and no locks, GTSAM confined to the fusion
@@ -248,6 +249,17 @@ expect_none("the replaced default helpers stay gone" "register(Sp|Wsp)Default" s
 expect_none("no wind default in the importer or the backfill" "_WIND_|WindN|WindE"
   src/dataimporter.cpp src/dataimporter.h src/logbookmanager.cpp src/logbookmanager.h)
 
+# ─────────────────────────────── orientation
+# The orientation type (Fusion::Orientation) is the one place that spells the
+# vocabulary of the orientation attribute: its choices, its constant default
+# and the attitude's parser all come from it. Tests and documents spell tokens
+# legitimately, so only src is searched. Allow: none expected; code that needs
+# a token asks the type (a comment names an orientation in words, "forward +y,
+# up +z", or by its label). Never add a file to the allowed regex.
+audit_group(orientation)
+expect_only("one authority: orientation tokens" "[+-][xyz],[+-][xyz]"
+  "^src/fusion/orientation\\.(cpp|h)$" src)
+
 # The recording-wide local frame is the only projection: the simplified track
 # (and anything else that needs metres) consumes Local/..., never its own.
 # Allow: a second legitimate user of LocalCartesian is added to the
@@ -395,7 +407,8 @@ expect_only("GTSAM headers: kernel and its tests only" "#include <gtsam/"
 expect_only("oneTBB: the solver-threads adapter only" "#include [<\"](oneapi/)?tbb/"
   "^src/fusion/solverthreads\\.cpp$" src tests)
 expect_none("public and registration files are GTSAM-free" "#include <(gtsam|Eigen)"
-  src/fusion/fusion.h src/fusion/fusionregistration.h src/fusion/fusionregistration.cpp)
+  src/fusion/fusion.h src/fusion/fusionregistration.h src/fusion/fusionregistration.cpp
+  src/fusion/orientation.h src/fusion/orientation.cpp)
 # Allow: only the registration adapter may see the engine and the session keys.
 expect_none("the kernel is pure"
   "#include [<\"](sessiondata|sessionmodel|engine/|jobqueue|${DEMAND_FILES}|preferences/|QApplication|QWidget|QtWidgets|QtGui)"

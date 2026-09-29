@@ -65,16 +65,31 @@ QList<FitOutputChannel> fitOutputChannels(const Result &result);
 ///    accE, accD against the wind-corrected velN, velE, velD.
 ///  - builtin.fusion.accCrossTrack (on demand): Fusion/accCrossTrack, the
 ///    GNSS cross-track acceleration of the same inputs.
+///  - builtin.default._ORIENTATION (Calculations::addConstantDefault): the
+///    constant default of the orientation attribute _ORIENTATION, forward +y,
+///    up +z (Orientation::defaultOrientation(), fusion/orientation.h). The
+///    attribute's definition (category "Session", "Orientation", a Choice of
+///    the 24 orientations) is registered with it, once per process.
+///  - builtin.fusion.attitude (on demand): Fusion/bodyHeading, bodyPitch and
+///    bodyRoll, published together, in degrees: the aircraft Euler angles of
+///    the body frame the orientation attribute defines, from the quaternion
+///    qx..qw. Heading is the forward axis clockwise from north, unwrapped and
+///    offset by the course reference angle exactly as GNSS/course is (its
+///    inputs include GNSS/velN, velE, _time and _COURSE_REF), pitch the
+///    forward axis above the horizontal in [-90, 90], roll about the forward
+///    axis, right side down positive, in (-180, 180]. Unavailable for a stored
+///    orientation that is not one of the 24.
 ///
 /// The derived values' inputs exist only once the fit has published, so they
 /// appear with it and never start it. Vertical acceleration is Fusion/accD
 /// itself (positive down, like GNSS/accD) and has no calculation of its own.
 ///
 /// The application's one entry point into this library: it calls this directly
-/// after Calculations::registerBuiltInCalculations(). The three helpers above
-/// are what the tests' tooling (fusion_runner) uses to feed the kernel exactly
-/// what the registered calculation feeds it. flysight_core never references
-/// any of them.
+/// after Calculations::registerBuiltInCalculations(), and it also registers the
+/// orientation attribute's definition in the AttributeRegistry. The three
+/// helpers above are what the tests' tooling (fusion_runner) uses to feed the
+/// kernel exactly what the registered calculation feeds it. flysight_core
+/// never references any of them.
 void registerFusionCalculations(CalculationRegistry &registry = CalculationRegistry::instance());
 
 } // namespace FlySight::Fusion

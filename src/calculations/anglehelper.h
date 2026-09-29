@@ -11,8 +11,9 @@ namespace Calculations {
 /// predecessor by the shortest adjacent change, so whole turns accumulate
 /// over the sequence. A change of exactly half a turn is not wrapped.
 ///
-/// The one unwrap rule of the application: the GNSS course and the sensor
-/// fusion's roll, pitch and yaw both use it.
+/// The one unwrap rule of the application: the GNSS course, the sensor
+/// fusion's roll, pitch and yaw, and the heading of the body frame derived
+/// from the fused attitude all use it.
 inline QVector<double> unwrapDegrees(const QVector<double> &angles)
 {
     if (angles.isEmpty())

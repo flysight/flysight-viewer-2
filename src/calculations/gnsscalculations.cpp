@@ -1,5 +1,5 @@
 #include "gnsscalculations.h"
-#include "anglehelper.h"
+#include "coursehelper.h"
 #include "derivativehelper.h"
 #include "isadensity.h"
 #include "../sessiondata.h"
@@ -285,43 +285,18 @@ void Calculations::registerGnssCalculations(CalculationRegistry &registry)
         { gnss("velN"), gnss("velE"), gnss(SessionKeys::Time),
           CalcInput::attribute(SessionKeys::CourseRef) },
         [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
-        QVector<double> velN = ctx.measurement("GNSS", "velN");
-        QVector<double> velE = ctx.measurement("GNSS", "velE");
-        QVector<double> time = ctx.measurement("GNSS", SessionKeys::Time);
-
-        if (velN.isEmpty() || velE.isEmpty() || time.isEmpty()) {
-            return std::nullopt;
-        }
-        if (velN.size() != velE.size() || velN.size() != time.size()) {
+        const QVector<double> time = ctx.measurement("GNSS", SessionKeys::Time);
+        const std::optional<QVector<double>> unwrapped = Calculations::unwrappedCourse(
+            ctx.measurement("GNSS", "velN"), ctx.measurement("GNSS", "velE"), time);
+        if (!unwrapped) {
             return std::nullopt;
         }
 
-        // Compute raw headings in degrees
-        QVector<double> rawDeg;
-        rawDeg.reserve(velN.size());
-        for (int i = 0; i < velN.size(); ++i) {
-            rawDeg.append(std::atan2(velE[i], velN[i]) * 180.0 / M_PI);
-        }
-
-        // Unwrap phase
-        QVector<double> course = Calculations::unwrapDegrees(rawDeg);
-
-        // Determine reference angle from CourseRef time
-        double courseRef = 0.0;
-        bool ok;
-        double refTime = ctx.attribute(SessionKeys::CourseRef).toDouble(&ok);
-        if (ok && refTime >= time.first() && refTime <= time.last()) {
-            auto it = std::lower_bound(time.constBegin(), time.constEnd(), refTime);
-            int idx = std::clamp<int>(int(it - time.constBegin()), 1, time.size() - 1);
-            if (qFuzzyCompare(refTime, time[idx])) {
-                courseRef = course[idx];
-            } else if (qFuzzyCompare(refTime, time[idx - 1])) {
-                courseRef = course[idx - 1];
-            } else {
-                double t = (refTime - time[idx - 1]) / (time[idx] - time[idx - 1]);
-                courseRef = course[idx - 1] + t * (course[idx] - course[idx - 1]);
-            }
-        }
+        // The reference angle, the one the fused heading is offset by too
+        // (coursehelper.h)
+        QVector<double> course = *unwrapped;
+        const double courseRef = Calculations::courseReferenceAngle(
+            course, time, ctx.attribute(SessionKeys::CourseRef));
 
         // Subtract course reference
         for (int i = 0; i < course.size(); ++i) {

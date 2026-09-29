@@ -149,6 +149,10 @@ running computation.
   track is "not computed" again.
 - **Changing settings the computation does not read** (altitude markers, other
   preferences, Python plugins it does not use) never discards a kept result.
+- **Changing a recording's Orientation** (the mount of the FlySight on the
+  body, [SENSOR_FUSION.md](SENSOR_FUSION.md) section 2) never discards a kept
+  sensor fusion result: heading, pitch and roll, and any column over them,
+  are recomputed from it at once, and nothing is counted in the status bar.
 - Moving markers, zooming, panning and changing display settings never discard
   a result.
 

@@ -259,6 +259,12 @@ add_library(flysight_model STATIC
   # needs Qt Core only, so neither this library nor the Python bridge gains a
   # dependency.
   csvformat.cpp              csvformat.h
+
+  # The attribute registry (what the logbook can show as a column). Here
+  # rather than in flysight_core so that the fusion registration can register
+  # the orientation attribute's definition without linking flysight_core; it
+  # needs Qt Core only.
+  attributeregistry.cpp      attributeregistry.h
 )
 target_include_directories(flysight_model PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(flysight_model PUBLIC Qt${QT_VERSION_MAJOR}::Core)
@@ -292,7 +298,6 @@ add_library(flysight_core STATIC
   # item model of its records
   jobmodel.cpp               jobmodel.h
   jobqueue.cpp               jobqueue.h
-  attributeregistry.cpp      attributeregistry.h
   markerregistry.cpp         markerregistry.h
   plotregistry.cpp           plotregistry.h
   # Plot check state (widget-free) and the demand layer: what requested
@@ -340,6 +345,7 @@ add_library(flysight_core STATIC
   calculations/anglehelper.h
   calculations/timefithelper.h
   calculations/trackhelper.h
+  calculations/coursehelper.h
   calculations/isadensity.cpp                  calculations/isadensity.h
 )
 target_link_libraries(flysight_core
@@ -351,10 +357,15 @@ target_link_libraries(flysight_core
 # (PRIVATE: fusion/fusion.h is GTSAM-free, so consumers get the link
 # dependency but none of GTSAM's headers or definitions). Pure kernel plus its
 # registration (fusion/fusionregistration.*, the only file here that sees the
-# engine); no session model, no job queue, no Qt GUI. flysight_core never
-# references this library: the application calls its one entry point.
+# engine, and which also registers the orientation attribute's definition in
+# the attribute registry of flysight_model); no session model, no job queue,
+# no Qt GUI. flysight_core never references this library: the application
+# calls its one entry point.
 add_library(flysight_fusion STATIC
   fusion/fusionregistration.cpp        fusion/fusionregistration.h
+  # The orientation of the device on the body: tokens, labels and the
+  # body-to-device rotation, pure (Qt Core only)
+  fusion/orientation.cpp               fusion/orientation.h
   fusion/fusion.cpp                    fusion/fusion.h
   fusion/fusionpipeline.h              fusion/fusionprogress.h
   fusion/fusionsamples.cpp             fusion/fusionsamples.h

@@ -278,6 +278,15 @@ milliseconds.
 Attribute text: strings verbatim (commas allowed), a line break replaced by
 one space, booleans as `true` / `false`, integers exactly.
 
+A choice attribute, such as the Orientation (`_ORIENTATION`, which device axes
+point forward and up), is saved as its token, verbatim text, for example
+`$VAR,_ORIENTATION,+x,+z`, and only when the user set one; choosing "Default"
+removes the line. A recording without the line reads the constant default
+(`docs/CALCULATIONS.md` section 5), for the Orientation forward +y, up +z. A
+hand-edited token outside the list is kept and shown as written, and for the
+Orientation heading, pitch and roll are then unavailable
+([SENSOR_FUSION.md](SENSOR_FUSION.md), section 2).
+
 A save **fails and leaves the previous file intact** when a sensor has columns
 of unequal length, when a sensor name, column label, or unit contains a comma
 or a line break, or when the session holds a `SCHEMA_VER` the importer would
@@ -300,7 +309,9 @@ migration.
 Very old session files gain `_JUMPER_MASS` and `_PLANFORM_AREA` lines on their
 next save (a legacy backfill; purely additive). Wind is no longer backfilled: a
 session without it reads zero from its constant default, and a file that
-carries wind keeps it.
+carries wind keeps it. Existing logbooks gain nothing for the Orientation
+either: every recording reads the default orientation, and nothing is
+written.
 
 ## 11. Logbook column cache
 

@@ -1,5 +1,6 @@
 #include "fusion/fusionregistration.h"
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 
@@ -7,11 +8,16 @@
 #include <QString>
 #include <QVector>
 
+#include "attributeregistry.h"
+#include "calculations/anglehelper.h"
+#include "calculations/attributecalculations.h"
+#include "calculations/coursehelper.h"
 #include "calculations/registration.h"
 #include "calculations/timefithelper.h"
 #include "calculations/trackhelper.h"
 #include "engine/calculationprogress.h"
 #include "fusion/fusion.h"
+#include "fusion/orientation.h"
 #include "fusion/solverthreads.h"
 #include "sessiondata.h"
 
@@ -352,6 +358,155 @@ void registerTrackAcceleration(CalculationRegistry &registry, const char *name, 
     Calculations::addCalculation(registry, d);
 }
 
+// The orientation attribute. Its definition goes into the attribute registry
+// once per process: the tests and fusion_runner call the entry point for more
+// than one calculation registry, the attribute registry cannot remove a
+// definition, and a second one would list the attribute twice in the Add
+// Column dialog. Its constant default goes into every registry given. The
+// choices and the default come from Fusion::Orientation, so nothing here
+// spells a token.
+void registerOrientation(CalculationRegistry &registry)
+{
+    const QString key = QString::fromLatin1(SessionKeys::Orientation);
+    AttributeRegistry &attributes = AttributeRegistry::instance();
+    if (!attributes.findByKey(key)) {
+        QVector<AttributeChoice> choices;
+        for (const Fusion::Orientation &orientation : Fusion::Orientation::all())
+            choices.append({ orientation.token(), orientation.label() });
+        attributes.registerAttribute({ QStringLiteral("Session"), QStringLiteral("Orientation"), key,
+                                       AttributeFormatType::Choice, true, QString(), choices });
+    }
+    Calculations::addConstantDefault(registry, key, Fusion::Orientation::defaultOrientation().token());
+}
+
+constexpr double kDegreesPerRadian = 57.295779513082320876798;
+
+// Heading, pitch and roll of the body frame, in degrees, for one sample.
+struct BodyAngles {
+    double heading, pitch, roll;
+};
+
+// The angles of one sample of the fit's quaternion (x, y, z, w; Hamilton,
+// device to north-east-down, as fillOutputChannels() publishes it: R v_device
+// = v_NED) on the body frame whose body-to-device rotation is `c`. The body's
+// rotation to north-east-down is M = R C, and its aircraft Euler angles are
+// heading = atan2(M10, M00), pitch = asin(-M20), roll = atan2(M21, M22): the
+// convention of the fit's own roll, pitch and yaw, which these are when the
+// body frame is the device frame. Nothing for a quaternion that is not finite
+// or has no length: one NaN would reach every later heading through the
+// unwrap.
+std::optional<BodyAngles> bodyAngles(double qx, double qy, double qz, double qw,
+                                     const Fusion::Orientation::Matrix &c)
+{
+    const double norm = std::sqrt(qx*qx + qy*qy + qz*qz + qw*qw);
+    if (!std::isfinite(norm) || norm == 0.0)
+        return std::nullopt;
+    const double x = qx / norm, y = qy / norm, z = qz / norm, w = qw / norm;
+
+    const double r[3][3] = {
+        { 1 - 2*(y*y + z*z), 2*(x*y - z*w),     2*(x*z + y*w) },
+        { 2*(x*y + z*w),     1 - 2*(x*x + z*z), 2*(y*z - x*w) },
+        { 2*(x*z - y*w),     2*(y*z + x*w),     1 - 2*(x*x + y*y) }
+    };
+    const auto m = [&r, &c](int row, int column) {
+        return r[row][0]*c[0][column] + r[row][1]*c[1][column] + r[row][2]*c[2][column];
+    };
+
+    BodyAngles angles;
+    angles.heading = std::atan2(m(1, 0), m(0, 0)) * kDegreesPerRadian;
+    // Rounding may take |M20| a hair past 1 near the vertical
+    angles.pitch = std::asin(std::clamp(-m(2, 0), -1.0, 1.0)) * kDegreesPerRadian;
+    angles.roll = std::atan2(m(2, 1), m(2, 2)) * kDegreesPerRadian;
+    // atan2 gives -180 for a negative zero; roll's range is (-180, 180]
+    if (angles.roll <= -180.0)
+        angles.roll += 360.0;
+    return angles;
+}
+
+// Fusion/bodyHeading, bodyPitch and bodyRoll from the fit's quaternion and the
+// orientation attribute, published together. It may run on any thread while
+// another session evaluates the same descriptor, so it keeps no state, and
+// like everything in this library it logs nothing. Unavailable for a token
+// that is not an orientation, for empty or unequal quaternion arrays, for a
+// quaternion sample that is not finite or has no length, and, like
+// GNSS/course, without the GNSS course.
+CalculationResult computeAttitude(const EvaluationContext &ctx)
+{
+    const std::optional<Fusion::Orientation> orientation =
+        Fusion::Orientation::fromToken(ctx.attribute(SessionKeys::Orientation).toString());
+    if (!orientation)
+        return CalculationResult::unavailable();
+
+    const QVector<double> qx = ctx.measurement(kSensor, "qx");
+    const QVector<double> qy = ctx.measurement(kSensor, "qy");
+    const QVector<double> qz = ctx.measurement(kSensor, "qz");
+    const QVector<double> qw = ctx.measurement(kSensor, "qw");
+    const qsizetype n = qx.size();
+    if (n == 0 || qy.size() != n || qz.size() != n || qw.size() != n)
+        return CalculationResult::unavailable();
+
+    // Heading is referenced as GNSS/course is, by the same angle
+    const QVector<double> gnssTime = ctx.measurement("GNSS", SessionKeys::Time);
+    const std::optional<QVector<double>> course = Calculations::unwrappedCourse(
+        ctx.measurement("GNSS", "velN"), ctx.measurement("GNSS", "velE"), gnssTime);
+    if (!course)
+        return CalculationResult::unavailable();
+    const double reference = Calculations::courseReferenceAngle(
+        *course, gnssTime, ctx.attribute(SessionKeys::CourseRef));
+
+    const Fusion::Orientation::Matrix c = orientation->bodyToDevice();
+    QVector<double> heading, pitch, roll;
+    heading.reserve(n);
+    pitch.reserve(n);
+    roll.reserve(n);
+    for (qsizetype i = 0; i < n; ++i) {
+        const std::optional<BodyAngles> angles = bodyAngles(qx[i], qy[i], qz[i], qw[i], c);
+        if (!angles)
+            return CalculationResult::unavailable();
+        heading.append(angles->heading);
+        pitch.append(angles->pitch);
+        roll.append(angles->roll);
+    }
+
+    heading = Calculations::unwrapDegrees(heading);
+    for (double &h : heading)
+        h -= reference;
+
+    return CalculationResult()
+        .setMeasurement(kSensor, "bodyHeading", heading)
+        .setMeasurement(kSensor, "bodyPitch", pitch)
+        .setMeasurement(kSensor, "bodyRoll", roll);
+}
+
+// Fusion/bodyHeading, bodyPitch, bodyRoll: the attitude of the body frame
+// that the orientation attribute defines. On demand and waiting on the fit
+// like accH. The fit does not read the attribute, so an orientation edit
+// recomputes the angles and never refits. The last four inputs are exactly
+// GNSS/course's, so heading is available exactly when course is.
+void registerAttitude(CalculationRegistry &registry)
+{
+    CalculationDescriptor d;
+    d.id = QStringLiteral("builtin.fusion.attitude");
+    d.inputs = {
+        CalcInput::measurement(kSensor, "qx"),
+        CalcInput::measurement(kSensor, "qy"),
+        CalcInput::measurement(kSensor, "qz"),
+        CalcInput::measurement(kSensor, "qw"),
+        CalcInput::attribute(SessionKeys::Orientation),
+        CalcInput::measurement("GNSS", "velN"),
+        CalcInput::measurement("GNSS", "velE"),
+        CalcInput::measurement("GNSS", SessionKeys::Time),
+        CalcInput::attribute(SessionKeys::CourseRef)
+    };
+    d.outputs = {
+        DependencyKey::measurement(kSensor, "bodyHeading"),
+        DependencyKey::measurement(kSensor, "bodyPitch"),
+        DependencyKey::measurement(kSensor, "bodyRoll")
+    };
+    d.compute = computeAttitude;
+    Calculations::addCalculation(registry, d);
+}
+
 } // namespace
 
 void Fusion::registerFusionCalculations(CalculationRegistry &registry)
@@ -362,4 +517,7 @@ void Fusion::registerFusionCalculations(CalculationRegistry &registry)
     registerElevation(registry);
     registerTrackAcceleration(registry, "accAlongTrack", Calculations::alongTrackAcceleration);
     registerTrackAcceleration(registry, "accCrossTrack", Calculations::crossTrackAcceleration);
+    // The vocabulary before its reader
+    registerOrientation(registry);
+    registerAttitude(registry);
 }

@@ -227,11 +227,14 @@ void FusionSessionTest::registrationShape()
     const CalculationRegistry &registry = CalculationRegistry::instance();
 
     // Registered after every built-in, in this order; the derived values'
-    // descriptors are tst_fusion_derived's
-    QCOMPARE(registry.registeredIds().mid(registry.registeredIds().size() - 6),
+    // descriptors, the orientation's constant default and the attitude are
+    // tst_fusion_derived's
+    QCOMPARE(registry.registeredIds().mid(registry.registeredIds().size() - 8),
              QStringList({kFit, kAccH, kSystemTime, QStringLiteral("builtin.fusion.z"),
                           QStringLiteral("builtin.fusion.accAlongTrack"),
-                          QStringLiteral("builtin.fusion.accCrossTrack")}));
+                          QStringLiteral("builtin.fusion.accCrossTrack"),
+                          QStringLiteral("builtin.default._ORIENTATION"),
+                          QStringLiteral("builtin.fusion.attitude")}));
     QCOMPARE(QString::fromLatin1(Fusion::FitCalculationId), kFit);
     QCOMPARE(registry.title(kFit), QStringLiteral("Sensor fusion"));
 

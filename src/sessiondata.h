@@ -97,6 +97,11 @@ namespace SessionKeys {
     constexpr char CourseRef[] = "_COURSE_REF";
     constexpr char JumperMass[] = "_JUMPER_MASS";
     constexpr char PlanformArea[] = "_PLANFORM_AREA";
+
+    // Which device axes point forward and up on the body, as a token of
+    // Fusion::Orientation (src/fusion/orientation.h), the one owner of that
+    // vocabulary. Unset, it reads the orientation's constant default.
+    constexpr char Orientation[] = "_ORIENTATION";
 }
 
 /// One column of the source layer: samples and unit text exactly as recorded.

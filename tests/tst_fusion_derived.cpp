@@ -1,27 +1,54 @@
 // What is derived from the fit's published outputs, on real SessionData
-// engines bound to the global registry: fused elevation and the fused
-// along-track and cross-track accelerations. The solver never runs here. The
-// fit's outputs are stored as data (syntheticFitSession(), fusionsessions.h),
-// so the derivations are held to exact known answers, and only the tests
-// that the derived values wait on the fit use a fixture session with the
-// fit's inputs, which they never request.
+// engines bound to the global registry: fused elevation, the fused
+// along-track and cross-track accelerations, and the attitude of the body
+// frame (heading, pitch and roll) that the orientation attribute defines. The
+// solver never runs here. The fit's outputs are stored as data
+// (syntheticFitSession(), fusionsessions.h), so the derivations are held to
+// exact known answers, and only the tests that the derived values wait on
+// the fit use a fixture session with the fit's inputs, which they never
+// request.
 //
 // Expected values are literals chosen to be exactly representable, except
 // where "the fused value is the GNSS definition" is the rule being tested:
-// there the GNSS calculation on the same samples is the expectation.
+// there the GNSS calculation on the same samples is the expectation. The
+// attitude's expectations are built by hand here: Euler angles to a
+// body-to-north-east-down quaternion, composed with a hand-written constant
+// for the default mount, never from the orientation type's own rotation.
+// Tokens are spelled literally.
+//
+// The orientation vocabulary (Fusion::Orientation) and the Orientation
+// column's model, edit and bulk edit (through ChoiceFixture, on fixture
+// sessions that may enter a SessionModel) are tested here too: this is the
+// executable that links the fusion library, which registers the attribute.
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <memory>
 #include <optional>
 
+#include <QSignalSpy>
 #include <QtTest>
 
+#include "attributeregistry.h"
 #include "calculationdemand.h"
+#include "calculations/anglehelper.h"
+#include "choicefixture.h"
 #include "engine/calculationengine.h"
 #include "engine/calculationregistry.h"
+#include "fixturebuilder.h"
 #include "fusion/fusionregistration.h"
+#include "fusion/orientation.h"
 #include "fusiongolden.h"
 #include "fusionsessions.h"
+#include "idlescheduler.h"
+#include "logbookcolumn.h"
+#include "logbookmanager.h"
+#include "logbookprobe.h"
+#include "preferences/preferencekeys.h"
+#include "preferences/preferencesmanager.h"
 #include "sessiondata.h"
+#include "sessionmodel.h"
 #include "testenvironment.h"
 #include "testmain.h"
 #include "testutil.h"
@@ -39,6 +66,8 @@ const QString kSystemTime = QStringLiteral("builtin.fusion.systemTime");
 const QString kZ = QStringLiteral("builtin.fusion.z");
 const QString kAlong = QStringLiteral("builtin.fusion.accAlongTrack");
 const QString kCross = QStringLiteral("builtin.fusion.accCrossTrack");
+const QString kOrientationDefault = QStringLiteral("builtin.default._ORIENTATION");
+const QString kAttitude = QStringLiteral("builtin.fusion.attitude");
 
 QVector<double> fusion(const SessionData &session, const QString &name)
 {
@@ -102,6 +131,154 @@ QList<TrackSample> calmSamples()
 const QVector<double> kCalmAlong{3, -3, 5, 0};
 const QVector<double> kCalmCross{4, 4, 0, 5};
 
+// ---- the attitude's hand-built expectations ---------------------------------------
+
+constexpr double kDeg = 3.14159265358979323846 / 180.0;
+/// Angles within this many degrees of their expectation pass (criterion 8).
+constexpr double kAngleTolerance = 1e-9;
+
+/// A quaternion, x, y, z, w (Hamilton).
+struct Quat {
+    double x, y, z, w;
+};
+
+Quat hamilton(const Quat &a, const Quat &b)
+{
+    return {a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+            a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+            a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+            a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+}
+
+/// The body-to-north-east-down rotation of the aircraft Euler angles, in
+/// degrees: heading about down, then pitch about the new right axis, then
+/// roll about the forward axis.
+Quat fromEuler(double heading, double pitch, double roll)
+{
+    const double ch = std::cos(heading * kDeg / 2), sh = std::sin(heading * kDeg / 2);
+    const double cp = std::cos(pitch * kDeg / 2), sp = std::sin(pitch * kDeg / 2);
+    const double cr = std::cos(roll * kDeg / 2), sr = std::sin(roll * kDeg / 2);
+    return {sr * cp * ch - cr * sp * sh,
+            cr * sp * ch + sr * cp * sh,
+            cr * cp * sh - sr * sp * ch,
+            cr * cp * ch + sr * sp * sh};
+}
+
+/// The default mount (forward +y, up +z), written by hand: the body's forward
+/// axis is the device's y, right is x and down is -z. That rotation is half a
+/// turn about (x + y)/sqrt 2 and its own inverse, so the device-to-NED
+/// rotation of a body attitude B is B composed with it.
+const Quat kDefaultMount{std::sqrt(0.5), std::sqrt(0.5), 0.0, 0.0};
+
+/// The fit's quaternion of a device mounted in the default orientation on a
+/// body with these angles.
+Quat deviceQuaternion(double heading, double pitch, double roll)
+{
+    return hamilton(fromEuler(heading, pitch, roll), kDefaultMount);
+}
+
+/// The fit's quaternion channels of `samples`.
+QHash<QString, QVector<double>> quaternionChannels(const QList<Quat> &samples)
+{
+    QHash<QString, QVector<double>> channels;
+    for (const Quat &q : samples) {
+        channels[QStringLiteral("qx")].append(q.x);
+        channels[QStringLiteral("qy")].append(q.y);
+        channels[QStringLiteral("qz")].append(q.z);
+        channels[QStringLiteral("qw")].append(q.w);
+    }
+    return channels;
+}
+
+/// A course reference before every GNSS track of this file: outside the
+/// range, so the course reference angle is zero and heading is measured from
+/// north. The GNSS course, and with it the attitude, needs _COURSE_REF to be
+/// available: a synthetic session has no exit for it to default to.
+constexpr double kCourseRefBeforeTrack = kFixtureEpochUtc - 1000.0;
+
+/// Stores a GNSS track on `session` whose raw course at fix j is courseDeg[j]
+/// (at 10 m/s), one fix a second from kFixtureEpochUtc, and the course
+/// reference kCourseRefBeforeTrack. GNSS/_time is the passthrough of
+/// GNSS/time.
+void addGnssCourse(SessionData &session, const QVector<double> &courseDeg)
+{
+    QVector<double> time, velN, velE;
+    for (qsizetype j = 0; j < courseDeg.size(); ++j) {
+        time.append(kFixtureEpochUtc + double(j));
+        velN.append(10.0 * std::cos(courseDeg[j] * kDeg));
+        velE.append(10.0 * std::sin(courseDeg[j] * kDeg));
+    }
+    session.setSourceMeasurement("GNSS", "time", time, "s");
+    session.setSourceMeasurement("GNSS", "velN", velN, "m/s");
+    session.setSourceMeasurement("GNSS", "velE", velE, "m/s");
+    session.setAttribute(SessionKeys::CourseRef, kCourseRefBeforeTrack);
+}
+
+/// A synthetic session with these quaternions and, when `withCourse`, a
+/// northward GNSS track with a course reference outside it: heading is then
+/// measured from north.
+SessionData attitudeSession(const QString &id, const QList<Quat> &samples, bool withCourse = true)
+{
+    SessionData session = syntheticFitSession(id, quaternionChannels(samples));
+    if (withCourse)
+        addGnssCourse(session, {0.0, 0.0, 0.0});
+    return session;
+}
+
+QVector<double> heading(const SessionData &s) { return fusion(s, QStringLiteral("bodyHeading")); }
+QVector<double> pitch(const SessionData &s) { return fusion(s, QStringLiteral("bodyPitch")); }
+QVector<double> roll(const SessionData &s) { return fusion(s, QStringLiteral("bodyRoll")); }
+
+/// Whether two angles agree within kAngleTolerance, modulo 360 (so that an
+/// expected 180 accepts -180).
+bool sameAngle(double got, double expected, double tolerance = kAngleTolerance)
+{
+    return std::abs(std::remainder(got - expected, 360.0)) <= tolerance;
+}
+
+/// Empty when the one-sample attitude of `session` is (h, p, r): heading and
+/// roll modulo 360, pitch plainly, each within the tolerance.
+QString attitudeDifference(const SessionData &session, double h, double p, double r)
+{
+    const QVector<double> hs = heading(session), ps = pitch(session), rs = roll(session);
+    if (hs.size() != 1 || ps.size() != 1 || rs.size() != 1)
+        return QStringLiteral("sizes %1, %2, %3").arg(hs.size()).arg(ps.size()).arg(rs.size());
+    if (!sameAngle(hs[0], h) || std::abs(ps[0] - p) > kAngleTolerance || !sameAngle(rs[0], r)) {
+        return QStringLiteral("got (%1, %2, %3), expected (%4, %5, %6)")
+            .arg(hs[0], 0, 'g', 17).arg(ps[0], 0, 'g', 17).arg(rs[0], 0, 'g', 17)
+            .arg(h).arg(p).arg(r);
+    }
+    return QString();
+}
+
+/// The unit vector of an axis text ("+x" ... "-z"), read here and not from
+/// the orientation type.
+std::array<int, 3> axisOf(const QString &text)
+{
+    std::array<int, 3> v{0, 0, 0};
+    v[size_t(text.at(1).toLatin1() - 'x')] = text.at(0) == QLatin1Char('+') ? 1 : -1;
+    return v;
+}
+
+// ---- the Orientation column ------------------------------------------------------------
+
+const QString kDefaultLabel = QStringLiteral("forward +y, up +z");
+
+/// The bulk edit task's activations on the model's scheduler (as tst_choice_attribute)
+struct BulkEditSignals {
+    explicit BulkEditSignals(SessionModel &model)
+        : active(&model.scheduler(), &IdleScheduler::activeTaskChanged)
+    {}
+    int activations() const
+    {
+        int count = 0;
+        for (const QList<QVariant> &args : active)
+            count += args.at(0).toInt() == SessionModel::BulkEditTask ? 1 : 0;
+        return count;
+    }
+    QSignalSpy active;
+};
+
 } // namespace
 
 class FusionDerivedTest : public QObject {
@@ -119,8 +296,46 @@ private slots:
     void trackAccelerationsKnownAnswers();
     void trackAccelerationsAreTheGnssDefinitions();
 
+    void orientationVocabularyHasTwentyFourPairs();
+    void orientationRotationIsProper();
+    void orientationDefinitionIsTheEnumeration();
+    void attitudeRegistrationShape();
+    void attitudeWaitsOnTheFit();
+    void levelNorthFacingBodyReadsZero();
+    void knownAnglesComeBack_data();
+    void knownAnglesComeBack();
+    void headingUnwrapsThroughAFullTurn();
+    void rollAndPitchStayInTheirNaturalRanges();
+    void sideMountPermutesTheAngles_data();
+    void sideMountPermutesTheAngles();
+    void deviceFrameMountGivesTheFitsOwnAngles();
+    void invalidStoredOrientationMakesAttitudeUnavailable();
+    void storedOrientationRecomputesWithoutAFit();
+
+    void orientationColumnShowsTheDefaultWithoutAWrite_data();
+    void orientationColumnShowsTheDefaultWithoutAWrite();
+    void orientationEditStoresATokenAndRefusesOthers_data();
+    void orientationEditStoresATokenAndRefusesOthers();
+    void orientationDefaultRemovesTheStoredValue_data();
+    void orientationDefaultRemovesTheStoredValue();
+    void orientationBulkEdit_data();
+    void orientationBulkEdit();
+
 private:
+    static void addRowKinds()
+    {
+        QTest::addColumn<bool>("stubs");
+        QTest::newRow("loaded") << false;
+        QTest::newRow("stubs") << true;
+    }
+    /// Two fixture sessions, o1 storing `o1Token` when given and o2 nothing,
+    /// in a SessionModel over a fresh logbook with the Orientation column,
+    /// loaded or as stubs after a restart. Empty on success.
+    [[nodiscard]] QString startOrientationWorld(bool stubs, const std::optional<QString> &o1Token = std::nullopt);
+    static QByteArray fileBytes(const QString &id) { return readFileBytes(sessionFilePath(id)); }
+
     QStringList m_registryBefore;
+    std::unique_ptr<ChoiceFixture> m_fixture;
 };
 
 void FusionDerivedTest::initTestCase()
@@ -128,6 +343,9 @@ void FusionDerivedTest::initTestCase()
     // As the application does: the built-ins, then sensor fusion
     TestEnvironment::instance().registerBuiltIns();
     registerFusionOnce();
+    // For the Orientation column's tests, as every suite that sets columns
+    PreferencesManager::instance().registerPreference(PreferenceKeys::LogbookColumnsVersion, 0);
+    LogbookColumnStore::instance().setColumns({descriptionColumn()});
 }
 
 void FusionDerivedTest::init()
@@ -136,8 +354,10 @@ void FusionDerivedTest::init()
     m_registryBefore = CalculationRegistry::instance().registeredIds();
 }
 
+// The model goes before the checks
 void FusionDerivedTest::cleanup()
 {
+    m_fixture.reset();
     QCOMPARE(CalculationRegistry::instance().registeredIds(), m_registryBefore);
     QCOMPARE(CalculationRegistry::instance().enrolledEngineCount(), 0);
 }
@@ -172,8 +392,12 @@ void FusionDerivedTest::derivedRegistrationShape()
 {
     const CalculationRegistry &registry = CalculationRegistry::instance();
 
+    // In this order after the system time; the whole tail is pinned by
+    // tst_fusion_session::registrationShape
     const QStringList ids = registry.registeredIds();
-    QCOMPARE(ids.mid(ids.size() - 6), QStringList({kFit, kAccH, kSystemTime, kZ, kAlong, kCross}));
+    const qsizetype systemTime = ids.indexOf(kSystemTime);
+    QVERIFY(systemTime >= 0);
+    QCOMPARE(ids.mid(systemTime + 1, 3), QStringList({kZ, kAlong, kCross}));
 
     const struct {
         const QString &id;
@@ -426,6 +650,730 @@ void FusionDerivedTest::trackAccelerationsAreTheGnssDefinitions()
 
     QCOMPARE(session.calculationEngine().runCount(kFit), 0);
     QCOMPARE(session.calculationEngine().undeclaredReadCount(), 0);
+}
+
+// ---- The orientation vocabulary --------------------------------------------------------
+
+// Criterion 1: 24 distinct pairs in the enumeration order of D1, the default
+// first; tokens and labels distinct, each token parsing back to its pair, and
+// nothing else parsing.
+void FusionDerivedTest::orientationVocabularyHasTwentyFourPairs()
+{
+    using Fusion::Orientation;
+    const std::vector<Orientation> &all = Orientation::all();
+    QCOMPARE(all.size(), size_t(24));
+
+    QStringList tokens;
+    QStringList labels;
+    for (const Orientation &orientation : all) {
+        tokens.append(orientation.token());
+        labels.append(orientation.label());
+    }
+    QCOMPARE(tokens, QStringList({QStringLiteral("+y,+z"),
+                                  QStringLiteral("+x,+y"), QStringLiteral("+x,-y"), QStringLiteral("+x,+z"),
+                                  QStringLiteral("+x,-z"),
+                                  QStringLiteral("-x,+y"), QStringLiteral("-x,-y"), QStringLiteral("-x,+z"),
+                                  QStringLiteral("-x,-z"),
+                                  QStringLiteral("+y,+x"), QStringLiteral("+y,-x"), QStringLiteral("+y,-z"),
+                                  QStringLiteral("-y,+x"), QStringLiteral("-y,-x"), QStringLiteral("-y,+z"),
+                                  QStringLiteral("-y,-z"),
+                                  QStringLiteral("+z,+x"), QStringLiteral("+z,-x"), QStringLiteral("+z,+y"),
+                                  QStringLiteral("+z,-y"),
+                                  QStringLiteral("-z,+x"), QStringLiteral("-z,-x"), QStringLiteral("-z,+y"),
+                                  QStringLiteral("-z,-y")}));
+    QCOMPARE(QSet<QString>(tokens.cbegin(), tokens.cend()).size(), 24);
+    QCOMPARE(QSet<QString>(labels.cbegin(), labels.cend()).size(), 24);
+
+    for (size_t i = 0; i < all.size(); ++i) {
+        const QString &token = tokens.at(qsizetype(i));
+        // The label spells the token's axes, ASCII hyphen-minus included
+        const QStringList axes = token.split(QLatin1Char(','));
+        QCOMPARE(labels.at(qsizetype(i)), QStringLiteral("forward %1, up %2").arg(axes.at(0), axes.at(1)));
+        // Forward and up neither equal nor opposite
+        QVERIFY2(axes.at(0).at(1) != axes.at(1).at(1), qPrintable(token));
+        // Distinct pairs
+        for (size_t j = i + 1; j < all.size(); ++j)
+            QVERIFY(all[i] != all[j]);
+        // Parses back to its pair
+        const std::optional<Orientation> parsed = Orientation::fromToken(token);
+        QVERIFY2(parsed.has_value(), qPrintable(token));
+        QVERIFY(*parsed == all[i]);
+        QCOMPARE(parsed->token(), token);
+    }
+
+    QVERIFY(all.front() == Orientation::defaultOrientation());
+    QCOMPARE(Orientation::defaultOrientation().token(), QStringLiteral("+y,+z"));
+    QCOMPARE(Orientation::defaultOrientation().label(), QStringLiteral("forward +y, up +z"));
+
+    for (const QString &text : {QStringLiteral("+y,+y"), QStringLiteral("+y,-y"), QStringLiteral("-z,+z"),
+                                QStringLiteral("y,z"), QStringLiteral("+y, +z"), QStringLiteral("+Y,+Z"),
+                                QString(), QStringLiteral(""), QStringLiteral(" +y,+z"), QStringLiteral("+y,+z "),
+                                QStringLiteral("+y;+z"), QStringLiteral("+y,+z,+x"),
+                                QStringLiteral("forward +y, up +z"),
+                                QString(QChar(0x2212)) + QStringLiteral("y,+z")})
+        QVERIFY2(!Orientation::fromToken(text).has_value(), qPrintable(text));
+}
+
+// Criterion 2: for every pair an exact proper rotation whose columns are
+// forward, forward x up and -up (the axes read from the token here), and the
+// default's matrix exactly.
+void FusionDerivedTest::orientationRotationIsProper()
+{
+    using Fusion::Orientation;
+    for (const Orientation &orientation : Orientation::all()) {
+        const QString token = orientation.token();
+        const QStringList axes = token.split(QLatin1Char(','));
+        const std::array<int, 3> f = axisOf(axes.at(0));
+        const std::array<int, 3> u = axisOf(axes.at(1));
+        const std::array<int, 3> right{f[1] * u[2] - f[2] * u[1], f[2] * u[0] - f[0] * u[2],
+                                       f[0] * u[1] - f[1] * u[0]};
+        const Orientation::Matrix m = orientation.bodyToDevice();
+
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                const double v = m[r][c];
+                QVERIFY2(v == -1.0 || v == 0.0 || v == 1.0, qPrintable(token));
+            }
+            QVERIFY2(m[r][0] == f[r], qPrintable(token));
+            QVERIFY2(m[r][1] == right[r], qPrintable(token));
+            QVERIFY2(m[r][2] == -u[r], qPrintable(token));
+        }
+        // Orthonormal
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                const double dot = m[0][i] * m[0][j] + m[1][i] * m[1][j] + m[2][i] * m[2][j];
+                QVERIFY2(dot == (i == j ? 1.0 : 0.0), qPrintable(token));
+            }
+        }
+        // A rotation, never a reflection
+        const double det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                         - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        QVERIFY2(det == 1.0, qPrintable(token));
+    }
+
+    // Forward +y, up +z: columns (0,1,0), (1,0,0), (0,0,-1)
+    const Orientation::Matrix expected{{{0, 1, 0}, {1, 0, 0}, {0, 0, -1}}};
+    QVERIFY(Orientation::defaultOrientation().bodyToDevice() == expected);
+}
+
+// Criterion 4: exactly one definition, its fields, its choices the
+// enumeration token for token and label for label, also after the entry
+// point registers on another registry (which gets the constant default).
+void FusionDerivedTest::orientationDefinitionIsTheEnumeration()
+{
+    const QString key = QStringLiteral("_ORIENTATION");
+    const auto check = [&key]() -> QString {
+        int count = 0;
+        for (const AttributeDefinition &definition : AttributeRegistry::instance().allAttributes())
+            count += definition.attributeKey == key ? 1 : 0;
+        if (count != 1)
+            return QStringLiteral("%1 definitions").arg(count);
+
+        const AttributeDefinition *definition = AttributeRegistry::instance().findByKey(key);
+        if (definition->category != QLatin1String("Session") || definition->displayName != QLatin1String("Orientation")
+            || definition->formatType != AttributeFormatType::Choice || !definition->editable
+            || !definition->measurementType.isEmpty())
+            return QStringLiteral("the definition's fields");
+
+        const std::vector<Fusion::Orientation> &all = Fusion::Orientation::all();
+        if (definition->choices.size() != qsizetype(all.size()))
+            return QStringLiteral("%1 choices").arg(definition->choices.size());
+        for (size_t i = 0; i < all.size(); ++i) {
+            const AttributeChoice &choice = definition->choices.at(qsizetype(i));
+            if (choice.token != all[i].token() || choice.label != all[i].label())
+                return QStringLiteral("choice %1: %2 / %3").arg(i).arg(choice.token, choice.label);
+        }
+        return QString();
+    };
+
+    QCOMPARE(check(), QString());
+    QCOMPARE(AttributeRegistry::instance().findByKey(key)->choices.first().token, QStringLiteral("+y,+z"));
+    QCOMPARE(AttributeRegistry::instance().findByKey(key)->choices.first().label, QStringLiteral("forward +y, up +z"));
+
+    {
+        CalculationRegistry privateRegistry;
+        Fusion::registerFusionCalculations(privateRegistry);
+        QVERIFY(privateRegistry.contains(kOrientationDefault));
+        QVERIFY(privateRegistry.contains(kAttitude));
+    }
+    QCOMPARE(check(), QString());
+}
+
+// ---- The attitude --------------------------------------------------------------------
+
+// Criteria 5 (the registry half) and 6: the constant default and the attitude
+// as registered, in that order after the track accelerations.
+void FusionDerivedTest::attitudeRegistrationShape()
+{
+    const CalculationRegistry &registry = CalculationRegistry::instance();
+
+    const QStringList ids = registry.registeredIds();
+    QVERIFY(ids.indexOf(kCross) >= 0);
+    QVERIFY(ids.indexOf(kCross) < ids.indexOf(kOrientationDefault));
+    QVERIFY(ids.indexOf(kOrientationDefault) < ids.indexOf(kAttitude));
+
+    // The constant default: no inputs, the attribute its one output, a string
+    const DependencyKey orientationKey = DependencyKey::attribute(QStringLiteral("_ORIENTATION"));
+    const std::optional<CalculationInstance> constant = registry.instance(kOrientationDefault);
+    QVERIFY(constant.has_value());
+    QVERIFY(constant->descriptor->inputs.isEmpty());
+    QVERIFY(constant->descriptor->outputs == QList<DependencyKey>({orientationKey}));
+    QVERIFY(constant->descriptor->policy == EvaluationPolicy::OnDemand);
+    QCOMPARE(registry.candidatesFor(orientationKey).size(), 1);
+    QCOMPARE(registry.candidatesFor(orientationKey).first().instanceId, kOrientationDefault);
+    QVERIFY(registry.explicitDependencies(orientationKey).isEmpty());
+    {
+        const SessionData bare;
+        const QVariant value = bare.getAttribute(QStringLiteral("_ORIENTATION"));
+        QCOMPARE(value.typeId(), int(QMetaType::QString));
+        QCOMPARE(value.toString(), QStringLiteral("+y,+z"));
+    }
+
+    // The attitude
+    const std::optional<CalculationInstance> attitude = registry.instance(kAttitude);
+    QVERIFY(attitude.has_value());
+    const CalculationDescriptor &d = *attitude->descriptor;
+    QVERIFY(d.policy == EvaluationPolicy::OnDemand);
+    QVERIFY(d.title.isEmpty());
+    QVERIFY(d.resultVersion.isEmpty());
+    const QList<CalcInput> courseInputs{CalcInput::measurement("GNSS", "velN"), CalcInput::measurement("GNSS", "velE"),
+                                        CalcInput::measurement("GNSS", "_time"),
+                                        CalcInput::attribute("_COURSE_REF")};
+    QVERIFY(d.inputs == QList<CalcInput>({CalcInput::measurement("Fusion", "qx"), CalcInput::measurement("Fusion", "qy"),
+                                          CalcInput::measurement("Fusion", "qz"), CalcInput::measurement("Fusion", "qw"),
+                                          CalcInput::attribute("_ORIENTATION")})
+                          + courseInputs);
+    // The heading reference's inputs are exactly the GNSS course's
+    const std::optional<CalculationInstance> course = registry.instance(QStringLiteral("builtin.gnss.course"));
+    QVERIFY(course.has_value());
+    QVERIFY(course->descriptor->inputs == courseInputs);
+
+    const QList<DependencyKey> outputs{fusionKey(QStringLiteral("bodyHeading")), fusionKey(QStringLiteral("bodyPitch")),
+                                       fusionKey(QStringLiteral("bodyRoll"))};
+    QVERIFY(d.outputs == outputs);
+    for (const DependencyKey &output : outputs) {
+        const QList<CalculationInstance> candidates = registry.candidatesFor(output);
+        QCOMPARE(candidates.size(), 1);
+        QCOMPARE(candidates.first().instanceId, kAttitude);
+        QCOMPARE(registry.explicitDependencies(output), QStringList({kFit}));
+    }
+}
+
+// Criterion 7: with the fit's inputs (and the GNSS velocity the heading
+// reference reads) and no fit, each angle waits on the fit alone, and nothing
+// starts it.
+void FusionDerivedTest::attitudeWaitsOnTheFit()
+{
+    SessionData session = fixtureSession(QStringLiteral("coarse_linear"));
+    // The fixture sessions store the local frame's velocity, which the fit
+    // reads; the course reference reads GNSS's
+    const FusionFixture fixture = fusionFixture(QStringLiteral("coarse_linear"));
+    session.setSourceMeasurement("GNSS", "velN", fixture.velN, "m/s");
+    session.setSourceMeasurement("GNSS", "velE", fixture.velE, "m/s");
+    QVERIFY(!session.getMeasurement("GNSS", "course").isEmpty());
+    CalculationEngine &engine = session.calculationEngine();
+
+    for (const char *name : {"bodyHeading", "bodyPitch", "bodyRoll"}) {
+        const DependencyKey key = fusionKey(QString::fromLatin1(name));
+        const BlockerReport report = engine.blockers(key);
+        QVERIFY2(report.state == BlockerState::Blocked, name);
+        QCOMPARE(report.blockers.size(), 1);
+        QCOMPARE(report.blockers.first().registrationId, kFit);
+        QCOMPARE(report.blockers.first().instanceId, kFit);
+        QVERIFY(report.notProduced.isEmpty());
+        QVERIFY2(CalculationDemand::isMerelyUncomputed(session, QStringLiteral("Fusion"), QString::fromLatin1(name)),
+                 name);
+        QVERIFY2(fusion(session, QString::fromLatin1(name)).isEmpty(), name);
+    }
+
+    QCOMPARE(engine.runCount(kFit), 0);
+    const std::optional<ResultStatus> status = engine.resultStatus(kFit);
+    QVERIFY(!status.has_value() || *status == ResultStatus::NotRequested);
+}
+
+// Criterion 8, first case: under the default orientation, a device with y
+// north, x east and z up (either sign of its quaternion) is a level,
+// north-facing body.
+void FusionDerivedTest::levelNorthFacingBodyReadsZero()
+{
+    const double h = std::sqrt(0.5);
+    const Quat level = deviceQuaternion(0, 0, 0);
+    QVERIFY(level.x == h && level.y == h && level.z == 0.0 && level.w == 0.0);
+
+    for (const Quat &q : {Quat{h, h, 0.0, 0.0}, Quat{-h, -h, 0.0, 0.0}}) {
+        const SessionData session = attitudeSession(QStringLiteral("l1"), {q});
+        QVERIFY(!session.hasAttribute(SessionKeys::Orientation));
+        QCOMPARE(attitudeDifference(session, 0, 0, 0), QString());
+        QCOMPARE(session.calculationEngine().runCount(kFit), 0);
+        QCOMPARE(session.calculationEngine().undeclaredReadCount(), 0);
+    }
+}
+
+void FusionDerivedTest::knownAnglesComeBack_data()
+{
+    QTest::addColumn<double>("h");
+    QTest::addColumn<double>("p");
+    QTest::addColumn<double>("r");
+    QTest::newRow("heading 179") << 179.0 << 0.0 << 0.0;
+    QTest::newRow("heading -179") << -179.0 << 0.0 << 0.0;
+    QTest::newRow("heading 180") << 180.0 << 0.0 << 0.0;
+    QTest::newRow("heading 90") << 90.0 << 0.0 << 0.0;
+    QTest::newRow("pitch 80") << 0.0 << 80.0 << 0.0;
+    QTest::newRow("pitch -80") << 0.0 << -80.0 << 0.0;
+    QTest::newRow("roll 170") << 0.0 << 0.0 << 170.0;
+    QTest::newRow("roll -170") << 0.0 << 0.0 << -170.0;
+    QTest::newRow("roll 180") << 0.0 << 0.0 << 180.0;
+    QTest::newRow("179, 80, 170") << 179.0 << 80.0 << 170.0;
+    QTest::newRow("-179, -80, -170") << -179.0 << -80.0 << -170.0;
+    QTest::newRow("-179, 80, -170") << -179.0 << 80.0 << -170.0;
+    QTest::newRow("37.5, -12.25, 101") << 37.5 << -12.25 << 101.0;
+}
+
+// Criterion 8: a body built by hand from heading, pitch and roll reads them
+// back under the default orientation.
+void FusionDerivedTest::knownAnglesComeBack()
+{
+    QFETCH(double, h);
+    QFETCH(double, p);
+    QFETCH(double, r);
+    const SessionData session = attitudeSession(QStringLiteral("k1"), {deviceQuaternion(h, p, r)});
+    QCOMPARE(attitudeDifference(session, h, p, r), QString());
+    QCOMPARE(session.calculationEngine().runCount(kFit), 0);
+}
+
+// Criterion 8 and decision 5: two full turns of heading read continuous, the
+// one unwrap rule over the wrapped headings, less the course reference angle,
+// which is exactly the angle GNSS/course is offset by; heading is available
+// exactly when the course is.
+void FusionDerivedTest::headingUnwrapsThroughAFullTurn()
+{
+    QList<Quat> turn;
+    QVector<double> wrapped;
+    for (int k = 0; k <= 72; ++k) {
+        turn.append(deviceQuaternion(10.0 * k, 0, 0));
+        wrapped.append(std::remainder(10.0 * k, 360.0));
+    }
+    const QVector<double> unwrapped = Calculations::unwrapDegrees(wrapped);
+    // The raw GNSS course at five fixes, one a second
+    const QVector<double> rawCourse{20, 30, 40, 50, 60};
+    const auto session = [&turn, &rawCourse](const QString &id, const QVariant &courseRef) {
+        SessionData s = syntheticFitSession(id, quaternionChannels(turn));
+        addGnssCourse(s, rawCourse);
+        if (courseRef.isValid())
+            s.setAttribute(SessionKeys::CourseRef, courseRef);
+        return s;
+    };
+
+    // A course reference before the track: no offset, heading from north
+    const SessionData bare = session(QStringLiteral("h1"), QVariant());
+    QCOMPARE(bare.getAttribute(SessionKeys::CourseRef).toDouble(), kCourseRefBeforeTrack);
+    const QVector<double> h0 = heading(bare);
+    QCOMPARE(h0.size(), turn.size());
+    for (int k = 0; k <= 72; ++k) {
+        QVERIFY2(std::abs(h0[k] - unwrapped[k]) <= kAngleTolerance, qPrintable(QString::number(k)));
+        QVERIFY2(std::abs(h0[k] - 10.0 * k) <= kAngleTolerance, qPrintable(QString::number(k)));
+        QVERIFY(std::abs(pitch(bare)[k]) <= kAngleTolerance);
+        QVERIFY(sameAngle(roll(bare)[k], 0.0));
+    }
+    const QVector<double> courseBare = bare.getMeasurement("GNSS", "course");
+    QCOMPARE(courseBare.size(), rawCourse.size());
+
+    // A stored reference inside the GNSS time range: both are offset by the
+    // course interpolated there, halfway between 30 and 40. The two libraries
+    // compute the one definition, one of them without contraction, hence the
+    // tolerance rather than bit equality.
+    const SessionData inside = session(QStringLiteral("h2"), QVariant(kFixtureEpochUtc + 1.5));
+    const QVector<double> courseInside = inside.getMeasurement("GNSS", "course");
+    QCOMPARE(courseInside.size(), rawCourse.size());
+    const double courseOffset = courseBare[0] - courseInside[0];
+    QVERIFY2(std::abs(courseOffset - 35.0) <= kAngleTolerance, qPrintable(QString::number(courseOffset, 'g', 17)));
+    const QVector<double> hInside = heading(inside);
+    QCOMPARE(hInside.size(), turn.size());
+    for (int k = 0; k <= 72; ++k) {
+        QVERIFY2(std::abs((h0[k] - hInside[k]) - courseOffset) <= kAngleTolerance, qPrintable(QString::number(k)));
+        QVERIFY2(std::abs(hInside[k] - (unwrapped[k] - 35.0)) <= kAngleTolerance, qPrintable(QString::number(k)));
+    }
+
+    // Outside the range, before or after it, or not a number: no offset
+    for (const QVariant &courseRef : {QVariant(kFixtureEpochUtc - 0.5), QVariant(kFixtureEpochUtc + 100.0),
+                                      QVariant(QStringLiteral("later"))}) {
+        const SessionData outside = session(QStringLiteral("h3"), courseRef);
+        QVERIFY2(sameBitsEverywhere(heading(outside), h0), qPrintable(courseRef.toString()));
+        QVERIFY2(sameBitsEverywhere(outside.getMeasurement("GNSS", "course"), courseBare),
+                 qPrintable(courseRef.toString()));
+    }
+
+    // No course reference at all (nothing stored, and no exit for it to
+    // default to): the course is unavailable, and so is the attitude, whose
+    // inputs include the course's
+    {
+        SessionData none = session(QStringLiteral("h6"), QVariant());
+        none.removeAttribute(SessionKeys::CourseRef);
+        QVERIFY(!none.getAttribute(SessionKeys::CourseRef).isValid());
+        QVERIFY(none.getMeasurement("GNSS", "course").isEmpty());
+        QVERIFY(heading(none).isEmpty());
+        QVERIFY(pitch(none).isEmpty());
+        QVERIFY(roll(none).isEmpty());
+    }
+    // Without GNSS velocity there is no course, and no heading, pitch or roll:
+    // they are one calculation
+    {
+        SessionData noCourse = syntheticFitSession(QStringLiteral("h4"), quaternionChannels(turn));
+        noCourse.setAttribute(SessionKeys::CourseRef, kCourseRefBeforeTrack);
+        QVERIFY(noCourse.getMeasurement("GNSS", "course").isEmpty());
+        QVERIFY(heading(noCourse).isEmpty());
+        QVERIFY(pitch(noCourse).isEmpty());
+        QVERIFY(roll(noCourse).isEmpty());
+    }
+    // GNSS arrays of unequal length: neither
+    {
+        SessionData ragged = syntheticFitSession(QStringLiteral("h5"), quaternionChannels(turn));
+        addGnssCourse(ragged, rawCourse);
+        ragged.setSourceMeasurement("GNSS", "velE", QVector<double>{0.0, 0.0, 0.0, 0.0}, "m/s");
+        QVERIFY(ragged.getMeasurement("GNSS", "course").isEmpty());
+        QVERIFY(heading(ragged).isEmpty());
+        QVERIFY(pitch(ragged).isEmpty());
+    }
+
+    QCOMPARE(bare.calculationEngine().runCount(kFit), 0);
+    QCOMPARE(bare.calculationEngine().undeclaredReadCount(), 0);
+}
+
+// Criterion 8: a barrel roll keeps roll in (-180, 180] and a loop keeps pitch
+// in [-90, 90], each reading the angle it was built from, modulo 360.
+void FusionDerivedTest::rollAndPitchStayInTheirNaturalRanges()
+{
+    // A barrel roll through two turns at heading 30
+    QList<Quat> barrel;
+    for (int k = 0; k <= 72; ++k)
+        barrel.append(deviceQuaternion(30.0, 0.0, 10.0 * k));
+    const SessionData rolling = attitudeSession(QStringLiteral("b1"), barrel);
+    const QVector<double> rolls = roll(rolling);
+    QCOMPARE(rolls.size(), barrel.size());
+    for (int k = 0; k <= 72; ++k) {
+        QVERIFY2(rolls[k] > -180.0 && rolls[k] <= 180.0, qPrintable(QString::number(rolls[k], 'g', 17)));
+        QVERIFY2(sameAngle(rolls[k], 10.0 * k), qPrintable(QString::number(k)));
+        QVERIFY(std::abs(pitch(rolling)[k]) <= kAngleTolerance);
+        QVERIFY(std::abs(heading(rolling)[k] - 30.0) <= kAngleTolerance);
+    }
+
+    // A loop: the body turned about its right axis by a = 5, 15, ..., 355
+    // degrees, never exactly vertical (heading and roll are not defined there)
+    QList<Quat> loop;
+    QVector<double> angles;
+    for (int k = 0; k < 36; ++k) {
+        const double a = 5.0 + 10.0 * k;
+        angles.append(a);
+        loop.append(hamilton(Quat{0.0, std::sin(a * kDeg / 2), 0.0, std::cos(a * kDeg / 2)}, kDefaultMount));
+    }
+    const SessionData looping = attitudeSession(QStringLiteral("b2"), loop);
+    const QVector<double> pitches = pitch(looping);
+    QCOMPARE(pitches.size(), loop.size());
+    for (int k = 0; k < 36; ++k) {
+        const double a = angles[k];
+        // Past the vertical the body is inverted: heading and roll turn by half a turn
+        const bool inverted = a > 90.0 && a < 270.0;
+        const double expectedPitch = a <= 90.0 ? a : (inverted ? 180.0 - a : a - 360.0);
+        QVERIFY2(pitches[k] >= -90.0 && pitches[k] <= 90.0, qPrintable(QString::number(pitches[k], 'g', 17)));
+        QVERIFY2(std::abs(pitches[k] - expectedPitch) <= kAngleTolerance, qPrintable(QString::number(a)));
+        QVERIFY2(sameAngle(heading(looping)[k], inverted ? 180.0 : 0.0), qPrintable(QString::number(a)));
+        QVERIFY2(sameAngle(roll(looping)[k], inverted ? 180.0 : 0.0), qPrintable(QString::number(a)));
+        QVERIFY(roll(looping)[k] > -180.0 && roll(looping)[k] <= 180.0);
+    }
+}
+
+void FusionDerivedTest::sideMountPermutesTheAngles_data()
+{
+    QTest::addColumn<QString>("token");
+    QTest::addColumn<double>("devicePitch");
+    QTest::addColumn<double>("h");
+    QTest::addColumn<double>("p");
+    QTest::addColumn<double>("r");
+    // The level device of levelNorthFacingBodyReadsZero: y north, x east, z up
+    QTest::newRow("+y,+z") << QStringLiteral("+y,+z") << 0.0 << 0.0 << 0.0 << 0.0;
+    QTest::newRow("+x,+z") << QStringLiteral("+x,+z") << 0.0 << 90.0 << 0.0 << 0.0;
+    QTest::newRow("-x,+z") << QStringLiteral("-x,+z") << 0.0 << -90.0 << 0.0 << 0.0;
+    QTest::newRow("+y,+x") << QStringLiteral("+y,+x") << 0.0 << 0.0 << 0.0 << 90.0;
+    QTest::newRow("+y,-x") << QStringLiteral("+y,-x") << 0.0 << 0.0 << 0.0 << -90.0;
+    QTest::newRow("+x,+y") << QStringLiteral("+x,+y") << 0.0 << 90.0 << 0.0 << -90.0;
+    // The device pitched up 30 degrees under the default: forward is still
+    // its y, pitched, and up its x, which stays level (east)
+    QTest::newRow("+y,+x, pitched") << QStringLiteral("+y,+x") << 30.0 << 0.0 << 30.0 << 90.0;
+}
+
+// Criterion 8: a stored side mount changes the angles as the axis permutation
+// predicts.
+void FusionDerivedTest::sideMountPermutesTheAngles()
+{
+    QFETCH(QString, token);
+    QFETCH(double, devicePitch);
+    QFETCH(double, h);
+    QFETCH(double, p);
+    QFETCH(double, r);
+    SessionData session = attitudeSession(QStringLiteral("m1"), {deviceQuaternion(0.0, devicePitch, 0.0)});
+    session.setAttribute(SessionKeys::Orientation, token);
+    QCOMPARE(attitudeDifference(session, h, p, r), QString());
+    QCOMPARE(session.calculationEngine().runCount(kFit), 0);
+}
+
+// Criterion 9 (D8): with the device frame as the body frame (forward +x, up
+// -z) the angles derived from a success golden's quaternion are that golden's
+// own yaw, pitch and roll. Modulo 360: the fit unwraps all three and the
+// derivation only heading.
+void FusionDerivedTest::deviceFrameMountGivesTheFitsOwnAngles()
+{
+    const FusionGolden golden = loadFusionGolden(QStringLiteral("coarse_maneuver"));
+    QCOMPARE(golden.outcome, QStringLiteral("succeeded"));
+    const QVector<double> yaw = golden.channels.value(QStringLiteral("yaw"));
+    const QVector<double> goldenPitch = golden.channels.value(QStringLiteral("pitch"));
+    const QVector<double> goldenRoll = golden.channels.value(QStringLiteral("roll"));
+    QVERIFY(yaw.size() > 100);
+
+    // The premise: well away from the vertical, where heading and roll are defined
+    double steepest = 0.0;
+    for (const double sample : goldenPitch)
+        steepest = std::max(steepest, std::abs(sample));
+    QVERIFY2(steepest < 60.0, qPrintable(QString::number(steepest)));
+
+    QHash<QString, QVector<double>> channels;
+    for (const char *name : {"_time", "qx", "qy", "qz", "qw"})
+        channels.insert(QString::fromLatin1(name), golden.channels.value(QString::fromLatin1(name)));
+    SessionData session = syntheticFitSession(QStringLiteral("d1"), channels);
+    addGnssCourse(session, {0.0, 0.0, 0.0});
+    session.setAttribute(SessionKeys::Orientation, QStringLiteral("+x,-z"));
+
+    const QVector<double> h = heading(session);
+    const QVector<double> p = pitch(session);
+    const QVector<double> r = roll(session);
+    QCOMPARE(h.size(), yaw.size());
+    QCOMPARE(p.size(), yaw.size());
+    QCOMPARE(r.size(), yaw.size());
+    constexpr double tolerance = 1e-6;
+    for (qsizetype i = 0; i < yaw.size(); ++i) {
+        QVERIFY2(sameAngle(h[i], yaw[i], tolerance),
+                 qPrintable(QStringLiteral("heading[%1] %2 vs yaw %3").arg(i).arg(h[i], 0, 'g', 17).arg(yaw[i], 0, 'g', 17)));
+        QVERIFY2(sameAngle(p[i], goldenPitch[i], tolerance),
+                 qPrintable(QStringLiteral("pitch[%1] %2 vs %3").arg(i).arg(p[i], 0, 'g', 17).arg(goldenPitch[i], 0, 'g', 17)));
+        QVERIFY2(sameAngle(r[i], goldenRoll[i], tolerance),
+                 qPrintable(QStringLiteral("roll[%1] %2 vs %3").arg(i).arg(r[i], 0, 'g', 17).arg(goldenRoll[i], 0, 'g', 17)));
+    }
+    QCOMPARE(session.calculationEngine().runCount(kFit), 0);
+}
+
+// Criterion 10: a stored value that is not one of the 24 tokens makes all
+// three angles unavailable (a stored value wins, even an invalid one);
+// removing it restores them.
+void FusionDerivedTest::invalidStoredOrientationMakesAttitudeUnavailable()
+{
+    SessionData session = attitudeSession(QStringLiteral("i1"),
+                                          {deviceQuaternion(0, 0, 0), deviceQuaternion(45, 10, -20)});
+    QCOMPARE(heading(session).size(), 2);
+
+    for (const QString &text : {QString(), QStringLiteral("+y,+y"), QStringLiteral("+y,-y"), QStringLiteral("-z,+z"),
+                                QStringLiteral("y,z"), QStringLiteral("+Y,+Z"), QStringLiteral("+y, +z"),
+                                QStringLiteral("forward +y, up +z"), QStringLiteral("+y,+z,+x")}) {
+        session.setAttribute(SessionKeys::Orientation, text);
+        QVERIFY2(session.hasAttribute(SessionKeys::Orientation), qPrintable(text));
+        QVERIFY2(heading(session).isEmpty(), qPrintable(text));
+        QVERIFY2(pitch(session).isEmpty(), qPrintable(text));
+        QVERIFY2(roll(session).isEmpty(), qPrintable(text));
+    }
+
+    session.removeAttribute(SessionKeys::Orientation);
+    QVERIFY(!session.hasAttribute(SessionKeys::Orientation));
+    const QVector<double> h = heading(session), p = pitch(session), r = roll(session);
+    QCOMPARE(h.size(), 2);
+    QVERIFY(sameAngle(h[0], 0) && std::abs(p[0]) <= kAngleTolerance && sameAngle(r[0], 0));
+    QVERIFY(sameAngle(h[1], 45) && std::abs(p[1] - 10) <= kAngleTolerance && sameAngle(r[1], -20));
+    QCOMPARE(session.calculationEngine().runCount(kFit), 0);
+    QCOMPARE(session.calculationEngine().undeclaredReadCount(), 0);
+}
+
+// Criterion 11 and the engine half of criterion 12: with nothing stored the
+// session reads the default and stores nothing; a stored token wins and the
+// angles recompute through ordinary invalidation, without the fit and without
+// touching its own channels; removing it returns to the default's angles.
+void FusionDerivedTest::storedOrientationRecomputesWithoutAFit()
+{
+    QHash<QString, QVector<double>> channels = quaternionChannels({deviceQuaternion(0, 0, 0)});
+    // The fit's own angles, deliberately not the quaternion's: nothing may move them
+    channels.insert(QStringLiteral("roll"), {1.5});
+    channels.insert(QStringLiteral("pitch"), {-2.25});
+    channels.insert(QStringLiteral("yaw"), {370.0});
+    SessionData session = syntheticFitSession(QStringLiteral("r1"), channels);
+    addGnssCourse(session, {0.0, 0.0, 0.0});
+    CalculationEngine &engine = session.calculationEngine();
+
+    QVERIFY(!session.hasAttribute(SessionKeys::Orientation));
+    QCOMPARE(session.getAttribute(SessionKeys::Orientation).toString(), QStringLiteral("+y,+z"));
+    QVERIFY(!session.hasAttribute(SessionKeys::Orientation));
+    QCOMPARE(attitudeDifference(session, 0, 0, 0), QString());
+    QCOMPARE(engine.runCount(kAttitude), 1);
+
+    // A stored token wins
+    const QSet<DependencyKey> changed = session.setAttribute(SessionKeys::Orientation, QStringLiteral("+x,+z"));
+    for (const char *name : {"bodyHeading", "bodyPitch", "bodyRoll"})
+        QVERIFY2(changed.contains(fusionKey(QString::fromLatin1(name))), name);
+    QCOMPARE(session.getAttribute(SessionKeys::Orientation).toString(), QStringLiteral("+x,+z"));
+    QCOMPARE(attitudeDifference(session, 90, 0, 0), QString());
+    QCOMPARE(engine.runCount(kAttitude), 2);
+
+    // The fit's channels are what they were
+    for (auto it = channels.cbegin(); it != channels.cend(); ++it)
+        QVERIFY2(sameBitsEverywhere(fusion(session, it.key()), it.value()), qPrintable(it.key()));
+
+    // Removed: the default's angles again
+    QVERIFY(session.removeAttribute(SessionKeys::Orientation).contains(fusionKey(QStringLiteral("bodyHeading"))));
+    QCOMPARE(attitudeDifference(session, 0, 0, 0), QString());
+    QCOMPARE(engine.runCount(kAttitude), 3);
+
+    QCOMPARE(engine.runCount(kFit), 0);
+    QVERIFY(!engine.resultStatus(kFit).has_value());
+    QCOMPARE(engine.undeclaredReadCount(), 0);
+}
+
+// ---- The Orientation column ----------------------------------------------------------------
+
+QString FusionDerivedTest::startOrientationWorld(bool stubs, const std::optional<QString> &o1Token)
+{
+    TestEnvironment::instance().useFreshLogbook();
+    LogbookManager::instance().initialize();
+
+    SessionData o1 = fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("o1"));
+    if (o1Token)
+        o1.setAttribute(SessionKeys::Orientation, *o1Token);
+    const SessionData o2 = fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("o2"));
+
+    m_fixture = std::make_unique<ChoiceFixture>(QString::fromLatin1(SessionKeys::Orientation));
+    return m_fixture->start({o1, o2}, stubs ? ChoiceFixture::Rows::Stubs : ChoiceFixture::Rows::Loaded);
+}
+
+void FusionDerivedTest::orientationColumnShowsTheDefaultWithoutAWrite_data() { addRowKinds(); }
+
+// Criterion 12: every recording without a stored value shows the default's
+// label, its file has no line for it, and index.json caches its token.
+void FusionDerivedTest::orientationColumnShowsTheDefaultWithoutAWrite()
+{
+    QFETCH(bool, stubs);
+    QCOMPARE(startOrientationWorld(stubs), QString());
+    QCOMPARE(logbookColumnLabel(m_fixture->choiceColumn()), QStringLiteral("Orientation"));
+
+    for (const QString &id : {QStringLiteral("o1"), QStringLiteral("o2")}) {
+        QCOMPARE(m_fixture->displayText(id), kDefaultLabel);
+        QCOMPARE(m_fixture->fileToken(id), std::optional<QString>());
+        QVERIFY2(!fileBytes(id).isEmpty(), qPrintable(id));
+        QVERIFY2(!fileBytes(id).contains("$VAR,_ORIENTATION"), qPrintable(id));
+        QCOMPARE(m_fixture->indexValue(id), QJsonValue(QStringLiteral("+y,+z")));
+    }
+    for (int r = 0; r < m_fixture->model().rowCount(); ++r)
+        QCOMPARE(std::as_const(m_fixture->model()).rowAt(r).isLoaded(), !stubs);
+}
+
+void FusionDerivedTest::orientationEditStoresATokenAndRefusesOthers_data() { addRowKinds(); }
+
+// Criterion 13, setData(): a token of the list is stored and written
+// verbatim, comma included; a token outside the list, a label and an empty
+// string are refused; after a restart the stub shows the stored label.
+void FusionDerivedTest::orientationEditStoresATokenAndRefusesOthers()
+{
+    QFETCH(bool, stubs);
+    QCOMPARE(startOrientationWorld(stubs), QString());
+    SessionModel &model = m_fixture->model();
+
+    QVERIFY(m_fixture->setData(QStringLiteral("o1"), QStringLiteral("+x,+z")));
+    QCOMPARE(m_fixture->displayText(QStringLiteral("o1")), QStringLiteral("forward +x, up +z"));
+    QVERIFY(waitForIdle(model));
+    QVERIFY(fileBytes(QStringLiteral("o1")).contains("\n$VAR,_ORIENTATION,+x,+z\n"));
+    QCOMPARE(m_fixture->fileToken(QStringLiteral("o1")), std::optional<QString>(QStringLiteral("+x,+z")));
+    QCOMPARE(m_fixture->indexValue(QStringLiteral("o1")), QJsonValue(QStringLiteral("+x,+z")));
+
+    // Refused: nothing changes, nothing is written
+    const QByteArray o1Bytes = fileBytes(QStringLiteral("o1"));
+    const QByteArray o2Bytes = fileBytes(QStringLiteral("o2"));
+    QSignalSpy dataSpy(&model, &QAbstractItemModel::dataChanged);
+    for (const QVariant &value : {QVariant(QStringLiteral("+y,+y")), QVariant(QStringLiteral("+z,-z")),
+                                  QVariant(QStringLiteral("y,z")), QVariant(QStringLiteral("+X,+Z")),
+                                  QVariant(QStringLiteral("+x, +z")), QVariant(QStringLiteral("forward +y, up +x")),
+                                  QVariant(QString()), QVariant(QStringLiteral(""))}) {
+        for (const QString &id : {QStringLiteral("o1"), QStringLiteral("o2")})
+            QVERIFY2(!m_fixture->setData(id, value), qPrintable(id + QLatin1Char(' ') + value.toString()));
+    }
+    QCOMPARE(dataSpy.count(), 0);
+    QVERIFY(waitForIdle(model));
+    QCOMPARE(fileBytes(QStringLiteral("o1")), o1Bytes);
+    QCOMPARE(fileBytes(QStringLiteral("o2")), o2Bytes);
+    QCOMPARE(m_fixture->displayText(QStringLiteral("o1")), QStringLiteral("forward +x, up +z"));
+    QCOMPARE(m_fixture->displayText(QStringLiteral("o2")), kDefaultLabel);
+
+    // After a restart every row is a stub, showing the stored label
+    QCOMPARE(m_fixture->restartAsStubs(), QString());
+    QCOMPARE(m_fixture->displayText(QStringLiteral("o1")), QStringLiteral("forward +x, up +z"));
+    QCOMPARE(m_fixture->displayText(QStringLiteral("o2")), kDefaultLabel);
+}
+
+void FusionDerivedTest::orientationDefaultRemovesTheStoredValue_data() { addRowKinds(); }
+
+// Criterion 13, removal: setData(QVariant()) removes the stored value, and
+// the default shows again; with nothing stored there is nothing to remove.
+void FusionDerivedTest::orientationDefaultRemovesTheStoredValue()
+{
+    QFETCH(bool, stubs);
+    QCOMPARE(startOrientationWorld(stubs, QStringLiteral("-y,-x")), QString());
+    QCOMPARE(m_fixture->displayText(QStringLiteral("o1")), QStringLiteral("forward -y, up -x"));
+    QCOMPARE(m_fixture->fileToken(QStringLiteral("o1")), std::optional<QString>(QStringLiteral("-y,-x")));
+
+    QVERIFY(m_fixture->setData(QStringLiteral("o1"), QVariant()));
+    QCOMPARE(m_fixture->displayText(QStringLiteral("o1")), kDefaultLabel);
+    QVERIFY(waitForIdle(m_fixture->model()));
+    QCOMPARE(m_fixture->fileToken(QStringLiteral("o1")), std::optional<QString>());
+    QVERIFY(!fileBytes(QStringLiteral("o1")).contains("$VAR,_ORIENTATION"));
+    QCOMPARE(m_fixture->indexValue(QStringLiteral("o1")), QJsonValue(QStringLiteral("+y,+z")));
+
+    QVERIFY(!m_fixture->setData(QStringLiteral("o1"), QVariant()));
+    QVERIFY(!m_fixture->setData(QStringLiteral("o2"), QVariant()));
+}
+
+void FusionDerivedTest::orientationBulkEdit_data() { addRowKinds(); }
+
+// Criterion 13, the bulk edit: a token for every selected session, QVariant()
+// removes, and a token outside the list queues nothing.
+void FusionDerivedTest::orientationBulkEdit()
+{
+    QFETCH(bool, stubs);
+    QCOMPARE(startOrientationWorld(stubs), QString());
+    SessionModel &model = m_fixture->model();
+    const QStringList both{QStringLiteral("o1"), QStringLiteral("o2")};
+
+    QVERIFY(m_fixture->bulkEdit(both, QStringLiteral("+y,+x")));
+    for (const QString &id : both) {
+        QCOMPARE(m_fixture->fileToken(id), std::optional<QString>(QStringLiteral("+y,+x")));
+        QCOMPARE(m_fixture->indexValue(id), QJsonValue(QStringLiteral("+y,+x")));
+        QCOMPARE(m_fixture->displayText(id), QStringLiteral("forward +y, up +x"));
+    }
+
+    QVERIFY(m_fixture->bulkEdit({QStringLiteral("o1")}, QVariant()));
+    QCOMPARE(m_fixture->fileToken(QStringLiteral("o1")), std::optional<QString>());
+    QCOMPARE(m_fixture->displayText(QStringLiteral("o1")), kDefaultLabel);
+    QCOMPARE(m_fixture->indexValue(QStringLiteral("o1")), QJsonValue(QStringLiteral("+y,+z")));
+    QCOMPARE(m_fixture->fileToken(QStringLiteral("o2")), std::optional<QString>(QStringLiteral("+y,+x")));
+
+    // Outside the list: refused before anything is queued
+    const QByteArray o1Bytes = fileBytes(QStringLiteral("o1"));
+    const QByteArray o2Bytes = fileBytes(QStringLiteral("o2"));
+    const QList<int> rows{m_fixture->row(QStringLiteral("o1")), m_fixture->row(QStringLiteral("o2"))};
+    BulkEditSignals bulk(model);
+    QSignalSpy dataSpy(&model, &QAbstractItemModel::dataChanged);
+    for (const QVariant &value : {QVariant(QStringLiteral("+x,-x")), QVariant(QStringLiteral("forward +y, up +x")),
+                                  QVariant(QString()), QVariant(QStringLiteral("zz"))})
+        model.startBulkEdit(rows, m_fixture->column(), value);
+    QVERIFY(waitForIdle(model));
+    QCOMPARE(bulk.activations(), 0);
+    QCOMPARE(dataSpy.count(), 0);
+    QCOMPARE(fileBytes(QStringLiteral("o1")), o1Bytes);
+    QCOMPARE(fileBytes(QStringLiteral("o2")), o2Bytes);
+    for (int r = 0; r < model.rowCount(); ++r)
+        QCOMPARE(std::as_const(model).rowAt(r).isLoaded(), !stubs);
 }
 
 FLYSIGHT_TEST_MAIN(FusionDerivedTest)

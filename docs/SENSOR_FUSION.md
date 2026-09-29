@@ -37,6 +37,26 @@ document describes what is computed, from what, and how far to trust it.
 - The plot list has a "Sensor fusion" category with seventeen plots: north,
   east and down position, velocity and acceleration, horizontal acceleration,
   roll, pitch and yaw, and the four quaternion components.
+- Heading, pitch and roll of the body the FlySight is mounted on are derived
+  from the fit's attitude (its quaternion) in the aircraft convention.
+  Heading is the direction of the body's forward axis, clockwise from north;
+  pitch is the forward axis's elevation above the horizontal, from -90 to 90
+  degrees; roll is the rotation about the forward axis, positive right side
+  down, from -180 to 180 degrees. Heading is unwrapped by the rule of the GNSS
+  course and referenced to the course reference exactly as the course is, so
+  heading and course overlay in straight flight and their difference is the
+  sideslip. The body is defined by the recording's **Orientation** attribute:
+  which device axes point forward and which up. The default is forward +y,
+  up +z, a FlySight 2 on the back of a helmet with its label up. To change
+  it, add the Orientation column to the logbook (Add Column, "Session") and
+  edit its cell, or use "Set Orientation..." from the logbook's context menu
+  for the selected recordings; both offer the 24 possible orientations, and
+  "Default" removes the setting. The attribute describes how the unit is
+  mounted and nothing about the posture of whoever wears it: the angles are
+  those of the mount's body frame (for a helmet mount, of the head). A mount,
+  or a posture, that points the forward axis straight up or down makes heading
+  and roll meaningless there. Changing the orientation recomputes heading,
+  pitch and roll at once, without a new fit.
 - A recording needs matching `TRACK.CSV` and `SENSOR.CSV` data (GNSS and IMU
   with a shared time base) and at least one GNSS fix with a horizontal accuracy
   under 10 m. A recording without them is simply absent from these plots, like
@@ -189,7 +209,11 @@ All arrays align with `_time`. Roll, pitch and yaw unwrap successive angles by
 adding or subtracting 360 degrees, with the same rule as the GNSS course
 (`src/calculations/anglehelper.h`). They keep the first angle and accumulate
 turns over the whole fit, independently of zoom or markers. That removes
-wrap-boundary jumps; Euler-angle singularities remain.
+wrap-boundary jumps; Euler-angle singularities remain. They are the angles of
+the device frame: the same aircraft angles as `bodyRoll`, `bodyPitch` and
+`bodyHeading` below for the orientation forward +x, up -z, except that all
+three are unwrapped and yaw is measured from north, without the course
+reference.
 
 These values are derived from the outputs on demand, under the same sensor,
 and appear with them; none of them starts a fit:
@@ -200,6 +224,7 @@ and appear with them; none of them starts a fit:
 | `_system_time` | the device-time axis of `_time` (the inverse time fit) |
 | `z` | elevation above the ground, metres: `_LOCAL_ORIGIN_HMSL - down - _GROUND_ELEV`, the same ground as `GNSS/z`; unavailable when either attribute is not a number |
 | `accAlongTrack`, `accCrossTrack` | along-track and cross-track acceleration, m/s^2: the GNSS definitions, relative to the wind-corrected velocity (`_WIND_N`, `_WIND_E`), applied to the fused velocity and acceleration |
+| `bodyHeading`, `bodyPitch`, `bodyRoll` | heading, pitch and roll of the body frame the `_ORIENTATION` attribute defines, degrees (section 2): the aircraft angles of the quaternion composed with the orientation's body-to-device rotation, published together; heading unwrapped and offset by the course reference angle as `GNSS/course` is, so the three need the GNSS course's inputs and are unavailable where the course is (a recording with no course reference, say); unavailable too for a stored orientation that is not one of the 24 |
 
 Vertical acceleration is `accD` itself, positive down like `GNSS/accD`; it has
 no derived measurement of its own. `z` and `GNSS/z` stand on the same ground
@@ -226,7 +251,9 @@ its top-level keys are, grouped:
   `covers`, `no_gain` or `all_failed`), `iterations`, `fallback`) and
   `fallback_segments` (the indices of the segments that fell back);
 - *the fit*: `start_s`, `end_s`, `gnss_states`, `imu_outputs`, `objective`,
-  `orientation` (the output convention, as text), `residuals` (one entry per
+  `orientation` (the output convention, as text: the fit's own device frame,
+  where "body" means the device; it does not follow the Orientation
+  attribute of section 2), `residuals` (one entry per
   factor, kinds `position`, `velocity`, `imu`, `bias_prior` and
   `slope_prior`, each with `node`, `time_s` and `squared_whitened_error`),
   `seeds` (one entry, the fit that was run: `heading_deg` `null`,
@@ -297,7 +324,10 @@ arbitrary. That is acceptable: yaw is unobservable there in the full fit too,
 and neighbouring segments carry the heading through their own motion.
 Agreement of the fitted yaw between starts is not an observability test and
 is not used. Heading remains free during optimization; the fit does not assume
-a known mounting heading or equate GNSS course with sensor orientation.
+a known mounting heading or equate GNSS course with sensor orientation. The
+Orientation attribute (section 2) is not an input of the fit either: it only
+turns the fit's quaternion into heading, pitch and roll, so changing it never
+refits and never makes a stored fit stale.
 
 **Why.** One anchor attitude propagated with one bias through a long recording
 ends hundreds of degrees off on a unit whose bias drifts, and a resting unit
@@ -457,7 +487,7 @@ demonstrated by tests, all labelled `fusion`:
 | `tst_fusion_golden` | the kernel through its public API reproduces its goldens for twelve synthetic fixtures (three fits, nine rejections), the progress texts at its boundaries, cancellation at each kind of boundary (prefix, segment and full-fit iterations included), determinism and thread independence |
 | `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the two stopping rules forced through the tuning, the per-step covariance, the temperature factor's Jacobians and the three temperature cases, and the fit trace iteration by iteration against the goldens |
 | `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
-| `tst_fusion_derived` | what is derived from the outputs, without the solver: the outputs stored as data, elevation and the track accelerations held to exact known answers, the track accelerations equal to the GNSS ones on the same samples, and each derived value waiting on the fit and never starting it |
+| `tst_fusion_derived` | what is derived from the outputs, without the solver: the outputs stored as data, elevation and the track accelerations held to exact known answers, the track accelerations equal to the GNSS ones on the same samples, and each derived value waiting on the fit and never starting it; the orientation vocabulary (24 pairs, each a proper rotation, the attribute's choices), heading, pitch and roll held to hand-built known answers, side mounts, the course reference and the fit's own angles for the device frame, an invalid or changed orientation without a fit, and the Orientation column's display, edit and bulk edit |
 | `tst_fusion_jobs` | the real fit through the executor: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result and kept, for an unloaded session, through an altitude marker added at run time or at the next start |
 | `tst_fusion_rows` | the demand layer with the real fusion plots, end to end: fits started and dropped by what is checked and visible, with no gesture; progress and failures as each fit ends |
 | `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), a rejection and a solver failure listed among the recordings that could not be computed, with their reasons, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a logbook column over roll filled for recordings that are not loaded, and nothing fitted again after a restart |

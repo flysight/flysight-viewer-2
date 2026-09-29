@@ -350,9 +350,10 @@ flysight-viewer-2/
 │   └── diagnose_macos_bundle.sh           # Diagnostic tool for macOS bundle issues
 ├── src/
 │   ├── CMakeLists.txt                     # Main application build configuration; defines the
-│                                          #   flysight_model library (session data + calculation
-│                                          #   engine, Qt Core only, also linked by the Python
-│                                          #   bridge), the flysight_core library (import/export,
+│                                          #   flysight_model library (session data, calculation
+│                                          #   engine and attribute registry, Qt Core only, also
+│                                          #   linked by the Python bridge), the flysight_core
+│                                          #   library (import/export,
 │                                          #   logbook, session model, registries, calculations,
 │                                          #   executor, demand layer; Qt Core + Gui, no
 │                                          #   UI), the flysight_fusion library, and the

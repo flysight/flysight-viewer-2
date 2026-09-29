@@ -2073,7 +2073,14 @@ through one file, `src/fusion/fusionregistration.cpp`, and one entry point,
 never references it: `MainWindow` calls the entry point directly after
 `registerBuiltInCalculations()`, and the fusion tests call it after
 `TestEnvironment::registerBuiltIns()` (`FlySightTest::registerFusionOnce()`).
-Six calculations are registered, in this order:
+The entry point also registers the definition of the orientation attribute
+(`_ORIENTATION`, `SessionKeys::Orientation`: category "Session", display name
+"Orientation", editable, a Choice of the 24 orientations of
+`Fusion::Orientation`, `src/fusion/orientation.h`) in the attribute registry
+(`AttributeRegistry`, in `flysight_model` so that the fusion library can reach
+it), once per process: the tests and `fusion_runner` call the entry point for
+more than one registry, so it skips the definition when `findByKey()` already
+finds it. Eight calculations are registered, in this order:
 
 | Id | Policy | Inputs | Outputs |
 | --- | --- | --- | --- |
@@ -2083,6 +2090,8 @@ Six calculations are registered, in this order:
 | `builtin.fusion.z` | OnDemand | `Fusion/down`, `_LOCAL_ORIGIN_HMSL`, `_GROUND_ELEV` | `Fusion/z` |
 | `builtin.fusion.accAlongTrack` | OnDemand | `Fusion/accN`, `accE`, `accD`, `velN`, `velE`, `velD`, `_WIND_N`, `_WIND_E` | `Fusion/accAlongTrack` |
 | `builtin.fusion.accCrossTrack` | OnDemand | the same eight | `Fusion/accCrossTrack` |
+| `builtin.default._ORIENTATION` | OnDemand | none | `_ORIENTATION` (the default's token, a string) |
+| `builtin.fusion.attitude` | OnDemand | `Fusion/qx`, `qy`, `qz`, `qw`, `_ORIENTATION`, `GNSS/velN`, `GNSS/velE`, `GNSS/_time`, `_COURSE_REF` | `Fusion/bodyHeading`, `bodyPitch`, `bodyRoll` |
 
 **Inputs of the fit** (all required; exactly the vector members of
 `Fusion::Channels`, in member order, then the four origin attributes):
@@ -2164,11 +2173,47 @@ as zero, for every calculation that reads wind. The fused track
 accelerations declare the inputs of the GNSS ones, in their order, so the
 wind's constant defaults (section 5) apply to both. Vertical
 acceleration is `Fusion/accD` itself, positive down like `GNSS/accD`; no
-calculation copies it. All five derived values are on demand, but their
-inputs exist only once the fit has published, so they are blocked by the fit
-(section 13), appear with it through ordinary invalidation, and never start
-one. Every one has the length of its inputs, so together with `Fusion/_time`
-(an output of the fit) they satisfy the time-axis rule of section 16.1.
+calculation copies it.
+
+`Fusion/bodyHeading`, `bodyPitch` and `bodyRoll` are the attitude of the body
+frame that `_ORIENTATION` defines, published together by one calculation
+that keeps no state and logs nothing. It reads `_ORIENTATION` as text and
+parses it with `Fusion::Orientation::fromToken()`; a text that is not one of
+the 24 tokens (a stored empty or hand-edited value wins over the default,
+section 5) makes all three unavailable, as do empty or unequal `qx..qw`
+arrays and a quaternion sample that is not finite or has zero norm (one NaN
+would reach every later heading through the unwrap). Otherwise, per sample:
+q = (qx, qy, qz, qw) is normalized; R is its rotation matrix, Hamilton,
+device to north-east-down (`R v_device = v_NED`, the convention of the fit's
+own output, `fillOutputChannels()`); C is the orientation's body-to-device
+rotation, the signed permutation whose columns are forward, right = forward x
+up and down = -up in device coordinates; M = R C, and
+`heading = atan2(M10, M00)`, `pitch = asin(clamp(-M20, -1, 1))`,
+`roll = atan2(M21, M22)`, in degrees, roll in (-180, 180]. Heading is then
+unwrapped over the whole array with `unwrapDegrees()` and less the course
+reference angle, the value `GNSS/course` subtracts: the unwrapped raw GNSS
+course interpolated at `_COURSE_REF`, zero when the reference is not a number
+or lies outside the GNSS time. Both calculations get it from
+`Calculations::unwrappedCourse()` and `courseReferenceAngle()`
+(`src/calculations/coursehelper.h`, header-only for the reason given for
+`timefithelper.h`), and the attitude declares the GNSS course's four inputs,
+so heading is available exactly when the course is. Since the three angles
+are one calculation, pitch and roll share that availability: a recording
+whose `_COURSE_REF` is unavailable (none stored and no exit time for its
+default) has no course, and no heading, pitch or roll either. With the orientation
+forward +x, up -z (C = I) the angles are the fit's own yaw, pitch and roll,
+modulo the unwrap and the course reference. The orientation's default,
+forward +y, up +z, is a constant default registered with
+`Calculations::addConstantDefault` (section 5); the fit does not read
+`_ORIENTATION`, so an orientation edit recomputes the angles and never
+invalidates the fit.
+
+The six derived calculations (`accH`, the system time, `z`, the two track
+accelerations and the attitude's three angles) are on demand, but their
+inputs exist only once the fit has published, so they are blocked by the fit (section 13), appear with
+it through ordinary invalidation, and never start one. Every one has the
+length of its inputs, so together with `Fusion/_time` (an output of the fit)
+they satisfy the time-axis rule of section 16.1.
 
 **Plots.** Seventeen plots in the category "Sensor fusion"
 (`MainWindow::registerBuiltInPlots`): the sixteen measurements other than
@@ -2235,7 +2280,11 @@ edit) discards the cached values of the columns whose environment it changes
 recompute those columns from the engine, and the column worker recomputes a
 stub's from its stored results. A Fusion/roll column keeps its cached value
 through an altitude marker added at run time or at the next start (no name of
-its closure changes), also for a session that is not loaded.
+its closure changes), also for a session that is not loaded. A column over
+`Fusion/bodyRoll` (or `bodyHeading`, `bodyPitch`) reads `_ORIENTATION`, so an
+orientation edit discards its cached value like any edit of a name it
+reads, and it is recomputed from the stored fit without a fit: by the engine
+for a loaded row, by the column worker for a stub.
 `CalculationCompatibilityVersion` did not change for
 this: an index written before the stamp holds explicit-backed values only as
 "unavailable", and at start-up they are kept only for sessions without a
@@ -2250,7 +2299,12 @@ it.
 Tests (label `fusion`, behind `FLYSIGHT_BUILD_FUSION_TESTS`):
 `tests/tst_fusion_session.cpp` (real `SessionData` engines, the fit on the
 test's main thread), `tests/tst_fusion_derived.cpp` (the derived values on the
-fit's outputs stored as data, without the solver), `tests/tst_fusion_jobs.cpp` (the executor's worker on a
+fit's outputs stored as data, without the solver; among them the attitude:
+known angles, side mounts, the course reference and the unwrap, the fit's own
+angles for the device frame, an invalid stored orientation, an orientation
+edit without a fit; and the orientation vocabulary, the attribute's
+definition and the Orientation column through `ChoiceFixture`),
+`tests/tst_fusion_jobs.cpp` (the executor's worker on a
 real `SessionModel`), `tests/tst_fusion_rows.cpp` (the demand layer of
 section 16 with the seventeen real plots and real fits: fits
 start and are dropped with no gesture),
