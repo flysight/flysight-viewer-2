@@ -1,14 +1,17 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Eight specifications, eight item ranges:
+# (tests/audit/cleanup_audit.cmake). Nine specifications, nine item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
-#             which is not one of the 19 items, is filed under item 19.)
+#             which is not one of the 19 items, is filed under item 19.) It
+#             is amended by the specification of 801-863: item 6 is stated as
+#             amended.
 #   101-120   sensor fusion as an explicit calculation with plot-driven
 #             background jobs: item = 100 + acceptance number. Stated in full
 #             in tests/README.md, appendix B. It is amended by the
 #             specification of 701-754: items 111 and 115 are stated as
-#             amended.
+#             amended. It is amended by the specification of 801-863: item
+#             115 is stated as amended.
 #   201-247   sensor fusion improvements (segmented initializer, stopping rule,
 #             per-step IMU noise, temperature-dependent gyro bias, the
 #             command-line runner): item = 200 + requirement number. Stated in
@@ -37,7 +40,8 @@
 #             528, 530, 532, 535-537, 539, 546, 547, 557 and 559 are stated
 #             as amended. It is amended by the specification of 701-754:
 #             items 517, 525, 526, 530, 535-537, 539, 542, 554, 555, 557, 559
-#             and 563 are stated as amended.
+#             and 563 are stated as amended. It is amended by the
+#             specification of 801-863: item 509 is stated as amended.
 #   601-662   calculation refinements (the scheduler's completion of a
 #             task whose work is gone, announced record outcomes, the
 #             session model as the source of column knowledge and display
@@ -55,6 +59,12 @@
 #             700 + clause number. Stated in full in tests/README.md,
 #             appendix H. It amends the specifications of 101-120, 201-247,
 #             301-350, 501-563 and 601-662.
+#   801-863   sensor fusion plots, attitude and the orientation attribute (the
+#             eight fusion plots, the derived kinematics, heading, pitch and
+#             roll on the body frame, the orientation attribute, the choice
+#             attribute type, constant defaults): item = 800 + clause number.
+#             Stated in full in tests/README.md, appendix I. It amends the
+#             specifications of 1-19, 101-120 and 501-563.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -64,11 +74,11 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the eight ranges; every item 1-19 needs a line;
-# every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662 or 701-754
-# needs at least one test or audit line (manual and ci lines never stand
-# alone). The human-readable matrices are tests/README.md sections 9.1 to 9.8;
-# keep them in sync with this file.
+# Every item must lie in one of the nine ranges; every item 1-19 needs a line;
+# every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754 or
+# 801-863 needs at least one test or audit line (manual and ci lines never
+# stand alone). The human-readable matrices are tests/README.md sections 9.1
+# to 9.9; keep them in sync with this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -112,10 +122,11 @@
 5 tst_workflow warmModelSaveEqualsColdExport
 5 tst_persistence_roundtrip unsupportedSchemaIsNotSaved
 
-# 6 - released-format logbook
+# 6 - (as amended) released-format logbook: it loads, its gyro is corrected once, and saving it does not rescale or relabel it; loading it adds only jumper mass and planform area where they are absent (the legacy backfill), additively and once; wind is not written: a recording without it reads zero from a constant default
 6 tst_source_layer releasedLogbookFormatLoads
 6 tst_persistence_roundtrip releasedLogbookSaveKeepsBytes
 6 tst_persistence_roundtrip releasedLogbookBackfillIsAdditive
+6 tst_logbook_index rawLoadSkipsBackfill
 6 tst_workflow releasedLogbookUpgrade
 
 # 7 - merge in either order, loaded or not; conflicts; what survives
@@ -349,7 +360,7 @@
 114 tst_jobqueue duplicateOffersCreateNoDuplicates
 114 tst_jobqueue holdsAtMostRunningAndChosenNext
 
-# 115 - (as amended) row behaviour without widgets, then with the real fusion plots: checking computes the visible tracks one after another, the sessions still to compute falling; unchecking mid-way drops the waiting ones and lets the running one finish; checking again resumes; a fourth track shown afterwards is computed with no other action; what the user sees
+# 115 - (as amended) row behaviour without widgets, then with the real fusion plots: checking computes the visible tracks one after another, the sessions still to compute falling; unchecking mid-way drops the waiting ones and lets the running one finish; checking again resumes; a fourth track shown afterwards is computed with no other action; what the user sees; the real fusion plots are the eight of the "Sensor fusion" category, and heading, pitch and roll share one job
 115 tst_calculation_demand rowScript
 115 tst_fusion_rows realRowScript
 115 tst_fusion_rows headingPitchRollShareOneJob
@@ -1297,7 +1308,7 @@
 508 tst_calculation_demand fillTaskIsLowestAndNotCancellable
 508 audit demand
 
-# 509 - (5) plot demand: for every checked plot whose value is a requested output, every visible session needs the requested calculations that block that output
+# 509 - (5, as amended) plot demand: for every checked plot whose value is a requested output, every visible session needs the requested calculations that block that output; the eight plots of the "Sensor fusion" category are such plots: one is an output of the fit, and the seven derived from its outputs are blocked by it
 509 tst_calculation_demand rowScript
 509 tst_calculation_demand ordinaryPlotsAreNeverInspected
 509 tst_calculation_demand hiddenAndStubRowsAreNotTracks
@@ -2398,3 +2409,331 @@
 
 # 754 - (14) docs/ and tests/README.md describe the status bar, the row warning, the demand layer's progress, failures and pending cells and what stays visible after a restart, and no document names the removed surface
 754 audit demand
+
+# ---- Sensor fusion plots, attitude and the orientation attribute: item = 800 + clause number ----
+
+# 801 - (5) the "Sensor fusion" category holds exactly eight plots, in this order: Elevation, Horizontal acceleration, Vertical acceleration, Along-track acceleration, Cross-track acceleration, Heading, Pitch, Roll
+801 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+801 audit naming
+801 manual M39
+
+# 802 - (5, as settled) each is named, united and typed as its GNSS counterpart (Elevation, the four accelerations, Heading as Course), Pitch and Roll as angles, so that the two overlay; a fused plot's colour differs from its counterpart's
+802 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+802 manual M39
+
+# 803 - (5) the fused north, east and down position and velocity, north and east acceleration, roll, pitch, yaw and quaternion plots are removed, and the local-frame category with them
+803 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+803 audit naming
+803 manual M39
+
+# 804 - (5) every measurement behind a removed plot still exists and is computed as before: the local frame feeds the fit and a column, and the fit's channels are its record, read by a column kept from before, the stored result and plug-ins
+804 tst_fusion_rows removedPlotMeasurementsStayAvailable
+804 tst_fusion_jobs columnOnFusionOutputIsCachedFromRecord
+804 manual M44
+
+# 805 - (5) applying a profile enables the listed plots the application has and ignores the rest silently (no message, no log, no failure); nothing rewrites a profile
+805 tst_calculation_demand profileNamingRemovedPlotsAppliesWithoutThem
+805 manual M43
+
+# 806 - (6) each derived quantity is an on-demand calculation over the fit's outputs, registered with the fit: blocked by it until it publishes, it appears with it and never starts one
+806 tst_fusion_derived derivedRegistrationShape
+806 tst_fusion_derived derivedValuesWaitOnTheFit
+806 tst_fusion_derived attitudeWaitsOnTheFit
+806 tst_fusion_rows accHRowIsBlockedByFusion
+806 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+
+# 807 - (6, as settled) elevation is the local origin's height above mean sea level minus the fused down position, above the ground elevation as the GNSS elevation is, so the two overlay; it is unavailable when either attribute is not a number
+807 tst_fusion_derived elevationIsOriginHeightMinusDownAboveGround
+
+# 808 - (6, as settled) vertical acceleration is the fit's own fused down acceleration, positive down like the GNSS one; no second calculation publishes it
+808 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+808 tst_fusion_derived derivedRegistrationShape
+808 tst_fusion_session explicitOutputsHaveOneCandidate
+
+# 809 - (6) along-track and cross-track acceleration are the GNSS definitions applied to the fused velocity and acceleration, wind-corrected, so their signs and the meaning of "track" agree
+809 tst_fusion_derived trackAccelerationsKnownAnswers
+809 tst_fusion_derived trackAccelerationsAreTheGnssDefinitions
+
+# 810 - (6, as settled) one definition of the track-relative accelerations and of the wind rule serves both categories, and the GNSS values are unchanged
+810 tst_fusion_derived trackAccelerationsAreTheGnssDefinitions
+810 tst_builtins_golden sessionDataMatchesGolden
+810 tst_builtins_engine goldenOnEngine
+
+# 811 - (7) the orientation's forward and up axes fix the body frame, right being their cross product; the body-to-device rotation is a constant signed axis permutation, a proper rotation for each of the 24 pairs, never a reflection
+811 tst_fusion_derived orientationRotationIsProper
+
+# 812 - (7) heading, pitch and roll are the aircraft Euler angles of the fit's quaternion composed with that rotation: heading the forward axis's direction clockwise from north, pitch its elevation above the horizontal, roll the rotation about it, positive right side down
+812 tst_fusion_derived levelNorthFacingBodyReadsZero
+812 tst_fusion_derived knownAnglesComeBack
+812 tst_fusion_derived sideMountPermutesTheAngles
+812 tst_fusion_derived deviceFrameMountGivesTheFitsOwnAngles
+812 manual M40
+
+# 813 - (7) they are computed when read, from the quaternion channels and the orientation attribute, never by the fit
+813 tst_fusion_derived attitudeRegistrationShape
+813 tst_fusion_derived attitudeWaitsOnTheFit
+813 tst_fusion_derived storedOrientationRecomputesWithoutAFit
+813 tst_fusion_session registrationShape
+
+# 814 - (7, as settled) heading is unwrapped by the application's one unwrap rule, the course's, and less the course reference angle the GNSS course subtracts, computed in one place for both (zero for a stored reference that is not a number or lies outside the GNSS time), so heading and course overlay in straight flight and heading minus course reads as sideslip; heading has the course's inputs and availability, so a recording without a course reference has neither
+814 tst_fusion_derived headingUnwrapsThroughAFullTurn
+814 tst_fusion_derived attitudeRegistrationShape
+814 manual M40
+
+# 815 - (7) pitch and roll are reported in their natural ranges, pitch from -90 to 90 degrees and roll from -180 to 180
+815 tst_fusion_derived rollAndPitchStayInTheirNaturalRanges
+
+# 816 - (7) where the forward axis is vertical, heading and roll are not defined and the derivation reports what the standard formulas give
+816 tst_fusion_derived forwardAxisVerticalGivesTheStandardFormulas
+
+# 817 - (7) a change of the orientation attribute recomputes the angles through ordinary invalidation and never refits
+817 tst_fusion_derived storedOrientationRecomputesWithoutAFit
+817 manual M41
+
+# 818 - (8) the orientation is a token naming the forward and the up axis in a fixed form the fusion module owns (the default `+y,+z`); the 24 valid pairs, and only they, are its choices, labelled "forward +y, up +z" and so on, the default first
+818 tst_fusion_derived orientationVocabularyHasTwentyFourPairs
+818 tst_fusion_derived orientationDefinitionIsTheEnumeration
+
+# 819 - (8) its default, forward +y and up +z, is a constant calculated attribute: every recording has it, imported before or after, and nothing is written into any session file
+819 tst_fusion_derived orientationColumnShowsTheDefaultWithoutAWrite
+819 tst_fusion_derived storedOrientationRecomputesWithoutAFit
+819 tst_fusion_derived attitudeRegistrationShape
+819 manual M41
+
+# 820 - (8) a stored value wins over the default, and removing it returns to the default
+820 tst_fusion_derived storedOrientationRecomputesWithoutAFit
+820 tst_fusion_derived orientationDefaultRemovesTheStoredValue
+
+# 821 - (8) one orientation type in the fusion module owns the vocabulary (the axis pair, token, label, body-frame rotation, default and enumeration); the derivation parses with it, the attribute's choices come from it, and nothing else spells a token
+821 tst_fusion_derived orientationDefinitionIsTheEnumeration
+821 tst_fusion_derived orientationVocabularyHasTwentyFourPairs
+821 audit orientation
+
+# 822 - (8, as settled) the fusion registration registers the attribute's definition once per process (key `_ORIENTATION`, "Orientation", category "Session", a choice attribute, editable) with the derivation that reads it; the key is part of the session file's vocabulary
+822 tst_fusion_derived orientationDefinitionIsTheEnumeration
+822 tst_fusion_derived attitudeRegistrationShape
+822 tst_fusion_derived orientationEditStoresATokenAndRefusesOthers
+822 manual M41
+
+# 823 - (8) it is edited as any editable attribute: a logbook column the user can add, not among the default columns, edited in place, and set for the selected sessions from the context menu
+823 tst_fusion_derived orientationEditStoresATokenAndRefusesOthers
+823 tst_fusion_derived orientationBulkEdit
+823 tst_choice_attribute cellEditorOffersTheList
+823 tst_choice_attribute setDialogOffersTheList
+823 manual M41
+823 manual M42
+
+# 824 - (8) both editors offer the list, not free text, and a "Default" entry that removes the stored value rather than storing anything
+824 tst_choice_attribute cellEditorOffersTheList
+824 tst_choice_attribute setDialogOffersTheList
+824 tst_fusion_derived orientationDefaultRemovesTheStoredValue
+824 tst_fusion_derived orientationBulkEdit
+824 manual M41
+824 manual M42
+
+# 825 - (8) a value outside the list is refused by the model, the in-place editor and the bulk edit
+825 tst_fusion_derived orientationEditStoresATokenAndRefusesOthers
+825 tst_fusion_derived orientationBulkEdit
+825 tst_choice_attribute cellEditorOffersTheList
+
+# 826 - (8, as settled) a stored token outside the list (a hand-edited file) is kept and shown as written, and heading, pitch and roll are unavailable for it until it is changed or removed
+826 tst_fusion_derived invalidStoredOrientationMakesAttitudeUnavailable
+826 tst_choice_attribute choiceShowsTheLabelOfTheEffectiveToken
+826 manual M42
+
+# 827 - (9) the attribute registry's format types gain a fifth, choice, whose definition carries its allowed values, each a stored token and a display label
+827 tst_choice_attribute choiceShowsTheLabelOfTheEffectiveToken
+827 tst_choice_attribute choiceEditStoresAToken
+827 tst_fusion_derived orientationDefinitionIsTheEnumeration
+
+# 828 - (9) a choice is displayed and sorted by its label
+828 tst_choice_attribute choiceShowsTheLabelOfTheEffectiveToken
+828 tst_choice_attribute choiceSortsByLabel
+
+# 829 - (9) in-place editing of a choice gives a list editor in place of the line edit
+829 tst_choice_attribute cellEditorOffersTheList
+829 manual M41
+
+# 830 - (9) the context menu's "Set ..." action offers a list in place of the text prompt
+830 tst_choice_attribute setDialogOffersTheList
+830 manual M42
+
+# 831 - (9) the bulk edit sets the chosen token for the selected sessions, loaded or not
+831 tst_choice_attribute bulkEditSetsAToken
+831 tst_fusion_derived orientationBulkEdit
+831 manual M42
+
+# 832 - (9) "Default" removes the stored attribute on every edit path, and a token outside the list is refused
+832 tst_choice_attribute choiceDefaultRemovesTheStoredValue
+832 tst_choice_attribute bulkEditDefaultRemovesTheStoredValue
+832 tst_choice_attribute choiceEditRefusesATokenOutsideTheList
+832 tst_choice_attribute bulkEditRefusesATokenOutsideTheList
+
+# 833 - (9) nothing about the type is specific to orientation: any choice definition gets all of it
+833 tst_choice_attribute choiceEditStoresAToken
+833 tst_choice_attribute cellEditorOffersTheList
+
+# 834 - (10) a constant default is a registered calculation with no inputs whose one output is the attribute: it runs once and is cached, a stored value wins, setting or removing a stored value invalidates what read the attribute, and a dependent follows every change
+834 tst_calcengine constantCalculationIsADefault
+834 tst_builtins_engine constantDefaults
+
+# 835 - (10) one helper registers a constant default for an attribute key and a value, beside the exit-time defaults, so that every constant default is found by one search; the orientation default uses it from the fusion registration
+835 tst_builtins_engine constantDefaults
+835 tst_fusion_derived attitudeRegistrationShape
+835 audit constant-defaults
+
+# 836 - (10, as settled) the seven constant defaults of the SP and WS-P calculations are registered through the same helper, with their values
+836 tst_builtins_engine constantDefaults
+836 tst_builtins_engine inventory
+836 audit constant-defaults
+
+# 837 - (10) the importer stores only what is a fact of the import; anything that stands in for a value the user has not set is a calculation, derived where possible, constant otherwise
+837 tst_importer creationDefaultsOnlyFillAbsent
+837 tst_smoke importAppliesCreationDefaults
+837 audit constant-defaults
+
+# 838 - (10) wind north and east are constants of zero: a recording without stored wind reads zero, one with stored wind keeps it, and the importer no longer writes them
+838 tst_builtins_engine constantDefaults
+838 tst_smoke importAppliesCreationDefaults
+838 tst_importer creationDefaultsOnlyFillAbsent
+838 tst_import_merge newSessionGetsDefaults
+838 audit constant-defaults
+
+# 839 - (10, as settled) the logbook's legacy backfill no longer writes wind either; it adds jumper mass and planform area only
+839 tst_persistence_roundtrip releasedLogbookBackfillIsAdditive
+839 tst_logbook_index rawLoadSkipsBackfill
+839 audit constant-defaults
+
+# 840 - (10) jumper mass, planform area and the fixed ground elevation stay creation defaults of the importer (section 3)
+840 tst_importer creationDefaultsOnlyFillAbsent
+840 tst_importer fixedGroundElevationOnlyInFixedMode
+840 tst_smoke importAppliesCreationDefaults
+
+# 841 - (10) a stored attribute wins even when invalid or empty, so returning to a default removes the stored attribute and never stores a blank
+841 tst_calcengine storedInvalidValueStillWins
+841 tst_calcengine removingStoredFallsBackToCalc
+841 tst_choice_attribute choiceDefaultRemovesTheStoredValue
+841 tst_choice_attribute bulkEditDefaultRemovesTheStoredValue
+
+# 842 - (11) the plot list shows "Sensor fusion" with eight plots named as the GNSS plots and no local-frame category; checking a fusion plot starts the fit as before, the status bar shows it, and a stored fit draws at once
+842 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+842 tst_fusion_rows realRowScript
+842 tst_fusion_store restoredAfterRestartIsBitIdentical
+842 manual M39
+
+# 843 - (11) the attitude plots are in the aircraft convention for the mount the orientation describes, heading continuous through turns
+843 tst_fusion_derived sideMountPermutesTheAngles
+843 tst_fusion_derived headingUnwrapsThroughAFullTurn
+843 manual M40
+
+# 844 - (11) the orientation column, once added, shows "forward +y, up +z" for every recording not set and the chosen label for one that is; editing offers the list and "Default"; changing it redraws the attitude plots without a fit
+844 tst_fusion_derived orientationColumnShowsTheDefaultWithoutAWrite
+844 tst_fusion_derived orientationEditStoresATokenAndRefusesOthers
+844 tst_fusion_derived storedOrientationRecomputesWithoutAFit
+844 tst_choice_attribute cellEditorOffersTheList
+844 manual M41
+
+# 845 - (11) profiles that name removed plots apply without complaint
+845 tst_calculation_demand profileNamingRemovedPlotsAppliesWithoutThem
+845 manual M43
+
+# 846 - (11) wind reads zero where nothing was stored, as before
+846 tst_builtins_engine constantDefaults
+846 tst_smoke importAppliesCreationDefaults
+
+# 847 - (12) the fusion kernel and the fit calculation are unchanged (inputs, outputs, diagnostics, algorithm string), and the golden fixtures and stored results stay valid
+847 tst_fusion_session registrationShape
+847 tst_fusion_golden successFixturesMatchGolden
+847 tst_fusion_golden rejectionFixturesMatchGolden
+847 tst_fusion_kernel fitTraceMatchesGolden
+847 tst_fusion_store restoredAfterRestartIsBitIdentical
+
+# 848 - (12) GTSAM stays confined to the fusion kernel, the new fusion files include neither GTSAM nor Eigen, and the rules on the fusion tooling hold
+848 audit solver-confinement
+848 audit fusion-tooling
+
+# 849 - (12) the fusion registration gains the derived kinematics, the attitude derivation, the orientation type and the orientation attribute with its constant default; each derivation is an ordinary on-demand calculation with declared inputs, the attitude's including the orientation attribute
+849 tst_fusion_session registrationShape
+849 tst_fusion_derived derivedRegistrationShape
+849 tst_fusion_derived attitudeRegistrationShape
+
+# 850 - (12, as settled) the fusion library reaches nothing of the core library: the attribute registry lives in the model library, the constant-default and track helpers are header-only, and the calculations never name the fusion library
+850 tst_fusion_derived orientationDefinitionIsTheEnumeration
+850 audit solver-confinement
+
+# 851 - (12) the attribute calculations hold the constant-default helper and the wind defaults; the importer holds neither
+851 tst_builtins_engine constantDefaults
+851 audit constant-defaults
+
+# 852 - (12) the plot registry loses the removed plots and the local-frame category; the profile rule is the plot model's, one function the profile bridge calls
+852 tst_calculation_demand profileNamingRemovedPlotsAppliesWithoutThem
+852 tst_calculation_demand profileStyleApplyCreatesDemand
+852 audit naming
+
+# 853 - (12) the demand layer is untouched: a derived plot's blockers lead to the fit through the chain it already follows, and heading, pitch and roll are filled by one job
+853 tst_fusion_rows accHRowIsBlockedByFusion
+853 tst_fusion_rows headingPitchRollShareOneJob
+853 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+853 audit demand
+
+# 854 - (13) test: the plot list has the eight fusion plots and no local-frame plots; every fusion plot is explicit-backed (waits on the fit) as the seventeen were; an existing column over a removed plot's measurement still computes, and the export of the fit, its stored record, still holds the measurement
+854 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+854 tst_fusion_rows removedPlotMeasurementsStayAvailable
+854 tst_fusion_rows noImuSessionIsNeverCounted
+854 tst_fusion_session missingInputsAreNotApplicable
+854 tst_fusion_jobs noImuSessionCannotHaveAJob
+
+# 855 - (13) test: applying a profile that names a removed plot enables its other plots and ignores that one, silently
+855 tst_calculation_demand profileNamingRemovedPlotsAppliesWithoutThem
+
+# 856 - (13) test: elevation equals the origin height minus down minus the ground elevation, and is unavailable without a ground elevation; vertical acceleration is the down acceleration; along-track and cross-track equal the GNSS definitions applied to the fused velocity and acceleration, on synthetic data with known answers
+856 tst_fusion_derived syntheticOutputsAreServedWithoutAFit
+856 tst_fusion_derived elevationIsOriginHeightMinusDownAboveGround
+856 tst_fusion_derived trackAccelerationsKnownAnswers
+856 tst_fusion_derived trackAccelerationsAreTheGnssDefinitions
+856 tst_fusion_derived derivedRegistrationShape
+856 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+
+# 857 - (13) test: attitude, on synthetic quaternions with known answers: for the default orientation, heading, pitch and roll of a level, north-facing body are zero; a known heading, pitch and roll come back; heading unwraps through a full turn; a stored course reference offsets heading by exactly the angle it offsets the GNSS course, and heading is unavailable exactly when the course is; a different orientation (a side mount) changes the angles as the axis permutation predicts; the rotation is proper for all 24 pairs
+857 tst_fusion_derived levelNorthFacingBodyReadsZero
+857 tst_fusion_derived knownAnglesComeBack
+857 tst_fusion_derived headingUnwrapsThroughAFullTurn
+857 tst_fusion_derived sideMountPermutesTheAngles
+857 tst_fusion_derived orientationRotationIsProper
+
+# 858 - (13) test: the orientation attribute: every recording reads the default without a stored value and without any write to its file; a stored token wins and the attitude recomputes without a fit; "Default" removes the stored value; a token outside the list is refused by the model, the editor and the bulk edit; the labels and tokens come from one enumeration of 24
+858 tst_fusion_derived orientationColumnShowsTheDefaultWithoutAWrite
+858 tst_fusion_derived storedOrientationRecomputesWithoutAFit
+858 tst_fusion_derived orientationDefaultRemovesTheStoredValue
+858 tst_fusion_derived orientationEditStoresATokenAndRefusesOthers
+858 tst_fusion_derived orientationBulkEdit
+858 tst_fusion_derived orientationDefinitionIsTheEnumeration
+858 tst_choice_attribute cellEditorOffersTheList
+
+# 859 - (13) test: the choice type: display and sort by label; the in-place editor and the context menu offer the list; the bulk edit sets the token for the selected sessions
+859 tst_choice_attribute choiceShowsTheLabelOfTheEffectiveToken
+859 tst_choice_attribute choiceSortsByLabel
+859 tst_choice_attribute cellEditorOffersTheList
+859 tst_choice_attribute setDialogOffersTheList
+859 tst_choice_attribute bulkEditSetsAToken
+
+# 860 - (13) test: constant defaults: the helper registers a calculation that the engine serves as a default (the existing engine test covers the mechanism); wind north and east read zero for a recording without stored wind, keep a stored value, and the importer no longer writes them
+860 tst_builtins_engine constantDefaults
+860 tst_calcengine constantCalculationIsADefault
+860 tst_smoke importAppliesCreationDefaults
+860 tst_importer creationDefaultsOnlyFillAbsent
+860 tst_import_merge newSessionGetsDefaults
+
+# 861 - (13) test: the fit is unchanged: the golden fixtures and the stored-result tests pass unchanged; the algorithm string is the same
+861 tst_fusion_golden successFixturesMatchGolden
+861 tst_fusion_golden rejectionFixturesMatchGolden
+861 tst_fusion_kernel fitTraceMatchesGolden
+861 tst_fusion_store restoredAfterRestartIsBitIdentical
+861 tst_fusion_store codeStampChangeDropsRecordOnLoad
+861 tst_fusion_session registrationShape
+
+# 862 - (13) test: the audit keeps the removed plot names out of the registry, and the documents describe the eight plots, the attitude convention, the orientation attribute and the rule for defaults
+862 audit naming
+
+# 863 - (14) `docs/` describes the eight fusion plots and the derived quantities, the attitude convention with the orientation attribute, its default and its limits (it describes the mount, not the wearer's posture; a forward axis pointing straight up or down makes heading and roll meaningless), the choice type and the orientation in the session file, the rule for defaults and its helper, and that wind is no longer written at import; no document describes a removed plot or the local-frame category
+863 audit naming

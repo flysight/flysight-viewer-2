@@ -7,10 +7,7 @@
 #     removed rather than living alongside their replacements (acceptance 19);
 #   - each fact has exactly one authority (one gyro factor, one schema-version
 #     attribute name, one compatibility marker, one number formatter, one
-#     emitter of dependencyChanged, one saver, one import path, one helper
-#     that registers every constant attribute default, which the importer
-#     and the legacy backfill no longer write for wind, one owner of the
-#     orientation tokens);
+#     emitter of dependencyChanged, one saver, one import path);
 #   - the mechanisms of sensor-fusion-clean-port that have no successor stay
 #     absent (acceptance 120), and the structure that replaced them stays in
 #     place: one worker thread and no locks, GTSAM confined to the fusion
@@ -18,9 +15,7 @@
 #     widget-free core; the stationary-window initializer, its silent poll and the
 #     constant-bias algorithm strings retired by the sensor fusion improvements
 #     stay absent, and the fusion tools stay isolated (items 212, 218, 231,
-#     233, 234, 247); the sensor fusion category is the eight plots of the
-#     tests' mirror, and no removed fusion plot, no local-frame plot and no
-#     document describing either remains;
+#     233, 234, 247);
 #   - the stored results of requested calculations live in the logbook's
 #     cache/ folder, never in the session file: they are named, written, read,
 #     restored and deleted in one place each, and the documents describe them
@@ -47,7 +42,13 @@
 #     layer's progress and failures, the logbook row a recording's failures,
 #     and one drawing of the warning glyph remains, the style's; the
 #     per-source presentation, the indicators, the clock and the logbook's
-#     progress line stay gone, in code and documents (items 701-754).
+#     progress line stay gone, in code and documents (items 701-754);
+#   - a default that stands in for a value the user has not set is a
+#     calculation, and every constant one is registered by one helper;
+#     neither the importer nor the legacy backfill writes wind; one type owns
+#     the orientation vocabulary; the sensor fusion category is the eight
+#     plots of the tests' mirror, and no removed fusion plot and no
+#     local-frame plot remains in code or documents (items 801-863).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -232,7 +233,7 @@ expect_count("one authority: compatibility marker" "CalculationCompatibilityVers
 expect_only("one authority: number formatting" "FloatingPointShortest" "^src/csvformat\\.cpp$" src)
 expect_none("one authority: number formatting" "<charconv>" src)
 
-# ─────────────────────────────── constant defaults
+# ─────────────────────────────── constant defaults (items 835-839, 851)
 # A default that stands in for a value the user has not set is a registered
 # calculation. A constant one is registered by Calculations::addConstantDefault
 # and by nothing else, so one search finds them all; the importer and the
@@ -251,7 +252,7 @@ expect_none("the replaced default helpers stay gone" "register(Sp|Wsp)Default" s
 expect_none("no wind default in the importer or the backfill" "_WIND_|WindN|WindE"
   src/dataimporter.cpp src/dataimporter.h src/logbookmanager.cpp src/logbookmanager.h)
 
-# ─────────────────────────────── orientation
+# ─────────────────────────────── orientation (item 821)
 # The orientation type (Fusion::Orientation) is the one place that spells the
 # vocabulary of the orientation attribute: its choices, its constant default
 # and the attitude's parser all come from it. Tests and documents spell tokens
@@ -373,7 +374,7 @@ expect_none("no dialog or message box for a calculation outcome"
 # by the engine like any other; the registration never catches and stores one.
 expect_none("no hand-cached failure" "catch *\\(" src/fusion/fusionregistration.cpp)
 
-# ─────────────────────────────── naming
+# ─────────────────────────────── naming (items 120, 801, 803, 852, 862, 863)
 # The algorithm is a batch factor-graph fit and nothing is named after a
 # filter; the branch's sensor and output names are gone.
 # Allow: tests/README.md is excluded because its section 10 spells these
@@ -592,7 +593,7 @@ expect_none("the fusion document describes the current model"
   "stationary window|candidate window|coarse initializer|frozen|bias shifts below|zero bias shift|sensor-fusion-clean-port|twenty-one"
   docs/SENSOR_FUSION.md)
 
-# ─────────────────────────────── fusion-tooling (items 231, 233)
+# ─────────────────────────────── fusion-tooling (items 231, 233, 848)
 audit_group(fusion-tooling)
 # Allow: none expected. The runner imports model-free (DataImporter::parseFile,
 # SessionMerge, the engine on a bare SessionData) and never names the
@@ -796,7 +797,7 @@ expect_none("no text says an unrelated change makes stored results stale"
 # the documents.
 # =============================================================================
 
-# ─────────────────────────────── demand (items 506, 508, 513, 515, 518, 527, 529, 530, 533-535, 538, 540-544, 546, 547, 563, 601-605, 607, 612, 613, 615, 616, 622, 624, 627, 631, 636, 641, 644, 646, 647, 649-652, 659-662, 701, 702, 706, 708, 723-728, 732, 736-744, 752-754)
+# ─────────────────────────────── demand (items 506, 508, 513, 515, 518, 527, 529, 530, 533-535, 538, 540-544, 546, 547, 563, 601-605, 607, 612, 613, 615, 616, 622, 624, 627, 631, 636, 641, 644, 646, 647, 649-652, 659-662, 701, 702, 706, 708, 723-728, 732, 736-744, 752-754, 853)
 audit_group(demand)
 # Allow: a new view that presents the demand layer is added to the allowed-file
 # regex; nothing below the demand layer (the executor, the session model, the
@@ -1033,9 +1034,10 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # item = 300 + clause number), 401-442 (stored results: validity that
 # mirrors memory, item = 400 + clause number), 501-563 (demand-driven
 # requested calculations, item = 500 + clause number), 601-662
-# (calculation refinements, item = 600 + clause number) and 701-754 (one
-# status bar for background work, item = 700 + clause number). Four line
-# forms; see the head of the map.
+# (calculation refinements, item = 600 + clause number), 701-754 (one
+# status bar for background work, item = 700 + clause number) and 801-863
+# (sensor fusion plots, attitude and the orientation attribute, item = 800 +
+# clause number). Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -1107,8 +1109,9 @@ else()
     if(NOT ((item GREATER_EQUAL 1 AND item LESS_EQUAL 19) OR (item GREATER_EQUAL 101 AND item LESS_EQUAL 120)
             OR (item GREATER_EQUAL 201 AND item LESS_EQUAL 247) OR (item GREATER_EQUAL 301 AND item LESS_EQUAL 350)
             OR (item GREATER_EQUAL 401 AND item LESS_EQUAL 442) OR (item GREATER_EQUAL 501 AND item LESS_EQUAL 563)
-            OR (item GREATER_EQUAL 601 AND item LESS_EQUAL 662) OR (item GREATER_EQUAL 701 AND item LESS_EQUAL 754)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662 and 701-754: ${line}")
+            OR (item GREATER_EQUAL 601 AND item LESS_EQUAL 662) OR (item GREATER_EQUAL 701 AND item LESS_EQUAL 754)
+            OR (item GREATER_EQUAL 801 AND item LESS_EQUAL 863)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754 and 801-863: ${line}")
     endif()
   endforeach()
 
@@ -1156,6 +1159,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 701 754)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 801 863)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

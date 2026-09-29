@@ -18,6 +18,7 @@
     - 12.4 [Demand-driven calculations](#124-demand-driven-calculations)
     - 12.5 [Calculation refinements](#125-calculation-refinements)
     - 12.6 [One status bar for background work](#126-one-status-bar-for-background-work)
+    - 12.7 [Sensor fusion plots, attitude and the orientation attribute](#127-sensor-fusion-plots-attitude-and-the-orientation-attribute)
 
 [Appendix A. The acceptance items (1-19)](#appendix-a-the-acceptance-items-1-19)
 [Appendix B. The acceptance items of sensor fusion and plot-driven jobs (101-120)](#appendix-b-the-acceptance-items-of-sensor-fusion-and-plot-driven-jobs-101-120)
@@ -27,6 +28,7 @@
 [Appendix F. The acceptance items of demand-driven requested calculations (501-563)](#appendix-f-the-acceptance-items-of-demand-driven-requested-calculations-501-563)
 [Appendix G. The acceptance items of calculation refinements (601-662)](#appendix-g-the-acceptance-items-of-calculation-refinements-601-662)
 [Appendix H. The acceptance items of one status bar for background work (701-754)](#appendix-h-the-acceptance-items-of-one-status-bar-for-background-work-701-754)
+[Appendix I. The acceptance items of sensor fusion plots, attitude and the orientation attribute (801-863)](#appendix-i-the-acceptance-items-of-sensor-fusion-plots-attitude-and-the-orientation-attribute-801-863)
 
 ## 1. What this is
 
@@ -76,7 +78,7 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | Test | Covers |
 |------|--------|
 | `tst_builtins_golden` | Every built-in calculation read through `SessionData` on the generated descent fixture, against hand-derived golden literals |
-| `tst_builtins_engine` | The built-ins on a private registry and `FakeSessionState`: golden values, registration inventory, declared inputs only, multi-output groups, candidate order, the declared preference, interpolation family, altitude descriptor, the constant defaults (`constantDefaults`), the column environment digest: per set of names, changed only by what their static closure reaches (`digestChanges`), covering every candidate's result version (`digestCoversResultVersions`) and the conversion layer (`digestCoversConversionLayer`), the same for an altitude marker registered at run time or at the next start and unchanged for every other name (`digestSurvivesRuntimeAltitudeMarker`), and the altitude-marker manager's destructor removing its registrations as teardown, which reports no drop while a marker removed at run time does (`altitudeMarkerTeardownReportsNothing`) |
+| `tst_builtins_engine` | The built-ins on a private registry and `FakeSessionState`: golden values, registration inventory, declared inputs only, multi-output groups, candidate order, the declared preference, interpolation family, altitude descriptor, the constant defaults (`constantDefaults`), the column environment digest: per set of names, changed only by what their static closure reaches (`digestChanges`), covering every candidate's result version (`digestCoversResultVersions`) and the conversion layer (`digestCoversConversionLayer`), the same for an altitude marker registered at run time or at the next start and unchanged for every other name (`digestSurvivesRuntimeAltitudeMarker`), and the altitude-marker manager's destructor removing its registrations as teardown, which reports no drop while a marker removed at run time does (`altitudeMarkerTeardownReportsNothing`) (fusion-plots items 810, 834-836, 838, 846, 851, 860) |
 | `tst_time_fit` | The system-time-to-UTC fit: microsecond-level conversion of an exact synthetic clock at high device uptime (the regression test of the centered sums), invalidation through the TIME sensor, GPS week rollover, degenerate clocks |
 | `tst_local_coordinates` | The recording-wide `Local` frame: origin gates, analytically known displacements and velocity rotation on WGS84, NaN at the index of an invalid sample only, all outputs unavailable without a qualifying fix, the shared GNSS time axes, invalidation on source changes and independence from markers on a real `SessionData` |
 | `tst_simplified_track` | The simplified map track on the shared `Local` frame: all seven outputs at the same retained sample indices, every dropped sample within 0.5 m of the path and the strictly-greater rule, duplicate-position endpoints, closed, degenerate and empty tracks, non-finite samples left out, one projection per recording, unavailable without a local origin and back after a source correction, siblings invalidated together |
@@ -92,10 +94,10 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 |------|--------|
 | `tst_jobqueue` | The executor, `JobQueue`, on a real `SessionModel`, real session engines and the global registry, with the synthetic explicit calculations of `jobfixture.h` (no GTSAM): publication through the session model, the 64 MiB worker thread at below-normal priority (`workerRunsBelowNormalPriority`), the main thread free while a job computes (`mainThreadIsNotBlockedByARunningJob`), at most the running job and one chosen next job (`holdsAtMostRunningAndChosenNext`), an equal offer creating nothing, a different offer replacing the chosen next job, which ends Cancelled "No longer needed" (`offerReplacesChosenNext`), withdrawing it (`withdrawEndsChosenNext`), one job at a time in offer order, refusals (missing input, unloaded or unknown session, blocked, done, unknown), never loading a session, every superseded / succeeded / failed / cancelled path with its reason text, a running job whose ticket went stale (input edit, merge, registration removed, model destroyed, the row's session data replaced - "Session data replaced", not "removed or unloaded") asked to stop at once and ended Superseded with the refusal's reason without its compute reaching the end, a new offer behind it becoming the chosen next job and run with the new inputs, first writer wins between a user cancel and a stale stop, cancel wins over a completed compute, a job cancelled from a `rowsInserted` slot (no pin left), session removal, deferred eviction, repopulation, merge, sort, shutdown in every order, the idle scheduler working during a job, and the job record naming its session by the session model's display name (`runsAndPublishes`) (sensor-fusion-jobs acceptance 8, 10, 11, 14, 17; demand items 521, 540, 544, 560, 561; refinement items 606, 624, 628, 629) |
 | `tst_jobmodel` | The `JobModel` contract under `QAbstractItemModelTester`: every role on every column, a test view that renders the whole job history from model signals alone, never more than one running row, a replaced chosen next job recorded as Cancelled "No longer needed", ordered UTC timestamps, progress and cancel-requested as their own signals, removal of finished rows only, the retention bound, and no job persisted: the settings and the logbook folder are byte-identical after jobs of every ending, except for the stored results of the two jobs that published `Ok` (sensor-fusion-jobs acceptance 18; store-requested item 309) |
-| `tst_calculation_demand` | `CalculationDemand`, the widget-free demand layer, on a real `PlotModel`, executor, `SessionModel`, `LogbookColumnStore`, logbook, real session engines and the global registry, with the synthetic plots of `plotfixture.h` (no widgets, no GTSAM). **Plot demand:** checking a plot starts the visible sessions without a result, showing a session or loading a visible one starts it, hiding drops its waiting pair and unchecking all of them while the running job finishes and is stored (`rowScript`, `showingASessionStartsIt`, `hidingASessionDropsItsWaitingPair`, `uncheckingDropsWaitingPairsKeepsRunning`); a waiting pair whose result appears by other means dropped before it starts (`resultAppearingWhileWaitingDropsThePair`); a click, `setPlotEnabled`, `togglePlot`, `setData` and a profile (applied by `PlotModel::setEnabledPlotIds()`, as `applyProfile()` does) create the same demand, the start-up restore with every session hidden none; a profile naming plots the model does not have enables its others and ignores those, silently: no message of any type, no row added (`profileNamingRemovedPlotsAppliesWithoutThem`); chained calculations upstream first, the executor never idle between links; the focused session, then row order, the chosen next job replaced when demand changes, never more than the running and one chosen next job; the one-second input-settle wait (a burst runs one job, counted from the first change); failures (an input-determined one stored, listed and never re-run; a job-level one listed, not re-run in the run and re-run by a new demand layer, as after a restart); not-applicable sessions never listed; progress, failures and their change signals (`changeSignalsAreMinimal`), coalesced passes, `isMerelyUncomputed()` (the plot widget's "No data available" warning is withheld for a value that waits on a requested calculation or was rejected by one, and for nothing else); session removal, registry changes, executor shutdown and null collaborators. **Column demand:** enabling a column over a requested output fills every session of the logbook, loading sessions that are not loaded at most two at a time as hidden, pinned sessions that leave by ordinary eviction (`enablingColumnFillsEveryUnloadedSession`), a session shown meanwhile running next, stored results creating no job (a stored rejection of a session that is not loaded listed with its reason after a restart, without a load), one pair memory (a refused offer or a column's not-applicable verdict; a failed job, load or record write; an exception result) that keeps a session from being loaded or a pair from being offered again after eviction, a sort or the column worker's pass (`settledPairsSurviveEvictionSortAndColumnWorker`), cleared by a record change, an input change or a registry change (`pairMemoryIsClearedByRecordInputAndRegistryChanges`), a column's verdict for that column only (`columnVerdictDoesNotSuppressAnotherColumn`), a column pair the executor refuses at offer time remembered and followed by a pass so that its cell does not stay pending (`columnOfferRefusalIsNotLeftPending`), chains keeping their hold, holds released on disable, show, removal, repopulation and destruction, the identity stub offered under its real id, the column's progress and pending cells (`columnProgressAndPendingCells`), the load step below saves, bulk edits and column work, not cancellable and reporting no progress of its own (`fillTaskRestsWhileWaiting`), and a pass over 2000 stubs reading each record set once. **Refinements:** one walk for plots and columns, a column track running on one blocker filing its others (`runningColumnTrackFilesItsOtherBlockers`); a record that could not be written listed among the failures, for a column and for a plot alike, not retried in the run, cleared by a later write, tried again after a restart (`failedRecordWriteIsShownAndNotRetried`, `failedRecordWriteIsShownOnThePlotRow`); a reason learned by the column worker's restore reaching the demand layer through the record change alone (`recordReasonReachesDemandThroughRecordChange`); column knowledge from the session model (`columnKnowledgeComesFromTheSessionModel`); the choice acting on the executor's answer and withdrawing a chosen next job nothing wants (`chosenNextJobFollowsTheExecutorsAnswer`); the settle clock (`settleClockAnswersItsQuestions`); the fill completed by the scheduler, a new burst of computations after a fill that ends behind another task starting its own high-water mark (`fillEndingBehindAnotherTaskStartsNextCountFresh`), holds released at the executor's shutdown; a successful load forgetting a session's failed-load facts (`successfulLoadForgetsFailedLoadFacts`). **Progress and failures:** the sessions with a waiting or running track counted once across plots and columns, a stub with a waiting cell included, out of a high-water mark that holds until the count is 0, and the running recording with its step (`progressCountsEachSessionOnce`); the step changing without a pass (`progressTextWithoutAPass`); one entry per recording in row order, each pair once, with its title, its reason and whether the next start tries it again (`failuresAreOnePerSessionInRowOrder`, `failuresNameEachCalculationOnce`); a stored rejection a failure of a new demand layer without a load, an unstored one only once its retry fails again (`storedRejectionIsAFailureWithoutLoad`, `unstoredFailureReturnsOnlyWhenItFailsAgain`); failures clearing as the pair memory clears and following what is switched on (`failuresClearAsThePairMemoryClears`, `failuresFollowWhatIsSwitchedOn`); the pending cells' own announcement per column (`pendingCellsChangedPerColumn`); the one text form of the failures and its limit of ten (`failureTextAndItsLimit`) (sensor-fusion-jobs acceptance 11, 13, 15, 16; demand items 501-560; refinement items 601-604, 607, 609, 611, 612, 615, 616, 618-620, 622, 624-627, 630-643, 645, 647, 648, 651-659; status-bar items 703-706, 711, 713-717, 720, 727-732, 736, 740, 744, 745, 748-750, 753) |
+| `tst_calculation_demand` | `CalculationDemand`, the widget-free demand layer, on a real `PlotModel`, executor, `SessionModel`, `LogbookColumnStore`, logbook, real session engines and the global registry, with the synthetic plots of `plotfixture.h` (no widgets, no GTSAM). **Plot demand:** checking a plot starts the visible sessions without a result, showing a session or loading a visible one starts it, hiding drops its waiting pair and unchecking all of them while the running job finishes and is stored (`rowScript`, `showingASessionStartsIt`, `hidingASessionDropsItsWaitingPair`, `uncheckingDropsWaitingPairsKeepsRunning`); a waiting pair whose result appears by other means dropped before it starts (`resultAppearingWhileWaitingDropsThePair`); a click, `setPlotEnabled`, `togglePlot`, `setData` and a profile (applied by `PlotModel::setEnabledPlotIds()`, as `applyProfile()` does) create the same demand, the start-up restore with every session hidden none; a profile naming plots the model does not have enables its others and ignores those, silently: no message of any type, no row added (`profileNamingRemovedPlotsAppliesWithoutThem`); chained calculations upstream first, the executor never idle between links; the focused session, then row order, the chosen next job replaced when demand changes, never more than the running and one chosen next job; the one-second input-settle wait (a burst runs one job, counted from the first change); failures (an input-determined one stored, listed and never re-run; a job-level one listed, not re-run in the run and re-run by a new demand layer, as after a restart); not-applicable sessions never listed; progress, failures and their change signals (`changeSignalsAreMinimal`), coalesced passes, `isMerelyUncomputed()` (the plot widget's "No data available" warning is withheld for a value that waits on a requested calculation or was rejected by one, and for nothing else); session removal, registry changes, executor shutdown and null collaborators. **Column demand:** enabling a column over a requested output fills every session of the logbook, loading sessions that are not loaded at most two at a time as hidden, pinned sessions that leave by ordinary eviction (`enablingColumnFillsEveryUnloadedSession`), a session shown meanwhile running next, stored results creating no job (a stored rejection of a session that is not loaded listed with its reason after a restart, without a load), one pair memory (a refused offer or a column's not-applicable verdict; a failed job, load or record write; an exception result) that keeps a session from being loaded or a pair from being offered again after eviction, a sort or the column worker's pass (`settledPairsSurviveEvictionSortAndColumnWorker`), cleared by a record change, an input change or a registry change (`pairMemoryIsClearedByRecordInputAndRegistryChanges`), a column's verdict for that column only (`columnVerdictDoesNotSuppressAnotherColumn`), a column pair the executor refuses at offer time remembered and followed by a pass so that its cell does not stay pending (`columnOfferRefusalIsNotLeftPending`), chains keeping their hold, holds released on disable, show, removal, repopulation and destruction, the identity stub offered under its real id, the column's progress and pending cells (`columnProgressAndPendingCells`), the load step below saves, bulk edits and column work, not cancellable and reporting no progress of its own (`fillTaskRestsWhileWaiting`), and a pass over 2000 stubs reading each record set once. **Refinements:** one walk for plots and columns, a column track running on one blocker filing its others (`runningColumnTrackFilesItsOtherBlockers`); a record that could not be written listed among the failures, for a column and for a plot alike, not retried in the run, cleared by a later write, tried again after a restart (`failedRecordWriteIsShownAndNotRetried`, `failedRecordWriteIsShownOnThePlotRow`); a reason learned by the column worker's restore reaching the demand layer through the record change alone (`recordReasonReachesDemandThroughRecordChange`); column knowledge from the session model (`columnKnowledgeComesFromTheSessionModel`); the choice acting on the executor's answer and withdrawing a chosen next job nothing wants (`chosenNextJobFollowsTheExecutorsAnswer`); the settle clock (`settleClockAnswersItsQuestions`); the fill completed by the scheduler, a new burst of computations after a fill that ends behind another task starting its own high-water mark (`fillEndingBehindAnotherTaskStartsNextCountFresh`), holds released at the executor's shutdown; a successful load forgetting a session's failed-load facts (`successfulLoadForgetsFailedLoadFacts`). **Progress and failures:** the sessions with a waiting or running track counted once across plots and columns, a stub with a waiting cell included, out of a high-water mark that holds until the count is 0, and the running recording with its step (`progressCountsEachSessionOnce`); the step changing without a pass (`progressTextWithoutAPass`); one entry per recording in row order, each pair once, with its title, its reason and whether the next start tries it again (`failuresAreOnePerSessionInRowOrder`, `failuresNameEachCalculationOnce`); a stored rejection a failure of a new demand layer without a load, an unstored one only once its retry fails again (`storedRejectionIsAFailureWithoutLoad`, `unstoredFailureReturnsOnlyWhenItFailsAgain`); failures clearing as the pair memory clears and following what is switched on (`failuresClearAsThePairMemoryClears`, `failuresFollowWhatIsSwitchedOn`); the pending cells' own announcement per column (`pendingCellsChangedPerColumn`); the one text form of the failures and its limit of ten (`failureTextAndItsLimit`) (sensor-fusion-jobs acceptance 11, 13, 15, 16; demand items 501-560; refinement items 601-604, 607, 609, 611, 612, 615, 616, 618-620, 622, 624-627, 630-643, 645, 647, 648, 651-659; status-bar items 703-706, 711, 713-717, 720, 727-732, 736, 740, 744, 745, 748-750, 753; fusion-plots items 805, 845, 852, 855) |
 | `tst_logbook_indicators` | `LogbookView` with `LogbookCellDelegate` on the tree's own header, in an offscreen window beside a reference `QTreeView` with the base delegate, on a real demand layer, executor and `SessionModel`; the first of the three tests that link Qt Widgets (`FLYSIGHT_BUILD_WIDGET_TESTS`, label `widgets`). Without a failure the header and every cell that is not pending are the reference's, with the same sizes, while a requested column works and once it has finished (`plainHeaderAndCellsAreIdenticalToBase`); the header is the tree's own `QHeaderView`, identical to the reference's and reserving no room while a column works and after one has failed, nothing repaints by itself while a column works, and the view has no progress bar or cancel button (`headerIsPlainAndNothingAnimates`); a recording with a current failure shows one glyph, the style's warning icon, right after the text of its row's first visual cell, attached to it and leaving the text where it was, for a loaded row and for one that stays unloaded, every other cell (the failed calculation's blank one included) the base delegate's and every size unchanged (`rowWarningFollowsTheText`); the hover over the glyph is exactly `SessionFailures::text()`, the rest of a pending first cell keeping the pending tooltip (`rowWarningHoverIsTheSessionsFailures`); the glyph in the new first visual cell after a section is moved to the front or hidden, a sort and a rebuild of the columns (`rowWarningFollowsTheFirstVisualColumn`); the glyph appearing when a job fails and going after an input change whose retry succeeds and when the last source is disabled (`rowWarningFollowsFailures`); a session file that cannot be loaded warning on its row, its cell not pending (`failedLoadSessionShowsRowWarningNotPending`); a record that could not be written named in the row's hover, tried again at the next start (`failedWriteIsListedInTheHover`); a click on the glyph selecting as a click elsewhere in the cell, starting and cancelling nothing (`clickOnRowWarningIsAClickOnTheCell`); pending cells distinct from unavailable ones and from the unreadable-record state, never in the model or `index.json`, sorted as unavailable, and replaced by the value when the record is written; `pendingCellsChanged` repainting that column and `failuresChanged` the first visual column, with no model signal (`pendingCellsChangeRepaintsOnlyThatColumn`); a demand layer destroyed first, with a glyph and pending cells shown (`survivesDemandDestroyedFirst`) (demand items 526, 527, 533-538, 543, 547, 557, 558; refinement items 618, 633, 644, 646, 648-650, 652, 660; status-bar items 718-726, 731, 735-737, 741, 744, 750-752) |
 | `tst_status_bar` | `StatusBarFeature` in the status bar of an offscreen `QMainWindow`, on a real `SessionModel` with its idle scheduler, executor and demand layer, with the synthetic calculations of `jobfixture.h` and the plots of `plotfixture.h`; the second of the three tests that link Qt Widgets (label `widgets`). The scheduler's four tasks under their labels, with the scheduler's count for that id on the label and the bar, a report for another id changing nothing, and idle leaving the activity area empty (`schedulerTasksShowTheirLabelsAndCounts`); the computations as one item, counting the sessions of plots and columns together, each once, out of the high-water mark, shown while the fill is the active task, the fill never reporting a progress of its own, and a later burst starting its own total (`computationsAreOneItem`); a task shown over the computations, the hover listing both with the recording being computed and its step, and the computations returning when the task ends (`taskShownOverComputationsAndHoverListsBoth`); the cancel button exactly while the shown item is a cancellable task, never for saving, the fill or the computations, and a click cancelling a visible load (`cancelOnlyForACancellableShownTask`); the warning beside the computations and then alone, counting recordings with the style's warning icon, its hover the capped list of `SessionFailures::listText()` (`warningBesideComputationsThenAlone`, `warningCountsRecordingsAndListsThem`, `warningListsAtMostTenRecordings`), absent without a failure, not dismissed by a click and gone with the last source (`warningAbsentWhenNothingFailedAndNotDismissable`), and after a restart counting a stored rejection without a load, also from an index without "recordReasons", and an unstored failure only once its retry fails again (`warningAfterRestart`); one height idle, with a task, the cancel button, the warning and both (`heightNeverChanges`); the activity at the left, label then a compact bar then the cancel button, the warning at the right, and no width kept by a hidden widget (`activityLeftAndWarningRight`); a demand layer destroyed first, and none at all (`survivesDemandDestroyedFirst`) (demand items 530, 534-537, 539, 559; refinement items 612, 644, 645, 647, 650, 653, 660; status-bar items 701-705, 707-716, 725, 727, 733, 734, 737-739, 745-750) |
-| `tst_choice_attribute` | The Choice attribute format type (`AttributeFormatType::Choice`) through the logbook, on a real `SessionModel` and logbook, with Choice attributes the test registers (three choices whose label, token and definition orders all differ, one token holding a comma; one attribute with a no-input default calculation, one without) and driven through `ChoiceFixture` (`support/choicefixture.h`); the third of the three tests that link Qt Widgets (label `widgets`), with a `LogbookView` and no demand layer. On loaded rows and on stubs after a restart: a cell shows the label of the effective token, stored or calculated, and a token outside the list (planted with `updateAttribute()`) its raw text (`choiceShowsTheLabelOfTheEffectiveToken`); sorting orders by that text, missing values last both ways (`choiceSortsByLabel`); `setData()` stores a token of the list verbatim (`$VAR,<key>,b,1`), shows its label and publishes the change, refuses the stored token again, and compares with the stored value, so the default's own token can be pinned (`choiceEditStoresAToken`); a token outside the list, a label, an empty string or another type is refused with nothing emitted, saved or loaded (`choiceEditRefusesATokenOutsideTheList`); an invalid value removes the stored attribute, the default's label returning, and is refused when nothing is stored (`choiceDefaultRemovesTheStoredValue`); the bulk edit sets a token on loaded and stub rows, files, `index.json` and cells agreeing (`bulkEditSetsAToken`), removes it for an invalid value (`bulkEditDefaultRemovesTheStoredValue`) and queues nothing for any other value, the bulk edit task never active (`bulkEditRefusesATokenOutsideTheList`); the in-place editor is a non-editable `QComboBox` of "Default" then the labels in definition order, opening on the cell's label or on no entry for a raw token, a label storing its token, "Default" removing the stored value and Enter on the opening entry writing nothing, a Text cell keeping the base class's `QLineEdit` (`cellEditorOffersTheList`); the "Set ..." dialog, `LogbookView::askAndSetAttribute()` driven through its modal `QInputDialog` by a timer, is a non-editable list of the same entries opening on "Default", a label bulk-editing its token onto the given sessions, "Default" removing it and a rejection changing nothing, a Text attribute keeping the text prompt (`setDialogOffersTheList`) |
+| `tst_choice_attribute` | The Choice attribute format type (`AttributeFormatType::Choice`) through the logbook, on a real `SessionModel` and logbook, with Choice attributes the test registers (three choices whose label, token and definition orders all differ, one token holding a comma; one attribute with a no-input default calculation, one without) and driven through `ChoiceFixture` (`support/choicefixture.h`); the third of the three tests that link Qt Widgets (label `widgets`), with a `LogbookView` and no demand layer. On loaded rows and on stubs after a restart: a cell shows the label of the effective token, stored or calculated, and a token outside the list (planted with `updateAttribute()`) its raw text (`choiceShowsTheLabelOfTheEffectiveToken`); sorting orders by that text, missing values last both ways (`choiceSortsByLabel`); `setData()` stores a token of the list verbatim (`$VAR,<key>,b,1`), shows its label and publishes the change, refuses the stored token again, and compares with the stored value, so the default's own token can be pinned (`choiceEditStoresAToken`); a token outside the list, a label, an empty string or another type is refused with nothing emitted, saved or loaded (`choiceEditRefusesATokenOutsideTheList`); an invalid value removes the stored attribute, the default's label returning, and is refused when nothing is stored (`choiceDefaultRemovesTheStoredValue`); the bulk edit sets a token on loaded and stub rows, files, `index.json` and cells agreeing (`bulkEditSetsAToken`), removes it for an invalid value (`bulkEditDefaultRemovesTheStoredValue`) and queues nothing for any other value, the bulk edit task never active (`bulkEditRefusesATokenOutsideTheList`); the in-place editor is a non-editable `QComboBox` of "Default" then the labels in definition order, opening on the cell's label or on no entry for a raw token, a label storing its token, "Default" removing the stored value and Enter on the opening entry writing nothing, a Text cell keeping the base class's `QLineEdit` (`cellEditorOffersTheList`); the "Set ..." dialog, `LogbookView::askAndSetAttribute()` driven through its modal `QInputDialog` by a timer, is a non-editable list of the same entries opening on "Default", a label bulk-editing its token onto the given sessions, "Default" removing it and a rejection changing nothing, a Text attribute keeping the text prompt (`setDialogOffersTheList`) (fusion-plots items 823-833, 841, 844, 858, 859) |
 
 **Source layer, conversion layer, importer**
 
@@ -111,7 +113,7 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | Test | Covers |
 |------|--------|
 | `tst_csvformat` | `CsvFormat`, the one definition of the on-disk text forms: shortest round-trip doubles (a 200 000-value bit-pattern sweep), `-0`, `nan` / `inf` / `-inf`, attribute values by `QVariant` type, line-break flattening, valid names and units |
-| `tst_persistence_roundtrip` | Save / reload on the real importer, exporter and logbook: acceptance 5 (bit-identical samples, units and header attributes preserved, `SCHEMA_VER` only if recorded, effective values unchanged, second cycle byte-identical, independent of any cache) and acceptance 6 (a released logbook file is not rescaled, relabelled or stamped by a save; the `loadSession` backfill is additive and idempotent); non-finite samples, ragged sensors, unrepresentable text; the file writer and the in-memory writer agree (also across the 4 MB flush boundary); an unsupported stored `SCHEMA_VER` is never written |
+| `tst_persistence_roundtrip` | Save / reload on the real importer, exporter and logbook: acceptance 5 (bit-identical samples, units and header attributes preserved, `SCHEMA_VER` only if recorded, effective values unchanged, second cycle byte-identical, independent of any cache) and acceptance 6 (a released logbook file is not rescaled, relabelled or stamped by a save; the `loadSession` backfill is additive and idempotent (mass and area; wind is not backfilled)); non-finite samples, ragged sensors, unrepresentable text; the file writer and the in-memory writer agree (also across the 4 MB flush boundary); an unsupported stored `SCHEMA_VER` is never written |
 | `tst_logbook_index` | `LogbookManager`'s `index.json` column cache (and each session's `"recordReasons"`, `recordReasonsRoundTrip`; a changed reason announced as a record change, an unchanged one silent, `recordReasonChangeIsAnnounced`): the calculation-compatibility marker gates every cached value and each column's recorded environment the values of that column (acceptance 18 at the storage level; `differentColumnEnvironmentDiscardsThatColumn`, `missingColumnEnvironmentsDiscardOnce`, `environmentIsTheCachedOne`), unsaved-column tracking and save ordering (an interrupted save never leaves a cached column that disagrees with the session file), orphan session files adopted, marks follow remap / remove / reset; the raw load with its failure reason, the legacy backfill as a separate step, identity-entry queries, a legacy flat index coming up as stubs without rewriting a session file |
 | `tst_result_records` | Stored requested-calculation results: the record file name (percent-encoded calculation id, canonical, dot-free, distinct under case folding; the parse of a name), the code stamp (the compatibility marker) computed fresh, never made stale by a registration, the binary record format (bit-exact round trip of `-0`, NaN payloads, infinities and subnormals, null / empty / non-ASCII strings and unavailable outputs; a round trip of every accepted attribute type; the pinned byte layout of format version 2, the resolutions included; other format versions (format 1, in both of its layouts, included), damaged and crafted payloads refused without allocating; every other attribute type, `long` and `unsigned long` included, refused at encode; size), and `LogbookManager`'s record files in the logbook's `cache/` folder: a short read is `Unreadable`, never decoded (`readWholeDevice()` on a buffer that holds less than expected: no file system gives a short read on demand); write, read, replace, list, remove, the folder created by the first write only (a missing folder holds no record), write failures leaving the previous record intact (a `cache/` that cannot be created included), removal with the session (dotted identity stems), stray records removed from `cache/` by `initialize()` in all three index branches, `sessions/` untouched (a name spelling the extension in another case is not a record: neither listed nor removed), orphan adoption, remap, and a session save that never depends on records |
 | `tst_column_cache` | The same through `SessionModel`: upgrade discards and lazily recomputes (acceptance 18), an edit refreshes only the affected columns with a warm and a cold engine, merges and bulk edits, interrupted saves, environment changes discarding, in loaded and unloaded rows and without saving, exactly the columns whose environment they change: a declared preference only the columns that read it (`preferenceChangeDiscardsOnlyReadingColumns`), a registration only the columns whose closure it reaches (`environmentCheckDropsExactlyTheReachedColumn`), new altitude markers no column at all, at run time and after a restart (`altitudeMarkerChangeKeepsOtherColumns`), and a value computed after a change but before the queued check (an eviction) stored and flushed only under its column's new environment (`valueComputedBeforeCheckIsStoredUnderItsEnvironment`), save failures (the row stays dirty and loaded, is skipped by the idle saver and the LRU, stays out of the index, and is saved by a later edit or the shutdown flush), line breaks flattened at edit, a column over an explicit result cached from the result the session has and following its record, shown by a stub after a restart without a load (`explicitBackedColumnFollowsItsResult`), a plug-in edit (a changed plug-in code identity) discarding the cached values of the plug-in column at the next start and keeping the others (`pluginEditDiscardsPluginColumns`), and `loadPinnedSession()`: a hidden session loaded the way showing it would, pinned under its corrected id, nothing pinned for a file that cannot be loaded (`loadPinnedSessionLoadsWithoutShowing`, `loadPinnedSessionFollowsIdentityRemap`, `loadPinnedSessionFailedLoadPinsNothing`) |
@@ -141,11 +143,11 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | `tst_fusion_golden` | The fusion kernel (`flysight_fusion`) through its public API, `src/fusion/fusion.h`, only. What it reaches: `Fusion::run()` on the twelve committed synthetic fixtures and nothing internal. In spec order: the initializer's prefix and segment fits are boundaries of the same kinds as the full fit's, so cancellation at each kind of boundary (`Starting fit`, graph construction, a prefix fit iteration, a segment fit iteration, a full fit iteration) leaves an empty result and no state behind, and preparation has no boundary of its own (the first is `Starting fit`); the progress texts at the kernel's boundaries, prefix and segment texts included, are the golden's; two runs are bit-identical with TBB on, a 64 MiB worker thread matches the main thread, and nothing depends on the caller's data. The golden comparison: for every fixture the fit reproduces the goldens captured from the kernel by `fusion_golden_capture` (three successes: seventeen channels and the diagnostics with their `initializer`, `stopping`, `quality` and `model` objects; nine rejections: the exact reason), the channel writer of the capture tool is the inverse of the loader on the committed files (and the hex sample form round-trips signed zero, a NaN and a subnormal by bit pattern), and the comparator holds its bounds (sensor-fusion-jobs acceptance 4; section 11). Label `fusion` |
 | `tst_fusion_kernel` | The kernel's internals through the seams of `src/fusion/` (the only test that includes those headers), with the literal expectations of the reference's self-test: the shared unwrap rule, preintegration across exact boundaries, every validation defect, backward attitude propagation, heading freedom, dense reconstruction timing and endpoint correction, an exact constant-velocity fit, TBB really on. In spec order: the segmented initializer (segment cutting on fixes and the merge of a short final piece, a window shorter than one segment, the smallest-sAcc anchor and the carried-back start, prefix growth on the marginal yaw sigma about the vertical, the growth stop when a doubling gains nothing, the prefix budget of one pass and 50 iterations and starts that end on the limit, the fallback when every prefix start fails, its progress texts and diagnostics keys, the four synthetic initializer recordings of the specification and `coarse_maneuver`); the stopping rule (the bias-settled cost test, the slow tail accepted and refused on each bound, non-convergence and a never-settling bias as solver failures with their failure shapes); the per-step IMU noise term (the density covariance exactly without a signal change, the specified covariance for a known change, the `dt` scaling, the constants in `model.per_step`); the temperature-dependent gyro bias (the custom IMU factor's six Jacobians against finite differences and its equivalence with `ImuFactor` at zero slope, the graph shape with `T_ref` and the slope prior last, the reconstruction at each interval's own bias, a recording without the temperature channel rejected by name, a constant temperature leaving `b1` at its prior and agreeing with the constant-bias fit, the drifting-bias recording recovering `b1` within 20 % in at most 30 iterations). The golden comparison: the fit trace (the segment account and the cost before and after every optimizer iteration) against the goldens, which localizes a golden failure to a stage, and the chosen prefix fit's iteration count against the golden's (acceptance 4; section 11). Label `fusion` |
 | `tst_fusion_session` | Sensor fusion as a registered calculation (`src/fusion/fusionregistration.cpp`) on real `SessionData` engines bound to the global registry, with the real fit on the test's main thread. What it reaches: the engine's request, prepare / compute / publish and blocker paths on fixture sessions whose effective inputs are bit-identical to the kernel's fixtures, and a natural session through the real input chain. The registration's shape: eight registrations, the fit with 22 inputs (all required, `IMU/temperature` the last measurement) and 18 outputs, explicit, title "Sensor fusion". In spec order: cancellation at each kind of boundary through the engine's facility publishes and caches nothing (sensor-fusion-jobs acceptance 10); a session with the temperature column carries it to the kernel bit for bit and matches the kernel's direct run, and a session without `IMU/temperature` is `MissingInput` / `NotApplicable` like one without IMU data, a local origin or a time fit (11). The lifecycle: reads of every fusion value, `accH`, the system-time axis, the diagnostics and an interpolated logbook value never run the fit, in any order, nor does the exporter (5); a request runs once, publishes all outputs together, and brings `accH` and `_system_time` with it (6); prepare / compute / publish equals `request()` bit for bit (7); an input change after publication drops everything while markers do not (8); a rejection is a cached result with its reason, `NotProduced` for inspection, and requestable again after an input change (9); blocker inspection reports the fit through on-demand intermediates and never starts it (12); two sessions are independent. The fit declares its kernel's algorithm string as its result version, no output of an explicit built-in has another candidate (`explicitOutputsHaveOneCandidate`), and a fit exported from one session and restored into another is indistinguishable from the fresh one: every channel bit for bit, the diagnostics byte for byte, status, detail, dependency edges (`SCHEMA_VER` among its leaves), blockers and invalidation, and the fit's snapshot lists what provided each name it looked up (`restoredFitIsIndistinguishable`). The golden comparison: every published result equals the kernel's goldens. Label `fusion` |
-| `tst_fusion_derived` | What is derived on demand from the fit's published outputs (`src/fusion/fusionregistration.cpp`), without the solver: the fit's outputs are stored as data on real `SessionData` engines bound to the global registry (`syntheticFitSession()`, section 11), and every expected value is an exactly representable literal or, for "one definition", the GNSS calculation on the same samples. The seam's premise: stored `Fusion/<name>` reads back bit for bit and the fit never runs. The registrations of `builtin.fusion.z`, `accAlongTrack` and `accCrossTrack`: on demand, no title or result version, their inputs in order (the track accelerations those of the GNSS ones), one candidate each, the fit their one explicit dependency, and `Fusion/accD` with no second producer (vertical acceleration). On a fixture session that has the fit's inputs and no fit, each waits on the fit alone: `Blocked` by it, merely uncomputed, unavailable, and nothing runs it. Elevation is `_LOCAL_ORIGIN_HMSL` less `down` less `_GROUND_ELEV`, recomputed from an attribute edit without the fit and unavailable when either attribute is not a number. The track accelerations' known answers: along north, reversed, a vertical descent, a wind that turns a skewed ground velocity north, no motion through the air, a wind that is not a number (zero), no stored wind (the constant zero default) and unequal lengths (unavailable). The fused and the GNSS track accelerations agree on the same samples and wind (bit-exact in exact mode, within 4 ulp otherwise). The orientation vocabulary (`src/fusion/orientation.h`): exactly 24 pairs in the enumeration order, the default first, distinct tokens and labels, each token parsing back and nothing else parsing, every body-to-device rotation exact and proper with the columns forward, forward x up and -up; the attribute's one definition, its choices the enumeration, also after the entry point registers on a private registry. The attitude (`builtin.fusion.attitude`, after the orientation's constant default `builtin.default._ORIENTATION`): its registration, waiting on the fit on a fixture session, and on the quaternion stored as data (expected values built by hand from Euler angles and a hand-written default mount, within 1e-9 degrees): a level north-facing body, known heading, pitch and roll, two turns of heading unwrapped and offset by the course reference exactly as `GNSS/course` is (and unavailable exactly when it is), roll and pitch in their ranges through a barrel roll and a loop, the forward axis exactly vertical (the body pitched straight up and down between ordinary samples under the default orientation, and a level device under the mounts forward +z and forward -z, the sample whose pitch argument rounds past 1): all three angles published and finite, pitch at +90 or -90, roll in range and the later samples still reading their own angles, side mounts, the fit's own yaw, pitch and roll from a success golden's quaternion under forward +x, up -z (within 1e-6 degrees), an invalid stored orientation (unavailable) and a stored one recomputed without a fit. The Orientation column's model and bulk edit through `ChoiceFixture` on fixture sessions, loaded and as stubs: the default's label with nothing written and its token cached, a token stored and written verbatim, a token outside the list, a label and an empty string refused, "Default" removing the stored value, and the bulk edit setting, removing and refusing. No golden comparison, so no `_exact` run. Label `fusion` |
+| `tst_fusion_derived` | What is derived on demand from the fit's published outputs (`src/fusion/fusionregistration.cpp`), without the solver: the fit's outputs are stored as data on real `SessionData` engines bound to the global registry (`syntheticFitSession()`, section 11), and every expected value is an exactly representable literal or, for "one definition", the GNSS calculation on the same samples. The seam's premise: stored `Fusion/<name>` reads back bit for bit and the fit never runs. The registrations of `builtin.fusion.z`, `accAlongTrack` and `accCrossTrack`: on demand, no title or result version, their inputs in order (the track accelerations those of the GNSS ones), one candidate each, the fit their one explicit dependency, and `Fusion/accD` with no second producer (vertical acceleration). On a fixture session that has the fit's inputs and no fit, each waits on the fit alone: `Blocked` by it, merely uncomputed, unavailable, and nothing runs it. Elevation is `_LOCAL_ORIGIN_HMSL` less `down` less `_GROUND_ELEV`, recomputed from an attribute edit without the fit and unavailable when either attribute is not a number. The track accelerations' known answers: along north, reversed, a vertical descent, a wind that turns a skewed ground velocity north, no motion through the air, a wind that is not a number (zero), no stored wind (the constant zero default) and unequal lengths (unavailable). The fused and the GNSS track accelerations agree on the same samples and wind (bit-exact in exact mode, within 4 ulp otherwise). The orientation vocabulary (`src/fusion/orientation.h`): exactly 24 pairs in the enumeration order, the default first, distinct tokens and labels, each token parsing back and nothing else parsing, every body-to-device rotation exact and proper with the columns forward, forward x up and -up; the attribute's one definition, its choices the enumeration, also after the entry point registers on a private registry. The attitude (`builtin.fusion.attitude`, after the orientation's constant default `builtin.default._ORIENTATION`): its registration, waiting on the fit on a fixture session, and on the quaternion stored as data (expected values built by hand from Euler angles and a hand-written default mount, within 1e-9 degrees): a level north-facing body, known heading, pitch and roll, two turns of heading unwrapped and offset by the course reference exactly as `GNSS/course` is (and unavailable exactly when it is), roll and pitch in their ranges through a barrel roll and a loop, the forward axis exactly vertical (the body pitched straight up and down between ordinary samples under the default orientation, and a level device under the mounts forward +z and forward -z, the sample whose pitch argument rounds past 1): all three angles published and finite, pitch at +90 or -90, roll in range and the later samples still reading their own angles, side mounts, the fit's own yaw, pitch and roll from a success golden's quaternion under forward +x, up -z (within 1e-6 degrees), an invalid stored orientation (unavailable) and a stored one recomputed without a fit. The Orientation column's model and bulk edit through `ChoiceFixture` on fixture sessions, loaded and as stubs: the default's label with nothing written and its token cached, a token stored and written verbatim, a token outside the list, a label and an empty string refused, "Default" removing the stored value, and the bulk edit setting, removing and refusing (fusion-plots items 806-827, 831, 835, 843, 844, 849, 850, 856-858). No golden comparison, so no `_exact` run. Label `fusion` |
 | `tst_fusion_jobs` | The real fit through the executor on a real `SessionModel`, on the executor's 64 MiB worker: one job publishes all outputs together and announces them through the session model (acceptance 6); the executor gives the bits a synchronous request gives (7); the solver's oneTBB helper threads run at the worker's below-normal priority while they help a fit (`solverThreadsRunAtWorkerPriority`); an input edit during the fit asks the fit to stop at once, ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job (11); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before the fit, from the published result after it (with the `"records"` stamp in `index.json`), shown by the unloaded row after a restart without a load, and dropped with the record by an input change (`columnOnFusionOutputIsCachedFromRecord`); an altitude marker added at run time and registered again after a restart keeps that column's and the description's cached values of an unloaded session - no load, nothing pending (`altitudeMarkerKeepsColumnsOfUnloadedSession`); once that value of an unloaded session is gone from `index.json` (cleared, or dropped by an exit-marker move made while the application was closed: `_EXIT_TIME` is not bulk-editable, so the test repeats the `LogbookManager` calls of the bulk edit's stub path - temporary load, column marked unsaved, save), the column worker refills it after a restart from the stored fit restored into its temporary copy: the roll at the marker's time, bit-identical to the loaded session's, with no load of the row, no job, no fit and the record's bytes unchanged (`workerRefillsColumnFromStoredFit`); while the loaded row's cell shows the golden's number the moment the job publishes (`dataChanged` for that row only, and the number already there when the view is told); shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the executor delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 11 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit, driven as a child process on fixtures written out as `TRACK.CSV` / `SENSOR.CSV`: its diagnostics equal a direct `Fusion::run()` on the fixture and equal the application's own import-and-fit path (`SessionImport` on a `SessionModel`); the CSV output reloads bit for bit; `--dump-inputs` shows the effective inputs, including the legacy gyro scale of a file without `SCHEMA_VER`; a rejection exits 1 with the failure JSON and writes no CSV; usage and import failures exit 64 and 3; no calculation on the fit's input path declares a preference (the premise of the model-free import); and the seventeen output channels of `fitOutputChannels()` are the golden's columns in order. Label `fusion` |
 | `tst_fusion_golden_exact`, `tst_fusion_kernel_exact`, `tst_fusion_session_exact`, `tst_fusion_jobs_exact`, `tst_fusion_rows_exact`, `tst_fusion_store_exact`, `tst_fusion_runner_exact` | Not executables: the seven tests above that compare with the goldens, run a second time with `FLYSIGHT_FUSION_EXACT=1` and otherwise the same environment, so that every golden comparison is bit equality (section 11, "Tolerance policy"). Registered only where that is a fair demand, the compiler the goldens were captured with (`FLYSIGHT_FUSION_EXACT_TESTS`, section 3). The first two decide bit-identity; the next four show that the bits survive the engine, the executor's worker thread, the demand layer's plot demand and a stored and restored record; the last is bit identity across the process boundary (the runner's output against an in-process run). Labels `fusion` and `exact` |
-| `tst_fusion_rows` | The plot-row script with the **real** fusion plots: `PlotModel` + `CalculationDemand` + the executor + `SessionModel` + the fusion registration, with real fits on the executor's 64 MiB worker and the eight plots of `fusionPlots()` (`tests/fusion/fusionsessions.h`, which mirrors `MainWindow::registerBuiltInPlots()`; `audit_cleanup` pins the application's list at eight rows). All eight plots are explicit-backed (the fit their one requested calculation) and every one is drawn after the one fit, on the fit's time axis (`allEightFusionPlotsAreExplicitBacked`); the row script of acceptance 15 on three real tracks (checking fits them one after another with no other action, the sessions still to compute falling as each publishes; unchecking mid-way drops the waiting one and lets the running one finish; checking again resumes; a fourth track shown is fitted with no other action), with every published track held to the kernel's goldens and the job history as a literal; Heading, Pitch and Roll share one job and one progress text (`headingPitchRollShareOneJob`); `accH` is blocked by the fit and never has a job of its own; a session without IMU data is never counted and never listed among failures before, during and after a fit (11); a rejected recording is listed among failures with the reason, offers no retry, and is fitted again after its input changes and settles (9); sessions are edited, tracks hidden and shown and other values read while a real fit runs, without disturbing it, and are fitted afterwards with no other action (19, the half that needs no widget); the demand layer's items on demand, failures and chains unchanged in what they assert with real fits (status-bar item 753); the measurements of the removed plots still serve a logbook column kept from before (the fit's roll and the local frame's north at the exit marker, labelled with the measurement's name, `Fusion/roll @ ...`, beside a column over the Roll row labelled `Roll @ ...`) and the fit's stored record carries every fit channel that has no plot (`removedPlotMeasurementsStayAvailable`). Steered by the first progress text of a job and by `jobFinished`: no gate, no sleeps. Label `fusion` |
+| `tst_fusion_rows` | The plot-row script with the **real** fusion plots: `PlotModel` + `CalculationDemand` + the executor + `SessionModel` + the fusion registration, with real fits on the executor's 64 MiB worker and the eight plots of `fusionPlots()` (`tests/fusion/fusionsessions.h`, which mirrors `MainWindow::registerBuiltInPlots()`; `audit_cleanup` pins the application's list at eight rows). All eight plots are explicit-backed (the fit their one requested calculation) and every one is drawn after the one fit, on the fit's time axis (`allEightFusionPlotsAreExplicitBacked`); the row script of acceptance 15 on three real tracks (checking fits them one after another with no other action, the sessions still to compute falling as each publishes; unchecking mid-way drops the waiting one and lets the running one finish; checking again resumes; a fourth track shown is fitted with no other action), with every published track held to the kernel's goldens and the job history as a literal; Heading, Pitch and Roll share one job and one progress text (`headingPitchRollShareOneJob`); `accH` is blocked by the fit and never has a job of its own; a session without IMU data is never counted and never listed among failures before, during and after a fit (11); a rejected recording is listed among failures with the reason, offers no retry, and is fitted again after its input changes and settles (9); sessions are edited, tracks hidden and shown and other values read while a real fit runs, without disturbing it, and are fitted afterwards with no other action (19, the half that needs no widget); the demand layer's items on demand, failures and chains unchanged in what they assert with real fits (status-bar item 753); the measurements of the removed plots still serve a logbook column kept from before (the fit's roll and the local frame's north at the exit marker, labelled with the measurement's name, `Fusion/roll @ ...`, beside a column over the Roll row labelled `Roll @ ...`) and the fit's stored record carries every fit channel that has no plot (`removedPlotMeasurementsStayAvailable`) (fusion-plots items 801-804, 806, 808, 842, 853, 854, 856). Steered by the first progress text of a job and by `jobFinished`: no gate, no sleeps. Label `fusion` |
 | `tst_fusion_store` | The fit's stored result: bit-identical after unload and restart (also when fitted before the first save), rejection / solver failure listed with its reason, dependency (a declared input, `SCHEMA_VER`) and code-stamp invalidation, merges, session file untouched, not requested after the `cache/` folder was deleted while closed (one fit offered while the Roll plot is checked, dropped when unchecked, nothing run); kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a provider's result version in the record; a logbook column over roll filled for sessions that are not loaded, and nothing fitted again after a restart (`columnOverFusionFillsUnloadedSessions`, `fusionColumnWithStoredFitsRunsNothing`); also run as `_exact` |
 
 Three executables are built with these but are not tests and are not counted
@@ -173,7 +175,7 @@ comparison (section 12.2).
 
 | Test | Covers |
 |------|--------|
-| `audit_cleanup` | No old mechanism remains, each fact has one authority, none of the mechanisms of `sensor-fusion-clean-port` that have no successor exists, the structural rules of background work hold (one worker, no locks, GTSAM confined, work started only by the demand layer through the executor, views that only read the demand layer, a model and scheduler that know no jobs, a widget-free core), stored results live in the logbook's `cache/` folder, never in the session file, and are named, written, read, restored and deleted in one place each, and a stored result goes stale only when its in-memory twin would be dropped or its code changed (no environment fingerprint in a record, the plug-in code identity computed in one place, teardown removals at shutdown only), and no refresh, cancel, queue or plot-request logic remains in code or documents, background work is shown in one place, the status bar, and a failure once per recording, on its logbook row (the per-source presentation, its indicators, its clock and the logbook's progress line gone from code and documents), the plot list's eight fusion plots, and no local-frame or removed fusion plot in code or documents, and every line of `tests/acceptance_map.txt` resolves (section 10) |
+| `audit_cleanup` | No old mechanism remains, each fact has one authority, none of the mechanisms of `sensor-fusion-clean-port` that have no successor exists, the structural rules of background work hold (one worker, no locks, GTSAM confined, work started only by the demand layer through the executor, views that only read the demand layer, a model and scheduler that know no jobs, a widget-free core), stored results live in the logbook's `cache/` folder, never in the session file, and are named, written, read, restored and deleted in one place each, and a stored result goes stale only when its in-memory twin would be dropped or its code changed (no environment fingerprint in a record, the plug-in code identity computed in one place, teardown removals at shutdown only), and no refresh, cancel, queue or plot-request logic remains in code or documents, background work is shown in one place, the status bar, and a failure once per recording, on its logbook row (the per-source presentation, its indicators, its clock and the logbook's progress line gone from code and documents), a default standing in for a value the user has not set is a calculation, a constant one registered by one helper, one type owns the mount vocabulary, the plot list has its eight fusion plots, and no local-frame or removed fusion plot remains in code or documents, and every line of `tests/acceptance_map.txt` resolves (section 10) |
 
 The `tst_calc*` tests drive `src/engine/` with synthetic calculations against
 `FakeSessionState` / `FakePreferenceProvider` (`support/fakesessionstate.h`).
@@ -697,14 +699,16 @@ missing invalidation in the code under test.
 
 ## 9. Acceptance traceability
 
-Eight specifications, eight ranges of items in `tests/acceptance_map.txt`, the
-machine-checked form of the eight tables below (section 10); keep them in sync.
+Nine specifications, nine ranges of items in `tests/acceptance_map.txt`, the
+machine-checked form of the nine tables below (section 10); keep them in sync.
 
 ### 9.1 Schema and calculation engine (items 1-19)
 
 Every acceptance item (items 1-19, stated in full in
 [appendix A](#appendix-a-the-acceptance-items-1-19)), clause by
 clause, and the test functions that assert it with literal expectations.
+Item 6 is stated as amended by the specification "Sensor fusion plots,
+attitude and the orientation attribute" (9.9).
 
 | # | Clause | Test target :: function |
 |---|---|---|
@@ -722,7 +726,7 @@ clause, and the test functions that assert it with literal expectations.
 | 5 | repeating the cycle changes nothing | `tst_persistence_roundtrip::secondCycleIsByteIdentical`, `logbookSaveReloadCycle` |
 | 5 | warm and cold caches produce the same file | `tst_persistence_roundtrip::warmAndColdCachesSameFile`, `fileAndMemoryWritersAgree`; `tst_workflow::warmModelSaveEqualsColdExport` |
 | 6 | released file loads, gyro corrected once | `tst_source_layer::releasedLogbookFormatLoads` |
-| 6 | saving does not rescale or relabel | `tst_persistence_roundtrip::releasedLogbookSaveKeepsBytes`, `releasedLogbookBackfillIsAdditive`; `tst_workflow::releasedLogbookUpgrade` |
+| 6 | (as amended) saving does not rescale or relabel; loading adds only jumper mass and planform area where they are absent (the legacy backfill), additively and once; wind is not written and reads zero from a constant default | `tst_persistence_roundtrip::releasedLogbookSaveKeepsBytes`, `releasedLogbookBackfillIsAdditive`; `tst_logbook_index::rawLoadSkipsBackfill`; `tst_workflow::releasedLogbookUpgrade` |
 | 7 | either order, same result, loaded | `tst_import_merge::mergeOrderLoaded`, `mergeInOneBatch` |
 | 7 | ... whether or not the session is loaded | `tst_import_merge::mergeOrderUnloaded`, `identityStubIsMatched` |
 | 7 | conflicting header attribute fails, changes nothing | `tst_import_merge::conflictChangesNothing_loaded` / `_unloaded`; `tst_session_merge::differentAttributeConflicts`, `planIsPure` |
@@ -766,8 +770,10 @@ plot-driven background jobs", stated in full in
 [appendix B](#appendix-b-the-acceptance-items-of-sensor-fusion-and-plot-driven-jobs-101-120).
 In the map, item = 100 + the number in the first column. Items 110, 111, 113,
 114, 115, 116 and 117 are stated as amended by the specification
-"Demand-driven requested calculations" (9.6), and items 111 and 115 again by
-the specification "One status bar for background work" (9.8).
+"Demand-driven requested calculations" (9.6), items 111 and 115 again by the
+specification "One status bar for background work" (9.8), and item 115 again
+by the specification "Sensor fusion plots, attitude and the orientation
+attribute" (9.9).
 
 A line of the map has one of four forms, one per kind of evidence:
 
@@ -805,12 +811,12 @@ never stand alone.
 | 8 | change after publication drops the result and dependents | `tst_calcengine_async::changeAfterPublicationDropsDependents`; `tst_fusion_session::changeAfterPublicationDropsEverything` |
 | 9 | rejection: unavailable, diagnostics reason, succeeded job with the reason, no second run, fresh run after an input change | `tst_fusion_session::rejectionIsACachedResult`; `tst_fusion_jobs::rejectedRecordingIsSucceededJob`; (synthetic) `tst_jobqueue::rejectionSucceedsWithReason`; (listed among the failures) `tst_fusion_rows::rejectedTrackShowsBadge` |
 | 10 | (as amended) cancel through the executor stops at the next boundary, publishes nothing, requestable; the chosen next job starts | `tst_fusion_golden::cancelAtEachKindOfBoundary`, `cancelDuringPreparation`; `tst_fusion_session::cancelStopsAtNextBoundary`; `tst_jobqueue::cancelRunningThenNextStarts`; `tst_fusion_jobs::cancelDuringFitThenNextJobStarts` |
-| 11 | (as amended) no-IMU session: never counted in progress nor listed among the failures; no job possible | `tst_jobqueue::refusesMissingInput`; `tst_calculation_demand::sessionWithoutInputIsNeverListed`; `tst_fusion_session::missingInputsAreNotApplicable`; `tst_fusion_jobs::noImuSessionCannotHaveAJob`; `tst_fusion_rows::noImuSessionIsNeverCounted` (all seventeen real rows) |
+| 11 | (as amended) no-IMU session: never counted in progress nor listed among the failures; no job possible | `tst_jobqueue::refusesMissingInput`; `tst_calculation_demand::sessionWithoutInputIsNeverListed`; `tst_fusion_session::missingInputsAreNotApplicable`; `tst_fusion_jobs::noImuSessionCannotHaveAJob`; `tst_fusion_rows::noImuSessionIsNeverCounted` (all eight real rows) |
 | 12 | blockers report fusion for `accH`, nothing after publication, never a fit | `tst_calcengine_blockers::derivedNameReportsExplicitBlocker`, `inspectionNeverRunsExplicit`; `tst_fusion_session::blockersReportFusion` |
 | 13 | (as amended) B consumes A: checking the plot runs A then B | `tst_calcengine_blockers::chainedBlockers`; `tst_calculation_demand::chainedBlockersContinue` |
 | 14 | (as amended) one job at a time; at most the running and one chosen next job; no duplicates | `tst_jobqueue::oneAtATimeInOfferOrder`, `duplicateOffersCreateNoDuplicates`, `holdsAtMostRunningAndChosenNext` |
 | 15 | (as amended) row script, without widgets, synthetic: checking computes the visible tracks one after another, the sessions still to compute falling; unchecking drops the waiting ones, a track shown is computed | `tst_calculation_demand::rowScript`, `showingASessionStartsIt`, `uncheckingDropsWaitingPairsKeepsRunning` |
-| 15 | row script with the real fusion plots; roll / pitch / yaw share one job; `accH` blocked by fusion | `tst_fusion_rows::realRowScript`, `headingPitchRollShareOneJob`, `accHRowIsBlockedByFusion`, `rejectedTrackShowsBadge`, `allEightFusionPlotsAreExplicitBacked` |
+| 15 | (as amended) row script with the real fusion plots (the eight); heading / pitch / roll share one job; `accH` blocked by fusion | `tst_fusion_rows::realRowScript`, `headingPitchRollShareOneJob`, `accHRowIsBlockedByFusion`, `rejectedTrackShowsBadge`, `allEightFusionPlotsAreExplicitBacked` |
 | 15 | what the user sees | `manual M3`, `M4`, `M6`, `M7` |
 | 16 | (as amended) start-up restore with hidden tracks starts nothing; a profile or a programmatic check creates demand like a click (logic) | `tst_calculation_demand::startupRestoreWithHiddenSessionsStartsNothing`, `profileStyleApplyCreatesDemand`, `programmaticCheckCreatesDemand` |
 | 16 | ... and the plot widget does not warn "No data available" about a checked plot that is merely uncomputed (the predicate; the widget's one call of it is M1) | `tst_calculation_demand::merelyUncomputedIsNotWorthAWarning` |
@@ -1033,7 +1039,9 @@ and 9.4 (items 304, 306, 321, 337). Clauses 13, 26, 28, 30, 32, 35, 36, 37,
 39, 46, 47, 57 and 59 are stated as amended by the specification "Calculation
 refinements" (9.7). Clauses 17, 25, 26, 30, 35-37, 39, 42, 54, 55, 57, 59 and
 63 are stated as amended by the specification "One status bar for background
-work" (9.8), which restates them again where 9.7 had.
+work" (9.8), which restates them again where 9.7 had. Clause 9 is stated as
+amended by the specification "Sensor fusion plots, attitude and the
+orientation attribute" (9.9).
 
 | # | Section | Clause | Evidence |
 |---|---|---|---|
@@ -1045,7 +1053,7 @@ work" (9.8), which restates them again where 9.7 had.
 | 506 | 2 | each component's contract can be stated without naming the others (section 12 gives the contracts) | `tst_calculation_demand::nullCollaborators`; `tst_result_columns::columnWorkerIsUnchangedByDemand`; `tst_session_model_engine::schedulerTaskCanBeUnregistered`; `audit demand` |
 | 507 | 3 | the fusion kernel, its outputs and the record format are unchanged; the job history the jobs dock will read stays as it is | `tst_fusion_golden::successFixturesMatchGolden`; `tst_result_records::layoutIsPinned`; `tst_jobmodel::historyFromSignalsAlone`; `tst_fusion_store::restoredAfterRestartIsBitIdentical` |
 | 508 | 3 | nothing about demand or the job history is persisted across restarts, and no user-facing switch pauses or throttles background work | `tst_jobmodel::nothingIsPersisted`; `tst_calculation_demand::jobLevelFailureIsBadgedNotRerunUntilRestart`, `fillTaskIsLowestAndNotCancellable`; `audit demand` |
-| 509 | 5 | plot demand: for every checked plot whose value is a requested output, every visible session needs the requested calculations that block that output | `tst_calculation_demand::rowScript`, `ordinaryPlotsAreNeverInspected`, `hiddenAndStubRowsAreNotTracks`, `failedLoadPlaceholderIsNotATrack`, `plotIdMatchesPlotModelRole`, `uncheckedPlotsAreNeverInspected`; `tst_fusion_rows::allEightFusionPlotsAreExplicitBacked` |
+| 509 | 5, as amended | plot demand: for every checked plot whose value is a requested output, every visible session needs the requested calculations that block that output; the eight plots of the "Sensor fusion" category are such plots: one is an output of the fit, and the seven derived from its outputs are blocked by it | `tst_calculation_demand::rowScript`, `ordinaryPlotsAreNeverInspected`, `hiddenAndStubRowsAreNotTracks`, `failedLoadPlaceholderIsNotATrack`, `plotIdMatchesPlotModelRole`, `uncheckedPlotsAreNeverInspected`; `tst_fusion_rows::allEightFusionPlotsAreExplicitBacked` |
 | 510 | 5 | column demand: for every enabled logbook column whose value depends on a requested output, every session in the logbook needs the requested calculations that block that value | `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `loadedHiddenSessionsNeedNoLoad`, `ordinaryColumnsCreateNoDemand`, `columnIdIsTheDefinitionKey`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions`; `manual M24` |
 | 511 | 5 | a pair is in demand only while it has no result; a result counts whether published in this run or restored, success or input-determined failure | `tst_calculation_demand::onlyRequestableCalculationsAreOffered`, `storedResultsCreateNoJob`, `inputDeterminedFailureIsStoredBadgedNeverRerun`, `columnFailuresAreBadgedNotReloaded`; `tst_fusion_store::restoredRejectionShowsBadge`, `restoredAfterRestartIsBitIdentical` |
 | 512 | 5 | a pair whose calculation cannot apply (a declared input missing) is never in demand and is not reported anywhere | `tst_calculation_demand::sessionWithoutInputIsNeverListed`, `notApplicableSessionIsSettledWithoutAJob`; `tst_jobqueue::refusesMissingInput`; `tst_fusion_rows::noImuSessionIsNeverCounted`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions` |
@@ -1267,6 +1275,100 @@ specification amends those of 9.2 (items 111, 115), 9.3 (item 228), 9.4
 | 753 | 13 | test: the demand layer's progress and failures are computed in the one walk and announced only when they change; the acceptance items of the earlier specifications on demand, priority, the settle wait, failures, not applicable, chains, unloaded sessions and the pair memory pass unchanged in what they assert | `tst_calculation_demand::changeSignalsAreMinimal`, `pendingCellsChangedPerColumn`, `rowScript`, `enablingColumnFillsEveryUnloadedSession`, `settledPairsSurviveEvictionSortAndColumnWorker`; `tst_fusion_rows::realRowScript`; `audit demand` |
 | 754 | 14 | docs/ and tests/README.md describe the status bar, the row warning, the demand layer's progress, failures and pending cells and what stays visible after a restart, and no document names the removed surface | `audit demand` |
 
+### 9.9 Sensor fusion plots, attitude and the orientation attribute (items 801-863)
+
+The sixty-three clauses of the specification "Sensor fusion plots, attitude
+and the orientation attribute", stated in full in
+[appendix I](#appendix-i-the-acceptance-items-of-sensor-fusion-plots-attitude-and-the-orientation-attribute-801-863).
+In the map, item = 800 + the clause number; the same four line forms as 9.2,
+and every item has at least one test or audit line. "Section" is the section
+of the specification; its sections 1-4 (motivation, principles, scope, terms)
+have no item. Their principles are carried by the clauses of the sections
+that apply them, and the two statements of its section 3 that a test can
+observe are clauses 4 (the fit's channels remain measurements) and 40 (mass,
+area and the fixed ground elevation stay creation defaults). Clauses 54-62 are
+its section 13 tests, one per bullet, and clause 63 its section 14. Clauses 2,
+7, 8, 10, 14, 22, 26, 36, 39 and 50 are stated as settled: a fused plot is
+coloured apart from its GNSS counterpart; the fused elevation stands on the
+GNSS elevation's ground; vertical acceleration is the fit's own down
+acceleration; one helper defines the track accelerations and the wind rule for
+both categories; heading takes the course's reference and its availability,
+so a recording without a course reference has neither (a stored reference
+that is not a number or lies outside the GNSS time gives no offset); the
+attribute's key is `_ORIENTATION`, in category "Session", registered once per
+process; an invalid stored token is kept and makes the attitude unavailable;
+the SP and WS-P defaults move onto the constant-default helper; the legacy
+backfill no longer writes wind; the attribute registry moves to the model
+library and the helpers the fusion library calls are header-only. The
+specification amends those of 9.1 (item 6), 9.2 (item 115) and 9.6 (item
+509).
+
+| # | Section | Clause | Evidence |
+|---|---|---|---|
+| 801 | 5 | the "Sensor fusion" category holds exactly eight plots, in this order: Elevation, Horizontal acceleration, Vertical acceleration, Along-track acceleration, Cross-track acceleration, Heading, Pitch, Roll | `tst_fusion_rows::allEightFusionPlotsAreExplicitBacked`; `audit naming`; `manual M39` |
+| 802 | 5, as settled | each is named, united and typed as its GNSS counterpart (Elevation, the four accelerations, Heading as Course), Pitch and Roll as angles, so that the two overlay; a fused plot's colour differs from its counterpart's | `tst_fusion_rows::allEightFusionPlotsAreExplicitBacked`; `manual M39` |
+| 803 | 5 | the fused north, east and down position and velocity, north and east acceleration, roll, pitch, yaw and quaternion plots are removed, and the "GNSS (Local frame)" category with them | `tst_fusion_rows::allEightFusionPlotsAreExplicitBacked`; `audit naming`; `manual M39` |
+| 804 | 5 | every measurement behind a removed plot still exists and is computed as before: the local frame feeds the fit and a column, and the fit's channels are its record, read by a column kept from before, the stored result and plug-ins | `tst_fusion_rows::removedPlotMeasurementsStayAvailable`; `tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord`; `manual M44` |
+| 805 | 5 | applying a profile enables the listed plots the application has and ignores the rest silently (no message, no log, no failure); nothing rewrites a profile | `tst_calculation_demand::profileNamingRemovedPlotsAppliesWithoutThem`; `manual M43` |
+| 806 | 6 | each derived quantity is an on-demand calculation over the fit's outputs, registered with the fit: blocked by it until it publishes, it appears with it and never starts one | `tst_fusion_derived::derivedRegistrationShape`, `derivedValuesWaitOnTheFit`, `attitudeWaitsOnTheFit`; `tst_fusion_rows::accHRowIsBlockedByFusion`, `allEightFusionPlotsAreExplicitBacked` |
+| 807 | 6, as settled | elevation is the local origin's height above mean sea level minus the fused down position, above the ground elevation as the GNSS elevation is, so the two overlay; it is unavailable when either attribute is not a number | `tst_fusion_derived::elevationIsOriginHeightMinusDownAboveGround` |
+| 808 | 6, as settled | vertical acceleration is the fit's own fused down acceleration, positive down like the GNSS one; no second calculation publishes it | `tst_fusion_rows::allEightFusionPlotsAreExplicitBacked`; `tst_fusion_derived::derivedRegistrationShape`; `tst_fusion_session::explicitOutputsHaveOneCandidate` |
+| 809 | 6 | along-track and cross-track acceleration are the GNSS definitions applied to the fused velocity and acceleration, wind-corrected, so their signs and the meaning of "track" agree | `tst_fusion_derived::trackAccelerationsKnownAnswers`, `trackAccelerationsAreTheGnssDefinitions` |
+| 810 | 6, as settled | one definition of the track-relative accelerations and of the wind rule serves both categories, and the GNSS values are unchanged | `tst_fusion_derived::trackAccelerationsAreTheGnssDefinitions`; `tst_builtins_golden::sessionDataMatchesGolden`; `tst_builtins_engine::goldenOnEngine` |
+| 811 | 7 | the orientation's forward and up axes fix the body frame, right being their cross product; the body-to-device rotation is a constant signed axis permutation, a proper rotation for each of the 24 pairs, never a reflection | `tst_fusion_derived::orientationRotationIsProper` |
+| 812 | 7 | heading, pitch and roll are the aircraft Euler angles of the fit's quaternion composed with that rotation: heading the forward axis's direction clockwise from north, pitch its elevation above the horizontal, roll the rotation about it, positive right side down | `tst_fusion_derived::levelNorthFacingBodyReadsZero`, `knownAnglesComeBack`, `sideMountPermutesTheAngles`, `deviceFrameMountGivesTheFitsOwnAngles`; `manual M40` |
+| 813 | 7 | they are computed when read, from the quaternion channels and the orientation attribute, never by the fit | `tst_fusion_derived::attitudeRegistrationShape`, `attitudeWaitsOnTheFit`, `storedOrientationRecomputesWithoutAFit`; `tst_fusion_session::registrationShape` |
+| 814 | 7, as settled | heading is unwrapped by the application's one unwrap rule, the course's, and less the course reference angle the GNSS course subtracts, computed in one place for both (zero for a stored reference that is not a number or lies outside the GNSS time), so heading and course overlay in straight flight and heading minus course reads as sideslip; heading has the course's inputs and availability, so a recording without a course reference has neither | `tst_fusion_derived::headingUnwrapsThroughAFullTurn`, `attitudeRegistrationShape`; `manual M40` |
+| 815 | 7 | pitch and roll are reported in their natural ranges, pitch from -90 to 90 degrees and roll from -180 to 180 | `tst_fusion_derived::rollAndPitchStayInTheirNaturalRanges` |
+| 816 | 7 | where the forward axis is vertical, heading and roll are not defined and the derivation reports what the standard formulas give | `tst_fusion_derived::forwardAxisVerticalGivesTheStandardFormulas` |
+| 817 | 7 | a change of the orientation attribute recomputes the angles through ordinary invalidation and never refits | `tst_fusion_derived::storedOrientationRecomputesWithoutAFit`; `manual M41` |
+| 818 | 8 | the orientation is a token naming the forward and the up axis in a fixed form the fusion module owns (the default `+y,+z`); the 24 valid pairs, and only they, are its choices, labelled "forward +y, up +z" and so on, the default first | `tst_fusion_derived::orientationVocabularyHasTwentyFourPairs`, `orientationDefinitionIsTheEnumeration` |
+| 819 | 8 | its default, forward +y and up +z, is a constant calculated attribute: every recording has it, imported before or after, and nothing is written into any session file | `tst_fusion_derived::orientationColumnShowsTheDefaultWithoutAWrite`, `storedOrientationRecomputesWithoutAFit`, `attitudeRegistrationShape`; `manual M41` |
+| 820 | 8 | a stored value wins over the default, and removing it returns to the default | `tst_fusion_derived::storedOrientationRecomputesWithoutAFit`, `orientationDefaultRemovesTheStoredValue` |
+| 821 | 8 | one orientation type in the fusion module owns the vocabulary (the axis pair, token, label, body-frame rotation, default and enumeration); the derivation parses with it, the attribute's choices come from it, and nothing else spells a token | `tst_fusion_derived::orientationDefinitionIsTheEnumeration`, `orientationVocabularyHasTwentyFourPairs`; `audit orientation` |
+| 822 | 8, as settled | the fusion registration registers the attribute's definition once per process (key `_ORIENTATION`, "Orientation", category "Session", a choice attribute, editable) with the derivation that reads it; the key is part of the session file's vocabulary | `tst_fusion_derived::orientationDefinitionIsTheEnumeration`, `attitudeRegistrationShape`, `orientationEditStoresATokenAndRefusesOthers`; `manual M41` |
+| 823 | 8 | it is edited as any editable attribute: a logbook column the user can add, not among the default columns, edited in place, and set for the selected sessions from the context menu | `tst_fusion_derived::orientationEditStoresATokenAndRefusesOthers`, `orientationBulkEdit`; `tst_choice_attribute::cellEditorOffersTheList`, `setDialogOffersTheList`; `manual M41`, `M42` |
+| 824 | 8 | both editors offer the list, not free text, and a "Default" entry that removes the stored value rather than storing anything | `tst_choice_attribute::cellEditorOffersTheList`, `setDialogOffersTheList`; `tst_fusion_derived::orientationDefaultRemovesTheStoredValue`, `orientationBulkEdit`; `manual M41`, `M42` |
+| 825 | 8 | a value outside the list is refused by the model, the in-place editor and the bulk edit | `tst_fusion_derived::orientationEditStoresATokenAndRefusesOthers`, `orientationBulkEdit`; `tst_choice_attribute::cellEditorOffersTheList` |
+| 826 | 8, as settled | a stored token outside the list (a hand-edited file) is kept and shown as written, and heading, pitch and roll are unavailable for it until it is changed or removed | `tst_fusion_derived::invalidStoredOrientationMakesAttitudeUnavailable`; `tst_choice_attribute::choiceShowsTheLabelOfTheEffectiveToken`; `manual M42` |
+| 827 | 9 | the attribute registry's format types gain a fifth, choice, whose definition carries its allowed values, each a stored token and a display label | `tst_choice_attribute::choiceShowsTheLabelOfTheEffectiveToken`, `choiceEditStoresAToken`; `tst_fusion_derived::orientationDefinitionIsTheEnumeration` |
+| 828 | 9 | a choice is displayed and sorted by its label | `tst_choice_attribute::choiceShowsTheLabelOfTheEffectiveToken`, `choiceSortsByLabel` |
+| 829 | 9 | in-place editing of a choice gives a list editor in place of the line edit | `tst_choice_attribute::cellEditorOffersTheList`; `manual M41` |
+| 830 | 9 | the context menu's "Set ..." action offers a list in place of the text prompt | `tst_choice_attribute::setDialogOffersTheList`; `manual M42` |
+| 831 | 9 | the bulk edit sets the chosen token for the selected sessions, loaded or not | `tst_choice_attribute::bulkEditSetsAToken`; `tst_fusion_derived::orientationBulkEdit`; `manual M42` |
+| 832 | 9 | "Default" removes the stored attribute on every edit path, and a token outside the list is refused | `tst_choice_attribute::choiceDefaultRemovesTheStoredValue`, `bulkEditDefaultRemovesTheStoredValue`, `choiceEditRefusesATokenOutsideTheList`, `bulkEditRefusesATokenOutsideTheList` |
+| 833 | 9 | nothing about the type is specific to orientation: any choice definition gets all of it | `tst_choice_attribute::choiceEditStoresAToken`, `cellEditorOffersTheList` |
+| 834 | 10 | a constant default is a registered calculation with no inputs whose one output is the attribute: it runs once and is cached, a stored value wins, setting or removing a stored value invalidates what read the attribute, and a dependent follows every change | `tst_calcengine::constantCalculationIsADefault`; `tst_builtins_engine::constantDefaults` |
+| 835 | 10 | one helper registers a constant default for an attribute key and a value, beside the exit-time defaults, so that every constant default is found by one search; the orientation default uses it from the fusion registration | `tst_builtins_engine::constantDefaults`; `tst_fusion_derived::attitudeRegistrationShape`; `audit constant-defaults` |
+| 836 | 10, as settled | the seven constant defaults of the SP and WS-P calculations are registered through the same helper, with their values | `tst_builtins_engine::constantDefaults`, `inventory`; `audit constant-defaults` |
+| 837 | 10 | the importer stores only what is a fact of the import; anything that stands in for a value the user has not set is a calculation, derived where possible, constant otherwise | `tst_importer::creationDefaultsOnlyFillAbsent`; `tst_smoke::importAppliesCreationDefaults`; `audit constant-defaults` |
+| 838 | 10 | wind north and east are constants of zero: a recording without stored wind reads zero, one with stored wind keeps it, and the importer no longer writes them | `tst_builtins_engine::constantDefaults`; `tst_smoke::importAppliesCreationDefaults`; `tst_importer::creationDefaultsOnlyFillAbsent`; `tst_import_merge::newSessionGetsDefaults`; `audit constant-defaults` |
+| 839 | 10, as settled | the logbook's legacy backfill no longer writes wind either; it adds jumper mass and planform area only | `tst_persistence_roundtrip::releasedLogbookBackfillIsAdditive`; `tst_logbook_index::rawLoadSkipsBackfill`; `audit constant-defaults` |
+| 840 | 10 | jumper mass, planform area and the fixed ground elevation stay creation defaults of the importer (section 3) | `tst_importer::creationDefaultsOnlyFillAbsent`, `fixedGroundElevationOnlyInFixedMode`; `tst_smoke::importAppliesCreationDefaults` |
+| 841 | 10 | a stored attribute wins even when invalid or empty, so returning to a default removes the stored attribute and never stores a blank | `tst_calcengine::storedInvalidValueStillWins`, `removingStoredFallsBackToCalc`; `tst_choice_attribute::choiceDefaultRemovesTheStoredValue`, `bulkEditDefaultRemovesTheStoredValue` |
+| 842 | 11 | the plot list shows "Sensor fusion" with eight plots named as the GNSS plots and no local-frame category; checking a fusion plot starts the fit as before, the status bar shows it, and a stored fit draws at once | `tst_fusion_rows::allEightFusionPlotsAreExplicitBacked`, `realRowScript`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`; `manual M39` |
+| 843 | 11 | the attitude plots are in the aircraft convention for the mount the orientation describes, heading continuous through turns | `tst_fusion_derived::sideMountPermutesTheAngles`, `headingUnwrapsThroughAFullTurn`; `manual M40` |
+| 844 | 11 | the orientation column, once added, shows "forward +y, up +z" for every recording not set and the chosen label for one that is; editing offers the list and "Default"; changing it redraws the attitude plots without a fit | `tst_fusion_derived::orientationColumnShowsTheDefaultWithoutAWrite`, `orientationEditStoresATokenAndRefusesOthers`, `storedOrientationRecomputesWithoutAFit`; `tst_choice_attribute::cellEditorOffersTheList`; `manual M41` |
+| 845 | 11 | profiles that name removed plots apply without complaint | `tst_calculation_demand::profileNamingRemovedPlotsAppliesWithoutThem`; `manual M43` |
+| 846 | 11 | wind reads zero where nothing was stored, as before | `tst_builtins_engine::constantDefaults`; `tst_smoke::importAppliesCreationDefaults` |
+| 847 | 12 | the fusion kernel and the fit calculation are unchanged (inputs, outputs, diagnostics, algorithm string), and the golden fixtures and stored results stay valid | `tst_fusion_session::registrationShape`; `tst_fusion_golden::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; `tst_fusion_store::restoredAfterRestartIsBitIdentical` |
+| 848 | 12 | GTSAM stays confined to the fusion kernel, the new fusion files include neither GTSAM nor Eigen, and the rules on the fusion tooling hold | `audit solver-confinement`, `audit fusion-tooling` |
+| 849 | 12 | the fusion registration gains the derived kinematics, the attitude derivation, the orientation type and the orientation attribute with its constant default; each derivation is an ordinary on-demand calculation with declared inputs, the attitude's including the orientation attribute | `tst_fusion_session::registrationShape`; `tst_fusion_derived::derivedRegistrationShape`, `attitudeRegistrationShape` |
+| 850 | 12, as settled | the fusion library reaches nothing of the core library: the attribute registry lives in the model library, the constant-default and track helpers are header-only, and the calculations never name the fusion library | `tst_fusion_derived::orientationDefinitionIsTheEnumeration`; `audit solver-confinement` |
+| 851 | 12 | the attribute calculations hold the constant-default helper and the wind defaults; the importer holds neither | `tst_builtins_engine::constantDefaults`; `audit constant-defaults` |
+| 852 | 12 | the plot registry loses the removed plots and the local-frame category; the profile rule is the plot model's, one function the profile bridge calls | `tst_calculation_demand::profileNamingRemovedPlotsAppliesWithoutThem`, `profileStyleApplyCreatesDemand`; `audit naming` |
+| 853 | 12 | the demand layer is untouched: a derived plot's blockers lead to the fit through the chain it already follows, and heading, pitch and roll are filled by one job | `tst_fusion_rows::accHRowIsBlockedByFusion`, `headingPitchRollShareOneJob`, `allEightFusionPlotsAreExplicitBacked`; `audit demand` |
+| 854 | 13 | test: the plot list has the eight fusion plots and no local-frame plots; every fusion plot is explicit-backed (waits on the fit) as the seventeen were; an existing column over a removed plot's measurement still computes, and the export of the fit, its stored record, still holds the measurement | `tst_fusion_rows::allEightFusionPlotsAreExplicitBacked`, `removedPlotMeasurementsStayAvailable`, `noImuSessionIsNeverCounted`; `tst_fusion_session::missingInputsAreNotApplicable`; `tst_fusion_jobs::noImuSessionCannotHaveAJob` |
+| 855 | 13 | test: applying a profile that names a removed plot enables its other plots and ignores that one, silently | `tst_calculation_demand::profileNamingRemovedPlotsAppliesWithoutThem` |
+| 856 | 13 | test: elevation equals the origin height minus down minus the ground elevation, and is unavailable without a ground elevation; vertical acceleration is the down acceleration; along-track and cross-track equal the GNSS definitions applied to the fused velocity and acceleration, on synthetic data with known answers | `tst_fusion_derived::syntheticOutputsAreServedWithoutAFit`, `elevationIsOriginHeightMinusDownAboveGround`, `trackAccelerationsKnownAnswers`, `trackAccelerationsAreTheGnssDefinitions`, `derivedRegistrationShape`; `tst_fusion_rows::allEightFusionPlotsAreExplicitBacked` |
+| 857 | 13 | test: attitude, on synthetic quaternions with known answers: for the default orientation, heading, pitch and roll of a level, north-facing body are zero; a known heading, pitch and roll come back; heading unwraps through a full turn; a stored course reference offsets heading by exactly the angle it offsets the GNSS course, and heading is unavailable exactly when the course is; a different orientation (a side mount) changes the angles as the axis permutation predicts; the rotation is proper for all 24 pairs | `tst_fusion_derived::levelNorthFacingBodyReadsZero`, `knownAnglesComeBack`, `headingUnwrapsThroughAFullTurn`, `sideMountPermutesTheAngles`, `orientationRotationIsProper` |
+| 858 | 13 | test: the orientation attribute: every recording reads the default without a stored value and without any write to its file; a stored token wins and the attitude recomputes without a fit; "Default" removes the stored value; a token outside the list is refused by the model, the editor and the bulk edit; the labels and tokens come from one enumeration of 24 | `tst_fusion_derived::orientationColumnShowsTheDefaultWithoutAWrite`, `storedOrientationRecomputesWithoutAFit`, `orientationDefaultRemovesTheStoredValue`, `orientationEditStoresATokenAndRefusesOthers`, `orientationBulkEdit`, `orientationDefinitionIsTheEnumeration`; `tst_choice_attribute::cellEditorOffersTheList` |
+| 859 | 13 | test: the choice type: display and sort by label; the in-place editor and the context menu offer the list; the bulk edit sets the token for the selected sessions | `tst_choice_attribute::choiceShowsTheLabelOfTheEffectiveToken`, `choiceSortsByLabel`, `cellEditorOffersTheList`, `setDialogOffersTheList`, `bulkEditSetsAToken` |
+| 860 | 13 | test: constant defaults: the helper registers a calculation that the engine serves as a default (the existing engine test covers the mechanism); wind north and east read zero for a recording without stored wind, keep a stored value, and the importer no longer writes them | `tst_builtins_engine::constantDefaults`; `tst_calcengine::constantCalculationIsADefault`; `tst_smoke::importAppliesCreationDefaults`; `tst_importer::creationDefaultsOnlyFillAbsent`; `tst_import_merge::newSessionGetsDefaults` |
+| 861 | 13 | test: the fit is unchanged: the golden fixtures and the stored-result tests pass unchanged; the algorithm string is the same | `tst_fusion_golden::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`, `codeStampChangeDropsRecordOnLoad`; `tst_fusion_session::registrationShape` |
+| 862 | 13 | test: the audit keeps the removed plot names out of the registry, and the documents describe the eight plots, the attitude convention, the orientation attribute and the rule for defaults | `audit naming` |
+| 863 | 14 | `docs/` describes the eight fusion plots and the derived quantities, the attitude convention with the orientation attribute, its default and its limits (it describes the mount, not the wearer's posture; a forward axis pointing straight up or down makes heading and roll meaningless), the choice type and the orientation in the session file, the rule for defaults and its helper, and that wind is no longer written at import; no document describes a removed plot or the "GNSS (Local frame)" category | `audit naming` |
+
 ## 10. Cleanup audit
 
 `audit_cleanup` runs `tests/audit/cleanup_audit.cmake`, a CMake script over
@@ -1280,6 +1382,16 @@ takes about a second. It fails, listing **all** violations, when
 - the importer converts units, anything but the conversion layer knows the gyro
   factor, a second place spells `"SCHEMA_VER"`, or anything but
   `csvformat.cpp` formats numbers for files;
+- **group `constant-defaults`** (items 835-839, 851): a compute function that
+  ignores its context, which is a constant default, appears anywhere but
+  `src/calculations/attributecalculations.h`, where the one helper
+  `addConstantDefault` writes every one; the local helpers the SP and WS-P
+  calculations registered their defaults with before reappear in `src` or
+  `tests`; or the importer or the legacy backfill (`dataimporter.*`,
+  `logbookmanager.*`) names wind;
+- **group `orientation`** (item 821): an orientation token (a signed axis, a
+  comma, a signed axis) is spelled in `src` anywhere but
+  `src/fusion/orientation.*`: one type owns the mount vocabulary;
 - the conversion layer, the engine, the importer, the merge, or a calculation
   looks at the firmware version, a file name, or a date; a compute function
   reaches for preferences, settings, the clock, or random numbers;
@@ -1305,22 +1417,30 @@ takes about a second. It fails, listing **all** violations, when
   the plot list, or a hand-cached failure in the fusion registration
   appears. `m_pendingRebuildLevel` in the plot widget is `master`'s own and is
   not part of the rule;
-- **group `naming`**: something is named after a filter (the case-sensitive
-  pattern `EKF|[Ee]kf`), a branch output name (`posN` ...) or the branch's sensor
-  key reappears, or `MainWindow` no longer registers exactly seventeen "Sensor
-  fusion" and six "GNSS (Local frame)" plots. This file is excluded: this
-  section spells the patterns;
-- **group `solver-confinement`**: a GTSAM header is included outside
-  `src/fusion/` and the five GTSAM test and tool sources
-  (`tst_solver_smoke.cpp`, `solverprobe.h`, `solver_deploy_probe.cpp`,
+- **group `naming`** (items 120, 801, 803, 852, 862, 863): something is named
+  after a filter (the case-sensitive pattern `EKF|[Ee]kf`), a branch output
+  name (`posN` ...) or the branch's sensor key reappears; `MainWindow` does not
+  register exactly eight "Sensor fusion" plots (the count pins the
+  application's list to `fusionPlots()`, the tests' mirror); the "GNSS (Local
+  frame)" category or the tests' old helper for it appears in `src` or
+  `tests`; a plot row names a removed fusion measurement (the position, the
+  velocity, the north and east acceleration, the device-frame roll, pitch and
+  yaw, the quaternion); or `docs` or the root `README.md` describe the old
+  count of fusion plots, the local-frame category or a quaternion plot. This
+  file is excluded: this section spells the patterns;
+- **group `solver-confinement`** (items 101, 234, 236, 848, 850): a GTSAM
+  header is included outside `src/fusion/` and the five GTSAM test and tool
+  sources (`tst_solver_smoke.cpp`, `solverprobe.h`, `solver_deploy_probe.cpp`,
   `tst_fusion_kernel.cpp`, `fusion_golden_capture.cpp`), a oneTBB header is
   included anywhere but `src/fusion/solverthreads.cpp` (the adapter that runs
-  the solver's helper threads at the caller's priority), the public or registration
-  files of the fusion library include GTSAM or Eigen, the kernel includes a
-  session, engine, executor, preference or GUI header (the registration
-  adapter excepted) or logs, `flysight_core`'s calculation, engine,
-  session-model, executor or demand-layer code references the fusion library, or Boost reappears in
-  the sources or the build;
+  the solver's helper threads at the caller's priority), the public and
+  registration files of the fusion library and its orientation type
+  (`fusion.h`, `fusionregistration.*`, `orientation.*`) include GTSAM or
+  Eigen, the kernel includes a session, engine, executor, preference or GUI
+  header (the registration adapter, `fusionregistration.*`, excepted) or
+  logs, `flysight_core`'s calculation, engine, session-model, executor or
+  demand-layer code references the fusion library, or Boost reappears in the
+  sources or the build;
 - **group `one-worker`**: a thread is created anywhere but in `src/jobqueue.*`,
   a lock of any kind appears in `src`, or an atomic other than the executor's
   cancel flag does;
@@ -1367,7 +1487,7 @@ takes about a second. It fails, listing **all** violations, when
   test, the branch, or the input count from before the temperature channel).
   This file is excluded from the text rules of this group because this
   section spells the patterns;
-- **group `fusion-tooling`** (items 231, 233): `fusion_runner.cpp` names the
+- **group `fusion-tooling`** (items 231, 233, 848): `fusion_runner.cpp` names the
   preferences singleton, the logbook manager, the engine's preference
   provider, the session model, the application's import driver, the
   import-time defaults or the executor; the runner or the capture tool
@@ -1423,7 +1543,7 @@ takes about a second. It fails, listing **all** violations, when
 - **group `demand`** (items 506, 508, 513, 515, 518, 527, 529, 530, 533-535,
   538, 540-544, 546, 547, 563, 601-605, 607, 612, 613, 615, 616, 622, 624,
   627, 631, 636, 641, 644, 646, 647, 649-652, 659-662, 701, 702, 706, 708,
-  723-728, 732, 736-744, 752-754):
+  723-728, 732, 736-744, 752-754, 853):
   `CalculationDemand` is named outside the demand layer's files
   (`calculationdemand`, `demandstate`, `demandfill`, `demandsettleclock`),
   `MainWindow`, `AppContext.h`, the logbook view, cell delegate and dock
@@ -1506,9 +1626,9 @@ takes about a second. It fails, listing **all** violations, when
 - a line of `tests/acceptance_map.txt` is malformed, names a test function, a
   manual step (`**M<k> ` in this file), a CI token or an audit group that does
   not exist, or an item outside 1-19, 101-120, 201-247, 301-350, 401-442,
-  501-563, 601-662 and 701-754; an item 1-19 has no line; or an item 101-120,
-  201-247, 301-350, 401-442, 501-563, 601-662 or 701-754 has no test or audit
-  line.
+  501-563, 601-662, 701-754 and 801-863; an item 1-19 has no line; or an item
+  101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754 or 801-863 has
+  no test or audit line.
 
 Whether a target **links** GTSAM is not a text question (link items come from
 variables and from other targets' link interfaces). That half of the
@@ -2016,7 +2136,7 @@ objectives, are in section 12.2.
 
 ## 12. Manual verification
 
-Six scripts. Each step opens with its bold id and, in parentheses, the items
+Seven scripts. Each step opens with its bold id and, in parentheses, the items
 of `tests/acceptance_map.txt` it is evidence for; the map cites the ids
 (`manual M<k>`) and `audit_cleanup` checks that they exist here.
 
@@ -2064,7 +2184,7 @@ observed.
 
 **M2 Profile (116, 514, 515, 556).** Save a profile that checks Roll. Uncheck Roll, and show two fusable tracks without stored fits: nothing starts. Apply the profile: Roll is checked and the two fits start at once, one after the other, exactly as after a click on the check box (this is the real `applyProfile()` path, which no automated test can construct). Uncheck Roll and hide every track, apply the profile again: nothing starts (no track is visible); show one fusable track without a stored fit: its fit starts at once. In Manage Profiles restore the default profiles and apply each of them in turn: none adds a logbook column over a "Sensor fusion" value: while every track is hidden, the status bar never shows "Computing results" and no fit starts. (The status bar may show "Computing columns" for the cheap columns of a profile; "Computing results" would mean a column over a requested output.) (The Plots menu and its shortcuts list a fixed set of GNSS plots; no fusion plot can be toggled from there.)
 
-**M3 Computing in the status bar (115, 501, 535).** With three fusable tracks without stored fits visible, check Roll: the status bar shows "Computing results: 0 / 3" and its bar; the plot row looks as any other, with no glyph and no number; Pitch and Yaw, if checked, add nothing to the count (one computation per track serves all three). The hover of the label reads "Computing results: 0 / 3" and, under it, "<name>: <progress text>". As each fit publishes, its graph appears without any further action, the count advances ("1 / 3", "2 / 3"), and finally the status bar goes empty. The legend and any fusion logbook column fill in at the same moments.
+**M3 Computing in the status bar (115, 501, 535).** With three fusable tracks without stored fits visible, check Roll: the status bar shows "Computing results: 0 / 3" and its bar; the plot row looks as any other, with no glyph and no number; Heading and Pitch, if checked, add nothing to the count (one computation per track serves all three). The hover of the label reads "Computing results: 0 / 3" and, under it, "<name>: <progress text>". As each fit publishes, its graph appears without any further action, the count advances ("1 / 3", "2 / 3"), and finally the status bar goes empty. The legend and any fusion logbook column fill in at the same moments.
 
 **M4 No controls (115, 534).** On a fresh set of tracks, uncheck and re-check a fusion plot by clicking its check box: fits start. Do the same with Space. While they run, click, right-click and double-click the status bar's "Computing results" and its bar: nothing happens, and there is no cancel button; click the plot row: it is selected as by any click, and nothing is cancelled or toggled. No context menu, menu item or shortcut offers a refresh or a cancel for a calculation.
 
@@ -2230,13 +2350,39 @@ never the real one) and the recordings of 12.4.
 Pass / fail and a note per step go in the phase report. A step that fails is
 reported as it failed, not adjusted.
 
+### 12.7 Sensor fusion plots, attitude and the orientation attribute
+
+What the automated tests cannot show: the real plot list and its colours,
+real fits through turns, the logbook's editors on a real logbook with loaded
+and unloaded rows, a hand-edited session file, an old profile and a column
+kept from an earlier build. Use the preamble of 12.1 (a COPY of a logbook,
+never the real one) and the recordings of 12.4, plus one recording with
+several turns.
+
+**M39 The eight fusion plots (801, 802, 803, 842).** The plot list has "Sensor fusion" with Elevation, Horizontal acceleration, Vertical acceleration, Along-track acceleration, Cross-track acceleration, Heading, Pitch and Roll, in that order, and no "GNSS (Local frame)" category. With two fusable tracks without stored fits visible, check all eight: the status bar shows "Computing results: 0 / 2", and one fit per track fills all eight. Check each GNSS counterpart as well (Elevation; the four accelerations; Course): each pair shares one axis and unit, and the two lines are told apart by colour. Pitch and Roll share the angle axis with Heading. Hide and show a track: its plots draw at once, with no computation. Check this in the light and the dark theme.
+
+**M40 Attitude through turns (812, 814, 843).** On the recording with several turns, with the default orientation and a unit on the back of a helmet, label up: Heading shows no jump of 360 degrees at north. It overlays Course in straight flight and turns with it through every turn; the difference between them, read with the measure tool at a few points, is the sideslip and changes slowly. In straight flight Roll is near zero; it is positive in a right turn and negative in a left one.
+
+**M41 The orientation column (817, 819, 822, 823, 824, 829, 844).** The Add Column dialog, "Session Attribute", lists "Orientation" in the "Session" group; a new logbook's default columns do not include it. Add it: every row shows "forward +y, up +z", and a text editor shows no `$VAR,_ORIENTATION` line in any session file; import a new recording: the same. Double-click a cell: a drop-down list opens, "Default" first and then the 24 labels, and it accepts no typing. Choose "forward +x, up +z": the cell shows it; the session file gains `$VAR,_ORIENTATION,+x,+z`; with Heading, Pitch and Roll checked for that track, they redraw at once; no "Computing results" appears, and the track's record file in `cache/` keeps its modification time. Choose "Default": the line is gone and the plots are back.
+
+**M42 Setting it for several recordings (823, 824, 826, 830, 831).** Select rows that are loaded and rows that are not, right-click, and choose "Set Orientation...". A list opens, "Default" first, with no text box. Choose a label: every selected row shows it, and every file has the line. Choose "Default": the lines go. Cancel: nothing changes. Then, with the application closed, edit one session file's line to `$VAR,_ORIENTATION,sideways`. Start: its cell shows "sideways" and its Heading, Pitch and Roll draw nothing. Choosing a label in the cell draws them.
+
+**M43 An old profile (805, 845).** With the application closed, add `Fusion/qx`, `Fusion/roll` and `Local/north` to the `enabledPlots` list of a copy of a profile file in `Documents/FlySight Viewer/profiles/`, beside a GNSS plot it already lists, and note the file's modification time. Start and apply the profile: the GNSS plot is checked, and Sensor fusion > Roll is not. No message box appears, and the debug output has no line about the three ids. The file keeps its bytes and modification time.
+
+**M44 A column kept from before (804).** Set up a logbook copy with a build from before this change, with a column over Sensor fusion > Roll at the exit marker, filled. Start this build: the column still shows its values, labelled "Fusion/roll @ <marker>", with no fit. The Add Column dialog's measurement tree lists eight Sensor fusion measurements and no local-frame group.
+
+Pass / fail and a note per step go in the phase report. A step that fails is
+reported as it failed, not adjusted.
+
 ## Appendix A. The acceptance items (1-19)
 
 The numbered acceptance list that section 9.1, `tests/acceptance_map.txt`, and
 the "acceptance N" comments on test functions refer to. All of it must be
 demonstrated by automated tests that use generated fixtures in temporary
 directories, never the user's logbook or preferences, with expected values
-stated independently rather than computed by the code under test.
+stated independently rather than computed by the code under test. Clause 6
+is stated as amended by the specification "Sensor fusion plots, attitude and
+the orientation attribute" (appendix I).
 
 1. Importing an unmarked file with `wx=62.5, wy=-125, wz=0` yields effective
    `71.68, -143.36, 0` deg/s. Source access returns the recorded values and
@@ -2253,8 +2399,11 @@ stated independently rather than computed by the code under test.
    recorded, and effective values are identical before and after. Repeating
    the cycle changes nothing. Saving with warm and cold caches produces the
    same file.
-6. A released-format logbook file (normalized units, no `SCHEMA_VER`) loads,
-   its gyro is corrected once, and saving it does not rescale or relabel it.
+6. (as amended) A released-format logbook file (normalized units, no
+   `SCHEMA_VER`) loads, its gyro is corrected once, and saving it does not
+   rescale or relabel it. Loading it adds only jumper mass and planform area
+   where they are absent (the legacy backfill), additively and once. Wind is
+   not written: a recording without it reads zero from a constant default.
 7. `TRACK.CSV` and `SENSOR.CSV` merge in either order, whether or not the
    session is loaded, with the same result. A merge whose header attribute
    conflicts with the session fails and changes nothing. Session edits and
@@ -2309,9 +2458,11 @@ calculation, with plot-driven background jobs", verbatim. These are items
 rows of section 9.2; "sensor-fusion-jobs acceptance N" in comments on test
 functions refers to them. Clauses 10, 11, 13, 14, 15, 16 and 17 are stated as
 amended by the specification "Demand-driven requested calculations"
-(appendix F), and clauses 11 and 15 again by the specification "One status
-bar for background work" (appendix H). "The branch" is `sensor-fusion-clean-port`, the behavioural
-reference the fusion kernel was ported from.
+(appendix F), clauses 11 and 15 again by the specification "One status bar
+for background work" (appendix H), and clause 15 again by the specification
+"Sensor fusion plots, attitude and the orientation attribute" (appendix I).
+"The branch" is `sensor-fusion-clean-port`, the behavioural reference the
+fusion kernel was ported from.
 
 1. The application builds, deploys its solver runtime libraries, and passes
    its tests on Windows, macOS, and Linux through the existing CI workflow.
@@ -2364,7 +2515,8 @@ reference the fusion kernel was ported from.
     sessions still to compute falling as each publishes; unchecking mid-way
     drops the tracks that are waiting and lets the running one finish; checking
     again resumes; a fourth track shown afterwards is computed with no other
-    action.
+    action. The real fusion plots are the eight of the "Sensor fusion"
+    category, and heading, pitch and roll share one job.
 16. (as amended) Starting the application with fusion plots checked starts no
     job, because every track starts hidden. Applying a profile that checks
     fusion plots, the Plots menu and any other programmatic check create
@@ -2870,7 +3022,9 @@ specification's sections 1 (motivation) and 4 (terms) have no item. Clauses
 specification "Calculation refinements" (appendix G). Clauses 17, 25, 26, 30,
 35-37, 39, 42, 54, 55, 57, 59 and 63 are stated as amended by the
 specification "One status bar for background work" (appendix H), which
-restates them again where appendix G had.
+restates them again where appendix G had. Clause 9 is stated as amended by the
+specification "Sensor fusion plots, attitude and the orientation attribute"
+(appendix I).
 
 1. (2) The user expresses intent through plots and logbook columns, never
    through calculations: what is switched on is the request.
@@ -2885,9 +3039,11 @@ restates them again where appendix G had.
    job history the jobs dock will read stays as it is.
 8. (3) Nothing about demand or the job history is persisted across restarts,
    and no user-facing switch pauses or throttles background work.
-9. (5) Plot demand: for every checked plot whose value is a requested output,
-   every visible session needs the requested calculations that block that
-   output.
+9. (5, as amended) Plot demand: for every checked plot whose value is a
+   requested output, every visible session needs the requested calculations
+   that block that output. The eight plots of the "Sensor fusion" category are
+   such plots: one is an output of the fit, and the seven derived from its
+   outputs are blocked by it.
 10. (5) Column demand: for every enabled logbook column whose value depends on
     a requested output, every session in the logbook needs the requested
     calculations that block that value.
@@ -3512,3 +3668,215 @@ apply them. Clauses 45-53 are its section 13 tests, one per bullet, and clause
 54. (14) `docs/` and `tests/README.md` describe the status bar, the row
     warning, the demand layer's progress, failures and pending cells and what
     stays visible after a restart, and no document names the removed surface.
+
+## Appendix I. The acceptance items of sensor fusion plots, attitude and the orientation attribute (801-863)
+
+The testable statements of the specification "Sensor fusion plots, attitude
+and the orientation attribute", which amends the schema and
+calculation-engine items (appendix A), "Sensor fusion as an explicit
+calculation, with plot-driven background jobs" (appendix B) and
+"Demand-driven requested calculations" (appendix F), one sentence each, with
+the specification's section number in front. The specification numbers no
+clauses; the numbers below are this list's, and item = 800 + the number
+(items 801-863 of `tests/acceptance_map.txt`, the rows of section 9.9). Its
+sections 1-4 (motivation, principles, scope, terms) have no item, their
+principles being carried by the clauses of the sections that apply them; the
+two statements of its section 3 that a test can observe are clauses 4 and 40.
+Clauses 54-62 are its section 13 tests, one per bullet, and clause 63 its
+section 14. Clauses 2, 7, 8, 10, 14, 22, 26, 36, 39 and 50 are stated as
+settled (9.9 says how).
+
+1. (5) The "Sensor fusion" category holds exactly eight plots, in this order:
+   Elevation, Horizontal acceleration, Vertical acceleration, Along-track
+   acceleration, Cross-track acceleration, Heading, Pitch, Roll.
+2. (5, as settled) Each is named, united and typed as its GNSS counterpart
+   (Elevation, the four accelerations, Heading as Course), Pitch and Roll as
+   angles, so that the two overlay; a fused plot's colour differs from its
+   counterpart's.
+3. (5) The fused north, east and down position and velocity, north and east
+   acceleration, roll, pitch, yaw and quaternion plots are removed, and the
+   "GNSS (Local frame)" category with them.
+4. (5) Every measurement behind a removed plot still exists and is computed as
+   before: the local frame feeds the fit and a column, and the fit's channels
+   are its record, read by a column kept from before, the stored result and
+   plug-ins.
+5. (5) Applying a profile enables the listed plots the application has and
+   ignores the rest silently (no message, no log, no failure); nothing rewrites
+   a profile.
+6. (6) Each derived quantity is an on-demand calculation over the fit's
+   outputs, registered with the fit: blocked by it until it publishes, it
+   appears with it and never starts one.
+7. (6, as settled) Elevation is the local origin's height above mean sea level
+   minus the fused down position, above the ground elevation as the GNSS
+   elevation is, so the two overlay; it is unavailable when either attribute is
+   not a number.
+8. (6, as settled) Vertical acceleration is the fit's own fused down
+   acceleration, positive down like the GNSS one; no second calculation
+   publishes it.
+9. (6) Along-track and cross-track acceleration are the GNSS definitions
+   applied to the fused velocity and acceleration, wind-corrected, so their
+   signs and the meaning of "track" agree.
+10. (6, as settled) One definition of the track-relative accelerations and of
+    the wind rule serves both categories, and the GNSS values are unchanged.
+11. (7) The orientation's forward and up axes fix the body frame, right being
+    their cross product; the body-to-device rotation is a constant signed axis
+    permutation, a proper rotation for each of the 24 pairs, never a
+    reflection.
+12. (7) Heading, pitch and roll are the aircraft Euler angles of the fit's
+    quaternion composed with that rotation: heading the forward axis's
+    direction clockwise from north, pitch its elevation above the horizontal,
+    roll the rotation about it, positive right side down.
+13. (7) They are computed when read, from the quaternion channels and the
+    orientation attribute, never by the fit.
+14. (7, as settled) Heading is unwrapped by the application's one unwrap rule,
+    the course's, and less the course reference angle the GNSS course
+    subtracts, computed in one place for both (zero for a stored reference that
+    is not a number or lies outside the GNSS time), so heading and course
+    overlay in straight flight and heading minus course reads as sideslip;
+    heading has the course's inputs and availability, so a recording without a
+    course reference has neither.
+15. (7) Pitch and roll are reported in their natural ranges, pitch from -90 to
+    90 degrees and roll from -180 to 180.
+16. (7) Where the forward axis is vertical, heading and roll are not defined
+    and the derivation reports what the standard formulas give.
+17. (7) A change of the orientation attribute recomputes the angles through
+    ordinary invalidation and never refits.
+18. (8) The orientation is a token naming the forward and the up axis in a
+    fixed form the fusion module owns (the default `+y,+z`); the 24 valid
+    pairs, and only they, are its choices, labelled "forward +y, up +z" and so
+    on, the default first.
+19. (8) Its default, forward +y and up +z, is a constant calculated attribute:
+    every recording has it, imported before or after, and nothing is written
+    into any session file.
+20. (8) A stored value wins over the default, and removing it returns to the
+    default.
+21. (8) One orientation type in the fusion module owns the vocabulary (the axis
+    pair, token, label, body-frame rotation, default and enumeration); the
+    derivation parses with it, the attribute's choices come from it, and
+    nothing else spells a token.
+22. (8, as settled) The fusion registration registers the attribute's
+    definition once per process (key `_ORIENTATION`, "Orientation", category
+    "Session", a choice attribute, editable) with the derivation that reads it;
+    the key is part of the session file's vocabulary.
+23. (8) It is edited as any editable attribute: a logbook column the user can
+    add, not among the default columns, edited in place, and set for the
+    selected sessions from the context menu.
+24. (8) Both editors offer the list, not free text, and a "Default" entry that
+    removes the stored value rather than storing anything.
+25. (8) A value outside the list is refused by the model, the in-place editor
+    and the bulk edit.
+26. (8, as settled) A stored token outside the list (a hand-edited file) is
+    kept and shown as written, and heading, pitch and roll are unavailable for
+    it until it is changed or removed.
+27. (9) The attribute registry's format types gain a fifth, choice, whose
+    definition carries its allowed values, each a stored token and a display
+    label.
+28. (9) A choice is displayed and sorted by its label.
+29. (9) In-place editing of a choice gives a list editor in place of the line
+    edit.
+30. (9) The context menu's "Set ..." action offers a list in place of the text
+    prompt.
+31. (9) The bulk edit sets the chosen token for the selected sessions, loaded
+    or not.
+32. (9) "Default" removes the stored attribute on every edit path, and a token
+    outside the list is refused.
+33. (9) Nothing about the type is specific to orientation: any choice
+    definition gets all of it.
+34. (10) A constant default is a registered calculation with no inputs whose
+    one output is the attribute: it runs once and is cached, a stored value
+    wins, setting or removing a stored value invalidates what read the
+    attribute, and a dependent follows every change.
+35. (10) One helper registers a constant default for an attribute key and a
+    value, beside the exit-time defaults, so that every constant default is
+    found by one search; the orientation default uses it from the fusion
+    registration.
+36. (10, as settled) The seven constant defaults of the SP and WS-P
+    calculations are registered through the same helper, with their values.
+37. (10) The importer stores only what is a fact of the import; anything that
+    stands in for a value the user has not set is a calculation, derived where
+    possible, constant otherwise.
+38. (10) Wind north and east are constants of zero: a recording without stored
+    wind reads zero, one with stored wind keeps it, and the importer no longer
+    writes them.
+39. (10, as settled) The logbook's legacy backfill no longer writes wind
+    either; it adds jumper mass and planform area only.
+40. (10) Jumper mass, planform area and the fixed ground elevation stay
+    creation defaults of the importer (section 3).
+41. (10) A stored attribute wins even when invalid or empty, so returning to a
+    default removes the stored attribute and never stores a blank.
+42. (11) The plot list shows "Sensor fusion" with eight plots named as the GNSS
+    plots and no local-frame category; checking a fusion plot starts the fit as
+    before, the status bar shows it, and a stored fit draws at once.
+43. (11) The attitude plots are in the aircraft convention for the mount the
+    orientation describes, heading continuous through turns.
+44. (11) The orientation column, once added, shows "forward +y, up +z" for
+    every recording not set and the chosen label for one that is; editing
+    offers the list and "Default"; changing it redraws the attitude plots
+    without a fit.
+45. (11) Profiles that name removed plots apply without complaint.
+46. (11) Wind reads zero where nothing was stored, as before.
+47. (12) The fusion kernel and the fit calculation are unchanged (inputs,
+    outputs, diagnostics, algorithm string), and the golden fixtures and stored
+    results stay valid.
+48. (12) GTSAM stays confined to the fusion kernel, the new fusion files
+    include neither GTSAM nor Eigen, and the rules on the fusion tooling hold.
+49. (12) The fusion registration gains the derived kinematics, the attitude
+    derivation, the orientation type and the orientation attribute with its
+    constant default; each derivation is an ordinary on-demand calculation with
+    declared inputs, the attitude's including the orientation attribute.
+50. (12, as settled) The fusion library reaches nothing of the core library:
+    the attribute registry lives in the model library, the constant-default and
+    track helpers are header-only, and the calculations never name the fusion
+    library.
+51. (12) The attribute calculations hold the constant-default helper and the
+    wind defaults; the importer holds neither.
+52. (12) The plot registry loses the removed plots and the local-frame
+    category; the profile rule is the plot model's, one function the profile
+    bridge calls.
+53. (12) The demand layer is untouched: a derived plot's blockers lead to the
+    fit through the chain it already follows, and heading, pitch and roll are
+    filled by one job.
+54. (13) Test: the plot list has the eight fusion plots and no local-frame
+    plots; every fusion plot is explicit-backed (waits on the fit) as the
+    seventeen were; an existing column over a removed plot's measurement still
+    computes, and the export of the fit, its stored record, still holds the
+    measurement.
+55. (13) Test: applying a profile that names a removed plot enables its other
+    plots and ignores that one, silently.
+56. (13) Test: elevation equals the origin height minus down minus the ground
+    elevation, and is unavailable without a ground elevation; vertical
+    acceleration is the down acceleration; along-track and cross-track equal
+    the GNSS definitions applied to the fused velocity and acceleration, on
+    synthetic data with known answers.
+57. (13) Test: attitude, on synthetic quaternions with known answers: for the
+    default orientation, heading, pitch and roll of a level, north-facing body
+    are zero; a known heading, pitch and roll come back; heading unwraps
+    through a full turn; a stored course reference offsets heading by exactly
+    the angle it offsets the GNSS course, and heading is unavailable exactly
+    when the course is; a different orientation (a side mount) changes the
+    angles as the axis permutation predicts; the rotation is proper for all 24
+    pairs.
+58. (13) Test: the orientation attribute: every recording reads the default
+    without a stored value and without any write to its file; a stored token
+    wins and the attitude recomputes without a fit; "Default" removes the
+    stored value; a token outside the list is refused by the model, the editor
+    and the bulk edit; the labels and tokens come from one enumeration of 24.
+59. (13) Test: the choice type: display and sort by label; the in-place editor
+    and the context menu offer the list; the bulk edit sets the token for the
+    selected sessions.
+60. (13) Test: constant defaults: the helper registers a calculation that the
+    engine serves as a default (the existing engine test covers the mechanism);
+    wind north and east read zero for a recording without stored wind, keep a
+    stored value, and the importer no longer writes them.
+61. (13) Test: the fit is unchanged: the golden fixtures and the stored-result
+    tests pass unchanged; the algorithm string is the same.
+62. (13) Test: the audit keeps the removed plot names out of the registry, and
+    the documents describe the eight plots, the attitude convention, the
+    orientation attribute and the rule for defaults.
+63. (14) `docs/` describes the eight fusion plots and the derived quantities,
+    the attitude convention with the orientation attribute, its default and its
+    limits (it describes the mount, not the wearer's posture; a forward axis
+    pointing straight up or down makes heading and roll meaningless), the
+    choice type and the orientation in the session file, the rule for defaults
+    and its helper, and that wind is no longer written at import; no document
+    describes a removed plot or the "GNSS (Local frame)" category.

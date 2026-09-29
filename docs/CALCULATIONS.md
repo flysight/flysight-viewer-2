@@ -118,9 +118,11 @@ output is the attribute, registered with `Calculations::addConstantDefault`
 (`src/calculations/attributecalculations.h`) under the id
 `builtin.default.<key>`. Every constant default is found by searching for that
 name; wind north and east (zero) and the SP and WS-P parameters are constant
-defaults. A stored value wins even when it is invalid or empty (step 1 of the
-resolution below), so returning a session to its default removes the stored
-attribute; it never stores a blank.
+defaults, and so is the orientation (`_ORIENTATION`, forward +y, up +z), which
+the sensor fusion registration registers (section 17). A stored value wins
+even when it is invalid or empty (step 1 of the resolution below), so
+returning a session to its default removes the stored attribute; it never
+stores a blank.
 
 The engine records everything a resolution looked at, including the candidates
 it rejected, so a cached fallback is replaced when a preferred candidate
