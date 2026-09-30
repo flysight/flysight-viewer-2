@@ -49,10 +49,13 @@
 #     the orientation vocabulary; the sensor fusion category is the eight
 #     plots of the tests' mirror, and no removed fusion plot and no
 #     local-frame plot remains in code or documents (items 801-863);
-#   - the fused output is the state at every IMU sample: the linear
-#     reconstruction it replaced (states interpolated between fixes, an
-#     attitude correction spread by elapsed time) stays gone, and no text
-#     says the output is interpolated.
+#   - the fused output is the state at every IMU sample: the step model has
+#     one author (one integration call and one writer of the per-step
+#     covariance, which the reconstruction and its tests read), and the
+#     linear reconstruction it replaced (states interpolated between fixes,
+#     an attitude correction spread by elapsed time), its diagnostics key and
+#     any text calling the fused output interpolated stay gone (items
+#     901-940).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -549,7 +552,7 @@ expect_none("the logic components see no widget"
 # tools isolated and uninstalled.
 # =============================================================================
 
-# ─────────────────────────────── fusion-model (items 212, 218, 234, 247)
+# ─────────────────────────────── fusion-model (items 212, 218, 234, 247, 902, 903, 927, 929, 939, 940)
 audit_group(fusion-model)
 # Allow: tests/README.md is excluded because its section 10 spells these
 # patterns. `kWindowLength` only at a word end (WB_END): the kernel's
@@ -609,7 +612,7 @@ expect_none("the fusion document describes the current model"
   "stationary window|candidate window|coarse initializer|frozen|bias shifts below|zero bias shift|sensor-fusion-clean-port|twenty-one"
   docs/SENSOR_FUSION.md)
 
-# ─────────────────────────────── fusion-tooling (items 231, 233, 848)
+# ─────────────────────────────── fusion-tooling (items 231, 233, 848, 928, 939)
 audit_group(fusion-tooling)
 # Allow: none expected. The runner imports model-free (DataImporter::parseFile,
 # SessionMerge, the engine on a bare SessionData) and never names the
@@ -652,7 +655,7 @@ expect_only("the tools see the public header or the trace seam only"
 # literal, and the documents current.
 # =============================================================================
 
-# ─────────────────────────────── stored-results (items 304, 305, 316, 317, 326, 327, 330, 333, 334, 346, 348, 349)
+# ─────────────────────────────── stored-results (items 304, 305, 316, 317, 326, 327, 330, 333, 334, 346, 348, 349, 921, 930)
 audit_group(stored-results)
 # Allow: none expected. The extension and the magic are file-local constants of
 # calculationrecord.cpp; everything else asks calculationRecordExtension() or the
@@ -1049,12 +1052,13 @@ expect_none("the documents describe the refined demand layer"
 # beside it, and no code, test or document says the output is interpolated.
 # =============================================================================
 
-# ─────────────────────────────── fusion-reconstruction
+# ─────────────────────────────── fusion-reconstruction (items 917, 926, 939, 940)
 audit_group(fusion-reconstruction)
 # Allow: none expected. The goldens under tests/data/fusion are searched, so a
 # capture from before the reconstruction (display_position_velocity in its
 # diagnostics) fails here: re-capture (tests/README.md section 11).
-# tests/README.md is excluded because its section 10 spells these names.
+# tests/README.md is excluded because its section 10 spells these names and
+# its section 11 records the capture that replaced the key.
 expect_none("the linear reconstruction is gone"
   "DenseTrajectory|reconstructTrajectory|endpointCorrection|propagateThroughInterval|display_position_velocity"
   src tests docs README.md ":!tests/README.md")
@@ -1079,9 +1083,10 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # mirrors memory, item = 400 + clause number), 501-563 (demand-driven
 # requested calculations, item = 500 + clause number), 601-662
 # (calculation refinements, item = 600 + clause number), 701-754 (one
-# status bar for background work, item = 700 + clause number) and 801-863
+# status bar for background work, item = 700 + clause number), 801-863
 # (sensor fusion plots, attitude and the orientation attribute, item = 800 +
-# clause number). Four line forms; see the head of the map.
+# clause number) and 901-940 (the fused state at every IMU sample, item =
+# 900 + clause number). Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -1154,8 +1159,8 @@ else()
             OR (item GREATER_EQUAL 201 AND item LESS_EQUAL 247) OR (item GREATER_EQUAL 301 AND item LESS_EQUAL 350)
             OR (item GREATER_EQUAL 401 AND item LESS_EQUAL 442) OR (item GREATER_EQUAL 501 AND item LESS_EQUAL 563)
             OR (item GREATER_EQUAL 601 AND item LESS_EQUAL 662) OR (item GREATER_EQUAL 701 AND item LESS_EQUAL 754)
-            OR (item GREATER_EQUAL 801 AND item LESS_EQUAL 863)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754 and 801-863: ${line}")
+            OR (item GREATER_EQUAL 801 AND item LESS_EQUAL 863) OR (item GREATER_EQUAL 901 AND item LESS_EQUAL 940)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863 and 901-940: ${line}")
     endif()
   endforeach()
 
@@ -1209,6 +1214,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 801 863)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 901 940)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

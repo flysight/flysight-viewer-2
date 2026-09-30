@@ -1,5 +1,5 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Nine specifications, nine item ranges:
+# (tests/audit/cleanup_audit.cmake). Ten specifications, ten item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
@@ -64,7 +64,15 @@
 #             roll on the body frame, the orientation attribute, the choice
 #             attribute type, constant defaults): item = 800 + clause number.
 #             Stated in full in tests/README.md, appendix I. It amends the
-#             specifications of 1-19, 101-120 and 501-563.
+#             specifications of 1-19, 101-120 and 501-563. It is amended by
+#             the specification of 901-940: items 847 and 861 are stated as
+#             amended.
+#   901-940   the fused state at every IMU sample (the reconstruction between
+#             fixes, the published channels at the IMU rate with the model's
+#             acceleration, the diagnostics' account of the reconstruction,
+#             the algorithm string and the goldens captured again): item =
+#             900 + clause number. Stated in full in tests/README.md,
+#             appendix J. It amends the specification of 801-863.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -74,11 +82,11 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the nine ranges; every item 1-19 needs a line;
-# every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754 or
-# 801-863 needs at least one test or audit line (manual and ci lines never
-# stand alone). The human-readable matrices are tests/README.md sections 9.1
-# to 9.9; keep them in sync with this file.
+# Every item must lie in one of the ten ranges; every item 1-19 needs a line;
+# every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754,
+# 801-863 or 901-940 needs at least one test or audit line (manual and ci
+# lines never stand alone). The human-readable matrices are tests/README.md
+# sections 9.1 to 9.10; keep them in sync with this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -2639,7 +2647,7 @@
 846 tst_builtins_engine constantDefaults
 846 tst_smoke importAppliesCreationDefaults
 
-# 847 - (12) the fusion kernel and the fit calculation are unchanged (inputs, outputs, diagnostics, algorithm string), and the golden fixtures and stored results stay valid
+# 847 - (12, as amended) the fusion plots leave the fusion kernel and the fit calculation as they are (inputs, outputs, diagnostics, algorithm string) and derive what they add from the fit's published outputs, whose values, diagnostics and algorithm string are those of the specification of 901-940, with its goldens and stored results
 847 tst_fusion_session registrationShape
 847 tst_fusion_golden successFixturesMatchGolden
 847 tst_fusion_golden rejectionFixturesMatchGolden
@@ -2722,7 +2730,7 @@
 860 tst_importer creationDefaultsOnlyFillAbsent
 860 tst_import_merge newSessionGetsDefaults
 
-# 861 - (13) test: the fit is unchanged: the golden fixtures and the stored-result tests pass unchanged; the algorithm string is the same
+# 861 - (13, as amended) test: the fusion plots leave the fit as the golden fixtures and the stored-result tests hold it, against the goldens and the algorithm string of the specification of 901-940
 861 tst_fusion_golden successFixturesMatchGolden
 861 tst_fusion_golden rejectionFixturesMatchGolden
 861 tst_fusion_kernel fitTraceMatchesGolden
@@ -2735,3 +2743,196 @@
 
 # 863 - (14) `docs/` describes the eight fusion plots and the derived quantities, the attitude convention with the orientation attribute, its default and its limits (it describes the mount, not the wearer's posture; a forward axis pointing straight up or down makes heading and roll meaningless), the choice type and the orientation in the session file, the rule for defaults and its helper, and that wind is no longer written at import; no document describes a removed plot or the local-frame category
 863 audit naming
+
+# ---- The fused state at every IMU sample: item = 900 + clause number ----
+
+# 901 - (5) for every fix interval of a fit that succeeds, the pass integrates gyro and accelerometer together from the fitted state at the interval's first fix with the biases the fit assigns to that interval: the attitude advances with the gyro, the reading, bias removed, is rotated by it and gravity added, and velocity and position advance with the result
+901 tst_fusion_kernel imuRateMatchesHeldEndsGraph
+901 tst_fusion_kernel imuRateEndsAreTheFit
+901 tst_fusion_kernel reconstructionUsesIntervalBias
+901 tst_fusion_kernel exactConstantVelocityFit
+
+# 902 - (5) the integration is the fit's own: its edges are every IMU sample in the interval and the two fix times, with the same midpoint interpolation of the readings and the same per-step noise as the fit's IMU factors
+902 tst_fusion_kernel imuRateEndsAreTheFit
+902 audit fusion-model
+
+# 903 - (5) the pass accumulates at every edge the covariance of the noise the steps so far have added, from the transition and noise of the solver library's own preintegration update; at the second fix it is the covariance of the fit's IMU factor for the interval
+903 tst_fusion_kernel imuRateEndsAreTheFit
+903 audit fusion-model
+
+# 904 - (5, as settled) the mismatch is the fitted state at the interval's second fix in the local coordinates of the forward state there, nine components; not the IMU factor's residual, which the library takes the other way round and whose negative misses the fitted end
+904 tst_fusion_kernel imuRateEndsAreTheFit
+
+# 905 - (5, as settled) the correction at each edge is the conditional mean of the step chain given both ends, linearized about the forward states, computed in the preintegration's tangent coordinates, where the covariance lives, and mapped into each forward state's local coordinates by the Jacobian of the library's retraction; the formula applied literally in the local coordinates is wrong at first order under rotation
+905 tst_fusion_kernel imuRateMatchesHeldEndsGraph
+905 tst_fusion_kernel imuRateMatchesHeldEndsGraphUnderRotation
+
+# 906 - (5) the share is nothing at the first fix and the whole mismatch at the second, one nine-component correction applied jointly, so that an attitude share turns the direction of every later reading
+906 tst_fusion_kernel imuRateEndsAreTheFit
+906 tst_fusion_kernel imuRateMatchesHeldEndsGraphUnderRotation
+906 tst_fusion_kernel imuRateSampleOnAFixIsPublishedOnce
+906 tst_fusion_kernel imuRateSharesByNoise
+
+# 907 - (5) where the per-step noise is uniform the velocity share grows with elapsed time; a step that carries more noise takes more of the mismatch
+907 tst_fusion_kernel imuRateSharesByNoise
+
+# 908 - (5) the corrected state is the forward state with its share applied by the retraction that inverts the local coordinates; at the second fix it is the fitted state, exactly
+908 tst_fusion_kernel imuRateEndsAreTheFit
+908 tst_fusion_kernel imuRateSampleOnAFixIsPublishedOnce
+
+# 909 - (5) the corrections are computed once, about the forward states, and applied once; the ends are exact by construction, and the linearization costs only the split inside the interval, within the equivalence test's bound
+909 tst_fusion_kernel imuRateMatchesHeldEndsGraph
+909 tst_fusion_kernel imuRateMatchesHeldEndsGraphUnderRotation
+909 tst_fusion_kernel imuRateEndsAreTheFit
+
+# 910 - (5, as settled) a step correction for every step: the corrected velocity change over the step length, less the mean of the readings at its two edges, bias removed, each rotated by the corrected attitude at its own edge, less gravity (at a fix the reading is the one the integration uses there)
+910 tst_fusion_kernel imuRateAccelerationIntegratesToVelocity
+910 tst_fusion_kernel imuRateZeroMismatchIsForward
+
+# 911 - (5, as settled) where the mismatch is zero the pass is the forward integration; the step corrections are zero where the recording does not rotate, and under rotation they are minus the integration's rotation lag
+911 tst_fusion_kernel imuRateZeroMismatchIsForward
+
+# 912 - (6) the fit publishes the seventeen channels of the fusion document's section 4, no more (no uncertainty is published), on the same time axis
+912 tst_fusion_session registrationShape
+912 tst_fusion_runner outputTableMatchesGolden
+912 tst_fusion_kernel imuRateIsWhatTheFitPublishes
+912 tst_fusion_kernel imuRateAxisWhenGnssIsFasterThanImu
+912 manual M46
+
+# 913 - (6) at every IMU sample the attitude (the quaternion, and roll, pitch and yaw from it) is the corrected attitude at the sample's edge, and velocity and position are the corrected state there
+913 tst_fusion_kernel imuRateIsWhatTheFitPublishes
+913 tst_fusion_kernel imuRateMatchesHeldEndsGraph
+913 tst_fusion_kernel exactConstantVelocityFit
+913 manual M45
+
+# 914 - (6, as settled) the acceleration is the sample's own reading, bias removed, rotated by the corrected attitude, plus gravity, plus the mean of the corrections of the steps beside its edge (a step beside a fix being the part-step in that fix interval); only a sample exactly on the first fix has one such step, since the last fix is never published; where the corrections are negligible it is the rotated reading
+914 tst_fusion_kernel imuRateZeroMismatchIsForward
+914 tst_fusion_kernel imuRateAccelerationIntegratesToVelocity
+914 tst_fusion_kernel imuRateIsWhatTheFitPublishes
+914 tst_fusion_kernel imuRateSampleOnAFixIsPublishedOnce
+914 manual M45
+
+# 915 - (6, as settled) integrated by the kernel's rule, the published acceleration reproduces the published velocity change over the fitted interval, and over any run of samples to within the spread of the corrections at its ends, the bound the fusion document's section 8 states; not step by step
+915 tst_fusion_kernel imuRateAccelerationIntegratesToVelocity
+
+# 916 - (6) the time axis is the IMU samples in the half-open interval from the first fix to the last, whatever the GNSS rate, a GNSS rate above the IMU's included: no fix time added, nothing resampled, a sample on a fix published once
+916 tst_fusion_kernel imuRateEndsAreTheFit
+916 tst_fusion_kernel imuRateSampleOnAFixIsPublishedOnce
+916 tst_fusion_kernel imuRateIsWhatTheFitPublishes
+916 tst_fusion_kernel imuRateAxisWhenGnssIsFasterThanImu
+916 manual M45
+916 manual M46
+
+# 917 - (7, as settled) the success diagnostics' account of the dense output names the reconstruction (`dense_output`, in place of the previous key), and `limitations` no longer denies that the output is the IMU-rate posterior; the documentation quotes both texts
+917 tst_fusion_kernel initializerDiagnosticsShape
+917 tst_fusion_golden successFixturesMatchGolden
+917 audit fusion-reconstruction
+917 manual M46
+
+# 918 - (7, as settled) the success diagnostics report the largest step correction (`max_step_correction_m_s2`), the middle of its step in seconds since the epoch (`max_step_correction_time_s`) and the largest velocity mismatch of any interval (`max_velocity_mismatch_m_s`), beside `max_endpoint_correction_deg`, which stays
+918 tst_fusion_kernel imuRateEndsAreTheFit
+918 tst_fusion_kernel imuRateIsWhatTheFitPublishes
+918 tst_fusion_golden successFixturesMatchGolden
+918 tst_fusion_golden comparatorHoldsItsBounds
+918 tst_fusion_kernel reconstructionUsesIntervalBias
+918 tst_fusion_kernel reconstructionTimingAndEndpointCorrection
+918 manual M46
+
+# 919 - (7, as settled) the diagnostics of a rejected or failed fit are unchanged but for the algorithm string, which changes for every outcome (the specification's section 8)
+919 tst_fusion_golden rejectionFixturesMatchGolden
+919 tst_fusion_kernel failureDiagnosticsShape
+
+# 920 - (8) the record stores and restores the same channels, with the new values, in the record format as it is
+920 tst_fusion_store restoredAfterRestartIsBitIdentical
+920 tst_result_records layoutIsPinned
+
+# 921 - (8, as settled) the algorithm string changes (to the string tests/README.md appendix J names), so a fit stored under the previous one is stale at its recording's next load, by the existing validity rules
+921 tst_fusion_store codeStampChangeDropsRecordOnLoad
+921 tst_fusion_session registrationShape
+921 audit stored-results
+921 manual M46
+
+# 922 - (8, as settled) after the change every stored fit is computed again once, when something switched on needs it, not all at the next start (a stale record is deleted at its recording's load), and the status bar shows it as any computation
+922 tst_fusion_store codeStampChangeDropsRecordOnLoad
+922 tst_result_columns staleRecordDeletedByWorkerCreatesDemand
+922 manual M45
+
+# 923 - (8) the goldens are captured again from the changed kernel with the existing capture tool, and the golden tests compare against them
+923 tst_fusion_golden successFixturesMatchGolden
+923 tst_fusion_golden rejectionFixturesMatchGolden
+923 tst_fusion_kernel fitTraceMatchesGolden
+923 tst_fusion_runner outputTableMatchesGolden
+
+# 924 - (8, as settled) every fixture's time axis is unchanged: checked once, at the re-capture, each success fixture's `_time` byte for byte against the previous capture (tests/README.md section 11), and permanently against the IMU samples of its fitted interval
+924 tst_fusion_kernel imuRateIsWhatTheFitPublishes
+924 tst_fusion_kernel imuRateEndsAreTheFit
+
+# 925 - (9) the fit is unchanged (the graph, the noise model, the initializer, the solver and the stopping rule), and so are its states at the fixes and its biases: the pass reads the converged solution and changes nothing in it
+925 tst_fusion_kernel fitTraceMatchesGolden
+925 tst_fusion_golden successFixturesMatchGolden
+925 tst_fusion_kernel imuRateEndsAreTheFit
+925 manual M46
+
+# 926 - (9) the pass replaces the kernel's linear reconstruction, which no code, test, golden or document names
+926 audit fusion-reconstruction
+926 tst_fusion_kernel imuRateIsWhatTheFitPublishes
+
+# 927 - (9) the step model is read from the library's preintegration as it advances, never written again: one integration call and one author of the per-step covariance, and the tests check the pass's covariance against the factor's
+927 audit fusion-model
+927 tst_fusion_kernel imuRateEndsAreTheFit
+
+# 928 - (9) GTSAM stays confined to the kernel, and the rules on the fusion tooling hold
+928 audit solver-confinement
+928 audit fusion-tooling
+
+# 929 - (9, as settled) the pass runs after the fit's last iteration, inside the same cancellable job, and is not a cancellation boundary
+929 audit fusion-model
+929 tst_fusion_golden cancelAtEachKindOfBoundary
+929 tst_fusion_golden progressMatchesGoldenBoundaries
+
+# 930 - (9) the fit calculation publishes the same channels and its result version follows the algorithm string; the registration, the plot registry and everything above them are unchanged
+930 tst_fusion_session registrationShape
+930 audit stored-results
+930 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+
+# 931 - (10, as settled) test: equivalence: against a graph with a state at every edge, one-step IMU factors with the same per-step covariance and interval bias, and the fix states and biases held at the fit's values, the reconstruction agrees within a tolerance stated against the mismatch, on `coarse_maneuver` and on a rotating recording; a reference with free fix states and biases drifts along the unobservable heading, so that no such tolerance exists for it
+931 tst_fusion_kernel imuRateMatchesHeldEndsGraph
+931 tst_fusion_kernel imuRateMatchesHeldEndsGraphUnderRotation
+
+# 932 - (10) test: on every success fixture, the corrected state at each interval's second fix is the fitted state to rounding, and the pass's covariance there equals the factor's
+932 tst_fusion_kernel imuRateEndsAreTheFit
+
+# 933 - (10) test: a step carrying more noise takes the larger share; with uniform noise the velocity share grows with elapsed time
+933 tst_fusion_kernel imuRateSharesByNoise
+
+# 934 - (10, as settled) test: on a recording that does not rotate and whose readings integrate exactly to the fitted states, the reconstruction is the forward integration, the step corrections are zero and the acceleration is the rotated reading
+934 tst_fusion_kernel imuRateZeroMismatchIsForward
+
+# 935 - (10) test: on every success fixture the published acceleration integrated by the kernel's rule reproduces the published velocity change over the fitted interval, and over runs of samples within the stated spread
+935 tst_fusion_kernel imuRateAccelerationIntegratesToVelocity
+
+# 936 - (10, as settled) test: the published time axis of every success fixture and of a synthetic recording whose GNSS rate exceeds its IMU rate is exactly the IMU samples of the fitted interval; the before-and-after identity is the re-capture's check
+936 tst_fusion_kernel imuRateEndsAreTheFit
+936 tst_fusion_kernel imuRateSampleOnAFixIsPublishedOnce
+936 tst_fusion_kernel imuRateIsWhatTheFitPublishes
+936 tst_fusion_kernel imuRateAxisWhenGnssIsFasterThanImu
+
+# 937 - (10, as settled) test: the diagnostics carry the account of the specification's section 7, and the golden comparison covers it; in portable mode the time of the largest step correction is compared only where that correction exceeds the portable floor
+937 tst_fusion_kernel initializerDiagnosticsShape
+937 tst_fusion_golden successFixturesMatchGolden
+937 tst_fusion_golden comparatorHoldsItsBounds
+937 tst_fusion_kernel imuRateIsWhatTheFitPublishes
+
+# 938 - (10) test: a fit stored under the previous algorithm string is stale at the next load, and one stored after the change restores bit for bit
+938 tst_fusion_store codeStampChangeDropsRecordOnLoad
+938 tst_fusion_store restoredAfterRestartIsBitIdentical
+
+# 939 - (10) test: the audit's confinement rules hold, and the documents describe the reconstruction, what it publishes and what its one pass leaves out
+939 audit solver-confinement
+939 audit fusion-tooling
+939 audit fusion-model
+939 audit fusion-reconstruction
+
+# 940 - (11) `docs/` describe the reconstruction and that its output is the IMU-rate posterior to within one linearization, what that leaves out, what is published (the acceleration's consequence, the time axis in one sentence), the diagnostics keys, the algorithm string and the first start, and what the fusion plots show between fixes; tests/README.md section 11 records the goldens captured again and why; the map gives the specification its range, with the amended items restated
+940 audit fusion-reconstruction
+940 audit fusion-model
