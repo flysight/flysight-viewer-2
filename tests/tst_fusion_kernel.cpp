@@ -7,7 +7,8 @@
 // integration boundaries, heading freedom, the two stopping rules forced
 // through the tuning, the per-step covariance, the temperature-dependent gyro
 // bias (the custom factor's Jacobians, the section 6 cases), the
-// solver-failure path and its diagnostics shapes), with the literal expectations of the reference's own
+// solver-failure path and its diagnostics shapes, the IMU-rate reconstruction
+// pass against a dense reference graph and its per-interval seam), with the literal expectations of the reference's own
 // self-test (sensor-fusion-clean-port, tests/fusion_regression.cpp), and the
 // fit trace that localizes a golden failure to a stage: the segment account
 // first, then each optimizer iteration.
@@ -15,9 +16,11 @@
 // The only test source that includes internal src/fusion/ headers, and one of
 // the few targets that names gtsam itself.
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <map>
 #include <set>
 #include <string>
 
@@ -34,6 +37,8 @@
 #include <gtsam/navigation/GPSFactor.h>
 #include <gtsam/navigation/ImuFactor.h>
 #include <gtsam/navigation/NavState.h>
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
+#include <gtsam/nonlinear/NonlinearEquality.h>
 #include <gtsam/slam/PriorFactor.h>
 
 #include "calculations/anglehelper.h"
@@ -283,6 +288,278 @@ Rot3 rotationFromMatrix(double r00, double r01, double r02,
     return Rot3(m);
 }
 
+/// A fitted window with the tuning its fit ran with: what reconstructAtImuRate() takes.
+struct WindowFit {
+    Samples window;
+    Tuning tuning;
+    FitResult fit;
+};
+
+/// A fixture's full fit through the internal seams, in the order of planFit()
+/// and fitAndAssemble(): the prepared recording, the derived IMU gap limit,
+/// the fitted window validated, the temperature model, the initializer and
+/// the fit. The fits dominate this executable's time, so each is made once
+/// per run; the caller checks convergence.
+const WindowFit &fixtureFit(const QString &name)
+{
+    static std::map<QString, WindowFit> fits;
+    const auto found = fits.find(name);
+    if (found != fits.end())
+        return found->second;
+    WindowFit f;
+    f.tuning = pipelineTuning(name, Tuning{});
+    f.window = windowOf(name, Tuning{});
+    const GyroBiasModel model = gyroBiasModelFor(f.window);
+    const Initialization init = initialize(f.window, f.tuning);
+    f.fit = fitFactorGraph(f.window, init.state, f.tuning, QString::fromLatin1(kFullFitPassFormat), Checkpoint(), model);
+    return fits.emplace(name, std::move(f)).first->second;
+}
+
+/// The fitted state at fix `k` of `fit`.
+gtsam::NavState fixState(const FitResult &fit, size_t k)
+{
+    return gtsam::NavState(fit.values.at<gtsam::Pose3>(X(k)), fit.values.at<Vector3>(V(k)));
+}
+
+/// The angle between two attitudes, rad.
+double angleBetween(const Rot3 &a, const Rot3 &b)
+{
+    return Rot3::Logmap(a.between(b)).norm();
+}
+
+/// Criterion of "the same state to rounding": attitude within 1e-12 rad,
+/// velocity and position within 1e-12 x (1 + their norm).
+bool sameStateToRounding(const gtsam::NavState &got, const gtsam::NavState &expected)
+{
+    return angleBetween(got.attitude(), expected.attitude()) <= 1e-12
+        && (got.velocity()-expected.velocity()).norm() <= 1e-12*(1+expected.velocity().norm())
+        && (got.position()-expected.position()).norm() <= 1e-12*(1+expected.position().norm());
+}
+
+/// The per-interval seam of a whole window, on the window's one sequence of
+/// edges and steps: each interval's edges but its last, then the last fix.
+struct WindowSeams {
+    std::vector<IntervalReconstruction> intervals;
+    std::vector<double> edges;            ///< each fix once
+    NavStates forward, corrected;         ///< per edge
+    Vectors stepCorrection;               ///< per step
+    std::vector<size_t> stepInterval;     ///< the fix interval of each step
+    std::vector<size_t> fixEdge;          ///< the edge of each fix
+};
+
+WindowSeams seamsOf(const WindowFit &f)
+{
+    WindowSeams w;
+    for (size_t k = 0; k+1 < f.window.gnssTime.size(); ++k) {
+        w.intervals.push_back(reconstructInterval(f.window, f.fit, f.tuning, k));
+        const IntervalReconstruction &r = w.intervals.back();
+        w.fixEdge.push_back(w.edges.size());
+        for (size_t j = 0; j < r.stepCorrection.size(); ++j) {
+            w.edges.push_back(r.edges[j]);
+            w.forward.push_back(r.forward[j]);
+            w.corrected.push_back(r.corrected[j]);
+            w.stepCorrection.push_back(r.stepCorrection[j]);
+            w.stepInterval.push_back(k);
+        }
+    }
+    const IntervalReconstruction &last = w.intervals.back();
+    w.fixEdge.push_back(w.edges.size());
+    w.edges.push_back(last.edges.back());
+    w.forward.push_back(last.forward.back());
+    w.corrected.push_back(last.corrected.back());
+    return w;
+}
+
+/// The edge of the window's sequence at time `t`, which must be one.
+size_t edgeAt(const WindowSeams &w, double t)
+{
+    return size_t(std::lower_bound(w.edges.begin(), w.edges.end(), t)-w.edges.begin());
+}
+
+/// The largest norm of each part of the mismatch over the intervals.
+struct Mismatch { double attitude = 0, position = 0, velocity = 0; };
+
+Mismatch largestMismatch(const WindowSeams &w)
+{
+    Mismatch m;
+    for (const IntervalReconstruction &r : w.intervals) {
+        m.attitude = std::max(m.attitude, r.mismatch.head<3>().norm());
+        m.position = std::max(m.position, r.mismatch.segment<3>(3).norm());
+        m.velocity = std::max(m.velocity, r.mismatch.tail<3>().norm());
+    }
+    return m;
+}
+
+/// The reference of the equivalence tests: a state at every edge of the
+/// window, a one-step IMU factor across every step, the fix states and the
+/// bias (and slope) held at the fit's values, solved from the forward states.
+/// Each step's factor is preintegrated by preintegrateImu() over that step
+/// alone, which gives the loop's own midpoint reading and per-step covariance
+/// without restating either, at its interval's bias under the fit's model.
+/// The fix states are held because, freed with GNSS factors, they move along
+/// the unobservable heading, which is not what the tests measure.
+NavStates heldEndsReference(const WindowFit &f, const WindowSeams &w, int &iterations)
+{
+    using gtsam::imuBias::ConstantBias;
+    const ConstantBias bias = f.fit.values.at<ConstantBias>(B(0));
+    const GyroBiasModel &model = f.fit.biasModel;
+    gtsam::NonlinearFactorGraph graph;
+    gtsam::Values values;
+    for (size_t j = 0; j < w.edges.size(); ++j) {
+        values.insert(X(j), w.forward[j].pose());
+        values.insert(V(j), Vector3(w.forward[j].velocity()));
+    }
+    for (size_t k = 0; k < w.fixEdge.size(); ++k) {
+        const gtsam::Pose3 pose = f.fit.values.at<gtsam::Pose3>(X(k));
+        const Vector3 velocity = f.fit.values.at<Vector3>(V(k));
+        values.update(X(w.fixEdge[k]), pose);
+        values.update(V(w.fixEdge[k]), velocity);
+        graph.emplace_shared<gtsam::NonlinearEquality<gtsam::Pose3>>(X(w.fixEdge[k]), pose);
+        graph.emplace_shared<gtsam::NonlinearEquality<Vector3>>(V(w.fixEdge[k]), velocity);
+    }
+    values.insert(B(0), bias);
+    graph.emplace_shared<gtsam::NonlinearEquality<ConstantBias>>(B(0), bias);
+    if (model.temperatureLinear) {
+        values.insert(T(0), f.fit.gyroBiasSlope);
+        graph.emplace_shared<gtsam::NonlinearEquality<Vector3>>(T(0), f.fit.gyroBiasSlope);
+    }
+    for (size_t j = 0; j+1 < w.edges.size(); ++j) {
+        const size_t k = w.stepInterval[j];
+        const auto pim = preintegrateImu(f.window, w.edges[j], w.edges[j+1],
+                                         intervalBias(f.window, k, bias, f.fit.gyroBiasSlope, model), f.tuning);
+        if (model.temperatureLinear)
+            graph.emplace_shared<TemperatureImuFactor>(X(j), V(j), X(j+1), V(j+1), B(0), T(0), pim,
+                                                       temperatureAtFix(f.window, k)-model.tRef);
+        else
+            graph.emplace_shared<gtsam::ImuFactor>(X(j), V(j), X(j+1), V(j+1), B(0), pim);
+    }
+    // The fit's solver, driven to a tight settle.
+    gtsam::LevenbergMarquardtParams params;
+    params.setLinearSolverType("MULTIFRONTAL_QR");
+    gtsam::LevenbergMarquardtOptimizer optimizer(graph, values, params);
+    for (iterations = 0; iterations < 100;) {
+        const double before = optimizer.error();
+        optimizer.iterate();
+        ++iterations;
+        if (before-optimizer.error() <= 1e-14*std::max(1., before))
+            break;
+    }
+    NavStates states;
+    for (size_t j = 0; j < w.edges.size(); ++j)
+        states.emplace_back(optimizer.values().at<gtsam::Pose3>(X(j)), optimizer.values().at<Vector3>(V(j)));
+    return states;
+}
+
+/// The largest difference between the published states and `reference` at
+/// their edges: attitude (rad), velocity, position.
+struct StateDifference { double attitude = 0, velocity = 0, position = 0; };
+
+StateDifference largestDifference(const ImuRateTrajectory &out, const WindowSeams &w, const NavStates &reference)
+{
+    StateDifference d;
+    for (size_t i = 0; i < out.time.size(); ++i) {
+        const gtsam::NavState &r = reference[edgeAt(w, out.time[i])];
+        d.attitude = std::max(d.attitude, angleBetween(out.rotation[i], r.attitude()));
+        d.velocity = std::max(d.velocity, (out.velocity[i]-r.velocity()).norm());
+        d.position = std::max(d.position, (out.position[i]-r.position()).norm());
+    }
+    return d;
+}
+
+/// The rotating recording of the equivalence test: 3 rad/s about the
+/// horizontal y axis (body and navigation), a smooth translation, IMU at
+/// `imuRate` from 0 to 6 s and GNSS at 5 Hz from .013 s, exact readings, the
+/// true states at the fixes as the fit, zero bias, the constant model.
+struct Tumble {
+    static constexpr double kRate = 3;   ///< rad/s
+    static Rot3 attitude(double t) { return Rot3::Expmap(Vector3(0, kRate*t, 0)); }
+    static Vector3 acceleration(double t) { return Vector3(1., .5*std::sin(.7*t), -.3); }
+    static Vector3 velocity(double t) { return Vector3(30+t, 2-.5/.7*(std::cos(.7*t)-1), 10-.3*t); }
+    static Vector3 position(double t)
+    {
+        return Vector3(30*t+t*t/2, 2*t-.5/.7*(std::sin(.7*t)/.7-t), 10*t-.15*t*t);
+    }
+};
+
+WindowFit tumbleFit(double imuRate)
+{
+    WindowFit f;
+    Samples &d = f.window;
+    const int last = int(std::floor(6*imuRate));
+    for (int i = 0; i <= last; ++i) {
+        const double t = i/imuRate;
+        d.imuTime.push_back(t);
+        d.force.push_back(Tumble::attitude(t).unrotate(Tumble::acceleration(t)-kTestGravity));
+        d.gyro.emplace_back(0, Tumble::kRate, 0);
+    }
+    for (int k = 0; .013+k*.2 <= d.imuTime.back()-.05; ++k)
+        d.gnssTime.push_back(.013+k*.2);
+    f.tuning.maxGap = kImuGapMedians*medianInterval(d.imuTime);
+    f.fit.values.insert(B(0), gtsam::imuBias::ConstantBias());
+    for (size_t k = 0; k < d.gnssTime.size(); ++k) {
+        const double t = d.gnssTime[k];
+        f.fit.values.insert(X(k), gtsam::Pose3(Tumble::attitude(t), Tumble::position(t)));
+        f.fit.values.insert(V(k), Tumble::velocity(t));
+    }
+    return f;
+}
+
+/// The covariance of the IMU factor between fixes `k` and `k+1` in `graph`,
+/// found by its keys; empty when there is none.
+gtsam::Matrix imuFactorCovariance(const gtsam::NonlinearFactorGraph &graph, size_t k)
+{
+    for (const auto &factor : graph) {
+        if (!factor || factor->keys().size() < 4 || factor->keys()[0] != X(k) || factor->keys()[2] != X(k+1))
+            continue;
+        if (const auto *temperature = dynamic_cast<const TemperatureImuFactor *>(factor.get()))
+            return temperature->preintegratedMeasurements().preintMeasCov();
+        if (const auto *stock = dynamic_cast<const gtsam::ImuFactor *>(factor.get()))
+            return stock->preintegratedMeasurements().preintMeasCov();
+    }
+    return gtsam::Matrix();
+}
+
+/// The fixes and IMU samples of a WindowFit whose fitted states are each the
+/// prediction of the one before, perturbed by `perturbation` (zero: the
+/// forward integration exactly, interval by interval).
+void predictFits(WindowFit &f, const gtsam::imuBias::ConstantBias &bias, const gtsam::NavState &first,
+                 const gtsam::Vector9 &perturbation)
+{
+    f.fit.values.insert(B(0), bias);
+    gtsam::NavState state = first;
+    for (size_t k = 0; k < f.window.gnssTime.size(); ++k) {
+        if (k) {
+            const auto pim = preintegrateImu(f.window, f.window.gnssTime[k-1], f.window.gnssTime[k], bias, f.tuning);
+            state = pim.predict(state, bias);
+            if (!perturbation.isZero(0))
+                state = state.retract(perturbation);
+        }
+        f.fit.values.insert(X(k), state.pose());
+        f.fit.values.insert(V(k), Vector3(state.velocity()));
+    }
+}
+
+/// The IMU samples of `window` in [first fix, last fix): the published time axis.
+std::vector<double> samplesBetweenFirstAndLastFix(const Samples &window)
+{
+    const auto first = std::lower_bound(window.imuTime.begin(), window.imuTime.end(), window.gnssTime.front());
+    const auto last = std::lower_bound(window.imuTime.begin(), window.imuTime.end(), window.gnssTime.back());
+    return std::vector<double>(first, last);
+}
+
+/// The published acceleration at sample `i` as spec section 6 states it, from
+/// the seam's corrections: the step before and the step after the sample's
+/// edge, the step after alone on the window's first edge.
+Vector3 expectedAcceleration(const WindowFit &f, const WindowSeams &w, const ImuRateTrajectory &out, size_t i)
+{
+    const size_t e = edgeAt(w, out.time[i]);
+    const size_t sample = size_t(std::lower_bound(f.window.imuTime.begin(), f.window.imuTime.end(), out.time[i])
+                                 -f.window.imuTime.begin());
+    const Vector3 correction = e ? Vector3((w.stepCorrection[e-1]+w.stepCorrection[e])/2) : w.stepCorrection[e];
+    const Vector3 accBias = f.fit.values.at<gtsam::imuBias::ConstantBias>(B(0)).accelerometer();
+    return out.rotation[i].rotate(f.window.force[sample]-accBias)+kGravity+correction;
+}
+
 } // namespace
 
 class FusionKernelTest : public QObject {
@@ -327,6 +604,15 @@ private slots:
     void temperatureGraphShape();
     void reconstructionUsesIntervalBias();
     void constantTemperatureKeepsSlopeAtPrior();
+    void imuRateEndsAreTheFit_data();
+    void imuRateEndsAreTheFit();
+    void imuRateSampleOnAFixIsPublishedOnce();
+    void imuRateMatchesHeldEndsGraph();
+    void imuRateMatchesHeldEndsGraphUnderRotation();
+    void imuRateSharesByNoise();
+    void imuRateZeroMismatchIsForward();
+    void imuRateAccelerationIntegratesToVelocity_data();
+    void imuRateAccelerationIntegratesToVelocity();
 };
 
 void FusionKernelTest::solverUsesTbb()
@@ -2017,6 +2303,419 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     qInfo() << "constant temperature: objective" << objective << ", stock fit" << stock.objective
             << ", full fit" << trace.history.size() << "iterations";
     QVERIFY(std::abs(stock.objective-objective) <= 1e-6*std::max(1., objective));
+}
+
+void FusionKernelTest::imuRateEndsAreTheFit_data()
+{
+    QTest::addColumn<QString>("name");
+    for (const FusionFixture &fixture : fusionFixtures()) {
+        if (fixture.expectSuccess)
+            QTest::newRow(qPrintable(fixture.name)) << fixture.name;
+    }
+}
+
+void FusionKernelTest::imuRateEndsAreTheFit()
+{
+    // Spec section 10, "The ends": at each interval's second fix the corrected
+    // state is the fitted state to rounding, and P_n is the covariance of the
+    // interval's IMU factor in the fit's reported graph bit for bit (the same
+    // preintegration at the same bias with the same tuning, which also shows
+    // that the observer changes nothing the steps integrate). Section 3: the
+    // published axis is the window's IMU samples in [first fix, last fix).
+    // Section 7: the summaries are the seam's maxima bit for bit. And what is
+    // published is the seam's corrected state, bit for bit.
+    QFETCH(QString, name);
+    const WindowFit &f = fixtureFit(name);
+    QVERIFY(f.fit.converged);
+    const WindowSeams w = seamsOf(f);
+    QCOMPARE(w.intervals.size(), f.window.gnssTime.size()-1);
+    for (size_t k = 0; k < w.intervals.size(); ++k) {
+        const IntervalReconstruction &r = w.intervals[k];
+        QVERIFY2(sameStateToRounding(r.corrected.back(), fixState(f.fit, k+1)), qPrintable(QString::number(k)));
+        const gtsam::Matrix factor = imuFactorCovariance(f.fit.graph, k);
+        QCOMPARE(factor.rows(), Eigen::Index(9));
+        QCOMPARE(factor.cols(), Eigen::Index(9));
+        QVERIFY2(r.endCovariance == factor, qPrintable(QString::number(k)));
+    }
+
+    const ImuRateTrajectory out = reconstructAtImuRate(f.window, f.fit, f.tuning);
+    QVERIFY(!out.time.empty());
+    QVERIFY(out.time == samplesBetweenFirstAndLastFix(f.window));
+    QCOMPARE(out.rotation.size(), out.time.size());
+    QCOMPARE(out.position.size(), out.time.size());
+    QCOMPARE(out.velocity.size(), out.time.size());
+    QCOMPARE(out.acceleration.size(), out.time.size());
+    for (size_t i = 0; i < out.time.size(); ++i) {
+        const size_t e = edgeAt(w, out.time[i]);
+        QVERIFY(w.edges[e] == out.time[i]);
+        QVERIFY(out.rotation[i].matrix() == w.corrected[e].attitude().matrix());
+        QVERIFY(out.position[i] == w.corrected[e].position());
+        QVERIFY(out.velocity[i] == w.corrected[e].velocity());
+    }
+
+    double attitudeDeg = 0, velocity = 0, step = -1, stepTime = 0;
+    for (const IntervalReconstruction &r : w.intervals) {
+        attitudeDeg = std::max(attitudeDeg, r.mismatch.head<3>().norm()*180/kPi);
+        velocity = std::max(velocity, r.mismatch.tail<3>().norm());
+    }
+    for (size_t j = 0; j < w.stepCorrection.size(); ++j) {
+        if (w.stepCorrection[j].norm() > step) {
+            step = w.stepCorrection[j].norm();
+            stepTime = (w.edges[j]+w.edges[j+1])/2;
+        }
+    }
+    qInfo() << name << ": largest endpoint correction" << out.maxEndpointCorrectionDeg << "deg, velocity mismatch"
+            << out.maxVelocityMismatch << "m/s, step correction" << out.maxStepCorrection << "m/s^2 at"
+            << out.maxStepCorrectionTime << "s";
+    QVERIFY(out.maxEndpointCorrectionDeg == attitudeDeg);
+    QVERIFY(out.maxVelocityMismatch == velocity);
+    QVERIFY(out.maxStepCorrection == step);
+    QVERIFY(out.maxStepCorrectionTime == stepTime);
+}
+
+void FusionKernelTest::imuRateSampleOnAFixIsPublishedOnce()
+{
+    // Sections 3 and 6 on a recording with dyadic times, so that IMU samples
+    // fall exactly on the first fix (.25) and on an inner one (1.375); the
+    // other two fixes fall between samples. The fitted states are the
+    // predictions perturbed, so every interval has a mismatch. A sample on a
+    // fix is published once, at the first edge of the interval the fix
+    // starts, with the fitted state there; its acceleration takes the last
+    // step of the interval before and the first of its own, except on the
+    // first fix, which has only the step after it.
+    using gtsam::imuBias::ConstantBias;
+    WindowFit f;
+    Samples &d = f.window;
+    for (int i = 0; i <= 16; ++i) {
+        d.imuTime.push_back(i*.125);
+        d.gyro.emplace_back(.2, -.1+.02*i, .3);
+        d.force.emplace_back(1+.1*i, -.5, -9.8+.05*i);
+    }
+    d.gnssTime = {.25, .8125, 1.375, 1.9375};
+    f.tuning.maxGap = kImuGapMedians*medianInterval(d.imuTime);
+    gtsam::Vector9 perturbation;
+    perturbation << 1e-3, -2e-3, 1e-3, .01, -.02, .03, .05, -.04, .02;
+    predictFits(f, ConstantBias(Vector3(.02, -.01, .03), Vector3(.001, 0, -.002)),
+                gtsam::NavState(Rot3::RzRyRx(.1, -.2, .3), Vector3(1, 2, 3), Vector3(20, -3, 5)), perturbation);
+
+    const WindowSeams w = seamsOf(f);
+    QVERIFY(largestMismatch(w).velocity > 1e-2);
+    const ImuRateTrajectory out = reconstructAtImuRate(d, f.fit, f.tuning);
+    QVERIFY(out.time == samplesBetweenFirstAndLastFix(d));
+    QCOMPARE(out.time.size(), size_t(14));   // samples 2..15
+    QCOMPARE(std::count(out.time.begin(), out.time.end(), .25), std::ptrdiff_t(1));
+    QCOMPARE(std::count(out.time.begin(), out.time.end(), 1.375), std::ptrdiff_t(1));
+
+    for (const auto &[time, fix] : {std::pair<double, size_t>{.25, 0}, std::pair<double, size_t>{1.375, 2}}) {
+        const size_t i = size_t(std::find(out.time.begin(), out.time.end(), time)-out.time.begin());
+        QVERIFY(sameStateToRounding(gtsam::NavState(out.rotation[i], out.position[i], out.velocity[i]),
+                                    fixState(f.fit, fix)));
+        const size_t e = edgeAt(w, time);
+        QCOMPARE(e, w.fixEdge[fix]);
+        QCOMPARE(w.stepInterval[e], fix);
+        if (fix)
+            QCOMPARE(w.stepInterval[e-1], fix-1);
+    }
+    for (size_t i = 0; i < out.time.size(); ++i) {
+        const Vector3 expected = expectedAcceleration(f, w, out, i);
+        QVERIFY((out.acceleration[i]-expected).norm() <= 1e-12*(1+expected.norm()));
+    }
+}
+
+void FusionKernelTest::imuRateMatchesHeldEndsGraph()
+{
+    // Spec section 10, "Equivalence", on coarse_maneuver: the one pass against
+    // the dense graph with a state at every edge and the fix states and biases
+    // held (heldEndsReference()). What the linearization costs is quadratic in
+    // the mismatch; the tolerance is linear in it with a margin of about 300
+    // over what the pass measures, and applying the sharing unmapped in the
+    // local coordinates fails it.
+    const WindowFit &f = fixtureFit(QStringLiteral("coarse_maneuver"));
+    QVERIFY(f.fit.converged);
+    const WindowSeams w = seamsOf(f);
+    const ImuRateTrajectory out = reconstructAtImuRate(f.window, f.fit, f.tuning);
+    int iterations = 0;
+    const NavStates reference = heldEndsReference(f, w, iterations);
+    const Mismatch m = largestMismatch(w);
+    const StateDifference diff = largestDifference(out, w, reference);
+    qInfo() << "coarse_maneuver: largest mismatch: attitude" << m.attitude*180/kPi << "deg, velocity" << m.velocity
+            << "m/s, position" << m.position << "m";
+    qInfo() << "coarse_maneuver: against the held-ends graph (" << iterations << "iterations,"
+            << w.edges.size() << "states): attitude" << diff.attitude*180/kPi << "deg (" << diff.attitude/m.attitude
+            << "of the mismatch), velocity" << diff.velocity << "m/s (" << diff.velocity/m.velocity
+            << "), position" << diff.position << "m (" << diff.position/m.position << ")";
+    // Not vacuous: the fixture's mismatch is well above rounding.
+    QVERIFY(m.velocity > 1e-6);
+    QVERIFY(m.attitude > 1e-7);
+    QVERIFY(diff.attitude <= 1e-5*m.attitude+1e-12);
+    QVERIFY(diff.velocity <= 1e-5*m.velocity+1e-12);
+    QVERIFY(diff.position <= 1e-5*m.position+1e-12);
+}
+
+void FusionKernelTest::imuRateMatchesHeldEndsGraphUnderRotation()
+{
+    // The same against a recording that rotates, because coarse_maneuver
+    // barely does: 3 rad/s about a horizontal axis, IMU 25 Hz, GNSS 5 Hz,
+    // exact readings, the true states as the fit. The mismatch is then the
+    // integration's own discretization error. Velocity and position hold to
+    // the formula of the fixture test; applying the sharing unmapped misses
+    // the velocity by 5-15 % of the mismatch here.
+    //
+    // The attitude mismatch is at rounding, so a bound relative to it means
+    // nothing; the attitude differs from the reference by what tangent
+    // preintegration over many steps differs from one-step factors chained,
+    // not by linearization. Its bound is absolute: 5e-5 degrees, more than
+    // ten times what the pass measures and more than ten times below what the
+    // unmapped sharing gives (1.2e-3 degrees).
+    //
+    // The same recording at 13 Hz (FlySight's IMU rate) and 100 Hz: the
+    // published acceleration against the true one, and the rotated reading
+    // alone. Under rotation the integration rotates each reading by the
+    // attitude at the start of its step, so the corrections carry part of
+    // that error into the published acceleration.
+    for (const double rate : {13., 25., 100.}) {
+        const WindowFit f = tumbleFit(rate);
+        const WindowSeams w = seamsOf(f);
+        const Mismatch m = largestMismatch(w);
+        const ImuRateTrajectory out = reconstructAtImuRate(f.window, f.fit, f.tuning);
+        double published = 0, rotated = 0;
+        for (size_t i = 0; i < out.time.size(); ++i) {
+            const Vector3 truth = Tumble::acceleration(out.time[i]);
+            const size_t sample = size_t(std::lower_bound(f.window.imuTime.begin(), f.window.imuTime.end(),
+                                                          out.time[i])-f.window.imuTime.begin());
+            published = std::max(published, (out.acceleration[i]-truth).norm());
+            rotated = std::max(rotated, (out.rotation[i].rotate(f.window.force[sample])+kGravity-truth).norm());
+        }
+        qInfo() << "tumble at" << rate << "Hz: largest mismatch: attitude" << m.attitude*180/kPi << "deg, velocity"
+                << m.velocity << "m/s, position" << m.position << "m; published acceleration vs truth" << published
+                << "m/s^2, rotated reading alone" << rotated << "m/s^2";
+        if (rate != 25.)
+            continue;
+
+        int iterations = 0;
+        const NavStates reference = heldEndsReference(f, w, iterations);
+        const StateDifference diff = largestDifference(out, w, reference);
+        qInfo() << "tumble at 25 Hz: against the held-ends graph (" << iterations << "iterations,"
+                << w.edges.size() << "states): attitude" << diff.attitude*180/kPi << "deg (bound 5e-5 deg),"
+                << "velocity" << diff.velocity << "m/s (" << diff.velocity/m.velocity << "of the mismatch), position"
+                << diff.position << "m (" << diff.position/m.position << ")";
+        QVERIFY(m.velocity > .01);
+        QVERIFY(diff.velocity <= 1e-5*m.velocity+1e-12);
+        QVERIFY(diff.position <= 1e-5*m.position+1e-12);
+        QVERIFY(diff.attitude*180/kPi <= 5e-5);
+    }
+}
+
+void FusionKernelTest::imuRateSharesByNoise()
+{
+    // Spec section 10, "Sharing by noise", on one interval of
+    // boundarySamples(): at rest, identity attitude, no rotation, so the
+    // velocity local coordinates are NED. The fitted end is the forward end
+    // plus a vertical velocity dv and position dv T/2, a constant acceleration
+    // error, for which the velocity correction is dv (t - t0) / T; vertical,
+    // so that tilt does not couple (a tilt error moves the velocity
+    // horizontally under a vertical force).
+    using gtsam::imuBias::ConstantBias;
+    const double dv = .05;
+    const auto offsetEnd = [dv](const Samples &d, const Tuning &tuning) {
+        WindowFit f;
+        f.window = d;
+        f.tuning = tuning;
+        f.fit.values.insert(B(0), ConstantBias());
+        f.fit.values.insert(X(0), gtsam::Pose3());
+        f.fit.values.insert(V(0), Vector3(0, 0, 0));
+        f.fit.values.insert(X(1), gtsam::Pose3());
+        f.fit.values.insert(V(1), Vector3(0, 0, 0));
+        const gtsam::NavState end = reconstructInterval(d, f.fit, tuning, 0).forward.back();
+        const double duration = d.gnssTime[1]-d.gnssTime[0];
+        f.fit.values.update(X(1), gtsam::Pose3(end.attitude(), Vector3(end.position()+Vector3(0, 0, dv*duration/2))));
+        f.fit.values.update(V(1), Vector3(end.velocity()+Vector3(0, 0, dv)));
+        return reconstructInterval(d, f.fit, tuning, 0);
+    };
+    // The vertical velocity correction at every edge.
+    const auto corrections = [](const IntervalReconstruction &r) {
+        std::vector<double> u;
+        for (size_t j = 0; j < r.edges.size(); ++j)
+            u.push_back(r.corrected[j].velocity().z()-r.forward[j].velocity().z());
+        return u;
+    };
+
+    // Uniform noise: no signal change, so every step's covariance is the
+    // density's and the noise per unit time is the same everywhere. The
+    // correction grows strictly and is proportional to the elapsed time. Not
+    // approximately: a position offset of exactly dv T/2 is the direction of
+    // P_n's velocity column, whatever the integration covariance adds to the
+    // position alone, so the sharing puts nothing on the position's
+    // multiplier (measured 7e-16 of dv; bound 1e-9 of dv).
+    const Samples uniform = boundarySamples(Vector3::Zero());
+    const IntervalReconstruction r = offsetEnd(uniform, Tuning{});
+    const std::vector<double> u = corrections(r);
+    const double t0 = r.edges.front(), duration = r.edges.back()-t0;
+    QCOMPARE(u.front(), 0.);
+    double worst = 0;
+    for (size_t j = 0; j < u.size(); ++j) {
+        if (j)
+            QVERIFY2(u[j] > u[j-1], qPrintable(QString::number(j)));
+        worst = std::max(worst, std::abs(u[j]-dv*(r.edges[j]-t0)/duration));
+    }
+    qInfo() << "uniform noise: largest departure from proportional" << worst/dv << "of dv";
+    QVERIFY(worst <= 1e-9*dv);
+
+    // One noisy step: the force steps by 1 m/s^2 (vertically) between samples
+    // 49 and 50, and with an accelerometer slope of 40 s that step's per-step
+    // variance (covariance over dt) is 8 times its neighbours' (.18 against
+    // .0225 (m/s^2)^2). Its increment of the correction is the largest of the
+    // interval (measured 7.9 times the next).
+    Samples noisy = boundarySamples(Vector3::Zero());
+    for (size_t i = 50; i < noisy.force.size(); ++i)
+        noisy.force[i] += Vector3(0, 0, 1);
+    const IntervalReconstruction s = offsetEnd(noisy, withSlopes(Tuning{}.gyroStepSlope, 40));
+    const std::vector<double> v = corrections(s);
+    const size_t step = size_t(std::find(s.edges.begin(), s.edges.end(), noisy.imuTime[49])-s.edges.begin());
+    QVERIFY(step+1 < s.edges.size());
+    QCOMPARE(s.edges[step+1], noisy.imuTime[50]);
+    const double increment = v[step+1]-v[step];
+    double otherwise = 0;
+    for (size_t j = 0; j+1 < v.size(); ++j) {
+        if (j != step)
+            otherwise = std::max(otherwise, std::abs(v[j+1]-v[j]));
+    }
+    qInfo() << "noisy step: increment" << increment << "m/s against at most" << otherwise << "m/s elsewhere";
+    QVERIFY(increment > otherwise);
+}
+
+void FusionKernelTest::imuRateZeroMismatchIsForward()
+{
+    // Spec section 10, "Zero mismatch": fitted states that are the forward
+    // predictions interval by interval, so d is zero (to rounding). The pass
+    // is then the forward integration, every step correction is zero and the
+    // published acceleration is the rotated reading R (f - b_a) + g. Several
+    // intervals, a constant non-identity attitude, a non-zero accelerometer
+    // bias, a force that changes piecewise-linearly, one fix on a sample.
+    //
+    // The recording does not rotate, and must not: under rotation a zero
+    // mismatch leaves every c_j at minus the rotation lag, the difference
+    // between the trapezoid of the edge-rotated readings the step correction
+    // subtracts and the start-of-step rotation the integration applies.
+    //
+    // The tolerance on c: the velocities are about 20 m/s, their rounding
+    // about 4e-15 m/s, divided by the shortest step (3 ms) 1.3e-12 m/s^2;
+    // bound 1e-9.
+    using gtsam::imuBias::ConstantBias;
+    WindowFit f;
+    Samples &d = f.window;
+    for (int i = 0; i <= 200; ++i) {
+        d.imuTime.push_back(i*.01);
+        d.gyro.push_back(Vector3::Zero());
+        d.force.push_back(Vector3(.5, -.3, -9.5)+Vector3(.02, -.01, .03)*std::min(i, 80)
+                          +Vector3(-.03, .02, .01)*std::max(i-80, 0));
+    }
+    d.gnssTime = {.037, .5, 1.013, 1.49, 1.963};
+    f.tuning.maxGap = kImuGapMedians*medianInterval(d.imuTime);
+    const ConstantBias bias(Vector3(.05, -.08, .12), Vector3::Zero());
+    predictFits(f, bias, gtsam::NavState(Rot3::RzRyRx(.3, -.2, 1.1), Vector3(10, -5, -300), Vector3(20, 5, 8)),
+                gtsam::Vector9::Zero());
+
+    const WindowSeams w = seamsOf(f);
+    double mismatch = 0, largestC = 0;
+    for (const IntervalReconstruction &r : w.intervals) {
+        mismatch = std::max(mismatch, r.mismatch.cwiseAbs().maxCoeff());
+        for (size_t j = 0; j < r.edges.size(); ++j)
+            QVERIFY2(sameStateToRounding(r.corrected[j], r.forward[j]), qPrintable(QString::number(j)));
+    }
+    for (const Vector3 &c : w.stepCorrection)
+        largestC = std::max(largestC, c.norm());
+    const ImuRateTrajectory out = reconstructAtImuRate(d, f.fit, f.tuning);
+    double largestDeparture = 0;
+    for (size_t i = 0; i < out.time.size(); ++i) {
+        const size_t sample = size_t(std::lower_bound(d.imuTime.begin(), d.imuTime.end(), out.time[i])-d.imuTime.begin());
+        const Vector3 rotated = out.rotation[i].rotate(d.force[sample]-bias.accelerometer())+kGravity;
+        largestDeparture = std::max(largestDeparture, (out.acceleration[i]-rotated).norm());
+    }
+    qInfo() << "zero mismatch: largest |d| component" << mismatch << ", largest |c|" << largestC
+            << "m/s^2, published acceleration against the rotated reading" << largestDeparture << "m/s^2";
+    QCOMPARE(w.intervals.size(), size_t(4));
+    QVERIFY(mismatch <= 1e-12);
+    QVERIFY(largestC <= 1e-9);
+    QVERIFY(largestDeparture <= 1e-9);
+}
+
+void FusionKernelTest::imuRateAccelerationIntegratesToVelocity_data()
+{
+    imuRateEndsAreTheFit_data();
+}
+
+void FusionKernelTest::imuRateAccelerationIntegratesToVelocity()
+{
+    // Spec section 10, "Consistency": the published acceleration integrated
+    // by the kernel's rule (the midpoint value of the piecewise-linear signal
+    // over each step between samples) against the published velocity change,
+    // over every run of 1, 2, 5 and 20 sample steps and over the whole axis.
+    // The published acceleration spreads each correction over the two steps
+    // beside a sample, so a run gains or loses a quarter step of the jump of
+    // the corrections at each end: the bound from sample a to b is
+    // dt_a/4 |c_before(a) - c_after(a)| + dt_b/4 |c_after(b) - c_before(b)|,
+    // plus, for a sample step that contains a fix, dt/2 times the largest
+    // difference between the corrections of the part-steps inside it. It is
+    // tight (the ratio is 1 to 1e-5 on the worst runs), hence 1.01 x the bound
+    // + 1e-12 m/s. The published acceleration is also checked to be the
+    // formula of section 6 over the seam's corrections.
+    QFETCH(QString, name);
+    const WindowFit &f = fixtureFit(name);
+    QVERIFY(f.fit.converged);
+    const WindowSeams w = seamsOf(f);
+    const ImuRateTrajectory out = reconstructAtImuRate(f.window, f.fit, f.tuning);
+    const size_t n = out.time.size();
+    QVERIFY(n > 20);
+
+    std::vector<size_t> edge(n);
+    for (size_t i = 0; i < n; ++i) {
+        edge[i] = edgeAt(w, out.time[i]);
+        const Vector3 expected = expectedAcceleration(f, w, out, i);
+        QVERIFY((out.acceleration[i]-expected).norm() <= 1e-12*(1+expected.norm()));
+    }
+    const Vectors &c = w.stepCorrection;
+    // A sample on the window's first edge has one step beside it and no jump.
+    const auto before = [&](size_t i) { return edge[i] ? c[edge[i]-1] : c[edge[i]]; };
+    const auto after = [&](size_t i) { return c[edge[i]]; };
+
+    // Per step between samples: the integral by the kernel's rule and the
+    // fix term.
+    Vectors integral(n-1);
+    std::vector<double> fixTerm(n-1, 0.);
+    for (size_t i = 0; i+1 < n; ++i) {
+        const double dt = out.time[i+1]-out.time[i];
+        integral[i] = interpolateAt(out.time, out.acceleration, (out.time[i]+out.time[i+1])/2)*dt;
+        double spread = 0;
+        for (size_t q = edge[i]; q < edge[i+1]; ++q) {
+            for (size_t p = edge[i]; p < edge[i+1]; ++p)
+                spread = std::max(spread, (c[q]-c[p]).norm());
+        }
+        fixTerm[i] = dt/2*spread;
+    }
+
+    const std::vector<size_t> runs{1, 2, 5, 20, n-1};
+    double worstRatio = 0, wholeError = 0;
+    for (const size_t length : runs) {
+        for (size_t a = 0; a+length < n; ++a) {
+            const size_t b = a+length;
+            Vector3 sum = Vector3::Zero();
+            double bound = (out.time[a+1]-out.time[a])/4*(before(a)-after(a)).norm()
+                         + (out.time[b]-out.time[b-1])/4*(after(b)-before(b)).norm();
+            for (size_t i = a; i < b; ++i) {
+                sum += integral[i];
+                bound += fixTerm[i];
+            }
+            const double error = (sum-(out.velocity[b]-out.velocity[a])).norm();
+            if (bound > 0)
+                worstRatio = std::max(worstRatio, error/bound);
+            if (length == n-1)
+                wholeError = error;
+            QVERIFY2(error <= 1.01*bound+1e-12,
+                     qPrintable(QStringLiteral("run %1..%2: error %3, bound %4").arg(a).arg(b).arg(error).arg(bound)));
+        }
+    }
+    qInfo() << name << ": worst error over bound" << worstRatio << ", whole axis error" << wholeError << "m/s";
 }
 
 FLYSIGHT_TEST_MAIN(FusionKernelTest)

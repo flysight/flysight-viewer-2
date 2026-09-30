@@ -126,7 +126,7 @@ std::shared_ptr<gtsam::PreintegrationParams> preintegrationParams(const Tuning &
 
 gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, double start, double end,
                                                     const gtsam::imuBias::ConstantBias &bias,
-                                                    const Tuning &tuning)
+                                                    const Tuning &tuning, const ImuStepObserver &observer)
 {
     // The params are shared with `pim`, and integrateMeasurement() reads the
     // two sensor covariances on every call, so writing them before each call
@@ -139,6 +139,14 @@ gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, doub
     gtsam::Vector3 gyroStart = interpolateAt(samples.imuTime, samples.gyro, e[0]);
     for (size_t i = 1; i < e.size(); ++i) {
         const double dt = e[i]-e[i-1], mid = (e[i]+e[i-1])/2;
+        const ImuStep step{e[i-1], e[i], dt, interpolateAt(samples.imuTime, samples.force, mid),
+                           interpolateAt(samples.imuTime, samples.gyro, mid)};
+        // Before the step's covariance is written, so the two sensor
+        // covariances the step integrates with are always the ones set
+        // below. The observer can still reach the other shared params
+        // through p(), which GTSAM does not make const; it must only read.
+        if (observer)
+            observer(pim, step);
         const gtsam::Vector3 forceEnd = interpolateAt(samples.imuTime, samples.force, e[i]);
         const gtsam::Vector3 gyroEnd = interpolateAt(samples.imuTime, samples.gyro, e[i]);
         // The per-step term uses the change from the step's start to its end;
@@ -147,8 +155,7 @@ gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, doub
             tuning.gyroDensity, stepSigma(tuning.gyroStepSlope, dt, gyroEnd-gyroStart), dt);
         params->accelerometerCovariance = stepCovariance(
             tuning.accDensity, stepSigma(tuning.accStepSlope, dt, forceEnd-forceStart), dt);
-        pim.integrateMeasurement(interpolateAt(samples.imuTime, samples.force, mid),
-                                 interpolateAt(samples.imuTime, samples.gyro, mid), dt);
+        pim.integrateMeasurement(step.force, step.gyro, step.dt);
         forceStart = forceEnd;
         gyroStart = gyroEnd;
     }

@@ -584,6 +584,18 @@ expect_count("the branch is history only" "sensor-fusion-clean-port" 4 tests/REA
 expect_count("three kinds of boundary" "checkpoint\\(" 3 src/fusion)
 expect_count("one integrateMeasurement, per-step covariance" "[.>]integrateMeasurement\\(" 1
   src/fusion/imuintegration.cpp)
+# Allow: none expected; tests/README.md spells the call. The step model has
+# one author: preintegrateImu() integrates every IMU step and sets its
+# covariance, and whatever else needs a step reads it from there (the
+# reconstruction through the observer, the tests' one-step reference factors
+# by preintegrating one step); no other kernel file and no test integrates a
+# step or sets a sensor covariance, and the reconstruction's transition is the
+# library's update() on a copy, not the static tangent update. A second reader
+# of the step model takes it from preintegrateImu() instead of restating it.
+expect_only("the step model has one author"
+  "[.>]integrateMeasurement\\(|UpdatePreintegrated|(accelerometer|gyroscope|integration)Covariance"
+  "^src/fusion/imuintegration\\.cpp$|^tests/README\\.md$"
+  src tests)
 # Allow: none expected. The fusion document describes the model as it is:
 # no stationary or candidate window, no coarse-only initializer, no frozen
 # algorithm, no bias-shift settled test, no branch, twenty-two inputs. Say

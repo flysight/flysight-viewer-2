@@ -1,6 +1,7 @@
 #ifndef FLYSIGHT_FUSION_IMUINTEGRATION_H
 #define FLYSIGHT_FUSION_IMUINTEGRATION_H
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -45,12 +46,38 @@ gtsam::Vector3 gyroIncrement(const Samples &samples, double from, double to,
 /// Preintegration settings carrying the noise densities of `tuning`.
 std::shared_ptr<gtsam::PreintegrationParams> preintegrationParams(const Tuning &tuning);
 
+/// One step of preintegrateImu(): what that step integrates.
+struct ImuStep {
+    double start, end;          ///< the step's two integration edges, s
+    double dt;                  ///< end - start, the length passed to the integration
+    gtsam::Vector3 force, gyro; ///< the midpoint readings passed to the integration (raw, not bias-corrected)
+};
+
+/// Sees each step of preintegrateImu() before it is integrated, with the
+/// preintegration of the steps before it.
+using ImuStepObserver = std::function<void(const gtsam::PreintegratedImuMeasurements &, const ImuStep &)>;
+
 /// The preintegrated IMU measurement between two times (in practice two
 /// successive fixes), linearized at `bias`, with the per-step noise term of
 /// `tuning`.
+///
+/// `observer`, when given, is called once per step, in time order, before
+/// that step's covariance is written into the shared params and before the
+/// step is integrated: with the preintegration after the steps before it (so
+/// its preintMeasCov(), preintegrated() and deltaTij() are those of the step's
+/// first edge) and with the step. The returned preintegration is that of the
+/// last edge. The observer receives both by const reference, but GTSAM's p()
+/// and params() still hand out the shared params mutably, so the observer
+/// must only read them. The step's two sensor covariances are written after
+/// the observer returns, so they are always this function's own; with no
+/// observer, or with one that only reads, the result is the same bits.
+/// It exists so that the reconstruction (trajectoryreconstruction.h) reads
+/// the transition and the covariance of every step from the fit's own
+/// preintegration instead of restating the step model.
 gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, double start, double end,
                                                     const gtsam::imuBias::ConstantBias &bias,
-                                                    const Tuning &tuning);
+                                                    const Tuning &tuning,
+                                                    const ImuStepObserver &observer = ImuStepObserver());
 
 /// `rotation` (body to NED at `start`) carried to `end` by the bias-corrected
 /// gyro. `end` may precede `start`; the increments are then undone in reverse
