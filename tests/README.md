@@ -1998,10 +1998,14 @@ About 670 KB in total.
   `anchor_sacc_m_s`, `prefix_start_s`, `prefix_end_s`, `prefix_length_s`,
   `segment_length_s`, `fallback_segments`), and every string, bool and null; for every other number
   `|got - golden| <= floor + 1e-7 * |golden|`, where the floor is `1e-7` in
-  the solver's own units (m, m/s, m/s^2, rad, rad/s, quaternion components)
-  and therefore `1e-7 * 180/pi = 5.73e-6` for a number expressed in degrees
-  (`roll`, `pitch`, `yaw`, and JSON keys ending in `_deg`)
-  (`kPortableAbsolute`, `kPortableAbsoluteDegrees`, `kPortableRelative`,
+  the solver's own units (m, m/s, m/s^2, rad, rad/s) and therefore
+  `1e-7 * 180/pi = 5.73e-6` for a number expressed in degrees (`roll`,
+  `pitch`, and JSON keys ending in `_deg`), except for the heading: `yaw`,
+  the quaternion channels and JSON keys ending in `_quaternion_xyzw` take
+  `4e-6` rad in their unit (`2.29e-4` degrees of yaw, `2e-6` of a unit
+  quaternion component), for the reason recorded below
+  (`kPortableAbsolute`, `kPortableAbsoluteDegrees`, `kPortableAbsoluteHeading`,
+  `kPortableAbsoluteQuaternion`, `kPortableRelative`,
   `portableFloor()` and `withinPortableBound()` in
   `tests/fusion/fusiongolden.h`; the same bound serves the channels, the
   diagnostics and the fit trace). Other platforms differ legitimately in the
@@ -2051,10 +2055,26 @@ About 670 KB in total.
   needed more (it serves the large channels: positions in metres, unwrapped
   angles in degrees, UTC-sized numbers in the diagnostics).
 
+  The heading's floor (2026-09-30, the capture of the mid-step rotation, on
+  macOS 15 Intel and Ubuntu 22.04): both platforms failed `stationary_spin`
+  alone, in `yaw` by 6.6e-6 and 6.2e-6 degrees (1.1e-7 rad, a constant
+  offset along the whole channel; the bound allowed 6.5e-6 and 6.2e-6) and in
+  the trace's `initializer.segments[0].start_quaternion_xyzw[2]` by 3.2e-7
+  and 3.0e-7 (an attitude 6.4e-7 rad off; the bound allowed 1.1e-7). Every
+  other channel, fixture and number passed. That fixture's heading is
+  undetermined (its `yaw_sigma_deg` is at the 180-degree cap): a flat
+  direction of the fit, along which where the solver stops depends on the
+  last bits, so the platforms differ there far more than on anything the
+  data determines. The heading-bearing quantities (`yaw`, `qx`..`qw`, keys
+  ending `_quaternion_xyzw`) therefore take a floor of `4e-6` rad in their
+  unit, six times the largest difference observed; roll, pitch and every
+  other number keep `1e-7`.
+
   What the floor means per channel: 0.1 micrometre of position; `1e-7` m/s of
   velocity; `1e-7` m/s^2 of acceleration, a hundred-millionth of g; 5.7e-6
-  degrees of roll, pitch or yaw; and for a unit quaternion component (bound
-  `2e-7` at magnitude one) a rotation of about 2e-5 degrees. All of that is
+  degrees of roll or pitch; and for the heading, 2.3e-4 degrees of yaw or, for
+  a unit quaternion component (bound `2.1e-6` at magnitude one), a rotation of
+  about 2.4e-4 degrees. All of that is
   below the sensitivity the branch's `docs/PORT_VALIDATION.md` records for
   sub-microsecond timestamp changes (5e-5 degrees of orientation, 7e-6 m/s^2 of
   acceleration), and far below anything physical or any transcription error: a

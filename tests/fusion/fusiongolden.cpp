@@ -280,8 +280,14 @@ bool exactParityRequested()
 
 double portableFloor(const QString &channelOrKey)
 {
+    if (channelOrKey == QStringLiteral("yaw"))
+        return kPortableAbsoluteHeadingDegrees;
+    const bool quaternion = channelOrKey == QStringLiteral("qx") || channelOrKey == QStringLiteral("qy")
+                            || channelOrKey == QStringLiteral("qz") || channelOrKey == QStringLiteral("qw")
+                            || channelOrKey.endsWith(QStringLiteral("_quaternion_xyzw"));
+    if (quaternion)
+        return kPortableAbsoluteQuaternion;
     const bool degrees = channelOrKey == QStringLiteral("roll") || channelOrKey == QStringLiteral("pitch")
-                         || channelOrKey == QStringLiteral("yaw")
                          || channelOrKey.endsWith(QStringLiteral("_deg"));
     return degrees ? kPortableAbsoluteDegrees : kPortableAbsolute;
 }

@@ -577,7 +577,10 @@ The goldens live in `tests/data/fusion/`. In exact mode
 (`FLYSIGHT_FUSION_EXACT=1`, on the capture configuration) every output sample
 must equal the golden bit for bit; the portable mode used everywhere else
 allows `1e-7 + 1e-7 * |golden|` (`1e-7` rad, that is `5.73e-6`, for numbers in
-degrees; ten times the largest difference measured between compilers in CI:
+degrees; ten times the largest difference measured between compilers in CI;
+the heading, `yaw`, the quaternion and the initializer's start attitude,
+takes `4e-6` rad, because on a recording whose heading the data does not
+determine the platforms stop at different points along that flat direction:
 the numbers are in the tolerance policy of `tests/README.md`). Exact mode is
 not opt-in on the capture configuration: where the compiler matches
 `tests/data/fusion/capture.json` (64-bit MSVC 19.44, as the capture tool

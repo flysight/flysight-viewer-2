@@ -64,12 +64,23 @@ bool exactParityRequested();
 /// m/s^2, rad, rad/s, unit quaternion components), ten times the largest
 /// difference any CI compiler has shown (1.06e-8) and far below anything
 /// physical. A number expressed in degrees is the solver's angle times
-/// 180/pi, and so is its floor: kPortableAbsoluteDegrees applies to roll,
-/// pitch and yaw and to JSON keys ending in "_deg" (portableFloor()). The
+/// 180/pi, and so is its floor: kPortableAbsoluteDegrees applies to roll and
+/// pitch and to JSON keys ending in "_deg" (portableFloor()). The heading is
+/// the exception: on a recording whose heading the data does not determine
+/// (stationary_spin, whose yaw sigma is at the cap) it is a flat direction of
+/// the fit, and where the solver stops along it differs between platforms far
+/// more than an observable quantity does: 1.1e-7 rad in the fitted yaw and
+/// 6.4e-7 rad in the initializer's start attitude on CI (2026-09-30). So the
+/// yaw channel, the quaternion channels and the JSON keys ending in
+/// "_quaternion_xyzw" take kPortableAbsoluteHeading, 4e-6 rad, in their unit
+/// (a unit quaternion component moves by at most half the angle). The
 /// relative term serves the large numbers (positions in metres, unwrapped
 /// angles, costs). False for a NaN on either side.
 constexpr double kPortableAbsolute = 1e-7;
 constexpr double kPortableAbsoluteDegrees = kPortableAbsolute * 57.295779513082323;
+constexpr double kPortableAbsoluteHeading = 4e-6;
+constexpr double kPortableAbsoluteHeadingDegrees = kPortableAbsoluteHeading * 57.295779513082323;
+constexpr double kPortableAbsoluteQuaternion = kPortableAbsoluteHeading / 2;
 constexpr double kPortableRelative = 1e-7;
 double portableFloor(const QString &channelOrKey);
 bool withinPortableBound(double got, double golden, double floor = kPortableAbsolute);

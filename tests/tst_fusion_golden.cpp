@@ -197,15 +197,26 @@ void FusionGoldenTest::comparatorHoldsItsBounds()
             QVERIFY(jsonPasses("objective", golden + .99 * bound, golden));
             QVERIFY(!jsonPasses("objective", golden + 1.01 * bound, golden));
         }
-        // Numbers in degrees have the floor of 1e-7 rad; nothing else has
-        for (const char *name : {"roll", "pitch", "yaw"}) {
+        // Numbers in degrees have the floor of 1e-7 rad; the heading (yaw,
+        // the quaternion, the trace's start attitude) has 4e-6 rad in its
+        // unit, and nothing else has either
+        for (const char *name : {"roll", "pitch"}) {
             const QString channel = QString::fromLatin1(name);
             QVERIFY2(samplesPass(channel, 5e-6, 0.0), name);
             QVERIFY2(!samplesPass(channel, 6e-6, 0.0), name);
         }
         QVERIFY(jsonPasses("max_endpoint_correction_deg", 5e-6, 0.0));
         QVERIFY(!jsonPasses("max_endpoint_correction_deg", 6e-6, 0.0));
-        for (const char *name : {"north", "velD", "accE", "qx", "qw"})
+        QVERIFY(samplesPass(QStringLiteral("yaw"), 2.2e-4, 0.0));
+        QVERIFY(!samplesPass(QStringLiteral("yaw"), 2.4e-4, 0.0));
+        for (const char *name : {"qx", "qy", "qz", "qw"}) {
+            const QString channel = QString::fromLatin1(name);
+            QVERIFY2(samplesPass(channel, 1.9e-6, 0.0), name);
+            QVERIFY2(!samplesPass(channel, 2.1e-6, 0.0), name);
+        }
+        QVERIFY(jsonPasses("start_quaternion_xyzw", 1.9e-6, 0.0));
+        QVERIFY(!jsonPasses("start_quaternion_xyzw", 2.1e-6, 0.0));
+        for (const char *name : {"north", "velD", "accE"})
             QVERIFY2(!samplesPass(QString::fromLatin1(name), 2e-7, 0.0), name);
         QVERIFY(!jsonPasses("gyro_bias_rad_s", 2e-7, 0.0));
 
