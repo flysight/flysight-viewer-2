@@ -2769,6 +2769,7 @@
 
 # 906 - (5) the share is nothing at the first fix and the whole mismatch at the second, one nine-component correction applied jointly, so that an attitude share turns the direction of every later reading
 906 tst_fusion_kernel imuRateEndsAreTheFit
+906 tst_fusion_kernel imuRateMatchesHeldEndsGraph
 906 tst_fusion_kernel imuRateMatchesHeldEndsGraphUnderRotation
 906 tst_fusion_kernel imuRateSampleOnAFixIsPublishedOnce
 906 tst_fusion_kernel imuRateSharesByNoise
@@ -2791,6 +2792,7 @@
 
 # 911 - (5, as settled) where the mismatch is zero the pass is the forward integration; the step corrections are zero where the recording does not rotate, and under rotation they are minus the integration's rotation lag
 911 tst_fusion_kernel imuRateZeroMismatchIsForward
+911 tst_fusion_kernel imuRateZeroMismatchUnderRotation
 
 # 912 - (6) the fit publishes the seventeen channels of the fusion document's section 4, no more (no uncertainty is published), on the same time axis
 912 tst_fusion_session registrationShape
@@ -2812,7 +2814,7 @@
 914 tst_fusion_kernel imuRateSampleOnAFixIsPublishedOnce
 914 manual M45
 
-# 915 - (6, as settled) integrated by the kernel's rule, the published acceleration reproduces the published velocity change over the fitted interval, and over any run of samples to within the spread of the corrections at its ends, the bound the fusion document's section 8 states; not step by step
+# 915 - (6, as settled) integrated by the kernel's rule, the published acceleration reproduces the published velocity change over any run of samples, the whole fitted interval included, to within the spread of the corrections at its ends and at the fixes inside it, the bound the fusion document's section 8 states; not step by step
 915 tst_fusion_kernel imuRateAccelerationIntegratesToVelocity
 
 # 916 - (6) the time axis is the IMU samples in the half-open interval from the first fix to the last, whatever the GNSS rate, a GNSS rate above the IMU's included: no fix time added, nothing resampled, a sample on a fix published once
@@ -2908,7 +2910,7 @@
 # 934 - (10, as settled) test: on a recording that does not rotate and whose readings integrate exactly to the fitted states, the reconstruction is the forward integration, the step corrections are zero and the acceleration is the rotated reading
 934 tst_fusion_kernel imuRateZeroMismatchIsForward
 
-# 935 - (10) test: on every success fixture the published acceleration integrated by the kernel's rule reproduces the published velocity change over the fitted interval, and over runs of samples within the stated spread
+# 935 - (10, as settled) test: on every success fixture the published acceleration integrated by the kernel's rule reproduces the published velocity change over runs of samples, the whole fitted interval included, within the stated spread
 935 tst_fusion_kernel imuRateAccelerationIntegratesToVelocity
 
 # 936 - (10, as settled) test: the published time axis of every success fixture and of a synthetic recording whose GNSS rate exceeds its IMU rate is exactly the IMU samples of the fitted interval; the before-and-after identity is the re-capture's check
