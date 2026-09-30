@@ -27,18 +27,19 @@ namespace FlySight::Fusion::Detail {
 /// Navigation states in a standard container (see Vectors).
 using NavStates = std::vector<gtsam::NavState, Eigen::aligned_allocator<gtsam::NavState>>;
 
-/// One fix interval of the IMU-rate reconstruction, from fix k to fix k+1 (spec
-/// section 5), as reconstructInterval() computes it and reconstructAtImuRate()
-/// publishes it. Edge j is the time the preintegration has reached after j
-/// steps; step j runs from edge j to edge j+1. The forward state at edge j is
-/// the preintegration's prediction from the fitted state at fix k; the mismatch
-/// d is the fitted state at fix k+1 in the local coordinates of the forward
-/// state there (attitude, position, velocity, the order of the IMU factor); the
-/// corrected state at edge j is the forward state with its share of d applied,
-/// and at the last edge it is the fitted state itself (to rounding). The step
-/// correction c_j is the corrected velocity change across step j over its
-/// length, less the mean of the bias-corrected readings at its two edges each
-/// rotated by the corrected attitude there, less gravity.
+/// One fix interval of the IMU-rate reconstruction, from fix k to fix k+1
+/// (docs/SENSOR_FUSION.md section 4), as reconstructInterval() computes it and
+/// reconstructAtImuRate() publishes it. Edge j is the time the preintegration
+/// has reached after j steps; step j runs from edge j to edge j+1. The forward
+/// state at edge j is the preintegration's prediction from the fitted state at
+/// fix k; the mismatch d is the fitted state at fix k+1 in the local
+/// coordinates of the forward state there (attitude, position, velocity, the
+/// order of the IMU factor); the corrected state at edge j is the forward state
+/// with its share of d applied, and at the last edge it is the fitted state
+/// itself (to rounding). The step correction c_j is the corrected velocity
+/// change across step j over its length, less the mean of the bias-corrected
+/// readings at its two edges each rotated by the corrected attitude there, less
+/// gravity.
 struct IntervalReconstruction {
     gtsam::imuBias::ConstantBias bias;   ///< the interval's bias: intervalBias() of the fit
     std::vector<double> edges;           ///< the integration edges, s since the epoch: fix k first, fix k+1 last
@@ -63,13 +64,14 @@ struct IntervalReconstruction {
 IntervalReconstruction reconstructInterval(const Samples &window, const FitResult &fit, const Tuning &tuning,
                                            size_t k);
 
-/// The fitted window at every original IMU sample (spec section 5).
+/// The fitted window at every original IMU sample (docs/SENSOR_FUSION.md
+/// section 4).
 /// Everything but the four summaries aligns with `time`.
 struct ImuRateTrajectory {
     std::vector<double> time;          ///< IMU samples in [first fix, last fix), s since the epoch
     std::vector<gtsam::Rot3> rotation; ///< corrected attitude, body to NED
     Vectors position, velocity;        ///< corrected state, NED, m and m/s
-    Vectors acceleration;              ///< spec section 6, NED, m/s^2
+    Vectors acceleration;              ///< the model's acceleration (docs/SENSOR_FUSION.md section 4), NED, m/s^2
     double maxEndpointCorrectionDeg = 0; ///< largest |attitude part of d| over the intervals, deg
     double maxStepCorrection = 0;      ///< largest |c_j| over the window, m/s^2
     double maxStepCorrectionTime = 0;  ///< midpoint of that step, s since the epoch

@@ -376,7 +376,9 @@ void MainWindow::closeEvent(QCloseEvent *event)
     // solver step (an optimizer iteration, or 256 states of graph
     // construction), or during preparation one candidate window of the
     // initialization scan; the rest of preparation is a few linear passes
-    // over the recording. Nothing below can veto the close; a future veto
+    // over the recording, and after the last iteration the reconstruction at
+    // the IMU samples runs to its end, a fraction of a second. Nothing below
+    // can veto the close; a future veto
     // must be decided BEFORE this call, because an executor that has been shut
     // down refuses every later offer.
     if (m_jobQueue) {

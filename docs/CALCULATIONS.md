@@ -890,9 +890,11 @@ between links (16.4). Slots connected to the executor's signals may call
   Cancelled ("Application closing"), requests cancellation of the running
   job, and **waits for the worker without a timeout**. Quitting must neither hang nor crash, and
   abandoning a live thread inside a solver and letting teardown
-  proceed is a crash. The bound "one solver step" is delivered by the compute
-  function's cancellation boundaries; the executor adds nothing on top: the wait
-  ends as soon as `compute()` returns, whatever it returns. Idempotent; called
+  proceed is a crash. The bound "one solver step" (or, after the fit's last
+  iteration, the reconstruction at the IMU samples, a fraction of a second) is
+  delivered by the compute function's cancellation boundaries; the executor
+  adds nothing on top: the wait ends as soon as `compute()` returns, whatever
+  it returns. Idempotent; called
   by the destructor. The application calls it before tearing anything else down.
 - Teardown order is not load-bearing for memory safety: the executor holds the
   session model weakly, and an engine that dies nulls its tickets (section 12).
@@ -1939,7 +1941,7 @@ starts hidden, so start-up starts no job for plots, while an enabled column
 over a requested output does start its fill. `closeEvent()` calls
 `JobQueue::shutdown()` **first**, before sessions are flushed and the layout
 is saved (with a wait cursor when the executor is busy; the wait is at most
-one solver step). A future veto of the close must be decided before that
+one solver step, or the reconstruction that follows the last one). A future veto of the close must be decided before that
 call: an executor that was shut down refuses every later offer.
 `~MainWindow()` deletes the demand layer, then the executor, explicitly and
 before everything else: `QObject` deletes children in creation order, which

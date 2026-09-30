@@ -2072,9 +2072,9 @@ About 670 KB in total.
   stay bit-exact in both modes.
 
 ```powershell
-ctest --test-dir build/FlySightViewer-build -C Release -L exact --output-on-failure
+ctest --test-dir <tree>/FlySightViewer-build -C Release -L exact --output-on-failure
 # where the exact tests are not registered (another compiler), by hand:
-$env:FLYSIGHT_FUSION_EXACT = "1"; ctest --test-dir build/FlySightViewer-build -C Release -R "tst_fusion_(golden|kernel|session|jobs|rows|runner)$" --output-on-failure
+$env:FLYSIGHT_FUSION_EXACT = "1"; ctest --test-dir <tree>/FlySightViewer-build -C Release -R "tst_fusion_(golden|kernel|session|jobs|rows|runner)$" --output-on-failure
 ```
 
 ### The capture tool
@@ -2392,7 +2392,7 @@ python -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['stopping'][
 
 **M10 Runner streams and exit codes (233).** `"$R" --help; echo $?`: the usage on stdout, 64. `"$R" "TEMP/data/Data comp 5 - FS 2 - serie nr 2 - 014667 (test 10)/24-09-05/11-17-12" > TEMP/runs/11-17-12.json 2> TEMP/runs/11-17-12.log; echo $?`: stdout one JSON line; stderr the progress texts (`Starting fit`, `Integrating IMU factors`, `Segment i of n: prefix L s, pass p, iteration k`, `Segment i of n: pass p, iteration k`, `Pass p, iteration k`), then the outcome line; exit 0 for `Succeeded`. With `--csv TEMP/runs/11-17-12.csv`: a CSV whose header is the seventeen names and whose row count equals `imu_outputs`. A folder without `SENSOR.CSV`: exit 3.
 
-**M11 Reference recording `11-17-12` (208).** The recording of M10 (bias 1.03 deg/s after the schema correction; the previous initializer accepted no resting window and did not converge in five passes). Expected (specification section 12): converged (`settled` or `slow tail accepted`), about 12 full-fit iterations, objective near 45,000 with the density-only model; with the per-step term the objective is lower (the lab measured 26,515 with a weaker term), so the iteration count and the rule are the comparison and the objective is recorded. First segment: the unit rests for 180 s, so its prefix grows to 240 s (`prefix_length_s` 240, `yaw_sigma_deg` a few degrees). On the current build the first segment's 60 s prefix is already observable (its anchor, the smallest-sAcc fix at about 246 s, is in motion), so `prefix_length_s` is 60, not 240, and the objective is about 20,000; the specification's expectation stays the reference here until Michael decides which is.
+**M11 Reference recording `11-17-12` (208).** The recording of M10 (bias 1.03 deg/s after the schema correction; the previous initializer accepted no resting window and did not converge in five passes). Expected (specification section 12): converged (`settled` or `slow tail accepted`), about 12 full-fit iterations, objective near 45,000 with the density-only model; with the per-step term the objective is lower (the lab measured 26,515 with a weaker term), so the iteration count and the rule are the comparison and the objective is recorded. First segment: the unit rests for 180 s, so its prefix grows to 240 s (`prefix_length_s` 240, `yaw_sigma_deg` a few degrees). On the current build the first segment's 60 s prefix is already observable (its anchor, the smallest-sAcc fix at about 246 s, is in motion), so `prefix_length_s` is 60, not 240, and the objective is about 20,000; the specification's expectation stays the reference here until Michael decides which is. On the current build the full fit took 7 iterations (the M46 run of 2026-09-30).
 
 **M12 Reference recording `08-35-23` (208).** `"$R" "TEMP/data/Data comp 1 - FS 2 - serie nr 2 - 01465 (test 08)/24-09-07/08-35-23" > TEMP/runs/08-35-23.json 2> TEMP/runs/08-35-23.log; echo $?`. No resting window; the previous initializer "converged" it to an objective of 14 million with a position RMS of 25 m. Expected: converged, objective about 11,000, position RMS 0.7 m (`position_residual_rms_m` in `seeds[0]`), under 40 iterations, `prefix_length_s` 60.
 
