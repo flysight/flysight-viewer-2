@@ -243,12 +243,12 @@ sample and the fix). The reading is the sample itself, not the interpolated
 midpoint value the integration uses, so nothing smooths the accelerometer's
 signal: only the correction is spread, over the two steps beside each sample.
 The consequence: integrated with the kernel's own rule, the published
-acceleration reproduces the published velocity change over the fitted interval
-as a whole, and over any run of samples to within the spread of the
-corrections (the bound is in section 8), but not step by step. Where the
-corrections are negligible, in steady flight, the published acceleration is
-the rotated reading. It has no added low-pass filtering and is not a
-derivative of the GNSS velocity.
+acceleration reproduces the published velocity change over any run of
+samples, the whole fitted interval included, to within the spread of the
+corrections at its ends and at the fixes inside it (the bound is in
+section 8), but not step by step. Where the corrections are negligible, in
+steady flight, the published acceleration is the rotated reading. It has no
+added low-pass filtering and is not a derivative of the GNSS velocity.
 
 **Outputs**, published together under the sensor `Fusion`:
 
@@ -557,7 +557,7 @@ demonstrated by tests, all labelled `fusion`:
 | Test | What it holds |
 | --- | --- |
 | `tst_fusion_golden` | the kernel through its public API reproduces its goldens for twelve synthetic fixtures (three fits, nine rejections), the progress texts at its boundaries, cancellation at each kind of boundary (prefix, segment and full-fit iterations included), determinism and thread independence |
-| `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the two stopping rules forced through the tuning, the per-step covariance, the temperature factor's Jacobians and the three temperature cases, the fit trace iteration by iteration against the goldens; the reconstruction at the IMU samples (the ends are the fitted states, sharing by noise, zero mismatch, consistency, equivalence with a graph with a state at every sample), the channels and diagnostics the fit publishes as that reconstruction bit for bit, and the time axis on the three fits and on a recording whose GNSS rate is above its IMU's |
+| `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the two stopping rules forced through the tuning, the per-step covariance, the temperature factor's Jacobians and the three temperature cases, the fit trace iteration by iteration against the goldens; the reconstruction at the IMU samples (the ends are the fitted states, sharing by noise, zero mismatch with and without rotation, consistency, equivalence with a graph with a state at every sample), the channels and diagnostics the fit publishes as that reconstruction bit for bit, and the time axis on the three fits and on a recording whose GNSS rate is above its IMU's |
 | `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
 | `tst_fusion_derived` | what is derived from the outputs, without the solver: the outputs stored as data, elevation and the track accelerations held to exact known answers, the track accelerations equal to the GNSS ones on the same samples, and each derived value waiting on the fit and never starting it; the orientation vocabulary (24 pairs, each a proper rotation, the attribute's choices), heading, pitch and roll held to hand-built known answers, finite with pitch at +90 or -90 where the forward axis is exactly vertical, side mounts, a GNSS track and a course reference that change nothing, and the fit's own angles for the device frame, an invalid or changed orientation without a fit, and the Orientation column's display, edit and bulk edit |
 | `tst_fusion_jobs` | the real fit through the executor: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result and kept, for an unloaded session, through an altitude marker added at run time or at the next start |
@@ -608,7 +608,8 @@ interval is solved on its own.
 What the one pass leaves out: it is linearized once, about the forward
 states, so the split of the mismatch inside an interval carries an error
 quadratic in the mismatch, about `2.2e-5 |d_v|^2` m/s of velocity and
-`5.4e-4 |d_att|^2` degrees of attitude (the mismatch in m/s and degrees); the
+`5.4e-4 |d_att|^2` degrees of attitude (the mismatch in m/s and degrees;
+measured on `coarse_maneuver`, its fitted fixes perturbed up to 100 times); the
 states at the fixes and the biases are the fit's and are not solved again;
 chaining one-step preintegrations differs from preintegrating many steps at
 once (1.1e-6 degrees on `stationary_spin`); and no uncertainty is published.
@@ -618,12 +619,14 @@ kernel's rule from sample `a` to sample `b`, the published acceleration
 reproduces the published velocity change to within
 `dt_a / 4 |c_before(a) - c_after(a)| + dt_b / 4 |c_after(b) - c_before(b)|`,
 plus, for every sample step that contains a fix, `dt / 2` times the largest
-difference between the corrections of its part-steps; over the whole fitted
-interval only the first two terms remain. The test allows 1.01 times the
+difference between the corrections of its part-steps. Over the whole fitted
+interval the same bound holds, its fix terms included: the corrections of the
+part-steps beside a fix do not cancel. The test allows 1.01 times the
 bound plus 1e-12 m/s. The bound is tight: the worst ratio of error to bound is
 0.986 on `coarse_linear`, 0.99998 on `coarse_maneuver` and 0.99999 on
 `stationary_spin`, and over the whole fitted interval the error is 4.2e-13,
-1.9e-6 and 8.2e-6 m/s.
+1.9e-6 and 8.2e-6 m/s, where the first and last terms alone are 8.9e-15,
+2.1e-7 and 1.1e-6 m/s.
 
 Under fast rotation the corrections carry the integration's own
 discretization error. The fit's integration rotates each reading by the
