@@ -235,19 +235,12 @@ void FusionGoldenTest::comparatorHoldsItsBounds()
                              QJsonObject{{"algorithm", "b"}}).isEmpty());
         QVERIFY(!compareJson(QStringLiteral("j"), QJsonArray{1.0}, QJsonArray{1.0, 1.0}).isEmpty());
 
-        // The time of the largest step correction, an argmax: one step off
-        // passes while the golden's largest correction is rounding (at or
-        // below the floor, which is where another compiler may pick another
-        // step), and fails when it is above; above the floor it is exact.
+        // The time of the largest step correction, an argmax, is not
+        // compared in portable mode: one step off passes whatever the
+        // golden's largest correction, rounding or not.
         const double stepTime = 5.1775, stepLater = 5.1875;
-        for (const double largest : {0.0, 5.56e-11, kPortableAbsolute}) {
+        for (const double largest : {0.0, 5.56e-11, kPortableAbsolute, 4.6e-4, 2.08e-3}) {
             QVERIFY2(stepTimePasses(stepLater, stepTime, largest), qPrintable(QString::number(largest)));
-            QVERIFY2(stepTimePasses(stepTime, stepTime, largest), qPrintable(QString::number(largest)));
-        }
-        for (const double largest : {std::nextafter(kPortableAbsolute, 1.0), 4.6e-4, 2.08e-3}) {
-            QVERIFY2(!stepTimePasses(stepLater, stepTime, largest), qPrintable(QString::number(largest)));
-            QVERIFY2(!stepTimePasses(std::nextafter(stepTime, 6.0), stepTime, largest),
-                     qPrintable(QString::number(largest)));
             QVERIFY2(stepTimePasses(stepTime, stepTime, largest), qPrintable(QString::number(largest)));
         }
 

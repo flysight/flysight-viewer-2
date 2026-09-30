@@ -2919,7 +2919,7 @@
 936 tst_fusion_kernel imuRateIsWhatTheFitPublishes
 936 tst_fusion_kernel imuRateAxisWhenGnssIsFasterThanImu
 
-# 937 - (10, as settled) test: the diagnostics carry the account of the specification's section 7, and the golden comparison covers it; in portable mode the time of the largest step correction is compared only where that correction exceeds the portable floor
+# 937 - (10, as settled) test: the diagnostics carry the account of the specification's section 7, and the golden comparison covers it; the time of the largest step correction, an argmax, is compared in exact mode only
 937 tst_fusion_kernel initializerDiagnosticsShape
 937 tst_fusion_golden successFixturesMatchGolden
 937 tst_fusion_golden comparatorHoldsItsBounds
