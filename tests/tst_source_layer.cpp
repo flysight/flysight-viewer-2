@@ -611,9 +611,13 @@ void SourceLayerTest::exporterWritesSource()
     QVERIFY(bytes.contains("$IMU,3,62.5,-125,0,1,40\n"));
     QVERIFY(bytes.contains("$MAG,3,1,0,-0.5,40\n"));
 
-    QVERIFY(!bytes.contains("71.6"));
-    QVERIFY(!bytes.contains("9.80665"));
-    QVERIFY(!bytes.contains("0.0001"));
+    // The converted values must not appear in the data lines. The checks
+    // name the line, not the bare number: the file also carries the import
+    // time as a $VAR line, seconds since the epoch with milliseconds, and a
+    // bare "71.6" matched one of those on CI (1790795471.698, 2026-09-30).
+    QVERIFY(!bytes.contains("$IMU,3,71.68"));
+    QVERIFY(!bytes.contains(",9.80665,"));
+    QVERIFY(!bytes.contains("$MAG,3,0.0001"));
     QVERIFY(!bytes.contains("m/s^2"));
     QVERIFY(!bytes.contains("wTotal"));
     QVERIFY(!bytes.contains("SCHEMA_VER"));
