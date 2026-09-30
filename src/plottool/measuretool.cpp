@@ -330,9 +330,9 @@ MeasureTool::Measurement MeasureTool::measure(double currentX,
                 double maxVal = *std::max_element(samples.begin(), samples.end());
                 double avgVal = std::accumulate(samples.begin(), samples.end(), 0.0) / samples.size();
 
-                row.minValue = formatValue(minVal, pv.measurementID, pv.measurementType);
-                row.avgValue = formatValue(avgVal, pv.measurementID, pv.measurementType);
-                row.maxValue = formatValue(maxVal, pv.measurementID, pv.measurementType);
+                row.minValue = formatValue(minVal, pv.measurementType);
+                row.avgValue = formatValue(avgVal, pv.measurementType);
+                row.maxValue = formatValue(maxVal, pv.measurementType);
             }
 
             rows.push_back(row);
@@ -381,7 +381,7 @@ MeasureTool::Measurement MeasureTool::measure(double currentX,
         MeasureModel::Row row;
         row.name  = seriesDisplayName(ipv);
         row.color = plotColor(ipv);
-        row.deltaValue = formatValue(currentX - m_startX, ipv.measurementID, ipv.measurementType);
+        row.deltaValue = formatValue(currentX - m_startX, ipv.measurementType);
         row.finalValue = formatXAxisValue(currentX, xVariable, referenceMarkerKey);
         hasData = true;
         rows.push_back(row);
@@ -412,11 +412,11 @@ MeasureTool::Measurement MeasureTool::measure(double currentX,
 
         // Delta = final - initial
         if (!std::isnan(initialVal) && !std::isnan(finalVal))
-            row.deltaValue = formatValue(finalVal - initialVal, pv.measurementID, pv.measurementType);
+            row.deltaValue = formatValue(finalVal - initialVal, pv.measurementType);
         else
             row.deltaValue = QStringLiteral("--");
 
-        row.finalValue = formatValue(finalVal, pv.measurementID, pv.measurementType);
+        row.finalValue = formatValue(finalVal, pv.measurementType);
 
         // Compute min / avg / max across the range [rawLo, rawHi].
         // Collect: interpolated endpoints + all interior data points.
@@ -449,9 +449,9 @@ MeasureTool::Measurement MeasureTool::measure(double currentX,
             double maxVal = *std::max_element(samples.begin(), samples.end());
             double avgVal = std::accumulate(samples.begin(), samples.end(), 0.0) / samples.size();
 
-            row.minValue = formatValue(minVal, pv.measurementID, pv.measurementType);
-            row.avgValue = formatValue(avgVal, pv.measurementID, pv.measurementType);
-            row.maxValue = formatValue(maxVal, pv.measurementID, pv.measurementType);
+            row.minValue = formatValue(minVal, pv.measurementType);
+            row.avgValue = formatValue(avgVal, pv.measurementType);
+            row.maxValue = formatValue(maxVal, pv.measurementType);
         }
 
         rows.push_back(row);

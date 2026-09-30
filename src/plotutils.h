@@ -49,9 +49,11 @@ double interpolateSessionMeasurement(const SessionData &session,
                                      const QString &measurementId,
                                      double x);
 
-QString formatValue(double value,
-                    const QString &measurementId,
-                    const QString &measurementType);
+// A plot's value as text, for the legend, the analysis tab and the measure
+// tool: converted to the display unit and rounded to the precision of its
+// row's measurement type (the unit converter's), "--" for NaN, one decimal
+// unconverted when the row has no type. The measurement's name plays no part.
+QString formatValue(double value, const QString &measurementType);
 
 // Format a plot x-axis value for display.
 // In absolute UTC mode (no reference marker, xVariable == _time) the value

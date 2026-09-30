@@ -62,6 +62,7 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 |------|--------|
 | `tst_harness` | The test-support code itself: settings and logbook isolation, fixture builders |
 | `tst_plot_color` | `plotColor()` (`src/plotutils.h`), the one colour a plot is drawn in: the registry's default without a stored preference, the stored colour when one is valid, the default again for a stored value that is not a colour, and the same answer for the plot, the legend and the measure tool, which all read it there |
+| `tst_plot_format` | `formatValue()` and `formatXAxisValue()` (`src/plotutils.h`), the one way a plot's value is written as text in the legend, the analysis tab and the measure tool: converted and rounded by the row's measurement type through the unit converter, the same text a logbook column shows; one decimal unconverted without a type; `--` for NaN; the x axis in seconds as a time. The measurement's name plays no part (a substring test on it once printed the along-track accelerations raw, "lon" being in `accAlongTrack`) |
 | `tst_smoke` | End-to-end characterization of importer, session, calculations, exporter, logbook, and model (started as a pin of v2026.04.1; expectations the rework changed on purpose were rewritten with the change that altered them) |
 
 **Calculation engine (synthetic calculations)**

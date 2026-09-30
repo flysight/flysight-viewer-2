@@ -348,7 +348,7 @@ LegendContent legendContentForMoment(const SessionModel &sessionModel,
             const double v = interpolateSessionMeasurement(*session, pv.sensorID, xVariable, pv.measurementID, rawX);
             if (!std::isnan(v)) {
                 hasData = true;
-                row.value = formatValue(v, pv.measurementID, pv.measurementType);
+                row.value = formatValue(v, pv.measurementType);
             } else if (CalculationDemand::isNotYetComputed(*session, pv.sensorID, pv.measurementID)) {
                 // The value is on its way (a requested calculation has not
                 // produced it yet): the pending mark, as the logbook shows it,
@@ -356,7 +356,7 @@ LegendContent legendContentForMoment(const SessionModel &sessionModel,
                 hasData = true;
                 row.value = pendingMark();
             } else {
-                row.value = formatValue(v, pv.measurementID, pv.measurementType);
+                row.value = formatValue(v, pv.measurementType);
             }
             rows.push_back(row);
         }
@@ -457,9 +457,9 @@ LegendContent legendContentForMoment(const SessionModel &sessionModel,
             const double avgVal = std::accumulate(valuesAtCursor.begin(), valuesAtCursor.end(), 0.0)
                                     / valuesAtCursor.size();
 
-            row.minValue = formatValue(minVal, pv.measurementID, pv.measurementType);
-            row.avgValue = formatValue(avgVal, pv.measurementID, pv.measurementType);
-            row.maxValue = formatValue(maxVal, pv.measurementID, pv.measurementType);
+            row.minValue = formatValue(minVal, pv.measurementType);
+            row.avgValue = formatValue(avgVal, pv.measurementType);
+            row.maxValue = formatValue(maxVal, pv.measurementType);
         } else {
             row.minValue = QStringLiteral("--");
             row.avgValue = QStringLiteral("--");

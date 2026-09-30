@@ -91,26 +91,22 @@ double interpolateSessionMeasurement(const SessionData &session,
     return interpolateAtX(xData, yData, x);
 }
 
-QString formatValue(double value, const QString &measurementId, const QString &measurementType)
+QString formatValue(double value, const QString &measurementType)
 {
     if (std::isnan(value))
         return QStringLiteral("--");
 
-    const QString m = measurementId.toLower();
-    if (m.contains(QStringLiteral("lat")) || m.contains(QStringLiteral("lon")))
-        return QString::number(value, 'f', 6);
-
+    // The type decides everything, as it does for a logbook column; the
+    // measurement's name never enters. A substring test on the name once
+    // did, and "lon" in accAlongTrack made the along-track accelerations
+    // print raw to six decimals.
     if (!measurementType.isEmpty()) {
         double displayValue = UnitConverter::instance().convert(value, measurementType);
         int precision = UnitConverter::instance().getPrecision(measurementType);
         if (precision < 0) precision = 1;
         return QString::number(displayValue, 'f', precision);
     }
-
-    int precision = 1;
-    if (m.contains(QStringLiteral("time")))
-        precision = 3;
-    return QString::number(value, 'f', precision);
+    return QString::number(value, 'f', 1);
 }
 
 QString formatXAxisValue(double plotX,
@@ -126,7 +122,10 @@ QString formatXAxisValue(double plotX,
                    .toString(QStringLiteral("HH:mm:ss.zzz"));
     }
 
-    return formatValue(plotX, QStringLiteral("_time"), QString());
+    // Seconds from the reference marker, to the millisecond like the
+    // timestamps above; not the time type's precision, which is the
+    // measure tool's for a duration.
+    return QString::number(plotX, 'f', 3);
 }
 
 MomentModel::Moment chooseEffectiveMoment(const MomentModel *momentModel)

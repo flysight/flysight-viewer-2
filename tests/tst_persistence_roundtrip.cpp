@@ -538,8 +538,11 @@ void PersistenceRoundTripTest::warmAndColdCachesSameFile()
     // Source values under source units; no effective value leaked into the file
     QVERIFY(coldBytes.contains("62.5"));
     QVERIFY(coldBytes.contains(",g\n"));
-    QVERIFY(!coldBytes.contains("71.6"));
-    QVERIFY(!coldBytes.contains("9.80665"));
+    // The converted values, named as they would sit in a data line: the file
+    // also carries the import time as a $VAR line, seconds since the epoch
+    // with milliseconds, and a bare number can match it
+    QVERIFY(!coldBytes.contains(",71.68,"));
+    QVERIFY(!coldBytes.contains(",9.80665,"));
     QVERIFY(!coldBytes.contains("wTotal"));
     QVERIFY(!coldBytes.contains("m/s^2"));
 }
