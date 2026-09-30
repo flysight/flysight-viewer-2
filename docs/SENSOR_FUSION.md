@@ -236,8 +236,9 @@ not explain, as an acceleration. The published acceleration at a sample is
 `R * (specific_force - accelerometer_bias) + [0, 0, 9.80665] + (c_before + c_after) / 2`:
 the sample's own reading with the bias removed, rotated by the corrected
 attitude `R`, plus gravity, plus the mean of the corrections of the two steps
-beside the sample (the first and the last sample of the fitted interval have
-one and take it alone; the step beside a fix is the part-step between the
+beside the sample (only a sample exactly on the first fix has one and takes it
+alone; the last published sample has two, since the last fix is never
+published; the step beside a fix is the part-step between the
 sample and the fix). The reading is the sample itself, not the interpolated
 midpoint value the integration uses, so nothing smooths the accelerometer's
 signal: only the correction is spread, over the two steps beside each sample.
