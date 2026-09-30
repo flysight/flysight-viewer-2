@@ -482,7 +482,8 @@ struct Tumble {
     }
 };
 
-WindowFit tumbleFit(double imuRate)
+/// The rotating recording's samples and fixes, with no fitted state yet.
+WindowFit tumbleWindow(double imuRate)
 {
     WindowFit f;
     Samples &d = f.window;
@@ -496,6 +497,13 @@ WindowFit tumbleFit(double imuRate)
     for (int k = 0; .013+k*.2 <= d.imuTime.back()-.05; ++k)
         d.gnssTime.push_back(.013+k*.2);
     f.tuning.maxGap = kImuGapMedians*medianInterval(d.imuTime);
+    return f;
+}
+
+WindowFit tumbleFit(double imuRate)
+{
+    WindowFit f = tumbleWindow(imuRate);
+    const Samples &d = f.window;
     f.fit.values.insert(B(0), gtsam::imuBias::ConstantBias());
     for (size_t k = 0; k < d.gnssTime.size(); ++k) {
         const double t = d.gnssTime[k];
@@ -637,6 +645,7 @@ private slots:
     void imuRateMatchesHeldEndsGraphUnderRotation();
     void imuRateSharesByNoise();
     void imuRateZeroMismatchIsForward();
+    void imuRateZeroMismatchUnderRotation();
     void imuRateAccelerationIntegratesToVelocity_data();
     void imuRateAccelerationIntegratesToVelocity();
     void imuRateIsWhatTheFitPublishes_data();
@@ -2656,7 +2665,8 @@ void FusionKernelTest::imuRateZeroMismatchIsForward()
     // The recording does not rotate, and must not: under rotation a zero
     // mismatch leaves every c_j at minus the rotation lag, the difference
     // between the trapezoid of the edge-rotated readings the step correction
-    // subtracts and the start-of-step rotation the integration applies.
+    // subtracts and the start-of-step rotation the integration applies
+    // (imuRateZeroMismatchUnderRotation).
     //
     // The tolerance on c: the velocities are about 20 m/s, their rounding
     // about 4e-15 m/s, divided by the shortest step (3 ms) 1.3e-12 m/s^2;
@@ -2697,6 +2707,52 @@ void FusionKernelTest::imuRateZeroMismatchIsForward()
     QCOMPARE(w.intervals.size(), size_t(4));
     QVERIFY(mismatch <= 1e-12);
     QVERIFY(largestC <= 1e-9);
+    QVERIFY(largestDeparture <= 1e-9);
+}
+
+void FusionKernelTest::imuRateZeroMismatchUnderRotation()
+{
+    // The rotating half of "zero mismatch": the tumble at 25 Hz, zero bias,
+    // with fitted states that are the forward predictions interval by
+    // interval, so d is zero to rounding and the pass is the forward
+    // integration. The step corrections are then minus the rotation lag,
+    // which the test forms from the readings and the corrected attitudes
+    // alone: the trapezoid of the edge-rotated readings the step correction
+    // subtracts, less the integration's own step, the midpoint reading rotated
+    // by the attitude at the step's first edge. The lag is about
+    // |omega x f| dt / 2, far from zero here.
+    //
+    // The tolerance on c + lag: the velocities are about 35 m/s, their
+    // rounding about 7e-15 m/s, divided by the shortest step (a 13 ms
+    // part-step) 5e-13 m/s^2; bound 1e-9.
+    using gtsam::imuBias::ConstantBias;
+    WindowFit f = tumbleWindow(25);
+    const Samples &d = f.window;
+    const double t0 = d.gnssTime.front();
+    predictFits(f, ConstantBias(), gtsam::NavState(Tumble::attitude(t0), Tumble::position(t0), Tumble::velocity(t0)),
+                gtsam::Vector9::Zero());
+
+    const WindowSeams w = seamsOf(f);
+    double mismatch = 0;
+    for (const IntervalReconstruction &r : w.intervals) {
+        mismatch = std::max(mismatch, r.mismatch.cwiseAbs().maxCoeff());
+        for (size_t j = 0; j < r.edges.size(); ++j)
+            QVERIFY2(sameStateToRounding(r.corrected[j], r.forward[j]), qPrintable(QString::number(j)));
+    }
+    double largestLag = 0, largestDeparture = 0;
+    for (size_t j = 0; j+1 < w.edges.size(); ++j) {
+        const Rot3 from = w.corrected[j].attitude(), to = w.corrected[j+1].attitude();
+        const Vector3 trapezoid = .5*(from.rotate(interpolateAt(d.imuTime, d.force, w.edges[j]))
+                                      + to.rotate(interpolateAt(d.imuTime, d.force, w.edges[j+1])));
+        const Vector3 integrated = from.rotate(interpolateAt(d.imuTime, d.force, (w.edges[j]+w.edges[j+1])/2));
+        const Vector3 lag = trapezoid-integrated;
+        largestLag = std::max(largestLag, lag.norm());
+        largestDeparture = std::max(largestDeparture, (w.stepCorrection[j]+lag).norm());
+    }
+    qInfo() << "zero mismatch under rotation: largest |d| component" << mismatch << ", largest rotation lag"
+            << largestLag << "m/s^2, step correction plus lag at most" << largestDeparture << "m/s^2";
+    QVERIFY(mismatch <= 1e-12);
+    QVERIFY(largestLag > .1);
     QVERIFY(largestDeparture <= 1e-9);
 }
 
