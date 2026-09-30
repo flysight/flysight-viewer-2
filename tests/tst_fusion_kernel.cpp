@@ -1434,7 +1434,7 @@ void FusionKernelTest::biasSettledByCostTest()
     const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
     QCOMPARE(seed.value("converged").toBool(false), true);
     QCOMPARE(seed.value("iterations").toInt(), int(trace.history.size()));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v4"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v5"));
 
     // The quality metrics recomputed from the residuals array: 28 states, so
     // 28 position and velocity factors of dimension 3 and 27 IMU factors of
@@ -1612,7 +1612,7 @@ void FusionKernelTest::failureDiagnosticsShape()
     const QJsonObject diagnostics = failureDiagnostics(QStringLiteral("Nonfinite or increasing optimizer cost"), &s);
     QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure"),
                                               QStringLiteral("stopping")}));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v4"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v5"));
     QCOMPARE(diagnostics.value("failure").toString(), QStringLiteral("Nonfinite or increasing optimizer cost"));
     const QJsonObject stopping = diagnostics.value("stopping").toObject();
     QCOMPARE(stopping.value("rule").toString(), QStringLiteral("cost increased"));
@@ -2334,7 +2334,7 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     const Fusion::Result result = runPipeline(toChannels(f), t, Checkpoint(), &trace);
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
     const QJsonObject diagnostics = diagnosticsOf(result);
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v4"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v5"));
     const QJsonObject gyroBias = diagnostics.value("model").toObject().value("gyro_bias").toObject();
     const QJsonArray b1 = gyroBias.value("b1_rad_s_per_degc").toArray();
     QCOMPARE(b1.size(), 3);
@@ -2539,9 +2539,10 @@ void FusionKernelTest::imuRateMatchesHeldEndsGraphUnderRotation()
     //
     // The same recording at 13 Hz (FlySight's IMU rate) and 100 Hz: the
     // published acceleration against the true one, and the rotated reading
-    // alone. Under rotation the integration rotates each reading by the
-    // attitude at the start of its step, so the corrections carry part of
-    // that error into the published acceleration.
+    // alone. The integration applies each reading at the attitude of the
+    // middle of its step (the library alone would use the start), so what
+    // the corrections carry into the published acceleration under rotation
+    // is second order in the step's rotation.
     for (const double rate : {13., 25., 100.}) {
         const WindowFit f = tumbleFit(rate);
         const WindowSeams w = seamsOf(f);
@@ -2568,7 +2569,9 @@ void FusionKernelTest::imuRateMatchesHeldEndsGraphUnderRotation()
                 << w.edges.size() << "states): attitude" << diff.attitude*180/kPi << "deg (bound 5e-5 deg),"
                 << "velocity" << diff.velocity << "m/s (" << diff.velocity/m.velocity << "of the mismatch), position"
                 << diff.position << "m (" << diff.position/m.position << ")";
-        QVERIFY(m.velocity > .01);
+        // Not vacuous: with the mid-step rotation the mismatch is a few mm/s,
+        // still far above rounding.
+        QVERIFY(m.velocity > 1e-3);
         QVERIFY(diff.velocity <= 1e-5*m.velocity+1e-12);
         QVERIFY(diff.position <= 1e-5*m.position+1e-12);
         QVERIFY(diff.attitude*180/kPi <= 5e-5);
@@ -2665,7 +2668,7 @@ void FusionKernelTest::imuRateZeroMismatchIsForward()
     // The recording does not rotate, and must not: under rotation a zero
     // mismatch leaves every c_j at minus the rotation lag, the difference
     // between the trapezoid of the edge-rotated readings the step correction
-    // subtracts and the start-of-step rotation the integration applies
+    // subtracts and the mid-step rotation the integration applies
     // (imuRateZeroMismatchUnderRotation).
     //
     // The tolerance on c: the velocities are about 20 m/s, their rounding
@@ -2718,9 +2721,12 @@ void FusionKernelTest::imuRateZeroMismatchUnderRotation()
     // integration. The step corrections are then minus the rotation lag,
     // which the test forms from the readings and the corrected attitudes
     // alone: the trapezoid of the edge-rotated readings the step correction
-    // subtracts, less the integration's own step, the midpoint reading rotated
-    // by the attitude at the step's first edge. The lag is about
-    // |omega x f| dt / 2, far from zero here.
+    // subtracts, less the integration's own step, the midpoint reading turned
+    // by half the step's rotation and then rotated by the attitude at the
+    // step's first edge. That lag is second order in the step's rotation;
+    // the test also forms the lag the library's start-of-step rotation would
+    // leave, about |omega x f| dt / 2, and requires the integration's to be
+    // below a tenth of it.
     //
     // The tolerance on c + lag: the velocities are about 35 m/s, their
     // rounding about 7e-15 m/s, divided by the shortest step (a 13 ms
@@ -2739,20 +2745,26 @@ void FusionKernelTest::imuRateZeroMismatchUnderRotation()
         for (size_t j = 0; j < r.edges.size(); ++j)
             QVERIFY2(sameStateToRounding(r.corrected[j], r.forward[j]), qPrintable(QString::number(j)));
     }
-    double largestLag = 0, largestDeparture = 0;
+    double largestLag = 0, largestStartLag = 0, largestDeparture = 0;
     for (size_t j = 0; j+1 < w.edges.size(); ++j) {
         const Rot3 from = w.corrected[j].attitude(), to = w.corrected[j+1].attitude();
+        const double dt = w.edges[j+1]-w.edges[j], mid = (w.edges[j]+w.edges[j+1])/2;
         const Vector3 trapezoid = .5*(from.rotate(interpolateAt(d.imuTime, d.force, w.edges[j]))
                                       + to.rotate(interpolateAt(d.imuTime, d.force, w.edges[j+1])));
-        const Vector3 integrated = from.rotate(interpolateAt(d.imuTime, d.force, (w.edges[j]+w.edges[j+1])/2));
+        const Vector3 midReading = interpolateAt(d.imuTime, d.force, mid);
+        const Rot3 halfStep = Rot3::Expmap(interpolateAt(d.imuTime, d.gyro, mid)*(dt/2));
+        const Vector3 integrated = from.rotate(halfStep.rotate(midReading));
         const Vector3 lag = trapezoid-integrated;
         largestLag = std::max(largestLag, lag.norm());
+        largestStartLag = std::max(largestStartLag, (trapezoid-from.rotate(midReading)).norm());
         largestDeparture = std::max(largestDeparture, (w.stepCorrection[j]+lag).norm());
     }
     qInfo() << "zero mismatch under rotation: largest |d| component" << mismatch << ", largest rotation lag"
-            << largestLag << "m/s^2, step correction plus lag at most" << largestDeparture << "m/s^2";
+            << largestLag << "m/s^2 (the start-of-step rotation would leave" << largestStartLag
+            << "), step correction plus lag at most" << largestDeparture << "m/s^2";
     QVERIFY(mismatch <= 1e-12);
-    QVERIFY(largestLag > .1);
+    QVERIFY(largestStartLag > .1);
+    QVERIFY(largestLag < .1*largestStartLag);
     QVERIFY(largestDeparture <= 1e-9);
 }
 

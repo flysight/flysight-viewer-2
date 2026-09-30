@@ -123,7 +123,7 @@ StoredCalculationResult sampleSnapshot(const QString &id = QString::fromLatin1(k
 {
     StoredCalculationResult r;
     r.calculationId = id;
-    r.resultVersion = QStringLiteral("batch-temperature-bias-v4");
+    r.resultVersion = QStringLiteral("batch-temperature-bias-v5");
     r.inputFingerprint = QCryptographicHash::hash("sample inputs", QCryptographicHash::Sha256);
     r.leaves = {GraphNode::storedAttribute(QStringLiteral("_JUMPER_MASS")),
                 GraphNode::sourceMeasurement(QStringLiteral("IMU"), QStringLiteral("wx")),
@@ -677,7 +677,7 @@ void ResultRecordsTest::roundTripIsBitExact()
     QCOMPARE(decoded.result.leaves[1], GraphNode::sourceMeasurement(QStringLiteral("IMU"), QStringLiteral("wx")));
     QCOMPARE(decoded.result.leaves[3], GraphNode::preference(QStringLiteral("fusion/test")));
     QCOMPARE(decoded.calculationCompatibility, CalculationCompatibilityVersion);
-    QCOMPARE(decoded.result.resultVersion, QStringLiteral("batch-temperature-bias-v4"));
+    QCOMPARE(decoded.result.resultVersion, QStringLiteral("batch-temperature-bias-v5"));
     QCOMPARE(decoded.result.detail, decoded.result.bundle.reason());
 
     // The decoded record encodes to the same bytes
@@ -783,7 +783,7 @@ void ResultRecordsTest::rejectionShapedRecord()
     // A rejection / solver failure: Ok with a reason and the diagnostics, no measurements
     StoredCalculationResult r;
     r.calculationId = QString::fromLatin1(kFitId);
-    r.resultVersion = QStringLiteral("batch-temperature-bias-v4");
+    r.resultVersion = QStringLiteral("batch-temperature-bias-v5");
     r.inputFingerprint = QByteArray(32, '\x02');
     r.leaves = {GraphNode::sourceMeasurement(QStringLiteral("IMU"), QStringLiteral("ax"))};
     r.bundle.setAttribute(QStringLiteral("_FUSION_DIAGNOSTICS"),
@@ -1090,7 +1090,7 @@ void ResultRecordsTest::sizeIsOrderOfSamples()
 {
     StoredCalculationResult r;
     r.calculationId = QString::fromLatin1(kFitId);
-    r.resultVersion = QStringLiteral("batch-temperature-bias-v4");
+    r.resultVersion = QStringLiteral("batch-temperature-bias-v5");
     r.inputFingerprint = QByteArray(32, '\x03');
     QVector<double> samples(10000);
     for (int i = 0; i < samples.size(); ++i)

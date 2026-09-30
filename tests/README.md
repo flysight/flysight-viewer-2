@@ -1409,7 +1409,7 @@ beside a fix uncancelled (15, 35);
 the diagnostics' new keys are named, `dense_output` replacing the previous
 account (17, 18); the algorithm string of a rejected or failed fit does
 change, where the specification calls those diagnostics unchanged (19); the
-string is `batch-temperature-bias-v4` (21); a stale fit is computed again when
+string is `batch-temperature-bias-v5` (21); a stale fit is computed again when
 something switched on needs it, not all at the next start (22); the time axis
 was compared before and after once, at the re-capture (section 11), and is
 held permanently against its definition, not by a test that compares two
@@ -1442,7 +1442,7 @@ specification amends those of 9.9 (items 847 and 861).
 | 918 | 7, as settled | the success diagnostics report the largest step correction (`max_step_correction_m_s2`), the middle of its step in seconds since the epoch (`max_step_correction_time_s`) and the largest velocity mismatch of any interval (`max_velocity_mismatch_m_s`), beside `max_endpoint_correction_deg`, which stays | `tst_fusion_kernel::imuRateEndsAreTheFit`, `imuRateIsWhatTheFitPublishes`, `reconstructionUsesIntervalBias`, `reconstructionTimingAndEndpointCorrection`; `tst_fusion_golden::successFixturesMatchGolden`, `comparatorHoldsItsBounds`; `manual M46` |
 | 919 | 7, as settled | the diagnostics of a rejected or failed fit are unchanged but for the algorithm string, which changes for every outcome (the specification's section 8) | `tst_fusion_golden::rejectionFixturesMatchGolden`; `tst_fusion_kernel::failureDiagnosticsShape` |
 | 920 | 8 | the record stores and restores the same channels, with the new values, in the record format as it is | `tst_fusion_store::restoredAfterRestartIsBitIdentical`; `tst_result_records::layoutIsPinned` |
-| 921 | 8, as settled | the algorithm string changes, to `batch-temperature-bias-v4`, so a fit stored under the previous one is stale at its recording's next load, by the existing validity rules | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_fusion_session::registrationShape`; `audit stored-results`; `manual M46` |
+| 921 | 8, as settled | the algorithm string changes (to `batch-temperature-bias-v4` with the reconstruction, and to `v5` with the mid-step rotation of the accelerometer reading that followed it), so a fit stored under the previous one is stale at its recording's next load, by the existing validity rules | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_fusion_session::registrationShape`; `audit stored-results`; `manual M46` |
 | 922 | 8, as settled | after the change every stored fit is computed again once, when something switched on needs it, not all at the next start (a stale record is deleted at its recording's load), and the status bar shows it as any computation | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_result_columns::staleRecordDeletedByWorkerCreatesDemand`; `manual M45` |
 | 923 | 8 | the goldens are captured again from the changed kernel with the existing capture tool, and the golden tests compare against them | `tst_fusion_golden::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; `tst_fusion_runner::outputTableMatchesGolden` |
 | 924 | 8, as settled | every fixture's time axis is unchanged: checked once, at the re-capture, each success fixture's `_time` byte for byte against the previous capture (section 11), and permanently against the IMU samples of its fitted interval | `tst_fusion_kernel::imuRateIsWhatTheFitPublishes`, `imuRateEndsAreTheFit` |
@@ -1568,7 +1568,7 @@ takes about a second. It fails, listing **all** violations, when
   `CMakeLists.txt`; the silent cancellation
   poll or the retired single-anchor initial-attitude type reappears in `src`
   or `tests`; a retired constant-bias algorithm string (the `v1` / `v2`
-  strings the goldens once carried; the goldens say `batch-temperature-bias-v4`,
+  strings the goldens once carried; the goldens say `batch-temperature-bias-v5`,
   and a hit under `tests/data/fusion` means a stale capture) appears in `src`,
   `tests`, `docs` or `README.md`; the name of the branch the kernel was ported
   from appears anywhere but in this file's historical notes and in the
@@ -1814,6 +1814,17 @@ rejections, `algorithm` alone. What did not: the fit, so `trace`, `progress`,
 previous capture, and the time axis: the `_time` column of every success
 fixture is byte-identical to the previous capture's (`coarse_linear` 160
 lines, `coarse_maneuver` 540, `stationary_spin` 995).
+
+The capture of 2026-09-30 (the mid-step rotation, the same day): the
+accelerometer reading of every integration step is turned by half the step's
+rotation before the library applies it (`docs/SENSOR_FUSION.md` section 4),
+and the algorithm string changed to `batch-temperature-bias-v5`. What
+changed: the fit itself, so in the three successes every number of the
+diagnostics that the fit produces (`trace`, `objective`, `residuals`,
+`stopping`, `quality`, `model`, `initializer`, the reconstruction's four
+numbers) and every channel but `_time`; in the nine rejections, `algorithm`
+alone. What did not: the time axis, checked byte for byte as before, the
+row counts, and every rejection's reason.
 
 ### Fixtures
 
@@ -2184,8 +2195,8 @@ What changes, and what it means:
   fixture's numbers or texts. A phase that changes the `algorithm` string
   changes all twelve `.json` files; the nine `reject_*.json` otherwise change
   only when a rejection reason changes. The `algorithm` string is
-  `batch-temperature-bias-v4` since the IMU-rate reconstruction; a capture that
-  prints another string is from a stale build.
+  `batch-temperature-bias-v5` since the mid-step rotation of the accelerometer
+  reading; a capture that prints another string is from a stale build.
 - Two captures of the same build are byte-identical; the tool verifies this
   in-process and refuses to write otherwise (exit 3).
 - A `** UNEXPECTED **` line (exit 2) means a success fixture no longer
@@ -4148,9 +4159,11 @@ section 11. Clauses 4, 5, 10, 11, 14, 15, 17, 18, 19, 21, 22, 24, 29, 31 and
     specification's section 8).
 20. (8) The record stores and restores the same channels, with the new values,
     in the record format as it is.
-21. (8, as settled) The algorithm string changes, to
-    `batch-temperature-bias-v4`, so a fit stored under the previous one is
-    stale at its recording's next load, by the existing validity rules.
+21. (8, as settled) The algorithm string changes (to
+    `batch-temperature-bias-v4` with the reconstruction, and to `v5` with the
+    mid-step rotation of the accelerometer reading that followed it), so a fit
+    stored under the previous one is stale at its recording's next load, by
+    the existing validity rules.
 22. (8, as settled) After the change every stored fit is computed again once,
     when something switched on needs it, not all at the next start (a stale
     record is deleted at its recording's load), and the status bar shows it as

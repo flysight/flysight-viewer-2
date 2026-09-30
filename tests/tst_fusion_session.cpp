@@ -284,7 +284,7 @@ void FusionSessionTest::registrationShape()
     QVERIFY(systemTime->descriptor->outputs == QList<DependencyKey>({fusionKey("_system_time")}));
 
     // Only the fit declares a result version: its kernel's algorithm string
-    QCOMPARE(fit->descriptor->resultVersion, QStringLiteral("batch-temperature-bias-v4"));
+    QCOMPARE(fit->descriptor->resultVersion, QStringLiteral("batch-temperature-bias-v5"));
     QVERIFY(accH->descriptor->resultVersion.isEmpty());
     QVERIFY(systemTime->descriptor->resultVersion.isEmpty());
 
@@ -985,7 +985,7 @@ void FusionSessionTest::restoredFitIsIndistinguishable()
     const std::optional<StoredCalculationResult> snapshot = engineA.exportResult(kFit);
     QVERIFY(snapshot.has_value());
     QCOMPARE(snapshot->calculationId, kFit);
-    QCOMPARE(snapshot->resultVersion, QStringLiteral("batch-temperature-bias-v4"));
+    QCOMPARE(snapshot->resultVersion, QStringLiteral("batch-temperature-bias-v5"));
     const QJsonObject diagnostics = QJsonDocument::fromJson(
         snapshot->bundle.attributeValue(kDiagnostics).toString().toUtf8()).object();
     QCOMPARE(diagnostics.value(QStringLiteral("algorithm")).toString(), snapshot->resultVersion);

@@ -565,7 +565,7 @@ expect_none("the stationary-window detector is gone"
 expect_none("the silent poll is gone" "pollCancel" src tests)
 expect_none("the anchor-attitude initializer is gone"
   "InitialAttitude|initialAttitude\\(|kInitialHeadingDeg|attitudeFromStationaryWindow" src tests)
-# Allow: none expected. The goldens say batch-temperature-bias-v4; a hit under
+# Allow: none expected. The goldens say batch-temperature-bias-v5; a hit under
 # tests/data/fusion means a stale capture (re-capture, tests/README.md section 11).
 expect_none("the retired algorithm strings are gone" "batch-shared-bias-v[12]"
   src tests docs README.md ":!tests/README.md")
@@ -717,8 +717,8 @@ expect_none("stored results are widget-free"
 # Fusion's result version is its kernel's algorithm string, spelled once.
 # Allow: none expected. A changed algorithm changes the one literal; a comment
 # or test in src that quotes it names Fusion::Algorithm instead.
-expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v4" 1 src)
-expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v4"
+expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v5" 1 src)
+expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v5"
   "^src/fusion/fusion\\.h$" src)
 # The compatibility rule names the result version, in the code and in the note.
 # Allow: reword the sentence, never duplicate it; the count is 1 in each file.

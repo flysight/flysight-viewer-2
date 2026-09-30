@@ -92,7 +92,7 @@ constexpr int kFitTimeoutMs = 120000;
 const QString kSolverFailureReason =
     QStringLiteral("Batch fusion did not converge (iteration limit); sensor fusion unavailable");
 const QString kSolverFailureDiagnostics = QStringLiteral(
-    "{\"algorithm\":\"batch-temperature-bias-v4\","
+    "{\"algorithm\":\"batch-temperature-bias-v5\","
     "\"failure\":\"Batch fusion did not converge (iteration limit); sensor fusion unavailable\"}");
 
 /// What a fresh publish showed, for the bit-for-bit comparison with a restore.

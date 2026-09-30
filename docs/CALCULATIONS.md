@@ -2243,8 +2243,9 @@ record read.
 (`src/fusion/fusion.h`), the same string as the diagnostics' `"algorithm"`. The
 literal exists once in `src/`, in that header. Change it whenever a change can
 alter what the fit returns for the same channels; that drops every stored fit.
-It is `batch-temperature-bias-v4` since the reconstruction at the IMU samples,
-so the first start after that update finds every stored fit stale at its
+It is `batch-temperature-bias-v5` since the mid-step rotation of the
+accelerometer reading (`v4` was the reconstruction at the IMU samples), so
+the first start after that update finds every stored fit stale at its
 recording's load and fits each again once, when something switched on needs
 it. The record holds the seventeen measurements and `_FUSION_DIAGNOSTICS`, or, for
 a rejection or solver failure, the diagnostics and the reason. Its leaves are

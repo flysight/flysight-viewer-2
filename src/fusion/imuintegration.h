@@ -13,10 +13,14 @@
 // Internal to the fusion library: integration of IMU samples between exact
 // boundary times. IMU samples are treated as a piecewise-linear signal, and
 // every integration step takes the signal at the midpoint of the step, so a
-// boundary that falls between two samples is honoured exactly. Each step's
-// measurement covariance is the density plus a white-noise term proportional
-// to the change of the signal across the step (Tuning::gyroStepSlope,
-// accStepSlope); and the temperature at a fix, for the gyro bias model.
+// boundary that falls between two samples is honoured exactly. The
+// accelerometer reading of a step is turned by half the step's rotation
+// before the library applies it, so that it acts at the attitude of the
+// step's middle and not, as the library would have it, at the attitude of
+// the step's start. Each step's measurement covariance is the density plus a
+// white-noise term proportional to the change of the signal across the step
+// (Tuning::gyroStepSlope, accStepSlope); and the temperature at a fix, for
+// the gyro bias model.
 
 namespace FlySight::Fusion::Detail {
 
@@ -50,7 +54,7 @@ std::shared_ptr<gtsam::PreintegrationParams> preintegrationParams(const Tuning &
 struct ImuStep {
     double start, end;          ///< the step's two integration edges, s
     double dt;                  ///< end - start, the length passed to the integration
-    gtsam::Vector3 force, gyro; ///< the midpoint readings passed to the integration (raw, not bias-corrected)
+    gtsam::Vector3 force, gyro; ///< the readings passed to the integration, not bias-corrected: the midpoint rate, and the midpoint reading turned by half the step's bias-corrected rotation
 };
 
 /// Sees each step of preintegrateImu() before it is integrated, with the

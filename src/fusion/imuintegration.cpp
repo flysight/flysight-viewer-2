@@ -139,8 +139,19 @@ gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, doub
     gtsam::Vector3 gyroStart = interpolateAt(samples.imuTime, samples.gyro, e[0]);
     for (size_t i = 1; i < e.size(); ++i) {
         const double dt = e[i]-e[i-1], mid = (e[i]+e[i-1])/2;
-        const ImuStep step{e[i-1], e[i], dt, interpolateAt(samples.imuTime, samples.force, mid),
-                           interpolateAt(samples.imuTime, samples.gyro, mid)};
+        const gtsam::Vector3 gyroMid = interpolateAt(samples.imuTime, samples.gyro, mid);
+        const gtsam::Vector3 forceMid = interpolateAt(samples.imuTime, samples.force, mid);
+        // The library rotates a step's reading by the attitude at the step's
+        // start, half a step behind the reading: an error of about
+        // |omega x f| dt / 2, several m/s^2 at 13 Hz through a parachute
+        // opening. So the reading is turned by half the step's bias-corrected
+        // rotation first, and the library then applies it at the attitude of
+        // the step's middle. The bias, which is in the device frame, is
+        // removed for the turn and put back, since the library removes it
+        // itself.
+        const gtsam::Vector3 &accBias = bias.accelerometer();
+        const gtsam::Rot3 halfStep = gtsam::Rot3::Expmap((gyroMid-bias.gyroscope())*(dt/2));
+        const ImuStep step{e[i-1], e[i], dt, halfStep.rotate(forceMid-accBias)+accBias, gyroMid};
         // Before the step's covariance is written, so the two sensor
         // covariances the step integrates with are always the ones set
         // below. The observer can still reach the other shared params

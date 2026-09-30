@@ -163,6 +163,13 @@ fits hold the gyro bias constant.
 
 **Integration and noise.** IMU integration splits at exact GNSS boundaries and
 original IMU timestamps, using linearly interpolated midpoint inputs. The
+solver library applies a step's accelerometer reading at the attitude of the
+step's start, half a step behind the reading, an error of about
+`|omega x f| dt / 2`: several m/s^2 at 13 Hz where the unit turns at 5-7
+rad/s, as a helmet does through a parachute opening. So the kernel turns each
+step's reading by half the step's bias-corrected rotation before the library
+applies it, and the reading then acts at the attitude of the step's middle;
+what remains is second order in the step's rotation (section 8). The
 modelling noise densities are 0.015 m/s^2/sqrt(Hz) and 0.001 rad/s/sqrt(Hz),
 with integration covariance `I x 1e-8`. The integration treats the IMU stream
 as piecewise linear between samples. At the default 12.5 Hz output rate that is
@@ -295,7 +302,7 @@ about d^2/2R at a distance d from the origin (R the Earth's radius), some
 The attribute `_FUSION_DIAGNOSTICS` is compact JSON. After a successful fit
 its top-level keys are, grouped:
 
-- *identity and audit*: `algorithm` (`batch-temperature-bias-v4`) and `input`
+- *identity and audit*: `algorithm` (`batch-temperature-bias-v5`) and `input`
   (the input audit: `epoch_utc_s`, `imu_count`, `gnss_count`, `origin_index`,
   `origin`, `height_method`, `time_method`);
 - *the initializer*: `initialization` (`segmented initialization; heading
@@ -511,7 +518,8 @@ not.
 success, a rejection or a solver failure. It is restored bit for bit when the
 recording is loaded, and the restored result is indistinguishable from a fresh
 one. Its code stamp is the algorithm string of the diagnostics
-(`batch-temperature-bias-v4` since the reconstruction at the IMU samples): a
+(`batch-temperature-bias-v5` since the mid-step rotation of the accelerometer
+reading, `v4` having been the reconstruction at the IMU samples): a
 change that can alter what the fit returns changes that string, and every
 stored fit is then dropped at its recording's next load. So the first start
 after such an update finds every stored fit stale when its recording is
@@ -590,11 +598,11 @@ fixes and the biases held at the fit's values, solved by the fit's solver from
 the forward states. At every IMU sample the two agree to within the one
 linearization. On `coarse_maneuver`, whose largest mismatch is 1.1e-4 degrees
 of attitude, 9.1e-5 m/s of velocity and 9.1e-6 m of position, they differ by
-3.6e-12 degrees, 2.8e-13 m/s and 2.9e-14 m (3.3e-8, 3.1e-9 and 3.2e-9 of the
+3.6e-12 degrees, 3.0e-13 m/s and 4.3e-14 m (3.3e-8, 3.2e-9 and 4.7e-9 of the
 mismatch); on a synthetic recording that turns at 3 rad/s about a horizontal
 axis (IMU 25 Hz, GNSS 5 Hz, exact readings, the true states as the fit), whose
-velocity mismatch is 0.11 m/s and position mismatch 0.011 m, by 1.0e-9 m/s
-and 5.9e-11 m (9.4e-9 and 5.3e-9 of the mismatch) and 2.0e-6 degrees of
+velocity mismatch is 0.0035 m/s and position mismatch 0.00036 m, by 1.3e-10 m/s
+and 7.0e-12 m (3.6e-8 and 2.0e-8 of the mismatch) and 6.4e-8 degrees of
 attitude. The test allows 1e-5 of the largest mismatch plus 1e-12 per
 component, and on the turning recording 5e-5 degrees of attitude, whose
 mismatch there is at rounding. The reference holds the fix states because,
@@ -623,28 +631,38 @@ difference between the corrections of its part-steps. Over the whole fitted
 interval the same bound holds, its fix terms included: the corrections of the
 part-steps beside a fix do not cancel. The test allows 1.01 times the
 bound plus 1e-12 m/s. The bound is tight: the worst ratio of error to bound is
-0.986 on `coarse_linear`, 0.99998 on `coarse_maneuver` and 0.99999 on
-`stationary_spin`, and over the whole fitted interval the error is 4.2e-13,
-1.9e-6 and 8.2e-6 m/s, where the first and last terms alone are 8.9e-15,
-2.1e-7 and 1.1e-6 m/s.
+0.50 on `coarse_linear`, 0.9993 on `coarse_maneuver` and 0.99999 on
+`stationary_spin`, and over the whole fitted interval the error is 4.1e-13,
+2.6e-7 and 8.8e-6 m/s.
 
-Under fast rotation the corrections carry the integration's own
-discretization error. The fit's integration rotates each reading by the
-attitude at the start of its step, which is off by about `|omega x f| dt / 2`;
-with exact readings and the true states at the fixes that alone leaves a
-mismatch, which the pass shares out as corrections. On the turning recording
-above (3 rad/s), the published acceleration against the true one:
+Under fast rotation the corrections carry what remains of the integration's
+own discretization error. The solver library applies a step's reading at the
+attitude of the step's start, an error of about `|omega x f| dt / 2`, so the
+kernel turns each reading by half the step's rotation first (section 4); the
+remainder is second order in the step's rotation. With exact readings and the
+true states at the fixes that remainder alone leaves a mismatch, which the
+pass shares out as corrections. On the turning recording above (3 rad/s), the
+published acceleration against the true one:
 
 | IMU rate | velocity mismatch, m/s | published acceleration, error, m/s^2 | the rotated reading alone, error, m/s^2 |
 | --- | --- | --- | --- |
-| 13 Hz | 0.21 | 0.136 | 1.0e-3 |
-| 25 Hz | 0.11 | 0.133 | 1.2e-3 |
-| 100 Hz | 0.030 | 0.050 | 3.4e-4 |
+| 13 Hz | 0.013 | 0.017 | 3.7e-6 |
+| 25 Hz | 0.0035 | 0.0063 | 1.8e-6 |
+| 100 Hz | 0.00023 | 0.00050 | 1.2e-7 |
 
-At 1 rad/s the error is smaller, 0.017 m/s^2 at 100 Hz. The remedy is to
-rotate each reading by the attitude at the middle of its step, a change to
-the fit's integration, and so to the fitted states, that a later
-specification makes.
+With the library's start-of-step rotation alone the errors were 0.136, 0.133
+and 0.050 m/s^2, from velocity mismatches of 0.21, 0.11 and 0.030 m/s. On a
+real fit that lag did not even appear as a mismatch, because the states at
+the fixes came from the same integration; the corrections then carried it
+into the published acceleration wherever the unit turned, and on the
+reference recording `11-17-12` the two integrations differ by up to 4.8
+m/s^2 at the opening, where the unit turns at 5-7 rad/s. With the mid-step
+rotation the fit agrees with that recording better: its objective is 22 %
+lower (20,203 to 15,759), its velocity and IMU normalized RMS fall from 0.63
+and 0.59 to 0.53 each, the largest velocity mismatch of any fix interval
+from 1.45 to 0.92 m/s, and against the receiver's velocity changes over the
+fix intervals where the unit turns at 1-4 rad/s it agrees better in about
+three of four.
 
 **The runner.** `fusion_runner` is a test/tooling target, built with the
 fusion tests and never installed: the fit on one recording, imported exactly
