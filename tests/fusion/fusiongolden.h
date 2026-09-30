@@ -97,7 +97,11 @@ QString compareSamples(const QString &name, const QVector<double> &got,
 
 /// Compares two JSON values recursively: same types, same keys, same lengths,
 /// equal strings / bools / nulls; numbers by the mode, except counts and the
-/// epoch, which are always exact. `path` names the value in the message.
+/// epoch, which are always exact. In portable mode the time of the largest
+/// step correction (`max_step_correction_time_s`, an argmax) is compared
+/// exactly when the golden's `max_step_correction_m_s2` beside it is above the
+/// portable floor, and not at all otherwise. `path` names the value in the
+/// message.
 QString compareJson(const QString &path, const QJsonValue &got, const QJsonValue &golden);
 
 /// Field-by-field copy of a fixture into the kernel's input.

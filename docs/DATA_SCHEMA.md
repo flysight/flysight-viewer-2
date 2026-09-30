@@ -366,7 +366,7 @@ a calculation is valid only together with this stamp. For a session with a
 stored sensor fusion result:
 
 ```json
-"records": {"builtin.fusion.fit": "batch-temperature-bias-v3"}
+"records": {"builtin.fusion.fit": "batch-temperature-bias-v4"}
 ```
 
 Each session entry may also have `"recordReasons"`: an object mapping the
@@ -494,6 +494,11 @@ format version (such as format 1 from development builds), is deleted as stale
 at its session's next load, and the calculation is computed again when
 something switched on needs it.
 There is no migration.
+Since the sensor fusion result became the fitted state at every IMU sample,
+its record holds the same seventeen measurements and the diagnostics in the
+same format (version 2) with new values; a record written before that change
+is stale by its result version, deleted at its session's next load and
+computed again the same way.
 Only a regular file whose name ends exactly in `.fvresult` (lower case) is a
 record: a directory at a record's path is never listed, so neither the
 start-up pass nor deleting its session removes it.

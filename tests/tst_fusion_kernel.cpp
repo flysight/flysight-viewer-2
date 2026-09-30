@@ -8,7 +8,8 @@
 // through the tuning, the per-step covariance, the temperature-dependent gyro
 // bias (the custom factor's Jacobians, the section 6 cases), the
 // solver-failure path and its diagnostics shapes, the IMU-rate reconstruction
-// pass against a dense reference graph and its per-interval seam), with the literal expectations of the reference's own
+// pass against a dense reference graph and its per-interval seam, the
+// channels the fit publishes as that pass and their time axis), with the literal expectations of the reference's own
 // self-test (sensor-fusion-clean-port, tests/fusion_regression.cpp), and the
 // fit trace that localizes a golden failure to a stage: the segment account
 // first, then each optimizer iteration.
@@ -547,6 +548,31 @@ std::vector<double> samplesBetweenFirstAndLastFix(const Samples &window)
     return std::vector<double>(first, last);
 }
 
+/// The published time axis as a run's diagnostics define it: the epoch
+/// (`input.epoch_utc_s`) plus every IMU sample of the prepared recording in
+/// [start_s, end_s), the first and last fitted fix.
+QVector<double> expectedTimeAxis(const Fusion::Channels &channels, const QJsonObject &diagnostics)
+{
+    const double epoch = diagnostics.value("input").toObject().value("epoch_utc_s").toDouble();
+    const double start = diagnostics.value("start_s").toDouble(), end = diagnostics.value("end_s").toDouble();
+    QVector<double> axis;
+    for (const double t : prepareInput(channels).recording.imuTime) {
+        if (t >= start && t < end)
+            axis.append(epoch+t);
+    }
+    return axis;
+}
+
+/// Criterion of the time-axis tests: `time` is `expected` element by element
+/// (==), and as long as the diagnostics' imu_outputs says.
+void verifyTimeAxis(const QVector<double> &time, const QVector<double> &expected, const QJsonObject &diagnostics)
+{
+    QCOMPARE(time.size(), expected.size());
+    QCOMPARE(qsizetype(diagnostics.value("imu_outputs").toInt(-1)), expected.size());
+    for (qsizetype i = 0; i < expected.size(); ++i)
+        QVERIFY2(time[i] == expected[i], qPrintable(QString::number(i)));
+}
+
 /// The published acceleration at sample `i` as spec section 6 states it, from
 /// the seam's corrections: the step before and the step after the sample's
 /// edge, the step after alone on the window's first edge.
@@ -613,6 +639,9 @@ private slots:
     void imuRateZeroMismatchIsForward();
     void imuRateAccelerationIntegratesToVelocity_data();
     void imuRateAccelerationIntegratesToVelocity();
+    void imuRateIsWhatTheFitPublishes_data();
+    void imuRateIsWhatTheFitPublishes();
+    void imuRateAxisWhenGnssIsFasterThanImu();
 };
 
 void FusionKernelTest::solverUsesTbb()
@@ -937,8 +966,18 @@ void FusionKernelTest::reconstructionTimingAndEndpointCorrection()
     const Samples d = boundarySamples(Vector3::Zero());
     const double duration = .863-.037;
 
-    // Two states that differ by a yaw of .2 rad which the (zero) gyro does
-    // not explain: the difference must be spread linearly over the interval.
+    // Two states at rest that differ by a yaw of .2 rad which the (zero) gyro
+    // does not explain. The force is vertical and does not change, so every
+    // step carries the density's noise alone, uniform in time, and a yaw
+    // about the force axis does not couple into velocity or position: the
+    // pass shares the yaw in proportion to elapsed time and nothing else, so
+    // the attitude is Rz(.2 (t - t0) / T) at every sample, the velocity and
+    // position stay zero, the step corrections are zero and so is the
+    // published acceleration, all to rounding. The tolerances are a hundred
+    // times or more what the pass measures: attitude 5.6e-17 rad against
+    // Rz, velocity and position 3.5e-15 (the forward integration's gravity
+    // and force cancel to rounding), acceleration 4.2e-14 m/s^2, velocity
+    // mismatch 7.1e-15 m/s, step correction 8.0e-14 m/s^2.
     FitResult endpoints;
     endpoints.values.insert(B(0), gtsam::imuBias::ConstantBias());
     endpoints.values.insert(X(0), gtsam::Pose3());
@@ -946,16 +985,27 @@ void FusionKernelTest::reconstructionTimingAndEndpointCorrection()
     endpoints.values.insert(V(0), Vector3(0, 0, 0));
     endpoints.values.insert(V(1), Vector3(0, 0, 0));
 
-    const DenseTrajectory dense = reconstructTrajectory(d, endpoints);
-    QCOMPARE(dense.time.size(), size_t(83));
-    QCOMPARE(dense.time.front(), .04);
-    QCOMPARE(dense.time.back(), .86);
-    QCOMPARE(dense.endpointCorrection.size(), size_t(1));
-    for (size_t i = 0; i < dense.time.size(); ++i) {
-        const Rot3 expected = Rot3::Rz(.2*(dense.time[i]-.037)/duration);
-        QVERIFY(Rot3::Logmap(dense.rotation[i].between(expected)).norm() < 1e-12);
-        QVERIFY(dense.acceleration[i].norm() < 1e-12);
+    const ImuRateTrajectory out = reconstructAtImuRate(d, endpoints, Tuning{});
+    QCOMPARE(out.time.size(), size_t(83));
+    QCOMPARE(out.time.front(), .04);
+    QCOMPARE(out.time.back(), .86);
+    double attitude = 0, state = 0, acceleration = 0;
+    for (size_t i = 0; i < out.time.size(); ++i) {
+        const Rot3 expected = Rot3::Rz(.2*(out.time[i]-.037)/duration);
+        attitude = std::max(attitude, angleBetween(out.rotation[i], expected));
+        state = std::max({state, out.velocity[i].norm(), out.position[i].norm()});
+        acceleration = std::max(acceleration, out.acceleration[i].norm());
     }
+    qInfo() << "yaw share: attitude against Rz(.2 (t - t0) / T)" << attitude << "rad, velocity and position" << state
+            << ", acceleration" << acceleration << "m/s^2; endpoint correction" << out.maxEndpointCorrectionDeg
+            << "deg (" << out.maxEndpointCorrectionDeg-.2*180/kPi << "from .2 rad), velocity mismatch" << out.maxVelocityMismatch << "m/s, step correction" << out.maxStepCorrection
+            << "m/s^2";
+    QVERIFY(attitude < 1e-14);
+    QVERIFY(state < 1e-12);
+    QVERIFY(acceleration < 1e-11);
+    QVERIFY(std::abs(out.maxEndpointCorrectionDeg-.2*180/kPi) < 1e-12);
+    QVERIFY(out.maxVelocityMismatch < 1e-12);
+    QVERIFY(out.maxStepCorrection < 1e-11);
 }
 
 void FusionKernelTest::shortWindowIsOneSegment()
@@ -1167,11 +1217,18 @@ void FusionKernelTest::initializerDiagnosticsShape()
     // Every key of a successful fit's diagnostics, `initializer` among them
     // (QJsonObject sorts its keys).
     QCOMPARE(diagnostics.keys(), QStringList({
-        "algorithm", "anchor_time_s", "display_position_velocity", "end_s", "gnss_states", "imu_outputs",
+        "algorithm", "anchor_time_s", "dense_output", "end_s", "gnss_states", "imu_outputs",
         "initialization", "initializer", "input", "limitations", "max_endpoint_correction_deg",
-        "max_seed_vs_selected_acceleration_m_s2", "max_seed_vs_selected_angle_deg", "model", "objective",
+        "max_seed_vs_selected_acceleration_m_s2", "max_seed_vs_selected_angle_deg", "max_step_correction_m_s2",
+        "max_step_correction_time_s", "max_velocity_mismatch_m_s", "model", "objective",
         "orientation", "quality", "residuals", "seed_comparison_performed", "seeds", "selected_heading_deg",
         "start_s", "stationary_interval_s", "stopping"}));
+    // The account of the reconstruction names it; the limitations no longer
+    // disclaim it.
+    QVERIFY(diagnostics.value("dense_output").toString().startsWith(QStringLiteral("IMU-rate reconstruction")));
+    QVERIFY(diagnostics.value("limitations").toString().startsWith(
+        QStringLiteral("Local batch convergence; heading may be ambiguous.")));
+    QVERIFY(!diagnostics.value("limitations").toString().contains(QStringLiteral("smoothing posterior")));
     QCOMPARE(diagnostics.value("initialization").toString(),
              QStringLiteral("segmented initialization; heading from segment fits"));
     QVERIFY(diagnostics.value("stationary_interval_s").isNull());
@@ -1246,7 +1303,9 @@ void FusionKernelTest::exactConstantVelocityFit()
     QVERIFY(fitted.quality.objectivePerState < 1e-12);
     QVERIFY(std::isfinite(fitted.stopping.lastPassMeanRelativeDecrease));
 
-    const DenseTrajectory output = reconstructTrajectory(linear, fitted);
+    // The published samples are the IMU-rate reconstruction of the fit with
+    // the tuning it ran with: on exact data the exact trajectory.
+    const ImuRateTrajectory output = reconstructAtImuRate(linear, fitted, Tuning{});
     QVERIFY(!output.time.empty());
     for (size_t i = 0; i < output.time.size(); ++i) {
         QVERIFY((output.position[i]-offset-output.time[i]*speed).norm() < 1e-8);
@@ -1366,7 +1425,7 @@ void FusionKernelTest::biasSettledByCostTest()
     const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
     QCOMPARE(seed.value("converged").toBool(false), true);
     QCOMPARE(seed.value("iterations").toInt(), int(trace.history.size()));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v3"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v4"));
 
     // The quality metrics recomputed from the residuals array: 28 states, so
     // 28 position and velocity factors of dimension 3 and 27 IMU factors of
@@ -1544,7 +1603,7 @@ void FusionKernelTest::failureDiagnosticsShape()
     const QJsonObject diagnostics = failureDiagnostics(QStringLiteral("Nonfinite or increasing optimizer cost"), &s);
     QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure"),
                                               QStringLiteral("stopping")}));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v3"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v4"));
     QCOMPARE(diagnostics.value("failure").toString(), QStringLiteral("Nonfinite or increasing optimizer cost"));
     const QJsonObject stopping = diagnostics.value("stopping").toObject();
     QCOMPARE(stopping.value("rule").toString(), QStringLiteral("cost increased"));
@@ -2208,8 +2267,9 @@ void FusionKernelTest::reconstructionUsesIntervalBias()
 {
     // The proof of the reconstruction's per-interval bias: X(1) is X(0)
     // propagated with the interval's temperature-dependent bias, so the
-    // reconstruction lands on it exactly under the temperature model, and
-    // misses it by |slope dT| x .826 s = .0165 rad = .95 degrees under the
+    // forward integration lands on it exactly under the temperature model
+    // (the attitude part of the mismatch, maxEndpointCorrectionDeg, is zero),
+    // and misses it by |slope dT| x .826 s = .0165 rad = .95 degrees under the
     // constant model (the .5 degree bound is the margin).
     using gtsam::imuBias::ConstantBias;
     Samples d = boundarySamples(Vector3::Zero());
@@ -2236,16 +2296,16 @@ void FusionKernelTest::reconstructionUsesIntervalBias()
     fit.gyroBiasSlope = slope;
     fit.biasModel = model;
 
-    const DenseTrajectory dense = reconstructTrajectory(d, fit);
-    QCOMPARE(dense.endpointCorrection.size(), size_t(1));
-    qInfo() << "endpoint correction: temperature model" << dense.endpointCorrection[0] << "deg";
-    QVERIFY(dense.endpointCorrection[0] < 1e-9);
+    // One fix interval, so the largest endpoint correction is its own.
+    const ImuRateTrajectory temperature = reconstructAtImuRate(d, fit, Tuning{});
+    qInfo() << "endpoint correction: temperature model" << temperature.maxEndpointCorrectionDeg << "deg";
+    QVERIFY(temperature.maxEndpointCorrectionDeg < 1e-9);
 
     fit.biasModel = GyroBiasModel{};
     fit.gyroBiasSlope = Vector3::Zero();
-    const DenseTrajectory constant = reconstructTrajectory(d, fit);
-    qInfo() << "endpoint correction: constant model" << constant.endpointCorrection[0] << "deg";
-    QVERIFY(constant.endpointCorrection[0] > .5);
+    const ImuRateTrajectory constant = reconstructAtImuRate(d, fit, Tuning{});
+    qInfo() << "endpoint correction: constant model" << constant.maxEndpointCorrectionDeg << "deg";
+    QVERIFY(constant.maxEndpointCorrectionDeg > .5);
 }
 
 void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
@@ -2265,7 +2325,7 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     const Fusion::Result result = runPipeline(toChannels(f), t, Checkpoint(), &trace);
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
     const QJsonObject diagnostics = diagnosticsOf(result);
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v3"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v4"));
     const QJsonObject gyroBias = diagnostics.value("model").toObject().value("gyro_bias").toObject();
     const QJsonArray b1 = gyroBias.value("b1_rad_s_per_degc").toArray();
     QCOMPARE(b1.size(), 3);
@@ -2716,6 +2776,124 @@ void FusionKernelTest::imuRateAccelerationIntegratesToVelocity()
         }
     }
     qInfo() << name << ": worst error over bound" << worstRatio << ", whole axis error" << wholeError << "m/s";
+}
+
+void FusionKernelTest::imuRateIsWhatTheFitPublishes_data()
+{
+    imuRateEndsAreTheFit_data();
+}
+
+void FusionKernelTest::imuRateIsWhatTheFitPublishes()
+{
+    // Spec sections 6, 7 and 9: what the pipeline publishes is the IMU-rate
+    // pass on the fit, bit for bit, not something like it. The seventeen
+    // channels of runPipeline() against reconstructAtImuRate() on this
+    // executable's own fit of the fixture (fixtureFit(), the pipeline's
+    // stages in its order) through fillOutputChannels(), and the four
+    // numbers of the diagnostics against the pass's summaries. Section 6 and
+    // decision 12: the published time axis is the fixture's IMU samples in
+    // [first fix, last fix) of the window, in the number imu_outputs says.
+    QFETCH(QString, name);
+    const Fusion::Channels channels = toChannels(fusionFixture(name));
+    const Fusion::Result result = runPipeline(channels, Tuning{}, Checkpoint());
+    QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
+    const QJsonObject diagnostics = diagnosticsOf(result);
+
+    const WindowFit &f = fixtureFit(name);
+    QVERIFY(f.fit.converged);
+    const ImuRateTrajectory out = reconstructAtImuRate(f.window, f.fit, f.tuning);
+    Fusion::Result expected;
+    fillOutputChannels(out, prepareInput(channels).epoch, expected);
+    for (const QString &channel : fusionChannelNames()) {
+        QVERIFY2(sameBitsEverywhere(fusionChannel(result, channel), fusionChannel(expected, channel)),
+                 qPrintable(channel));
+    }
+    QVERIFY(diagnostics.value("max_endpoint_correction_deg").toDouble() == out.maxEndpointCorrectionDeg);
+    QVERIFY(diagnostics.value("max_velocity_mismatch_m_s").toDouble() == out.maxVelocityMismatch);
+    QVERIFY(diagnostics.value("max_step_correction_m_s2").toDouble() == out.maxStepCorrection);
+    QVERIFY(diagnostics.value("max_step_correction_time_s").toDouble() == out.maxStepCorrectionTime);
+
+    verifyTimeAxis(result.time, expectedTimeAxis(channels, diagnostics), diagnostics);
+}
+
+void FusionKernelTest::imuRateAxisWhenGnssIsFasterThanImu()
+{
+    // Spec sections 6 and 10: the time axis is the IMU samples whatever the
+    // GNSS rate, including a GNSS rate above the IMU's. 100 s level flight
+    // under a horizontal acceleration that turns (so the heading is
+    // observable), exact data, 25 degC; GNSS 10 Hz from .05 s, IMU 5 Hz, so
+    // every other fix interval holds no IMU sample and is one integration
+    // step. The fit succeeds and publishes the 499 IMU samples from .2 to
+    // 99.8 s, every channel finite, and the reconstruction's account.
+    const double base = 1700000000.;
+    const auto acceleration = [](double t) { return Vector3(.5*std::cos(.1*t), .5*std::sin(.1*t), 0); };
+    const auto velocity = [](double t) { return Vector3(20+5*std::sin(.1*t), 10-5*std::cos(.1*t), 3); };
+    const auto position = [](double t) {
+        return Vector3(20*t-50*std::cos(.1*t)+50, 10*t-50*std::sin(.1*t), 3*t);
+    };
+    Fusion::Channels c;
+    for (int k = 0; k <= 999; ++k) {
+        const double t = .05+.1*k;
+        const Vector3 p = position(t), v = velocity(t);
+        c.gnssTime.append(base+t);
+        c.north.append(p.x());
+        c.east.append(p.y());
+        c.down.append(p.z());
+        c.velN.append(v.x());
+        c.velE.append(v.y());
+        c.velD.append(v.z());
+        c.hAcc.append(1);
+        c.vAcc.append(1.5);
+        c.sAcc.append(.1);
+    }
+    for (int i = 0; i <= 500; ++i) {
+        const double t = .2*i;
+        const Vector3 force = acceleration(t)-kTestGravity;
+        c.imuTime.append(base+t);
+        c.ax.append(force.x());
+        c.ay.append(force.y());
+        c.az.append(force.z());
+        c.wx.append(0);
+        c.wy.append(0);
+        c.wz.append(0);
+        c.imuTemperature.append(kFixtureTemperatureDegC);
+    }
+    c.originIndex = 0;
+
+    // Not vacuous: fix intervals without an IMU sample inside.
+    const Samples recording = prepareInput(c).recording;
+    int withoutSample = 0;
+    for (size_t k = 0; k+1 < recording.gnssTime.size(); ++k) {
+        const auto after = std::upper_bound(recording.imuTime.begin(), recording.imuTime.end(), recording.gnssTime[k]);
+        if (after == recording.imuTime.end() || *after >= recording.gnssTime[k+1])
+            ++withoutSample;
+    }
+    QVERIFY(withoutSample > 400);
+
+    const Fusion::Result result = runPipeline(c, Tuning{}, Checkpoint());
+    QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
+    const QJsonObject diagnostics = diagnosticsOf(result);
+    const QVector<double> axis = expectedTimeAxis(c, diagnostics);
+    QCOMPARE(axis.size(), qsizetype(499));
+    QVERIFY(std::abs(axis.front()-base-.2) < 1e-6);
+    QVERIFY(std::abs(axis.back()-base-99.8) < 1e-6);
+    verifyTimeAxis(result.time, axis, diagnostics);
+    for (const QString &channel : fusionChannelNames()) {
+        const QVector<double> &values = fusionChannel(result, channel);
+        QCOMPARE(values.size(), axis.size());
+        QVERIFY2(std::all_of(values.begin(), values.end(), [](double v) { return std::isfinite(v); }),
+                 qPrintable(channel));
+    }
+    for (const char *key : {"max_endpoint_correction_deg", "max_velocity_mismatch_m_s", "max_step_correction_m_s2",
+                            "max_step_correction_time_s"}) {
+        const QJsonValue value = diagnostics.value(QLatin1String(key));
+        QVERIFY2(value.isDouble() && std::isfinite(value.toDouble()), key);
+    }
+    qInfo() << "GNSS faster than IMU:" << withoutSample << "of" << recording.gnssTime.size()-1
+            << "fix intervals without an IMU sample; endpoint correction"
+            << diagnostics.value("max_endpoint_correction_deg").toDouble() << "deg, velocity mismatch"
+            << diagnostics.value("max_velocity_mismatch_m_s").toDouble() << "m/s, step correction"
+            << diagnostics.value("max_step_correction_m_s2").toDouble() << "m/s^2";
 }
 
 FLYSIGHT_TEST_MAIN(FusionKernelTest)

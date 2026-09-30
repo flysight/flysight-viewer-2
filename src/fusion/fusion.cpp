@@ -93,12 +93,15 @@ Result fitAndAssemble(const FitPlan &plan, const Checkpoint &checkpoint, Pipelin
             &fit.stopping, &fit.quality);
     }
 
-    const DenseTrajectory dense = reconstructTrajectory(plan.window, fit);
+    // The fitted states at every IMU sample. Not a boundary: one pass over the
+    // samples after the last iteration, a fraction of a second, so it runs to
+    // its end once the fit has converged.
+    const ImuRateTrajectory trajectory = reconstructAtImuRate(plan.window, fit, plan.tuning);
     Result result;
     result.outcome = Outcome::Succeeded;
-    fillOutputChannels(dense, plan.prepared.epoch, result);
+    fillOutputChannels(trajectory, plan.prepared.epoch, result);
     result.diagnosticsJson = toCompactJson(
-        successDiagnostics(plan.prepared, init.account, fit, plan.window, dense, plan.tuning));
+        successDiagnostics(plan.prepared, init.account, fit, plan.window, trajectory, plan.tuning));
     return result;
 }
 

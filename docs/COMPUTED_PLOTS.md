@@ -19,6 +19,12 @@ the "Sensor fusion" category (Elevation, Horizontal, Vertical, Along-track and
 Cross-track acceleration, Heading, Pitch and Roll) and any logbook column over
 a Sensor fusion value ([what they are](SENSOR_FUSION.md)).
 
+Between two GNSS fixes the Sensor fusion plots follow the IMU at its own rate,
+pulled onto the fitted fixes, so a line no longer runs straight from one fix
+to the next or bends where two samples straddle a fix. After the update that
+brought this, the first start computes the kept Sensor fusion results again,
+once each, as they are needed, shown in the status bar like any computation.
+
 FlySight Viewer computes them in the background for what you have switched
 on: a checked plot for the tracks that are visible, and a logbook column for
 every recording in the logbook. There is nothing to press. Switching a plot or

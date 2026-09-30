@@ -2130,7 +2130,9 @@ nothing to compute, no job can be created, and blocker inspection reports
 `pitch`, `yaw`, `qx`, `qy`, `qz`, `qw` (no unit reported, like every derived
 measurement), and the attribute `_FUSION_DIAGNOSTICS`
 (`SessionKeys::FusionDiagnostics`, compact JSON as a string; not a logbook
-attribute).
+attribute). The measurements are the fitted state and the model's
+acceleration at every IMU sample of the fitted interval
+([SENSOR_FUSION.md](SENSOR_FUSION.md), section 4).
 
 **No arithmetic in the adapter.** `channelsFrom()` copies the implicitly shared
 input vectors field by field; the only logic is that a stored
@@ -2239,7 +2241,10 @@ record read.
 (`src/fusion/fusion.h`), the same string as the diagnostics' `"algorithm"`. The
 literal exists once in `src/`, in that header. Change it whenever a change can
 alter what the fit returns for the same channels; that drops every stored fit.
-The record holds the seventeen measurements and `_FUSION_DIAGNOSTICS`, or, for
+It is `batch-temperature-bias-v4` since the reconstruction at the IMU samples,
+so the first start after that update finds every stored fit stale at its
+recording's load and fits each again once, when something switched on needs
+it. The record holds the seventeen measurements and `_FUSION_DIAGNOSTICS`, or, for
 a rejection or solver failure, the diagnostics and the reason. Its leaves are
 the source data and attributes behind the 22 inputs: the IMU and GNSS source
 columns, `SCHEMA_VER`, the `TIME` sensor, the stored origin attributes. Markers

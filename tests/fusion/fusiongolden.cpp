@@ -165,6 +165,23 @@ QString compareJsonUnder(const QString &path, const QString &key,
             return QStringLiteral("%1: keys {%2}, golden has {%3}")
                 .arg(path, a.keys().join(QLatin1Char(',')), b.keys().join(QLatin1Char(',')));
         for (auto it = b.constBegin(); it != b.constEnd(); ++it) {
+            // The time of the largest step correction is an argmax: where
+            // the largest correction is rounding (coarse_linear), another
+            // compiler picks another step. In portable mode it is compared
+            // when the golden's largest correction is above the floor, and
+            // then exactly: the midpoint of two copied times has the same
+            // bits on every IEEE platform. Exact mode compares it as any
+            // number.
+            if (it.key() == QStringLiteral("max_step_correction_time_s") && !exactParityRequested()) {
+                const QString largest = QStringLiteral("max_step_correction_m_s2");
+                if (!(b.value(largest).toDouble() > portableFloor(largest)))
+                    continue;
+                const QJsonValue value = a.value(it.key());
+                if (value.isDouble() && it.value().isDouble() && value.toDouble() == it.value().toDouble())
+                    continue;
+                return QStringLiteral("%1.%2: %3 (the time of the largest step correction, exact when that is above the floor)")
+                    .arg(path, it.key(), describeNumbers(value.toDouble(), it.value().toDouble()));
+            }
             const QString difference = compareJsonUnder(path + QLatin1Char('.') + it.key(), it.key(),
                                                         a.value(it.key()), it.value());
             if (!difference.isEmpty())

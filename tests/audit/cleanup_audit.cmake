@@ -48,7 +48,11 @@
 #     neither the importer nor the legacy backfill writes wind; one type owns
 #     the orientation vocabulary; the sensor fusion category is the eight
 #     plots of the tests' mirror, and no removed fusion plot and no
-#     local-frame plot remains in code or documents (items 801-863).
+#     local-frame plot remains in code or documents (items 801-863);
+#   - the fused output is the state at every IMU sample: the linear
+#     reconstruction it replaced (states interpolated between fixes, an
+#     attitude correction spread by elapsed time) stays gone, and no text
+#     says the output is interpolated.
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -558,7 +562,7 @@ expect_none("the stationary-window detector is gone"
 expect_none("the silent poll is gone" "pollCancel" src tests)
 expect_none("the anchor-attitude initializer is gone"
   "InitialAttitude|initialAttitude\\(|kInitialHeadingDeg|attitudeFromStationaryWindow" src tests)
-# Allow: none expected. The goldens say batch-temperature-bias-v3; a hit under
+# Allow: none expected. The goldens say batch-temperature-bias-v4; a hit under
 # tests/data/fusion means a stale capture (re-capture, tests/README.md section 11).
 expect_none("the retired algorithm strings are gone" "batch-shared-bias-v[12]"
   src tests docs README.md ":!tests/README.md")
@@ -710,8 +714,8 @@ expect_none("stored results are widget-free"
 # Fusion's result version is its kernel's algorithm string, spelled once.
 # Allow: none expected. A changed algorithm changes the one literal; a comment
 # or test in src that quotes it names Fusion::Algorithm instead.
-expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v3" 1 src)
-expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v3"
+expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v4" 1 src)
+expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v4"
   "^src/fusion/fusion\\.h$" src)
 # The compatibility rule names the result version, in the code and in the note.
 # Allow: reword the sentence, never duplicate it; the count is 1 in each file.
@@ -1034,6 +1038,34 @@ expect_none("the fill reports no progress of its own" "Progress\\{|[Hh]igh[-]?[W
 expect_none("the documents describe the refined demand layer"
   "jobQueued|activeJobs\\(|${WB_START}idle\\(\\)|[Ss]ettlement|progressLabel|isFillEnding|one clock per view|lose work only by stepping|under the same label|arc with \"k of n\"|triangle with a number|CalculationDemand::(kMaxHeldSessions|kToolTipListLimit|buildToolTip)|plotState|columnState|workingPlotIds|workingColumnIds|statesChanged|DemandState|DemandTrack|DemandCondition|buildToolTip|kToolTipListLimit|jobFailure|showsWarning|isPlain|isWorking\\(|WorkingAnimation|followDemand|workingClock|[Ww]orking[- ]indicator|DemandIndicator|PlotRowDelegate|PlotRowLayout|LogbookHeaderView|glyphMetrics|drawDemandGlyph|showIndicatorToolTip|repaintWhenDemandDestroyed|progress line|[Ww]arning badge|badges|turning arc"
   docs README.md)
+
+# =============================================================================
+# The fused state at every IMU sample: between fixes the published samples are
+# the IMU integrated from the fitted state, the mismatch with the next fitted
+# state shared over the steps by their noise, in one pass
+# (trajectoryreconstruction.h). The linear reconstruction it replaced -
+# position and velocity on the straight line between the fitted fixes, the
+# attitude's endpoint correction spread by elapsed time - is removed, not kept
+# beside it, and no code, test or document says the output is interpolated.
+# =============================================================================
+
+# ─────────────────────────────── fusion-reconstruction
+audit_group(fusion-reconstruction)
+# Allow: none expected. The goldens under tests/data/fusion are searched, so a
+# capture from before the reconstruction (display_position_velocity in its
+# diagnostics) fails here: re-capture (tests/README.md section 11).
+# tests/README.md is excluded because its section 10 spells these names.
+expect_none("the linear reconstruction is gone"
+  "DenseTrajectory|reconstructTrajectory|endpointCorrection|propagateThroughInterval|display_position_velocity"
+  src tests docs README.md ":!tests/README.md")
+# Allow: none expected; say what the output is ("the fitted state at every IMU
+# sample", "the IMU integrated between fixes"). The linear interpolation the
+# integration applies to the readings between samples is not this and does
+# not match. tests/README.md is excluded because its section 10 spells these
+# phrases.
+expect_none("no text says the fused output is interpolated"
+  "interpolated linearly onto|states interpolated|interpolation of (the )?optimi[sz]ed GNSS states|interpolated for display|[Dd]isplay-only (linear )?interpolation|not (an|a full) IMU-rate smoothing posterior|distributed correction"
+  src tests docs README.md ":!tests/README.md")
 
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)

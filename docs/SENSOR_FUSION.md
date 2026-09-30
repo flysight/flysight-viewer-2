@@ -200,26 +200,69 @@ last pass settled but re-preintegrating still moved the cost) or
 failure the fit cannot continue from). Reported factors are reintegrated at
 the final bias.
 
-**Dense reconstruction.** Dense orientation follows bias-corrected gyro
-increments with a distributed correction in the fixed NED frame to reach the
-next optimized attitude; the gyro bias of an interval is the model's bias at
-that interval's first fix. Acceleration is
-`R * (specific_force - accelerometer_bias) + [0, 0, 9.80665]`. It has no
-added low-pass filtering and is not a GNSS velocity derivative. This
-reconstruction is not a full IMU-rate smoothing posterior.
+**The state at every IMU sample.** The fit estimates the state at each GNSS
+fix; what it publishes is the state at every IMU sample between the first and
+the last fix, reconstructed one fix interval at a time from the fitted states
+at the interval's two ends and the fitted biases, which it leaves as they are.
+From the fitted state at the first fix the IMU is integrated forward with the
+interval's bias through the fit's own preintegration: the same step
+boundaries, the same midpoint readings and the same per-step noise as the
+interval's IMU factor, giving a forward state at every integration edge (each
+IMU sample and the two fixes). The forward state at the second fix misses the
+fitted one; the mismatch is the fitted state there in the local coordinates of
+the forward state, nine components of attitude, position and velocity. It is
+shared over the steps as the conditional mean of the chain of steps given both
+ends: the covariance and the transition of every step, read from the
+preintegration as it advances, decide how much of the mismatch each step
+takes, so a step that carries more noise, because the signal changed across
+it, takes more, and where the noise is uniform the velocity's share grows with
+elapsed time. The share is one correction of all nine components together: an
+attitude share turns the direction in which every later reading was applied,
+and the sharing carries that into velocity and position. It is computed once,
+linearized about the forward states, and applied once. The share is nothing at
+the first fix and the whole mismatch at the second, so the ends are the fitted
+states exactly; inside the interval the published state is, to within that one
+linearization, what a fit with a state at every IMU sample and the same
+measurements would give, with the states at the fixes and the biases held
+(what the one pass leaves out: section 8). Where the mismatch is zero it is
+the forward integration.
+
+**Acceleration.** For each step, the step correction `c` is the corrected
+velocity change across the step divided by its length, less the mean of the
+bias-corrected readings at its two edges, each rotated by the corrected
+attitude at its own edge (at a fix, the interpolated reading the integration
+uses), less gravity: the part of the velocity change the rotated readings do
+not explain, as an acceleration. The published acceleration at a sample is
+`R * (specific_force - accelerometer_bias) + [0, 0, 9.80665] + (c_before + c_after) / 2`:
+the sample's own reading with the bias removed, rotated by the corrected
+attitude `R`, plus gravity, plus the mean of the corrections of the two steps
+beside the sample (the first and the last sample of the fitted interval have
+one and take it alone; the step beside a fix is the part-step between the
+sample and the fix). The reading is the sample itself, not the interpolated
+midpoint value the integration uses, so nothing smooths the accelerometer's
+signal: only the correction is spread, over the two steps beside each sample.
+The consequence: integrated with the kernel's own rule, the published
+acceleration reproduces the published velocity change over the fitted interval
+as a whole, and over any run of samples to within the spread of the
+corrections (the bound is in section 8), but not step by step. Where the
+corrections are negligible, in steady flight, the published acceleration is
+the rotated reading. It has no added low-pass filtering and is not a
+derivative of the GNSS velocity.
 
 **Outputs**, published together under the sensor `Fusion`:
 
 | Measurement | Meaning |
 | --- | --- |
 | `_time` | UTC seconds: the original IMU samples inside the half-open fitted interval `[first GNSS fix, last GNSS fix)` |
-| `north`, `east`, `down` | position in the local frame, metres; the optimized GNSS states interpolated linearly onto `_time` |
-| `velN`, `velE`, `velD` | velocity, m/s, interpolated the same way |
-| `accN`, `accE`, `accD` | acceleration, m/s^2 (the display layer may show g) |
+| `north`, `east`, `down` | position in the local frame, metres: the fitted state at each sample (above), the fitted states at the fixes joined by the IMU |
+| `velN`, `velE`, `velD` | velocity, m/s: the fitted state at each sample, like the position |
+| `accN`, `accE`, `accD` | acceleration, m/s^2 (the display layer may show g): the rotated reading plus gravity plus the model's share of the correction (above); integrated, it reproduces the velocity |
 | `roll`, `pitch`, `yaw` | degrees, unwrapped |
 | `qx`, `qy`, `qz`, `qw` | the device-to-NED quaternion in x/y/z/w order (the fit's own device frame, where "body" means the device; it does not follow the Orientation attribute of section 2) |
 
-All arrays align with `_time`. Roll, pitch and yaw unwrap successive angles by
+All arrays align with `_time`, which is the IMU's samples whatever the GNSS
+rate, also when the GNSS rate is above the IMU's: no fix time is added and
+nothing is resampled. Roll, pitch and yaw unwrap successive angles by
 adding or subtracting 360 degrees, with the same rule as the GNSS course
 (`src/calculations/anglehelper.h`). They keep the first angle and accumulate
 turns over the whole fit, independently of zoom or markers. That removes
@@ -251,7 +294,7 @@ about d^2/2R at a distance d from the origin (R the Earth's radius), some
 The attribute `_FUSION_DIAGNOSTICS` is compact JSON. After a successful fit
 its top-level keys are, grouped:
 
-- *identity and audit*: `algorithm` (`batch-temperature-bias-v3`) and `input`
+- *identity and audit*: `algorithm` (`batch-temperature-bias-v4`) and `input`
   (the input audit: `epoch_utc_s`, `imu_count`, `gnss_count`, `origin_index`,
   `origin`, `height_method`, `time_method`);
 - *the initializer*: `initialization` (`segmented initialization; heading
@@ -274,8 +317,13 @@ its top-level keys are, grouped:
   `converged`, `objective`, `iterations`, `acc_bias_m_s2`, `gyro_bias_rad_s`
   (`b0`), `position_residual_rms_m`, `velocity_residual_rms_m_s`),
   `seed_comparison_performed` (`false`), `max_seed_vs_selected_angle_deg` and
-  `max_seed_vs_selected_acceleration_m_s2` (`null`),
-  `max_endpoint_correction_deg`;
+  `max_seed_vs_selected_acceleration_m_s2` (`null`);
+- *the reconstruction* (above): `max_endpoint_correction_deg`, the largest
+  attitude part of the mismatch over the fix intervals, degrees;
+  `max_velocity_mismatch_m_s`, the largest velocity part of the mismatch over
+  the fix intervals, m/s; `max_step_correction_m_s2`, the largest step
+  correction of the fit, m/s^2; `max_step_correction_time_s`, the middle of
+  that step, seconds since the epoch like `start_s`;
 - `stopping`: `rule` (one of the five texts above), `passes`,
   `last_pass_mean_relative_decrease`, `repreintegration_cost_difference`,
   `bias_settled_tolerance`, and `slow_tail` with `window`,
@@ -285,7 +333,9 @@ its top-level keys are, grouped:
 - `model`: `per_step` with `gyro_slope_s` and `acc_slope_s`, and `gyro_bias`
   with `b0_rad_s`, `b1_rad_s_per_degc` and `t_ref_degc`, always numbers (the
   temperature is a required input);
-- `display_position_velocity` and `limitations`, as text.
+- `dense_output` and `limitations`, as text: `dense_output` is
+  "IMU-rate reconstruction at original IMU times: between fixes the IMU integrated from the fitted state, the mismatch with the next fitted state shared over the steps by their noise, in one linearized pass", and `limitations` is
+  "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass with the fitted fix states and biases held; no uncertainty is published."
 
 When the recording was rejected, or the fit stage raised anything but a
 stopping-rule failure, the diagnostics are `{"algorithm", "failure"}` with the
@@ -436,8 +486,10 @@ stopped.
 `Starting fit`); every 256 states of graph construction, in the initializer's
 prefix and segment fits as in the full fit; and before each optimizer
 iteration of any of those fits (the segment fits' texts name the segment and,
-for a prefix, its length). A linear solve in progress finishes first. A cancelled fit
-publishes nothing and caches nothing.
+for a prefix, its length). A linear solve in progress finishes first. The
+reconstruction at the IMU samples (section 4), after the last iteration of the
+full fit, is not a boundary: it runs to its end, a fraction of a second. A
+cancelled fit publishes nothing and caches nothing.
 
 **Outcomes.** A rejection (section 6) and a solver failure are functions of the
 inputs, so they are cached like any result: the recording is listed among
@@ -458,9 +510,14 @@ not.
 success, a rejection or a solver failure. It is restored bit for bit when the
 recording is loaded, and the restored result is indistinguishable from a fresh
 one. Its code stamp is the algorithm string of the diagnostics
-(`batch-temperature-bias-v3`): a change that can alter what the fit returns
-changes that string, and every stored fit is then dropped at its recording's
-next load. The record also states what provided each input the fit looked up,
+(`batch-temperature-bias-v4` since the reconstruction at the IMU samples): a
+change that can alter what the fit returns changes that string, and every
+stored fit is then dropped at its recording's next load. So the first start
+after such an update finds every stored fit stale when its recording is
+loaded: the record is deleted, and the recording is fitted again once when
+something switched on needs it (after a start, every recording a fusion
+column covers and every visible one a checked fusion plot covers), counted in
+the status bar like any fit. The record also states what provided each input the fit looked up,
 and a load repeats those lookups, so only a change of what the fit reads, or
 of the code that computes it, drops a stored fit. A cancelled fit, or one that
 ran out of memory, stores nothing. A stored rejection is listed again among
@@ -478,7 +535,7 @@ threads, on which GTSAM parallelizes the elimination, take the worker's
 priority while they help a fit, so the whole fit runs below normal priority
 where the operating system applies it (not on Linux; CALCULATIONS.md, section
 15.5). Quitting cancels them and waits for the running fit to reach its next
-cancellation boundary: at most one solver step.
+cancellation boundary: at most one solver step and the reconstruction.
 
 **Logbook columns** over fusion values show the live value for a loaded
 recording, and for an unloaded one the value cached from its stored result.
@@ -499,7 +556,7 @@ demonstrated by tests, all labelled `fusion`:
 | Test | What it holds |
 | --- | --- |
 | `tst_fusion_golden` | the kernel through its public API reproduces its goldens for twelve synthetic fixtures (three fits, nine rejections), the progress texts at its boundaries, cancellation at each kind of boundary (prefix, segment and full-fit iterations included), determinism and thread independence |
-| `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the two stopping rules forced through the tuning, the per-step covariance, the temperature factor's Jacobians and the three temperature cases, and the fit trace iteration by iteration against the goldens |
+| `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the two stopping rules forced through the tuning, the per-step covariance, the temperature factor's Jacobians and the three temperature cases, the fit trace iteration by iteration against the goldens; the reconstruction at the IMU samples (the ends are the fitted states, sharing by noise, zero mismatch, consistency, equivalence with a graph with a state at every sample), the channels and diagnostics the fit publishes as that reconstruction bit for bit, and the time axis on the three fits and on a recording whose GNSS rate is above its IMU's |
 | `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
 | `tst_fusion_derived` | what is derived from the outputs, without the solver: the outputs stored as data, elevation and the track accelerations held to exact known answers, the track accelerations equal to the GNSS ones on the same samples, and each derived value waiting on the fit and never starting it; the orientation vocabulary (24 pairs, each a proper rotation, the attribute's choices), heading, pitch and roll held to hand-built known answers, finite with pitch at +90 or -90 where the forward axis is exactly vertical, side mounts, a GNSS track and a course reference that change nothing, and the fit's own angles for the device frame, an invalid or changed orientation without a fit, and the Orientation column's display, edit and bulk edit |
 | `tst_fusion_jobs` | the real fit through the executor: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result and kept, for an unloaded session, through an altitude marker added at run time or at the next start |
@@ -523,6 +580,67 @@ as `tst_fusion_*_exact` (label `exact`; CMake option
 configure log says that they were not registered, and only the portable mode
 runs. The fixtures, the two modes and the capture procedure are described in
 [tests/README.md](../tests/README.md), section 11.
+
+**Validating the reconstruction.** The reconstruction of section 4 is held to
+a reference by `tst_fusion_kernel`: a graph with a state at every integration
+edge, a one-step IMU factor across every step with the same per-step
+covariance and the same interval bias as the fit's factor, the states at the
+fixes and the biases held at the fit's values, solved by the fit's solver from
+the forward states. At every IMU sample the two agree to within the one
+linearization. On `coarse_maneuver`, whose largest mismatch is 1.1e-4 degrees
+of attitude, 9.1e-5 m/s of velocity and 9.1e-6 m of position, they differ by
+3.6e-12 degrees, 2.8e-13 m/s and 2.9e-14 m (3.3e-8, 3.1e-9 and 3.2e-9 of the
+mismatch); on a synthetic recording that turns at 3 rad/s about a horizontal
+axis (IMU 25 Hz, GNSS 5 Hz, exact readings, the true states as the fit), whose
+velocity mismatch is 0.11 m/s and position mismatch 0.011 m, by 1.0e-9 m/s
+and 5.9e-11 m (9.4e-9 and 5.3e-9 of the mismatch) and 2.0e-6 degrees of
+attitude. The test allows 1e-5 of the largest mismatch plus 1e-12 per
+component, and on the turning recording 5e-5 degrees of attitude, whose
+mismatch there is at rounding. The reference holds the fix states because,
+freed with their GNSS factors and the biases, they move along the unobservable
+heading, which is not what the test measures: by 0.9 times the attitude
+mismatch on `coarse_maneuver`, 0.18 degrees on `stationary_spin` and 5.7
+degrees on the `rest_throughout` recording, so that no tolerance could be
+stated against the mismatch. With the states at the fixes settled, each fix
+interval is solved on its own.
+
+What the one pass leaves out: it is linearized once, about the forward
+states, so the split of the mismatch inside an interval carries an error
+quadratic in the mismatch, about `2.2e-5 |d_v|^2` m/s of velocity and
+`5.4e-4 |d_att|^2` degrees of attitude (the mismatch in m/s and degrees); the
+states at the fixes and the biases are the fit's and are not solved again;
+chaining one-step preintegrations differs from preintegrating many steps at
+once (1.1e-6 degrees on `stationary_spin`); and no uncertainty is published.
+
+The consistency of acceleration and velocity is bounded: integrated by the
+kernel's rule from sample `a` to sample `b`, the published acceleration
+reproduces the published velocity change to within
+`dt_a / 4 |c_before(a) - c_after(a)| + dt_b / 4 |c_after(b) - c_before(b)|`,
+plus, for every sample step that contains a fix, `dt / 2` times the largest
+difference between the corrections of its part-steps; over the whole fitted
+interval only the first two terms remain. The test allows 1.01 times the
+bound plus 1e-12 m/s. The bound is tight: the worst ratio of error to bound is
+0.986 on `coarse_linear`, 0.99998 on `coarse_maneuver` and 0.99999 on
+`stationary_spin`, and over the whole fitted interval the error is 4.2e-13,
+1.9e-6 and 8.2e-6 m/s.
+
+Under fast rotation the corrections carry the integration's own
+discretization error. The fit's integration rotates each reading by the
+attitude at the start of its step, which is off by about `|omega x f| dt / 2`;
+with exact readings and the true states at the fixes that alone leaves a
+mismatch, which the pass shares out as corrections. On the turning recording
+above (3 rad/s), the published acceleration against the true one:
+
+| IMU rate | velocity mismatch, m/s | published acceleration, error, m/s^2 | the rotated reading alone, error, m/s^2 |
+| --- | --- | --- | --- |
+| 13 Hz | 0.21 | 0.136 | 1.0e-3 |
+| 25 Hz | 0.11 | 0.133 | 1.2e-3 |
+| 100 Hz | 0.030 | 0.050 | 3.4e-4 |
+
+At 1 rad/s the error is smaller, 0.017 m/s^2 at 100 Hz. The remedy is to
+rotate each reading by the attitude at the middle of its step, a change to
+the fit's integration, and so to the fitted states, that a later
+specification makes.
 
 **The runner.** `fusion_runner` is a test/tooling target, built with the
 fusion tests and never installed: the fit on one recording, imported exactly

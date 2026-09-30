@@ -50,11 +50,16 @@ struct Result {
     QString diagnosticsJson;
     /// Succeeded only; otherwise all empty. All the same length and aligned
     /// with `time` (UTC s): the original IMU samples inside the fitted
-    /// interval. Position m and velocity m/s are the optimized GNSS states
-    /// interpolated for display; acceleration m/s^2 is inertial, NED. roll,
-    /// pitch and yaw are degrees, unwrapped across the whole fit with the rule
-    /// the GNSS course uses; qx..qw is the same body-to-NED attitude as a
-    /// quaternion.
+    /// interval, whatever the GNSS rate. Attitude, position m and velocity m/s
+    /// are the fitted state at every IMU sample: between two fixes the IMU
+    /// integrated from the fitted state at the first, joined to the fitted
+    /// state at the second by sharing the mismatch over the steps by their
+    /// noise (docs/SENSOR_FUSION.md section 4). Acceleration m/s^2 is
+    /// inertial, NED: the bias-corrected reading rotated by that attitude,
+    /// plus gravity, plus the model's share of the correction, so that
+    /// integrated it reproduces the velocity. roll, pitch and yaw are
+    /// degrees, unwrapped across the whole fit with the rule the GNSS course
+    /// uses; qx..qw is the same body-to-NED attitude as a quaternion.
     QVector<double> time, north, east, down, velN, velE, velD, accN, accE, accD,
                     roll, pitch, yaw, qx, qy, qz, qw;
 };
@@ -77,7 +82,8 @@ using CancelFn = std::function<bool()>;
 /// `Integrating IMU factors`, every 256 states of every graph build; and
 /// every iteration of every optimizer pass, in the initializer's prefix and
 /// segment fits (whose texts name the segment) as in the full fit. A linear
-/// solve in progress finishes first.
+/// solve in progress finishes first, and so does the reconstruction at the
+/// IMU samples after the last iteration, which is not a boundary.
 ///
 /// Every std::exception raised inside (the checks, the solver) becomes a
 /// Rejected or SolverFailed result. Two things propagate: std::bad_alloc,
@@ -92,7 +98,7 @@ Result run(const Channels &channels, const ProgressFn &progress = {},
 /// registration (CalculationDescriptor::resultVersion), so changing it drops
 /// every stored fit. Change it whenever a change can alter what run() returns
 /// for the same channels.
-inline constexpr char Algorithm[] = "batch-temperature-bias-v3";
+inline constexpr char Algorithm[] = "batch-temperature-bias-v4";
 
 } // namespace FlySight::Fusion
 

@@ -15,17 +15,22 @@
 
 namespace FlySight::Fusion::Detail {
 
-/// Fills the seventeen arrays of `result` from `dense`: UTC time restored by
-/// adding `epoch`, roll / pitch / yaw in degrees and unwrapped over the whole
-/// fit with the rule the GNSS course uses, quaternion xyzw.
-void fillOutputChannels(const DenseTrajectory &dense, double epoch, Result &result);
+/// Fills the seventeen arrays of `result` from the IMU-rate reconstruction
+/// `trajectory`: its time with `epoch` added back (UTC), its corrected
+/// position, velocity and published acceleration, and its corrected attitude
+/// as roll / pitch / yaw in degrees, unwrapped over the whole fit with the
+/// rule the GNSS course uses, and as a quaternion xyzw.
+void fillOutputChannels(const ImuRateTrajectory &trajectory, double epoch, Result &result);
 
 /// The diagnostics of a converged fit: input audit, the initializer's
 /// account, objective, biases, per-factor residuals, the model constants of
-/// `tuning`, and the statements of what the outputs mean.
+/// `tuning`, the statements of what the outputs mean, and the account of the
+/// reconstruction from `trajectory`: its sample count and its four summaries
+/// (the largest attitude and velocity mismatch at a fix, the largest step
+/// correction and when it occurred).
 QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerAccount &account,
                                const FitResult &fit, const Samples &window,
-                               const DenseTrajectory &dense, const Tuning &tuning);
+                               const ImuRateTrajectory &trajectory, const Tuning &tuning);
 
 /// The diagnostics of a rejected recording or a failed fit: the algorithm and
 /// the reason, plus the stopping account when the fit ran a pass (`stopping`

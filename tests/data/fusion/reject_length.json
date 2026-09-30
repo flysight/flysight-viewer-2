@@ -1,6 +1,6 @@
 {
     "diagnostics": {
-        "algorithm": "batch-temperature-bias-v3",
+        "algorithm": "batch-temperature-bias-v4",
         "failure": "Missing or mismatched Local/velE"
     },
     "fixture": "reject_length",

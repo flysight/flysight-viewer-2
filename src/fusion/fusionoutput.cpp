@@ -1,6 +1,5 @@
 #include "fusion/fusionoutput.h"
 
-#include <algorithm>
 #include <cmath>
 
 #include <QJsonArray>
@@ -18,6 +17,14 @@ namespace {
 // The legacy `initialization` key names the method; the keys that described
 // the stationary window and the selected heading are null and stay present.
 const char kInitializationMethod[] = "segmented initialization; heading from segment fits";
+
+// What the published samples are, and what the one pass behind them leaves
+// out; docs/SENSOR_FUSION.md section 4 quotes both.
+const char kDenseOutput[] = "IMU-rate reconstruction at original IMU times: between fixes the IMU integrated "
+                            "from the fitted state, the mismatch with the next fitted state shared over the "
+                            "steps by their noise, in one linearized pass";
+const char kLimitations[] = "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass "
+                            "with the fitted fix states and biases held; no uncertainty is published.";
 
 QJsonArray toJsonArray(const gtsam::Vector3 &v)
 {
@@ -144,9 +151,9 @@ QJsonArray residualArray(const FitResult &fit)
 
 } // namespace
 
-void fillOutputChannels(const DenseTrajectory &dense, double epoch, Result &result)
+void fillOutputChannels(const ImuRateTrajectory &trajectory, double epoch, Result &result)
 {
-    const qsizetype count = qsizetype(dense.time.size());
+    const qsizetype count = qsizetype(trajectory.time.size());
     for (QVector<double> *channel : { &result.time, &result.north, &result.east, &result.down,
                                       &result.velN, &result.velE, &result.velD,
                                       &result.accN, &result.accE, &result.accD,
@@ -154,11 +161,11 @@ void fillOutputChannels(const DenseTrajectory &dense, double epoch, Result &resu
                                       &result.qx, &result.qy, &result.qz, &result.qw })
         channel->reserve(count);
 
-    for (size_t i = 0; i < dense.time.size(); ++i) {
-        result.time.append(epoch+dense.time[i]);
-        const auto a = dense.acceleration[i], p = dense.position[i], v = dense.velocity[i];
-        const gtsam::Vector3 rpy = dense.rotation[i].rpy()*180/kPi;
-        const auto q = dense.rotation[i].toQuaternion();
+    for (size_t i = 0; i < trajectory.time.size(); ++i) {
+        result.time.append(epoch+trajectory.time[i]);
+        const auto a = trajectory.acceleration[i], p = trajectory.position[i], v = trajectory.velocity[i];
+        const gtsam::Vector3 rpy = trajectory.rotation[i].rpy()*180/kPi;
+        const auto q = trajectory.rotation[i].toQuaternion();
         result.accN.append(a.x());   result.accE.append(a.y());   result.accD.append(a.z());
         result.north.append(p.x());  result.east.append(p.y());   result.down.append(p.z());
         result.velN.append(v.x());   result.velE.append(v.y());   result.velD.append(v.z());
@@ -174,7 +181,7 @@ void fillOutputChannels(const DenseTrajectory &dense, double epoch, Result &resu
 
 QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerAccount &account,
                                const FitResult &fit, const Samples &window,
-                               const DenseTrajectory &dense, const Tuning &tuning)
+                               const ImuRateTrajectory &trajectory, const Tuning &tuning)
 {
     return QJsonObject{
         {"algorithm", Algorithm},
@@ -190,15 +197,17 @@ QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerA
         {"start_s", window.gnssTime.front()},
         {"end_s", window.gnssTime.back()},
         {"gnss_states", int(window.gnssTime.size())},
-        {"imu_outputs", int(dense.time.size())},
+        {"imu_outputs", int(trajectory.time.size())},
         {"seed_comparison_performed", false},
         {"max_seed_vs_selected_angle_deg", QJsonValue::Null},
         {"max_seed_vs_selected_acceleration_m_s2", QJsonValue::Null},
-        {"max_endpoint_correction_deg",
-         *std::max_element(dense.endpointCorrection.begin(), dense.endpointCorrection.end())},
-        {"display_position_velocity", "linear interpolation of optimized GNSS states at original IMU times"},
+        {"max_endpoint_correction_deg", trajectory.maxEndpointCorrectionDeg},
+        {"max_velocity_mismatch_m_s", trajectory.maxVelocityMismatch},
+        {"max_step_correction_m_s2", trajectory.maxStepCorrection},
+        {"max_step_correction_time_s", trajectory.maxStepCorrectionTime},
+        {"dense_output", kDenseOutput},
         {"orientation", "body to fixed NED; quaternion xyzw; RPY degrees"},
-        {"limitations", "Local batch convergence; heading may be ambiguous. Dense output is not an IMU-rate smoothing posterior."},
+        {"limitations", kLimitations},
         {"residuals", residualArray(fit)},
         {"stopping", stoppingObject(fit.stopping)},
         {"quality", qualityObject(fit.quality)}};

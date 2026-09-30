@@ -1,9 +1,9 @@
 {
     "channels_file": "coarse_linear.channels.txt",
     "diagnostics": {
-        "algorithm": "batch-temperature-bias-v3",
+        "algorithm": "batch-temperature-bias-v4",
         "anchor_time_s": null,
-        "display_position_velocity": "linear interpolation of optimized GNSS states at original IMU times",
+        "dense_output": "IMU-rate reconstruction at original IMU times: between fixes the IMU integrated from the fitted state, the mismatch with the next fitted state shared over the steps by their noise, in one linearized pass",
         "end_s": 1.6000001430511475,
         "gnss_states": 9,
         "imu_outputs": 160,
@@ -45,10 +45,13 @@
             "origin_index": 0,
             "time_method": "SessionData shared UTC conversion; common epoch subtraction only"
         },
-        "limitations": "Local batch convergence; heading may be ambiguous. Dense output is not an IMU-rate smoothing posterior.",
-        "max_endpoint_correction_deg": 3.976313502008755e-12,
+        "limitations": "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass with the fitted fix states and biases held; no uncertainty is published.",
+        "max_endpoint_correction_deg": 3.976313502009224e-12,
         "max_seed_vs_selected_acceleration_m_s2": null,
         "max_seed_vs_selected_angle_deg": null,
+        "max_step_correction_m_s2": 5.555043557532901e-11,
+        "max_step_correction_time_s": 1.0015000104904175,
+        "max_velocity_mismatch_m_s": 7.559928086784594e-12,
         "model": {
             "gyro_bias": {
                 "b0_rad_s": [

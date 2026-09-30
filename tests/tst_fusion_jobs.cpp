@@ -612,7 +612,7 @@ void FusionJobsTest::columnOnFusionOutputIsCachedFromRecord()
     QVERIFY(isNear(cachedRoll().value(kRollColumn).toDouble(), liveRoll));
     QVERIFY(indexValue("a", column).isDouble());
     QVERIFY(isNear(indexValue("a", column).toDouble(), liveRoll));
-    const QJsonObject stamp{{QStringLiteral("builtin.fusion.fit"), QStringLiteral("batch-temperature-bias-v3")}};
+    const QJsonObject stamp{{QStringLiteral("builtin.fusion.fit"), QStringLiteral("batch-temperature-bias-v4")}};
     QCOMPARE(indexRecordStamp("a"), QJsonValue(stamp));
     QVERIFY(showsNumber());
 
@@ -680,13 +680,13 @@ void FusionJobsTest::columnShowsValueStraightAfterPublication()
 
     // The expectation comes from the golden, not from the session: the exit
     // marker is exactly on an output sample, so the interpolated value is that
-    // sample of the golden roll channel (0.27409834397858546 deg as of the
+    // sample of the golden roll channel (0.2740970962934719 deg as of the
     // current capture; one decimal is what the logbook shows for an angle).
     const FusionGolden golden = loadFusionGolden(QStringLiteral("coarse_maneuver"));
     const qsizetype sample = golden.channels.value(QStringLiteral("_time")).indexOf(kFixtureExitTime);
     QVERIFY(sample >= 0);
     const double expectedRoll = golden.channels.value(QStringLiteral("roll")).at(sample);
-    QVERIFY(qAbs(expectedRoll - 0.27409834397858546) < 1e-15);
+    QVERIFY(qAbs(expectedRoll - 0.2740970962934719) < 1e-15);
 
     // What a view does first: it reads the cell, which is empty and starts nothing
     QCOMPARE(cell(row), QString());
@@ -850,7 +850,7 @@ void FusionJobsTest::workerRefillsColumnFromStoredFit()
     QVERIFY(waitForIdle(*m_model));
     const QVariant fitted = std::as_const(*m_model).rowAt(m_model->getSessionRow("a")).cachedValues.value(kRollColumn);
     QCOMPARE(fitted.typeId(), int(QMetaType::Double));
-    const QJsonObject stamp{{kFit, QStringLiteral("batch-temperature-bias-v3")}};
+    const QJsonObject stamp{{kFit, QStringLiteral("batch-temperature-bias-v4")}};
     QCOMPARE(indexRecordStamp("a"), QJsonValue(stamp));
     const QString recordPath = TestEnvironment::instance().cacheDir() + QLatin1Char('/')
         + sessionFileStem("a") + QStringLiteral(".builtin%2Efusion%2Efit.fvresult");

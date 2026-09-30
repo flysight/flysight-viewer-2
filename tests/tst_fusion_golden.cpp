@@ -154,6 +154,16 @@ bool jsonPasses(const char *key, double got, double golden)
                        QJsonObject{{QLatin1String(key), golden}}).isEmpty();
 }
 
+/// The time of the largest step correction beside the golden's largest
+/// correction `largest` (the same in both objects).
+bool stepTimePasses(double got, double golden, double largest)
+{
+    return compareJson(QStringLiteral("j"),
+                       QJsonObject{{"max_step_correction_m_s2", largest}, {"max_step_correction_time_s", got}},
+                       QJsonObject{{"max_step_correction_m_s2", largest}, {"max_step_correction_time_s", golden}})
+        .isEmpty();
+}
+
 } // namespace
 
 // The comparator itself: a bound wide enough for every compiler must still be
@@ -225,6 +235,22 @@ void FusionGoldenTest::comparatorHoldsItsBounds()
                              QJsonObject{{"algorithm", "b"}}).isEmpty());
         QVERIFY(!compareJson(QStringLiteral("j"), QJsonArray{1.0}, QJsonArray{1.0, 1.0}).isEmpty());
 
+        // The time of the largest step correction, an argmax: one step off
+        // passes while the golden's largest correction is rounding (at or
+        // below the floor, which is where another compiler may pick another
+        // step), and fails when it is above; above the floor it is exact.
+        const double stepTime = 5.1775, stepLater = 5.1875;
+        for (const double largest : {0.0, 5.56e-11, kPortableAbsolute}) {
+            QVERIFY2(stepTimePasses(stepLater, stepTime, largest), qPrintable(QString::number(largest)));
+            QVERIFY2(stepTimePasses(stepTime, stepTime, largest), qPrintable(QString::number(largest)));
+        }
+        for (const double largest : {std::nextafter(kPortableAbsolute, 1.0), 4.6e-4, 2.08e-3}) {
+            QVERIFY2(!stepTimePasses(stepLater, stepTime, largest), qPrintable(QString::number(largest)));
+            QVERIFY2(!stepTimePasses(std::nextafter(stepTime, 6.0), stepTime, largest),
+                     qPrintable(QString::number(largest)));
+            QVERIFY2(stepTimePasses(stepTime, stepTime, largest), qPrintable(QString::number(largest)));
+        }
+
         // A value the test recomputes: a few ulp, no more
         QVERIFY(sameRecomputedValue(oneUlpAboveOne, 1.0));
         QVERIFY(sameRecomputedValue(0.0, 0.0));
@@ -242,6 +268,14 @@ void FusionGoldenTest::comparatorHoldsItsBounds()
         QVERIFY(!samplesPass(timeChannel, timeOneUlpLater, time));
         QVERIFY(jsonPasses("objective", 1.0, 1.0));
         QVERIFY(!jsonPasses("objective", oneUlpAboveOne, 1.0));
+        // The time of the largest step correction is bit for bit, whatever
+        // the largest correction.
+        for (const double largest : {0.0, kPortableAbsolute, 4.6e-4}) {
+            QVERIFY2(!stepTimePasses(5.1875, 5.1775, largest), qPrintable(QString::number(largest)));
+            QVERIFY2(!stepTimePasses(std::nextafter(5.1775, 6.0), 5.1775, largest),
+                     qPrintable(QString::number(largest)));
+            QVERIFY2(stepTimePasses(5.1775, 5.1775, largest), qPrintable(QString::number(largest)));
+        }
         QVERIFY(sameRecomputedValue(1.0, 1.0));
         QVERIFY(!sameRecomputedValue(oneUlpAboveOne, 1.0));
     }

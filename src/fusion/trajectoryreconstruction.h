@@ -92,25 +92,6 @@ struct ImuRateTrajectory {
 /// validation: the window is the one the fit ran on.
 ImuRateTrajectory reconstructAtImuRate(const Samples &window, const FitResult &fit, const Tuning &tuning);
 
-/// The fit at IMU rate. Everything but endpointCorrection aligns with `time`.
-struct DenseTrajectory {
-    std::vector<double> time;                  ///< original IMU times inside the fitted interval, s since the epoch
-    std::vector<double> endpointCorrection;    ///< per GNSS interval, deg: see reconstructTrajectory()
-    std::vector<gtsam::Rot3> rotation;         ///< body to NED
-    Vectors acceleration;                      ///< inertial acceleration, NED, m/s^2
-    Vectors position, velocity;                ///< display-only interpolation of the fitted states
-};
-
-/// Between two fitted states the attitude is the gyro integration from the
-/// first state, which does not land exactly on the second state's fitted
-/// attitude. The mismatch (endpointCorrection, a small angle) is distributed
-/// linearly in time over the interval, so the dense attitude is continuous and
-/// agrees with the fit at every fix. The gyro bias of an interval is the
-/// model's bias at that interval's first fix (the bias its IMU factor was
-/// evaluated at). Acceleration is the bias-corrected force rotated by that
-/// attitude, plus gravity. Samples at or after the last fix are not produced.
-DenseTrajectory reconstructTrajectory(const Samples &samples, const FitResult &fit);
-
 } // namespace FlySight::Fusion::Detail
 
 #endif // FLYSIGHT_FUSION_TRAJECTORYRECONSTRUCTION_H
