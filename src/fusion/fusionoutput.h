@@ -22,19 +22,22 @@ namespace FlySight::Fusion::Detail {
 /// rule the GNSS course uses, and as a quaternion xyzw.
 void fillOutputChannels(const ImuRateTrajectory &trajectory, double epoch, Result &result);
 
-/// The diagnostics of a converged fit: input audit, the initializer's
-/// account, objective, biases, per-factor residuals, the model constants of
-/// `tuning`, the statements of what the outputs mean, and the account of the
-/// reconstruction from `trajectory`: its sample count and its four summaries
-/// (the largest attitude and velocity mismatch at a fix, the largest step
-/// correction and when it occurred).
+/// The diagnostics of a converged fit: input audit, the configuration the fit
+/// ran under and the noise the datasheet gives for it (both from
+/// `tuning.noise`), the initializer's account, objective, biases, per-factor
+/// residuals, the statements of what the outputs mean, the stopping account
+/// with its thresholds, and the account of the reconstruction from
+/// `trajectory`: its sample count and its four summaries (the largest attitude
+/// and velocity mismatch at a fix, the largest step correction and when it
+/// occurred).
 QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerAccount &account,
                                const FitResult &fit, const Samples &window,
                                const ImuRateTrajectory &trajectory, const Tuning &tuning);
 
 /// The diagnostics of a rejected recording or a failed fit: the algorithm and
 /// the reason, plus the stopping account when the fit ran a pass (`stopping`
-/// given) and the quality of the reported fit when it completed its passes
+/// given: its rule says `cost increased` or `damping saturated` for a pass that
+/// failed) and the quality of the reported fit when it completed its passes
 /// (`quality` given). A rejection has neither.
 QJsonObject failureDiagnostics(const QString &reason, const Stopping *stopping = nullptr,
                                const Quality *quality = nullptr);

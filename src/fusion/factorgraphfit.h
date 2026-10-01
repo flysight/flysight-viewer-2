@@ -43,6 +43,7 @@ constexpr char kSlowTailAccepted[] = "slow tail accepted";
 constexpr char kIterationLimit[] = "iteration limit";
 constexpr char kBiasNotSettled[] = "bias not settled";
 constexpr char kCostIncreased[] = "cost increased";
+constexpr char kDampingSaturated[] = "damping saturated";
 }
 
 /// How the fit ended: the rule, the measurements the rules were judged on,
@@ -60,6 +61,7 @@ struct Stopping {
     /// cost). NaN when no pass completed.
     double repreintegrationCostDifference = std::numeric_limits<double>::quiet_NaN();
     double biasSettledTolerance = 0;
+    double lambdaUpperBound = 0;                 ///< the ceiling of the optimizer's damping
     int slowTailWindow = 0;
     double slowTailMaxMeanRelativeDecrease = 0;
     double slowTailMaxNrms = 0;
@@ -115,10 +117,12 @@ struct FitResult {
 inline constexpr char kFullFitPassFormat[] = "Pass %1, iteration %2";
 
 /// Thrown by fitFactorGraph() when a pass makes the cost non-finite or raises
-/// it, the one failure the fit cannot continue from. A std::runtime_error so
-/// that a caller treating every failure alike (runPipeline(), an initializer's
+/// it, or leaves it unchanged with the optimizer's damping at its ceiling: the
+/// two failures the fit cannot continue from. A std::runtime_error so that a
+/// caller treating every failure alike (runPipeline(), an initializer's
 /// "infinite-objective start") needs no special case, and carrying the
-/// stopping account so the diagnostics can say `cost increased`.
+/// stopping account so the diagnostics can say `cost increased` or `damping
+/// saturated`.
 class FitFailure : public std::runtime_error {
 public:
     FitFailure(const std::string &what, Stopping stopping)
@@ -154,8 +158,11 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples, const BiasL
 /// `slowTailMaxMeanRelativeDecrease` per iteration on average and the position
 /// and velocity normalized RMS are both below `slowTailMaxNrms`. Otherwise the
 /// result says which rule ended the fit and `converged` is false. A non-finite
-/// or increasing cost throws FitFailure. The reported objective, residuals,
-/// quality and `graph` are those of the graph rebuilt at the fitted bias.
+/// or increasing cost throws FitFailure, and so does an iteration that leaves
+/// the cost unchanged while the damping is at `lambdaUpperBound`: the
+/// optimizer is stuck there, and that is never a convergence. The reported
+/// objective, residuals, quality and `graph` are those of the graph rebuilt at
+/// the fitted bias.
 ///
 /// Every iteration is reported through `checkpoint` as `passFormat` with its
 /// two remaining QString::arg placeholders filled: the lower-numbered one with

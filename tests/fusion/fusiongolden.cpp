@@ -100,11 +100,13 @@ QHash<QString, QVector<double>> loadChannels(const QString &fileName, int rows)
 }
 
 /// Numbers under these keys are counts or copies of an input (the tuning
-/// thresholds under `stopping` among them, and the initializer account's
+/// thresholds under `stopping` among them, the configuration and the
+/// datasheet's bandwidths under `model.noise`, and the initializer account's
 /// counts, flags, copied lengths and fix times: an epoch-relative fix time is
 /// one exact-rounded subtraction of two fixture doubles, the same bits on
 /// every IEEE platform), never the result of solver arithmetic: they are
-/// exact in both modes.
+/// exact in both modes. The noise model's other numbers are products of
+/// datasheet figures and take the default bound.
 bool isExactKey(const QString &key)
 {
     static const QSet<QString> keys{
@@ -113,7 +115,9 @@ bool isExactKey(const QString &key)
         QStringLiteral("origin"), QStringLiteral("epoch_utc_s"), QStringLiteral("node"),
         QStringLiteral("rows"), QStringLiteral("passes"), QStringLiteral("window"),
         QStringLiteral("bias_settled_tolerance"), QStringLiteral("max_mean_relative_decrease"),
-        QStringLiteral("max_nrms"),
+        QStringLiteral("max_nrms"), QStringLiteral("lambda_upper_bound"),
+        QStringLiteral("accel_fs_g"), QStringLiteral("gyro_fs_deg_s"), QStringLiteral("accel_odr_hz"),
+        QStringLiteral("gyro_odr_hz"), QStringLiteral("bandwidth_hz"),
         QStringLiteral("index"), QStringLiteral("prefix_fits"), QStringLiteral("segment_length_s"),
         QStringLiteral("prefix_length_s"), QStringLiteral("prefix_start_s"), QStringLiteral("prefix_end_s"),
         QStringLiteral("start_s"), QStringLiteral("end_s"), QStringLiteral("anchor_s"),
@@ -377,6 +381,10 @@ FlySight::Fusion::Channels toChannels(const FusionFixture &f)
     c.originLat = f.originLat;
     c.originLon = f.originLon;
     c.originHMSL = f.originHMSL;
+    c.imuConfiguration.accelFsG = f.accelFsG;
+    c.imuConfiguration.gyroFsDegS = f.gyroFsDegS;
+    c.imuConfiguration.accelOdrHz = f.accelOdrHz;
+    c.imuConfiguration.gyroOdrHz = f.gyroOdrHz;
     return c;
 }
 

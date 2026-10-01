@@ -1,6 +1,6 @@
 {
     "diagnostics": {
-        "algorithm": "batch-temperature-bias-v5",
+        "algorithm": "batch-temperature-bias-v6",
         "failure": "GNSS gap: fusion unavailable for a disconnected session"
     },
     "fixture": "reject_gnss_gap",

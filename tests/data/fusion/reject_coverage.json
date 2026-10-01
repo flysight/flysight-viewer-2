@@ -1,6 +1,6 @@
 {
     "diagnostics": {
-        "algorithm": "batch-temperature-bias-v5",
+        "algorithm": "batch-temperature-bias-v6",
         "failure": "Fewer than three GNSS fixes in IMU coverage"
     },
     "fixture": "reject_coverage",

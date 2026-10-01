@@ -1,6 +1,6 @@
 // fusion_golden_capture: the fusion goldens, captured from the product kernel.
 //
-// Runs the kernel on each of the twelve synthetic fixtures of
+// Runs the kernel on each of the fourteen synthetic fixtures of
 // tests/fusion/fusionfixtures.cpp and writes <fixture>.json,
 // <fixture>.channels.txt and capture.json into the output directory, in
 // exactly the formats tests/fusion/fusiongolden.cpp reads (tests/README.md,

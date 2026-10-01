@@ -39,8 +39,10 @@ struct Channels {
     /// _LOCAL_ORIGIN_LAT|LON|HMSL. Recorded in the diagnostics only; the
     /// numbers do not depend on them.
     double originLat = 0, originLon = 0, originHMSL = 0;
-    /// The four IMU configuration attributes. Recorded nowhere and read by
-    /// nothing in the kernel: the numbers do not depend on them.
+    /// The four IMU configuration attributes: the fit's noise model comes from
+    /// them (docs/SENSOR_FUSION.md section 4), the readings must lie on the
+    /// lattice of the stated ranges and be logged at the stated rates, and the
+    /// diagnostics report them.
     ImuConfiguration imuConfiguration;
 };
 
@@ -59,10 +61,13 @@ struct Result {
     /// Rejected / SolverFailed: why, in the words that are also the
     /// diagnostics' "failure". Empty otherwise.
     QString reason;
-    /// Compact JSON. On success: input audit, initializer, objective, biases,
-    /// the gyro bias model (`model.gyro_bias`: `b0`, `b1`, the reference
-    /// temperature), residuals. On Rejected / SolverFailed: the algorithm
-    /// name and the failure. Empty only when Cancelled.
+    /// Compact JSON. On success: input audit, the configuration the fit ran
+    /// under (`configuration`), initializer, objective, biases, the model
+    /// (`model.noise`: each sensor's datasheet density, bandwidth, step,
+    /// per-sample sigma and integration density; `model.gyro_bias`: `b0`,
+    /// `b1`, the reference temperature), residuals. On Rejected /
+    /// SolverFailed: the algorithm name and the failure. Empty only when
+    /// Cancelled.
     QString diagnosticsJson;
     /// Succeeded only; otherwise all empty. All the same length and aligned
     /// with `time` (UTC s): the original IMU samples inside the fitted
@@ -114,7 +119,7 @@ Result run(const Channels &channels, const ProgressFn &progress = {},
 /// registration (CalculationDescriptor::resultVersion), so changing it drops
 /// every stored fit. Change it whenever a change can alter what run() returns
 /// for the same channels.
-inline constexpr char Algorithm[] = "batch-temperature-bias-v5";
+inline constexpr char Algorithm[] = "batch-temperature-bias-v6";
 
 } // namespace FlySight::Fusion
 

@@ -339,7 +339,8 @@ Initialization initialize(const Samples &window, const Tuning &tuning, const Che
 {
     // The prefix budget: one pass of at most kPrefixIterations, and never
     // more than the tuning allows, so a test that forces the limit forces
-    // the prefix fits too.
+    // the prefix fits too. Everything else, the noise included, is the
+    // tuning's.
     Tuning prefixTuning = tuning;
     prefixTuning.maxIterations = std::min(tuning.maxIterations, kPrefixIterations);
     prefixTuning.maxPasses = std::min(tuning.maxPasses, kPrefixPasses);

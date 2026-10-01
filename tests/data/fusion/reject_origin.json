@@ -1,6 +1,6 @@
 {
     "diagnostics": {
-        "algorithm": "batch-temperature-bias-v5",
+        "algorithm": "batch-temperature-bias-v6",
         "failure": "Local origin index outside GNSS samples"
     },
     "fixture": "reject_origin",

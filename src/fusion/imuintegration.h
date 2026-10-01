@@ -17,10 +17,13 @@
 // accelerometer reading of a step is turned by half the step's rotation
 // before the library applies it, so that it acts at the attitude of the
 // step's middle and not, as the library would have it, at the attitude of
-// the step's start. Each step's measurement covariance is the density plus a
-// white-noise term proportional to the change of the signal across the step
-// (Tuning::gyroStepSlope, accStepSlope); and the temperature at a fix, for
-// the gyro bias model.
+// the step's start. Each step's measurement covariance is the integration
+// density of the datasheet's noise (sensornoise.h) plus, in quadrature, the
+// errors the integration itself makes on the step: the sampling term (the
+// piecewise-linear signal against a smooth one) and the remainder of the
+// mid-step scheme, both derived (docs/SENSOR_FUSION.md section 4) with no
+// constant of their own; and the temperature at a fix, for the gyro bias
+// model.
 
 namespace FlySight::Fusion::Detail {
 
@@ -47,8 +50,10 @@ double temperatureAtFix(const Samples &samples, size_t k);
 gtsam::Vector3 gyroIncrement(const Samples &samples, double from, double to,
                              const gtsam::Vector3 &gyroBias);
 
-/// Preintegration settings carrying the noise densities of `tuning`.
-std::shared_ptr<gtsam::PreintegrationParams> preintegrationParams(const Tuning &tuning);
+/// Preintegration settings carrying the integration densities of `noise`.
+/// Throws std::invalid_argument("Invalid fusion configuration") when a density
+/// is not finite and positive (a noise that was never derived).
+std::shared_ptr<gtsam::PreintegrationParams> preintegrationParams(const ImuNoise &noise);
 
 /// One step of preintegrateImu(): what that step integrates.
 struct ImuStep {
@@ -62,8 +67,22 @@ struct ImuStep {
 using ImuStepObserver = std::function<void(const gtsam::PreintegratedImuMeasurements &, const ImuStep &)>;
 
 /// The preintegrated IMU measurement between two times (in practice two
-/// successive fixes), linearized at `bias`, with the per-step noise term of
-/// `tuning`.
+/// successive fixes), linearized at `bias`, with the step model of `noise`.
+///
+/// Step [a, b], dt = b - a, lies inside one sample interval [t_k, t_k+1] of
+/// `samples` (the edges include every IMU time), whose second derivative is
+/// estimated as c_k, the larger norm of the changes of slope at its two ends
+/// (D_i = 2 (s_i - s_i-1) / (h_i-1 + h_i) at sample i, where it exists; 0
+/// when neither does). With w = 1/2 integral_a^b (t - t_k)(t_k+1 - t) dt
+/// (h^3 / 12 for a whole interval), the sampling terms are s_v = w c_k(force)
+/// and s_theta = w c_k(rate). With theta = (rate_mid - b_g) dt, dtheta =
+/// (rate(b) - rate(a)) dt, fbar = force_mid - b_a and df = force(b) -
+/// force(a), the remainders of the mid-step scheme to second order are
+/// r_v = |(dt/24) theta x (theta x fbar) + (dt/12)(theta x df - dtheta x fbar)|
+/// and r_theta = |theta x dtheta| / 12. The step's sensor covariances are
+/// (D_a^2 + (s_v^2 + r_v^2) / dt) I and (D_g^2 + (s_theta^2 + r_theta^2) / dt) I,
+/// D the integration densities: a step with a constant signal and no rotation
+/// has the densities' covariance exactly.
 ///
 /// `observer`, when given, is called once per step, in time order, before
 /// that step's covariance is written into the shared params and before the
@@ -74,13 +93,16 @@ using ImuStepObserver = std::function<void(const gtsam::PreintegratedImuMeasurem
 /// and params() still hand out the shared params mutably, so the observer
 /// must only read them. The step's two sensor covariances are written after
 /// the observer returns, so they are always this function's own; with no
-/// observer, or with one that only reads, the result is the same bits.
+/// observer, or with one that only reads, the result is the same bits. So at
+/// the observer's call for step j the shared params hold step j - 1's sensor
+/// covariances (the densities' for the first step), and after the return the
+/// last step's: what a test reads the step model through.
 /// It exists so that the reconstruction (trajectoryreconstruction.h) reads
 /// the transition and the covariance of every step from the fit's own
 /// preintegration instead of restating the step model.
 gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, double start, double end,
                                                     const gtsam::imuBias::ConstantBias &bias,
-                                                    const Tuning &tuning,
+                                                    const ImuNoise &noise,
                                                     const ImuStepObserver &observer = ImuStepObserver());
 
 /// `rotation` (body to NED at `start`) carried to `end` by the bias-corrected

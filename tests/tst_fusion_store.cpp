@@ -92,7 +92,7 @@ constexpr int kFitTimeoutMs = 120000;
 const QString kSolverFailureReason =
     QStringLiteral("Batch fusion did not converge (iteration limit); sensor fusion unavailable");
 const QString kSolverFailureDiagnostics = QStringLiteral(
-    "{\"algorithm\":\"batch-temperature-bias-v5\","
+    "{\"algorithm\":\"batch-temperature-bias-v6\","
     "\"failure\":\"Batch fusion did not converge (iteration limit); sensor fusion unavailable\"}");
 
 /// What a fresh publish showed, for the bit-for-bit comparison with a restore.
@@ -1079,8 +1079,8 @@ void FusionStoreTest::codeStampChangeDropsRecordOnLoad_data()
 // Bumping the compatibility marker, the fit's result version, or the result
 // version recorded for a calculation its lookups went through drops the
 // record on load. The fit's row stamps the algorithm string before the
-// IMU-rate reconstruction, the one users' logbooks hold, so it is the real
-// transition.
+// documented noise model, the one a logbook written by the previous build
+// holds, so it is the real transition (item 1062).
 void FusionStoreTest::codeStampChangeDropsRecordOnLoad()
 {
     QFETCH(QString, stamp);
@@ -1106,7 +1106,7 @@ void FusionStoreTest::codeStampChangeDropsRecordOnLoad()
         QCOMPARE(rewriteRecord("a", [](CalculationRecord &r) { r.calculationCompatibility += 1; }), QString());
     } else if (stamp == QLatin1String("resultVersion")) {
         QCOMPARE(rewriteRecord("a", [](CalculationRecord &r) {
-                     r.result.resultVersion = QStringLiteral("batch-temperature-bias-v3");
+                     r.result.resultVersion = QStringLiteral("batch-temperature-bias-v5");
                  }), QString());
     } else if (stamp == QLatin1String("providerResultVersion")) {
         bool found = false;

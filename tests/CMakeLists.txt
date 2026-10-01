@@ -496,7 +496,7 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
   # ---- three executables that are not tests and are not installed -----------
   # solver_deploy_probe is copied into an installed application tree and run
   # there to prove the deployed solver runtime is complete (tests/README.md
-  # section 1). fusion_golden_capture runs the product kernel on the twelve
+  # section 1). fusion_golden_capture runs the product kernel on the fourteen
   # fixtures and writes the goldens of tests/data/fusion/ (the re-capture
   # procedure of tests/README.md section 11); it is run by hand with the DLL
   # directories on PATH, so it needs no flysight_solver_test_environment().

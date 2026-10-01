@@ -47,6 +47,7 @@ QJsonObject stoppingObject(const Stopping &s)
         {"last_pass_mean_relative_decrease", numberOrNull(s.lastPassMeanRelativeDecrease)},
         {"repreintegration_cost_difference", numberOrNull(s.repreintegrationCostDifference)},
         {"bias_settled_tolerance", s.biasSettledTolerance},
+        {"lambda_upper_bound", s.lambdaUpperBound},
         {"slow_tail", QJsonObject{
             {"window", s.slowTailWindow},
             {"max_mean_relative_decrease", s.slowTailMaxMeanRelativeDecrease},
@@ -125,14 +126,35 @@ QJsonObject gyroBiasObject(const FitResult &fit)
         {"t_ref_degc", fit.biasModel.tRef}};
 }
 
-/// The model of this fit: the per-step constants of the tuning, which are
-/// not fitted, and the fitted gyro bias model.
-QJsonObject modelSummary(const Tuning &tuning, const FitResult &fit)
+/// The configuration the fit ran under: the four values of the attributes.
+QJsonObject configurationObject(const ImuConfiguration &c)
 {
     return QJsonObject{
-        {"per_step", QJsonObject{
-            {"gyro_slope_s", tuning.gyroStepSlope},
-            {"acc_slope_s", tuning.accStepSlope}}},
+        {"accel_fs_g", c.accelFsG},
+        {"gyro_fs_deg_s", c.gyroFsDegS},
+        {"accel_odr_hz", c.accelOdrHz},
+        {"gyro_odr_hz", c.gyroOdrHz}};
+}
+
+/// The model of this fit: the noise the datasheet gives for its
+/// configuration, which is not fitted, and the fitted gyro bias model.
+QJsonObject modelSummary(const ImuNoise &noise, const FitResult &fit)
+{
+    const SensorNoise &a = noise.accelerometer, &g = noise.gyroscope;
+    return QJsonObject{
+        {"noise", QJsonObject{
+            {"acc", QJsonObject{
+                {"datasheet_density_m_s2_rthz", a.datasheetDensity},
+                {"bandwidth_hz", a.bandwidth},
+                {"step_m_s2", a.step},
+                {"sample_sigma_m_s2", a.sampleSigma},
+                {"density_m_s2_rthz", a.density}}},
+            {"gyro", QJsonObject{
+                {"datasheet_density_rad_s_rthz", g.datasheetDensity},
+                {"bandwidth_hz", g.bandwidth},
+                {"step_rad_s", g.step},
+                {"sample_sigma_rad_s", g.sampleSigma},
+                {"density_rad_s_rthz", g.density}}}}},
         {"gyro_bias", gyroBiasObject(fit)}};
 }
 
@@ -185,7 +207,8 @@ QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerA
 {
     return QJsonObject{
         {"algorithm", Algorithm},
-        {"model", modelSummary(tuning, fit)},
+        {"configuration", configurationObject(tuning.noise.configuration)},
+        {"model", modelSummary(tuning.noise, fit)},
         {"input", prepared.audit},
         {"seeds", seedSummary(fit)},
         {"initialization", kInitializationMethod},

@@ -378,6 +378,8 @@ add_library(flysight_fusion STATIC
   fusion/fusionsamples.cpp             fusion/fusionsamples.h
   fusion/inputadapter.cpp              fusion/inputadapter.h
   fusion/samplestatistics.cpp          fusion/samplestatistics.h
+  # The IMU's datasheet: noise by configuration and the lattice of its readings
+  fusion/sensornoise.cpp               fusion/sensornoise.h
   fusion/imuintegration.cpp            fusion/imuintegration.h
   fusion/initializer.cpp               fusion/initializer.h
   fusion/factorgraphfit.cpp            fusion/factorgraphfit.h

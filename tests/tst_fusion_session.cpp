@@ -293,7 +293,7 @@ void FusionSessionTest::registrationShape()
     QVERIFY(systemTime->descriptor->outputs == QList<DependencyKey>({fusionKey("_system_time")}));
 
     // Only the fit declares a result version: its kernel's algorithm string
-    QCOMPARE(fit->descriptor->resultVersion, QStringLiteral("batch-temperature-bias-v5"));
+    QCOMPARE(fit->descriptor->resultVersion, QStringLiteral("batch-temperature-bias-v6"));
     QVERIFY(accH->descriptor->resultVersion.isEmpty());
     QVERIFY(systemTime->descriptor->resultVersion.isEmpty());
 
@@ -337,7 +337,8 @@ void FusionSessionTest::explicitOutputsHaveOneCandidate()
 
 // The premise of every golden comparison below: the eighteen measurements and
 // the four origin attributes are the fixture's bit for bit, and the four
-// configuration attributes are their constant defaults (item 1004).
+// configuration attributes are the fixture's stated configuration, stored as
+// the importer stores a header attribute: the recorded text (item 1045).
 void FusionSessionTest::inputsAreBitIdenticalToFixture()
 {
     const FusionFixture f = fusionFixture(QStringLiteral("coarse_maneuver"));
@@ -363,12 +364,14 @@ void FusionSessionTest::inputsAreBitIdenticalToFixture()
     QCOMPARE(session.getAttribute("_LOCAL_ORIGIN_LON"), QVariant(-75.0));
     QCOMPARE(session.getAttribute("_LOCAL_ORIGIN_HMSL"), QVariant(100.0));
 
-    // The fixture states no configuration: the session reads the four
-    // constant defaults
-    QCOMPARE(session.getAttribute("ACCEL_FS_G"), QVariant(QStringLiteral("16")));
-    QCOMPARE(session.getAttribute("GYRO_FS_DEG_S"), QVariant(QStringLiteral("2000")));
-    QCOMPARE(session.getAttribute("ACCEL_ODR_HZ"), QVariant(QStringLiteral("12.5")));
-    QCOMPARE(session.getAttribute("GYRO_ODR_HZ"), QVariant(QStringLiteral("12.5")));
+    // The fixture states its configuration: +/-16 g, +/-2000 deg/s, 104 Hz
+    QCOMPARE(f.accelOdrHz, 104.);
+    const struct { const char *key; const char *text; } stated[] = {
+        {"ACCEL_FS_G", "16"}, {"GYRO_FS_DEG_S", "2000"}, {"ACCEL_ODR_HZ", "104"}, {"GYRO_ODR_HZ", "104"}};
+    for (const auto &entry : stated) {
+        QVERIFY2(session.hasStoredAttribute(QString::fromLatin1(entry.key)), entry.key);
+        QCOMPARE(session.getAttribute(entry.key), QVariant(QString::fromLatin1(entry.text)));
+    }
     QCOMPARE(session.calculationEngine().runCount(kFit), 0);
 }
 
@@ -397,7 +400,11 @@ void FusionSessionTest::configurationDefaults()
     for (const char *key : {"BARO_ODR_HZ", "HUM_ODR_HZ", "MAG_ODR_HZ", "GNSS_MODEL", "GNSS_RATE_HZ"})
         QVERIFY2(registry.candidatesFor(DependencyKey::attribute(QString::fromLatin1(key))).isEmpty(), key);
 
+    // A fixture session states its configuration; without the keys it reads
+    // the defaults
     SessionData session = fixtureSession(QStringLiteral("coarse_linear"));
+    for (const auto &entry : defaults)
+        session.removeAttribute(QString::fromLatin1(entry.key));
     for (const auto &entry : defaults) {
         const QString key = QString::fromLatin1(entry.key);
         QVERIFY(!session.hasStoredAttribute(key));
@@ -418,13 +425,14 @@ void FusionSessionTest::configurationDefaults()
     QCOMPARE(session.calculationEngine().runCount(kFit), 0);
 }
 
-// Items 1007, 1061: the configuration reaches the kernel in
+// Items 1007, 1010, 1045: the configuration reaches the kernel in
 // Channels::imuConfiguration, as numbers, for a stated and a defaulted
-// session, and as NaN for a stored value that is not a number; the kernel does
-// not read it yet, so a fit on a session stating a configuration other than
-// the default is bit-identical, channels and diagnostics, to the same fit on
-// the default and to the golden, which the direct kernel run captured with an
-// all-NaN configuration.
+// session, and as NaN for a stored value that is not a number. The stated
+// path: a fixture session, which stores its fixture's configuration, is
+// fitted to the golden, channels and diagnostics (whose `configuration` is
+// the stated one). The default path: the same session with the four keys
+// removed reads firmware v2023.09.22's 12.5 Hz, which its 100 Hz logging
+// disagrees with, and is rejected with the rate text naming both.
 void FusionSessionTest::configurationReachesTheKernel()
 {
     const QString fixture = QStringLiteral("coarse_maneuver");
@@ -433,59 +441,64 @@ void FusionSessionTest::configurationReachesTheKernel()
             [&session](const QString &sensor, const QString &name) { return session.getMeasurement(sensor, name); },
             [&session](const QString &key) { return session.getAttribute(key); });
     };
+    const QStringList keys{QStringLiteral("ACCEL_FS_G"), QStringLiteral("GYRO_FS_DEG_S"),
+                           QStringLiteral("ACCEL_ODR_HZ"), QStringLiteral("GYRO_ODR_HZ")};
 
-    // The direct kernel run of the goldens: nothing set
+    // Stated: the fixture session carries the direct kernel run's
+    // configuration
+    SessionData stated = fixtureSession(fixture, QStringLiteral("s1"));
     const Fusion::ImuConfiguration direct = toChannels(fusionFixture(fixture)).imuConfiguration;
-    QVERIFY(std::isnan(direct.accelFsG) && std::isnan(direct.gyroFsDegS));
-    QVERIFY(std::isnan(direct.accelOdrHz) && std::isnan(direct.gyroOdrHz));
+    const Fusion::ImuConfiguration fromStated = channelsOf(stated).imuConfiguration;
+    QCOMPARE(fromStated.accelFsG, 16.0);
+    QCOMPARE(fromStated.gyroFsDegS, 2000.0);
+    QCOMPARE(fromStated.accelOdrHz, 104.0);
+    QCOMPARE(fromStated.gyroOdrHz, 104.0);
+    QVERIFY(fromStated.accelFsG == direct.accelFsG && fromStated.gyroFsDegS == direct.gyroFsDegS);
+    QVERIFY(fromStated.accelOdrHz == direct.accelOdrHz && fromStated.gyroOdrHz == direct.gyroOdrHz);
 
-    // Defaulted
-    const SessionData defaulted = fixtureSession(fixture, QStringLiteral("d1"));
+    // Defaulted: no key stored
+    SessionData defaulted = fixtureSession(fixture, QStringLiteral("d1"));
+    for (const QString &key : keys)
+        defaulted.removeAttribute(key);
     const Fusion::ImuConfiguration fromDefaults = channelsOf(defaulted).imuConfiguration;
     QCOMPARE(fromDefaults.accelFsG, 16.0);
     QCOMPARE(fromDefaults.gyroFsDegS, 2000.0);
     QCOMPARE(fromDefaults.accelOdrHz, 12.5);
     QCOMPARE(fromDefaults.gyroOdrHz, 12.5);
 
-    // Stated, as the importer stores it (text, whitespace kept)
-    SessionData stated = fixtureSession(fixture, QStringLiteral("s1"));
-    stated.setAttribute("ACCEL_FS_G", QStringLiteral("8"));
-    stated.setAttribute("GYRO_FS_DEG_S", QStringLiteral(" 500"));
-    stated.setAttribute("ACCEL_ODR_HZ", QStringLiteral("104"));
-    stated.setAttribute("GYRO_ODR_HZ", QStringLiteral("26"));
-    const Fusion::ImuConfiguration fromStated = channelsOf(stated).imuConfiguration;
-    QCOMPARE(fromStated.accelFsG, 8.0);
-    QCOMPARE(fromStated.gyroFsDegS, 500.0);
-    QCOMPARE(fromStated.accelOdrHz, 104.0);
-    QCOMPARE(fromStated.gyroOdrHz, 26.0);
-
-    // A stored value that is not a number is NaN, never 0; the others are kept
+    // Stored as the importer stores it (text, whitespace kept); a stored value
+    // that is not a number is NaN, never 0, and the others are kept
     SessionData edited = fixtureSession(fixture, QStringLiteral("e1"));
+    edited.setAttribute("GYRO_FS_DEG_S", QStringLiteral(" 500"));
     edited.setAttribute("GYRO_ODR_HZ", QStringLiteral("fast"));
     const Fusion::ImuConfiguration fromEdited = channelsOf(edited).imuConfiguration;
+    QCOMPARE(fromEdited.gyroFsDegS, 500.0);
     QVERIFY(std::isnan(fromEdited.gyroOdrHz));
     QCOMPARE(fromEdited.accelFsG, 16.0);
-    QCOMPARE(fromEdited.accelOdrHz, 12.5);
+    QCOMPARE(fromEdited.accelOdrHz, 104.0);
 
-    // The fit on the stated and on the defaulted session: the same bits, and
-    // the golden's
+    // The stated path: the golden's channels and diagnostics
     const FusionGolden golden = loadFusionGolden(fixture);
-    const SessionData *const sessions[] = {&defaulted, &stated};
-    for (const SessionData *session : sessions) {
-        QCOMPARE(session->calculationEngine().request(kFit).status, ResultStatus::Ok);
-        QVERIFY(session->calculationEngine().resultDetail(kFit).isEmpty());
-        const QString difference = goldenDifference(*session, golden);
-        QVERIFY2(difference.isEmpty(), qPrintable(difference));
-        const QString jsonDifference = diagnosticsDifference(*session, golden);
-        QVERIFY2(jsonDifference.isEmpty(), qPrintable(jsonDifference));
-        if (exactParityRequested()) {
-            QCOMPARE(session->getAttribute(kDiagnostics).toString().toUtf8(),
-                     QJsonDocument(golden.diagnostics).toJson(QJsonDocument::Compact));
-        }
+    QCOMPARE(stated.calculationEngine().request(kFit).status, ResultStatus::Ok);
+    QVERIFY(stated.calculationEngine().resultDetail(kFit).isEmpty());
+    const QString difference = goldenDifference(stated, golden);
+    QVERIFY2(difference.isEmpty(), qPrintable(difference));
+    const QString jsonDifference = diagnosticsDifference(stated, golden);
+    QVERIFY2(jsonDifference.isEmpty(), qPrintable(jsonDifference));
+    if (exactParityRequested()) {
+        QCOMPARE(stated.getAttribute(kDiagnostics).toString().toUtf8(),
+                 QJsonDocument(golden.diagnostics).toJson(QJsonDocument::Compact));
     }
-    for (const QString &name : fusionMeasurementNames())
-        QVERIFY2(sameBitsEverywhere(fusion(stated, name), fusion(defaulted, name)), qPrintable(name));
-    QCOMPARE(stated.getAttribute(kDiagnostics).toString(), defaulted.getAttribute(kDiagnostics).toString());
+    const QJsonObject configuration = diagnosticsOf(stated).value(QStringLiteral("configuration")).toObject();
+    QCOMPARE(configuration.value(QStringLiteral("accel_odr_hz")).toDouble(), 104.);
+
+    // The default path: rejected, a cached result with the rate's reason
+    const QString rate =
+        QStringLiteral("ACCEL_ODR_HZ states 12.5 Hz but the IMU is logged at 100.0 Hz; sensor fusion unavailable");
+    QCOMPARE(defaulted.calculationEngine().request(kFit).status, ResultStatus::Ok);
+    QCOMPARE(defaulted.calculationEngine().resultDetail(kFit), rate);
+    QCOMPARE(diagnosticsOf(defaulted).value(QStringLiteral("failure")).toString(), rate);
+    QVERIFY2(availableAmong(defaulted, valueNames()).isEmpty(), qPrintable(availableAmong(defaulted, valueNames())));
 }
 
 // Acceptance 5: reads of any fusion value on a session where fusion has not
@@ -714,9 +727,10 @@ void FusionSessionTest::changeAfterPublicationDropsEverything()
     QVERIFY(isAvailable(session, DependencyKey::attribute(fusionRollAtExit())));
     QCOMPARE(engine.runCount(kFit), 1);
 
-    // One sample of one declared input
+    // One sample of one declared input, by 100 counts of the stated +/-16 g
+    // range: a reading that range can show, so that the fit runs again
     QVector<double> az = session.getMeasurement("IMU", "az");
-    az[50] += .5;
+    az[50] += 100 * (16. / 32768 * 9.80665);
     const QSet<DependencyKey> dropped = session.setMeasurement("IMU", "az", az);
     for (const DependencyKey &name : names)
         QVERIFY(dropped.contains(name));
@@ -987,9 +1001,15 @@ void FusionSessionTest::blockersReportFusion()
 // The real input chain: GNSS/lat..velD -> Local and the origin, TIME -> the
 // time fit -> IMU/_time. Expectations are structural; the numbers are the
 // kernel's and are under golden test elsewhere.
+// Item 1045, the default path: a recording as the importer would leave it,
+// without any configuration key, logged at 12.5 Hz with readings on the
+// +/-16 g and +/-2000 deg/s lattices, is fitted under the defaults, which the
+// diagnostics report.
 void FusionSessionTest::naturalSessionEndToEnd()
 {
     SessionData session = naturalSession(QStringLiteral("n1"));
+    for (const char *key : {"ACCEL_FS_G", "GYRO_FS_DEG_S", "ACCEL_ODR_HZ", "GYRO_ODR_HZ"})
+        QVERIFY2(!session.hasStoredAttribute(QString::fromLatin1(key)), key);
     session.setAttribute(SessionKeys::ExitTime, kFixtureEpochUtc + 10.0);
     CalculationEngine &engine = session.calculationEngine();
 
@@ -1039,6 +1059,11 @@ void FusionSessionTest::naturalSessionEndToEnd()
     const QJsonObject diagnostics = diagnosticsOf(session);
     QCOMPARE(diagnostics.value(QStringLiteral("input")).toObject().value(QStringLiteral("origin_index")).toInt(-1), 0);
     QCOMPARE(diagnostics.value(QStringLiteral("gnss_states")).toInt(), 200);
+    const QJsonObject configuration = diagnostics.value(QStringLiteral("configuration")).toObject();
+    QCOMPARE(configuration.value(QStringLiteral("accel_fs_g")).toDouble(), 16.);
+    QCOMPARE(configuration.value(QStringLiteral("gyro_fs_deg_s")).toDouble(), 2000.);
+    QCOMPARE(configuration.value(QStringLiteral("accel_odr_hz")).toDouble(), 12.5);
+    QCOMPARE(configuration.value(QStringLiteral("gyro_odr_hz")).toDouble(), 12.5);
     QCOMPARE(diagnostics.value(QStringLiteral("imu_outputs")).toInt(), int(time.size()));
 
     // A transitive input (TIME/tow -> the time fit -> IMU/_time) reaches the result
@@ -1119,7 +1144,7 @@ void FusionSessionTest::restoredFitIsIndistinguishable()
     const std::optional<StoredCalculationResult> snapshot = engineA.exportResult(kFit);
     QVERIFY(snapshot.has_value());
     QCOMPARE(snapshot->calculationId, kFit);
-    QCOMPARE(snapshot->resultVersion, QStringLiteral("batch-temperature-bias-v5"));
+    QCOMPARE(snapshot->resultVersion, QStringLiteral("batch-temperature-bias-v6"));
     const QJsonObject diagnostics = QJsonDocument::fromJson(
         snapshot->bundle.attributeValue(kDiagnostics).toString().toUtf8()).object();
     QCOMPARE(diagnostics.value(QStringLiteral("algorithm")).toString(), snapshot->resultVersion);

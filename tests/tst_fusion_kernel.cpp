@@ -4,8 +4,10 @@
 // initializer: segment cutting on fixes, the smallest-sAcc anchor, prefix
 // growth on the marginal yaw sigma, the fallback when every start fails, its
 // progress texts and the synthetic recordings of the specification; exact
-// integration boundaries, heading freedom, the two stopping rules forced
-// through the tuning, the per-step covariance, the temperature-dependent gyro
+// integration boundaries, heading freedom, the stopping rules forced through
+// the tuning, the datasheet's noise by configuration, the lattice and rate
+// checks, the step model (the sampling term and the mid-step remainder against
+// their derivations), the temperature-dependent gyro
 // bias (the custom factor's Jacobians, the section 6 cases), the
 // solver-failure path and its diagnostics shapes, the IMU-rate reconstruction
 // pass against a dense reference graph and its per-interval seam, the
@@ -50,17 +52,20 @@
 #include "fusion/imuintegration.h"
 #include "fusion/initializer.h"
 #include "fusion/inputadapter.h"
+#include "fusion/sensornoise.h"
 #include "fusion/temperatureimufactor.h"
 #include "fusion/trajectoryreconstruction.h"
 #include "fusionfixtures.h"
 #include "fusiongolden.h"
 #include "fusiontrace.h"
+#include "sensorconfiguration.h"
 #include "testmain.h"
 #include "testutil.h"
 
 using namespace FlySight;
 using namespace FlySight::Fusion::Detail;
 using namespace FlySightTest;
+using FlySight::Fusion::ImuConfiguration;
 using gtsam::Rot3;
 using gtsam::Vector3;
 using gtsam::symbol_shorthand::B;
@@ -71,6 +76,29 @@ using gtsam::symbol_shorthand::X;
 namespace {
 
 const Vector3 kTestGravity(0, 0, 9.80665);
+
+/// The noise of a fixture's configuration, +/-16 g and +/-2000 deg/s at
+/// `rate` for both sensors. A hand-built recording takes the listed rate
+/// nearest its sampling (only the densities are read; an 8 Hz recording takes
+/// 12.5 Hz).
+ImuNoise fixtureNoise(double rate)
+{
+    ImuConfiguration configuration;
+    configuration.accelFsG = 16;
+    configuration.gyroFsDegS = 2000;
+    configuration.accelOdrHz = rate;
+    configuration.gyroOdrHz = rate;
+    return imuNoise(configuration);
+}
+
+/// The production tuning with the noise of fixtureNoise(rate), as planFit()
+/// would derive it: what the internal seams take for a hand-built recording.
+Tuning tuningAt(double rate)
+{
+    Tuning tuning;
+    tuning.noise = fixtureNoise(rate);
+    return tuning;
+}
 
 /// 1 s of 100 Hz IMU under constant acceleration (1, -2, .5), not rotating,
 /// with two GNSS fixes that fall between IMU samples.
@@ -117,63 +145,68 @@ Samples manoeuvreSamples()
     return d;
 }
 
-/// 1 s of IMU at 8 Hz whose rate and force ramp by exactly .03125 rad/s and
-/// .125 m/s^2 per step of exactly .125 s: every time and value is a small
-/// integer times a power of two, so every step's change is the same bit for
-/// bit. No GNSS: preintegrateImu() reads none.
-Samples rampSamples()
+/// IMU samples at `times` whose force and rate are `force(t)` and `rate(t)`.
+/// No GNSS: preintegrateImu() reads none.
+Samples signalSamples(const std::vector<double> &times, const std::function<Vector3(double)> &force,
+                      const std::function<Vector3(double)> &rate)
 {
     Samples d;
-    for (int i = 0; i <= 8; ++i) {
-        d.imuTime.push_back(i*.125);
-        d.gyro.emplace_back(0, 0, i*.03125);
-        d.force.emplace_back(i*.125, 0, -9.80665);
+    for (const double t : times) {
+        d.imuTime.push_back(t);
+        d.force.push_back(force(t));
+        d.gyro.push_back(rate(t));
     }
     return d;
 }
 
-/// One integration step of length `dt` with a change of .5 rad/s and 1 m/s^2
-/// whatever `dt` is.
-Samples singleStepSamples(double dt)
+/// Each step of a preintegration and the two sensor covariances it was
+/// integrated with, read through the observer and pim.p(): at the observer's
+/// call for a step the shared params hold the step before's, and after the
+/// return the last step's (imuintegration.h).
+struct StepCovariances {
+    std::vector<ImuStep> steps;
+    std::vector<gtsam::Matrix3> accelerometer, gyroscope;
+    gtsam::PreintegratedImuMeasurements pim;
+};
+
+StepCovariances stepCovariances(const Samples &d, double start, double end,
+                                const gtsam::imuBias::ConstantBias &bias, const ImuNoise &noise)
 {
-    Samples d;
-    d.imuTime = {0, dt};
-    d.gyro = {Vector3(0, 0, 0), Vector3(0, 0, .5)};
-    d.force = {Vector3(0, 0, -9.80665), Vector3(1, 0, -9.80665)};
-    return d;
+    std::vector<ImuStep> steps;
+    std::vector<gtsam::Matrix3> accelerometer, gyroscope;
+    const auto observer = [&](const gtsam::PreintegratedImuMeasurements &pim, const ImuStep &step) {
+        if (!steps.empty()) {
+            accelerometer.push_back(pim.p().accelerometerCovariance);
+            gyroscope.push_back(pim.p().gyroscopeCovariance);
+        }
+        steps.push_back(step);
+    };
+    const gtsam::PreintegratedImuMeasurements pim = preintegrateImu(d, start, end, bias, noise, observer);
+    accelerometer.push_back(pim.p().accelerometerCovariance);
+    gyroscope.push_back(pim.p().gyroscopeCovariance);
+    return {steps, accelerometer, gyroscope, pim};
 }
 
-/// The production tuning with the two per-step slopes replaced.
-Tuning withSlopes(double gyro, double acc)
+/// |got - expected| <= relative |expected|, element by element of the diagonal
+/// and exactly zero off it (the step model is isotropic).
+bool isotropicWithin(const gtsam::Matrix3 &got, double expected, double relative)
 {
-    Tuning t;
-    t.gyroStepSlope = gyro;
-    t.accStepSlope = acc;
-    return t;
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            if (r != c ? got(r, c) != 0 : !(std::abs(got(r, c)-expected) <= relative*std::abs(expected)))
+                return false;
+        }
+    }
+    return true;
 }
 
-/// `t` with the per-step term folded into the densities and the slopes zero.
-/// On a recording whose every step has length `dt` and the given changes, a
-/// preintegration with this tuning is the expected value of one with `t`:
-/// the same covariance on every step, so the same arithmetic, without
-/// restating how the covariance propagates.
-Tuning densityFor(const Tuning &t, double dt, double deltaGyro, double deltaForce)
+/// w = 1/2 integral_a^b (t - t0)(t1 - t) dt by Simpson's rule, which is exact
+/// for the quadratic integrand: a second derivation of the sampling weight,
+/// not the kernel's.
+double simpsonWeight(double t0, double t1, double a, double b)
 {
-    const double sigmaW = t.gyroStepSlope*dt*deltaGyro, sigmaA = t.accStepSlope*dt*deltaForce;
-    Tuning folded = t;
-    folded.gyroDensity = std::sqrt(t.gyroDensity*t.gyroDensity + sigmaW*sigmaW*dt);
-    folded.accDensity = std::sqrt(t.accDensity*t.accDensity + sigmaA*sigmaA*dt);
-    folded.gyroStepSlope = 0;
-    folded.accStepSlope = 0;
-    return folded;
-}
-
-/// The tolerance exists only because sqrt(x)^2 is not x in floating point; a
-/// missing term, a missing dt factor or midpoint differences instead of end
-/// minus start move a covariance by 1e-3 to 1e0 relative in the tests below.
-bool sameCovariance(const gtsam::Matrix &got, const gtsam::Matrix &expected)
-{
-    return (got-expected).cwiseAbs().maxCoeff() <= 1e-9*expected.cwiseAbs().maxCoeff();
+    const auto g = [&](double t) { return (t-t0)*(t1-t); };
+    return .5*(b-a)/6*(g(a)+4*g((a+b)/2)+g(b));
 }
 
 /// The reference self-test's exact constant-velocity recording, with
@@ -207,6 +240,13 @@ QJsonObject diagnosticsOf(const Fusion::Result &result)
     return QJsonDocument::fromJson(result.diagnosticsJson.toUtf8()).object();
 }
 
+/// `result` is a rejection with `reason`, in the result and the diagnostics.
+bool rejectedWith(const Fusion::Result &result, const QString &reason)
+{
+    return result.outcome == Fusion::Outcome::Rejected && result.reason == reason
+        && diagnosticsOf(result).value("failure").toString() == reason;
+}
+
 /// The failure diagnostics of a fit that completed its passes: QJsonObject
 /// sorts its keys.
 const QStringList kCompletedPassFailureKeys{QStringLiteral("algorithm"), QStringLiteral("failure"),
@@ -225,10 +265,13 @@ FusionFixture fixtureNamed(const QString &name)
     return golden.name.isEmpty() ? initializerFixture(name) : golden;
 }
 
-/// `tuning` with the IMU gap limit the pipeline derives for a fixture.
+/// `tuning` with the IMU gap limit and the noise the pipeline derives for a
+/// fixture.
 Tuning pipelineTuning(const QString &name, Tuning tuning)
 {
-    tuning.maxGap = kImuGapMedians*medianInterval(prepareInput(toChannels(fixtureNamed(name))).recording.imuTime);
+    const Fusion::Channels channels = toChannels(fixtureNamed(name));
+    tuning.maxGap = kImuGapMedians*medianInterval(prepareInput(channels).recording.imuTime);
+    tuning.noise = imuNoise(channels.imuConfiguration);
     return tuning;
 }
 
@@ -260,6 +303,15 @@ InitializerRun runInitializerFixture(const QString &name, const Tuning &tuning,
     run.result = runPipeline(toChannels(fixtureNamed(name)), tuning, checkpoint, &run.trace);
     run.diagnostics = diagnosticsOf(run.result);
     run.segments = run.diagnostics.value("initializer").toObject().value("segments").toArray();
+    return run;
+}
+
+/// rest_throughout through the whole pipeline with the production tuning,
+/// once per run of this executable: its fit is the longest of them, and two
+/// tests read it (atRestPrefixStopsGrowing, dampingSaturationIsASolverFailure).
+const InitializerRun &restThroughoutRun()
+{
+    static const InitializerRun run = runInitializerFixture(QStringLiteral("rest_throughout"), Tuning{});
     return run;
 }
 
@@ -427,7 +479,7 @@ NavStates heldEndsReference(const WindowFit &f, const WindowSeams &w, int &itera
     for (size_t j = 0; j+1 < w.edges.size(); ++j) {
         const size_t k = w.stepInterval[j];
         const auto pim = preintegrateImu(f.window, w.edges[j], w.edges[j+1],
-                                         intervalBias(f.window, k, bias, f.fit.gyroBiasSlope, model), f.tuning);
+                                         intervalBias(f.window, k, bias, f.fit.gyroBiasSlope, model), f.tuning.noise);
         if (model.temperatureLinear)
             graph.emplace_shared<TemperatureImuFactor>(X(j), V(j), X(j+1), V(j+1), B(0), T(0), pim,
                                                        temperatureAtFix(f.window, k)-model.tRef);
@@ -497,6 +549,8 @@ WindowFit tumbleWindow(double imuRate)
     for (int k = 0; .013+k*.2 <= d.imuTime.back()-.05; ++k)
         d.gnssTime.push_back(.013+k*.2);
     f.tuning.maxGap = kImuGapMedians*medianInterval(d.imuTime);
+    // The listed rate nearest the sampling: 12.5, 26 or 104 Hz.
+    f.tuning.noise = fixtureNoise(imuRate < 19 ? 12.5 : imuRate < 60 ? 26 : 104);
     return f;
 }
 
@@ -538,7 +592,7 @@ void predictFits(WindowFit &f, const gtsam::imuBias::ConstantBias &bias, const g
     gtsam::NavState state = first;
     for (size_t k = 0; k < f.window.gnssTime.size(); ++k) {
         if (k) {
-            const auto pim = preintegrateImu(f.window, f.window.gnssTime[k-1], f.window.gnssTime[k], bias, f.tuning);
+            const auto pim = preintegrateImu(f.window, f.window.gnssTime[k-1], f.window.gnssTime[k], bias, f.tuning.noise);
             state = pim.predict(state, bias);
             if (!perturbation.isZero(0))
                 state = state.retract(perturbation);
@@ -603,10 +657,17 @@ private slots:
     void solverUsesTbb();
     void unwrapRule();
     void preintegrationHonoursExactBoundaries();
-    void perStepTermIsZeroWithoutSignalChange();
-    void perStepTermMatchesSpecifiedCovariance();
-    void perStepTermScalesWithStep();
-    void diagnosticsReportPerStepConstants();
+    void noiseFollowsTheTable();
+    void configurationWithoutEntryIsRejected();
+    void constantSignalHasNoSamplingTerm();
+    void samplingTermFollowsTheDerivation();
+    void rotationRemainderFollowsTheDerivation();
+    void rotationRemainderMatchesTheSchemeError();
+    void latticeCheckFindsTheCoarsestRange();
+    void latticeCheckIdentifiesEveryFixture();
+    void rateCheckToleratesTenPercent();
+    void configurationChecksComeAfterTheOthers();
+    void diagnosticsReportTheNoiseModel();
     void validationRejectsEachDefect();
     void backwardPropagationUndoesForward();
     void headingIsUnconstrained();
@@ -626,6 +687,8 @@ private slots:
     void nonConvergenceIsSolverFailure();
     void biasNeverSettlesIsSolverFailure();
     void failureDiagnosticsShape();
+    void dampingSaturationIsASolverFailure();
+    void dampingCeilingChangesNothingBelowIt();
     void startsInMotionGrowsToTheManoeuvre();
     void atRestPrefixStopsGrowing();
     void smallestSaccFixIsTheAnchor();
@@ -681,111 +744,557 @@ void FusionKernelTest::preintegrationHonoursExactBoundaries()
 {
     const Vector3 acceleration(1, -2, .5);
     const Samples d = boundarySamples(acceleration);
-    const Tuning tuning;
+    const Tuning tuning = tuningAt(104);
     validateSamples(d, tuning);
 
     const gtsam::imuBias::ConstantBias bias;
-    const auto pim = preintegrateImu(d, .037, .863, bias, tuning);
+    const auto pim = preintegrateImu(d, .037, .863, bias, tuning.noise);
     const auto predicted = pim.predict(gtsam::NavState(gtsam::Pose3(), Vector3::Zero()), bias);
     const double duration = .863-.037;
     QVERIFY((predicted.velocity()-acceleration*duration).norm() < 1e-10);
     QVERIFY((predicted.position()-.5*acceleration*duration*duration).norm() < 1e-10);
 }
 
-void FusionKernelTest::perStepTermIsZeroWithoutSignalChange()
+void FusionKernelTest::noiseFollowsTheTable()
 {
-    // Spec section 10: a step with zero signal change has the density
-    // covariance exactly. Constant force and zero rate, so every step's change
-    // is exactly zero and the term is exactly 0.0 whatever the slope, even
-    // 1e3: the comparison is bitwise (Eigen's == is element-wise equality),
-    // with no tolerance.
+    // Clauses 11, 13 and 52: for each configuration the fixtures state, the
+    // per-sample sigma and the integration density are the formula of the
+    // specification with the datasheet's literals (DS12140 Rev 3: An 110
+    // ug/sqrt(Hz) at +/-16 g, Rn 3.8 mdps/sqrt(Hz), the gyro's LPF2 cutoff of
+    // Table 18, the accelerometer at ODR / 2, the step the sensitivity), bit
+    // for bit: the same operations in the same order.
+    const double g = 9.80665, radians = kPi/180;
+    const struct { double rate, gyroBandwidth; } configurations[] = {{12.5, 4.2}, {26, 8.3}, {104, 33.0}};
+    for (const auto &c : configurations) {
+        const ImuNoise n = fixtureNoise(c.rate);
+        QCOMPARE(n.configuration.accelFsG, 16.);
+        QCOMPARE(n.configuration.gyroOdrHz, c.rate);
+
+        const double accDatasheet = 110e-6*g, accStep = 16./32768*g, accBandwidth = c.rate/2;
+        const double accSigma = std::sqrt(accDatasheet*accDatasheet*accBandwidth + accStep*accStep/12);
+        const SensorNoise &a = n.accelerometer;
+        QVERIFY(a.range == 16 && a.rate == c.rate);
+        QVERIFY(a.datasheetDensity == accDatasheet);
+        QVERIFY(a.bandwidth == accBandwidth);
+        QVERIFY(a.step == accStep && a.latticeStep == accStep);
+        QVERIFY(a.sampleSigma == accSigma);
+        QVERIFY(a.density == accSigma*std::sqrt(1/c.rate));
+        QVERIFY(a.sensitivityTolerance == .01);
+
+        const double gyroDatasheet = 3.8e-3*radians, gyroStep = 70e-3*radians;
+        const double gyroSigma = std::sqrt(gyroDatasheet*gyroDatasheet*c.gyroBandwidth + gyroStep*gyroStep/12);
+        const SensorNoise &w = n.gyroscope;
+        QVERIFY(w.range == 2000 && w.rate == c.rate);
+        QVERIFY(w.datasheetDensity == gyroDatasheet);
+        QVERIFY(w.bandwidth == c.gyroBandwidth);
+        QVERIFY(w.step == gyroStep);
+        QVERIFY(w.latticeStep == 70e-3);
+        QVERIFY(w.sampleSigma == gyroSigma);
+        QVERIFY(w.density == gyroSigma*std::sqrt(1/c.rate));
+        QVERIFY(w.sensitivityTolerance == .01);
+        qInfo() << c.rate << "Hz: accelerometer sigma" << a.sampleSigma << "m/s^2, density" << a.density
+                << "; gyro sigma" << w.sampleSigma << "rad/s, density" << w.density;
+    }
+    // The 12.5 Hz accelerometer sigma is the corpus's quietest-window floor
+    // (0.0029-0.0035 m/s^2); the overview's table to its five digits.
+    QVERIFY(std::abs(fixtureNoise(12.5).accelerometer.sampleSigma-.0030304) < 1e-7);
+    QVERIFY(std::abs(fixtureNoise(104).gyroscope.density-5.0909e-5) < 1e-9);
+
+    // Every value the vocabulary lists has an entry (the accelerometer's
+    // 1.6 Hz excepted: configurationWithoutEntryIsRejected), with the
+    // datasheet's step at each range and bandwidth at each rate.
+    const struct { const char *text; double value, step; } accelerometerRanges[] = {
+        {"2", 2, 2./32768*g}, {"4", 4, 4./32768*g}, {"8", 8, 8./32768*g}, {"16", 16, 16./32768*g}};
+    const struct { const char *text; double value, step; } gyroRanges[] = {
+        {"250", 250, 8.75e-3}, {"500", 500, 17.5e-3}, {"1000", 1000, 35e-3}, {"2000", 2000, 70e-3}};
+    const struct { const char *text; double value, gyroBandwidth; } rates[] = {
+        {"12.5", 12.5, 4.2}, {"26", 26, 8.3}, {"52", 52, 16.6}, {"104", 104, 33.0}, {"208", 208, 66.8},
+        {"416", 416, 135.9}, {"833", 833, 295.5}, {"1666", 1666, 1108.1}, {"3333", 3333, 1320.7},
+        {"6666", 6666, 1441.8}};
+    for (const auto &accelerometer : accelerometerRanges) {
+        QVERIFY(SensorConfiguration::isValidValue(QString::fromLatin1(SensorConfiguration::AccelFsG), QString::fromLatin1(accelerometer.text)));
+        for (const auto &gyro : gyroRanges) {
+            QVERIFY(SensorConfiguration::isValidValue(QString::fromLatin1(SensorConfiguration::GyroFsDegS), QString::fromLatin1(gyro.text)));
+            for (const auto &rate : rates) {
+                QVERIFY(SensorConfiguration::isValidValue(QString::fromLatin1(SensorConfiguration::AccelOdrHz), QString::fromLatin1(rate.text)));
+                QVERIFY(SensorConfiguration::isValidValue(QString::fromLatin1(SensorConfiguration::GyroOdrHz), QString::fromLatin1(rate.text)));
+                ImuConfiguration configuration;
+                configuration.accelFsG = accelerometer.value;
+                configuration.gyroFsDegS = gyro.value;
+                configuration.accelOdrHz = rate.value;
+                configuration.gyroOdrHz = rate.value;
+                const ImuNoise n = imuNoise(configuration);
+                QVERIFY(n.accelerometer.step == accelerometer.step);
+                QVERIFY(n.gyroscope.latticeStep == gyro.step);
+                QVERIFY(n.accelerometer.bandwidth == rate.value/2);
+                QVERIFY(n.gyroscope.bandwidth == rate.gyroBandwidth);
+                for (const SensorNoise *s : {&n.accelerometer, &n.gyroscope})
+                    QVERIFY(std::isfinite(s->density) && s->density > 0 && s->sampleSigma > s->step/std::sqrt(12.));
+            }
+        }
+    }
+}
+
+void FusionKernelTest::configurationWithoutEntryIsRejected()
+{
+    // Clauses 46 and 52, the negative half: a value outside a key's list, or
+    // not a number, has no entry, and the rejection names the first such key
+    // in key order. The accelerometer's 1.6 Hz is a low-power rate with no
+    // entry; +/-125 deg/s is a datasheet range the keys do not list.
+    const double NaN = std::numeric_limits<double>::quiet_NaN();
+    const auto noEntry = [](const char *key, const char *value) {
+        return QStringLiteral("No datasheet entry for %1 = %2; sensor fusion unavailable")
+            .arg(QLatin1String(key), QLatin1String(value));
+    };
+    const auto reasonFor = [](const ImuConfiguration &configuration) {
+        try {
+            imuNoise(configuration);
+        } catch (const std::invalid_argument &e) {
+            return QString::fromUtf8(e.what());
+        }
+        return QString();
+    };
+    const ImuConfiguration valid = fixtureNoise(12.5).configuration;
+    struct Case { double ImuConfiguration::*member; double value; const char *key, *text; };
+    const Case cases[] = {
+        {&ImuConfiguration::accelOdrHz, 1.6, SensorConfiguration::AccelOdrHz, "1.6"},
+        {&ImuConfiguration::accelOdrHz, 3, SensorConfiguration::AccelOdrHz, "3"},
+        {&ImuConfiguration::accelOdrHz, NaN, SensorConfiguration::AccelOdrHz, "nan"},
+        {&ImuConfiguration::accelFsG, 3, SensorConfiguration::AccelFsG, "3"},
+        {&ImuConfiguration::accelFsG, NaN, SensorConfiguration::AccelFsG, "nan"},
+        {&ImuConfiguration::gyroFsDegS, 125, SensorConfiguration::GyroFsDegS, "125"},
+        {&ImuConfiguration::gyroFsDegS, NaN, SensorConfiguration::GyroFsDegS, "nan"},
+        {&ImuConfiguration::gyroOdrHz, 1.6, SensorConfiguration::GyroOdrHz, "1.6"},
+        {&ImuConfiguration::gyroOdrHz, 3332, SensorConfiguration::GyroOdrHz, "3332"},
+        {&ImuConfiguration::gyroOdrHz, NaN, SensorConfiguration::GyroOdrHz, "nan"}};
+    for (const Case &c : cases) {
+        ImuConfiguration configuration = valid;
+        configuration.*(c.member) = c.value;
+        QCOMPARE(reasonFor(configuration), noEntry(c.key, c.text));
+    }
+    // Key order: the first key without an entry is named.
+    QCOMPARE(reasonFor(ImuConfiguration{}), noEntry(SensorConfiguration::AccelFsG, "nan"));
+    ImuConfiguration two = valid;
+    two.gyroOdrHz = 1.6;
+    two.gyroFsDegS = 125;
+    QCOMPARE(reasonFor(two), noEntry(SensorConfiguration::GyroFsDegS, "125"));
+
+    // Through the pipeline: a Rejected result with that reason.
+    Fusion::Channels channels = toChannels(fusionFixture(QStringLiteral("coarse_linear")));
+    channels.imuConfiguration.accelOdrHz = 1.6;
+    QVERIFY(rejectedWith(rejectedBy(channels), noEntry(SensorConfiguration::AccelOdrHz, "1.6")));
+    channels.imuConfiguration = ImuConfiguration{};
+    QVERIFY(rejectedWith(rejectedBy(channels), noEntry(SensorConfiguration::AccelFsG, "nan")));
+
+    // The integration refuses a noise that was never derived.
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument,
+                             preintegrateImu(boundarySamples(Vector3::Zero()), .037, .863,
+                                             gtsam::imuBias::ConstantBias(), ImuNoise{}));
+}
+
+void FusionKernelTest::constantSignalHasNoSamplingTerm()
+{
+    // Clauses 14 and 53: a constant force and zero rate (zero bias): every
+    // step, the two part steps beside the fixes included, has the densities'
+    // covariance exactly (Eigen's == is element-wise equality, no
+    // tolerance): no sampling term and no remainder.
     const Samples d = boundarySamples(Vector3(1, -2, .5));
-    const gtsam::imuBias::ConstantBias bias;
-    const auto without = preintegrateImu(d, .037, .863, bias, withSlopes(0, 0));
-    for (const Tuning &tuning : { Tuning{}, withSlopes(1e3, 1e3) }) {
-        const auto with = preintegrateImu(d, .037, .863, bias, tuning);
-        QVERIFY(with.preintMeasCov() == without.preintMeasCov());
-        QVERIFY(with.deltaPij() == without.deltaPij());
-        QVERIFY(with.deltaVij() == without.deltaVij());
-        QVERIFY(with.deltaRij().matrix() == without.deltaRij().matrix());
+    const ImuNoise noise = fixtureNoise(104);
+    const StepCovariances s = stepCovariances(d, .037, .863, gtsam::imuBias::ConstantBias(), noise);
+    QCOMPARE(s.steps.size(), size_t(84));
+    QVERIFY(s.steps.front().dt < .01 && s.steps.back().dt < .01);
+    const double accelerometer = noise.accelerometer.density, gyroscope = noise.gyroscope.density;
+    const gtsam::Matrix3 expectedAccelerometer = gtsam::I_3x3*(accelerometer*accelerometer);
+    const gtsam::Matrix3 expectedGyroscope = gtsam::I_3x3*(gyroscope*gyroscope);
+    for (size_t j = 0; j < s.steps.size(); ++j) {
+        QVERIFY2(s.accelerometer[j] == expectedAccelerometer, qPrintable(QString::number(j)));
+        QVERIFY2(s.gyroscope[j] == expectedGyroscope, qPrintable(QString::number(j)));
     }
 }
 
-void FusionKernelTest::perStepTermMatchesSpecifiedCovariance()
+void FusionKernelTest::samplingTermFollowsTheDerivation()
 {
-    // Spec section 10: a step with a known change has the specified
-    // covariance. Eight steps of .125 s, each with a change of .03125 rad/s
-    // and .125 m/s^2, so every step's term is the same and the expectation is
-    // a second, density-only preintegration with sqrt(density^2 + sigma^2 dt)
-    // as the density. With slopes 8 and 4 the term dominates (sigma_w = .03125
-    // rad, sigma_w^2 dt = 1.22e-4 against 1e-6; sigma_a = .0625 m/s, sigma_a^2
-    // dt = 4.9e-4 against 2.25e-4); with the production slopes it is 1.3e-3 of
-    // the gyro covariance and 2.2 % of the accelerometer's, both far above the
-    // tolerance, as the negative check against the density-only value proves.
-    const Samples d = rampSamples();
-    const gtsam::imuBias::ConstantBias bias;
-    const auto densityOnly = preintegrateImu(d, 0, 1, bias, withSlopes(0, 0));
-    for (const Tuning &tuning : { withSlopes(8, 4), Tuning{} }) {
-        const auto got = preintegrateImu(d, 0, 1, bias, tuning);
-        const auto expected = preintegrateImu(d, 0, 1, bias, densityFor(tuning, .125, .03125, .125));
-        QVERIFY(sameCovariance(got.preintMeasCov(), expected.preintMeasCov()));
-        QVERIFY(!sameCovariance(got.preintMeasCov(), densityOnly.preintMeasCov()));
+    // Clauses 14, 47 and 53, as settled: on a signal with a known, constant
+    // second derivative, every step's covariance is the density's plus
+    // (w f'')^2 / dt, w = 1/2 integral over the step of (t - t_k)(t_k+1 - t),
+    // here by Simpson's rule (exact for it), for whole steps and the part
+    // steps beside the two ends; the samples are unevenly spaced, and the
+    // change of slope estimates f'' exactly there too. The remainder is zero:
+    // the force case does not rotate, and in the rate case the force is zero
+    // and the rate keeps its axis. And the sampling term is what the
+    // integration gets wrong: the summed w f'' is the preintegrated
+    // velocity's departure from the exact integral of the force (no rotation,
+    // so the preintegration is the sum of the midpoint readings).
+    const std::vector<double> times{0, .08, .17, .24, .33, .40, .49, .56};
+    const double q = 5, start = .05, end = .45;      // f = q t^2, f'' = 2 q
+    const ImuNoise noise = fixtureNoise(12.5);
+    const double accelerometer = noise.accelerometer.density, gyroscope = noise.gyroscope.density;
+
+    // The interval of `times` that holds the step, and the step's weight.
+    const auto weightOf = [&](const ImuStep &step) {
+        const size_t k = size_t(std::upper_bound(times.begin(), times.end(), (step.start+step.end)/2)
+                                -times.begin())-1;
+        return simpsonWeight(times[k], times[k+1], step.start, step.end);
+    };
+
+    const Samples forceCase = signalSamples(times, [q](double t) { return Vector3(q*t*t, 0, -9.80665); },
+                                            [](double) { return Vector3(0, 0, 0); });
+    const StepCovariances f = stepCovariances(forceCase, start, end, gtsam::imuBias::ConstantBias(), noise);
+    QCOMPARE(f.steps.size(), size_t(6));
+    double summed = 0, worst = 0;
+    for (size_t j = 0; j < f.steps.size(); ++j) {
+        const ImuStep &step = f.steps[j];
+        const double w = weightOf(step), sampling = w*2*q;
+        summed += sampling;
+        const double expected = accelerometer*accelerometer + sampling*sampling/step.dt;
+        worst = std::max(worst, std::abs(f.accelerometer[j](0, 0)-expected)/expected);
+        QVERIFY2(isotropicWithin(f.accelerometer[j], expected, 1e-12), qPrintable(QString::number(j)));
+        QVERIFY2(f.gyroscope[j] == gtsam::Matrix3(gtsam::I_3x3*(gyroscope*gyroscope)), qPrintable(QString::number(j)));
+        // Not vacuous: the term is a part of the step's variance worth having.
+        QVERIFY(sampling*sampling/step.dt > 1e-3*accelerometer*accelerometer);
+    }
+    // The whole steps carry h^3 / 12 of f'', the trapezoid rule's error.
+    const double h = times[2]-times[1];
+    QVERIFY(std::abs(weightOf(f.steps[1])-h*h*h/12) <= 1e-12*h*h*h);
+    const double exact = q*(end*end*end-start*start*start)/3;
+    const double departure = f.pim.deltaVij().x()-exact;
+    qInfo() << "sampling term: worst covariance departure" << worst << "relative; summed w f''" << summed
+            << "m/s against the preintegration's departure from the exact integral" << departure << "m/s";
+    QVERIFY(std::abs(departure-summed) <= 1e-9*summed);
+
+    const Samples rateCase = signalSamples(times, [](double) { return Vector3(0, 0, 0); },
+                                           [q](double t) { return Vector3(0, 0, q*t*t); });
+    const StepCovariances r = stepCovariances(rateCase, start, end, gtsam::imuBias::ConstantBias(), noise);
+    for (size_t j = 0; j < r.steps.size(); ++j) {
+        const double sampling = weightOf(r.steps[j])*2*q;
+        const double expected = gyroscope*gyroscope + sampling*sampling/r.steps[j].dt;
+        QVERIFY2(isotropicWithin(r.gyroscope[j], expected, 1e-12), qPrintable(QString::number(j)));
+        QVERIFY2(r.accelerometer[j] == gtsam::Matrix3(gtsam::I_3x3*(accelerometer*accelerometer)),
+                 qPrintable(QString::number(j)));
+    }
+
+    // Fewer than three samples: no change of slope exists, no term.
+    const Samples two = signalSamples({0, .08}, [q](double t) { return Vector3(q*t, 0, -9.80665); },
+                                      [](double) { return Vector3(0, 0, 0); });
+    const StepCovariances one = stepCovariances(two, 0, .08, gtsam::imuBias::ConstantBias(), noise);
+    QCOMPARE(one.steps.size(), size_t(1));
+    QVERIFY(one.accelerometer[0] == gtsam::Matrix3(gtsam::I_3x3*(accelerometer*accelerometer)));
+}
+
+void FusionKernelTest::rotationRemainderFollowsTheDerivation()
+{
+    // Clauses 15 and 53: a constant turn, rate omega about z and force f along
+    // x, so the signal is constant (no sampling term) and the step's rotation
+    // theta = omega dt is perpendicular to the force: the remainder is the
+    // pure rotation term alone, r_v = dt theta^2 |f| / 24, and the angle's
+    // remainder is zero (the rate does not change).
+    const double omega = .5, force = 10, dt = .08;   // theta = .04 at 12.5 Hz
+    const ImuNoise noise = fixtureNoise(12.5);
+    const double accelerometer = noise.accelerometer.density, gyroscope = noise.gyroscope.density;
+    std::vector<double> times;
+    for (int i = 0; i <= 4; ++i)
+        times.push_back(i*dt);
+    const Samples turn = signalSamples(times, [force](double) { return Vector3(force, 0, 0); },
+                                       [omega](double) { return Vector3(0, 0, omega); });
+    const StepCovariances s = stepCovariances(turn, 0, times.back(), gtsam::imuBias::ConstantBias(), noise);
+    QCOMPARE(s.steps.size(), size_t(4));
+    for (size_t j = 0; j < s.steps.size(); ++j) {
+        const double theta = omega*s.steps[j].dt;
+        const double remainder = s.steps[j].dt*theta*theta*force/24;
+        QVERIFY2(isotropicWithin(s.accelerometer[j], accelerometer*accelerometer + remainder*remainder/s.steps[j].dt,
+                                 1e-12), qPrintable(QString::number(j)));
+        QVERIFY2(s.gyroscope[j] == gtsam::Matrix3(gtsam::I_3x3*(gyroscope*gyroscope)), qPrintable(QString::number(j)));
+    }
+
+    // The library's one-step velocity against the closed form of the true
+    // velocity change, f / omega (sin theta, 1 - cos theta, 0): they differ
+    // by r_v, to 1 %, for turns up to .05 rad per step.
+    for (const double theta : {.01, .03, .05}) {
+        const double step = theta/omega;
+        const Samples one = signalSamples({0, step}, [force](double) { return Vector3(force, 0, 0); },
+                                          [omega](double) { return Vector3(0, 0, omega); });
+        const auto pim = preintegrateImu(one, 0, step, gtsam::imuBias::ConstantBias(), noise);
+        const Vector3 truth = force/omega*Vector3(std::sin(theta), 1-std::cos(theta), 0);
+        const double difference = (truth-pim.deltaVij()).norm();
+        const double remainder = step*theta*theta*force/24;
+        qInfo() << "constant turn of" << theta << "rad: scheme error" << difference << "m/s, r_v" << remainder;
+        QVERIFY(std::abs(difference-remainder) <= .01*remainder);
     }
 }
 
-void FusionKernelTest::perStepTermScalesWithStep()
+void FusionKernelTest::rotationRemainderMatchesTheSchemeError()
 {
-    // Spec section 10: the term scales with dt. The same change (.5 rad/s,
-    // 1 m/s^2) over one step of .125 s and one of .25 s: the sigma doubles
-    // with the step (.5 then 1.0 rad; .5 then 1.0 m/s) and each preintegration
-    // matches its own expectation. The cross check pins the dt factor in the
-    // sigma: the longer step is not within tolerance of the shorter step's
-    // sigma, the added variance differing by more than a factor four.
-    const Tuning tuning = withSlopes(8, 4);
-    const gtsam::imuBias::ConstantBias bias;
-    const Samples shortStep = singleStepSamples(.125), longStep = singleStepSamples(.25);
+    // Clause 15, as settled: on a linear ramp of rate and force across one
+    // step, the true velocity change minus the scheme's is, to second order,
+    // the vector (dt/24) theta x (theta x fbar) + (dt/12) (theta x df -
+    // dtheta x fbar), and the angle's |theta x dtheta| / 12 (coning). The
+    // truth is the same signal preintegrated in 1000 steps (each a thousandth
+    // of the turn, its own scheme error a millionth); the remainder of the
+    // expansion is third order, under 5 % here. Zero bias.
+    const double dt = .08;
+    const Vector3 rateStart(.3, -.2, .5), rateEnd(.4, .1, .7);
+    const Vector3 forceStart(1.5, -.5, -9.5), forceEnd(2.5, .5, -9.);
+    const auto rate = [&](double t) { return Vector3(rateStart+(rateEnd-rateStart)*(t/dt)); };
+    const auto force = [&](double t) { return Vector3(forceStart+(forceEnd-forceStart)*(t/dt)); };
+    const ImuNoise noise = fixtureNoise(12.5);
 
-    const auto gotShort = preintegrateImu(shortStep, 0, .125, bias, tuning);
-    const auto expectedShort = preintegrateImu(shortStep, 0, .125, bias, densityFor(tuning, .125, .5, 1));
-    QVERIFY(sameCovariance(gotShort.preintMeasCov(), expectedShort.preintMeasCov()));
+    const auto one = preintegrateImu(signalSamples({0, dt}, force, rate), 0, dt, gtsam::imuBias::ConstantBias(), noise);
+    std::vector<double> fine;
+    for (int j = 0; j <= 1000; ++j)
+        fine.push_back(dt*j/1000);
+    fine.back() = dt;
+    const auto many = preintegrateImu(signalSamples(fine, force, rate), 0, dt, gtsam::imuBias::ConstantBias(), noise);
 
-    const auto gotLong = preintegrateImu(longStep, 0, .25, bias, tuning);
-    const auto expectedLong = preintegrateImu(longStep, 0, .25, bias, densityFor(tuning, .25, .5, 1));
-    QVERIFY(sameCovariance(gotLong.preintMeasCov(), expectedLong.preintMeasCov()));
+    const Vector3 theta = rate(dt/2)*dt, dTheta = (rateEnd-rateStart)*dt;
+    const Vector3 fbar = force(dt/2), dForce = forceEnd-forceStart;
+    const Vector3 remainder = dt/24*theta.cross(theta.cross(fbar)) + dt/12*(theta.cross(dForce)-dTheta.cross(fbar));
+    const Vector3 difference = many.deltaVij()-one.deltaVij();
+    const double angle = Rot3::Logmap(one.deltaRij().between(many.deltaRij())).norm();
+    const double coning = theta.cross(dTheta).norm()/12;
+    qInfo() << "ramp: scheme error" << difference.x() << difference.y() << difference.z() << "m/s, r_v"
+            << remainder.x() << remainder.y() << remainder.z() << "(departure"
+            << (difference-remainder).norm()/remainder.norm() << "); angle" << angle << "rad, coning" << coning;
+    QVERIFY((difference-remainder).norm() <= .05*remainder.norm());
+    QVERIFY(std::abs(angle-coning) <= .05*coning);
 
-    const auto shorterSigma = preintegrateImu(longStep, 0, .25, bias, densityFor(tuning, .125, .5, 1));
-    QVERIFY(!sameCovariance(gotLong.preintMeasCov(), shorterSigma.preintMeasCov()));
-    QVERIFY((gotLong.preintMeasCov()-shorterSigma.preintMeasCov()).cwiseAbs().maxCoeff()
-            > 1e-3*shorterSigma.preintMeasCov().cwiseAbs().maxCoeff());
+    // And the covariance of that one step is the density's plus r_v and
+    // r_theta, plus its sampling term, which is zero on a linear signal.
+    const StepCovariances s = stepCovariances(signalSamples({0, dt}, force, rate), 0, dt,
+                                              gtsam::imuBias::ConstantBias(), noise);
+    const double accelerometer = noise.accelerometer.density, gyroscope = noise.gyroscope.density;
+    QVERIFY(isotropicWithin(s.accelerometer[0], accelerometer*accelerometer + remainder.squaredNorm()/dt, 1e-12));
+    QVERIFY(isotropicWithin(s.gyroscope[0], gyroscope*gyroscope + coning*coning/dt, 1e-12));
 }
 
-void FusionKernelTest::diagnosticsReportPerStepConstants()
+void FusionKernelTest::latticeCheckFindsTheCoarsestRange()
 {
-    QCOMPARE(Tuning{}.gyroStepSlope, .026);
-    QCOMPARE(Tuning{}.accStepSlope, .40);
+    // Clauses 8 and 9, as settled. The lattice steps: the range over 32768
+    // counts times 9.80665 for the accelerometer, the datasheet's sensitivity
+    // for the gyro. The tolerance: one unit of the file's last decimal
+    // through the conversion layer's largest factor, 1e-5 g x 9.80665 and
+    // 1e-3 deg/s x 1.14688 (the legacy correction, 70 mdps / (2000 / 32768)).
+    const double g = 9.80665, accelerometerTolerance = 1e-5*g, gyroTolerance = 1e-3*1.14688;
+    const double NaN = std::numeric_limits<double>::quiet_NaN();
+    const auto accelerometerRange = [](const QVector<double> &x, const QVector<double> &y, const QVector<double> &z) {
+        return rangeShownByReadings(ImuSensor::Accelerometer, x, y, z);
+    };
+    const auto gyroRange = [](const QVector<double> &x, const QVector<double> &y, const QVector<double> &z) {
+        return rangeShownByReadings(ImuSensor::Gyroscope, x, y, z);
+    };
+    const auto same = [](double got, double expected) { return std::isnan(expected) ? std::isnan(got) : got == expected; };
 
-    // The constants reported are the ones the fit ran with, not the defaults.
-    // coarse_linear has zero signal change, so both fits are the same fit and
-    // their objectives are identical.
-    const Fusion::Channels channels = toChannels(fusionFixture(QStringLiteral("coarse_linear")));
-    QJsonObject first;
-    for (const Tuning &tuning : { Tuning{}, withSlopes(.5, .7) }) {
-        const Fusion::Result result = runPipeline(channels, tuning, Checkpoint());
-        QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
-        const QJsonObject diagnostics = diagnosticsOf(result);
-        const QJsonObject model = diagnostics.value("model").toObject();
-        QCOMPARE(model.keys(), QStringList({QStringLiteral("gyro_bias"), QStringLiteral("per_step")}));
-        // A constant 25 degC series (kFixtureTemperatureDegC) has exactly that mean.
-        QCOMPARE(model.value("gyro_bias").toObject().value("t_ref_degc").toDouble(), kFixtureTemperatureDegC);
-        const QJsonObject perStep = model.value("per_step").toObject();
-        QCOMPARE(perStep.keys(), QStringList({QStringLiteral("acc_slope_s"), QStringLiteral("gyro_slope_s")}));
-        QCOMPARE(perStep.value("gyro_slope_s").toDouble(), tuning.gyroStepSlope);
-        QCOMPARE(perStep.value("acc_slope_s").toDouble(), tuning.accStepSlope);
-        if (first.isEmpty())
-            first = diagnostics;
+    // Each range's lattice: odd multiples of its step lie on it and on no
+    // coarser one, the three axes together.
+    for (const double range : {16., 8., 4., 2.}) {
+        const double s = range/32768*g;
+        QVERIFY2(same(accelerometerRange({s, -3*s}, {7*s}, {-2047*s}), range), qPrintable(QString::number(range)));
+        // One axis off the finer lattice decides for all three.
+        QVERIFY(same(accelerometerRange({2*s}, {4*s}, {s}), range));
+    }
+    for (const auto &[range, s] : {std::pair<double, double>{2000, 70e-3}, {1000, 35e-3}, {500, 17.5e-3},
+                                   {250, 8.75e-3}}) {
+        QVERIFY2(same(gyroRange({s, -3*s}, {7*s}, {-4095*s}), range), qPrintable(QString::number(range)));
+    }
+    // Zero lies on every lattice: the coarsest is shown.
+    QVERIFY(same(accelerometerRange({0}, {0}, {-2048*16./32768*g}), 16));
+    QVERIFY(same(gyroRange({0}, {0}, {0}), 2000));
+
+    // A legacy-style reading: the firmware writes counts x range / 32768
+    // truncated to the file's decimals (g to five, deg/s to three), and the
+    // conversion layer multiplies the gyro's by the legacy correction.
+    // 12345 counts at +/-16 g are 6.02783203125 g, written 6.02783; 4321
+    // counts at +/-2000 deg/s are 263.73291015625 deg/s, written 263.732 and
+    // read as 302.46895616, 1.04e-3 deg/s from the lattice point 302.47.
+    QVERIFY(same(accelerometerRange({6.02783*g}, {-6.02783*g}, {0}), 16));
+    QVERIFY(same(gyroRange({263.732*1.14688}, {-263.732*1.14688}, {0}), 2000));
+    // The printed 0.488 mg/LSB lattice would put the same reading 5.3e-4
+    // m/s^2 off it, more than twice the tolerance: the lattice is the range
+    // over 32768 counts, not the printed sensitivity.
+    QVERIFY(std::abs(6.02783*g-std::round(6.02783/.488e-3)*.488e-3*g) > 2*accelerometerTolerance);
+
+    // The tolerance's edges: a reading one tolerance from a lattice point fits
+    // and one 1.5 tolerances from it does not; then no range's lattice fits.
+    QVERIFY(same(accelerometerRange({accelerometerTolerance}, {0}, {0}), 16));
+    QVERIFY(same(accelerometerRange({1.5*accelerometerTolerance}, {0}, {0}), NaN));
+    QVERIFY(same(gyroRange({gyroTolerance}, {0}, {0}), 2000));
+    QVERIFY(same(gyroRange({1.5*gyroTolerance}, {0}, {0}), NaN));
+
+    // The kernel rule names the range stated and the range shown, or none.
+    Fusion::Channels c = toChannels(fusionFixture(QStringLiteral("coarse_linear")));
+    const Fusion::Channels linear = c;
+    requireReadingsOnLattice(c);
+    c.ax[5] = 8./32768*g;   // one reading on the +/-8 g lattice only
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, requireReadingsOnLattice(c));
+    QVERIFY(rejectedWith(rejectedBy(c), QStringLiteral(
+        "ACCEL_FS_G states +/-16 g but the accelerometer readings lie on the +/-8 g lattice; sensor fusion unavailable")));
+    c.ax[5] = 1.5*accelerometerTolerance;
+    QVERIFY(rejectedWith(rejectedBy(c), QStringLiteral(
+        "ACCEL_FS_G states +/-16 g but the accelerometer readings lie on no range's lattice; sensor fusion unavailable")));
+    c = linear;
+    c.imuConfiguration.accelFsG = 8;   // a finer range stated than the readings show
+    QVERIFY(rejectedWith(rejectedBy(c), QStringLiteral(
+        "ACCEL_FS_G states +/-8 g but the accelerometer readings lie on the +/-16 g lattice; sensor fusion unavailable")));
+    c = linear;
+    c.wz[7] = 35e-3;
+    QVERIFY(rejectedWith(rejectedBy(c), QStringLiteral(
+        "GYRO_FS_DEG_S states +/-2000 deg/s but the gyro readings lie on the +/-1000 deg/s lattice; sensor fusion unavailable")));
+    // Every reading counts, inside the fitted window or not: the last IMU
+    // sample of coarse_linear lies past its last fix.
+    c = linear;
+    c.ay.last() = 8./32768*g;
+    QVERIFY(c.imuTime.last() > c.gnssTime.last());
+    QVERIFY(rejectedBy(c).outcome == Fusion::Outcome::Rejected);
+}
+
+void FusionKernelTest::latticeCheckIdentifiesEveryFixture()
+{
+    // Clause 51: the range shown by every committed fixture's readings is
+    // the range it states (reject_lattice, built to show +/-8 g under a
+    // stated +/-16 g, excepted; reject_nonfinite's NaN reading lies on no
+    // lattice, and its earlier check rejects it). naturalSession's readings
+    // (tst_fusion_session; this executable does not build sessions) are 0
+    // and -9.80665 m/s^2 and 0 deg/s: the default's +/-16 g and +/-2000 deg/s.
+    QList<FusionFixture> fixtures = fusionFixtures();
+    for (const char *name : {"motion_start", "rest_throughout", "sacc_anchor", "drifting_bias"})
+        fixtures.append(initializerFixture(QLatin1String(name)));
+    QCOMPARE(fixtures.size(), 18);
+    for (const FusionFixture &f : fixtures) {
+        const double accelerometer = rangeShownByReadings(ImuSensor::Accelerometer, f.ax, f.ay, f.az);
+        const double gyro = rangeShownByReadings(ImuSensor::Gyroscope, f.wx, f.wy, f.wz);
+        QCOMPARE(f.accelFsG, 16.);
+        QCOMPARE(f.gyroFsDegS, 2000.);
+        if (f.name == QStringLiteral("reject_lattice"))
+            QCOMPARE(accelerometer, 8.);
+        else if (f.name == QStringLiteral("reject_nonfinite"))
+            QVERIFY(std::isnan(accelerometer));
         else
-            QVERIFY(first.value("objective").toDouble() == diagnostics.value("objective").toDouble());
+            QVERIFY2(accelerometer == f.accelFsG, qPrintable(f.name));
+        QVERIFY2(gyro == f.gyroFsDegS, qPrintable(f.name));
     }
+    const QVector<double> zeros(501, 0.), down(501, -9.80665);
+    QCOMPARE(rangeShownByReadings(ImuSensor::Accelerometer, zeros, zeros, down), 16.);
+    QCOMPARE(rangeShownByReadings(ImuSensor::Gyroscope, zeros, zeros, zeros), 2000.);
+}
+
+void FusionKernelTest::rateCheckToleratesTenPercent()
+{
+    // Clause 10, as settled: the median logged interval against 1 / rate of
+    // each stated rate; 10 % passes at 9.9 % and rejects at 10.1 %, either
+    // side; the accelerometer's rate is checked first; a gyro-only mismatch
+    // names the gyro.
+    const ImuConfiguration stated = fixtureNoise(12.5).configuration;
+    const auto reasonFor = [](double median, const ImuConfiguration &configuration) {
+        try {
+            requireStatedRates(median, configuration);
+        } catch (const std::invalid_argument &e) {
+            return QString::fromUtf8(e.what());
+        }
+        return QString();
+    };
+    const double nominal = 1/12.5;
+    QCOMPARE(reasonFor(nominal, stated), QString());
+    QCOMPARE(reasonFor(nominal*1.099, stated), QString());
+    QCOMPARE(reasonFor(nominal*.901, stated), QString());
+    QCOMPARE(reasonFor(nominal*1.101, stated),
+             QStringLiteral("ACCEL_ODR_HZ states 12.5 Hz but the IMU is logged at 11.4 Hz; sensor fusion unavailable"));
+    QCOMPARE(reasonFor(nominal*.899, stated),
+             QStringLiteral("ACCEL_ODR_HZ states 12.5 Hz but the IMU is logged at 13.9 Hz; sensor fusion unavailable"));
+    // The recordings on disk: 75.6 ms, 13.2 Hz, 5.5 % fast.
+    QCOMPARE(reasonFor(.0756, stated), QString());
+    ImuConfiguration gyroOnly = stated;
+    gyroOnly.gyroOdrHz = 26;
+    QCOMPARE(reasonFor(nominal, gyroOnly),
+             QStringLiteral("GYRO_ODR_HZ states 26 Hz but the IMU is logged at 12.5 Hz; sensor fusion unavailable"));
+    ImuConfiguration both = stated;
+    both.accelOdrHz = both.gyroOdrHz = 104;
+    QVERIFY(reasonFor(nominal, both).startsWith(QStringLiteral("ACCEL_ODR_HZ states 104 Hz")));
+
+    // Through the pipeline, on the whole recording's median interval.
+    Fusion::Channels c = toChannels(fusionFixture(QStringLiteral("coarse_linear")));
+    c.imuConfiguration.gyroOdrHz = 52;
+    QVERIFY(rejectedWith(rejectedBy(c), QStringLiteral(
+        "GYRO_ODR_HZ states 52 Hz but the IMU is logged at 100.0 Hz; sensor fusion unavailable")));
+}
+
+void FusionKernelTest::configurationChecksComeAfterTheOthers()
+{
+    // Decision 13 and clause 9: the configuration's checks come after every
+    // existing check, in the order table entry, lattice, rate, so a recording
+    // with several defects reports the earliest and every existing rejection
+    // keeps its reason.
+    const Fusion::Channels linear = toChannels(fusionFixture(QStringLiteral("coarse_linear")));
+    const Fusion::Channels gapped = toChannels(fusionFixture(QStringLiteral("reject_imu_gap")));
+    const QString gapReason = rejectedBy(gapped).reason;
+    QVERIFY(gapReason.startsWith(QStringLiteral("IMU gap at ")));
+
+    // An IMU gap and a configuration without an entry: the gap.
+    Fusion::Channels c = gapped;
+    c.imuConfiguration = ImuConfiguration{};
+    QVERIFY(rejectedWith(rejectedBy(c), gapReason));
+    // A non-finite reading, off every lattice, and a stated rate the logging
+    // disagrees with: the non-finite input.
+    c = linear;
+    c.ax[10] = std::numeric_limits<double>::quiet_NaN();
+    c.imuConfiguration.accelOdrHz = 12.5;
+    QVERIFY(rejectedWith(rejectedBy(c), QStringLiteral("Nonfinite IMU/ax")));
+    // No entry, readings off the lattice and a wrong rate: no entry.
+    c = linear;
+    c.ax[10] = 1e-3;
+    c.imuConfiguration.accelOdrHz = 1.6;
+    QVERIFY(rejectedBy(c).reason.startsWith(QStringLiteral("No datasheet entry for ACCEL_ODR_HZ")));
+    // Readings off the lattice and a wrong rate: the lattice.
+    c.imuConfiguration.accelOdrHz = 12.5;
+    QVERIFY(rejectedBy(c).reason.startsWith(QStringLiteral("ACCEL_FS_G states +/-16 g")));
+    // A wrong rate alone: the rate.
+    c.ax[10] = 0;
+    QVERIFY(rejectedBy(c).reason.startsWith(QStringLiteral("ACCEL_ODR_HZ states 12.5 Hz")));
+}
+
+void FusionKernelTest::diagnosticsReportTheNoiseModel()
+{
+    // Clause 40 and criterion 9: a successful fit's diagnostics carry the
+    // configuration it ran under and model.noise, with exactly these keys
+    // and the values of imuNoise() for the fixture's configuration (the
+    // diagnostics' JSON round-trips a double exactly); model holds the noise
+    // and the gyro bias model; stopping reports the damping ceiling.
+    const FusionFixture fixture = fusionFixture(QStringLiteral("coarse_linear"));
+    const Fusion::Result result = runPipeline(toChannels(fixture), Tuning{}, Checkpoint());
+    QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
+    const QJsonObject diagnostics = diagnosticsOf(result);
+
+    const QJsonObject configuration = diagnostics.value("configuration").toObject();
+    QCOMPARE(configuration.keys(), QStringList({"accel_fs_g", "accel_odr_hz", "gyro_fs_deg_s", "gyro_odr_hz"}));
+    QCOMPARE(configuration.value("accel_fs_g").toDouble(), fixture.accelFsG);
+    QCOMPARE(configuration.value("gyro_fs_deg_s").toDouble(), fixture.gyroFsDegS);
+    QCOMPARE(configuration.value("accel_odr_hz").toDouble(), fixture.accelOdrHz);
+    QCOMPARE(configuration.value("gyro_odr_hz").toDouble(), fixture.gyroOdrHz);
+
+    const QJsonObject model = diagnostics.value("model").toObject();
+    QCOMPARE(model.keys(), QStringList({QStringLiteral("gyro_bias"), QStringLiteral("noise")}));
+    // A constant 25 degC series (kFixtureTemperatureDegC) has exactly that mean.
+    QCOMPARE(model.value("gyro_bias").toObject().value("t_ref_degc").toDouble(), kFixtureTemperatureDegC);
+    const QJsonObject noise = model.value("noise").toObject();
+    QCOMPARE(noise.keys(), QStringList({QStringLiteral("acc"), QStringLiteral("gyro")}));
+    const ImuNoise expected = imuNoise(toChannels(fixture).imuConfiguration);
+    const QJsonObject acc = noise.value("acc").toObject(), gyro = noise.value("gyro").toObject();
+    QCOMPARE(acc.keys(), QStringList({"bandwidth_hz", "datasheet_density_m_s2_rthz", "density_m_s2_rthz",
+                                      "sample_sigma_m_s2", "step_m_s2"}));
+    QCOMPARE(gyro.keys(), QStringList({"bandwidth_hz", "datasheet_density_rad_s_rthz", "density_rad_s_rthz",
+                                       "sample_sigma_rad_s", "step_rad_s"}));
+    const SensorNoise &a = expected.accelerometer, &w = expected.gyroscope;
+    QVERIFY(acc.value("datasheet_density_m_s2_rthz").toDouble() == a.datasheetDensity);
+    QVERIFY(acc.value("bandwidth_hz").toDouble() == a.bandwidth);
+    QVERIFY(acc.value("step_m_s2").toDouble() == a.step);
+    QVERIFY(acc.value("sample_sigma_m_s2").toDouble() == a.sampleSigma);
+    QVERIFY(acc.value("density_m_s2_rthz").toDouble() == a.density);
+    QVERIFY(gyro.value("datasheet_density_rad_s_rthz").toDouble() == w.datasheetDensity);
+    QVERIFY(gyro.value("bandwidth_hz").toDouble() == w.bandwidth);
+    QVERIFY(gyro.value("step_rad_s").toDouble() == w.step);
+    QVERIFY(gyro.value("sample_sigma_rad_s").toDouble() == w.sampleSigma);
+    QVERIFY(gyro.value("density_rad_s_rthz").toDouble() == w.density);
+
+    QCOMPARE(diagnostics.value("stopping").toObject().value("lambda_upper_bound").toDouble(), 1e12);
+    QCOMPARE(Tuning{}.lambdaUpperBound, 1e12);
 }
 
 void FusionKernelTest::validationRejectsEachDefect()
@@ -835,15 +1344,13 @@ void FusionKernelTest::validationRejectsEachDefect()
     t.biasSettledTolerance = -1;
     validateSamples(d, t);
 
-    // The per-step slopes: zero is the term switched off; negative or
-    // non-finite is invalid.
+    // The damping ceiling must be finite and positive.
     t = Tuning{};
-    t.gyroStepSlope = -1e-3;
+    t.lambdaUpperBound = 0;
     QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
     t = Tuning{};
-    t.accStepSlope = std::numeric_limits<double>::quiet_NaN();
+    t.lambdaUpperBound = std::numeric_limits<double>::infinity();
     QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
-    validateSamples(d, withSlopes(0, 0));
 
     // The b1 prior sigma must be strictly positive.
     t = Tuning{};
@@ -954,7 +1461,7 @@ void FusionKernelTest::headingIsUnconstrained()
 {
     Samples d = boundarySamples(Vector3::Zero());
     const gtsam::imuBias::ConstantBias bias;
-    const auto graph = buildFactorGraph(d, bias, Tuning{});
+    const auto graph = buildFactorGraph(d, bias, tuningAt(104));
 
     std::vector<double> costs;
     for (double yaw : {0., .8, 2.}) {
@@ -994,7 +1501,7 @@ void FusionKernelTest::reconstructionTimingAndEndpointCorrection()
     endpoints.values.insert(V(0), Vector3(0, 0, 0));
     endpoints.values.insert(V(1), Vector3(0, 0, 0));
 
-    const ImuRateTrajectory out = reconstructAtImuRate(d, endpoints, Tuning{});
+    const ImuRateTrajectory out = reconstructAtImuRate(d, endpoints, tuningAt(104));
     QCOMPARE(out.time.size(), size_t(83));
     QCOMPARE(out.time.front(), .04);
     QCOMPARE(out.time.back(), .86);
@@ -1025,7 +1532,7 @@ void FusionKernelTest::shortWindowIsOneSegment()
     // segment fit runs. Exact constant velocity has no yaw information: the
     // marginal yaw sigma is the cap.
     const Samples linear = linearSamples(Vector3(12, -4, 2), Vector3(7, 8, 9));
-    const Initialization init = initialize(linear, Tuning{});
+    const Initialization init = initialize(linear, tuningAt(104));
     QCOMPARE(init.account.segmentLength, 600.);
     QCOMPARE(init.account.segments.size(), size_t(1));
     const SegmentAccount &s = init.account.segments[0];
@@ -1111,7 +1618,7 @@ void FusionKernelTest::yawSigmaIsMarginalAboutTheVertical()
     // way the cap.
     Samples still = boundarySamples(Vector3::Zero());
     still.velocitySigma = Vectors(2, Vector3::Constant(.1));
-    const auto stillGraph = buildFactorGraph(still, bias, Tuning{});
+    const auto stillGraph = buildFactorGraph(still, bias, tuningAt(104));
     gtsam::Values stillValues;
     stillValues.insert(B(0), bias);
     for (size_t k = 0; k < 2; ++k) {
@@ -1124,7 +1631,7 @@ void FusionKernelTest::yawSigmaIsMarginalAboutTheVertical()
     // velocity sigma of .1 m/s determines the yaw to a few degrees (and the
     // bias, common to both intervals, cancels out of the difference).
     const Samples moving = manoeuvreSamples();
-    const auto movingGraph = buildFactorGraph(moving, bias, Tuning{});
+    const auto movingGraph = buildFactorGraph(moving, bias, tuningAt(104));
     // The linearization point yawed as a whole (attitudes, positions and
     // velocities): gravity is invariant under a yaw and the GNSS sigmas are
     // isotropic, so the graph sees the same body-frame quantities.
@@ -1160,7 +1667,7 @@ void FusionKernelTest::yawSigmaIsMarginalAboutTheVertical()
         oneValues.insert(X(k), gtsam::Pose3());
         oneValues.insert(V(k), Vector3(0, 0, 0));
     }
-    QCOMPARE(yawSigmaDeg(buildFactorGraph(oneInterval, bias, Tuning{}), oneValues, X(0)), 180.);
+    QCOMPARE(yawSigmaDeg(buildFactorGraph(oneInterval, bias, tuningAt(104)), oneValues, X(0)), 180.);
 }
 
 void FusionKernelTest::initializerProgressTexts()
@@ -1226,7 +1733,7 @@ void FusionKernelTest::initializerDiagnosticsShape()
     // Every key of a successful fit's diagnostics, `initializer` among them
     // (QJsonObject sorts its keys).
     QCOMPARE(diagnostics.keys(), QStringList({
-        "algorithm", "anchor_time_s", "dense_output", "end_s", "gnss_states", "imu_outputs",
+        "algorithm", "anchor_time_s", "configuration", "dense_output", "end_s", "gnss_states", "imu_outputs",
         "initialization", "initializer", "input", "limitations", "max_endpoint_correction_deg",
         "max_seed_vs_selected_acceleration_m_s2", "max_seed_vs_selected_angle_deg", "max_step_correction_m_s2",
         "max_step_correction_time_s", "max_velocity_mismatch_m_s", "model", "objective",
@@ -1294,11 +1801,12 @@ void FusionKernelTest::exactConstantVelocityFit()
     // dense outputs against a physical trajectory with nonzero velocity.
     const Vector3 speed(12, -4, 2), offset(7, 8, 9);
     const Samples linear = linearSamples(speed, offset);
-    const Initialization init = initialize(linear, Tuning{});
+    const Tuning tuning = tuningAt(104);
+    const Initialization init = initialize(linear, tuning);
 
     // The yaw is arbitrary and unasserted; the position, velocity and
     // acceleration checks hold for any yaw.
-    const FitResult fitted = fitFactorGraph(linear, init.state, Tuning{});
+    const FitResult fitted = fitFactorGraph(linear, init.state, tuning);
     QVERIFY(fitted.converged);
     QVERIFY(fitted.objective < 1e-12);
 
@@ -1314,7 +1822,7 @@ void FusionKernelTest::exactConstantVelocityFit()
 
     // The published samples are the IMU-rate reconstruction of the fit with
     // the tuning it ran with: on exact data the exact trajectory.
-    const ImuRateTrajectory output = reconstructAtImuRate(linear, fitted, Tuning{});
+    const ImuRateTrajectory output = reconstructAtImuRate(linear, fitted, tuning);
     QVERIFY(!output.time.empty());
     for (size_t i = 0; i < output.time.size(); ++i) {
         QVERIFY((output.position[i]-offset-output.time[i]*speed).norm() < 1e-8);
@@ -1335,6 +1843,15 @@ void FusionKernelTest::initializerFixturesAreDeterministic()
         QCOMPARE(b.name, a.name);
         QCOMPARE(a.originIndex, b.originIndex);
         QVERIFY(a.expectSuccess);
+        // Every recording states its configuration: +/-16 g, +/-2000 deg/s and
+        // a listed rate within 4 % of its sampling (12.5 Hz for the two that
+        // log at 12.5 Hz, 26 Hz for the two at 25 Hz).
+        QCOMPARE(a.accelFsG, 16.);
+        QCOMPARE(a.gyroFsDegS, 2000.);
+        QCOMPARE(a.accelOdrHz, b.accelOdrHz);
+        QCOMPARE(a.gyroOdrHz, a.accelOdrHz);
+        const bool slow = a.name == QStringLiteral("sacc_anchor") || a.name == QStringLiteral("drifting_bias");
+        QCOMPARE(a.accelOdrHz, slow ? 12.5 : 26.);
         const QVector<double> *as[] = {&a.gnssTime, &a.north, &a.east, &a.down, &a.velN, &a.velE, &a.velD,
                                        &a.hAcc, &a.vAcc, &a.sAcc, &a.imuTime, &a.ax, &a.ay, &a.az,
                                        &a.wx, &a.wy, &a.wz, &a.imuTemperature};
@@ -1361,7 +1878,7 @@ void FusionKernelTest::initializerFixturesAreDeterministic()
     }
     // Any other name is nothing, and the golden fixtures are untouched.
     QVERIFY(initializerFixture(QStringLiteral("coarse_linear")).name.isEmpty());
-    QCOMPARE(fusionFixtures().size(), 12);
+    QCOMPARE(fusionFixtures().size(), 14);
 }
 
 void FusionKernelTest::fitTraceMatchesGolden_data()
@@ -1398,8 +1915,8 @@ void FusionKernelTest::biasSettledByCostTest()
     // bias-shift rule this fixture needed a third pass of one iteration that
     // lowered the cost by 8e-15 to prove the bias had stopped moving (under
     // that rule this fixture's history had passes of 4, 2, 1 iterations);
-    // under the cost test the second pass's re-preintegration changes the cost
-    // by 3.8e-12 relative and the fit is converged there.
+    // under the cost test the fit converges within two passes (in one, of four
+    // iterations, under the datasheet's noise).
     PipelineTrace trace;
     const Fusion::Result result = runPipeline(
         toChannels(fusionFixture(QStringLiteral("coarse_maneuver"))), Tuning{}, Checkpoint(), &trace);
@@ -1434,7 +1951,7 @@ void FusionKernelTest::biasSettledByCostTest()
     const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
     QCOMPARE(seed.value("converged").toBool(false), true);
     QCOMPARE(seed.value("iterations").toInt(), int(trace.history.size()));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v5"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v6"));
 
     // The quality metrics recomputed from the residuals array: 28 states, so
     // 28 position and velocity factors of dimension 3 and 27 IMU factors of
@@ -1596,30 +2113,41 @@ void FusionKernelTest::biasNeverSettlesIsSolverFailure()
 
 void FusionKernelTest::failureDiagnosticsShape()
 {
-    // The `cost increased` shape, proven on the writer directly: LM rejects
-    // an increasing step by construction, so the guard is reachable only
-    // through non-finite arithmetic, which no deterministic input forces.
+    // The shapes of the two failures a pass cannot continue from, `cost
+    // increased` and `damping saturated`, proven on the writer directly: LM
+    // rejects an increasing step by construction, so the first guard is
+    // reachable only through non-finite arithmetic, which no deterministic
+    // input forces (dampingSaturationIsASolverFailure reaches the second).
     const Tuning tuning;
+    const struct { const char *rule, *failure; } failures[] = {
+        {StopRule::kCostIncreased, "Nonfinite or increasing optimizer cost"},
+        {StopRule::kDampingSaturated, "Optimizer damping saturated without progress"}};
     Stopping s;
-    s.rule = StopRule::kCostIncreased;
-    s.passes = 2;
-    s.biasSettledTolerance = tuning.biasSettledTolerance;
-    s.slowTailWindow = tuning.slowTailWindow;
-    s.slowTailMaxMeanRelativeDecrease = tuning.slowTailMaxMeanRelativeDecrease;
-    s.slowTailMaxNrms = tuning.slowTailMaxNrms;
-    QVERIFY(std::isnan(s.lastPassMeanRelativeDecrease) && std::isnan(s.repreintegrationCostDifference));
+    for (const auto &failure : failures) {
+        s.rule = failure.rule;
+        s.passes = 2;
+        s.biasSettledTolerance = tuning.biasSettledTolerance;
+        s.lambdaUpperBound = tuning.lambdaUpperBound;
+        s.slowTailWindow = tuning.slowTailWindow;
+        s.slowTailMaxMeanRelativeDecrease = tuning.slowTailMaxMeanRelativeDecrease;
+        s.slowTailMaxNrms = tuning.slowTailMaxNrms;
+        QVERIFY(std::isnan(s.lastPassMeanRelativeDecrease) && std::isnan(s.repreintegrationCostDifference));
 
-    const QJsonObject diagnostics = failureDiagnostics(QStringLiteral("Nonfinite or increasing optimizer cost"), &s);
-    QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure"),
-                                              QStringLiteral("stopping")}));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v5"));
-    QCOMPARE(diagnostics.value("failure").toString(), QStringLiteral("Nonfinite or increasing optimizer cost"));
-    const QJsonObject stopping = diagnostics.value("stopping").toObject();
-    QCOMPARE(stopping.value("rule").toString(), QStringLiteral("cost increased"));
-    QCOMPARE(stopping.value("passes").toInt(), 2);
-    QVERIFY(stopping.value("last_pass_mean_relative_decrease").isNull());
-    QVERIFY(stopping.value("repreintegration_cost_difference").isNull());
-    QCOMPARE(stopping.value("slow_tail").toObject().value("window").toInt(), 20);
+        const QJsonObject diagnostics = failureDiagnostics(QString::fromLatin1(failure.failure), &s);
+        QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure"),
+                                                  QStringLiteral("stopping")}));
+        QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v6"));
+        QCOMPARE(diagnostics.value("failure").toString(), QString::fromLatin1(failure.failure));
+        const QJsonObject stopping = diagnostics.value("stopping").toObject();
+        QCOMPARE(stopping.value("rule").toString(), QString::fromLatin1(failure.rule));
+        QCOMPARE(stopping.value("passes").toInt(), 2);
+        QVERIFY(stopping.value("last_pass_mean_relative_decrease").isNull());
+        QVERIFY(stopping.value("repreintegration_cost_difference").isNull());
+        QCOMPARE(stopping.value("lambda_upper_bound").toDouble(), 1e12);
+        QCOMPARE(stopping.value("slow_tail").toObject().value("window").toInt(), 20);
+    }
+    QCOMPARE(QString::fromLatin1(StopRule::kDampingSaturated), QStringLiteral("damping saturated"));
+    s.rule = StopRule::kCostIncreased;
 
     // A rejection: the algorithm and the reason, nothing else.
     QCOMPARE(failureDiagnostics(QStringLiteral("x")).keys(),
@@ -1636,6 +2164,98 @@ void FusionKernelTest::failureDiagnosticsShape()
         QCOMPARE(QString::fromUtf8(e.what()), QStringLiteral("Nonfinite or increasing optimizer cost"));
     }
     QVERIFY(caught);
+}
+
+void FusionKernelTest::dampingSaturationIsASolverFailure()
+{
+    // Decision 7 and criterion 14: under GTSAM's default damping ceiling,
+    // 1e5, the full fit of rest_throughout from its coarse start (the
+    // coarse attitude at the anchor carried with zero bias, the start the
+    // initializer falls back to) saturates Levenberg-Marquardt's damping (the
+    // IMU blocks of the Hessian are about 1e9 under the datasheet's
+    // densities): every iteration returns the same values, and a pass that
+    // settled there would call that start converged. It is the solver failure
+    // `damping saturated` instead, with the failure diagnostics' shape of a
+    // failed pass (no quality: no pass completed). The forcing makes every
+    // prefix fit fail (allPrefixFitsFailFallsBack's), so the full fit starts
+    // there; through the initializer's own starts the recording converges
+    // even under 1e5 (41 iterations: a prefix start that saturated would be
+    // a failed start). Under the default ceiling, 1e12, the recording
+    // converges.
+    Tuning lowCeiling;
+    lowCeiling.lambdaUpperBound = 1e5;
+    const Checkpoint failingPrefixes(
+        [](const QString &text) {
+            if (text.contains(QStringLiteral(": prefix ")))
+                throw FitFailure(std::string("Nonfinite or increasing optimizer cost"), Stopping{});
+        },
+        [] { return false; });
+    PipelineTrace trace;
+    const Fusion::Result result = runPipeline(toChannels(initializerFixture(QStringLiteral("rest_throughout"))),
+                                              lowCeiling, failingPrefixes, &trace);
+    qInfo() << "rest_throughout from its coarse start under a 1e5 ceiling: outcome" << int(result.outcome)
+            << qPrintable(result.reason) << ", in pass" << trace.stopping.passes << "of the full fit";
+    QCOMPARE(trace.initializer.segments.size(), size_t(1));
+    QVERIFY(trace.initializer.segments.front().fallback);
+    QVERIFY(result.outcome == Fusion::Outcome::SolverFailed);
+    QCOMPARE(result.reason, QStringLiteral("Optimizer damping saturated without progress"));
+    // The full fit's: the initializer's fits catch a failure as a failed
+    // start, and with every prefix start failing no segment fit runs.
+    QCOMPARE(trace.stopping.rule, std::string(StopRule::kDampingSaturated));
+    QVERIFY(!trace.converged);
+    QVERIFY(trace.stopping.passes >= 1);
+    QCOMPARE(trace.initializer.segments.front().iterations, 0);
+    const QJsonObject diagnostics = diagnosticsOf(result);
+    QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure"),
+                                              QStringLiteral("stopping")}));
+    QCOMPARE(diagnostics.value("failure").toString(), result.reason);
+    const QJsonObject stopping = diagnostics.value("stopping").toObject();
+    QCOMPARE(stopping.value("rule").toString(), QStringLiteral("damping saturated"));
+    QCOMPARE(stopping.value("lambda_upper_bound").toDouble(), 1e5);
+    QCOMPARE(stopping.value("passes").toInt(), trace.stopping.passes);
+    QVERIFY(allChannelsEmpty(result));
+
+    const InitializerRun &run = restThroughoutRun();
+    QVERIFY2(run.result.outcome == Fusion::Outcome::Succeeded, qPrintable(run.result.reason));
+    QCOMPARE(run.trace.stopping.rule, std::string(StopRule::kSettled));
+    QCOMPARE(run.diagnostics.value("stopping").toObject().value("lambda_upper_bound").toDouble(), 1e12);
+}
+
+void FusionKernelTest::dampingCeilingChangesNothingBelowIt()
+{
+    // Criterion 14: a fit whose damping never reaches the ceiling does not
+    // depend on it. The three success fixtures, through the whole pipeline
+    // (coarse_maneuver's four prefix fits, its segment fit and the full fit
+    // among them), are the same bits under a 1e5 and the default 1e12
+    // ceiling: every channel, every iteration of the trace and the
+    // initializer's account; the diagnostics differ in the ceiling they
+    // report and nowhere else.
+    Tuning lowCeiling;
+    lowCeiling.lambdaUpperBound = 1e5;
+    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin"}) {
+        const Fusion::Channels channels = toChannels(fusionFixture(QLatin1String(name)));
+        PipelineTrace low, high;
+        const Fusion::Result a = runPipeline(channels, lowCeiling, Checkpoint(), &low);
+        const Fusion::Result b = runPipeline(channels, Tuning{}, Checkpoint(), &high);
+        QVERIFY2(a.outcome == Fusion::Outcome::Succeeded && b.outcome == Fusion::Outcome::Succeeded, name);
+        for (const QString &channel : fusionChannelNames())
+            QVERIFY2(sameBitsEverywhere(fusionChannel(a, channel), fusionChannel(b, channel)), qPrintable(channel));
+        QCOMPARE(low.history.size(), high.history.size());
+        for (size_t i = 0; i < low.history.size(); ++i) {
+            QVERIFY(low.history[i].before == high.history[i].before);
+            QVERIFY(low.history[i].after == high.history[i].after);
+        }
+        QVERIFY2(traceJson(low) == traceJson(high), name);
+        QJsonObject diagnosticsA = diagnosticsOf(a), diagnosticsB = diagnosticsOf(b);
+        QCOMPARE(diagnosticsA.value("stopping").toObject().value("lambda_upper_bound").toDouble(), 1e5);
+        QCOMPARE(diagnosticsB.value("stopping").toObject().value("lambda_upper_bound").toDouble(), 1e12);
+        for (QJsonObject *d : {&diagnosticsA, &diagnosticsB}) {
+            QJsonObject stopping = d->value("stopping").toObject();
+            stopping.remove("lambda_upper_bound");
+            d->insert("stopping", stopping);
+        }
+        QVERIFY2(diagnosticsA == diagnosticsB, name);
+    }
 }
 
 void FusionKernelTest::startsInMotionGrowsToTheManoeuvre()
@@ -1688,7 +2308,7 @@ void FusionKernelTest::atRestPrefixStopsGrowing()
     // neither has the 120 s window [0, 60]: its sigma is not 20 % below the
     // first, so growth stops there (no_gain) although the 300 s segment is
     // far from covered.
-    const InitializerRun run = runInitializerFixture(QStringLiteral("rest_throughout"), Tuning{});
+    const InitializerRun &run = restThroughoutRun();
     QVERIFY2(run.result.outcome == Fusion::Outcome::Succeeded, qPrintable(run.result.reason));
     QVERIFY(run.trace.converged);
     QCOMPARE(run.segments.size(), 1);
@@ -2087,7 +2707,7 @@ void FusionKernelTest::temperatureFactorJacobians()
         rate = Vector3(.1, -.05, .2);
     validateSamples(d, Tuning{});
     const ConstantBias linearizedAt(Vector3(.05, -.03, .08), Vector3(.003, -.002, .004));
-    const auto pim = preintegrateImu(d, .037, .863, linearizedAt, Tuning{});
+    const auto pim = preintegrateImu(d, .037, .863, linearizedAt, fixtureNoise(104));
     const double dT = 4.5;
     const TemperatureImuFactor factor(X(0), V(0), X(1), V(1), B(0), T(0), pim, dT);
     QCOMPARE(factor.temperatureDelta(), dT);
@@ -2197,7 +2817,7 @@ void FusionKernelTest::temperatureGraphShape()
 
     // The temperature graph: per state the position and velocity factors,
     // the temperature factor between them, the bias prior, the slope prior last.
-    const auto graph = buildFactorGraph(d, BiasLinearization{ConstantBias(), Vector3::Zero()}, model, Tuning{});
+    const auto graph = buildFactorGraph(d, BiasLinearization{ConstantBias(), Vector3::Zero()}, model, tuningAt(104));
     QCOMPARE(graph.size(), size_t(7));
     QVERIFY(dynamic_cast<const gtsam::GPSFactor *>(graph.at(0).get()));
     QVERIFY(dynamic_cast<const gtsam::PriorFactor<Vector3> *>(graph.at(1).get()));
@@ -2221,7 +2841,7 @@ void FusionKernelTest::temperatureGraphShape()
     QCOMPARE(Tuning{}.gyroBiasSlopeSigma, .010*kPi/180);
 
     // The stock four-argument builder is unchanged: six factors, ImuFactor at 4.
-    const auto stock = buildFactorGraph(d, ConstantBias(), Tuning{});
+    const auto stock = buildFactorGraph(d, ConstantBias(), tuningAt(104));
     QCOMPARE(stock.size(), size_t(6));
     QVERIFY(dynamic_cast<const gtsam::ImuFactor *>(stock.at(4).get()));
     QVERIFY(dynamic_cast<const gtsam::PriorFactor<ConstantBias> *>(stock.at(5).get()));
@@ -2306,13 +2926,13 @@ void FusionKernelTest::reconstructionUsesIntervalBias()
     fit.biasModel = model;
 
     // One fix interval, so the largest endpoint correction is its own.
-    const ImuRateTrajectory temperature = reconstructAtImuRate(d, fit, Tuning{});
+    const ImuRateTrajectory temperature = reconstructAtImuRate(d, fit, tuningAt(104));
     qInfo() << "endpoint correction: temperature model" << temperature.maxEndpointCorrectionDeg << "deg";
     QVERIFY(temperature.maxEndpointCorrectionDeg < 1e-9);
 
     fit.biasModel = GyroBiasModel{};
     fit.gyroBiasSlope = Vector3::Zero();
-    const ImuRateTrajectory constant = reconstructAtImuRate(d, fit, Tuning{});
+    const ImuRateTrajectory constant = reconstructAtImuRate(d, fit, tuningAt(104));
     qInfo() << "endpoint correction: constant model" << constant.maxEndpointCorrectionDeg << "deg";
     QVERIFY(constant.maxEndpointCorrectionDeg > .5);
 }
@@ -2328,19 +2948,20 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     t.segmentLength = 60;
     t.minFinalSegment = 12;
     FusionFixture f = initializerFixture(QStringLiteral("drifting_bias"));
-    QCOMPARE(f.imuTemperature.size(), 2001);
-    f.imuTemperature = QVector<double>(2001, 35.0);
+    const qsizetype samples = f.imuTime.size();
+    QCOMPARE(samples, 2501);
+    f.imuTemperature = QVector<double>(samples, 35.0);
     PipelineTrace trace;
     const Fusion::Result result = runPipeline(toChannels(f), t, Checkpoint(), &trace);
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
     const QJsonObject diagnostics = diagnosticsOf(result);
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v5"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v6"));
     const QJsonObject gyroBias = diagnostics.value("model").toObject().value("gyro_bias").toObject();
     const QJsonArray b1 = gyroBias.value("b1_rad_s_per_degc").toArray();
     QCOMPARE(b1.size(), 3);
     for (const QJsonValue &component : b1)
         QVERIFY(std::abs(component.toDouble(1)) < .01*Tuning{}.gyroBiasSlopeSigma);
-    // 2001 copies of 35: the sum 70035 and the quotient are exact.
+    // 2501 copies of 35: the sum 87535 and the quotient are exact.
     QCOMPARE(gyroBias.value("t_ref_degc").toDouble(), 35.);
     const QJsonArray residuals = diagnostics.value("residuals").toArray();
     const QJsonObject last = residuals.last().toObject();
@@ -2360,6 +2981,7 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     const PreparedInput prepared = prepareInput(toChannels(f));
     Tuning derived = t;
     derived.maxGap = kImuGapMedians*medianInterval(prepared.recording.imuTime);
+    derived.noise = imuNoise(toChannels(f).imuConfiguration);
     const Samples window = fittedWindow(prepared.recording, prepared.usableStart, prepared.recording.gnssTime.back());
     validateSamples(window, derived);
     const Initialization init = initialize(window, derived);
@@ -2461,6 +3083,7 @@ void FusionKernelTest::imuRateSampleOnAFixIsPublishedOnce()
         d.force.emplace_back(1+.1*i, -.5, -9.8+.05*i);
     }
     d.gnssTime = {.25, .8125, 1.375, 1.9375};
+    f.tuning = tuningAt(12.5);
     f.tuning.maxGap = kImuGapMedians*medianInterval(d.imuTime);
     gtsam::Vector9 perturbation;
     perturbation << 1e-3, -2e-3, 1e-3, .01, -.02, .03, .05, -.04, .02;
@@ -2496,9 +3119,13 @@ void FusionKernelTest::imuRateMatchesHeldEndsGraph()
     // Spec section 10, "Equivalence", on coarse_maneuver: the one pass against
     // the dense graph with a state at every edge and the fix states and biases
     // held (heldEndsReference()). What the linearization costs is quadratic in
-    // the mismatch; the tolerance is linear in it with a margin of about 300
-    // over what the pass measures, and applying the sharing unmapped in the
-    // local coordinates fails it.
+    // the mismatch, which on this fixture is a few 1e-7 m/s; under the
+    // datasheet's densities the two differ by more, linearly: by 2.5e-4 (attitude),
+    // 7.8e-3 (velocity) and 2.9e-3 (position) of the mismatch, which falls to
+    // below 4e-6 with an accelerometer density twenty times the datasheet's.
+    // The difference is that of one preintegration of many steps against a
+    // chain of one-step factors, in which the accelerometer's noise no longer
+    // dominates. The tolerance is linear in the mismatch, 2e-2 of it.
     const WindowFit &f = fixtureFit(QStringLiteral("coarse_maneuver"));
     QVERIFY(f.fit.converged);
     const WindowSeams w = seamsOf(f);
@@ -2514,11 +3141,11 @@ void FusionKernelTest::imuRateMatchesHeldEndsGraph()
             << "of the mismatch), velocity" << diff.velocity << "m/s (" << diff.velocity/m.velocity
             << "), position" << diff.position << "m (" << diff.position/m.position << ")";
     // Not vacuous: the fixture's mismatch is well above rounding.
-    QVERIFY(m.velocity > 1e-6);
-    QVERIFY(m.attitude > 1e-7);
-    QVERIFY(diff.attitude <= 1e-5*m.attitude+1e-12);
-    QVERIFY(diff.velocity <= 1e-5*m.velocity+1e-12);
-    QVERIFY(diff.position <= 1e-5*m.position+1e-12);
+    QVERIFY(m.velocity > 1e-7);
+    QVERIFY(m.attitude > 1e-9);
+    QVERIFY(diff.attitude <= 2e-2*m.attitude+1e-12);
+    QVERIFY(diff.velocity <= 2e-2*m.velocity+1e-12);
+    QVERIFY(diff.position <= 2e-2*m.position+1e-12);
 }
 
 void FusionKernelTest::imuRateMatchesHeldEndsGraphUnderRotation()
@@ -2527,8 +3154,9 @@ void FusionKernelTest::imuRateMatchesHeldEndsGraphUnderRotation()
     // barely does: 3 rad/s about a horizontal axis, IMU 25 Hz, GNSS 5 Hz,
     // exact readings, the true states as the fit. The mismatch is then the
     // integration's own discretization error. Velocity and position hold to
-    // the formula of the fixture test; applying the sharing unmapped misses
-    // the velocity by 5-15 % of the mismatch here.
+    // 5e-3 of the mismatch (the pass measures 5.7e-4 and 9.8e-4: the chain of
+    // one-step factors of coarse_maneuver's test); applying the sharing
+    // unmapped misses the velocity by 5-15 % of the mismatch here.
     //
     // The attitude mismatch is at rounding, so a bound relative to it means
     // nothing; the attitude differs from the reference by what tangent
@@ -2572,8 +3200,8 @@ void FusionKernelTest::imuRateMatchesHeldEndsGraphUnderRotation()
         // Not vacuous: with the mid-step rotation the mismatch is a few mm/s,
         // still far above rounding.
         QVERIFY(m.velocity > 1e-3);
-        QVERIFY(diff.velocity <= 1e-5*m.velocity+1e-12);
-        QVERIFY(diff.position <= 1e-5*m.position+1e-12);
+        QVERIFY(diff.velocity <= 5e-3*m.velocity+1e-12);
+        QVERIFY(diff.position <= 5e-3*m.position+1e-12);
         QVERIFY(diff.attitude*180/kPi <= 5e-5);
     }
 }
@@ -2620,7 +3248,7 @@ void FusionKernelTest::imuRateSharesByNoise()
     // position alone, so the sharing puts nothing on the position's
     // multiplier (measured 7e-16 of dv; bound 1e-9 of dv).
     const Samples uniform = boundarySamples(Vector3::Zero());
-    const IntervalReconstruction r = offsetEnd(uniform, Tuning{});
+    const IntervalReconstruction r = offsetEnd(uniform, tuningAt(104));
     const std::vector<double> u = corrections(r);
     const double t0 = r.edges.front(), duration = r.edges.back()-t0;
     QCOMPARE(u.front(), 0.);
@@ -2633,27 +3261,35 @@ void FusionKernelTest::imuRateSharesByNoise()
     qInfo() << "uniform noise: largest departure from proportional" << worst/dv << "of dv";
     QVERIFY(worst <= 1e-9*dv);
 
-    // One noisy step: the force steps by 1 m/s^2 (vertically) between samples
-    // 49 and 50, and with an accelerometer slope of 40 s that step's per-step
-    // variance (covariance over dt) is 8 times its neighbours' (.18 against
-    // .0225 (m/s^2)^2). Its increment of the correction is the largest of the
-    // interval (measured 7.9 times the next).
+    // Noisy steps: the force steps by 1 m/s^2 (vertically) between samples 49
+    // and 50, a change of slope of 1e4 m/s^4 at both, which raises the
+    // sampling term of the three sample intervals touching them (48-49,
+    // 49-50, 50-51): each step's variance there is about a hundred times the
+    // density's. Their increments of the correction are larger than any
+    // other step's.
     Samples noisy = boundarySamples(Vector3::Zero());
     for (size_t i = 50; i < noisy.force.size(); ++i)
         noisy.force[i] += Vector3(0, 0, 1);
-    const IntervalReconstruction s = offsetEnd(noisy, withSlopes(Tuning{}.gyroStepSlope, 40));
+    const IntervalReconstruction s = offsetEnd(noisy, tuningAt(104));
     const std::vector<double> v = corrections(s);
-    const size_t step = size_t(std::find(s.edges.begin(), s.edges.end(), noisy.imuTime[49])-s.edges.begin());
-    QVERIFY(step+1 < s.edges.size());
-    QCOMPARE(s.edges[step+1], noisy.imuTime[50]);
-    const double increment = v[step+1]-v[step];
-    double otherwise = 0;
-    for (size_t j = 0; j+1 < v.size(); ++j) {
-        if (j != step)
-            otherwise = std::max(otherwise, std::abs(v[j+1]-v[j]));
+    std::vector<size_t> touching;
+    for (const size_t sample : {48, 49, 50}) {
+        const size_t step = size_t(std::find(s.edges.begin(), s.edges.end(), noisy.imuTime[sample])-s.edges.begin());
+        QVERIFY(step+1 < s.edges.size());
+        QCOMPARE(s.edges[step+1], noisy.imuTime[sample+1]);
+        touching.push_back(step);
     }
-    qInfo() << "noisy step: increment" << increment << "m/s against at most" << otherwise << "m/s elsewhere";
-    QVERIFY(increment > otherwise);
+    double smallestTouching = std::numeric_limits<double>::infinity(), otherwise = 0;
+    for (size_t j = 0; j+1 < v.size(); ++j) {
+        const double increment = std::abs(v[j+1]-v[j]);
+        if (std::find(touching.begin(), touching.end(), j) != touching.end())
+            smallestTouching = std::min(smallestTouching, increment);
+        else
+            otherwise = std::max(otherwise, increment);
+    }
+    qInfo() << "noisy steps: the smallest increment of the three" << smallestTouching
+            << "m/s against at most" << otherwise << "m/s elsewhere";
+    QVERIFY(smallestTouching > otherwise);
 }
 
 void FusionKernelTest::imuRateZeroMismatchIsForward()
@@ -2684,6 +3320,7 @@ void FusionKernelTest::imuRateZeroMismatchIsForward()
                           +Vector3(-.03, .02, .01)*std::max(i-80, 0));
     }
     d.gnssTime = {.037, .5, 1.013, 1.49, 1.963};
+    f.tuning = tuningAt(104);
     f.tuning.maxGap = kImuGapMedians*medianInterval(d.imuTime);
     const ConstantBias bias(Vector3(.05, -.08, .12), Vector3::Zero());
     predictFits(f, bias, gtsam::NavState(Rot3::RzRyRx(.3, -.2, 1.1), Vector3(10, -5, -300), Vector3(20, 5, 8)),
@@ -2784,10 +3421,15 @@ void FusionKernelTest::imuRateAccelerationIntegratesToVelocity()
     // the corrections at each end: the bound from sample a to b is
     // dt_a/4 |c_before(a) - c_after(a)| + dt_b/4 |c_after(b) - c_before(b)|,
     // plus, for a sample step that contains a fix, dt/2 times the largest
-    // difference between the corrections of the part-steps inside it. It is
-    // tight (the ratio is 1 to 1e-5 on the worst runs), hence 1.01 x the bound
-    // + 1e-12 m/s. The published acceleration is also checked to be the
-    // formula of section 6 over the seam's corrections.
+    // difference between the corrections of the part-steps inside it, and
+    // the kink of the rotated reading at the fix: the part-steps integrate
+    // the bias-corrected reading rotated by the attitude at each edge,
+    // through the fix's own, while the kernel's rule takes the straight line
+    // between the samples, a difference of the length of the part-steps'
+    // trapezoids against the sample step's. It is tight (the ratio is 1 to
+    // 1e-5 on the worst runs), hence 1.01 x the bound + 1e-12 m/s. The
+    // published acceleration is also checked to be the formula of section 6
+    // over the seam's corrections.
     QFETCH(QString, name);
     const WindowFit &f = fixtureFit(name);
     QVERIFY(f.fit.converged);
@@ -2807,19 +3449,30 @@ void FusionKernelTest::imuRateAccelerationIntegratesToVelocity()
     const auto before = [&](size_t i) { return edge[i] ? c[edge[i]-1] : c[edge[i]]; };
     const auto after = [&](size_t i) { return c[edge[i]]; };
 
+    // The bias-corrected reading at edge `e` rotated by the corrected
+    // attitude there, with the bias of the interval of step `step` (the
+    // reconstruction's trapezoid of that step).
+    const auto rotatedReading = [&](size_t e, size_t step) {
+        const Vector3 reading = interpolateAt(f.window.imuTime, f.window.force, w.edges[e]);
+        return Vector3(w.corrected[e].attitude().rotate(reading-w.intervals[w.stepInterval[step]].bias.accelerometer()));
+    };
+
     // Per step between samples: the integral by the kernel's rule and the
-    // fix term.
+    // fix term (the corrections' spread and the rotated reading's kink).
     Vectors integral(n-1);
     std::vector<double> fixTerm(n-1, 0.);
     for (size_t i = 0; i+1 < n; ++i) {
         const double dt = out.time[i+1]-out.time[i];
         integral[i] = interpolateAt(out.time, out.acceleration, (out.time[i]+out.time[i+1])/2)*dt;
         double spread = 0;
+        Vector3 parts = Vector3::Zero();
         for (size_t q = edge[i]; q < edge[i+1]; ++q) {
             for (size_t p = edge[i]; p < edge[i+1]; ++p)
                 spread = std::max(spread, (c[q]-c[p]).norm());
+            parts += (w.edges[q+1]-w.edges[q])/2*(rotatedReading(q, q)+rotatedReading(q+1, q));
         }
-        fixTerm[i] = dt/2*spread;
+        const Vector3 whole = dt/2*(rotatedReading(edge[i], edge[i])+rotatedReading(edge[i+1], edge[i+1]-1));
+        fixTerm[i] = dt/2*spread + (edge[i+1]-edge[i] > 1 ? (parts-whole).norm() : 0.);
     }
 
     const std::vector<size_t> runs{1, 2, 5, 20, n-1};
@@ -2887,13 +3540,17 @@ void FusionKernelTest::imuRateIsWhatTheFitPublishes()
 void FusionKernelTest::imuRateAxisWhenGnssIsFasterThanImu()
 {
     // Spec sections 6 and 10: the time axis is the IMU samples whatever the
-    // GNSS rate, including a GNSS rate above the IMU's. 100 s level flight
+    // GNSS rate, including a GNSS rate above the IMU's. 40 s level flight
     // under a horizontal acceleration that turns (so the heading is
-    // observable), exact data, 25 degC; GNSS 10 Hz from .05 s, IMU 5 Hz, so
-    // every other fix interval holds no IMU sample and is one integration
-    // step. The fit succeeds and publishes the 499 IMU samples from .2 to
-    // 99.8 s, every channel finite, and the reconstruction's account.
+    // observable), 25 degC; GNSS 25 Hz from .02 s, IMU 12.5 Hz (the rate it
+    // states, with +/-16 g and +/-2000 deg/s), so every other fix interval
+    // holds no IMU sample and is one integration step. The readings are the
+    // exact force rounded onto the stated lattice, as a FlySight's are. The
+    // fit succeeds and publishes the 499 IMU samples from .08 to 39.92 s,
+    // every channel finite, and the reconstruction's account.
     const double base = 1700000000.;
+    const double step = 16./32768*9.80665;   // the +/-16 g lattice, m/s^2
+    const auto onLattice = [step](double value) { return std::round(value/step)*step; };
     const auto acceleration = [](double t) { return Vector3(.5*std::cos(.1*t), .5*std::sin(.1*t), 0); };
     const auto velocity = [](double t) { return Vector3(20+5*std::sin(.1*t), 10-5*std::cos(.1*t), 3); };
     const auto position = [](double t) {
@@ -2901,7 +3558,7 @@ void FusionKernelTest::imuRateAxisWhenGnssIsFasterThanImu()
     };
     Fusion::Channels c;
     for (int k = 0; k <= 999; ++k) {
-        const double t = .05+.1*k;
+        const double t = .02+.04*k;
         const Vector3 p = position(t), v = velocity(t);
         c.gnssTime.append(base+t);
         c.north.append(p.x());
@@ -2915,18 +3572,19 @@ void FusionKernelTest::imuRateAxisWhenGnssIsFasterThanImu()
         c.sAcc.append(.1);
     }
     for (int i = 0; i <= 500; ++i) {
-        const double t = .2*i;
+        const double t = .08*i;
         const Vector3 force = acceleration(t)-kTestGravity;
         c.imuTime.append(base+t);
-        c.ax.append(force.x());
-        c.ay.append(force.y());
-        c.az.append(force.z());
+        c.ax.append(onLattice(force.x()));
+        c.ay.append(onLattice(force.y()));
+        c.az.append(onLattice(force.z()));
         c.wx.append(0);
         c.wy.append(0);
         c.wz.append(0);
         c.imuTemperature.append(kFixtureTemperatureDegC);
     }
     c.originIndex = 0;
+    c.imuConfiguration = fixtureNoise(12.5).configuration;
 
     // Not vacuous: fix intervals without an IMU sample inside.
     const Samples recording = prepareInput(c).recording;
@@ -2943,8 +3601,8 @@ void FusionKernelTest::imuRateAxisWhenGnssIsFasterThanImu()
     const QJsonObject diagnostics = diagnosticsOf(result);
     const QVector<double> axis = expectedTimeAxis(c, diagnostics);
     QCOMPARE(axis.size(), qsizetype(499));
-    QVERIFY(std::abs(axis.front()-base-.2) < 1e-6);
-    QVERIFY(std::abs(axis.back()-base-99.8) < 1e-6);
+    QVERIFY(std::abs(axis.front()-base-.08) < 1e-6);
+    QVERIFY(std::abs(axis.back()-base-39.92) < 1e-6);
     verifyTimeAxis(result.time, axis, diagnostics);
     for (const QString &channel : fusionChannelNames()) {
         const QVector<double> &values = fusionChannel(result, channel);

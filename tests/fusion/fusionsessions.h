@@ -20,11 +20,12 @@
 // "Stored data always wins": a measurement with source data is served by the
 // conversion layer, not by a registered calculation. A fixture session stores
 // the fit's inputs under their own names (Local/north, IMU/_time, the origin
-// attributes, ...) with units the conversion layer passes through unchanged,
-// so the eighteen measurements and the four origin attributes are
-// bit-identical to the fixture, the four configuration attributes are read
-// from their constant defaults, and the session-level results can be held to
-// the goldens of the kernel.
+// attributes, the configuration attributes, ...) with units the conversion
+// layer passes through unchanged, so the eighteen measurements, the four
+// origin attributes and the four configuration attributes are the fixture's
+// (the stated path), and the session-level results can be held to the goldens
+// of the kernel. naturalSession() stores no configuration and reads the
+// constant defaults (the default path).
 
 namespace FlySight {
 class SessionModel;
@@ -39,15 +40,17 @@ constexpr double kFixtureTimeFitB = 1699999900.0;
 /// (after TestEnvironment::registerBuiltIns(), as the application does).
 void registerFusionOnce();
 
-/// Stored source data such that the 22 declared inputs other than the four
-/// configuration attributes read back bit-identical to the fixture (those
-/// four are not stored: the session reads their constant defaults):
+/// Stored source data such that the 26 declared inputs read back
+/// bit-identical to the fixture:
 ///   GNSS/time (unit "s")            -> GNSS/_time through builtin.time.utc.GNSS
 ///   GNSS/hAcc, vAcc ("m"), sAcc ("m/s")
 ///   Local/north|east|down ("m"), Local/velN|velE|velD ("m/s")
 ///   IMU/_time ("s"), IMU/ax|ay|az ("m/s^2"), IMU/wx|wy|wz ("deg/s"),
 ///   IMU/temperature ("deg C": the device's unit text, served as degC unchanged)
 ///   stored attributes _LOCAL_ORIGIN_INDEX (qlonglong), _LOCAL_ORIGIN_LAT|LON|HMSL (double),
+///   ACCEL_FS_G, GYRO_FS_DEG_S, ACCEL_ODR_HZ, GYRO_ODR_HZ as the text
+///   QString::number makes of the fixture's value ("16", "2000", "104", "26",
+///   "12.5"; a NaN member is not stored, and its key reads the default),
 ///   _TIME_FIT_A = "1", _TIME_FIT_B = "1699999900", SCHEMA_VER = 2 (the gyro
 ///   channels are read literally), SESSION_ID = sessionId, DEVICE_ID = "fusion-test"
 /// Only fixtures whose columns have equal lengths per sensor may go into a
@@ -82,8 +85,10 @@ FlySight::SessionData sessionWithoutImu(const FusionFixture &fixture, const QStr
 /// no stored origin, no stored fit. Retyped from the reference's synthetic
 /// session: epoch 1700000000, 200 fixes at .1 + i*.2 s with lat = lon = 0,
 /// hMSL = 100, zero velocity, hAcc = vAcc = 1, sAcc = .1; IMU system time
-/// 100 + i*.01, i = 0..4000, az = -9.80665 m/s^2, temperature 25 degC, the rest 0; TIME pulses
-/// {100, 120, 140} with tow / tow+20 / tow+40. SCHEMA_VER = 2.
+/// 100 + i*.08 (12.5 Hz), i = 0..500, az = -9.80665 m/s^2, temperature 25 degC, the rest 0; TIME pulses
+/// {100, 120, 140} with tow / tow+20 / tow+40. SCHEMA_VER = 2. No configuration
+/// attribute: the fit runs on the default configuration, whose rate and
+/// lattice the recording matches.
 FlySight::SessionData naturalSession(const QString &sessionId);
 
 /// The opposite premise to the fixture sessions: the fit's OUTPUTS stored as

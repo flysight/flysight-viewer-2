@@ -5,6 +5,9 @@
 
 #include <gtsam/base/Vector.h>
 
+#include "fusion/fusion.h"
+#include "fusion/sensornoise.h"
+
 // Internal to the fusion library: the recording as the numerical stages see
 // it, the tuning constants, and every rule that decides whether a recording
 // can be fitted. A rule that is violated throws with the text that becomes the
@@ -32,31 +35,33 @@ struct Samples {
     Vectors velocitySigma;    ///< m/s (sAcc three times), per GNSS fix
 };
 
-/// The model's tuning. The defaults are the model; only maxGap is derived
-/// from the recording (1.6 median IMU intervals), and only a test changes
-/// anything else. The four stopping fields and relativeTolerance may be set
-/// to a negative value by a test, which makes the corresponding test
-/// impossible to satisfy ("never settles", "never accepted"); production
-/// never does. The initializer's prefix fits cap maxIterations and maxPasses
-/// at their own budget (initializer.cpp): the smaller of the tuning's limit
-/// and 50 iterations, and of the tuning's limit and 1 pass.
+/// The model's tuning. The defaults are the model; only maxGap and noise are
+/// derived from the recording (1.6 median IMU intervals; the datasheet's noise
+/// at the recording's configuration), and only a test changes anything else.
+/// The four stopping fields and relativeTolerance may be set to a negative
+/// value by a test, which makes the corresponding test impossible to satisfy
+/// ("never settles", "never accepted"); production never does. The
+/// initializer's prefix fits cap maxIterations and maxPasses at their own
+/// budget (initializer.cpp): the smaller of the tuning's limit and 50
+/// iterations, and of the tuning's limit and 1 pass; they keep the noise.
 constexpr double kPi = 3.14159265358979323846;
 
 struct Tuning {
-    double accDensity = .015, gyroDensity = .001;   ///< IMU noise densities
+    /// The IMU's noise: derived from the recording's configuration by
+    /// planFit(), as maxGap is; NaN until then (preintegrateImu() refuses it).
+    ImuNoise noise;
+    // The bias priors cover the datasheet's typical offsets (Table 2):
+    // LA_TyOff +/-20 mg (0.2 m/s^2) and G_TyOff +/-1 deg/s (0.017 rad/s).
     double accBiasSigma = .3, gyroBiasSigma = .03;  ///< prior on the shared biases
     // The gyro bias of the full fit is b(t) = b0 + b1 (T(t) - T_ref), T the
     // IMU temperature; b0's prior is gyroBiasSigma and b1's is this.
-    double gyroBiasSlopeSigma = .010 * kPi / 180;  ///< prior on b1, the gyro bias change per degC of IMU temperature, rad/s/degC (spec: 0.010 deg/s/degC)
-    // Per integration step of length dt (s), a white-noise term is added in
-    // quadrature to the density: sigma_w = gyroStepSlope x dt x |delta omega|
-    // (radians; |delta omega| the norm of the change of the interpolated rate
-    // across the step, rad/s) and sigma_a = accStepSlope x dt x |delta f| (m/s;
-    // |delta f| the change of the specific force, m/s^2). The step's covariance
-    // is (density^2 + sigma^2 x dt) I. Zero disables the term and gives exactly
-    // the density covariance.
-    double accStepSlope = .40, gyroStepSlope = .026; ///< per-step noise slopes, s
+    double gyroBiasSlopeSigma = .010 * kPi / 180;  ///< prior on b1, the gyro bias change per degC of IMU temperature, rad/s/degC (Table 2, G_OffDr: 0.010 deg/s/degC)
     double maxGap = .025;                           ///< longest IMU interval the fit integrates across, s
+    // The ceiling of Levenberg-Marquardt's damping. GTSAM's default, 1e5, is
+    // below the damping a resting recording needs under the datasheet's
+    // densities (the IMU blocks of the Hessian are about 1e9): every iteration
+    // at that ceiling returns the same values. Only a test changes it.
+    double lambdaUpperBound = 1e12;
     double relativeTolerance = 1e-8;                ///< cost decrease at which a pass has settled
     int maxIterations = 100;                        ///< per bias pass
     double biasSettledTolerance = 1e-6;             ///< a settled pass has converged when re-preintegrating at its bias changes the cost by at most this, relative to max(1, cost)
@@ -100,6 +105,18 @@ void requireUsableRecording(const Samples &recording, double epoch, double usabl
 /// Throws when two successive fixes of `window` are more than `limit` seconds
 /// apart: a disconnected recording is not joined across the outage.
 void requireNoGnssOutage(const Samples &window, double limit);
+
+/// Throws unless every reading of `channels` (all of them, inside the fitted
+/// window or not, as the kernel received them) shows the stated range of its
+/// sensor: the coarsest range whose lattice the three axes fit
+/// (rangeShownByReadings) must be the configured one. The accelerometer is
+/// checked first. The configuration must have a datasheet entry.
+void requireReadingsOnLattice(const Channels &channels);
+
+/// Throws unless the recording's median IMU interval is within 10 % of the
+/// nominal interval, 1 / rate, of each stated rate: ACCEL_ODR_HZ first, then
+/// GYRO_ODR_HZ.
+void requireStatedRates(double medianImuInterval, const ImuConfiguration &configuration);
 
 } // namespace FlySight::Fusion::Detail
 

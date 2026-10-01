@@ -353,7 +353,8 @@ void FusionRunnerTest::outputTableMatchesGolden()
 }
 
 // A fixture session written as a recording stores Local/*, IMU/_time, the
-// origin attributes and SCHEMA_VER=2, so the imported effective inputs are
+// origin attributes, the configuration attributes and SCHEMA_VER=2, so the
+// imported effective inputs are
 // the fixture bit for bit (tst_fusion_session::inputsAreBitIdenticalToFixture):
 // the tool's every output must then equal a direct run on the fixture.
 void FusionRunnerTest::successMatchesDirectRun()
@@ -397,10 +398,10 @@ void FusionRunnerTest::successMatchesDirectRun()
     // --dump-inputs: the table of fitInputs() (the twenty-six labels are
     // derived from it), holding the fixture bit for bit. The temperature
     // column proves the CSV round trip: DataExporter writes it from its IMU
-    // column table, and the importer reads it back. The recording states no
-    // configuration, so the four configuration lines hold the defaults' text
-    // (items 1007, 1050), and the fit on them is the direct run's on an
-    // all-NaN configuration (item 1061).
+    // column table, and the importer reads it back. The recording states the
+    // fixture's configuration in its header, so the four configuration lines
+    // hold the stated text (items 1007, 1045), and the fit on them is the
+    // direct run's on the fixture's configuration.
     QList<QPair<QString, QStringList>> dump;
     QVERIFY2(readDump(dumpPath, dump), qPrintable(dumpPath));
     QCOMPARE(dumpLabels(dump), inputLabels());
@@ -409,8 +410,8 @@ void FusionRunnerTest::successMatchesDirectRun()
     QCOMPARE(configuration,
              (QList<QPair<QString, QStringList>>{{QStringLiteral("ACCEL_FS_G"), {QStringLiteral("16")}},
                                                  {QStringLiteral("GYRO_FS_DEG_S"), {QStringLiteral("2000")}},
-                                                 {QStringLiteral("ACCEL_ODR_HZ"), {QStringLiteral("12.5")}},
-                                                 {QStringLiteral("GYRO_ODR_HZ"), {QStringLiteral("12.5")}}}));
+                                                 {QStringLiteral("ACCEL_ODR_HZ"), {QStringLiteral("104")}},
+                                                 {QStringLiteral("GYRO_ODR_HZ"), {QStringLiteral("104")}}}));
     QVector<double> samples;
     QVERIFY(dumpSamples(dump, QStringLiteral("GNSS/_time"), samples));
     QVERIFY(sameBitsEverywhere(samples, fixture.gnssTime));

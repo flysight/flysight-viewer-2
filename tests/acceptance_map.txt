@@ -17,8 +17,8 @@
 #             command-line runner): item = 200 + requirement number. Stated in
 #             full in tests/README.md, appendix C. It is amended by the
 #             specification of 701-754: item 228 is stated as amended. It is
-#             amended by the specification of 1001-1065: item 221 is stated
-#             as amended.
+#             amended by the specification of 1001-1065: items 215, 216, 217,
+#             221, 227, 245 and 247 are stated as amended.
 #   301-350   storing requested calculation results with the session (record
 #             files, restore on load, validity, logbook columns over them):
 #             item = 300 + clause number. Stated in full in
@@ -68,16 +68,16 @@
 #             Stated in full in tests/README.md, appendix I. It amends the
 #             specifications of 1-19, 101-120 and 501-563. It is amended by
 #             the specification of 901-940: items 847 and 861 are stated as
-#             amended. It is amended by the specification of 1001-1065: item
-#             847 is stated as amended.
+#             amended. It is amended by the specification of 1001-1065: items
+#             847 and 861 are stated as amended.
 #   901-940   the fused state at every IMU sample (the reconstruction between
 #             fixes, the published channels at the IMU rate with the model's
 #             acceleration, the diagnostics' account of the reconstruction,
 #             the algorithm string and the goldens captured again): item =
 #             900 + clause number. Stated in full in tests/README.md,
 #             appendix J. It amends the specification of 801-863. It is
-#             amended by the specification of 1001-1065: item 930 is stated
-#             as amended.
+#             amended by the specification of 1001-1065: items 915, 921, 925,
+#             930 and 935 are stated as amended.
 #   1001-1065 the documented noise model and the accuracy, part 1 (the sensor
 #             configuration attributes, the noise model by configuration,
 #             the scale-factor state, the accuracy and its four channels and
@@ -510,21 +510,21 @@
 214 tst_fusion_kernel slowTailAtTheIterationLimit
 214 tst_fusion_kernel nonConvergenceIsSolverFailure
 
-# 215 - the per-step term formula and its covariance; zero change gives the density covariance exactly
-215 tst_fusion_kernel perStepTermMatchesSpecifiedCovariance
-215 tst_fusion_kernel perStepTermIsZeroWithoutSignalChange
+# 215 - (as amended) the per-step term is the sampling term and the rotation remainder of the specification of 1001-1065, in quadrature as (D^2 + eps^2 / dt) I; a step without signal change and without rotation has the density covariance exactly
+215 tst_fusion_kernel constantSignalHasNoSamplingTerm
+215 tst_fusion_kernel samplingTermFollowsTheDerivation
 215 tst_fusion_golden successFixturesMatchGolden
 
-# 216 - slopes 0.026 (gyro) and 0.40 (accelerometer); densities, step boundaries and midpoint sampling unchanged
-216 tst_fusion_kernel diagnosticsReportPerStepConstants
+# 216 - (as amended) no slopes; the densities are derived from the configuration; the step boundaries and the midpoint sampling are unchanged
+216 tst_fusion_kernel noiseFollowsTheTable
 216 tst_fusion_kernel preintegrationHonoursExactBoundaries
 
-# 217 - the dt factor keeps the constants valid at higher rates
-217 tst_fusion_kernel perStepTermScalesWithStep
+# 217 - (as amended) the term has no constant and falls with the step as the sampling error does
+217 tst_fusion_kernel samplingTermFollowsTheDerivation
 
 # 218 - the per-step covariance is applied by setting the shared parameters before each integrateMeasurement call
 218 audit fusion-model
-218 tst_fusion_kernel perStepTermMatchesSpecifiedCovariance
+218 tst_fusion_kernel samplingTermFollowsTheDerivation
 
 # 219 - b(t) = b0 + b1 (T(t) - T_ref), T_ref the mean IMU temperature over the fitted window, the accelerometer bias constant; each interval at its own bias in the fit and the reconstruction
 219 tst_fusion_kernel temperatureGraphShape
@@ -567,8 +567,8 @@
 226 tst_fusion_kernel biasSettledByCostTest
 226 tst_fusion_kernel exactConstantVelocityFit
 
-# 227 - the diagnostics report the per-step constants and the fitted b0, b1 with T_ref, always numbers
-227 tst_fusion_kernel diagnosticsReportPerStepConstants
+# 227 - (as amended) the diagnostics report the configuration, model.noise and the fitted b0, b1 with T_ref, always numbers
+227 tst_fusion_kernel diagnosticsReportTheNoiseModel
 227 tst_fusion_kernel driftingBiasSegmentsConverge
 227 tst_fusion_kernel constantTemperatureKeepsSlopeAtPrior
 
@@ -653,18 +653,19 @@
 # 244 - test 7: slow tail; a forced final pass at the limit is accepted when both conditions hold and fails when either fails
 244 tst_fusion_kernel slowTailAtTheIterationLimit
 
-# 245 - test 8: per-step term; zero change gives the density covariance exactly, a known change the specified covariance, the term scales with dt
-245 tst_fusion_kernel perStepTermIsZeroWithoutSignalChange
-245 tst_fusion_kernel perStepTermMatchesSpecifiedCovariance
-245 tst_fusion_kernel perStepTermScalesWithStep
+# 245 - (as amended) test 8: per-step term; a step without signal change and without rotation has the density covariance exactly, a known second derivative the derived sampling term, a constant turn the derived remainder
+245 tst_fusion_kernel constantSignalHasNoSamplingTerm
+245 tst_fusion_kernel samplingTermFollowsTheDerivation
+245 tst_fusion_kernel rotationRemainderFollowsTheDerivation
 
 # 246 - test 9: a recording without IMU/temperature is rejected by the kernel by name and blocked in a session; constant temperature leaves b1 at its prior
 246 tst_fusion_kernel validationRejectsEachDefect
 246 tst_fusion_kernel constantTemperatureKeepsSlopeAtPrior
 246 tst_fusion_session missingInputsAreNotApplicable
 
-# 247 - docs/ describes the segmented initializer, the stopping rule with its slow tail, the per-step term and its meaning at other rates, and the temperature-dependent bias (docs/SENSOR_FUSION.md sections 4 and 5)
+# 247 - (as amended) docs/ describes the segmented initializer, the stopping rule with its slow tail, the noise model of the specification of 1001-1065 in place of the per-step term, and the temperature-dependent bias (docs/SENSOR_FUSION.md sections 4 and 5)
 247 audit fusion-model
+247 audit noise-model
 
 # ---- Storing requested calculation results with the session: item = 300 + clause number ----
 
@@ -2662,7 +2663,7 @@
 846 tst_builtins_engine constantDefaults
 846 tst_smoke importAppliesCreationDefaults
 
-# 847 - (12, as amended) the fusion plots leave the fusion kernel and the fit calculation as they are (inputs, outputs, diagnostics, algorithm string), except that the specification of 1001-1065 adds the four configuration inputs, and derive what they add from the fit's published outputs, whose values, diagnostics and algorithm string are those of the specification of 901-940, with its goldens and stored results
+# 847 - (12, as amended) the fusion plots leave the fusion kernel and the fit calculation as they are (inputs, outputs, diagnostics, algorithm string), except that the specification of 1001-1065 adds the four configuration inputs, and derive what they add from the fit's published outputs, whose values, diagnostics and algorithm string are those of the specification of 1001-1065, with its goldens and stored results
 847 tst_fusion_session registrationShape
 847 tst_fusion_golden successFixturesMatchGolden
 847 tst_fusion_golden rejectionFixturesMatchGolden
@@ -2745,7 +2746,7 @@
 860 tst_importer creationDefaultsOnlyFillAbsent
 860 tst_import_merge newSessionGetsDefaults
 
-# 861 - (13, as amended) test: the fusion plots leave the fit as the golden fixtures and the stored-result tests hold it, against the goldens and the algorithm string of the specification of 901-940
+# 861 - (13, as amended) test: the fusion plots leave the fit as the golden fixtures and the stored-result tests hold it, against the goldens and the algorithm string of the specification of 1001-1065
 861 tst_fusion_golden successFixturesMatchGolden
 861 tst_fusion_golden rejectionFixturesMatchGolden
 861 tst_fusion_kernel fitTraceMatchesGolden
@@ -2829,7 +2830,7 @@
 914 tst_fusion_kernel imuRateSampleOnAFixIsPublishedOnce
 914 manual M45
 
-# 915 - (6, as settled) integrated by the kernel's rule, the published acceleration reproduces the published velocity change over any run of samples, the whole fitted interval included, to within the spread of the corrections at its ends and at the fixes inside it, the bound the fusion document's section 8 states; not step by step
+# 915 - (6, as settled, as amended) integrated by the kernel's rule, the published acceleration reproduces the published velocity change over any run of samples, the whole fitted interval included, to within the spread of the corrections at its ends and at the fixes inside it plus, for a sample step that contains a fix, the difference between the part-steps' trapezoids of the rotated reading and the sample step's (the kink at the fix), the bound the fusion document's section 8 states; not step by step
 915 tst_fusion_kernel imuRateAccelerationIntegratesToVelocity
 
 # 916 - (6) the time axis is the IMU samples in the half-open interval from the first fix to the last, whatever the GNSS rate, a GNSS rate above the IMU's included: no fix time added, nothing resampled, a sample on a fix published once
@@ -2863,7 +2864,7 @@
 920 tst_fusion_store restoredAfterRestartIsBitIdentical
 920 tst_result_records layoutIsPinned
 
-# 921 - (8, as settled) the algorithm string changes (to the string tests/README.md appendix J names), so a fit stored under the previous one is stale at its recording's next load, by the existing validity rules
+# 921 - (8, as settled, as amended) the algorithm string changes (to the string tests/README.md appendix J names, and to v6 with the specification of 1001-1065), so a fit stored under the previous one is stale at its recording's next load, by the existing validity rules
 921 tst_fusion_store codeStampChangeDropsRecordOnLoad
 921 tst_fusion_session registrationShape
 921 audit stored-results
@@ -2884,7 +2885,7 @@
 924 tst_fusion_kernel imuRateIsWhatTheFitPublishes
 924 tst_fusion_kernel imuRateEndsAreTheFit
 
-# 925 - (9) the fit is unchanged (the graph, the noise model, the initializer, the solver and the stopping rule), and so are its states at the fixes and its biases: the pass reads the converged solution and changes nothing in it
+# 925 - (9, as amended) the fit is unchanged by the pass (the specification of 1001-1065 changes the noise model, the damping ceiling and the stopping rules), and so are its states at the fixes and its biases: the pass reads the converged solution and changes nothing in it
 925 tst_fusion_kernel fitTraceMatchesGolden
 925 tst_fusion_golden successFixturesMatchGolden
 925 tst_fusion_kernel imuRateEndsAreTheFit
@@ -2925,7 +2926,7 @@
 # 934 - (10, as settled) test: on a recording that does not rotate and whose readings integrate exactly to the fitted states, the reconstruction is the forward integration, the step corrections are zero and the acceleration is the rotated reading
 934 tst_fusion_kernel imuRateZeroMismatchIsForward
 
-# 935 - (10, as settled) test: on every success fixture the published acceleration integrated by the kernel's rule reproduces the published velocity change over runs of samples, the whole fitted interval included, within the stated spread
+# 935 - (10, as settled, as amended) test: on every success fixture the published acceleration integrated by the kernel's rule reproduces the published velocity change over runs of samples, the whole fitted interval included, within the stated bound, the kink of the rotated reading at a fix included
 935 tst_fusion_kernel imuRateAccelerationIntegratesToVelocity
 
 # 936 - (10, as settled) test: the published time axis of every success fixture and of a synthetic recording whose GNSS rate exceeds its IMU rate is exactly the IMU samples of the fitted interval; the before-and-after identity is the re-capture's check
@@ -2994,11 +2995,93 @@
 1007 tst_fusion_store dependencyEditDropsRecord
 1007 audit solver-confinement
 
+# 1008 - (5, as settled) whether stated or defaulted, each IMU sensor's range is checked against the lattice of its readings (the datasheet's sensitivity at the range, in effective units, within the rounding of the file's decimals): the coarsest range whose lattice every reading fits must be the configured one; otherwise the fit rejects the recording with a reason that names the range stated and the range the values show, and does not guess
+1008 tst_fusion_kernel latticeCheckFindsTheCoarsestRange
+1008 tst_fusion_golden rejectionFixturesMatchGolden
+1008 manual M47
+
+# 1009 - (10, as settled) the lattice check is a kernel validation rule, one of the rules that decide whether a recording can be fitted, and reads the readings as the kernel receives them, before any correction of its own
+1009 tst_fusion_kernel latticeCheckFindsTheCoarsestRange
+1009 tst_fusion_kernel configurationChecksComeAfterTheOthers
+
+# 1010 - (5, as settled) a logged IMU interval that disagrees with a stated rate by more than the oscillator's tolerance (10 %) is a rejection that names both
+1010 tst_fusion_kernel rateCheckToleratesTenPercent
+1010 tst_fusion_golden rejectionFixturesMatchGolden
+1010 tst_fusion_session configurationReachesTheKernel
+
+# 1011 - (6, as settled) the per-sample noise of each sensor and axis is sqrt(density^2 x bandwidth + step^2 / 12): the datasheet's density at the configured range, the datasheet's bandwidth for the configured rate and filter, and the quantization step at the range (the datasheet's sensitivity)
+1011 tst_fusion_kernel noiseFollowsTheTable
+
+# 1012 - (6) the documentation carries the table: the density per range for each sensor and the bandwidth per rate and filter, with the datasheet's table numbers
+1012 audit noise-model
+
+# 1013 - (6) the density the integration uses is the per-sample noise times the square root of the nominal sample interval at the configured rate, so that a step of the nominal length carries one sample's variance; accDensity and gyroDensity are gone, and no density in the model is derived otherwise
+1013 tst_fusion_kernel noiseFollowsTheTable
+1013 audit noise-model
+
+# 1014 - (6, as settled) the sampling term replaces the slopes: per step, the trapezoid rule's error on a piecewise-linear signal, dt^3 / 12 times the second derivative for a step that is a whole sample interval, and for a part of one the same derivation's integral over the part, the second derivative estimated per sample interval as the larger of the changes of slope at its two ends, for velocity from the specific force and for the angle from the rate, added in quadrature per step, with no fitted coefficient
+1014 tst_fusion_kernel samplingTermFollowsTheDerivation
+1014 tst_fusion_kernel constantSignalHasNoSamplingTerm
+1014 audit noise-model
+
+# 1015 - (6, as settled) the remainder of the mid-step scheme to second order, for rate and force linear across the step: its pure rotation term, second order in the step's rotation, and the same expansion's terms in the change of force and of rate across the step (coning included), derived and added the same way
+1015 tst_fusion_kernel rotationRemainderFollowsTheDerivation
+1015 tst_fusion_kernel rotationRemainderMatchesTheSchemeError
+
+# 1016 - (6) the documentation writes the derivations out, including what they assume (a smooth signal between samples, the samples exact)
+1016 audit noise-model
+
+# 1017 - (6) the bias priors stay at 0.3 m/s^2, 0.03 rad/s and 0.010 deg/s per degC, and the documentation cites the datasheet's table for each
+1017 tst_fusion_kernel validationRejectsEachDefect
+1017 tst_fusion_kernel temperatureGraphShape
+1017 audit noise-model
+
+# 1040 - (8) the diagnostics show the configuration the fit ran under
+1040 tst_fusion_kernel diagnosticsReportTheNoiseModel
+1040 tst_fusion_golden successFixturesMatchGolden
+1040 manual M47
+
+# 1041 - (8, 9) the first start after the change finds every stored fit stale at its recording's load and recomputes it when something switched on needs it, counted in the status bar as any computation
+1041 tst_fusion_store codeStampChangeDropsRecordOnLoad
+1041 manual M48
+
+# 1043 - (9) the algorithm string changes once, for the whole specification
+1043 tst_fusion_session registrationShape
+1043 audit stored-results
+
+# 1045 - (9) the fixtures state their configuration explicitly, so that the stated path (the kernel's and the sessions' fixtures) and the default path (a session without the keys) are both exercised
+1045 tst_fusion_session configurationReachesTheKernel
+1045 tst_fusion_session naturalSessionEndToEnd
+1045 tst_fusion_session inputsAreBitIdenticalToFixture
+1045 tst_fusion_golden successFixturesMatchGolden
+
+# 1046 - (10) the kernel derives its noise from the configuration in one unit, the only place the datasheet table exists in code
+1046 tst_fusion_kernel noiseFollowsTheTable
+1046 tst_fusion_kernel configurationWithoutEntryIsRejected
+1046 audit noise-model
+
+# 1047 - (10) the sampling term and the rotation remainder are computed where the steps are integrated, from the readings, with no constant of their own
+1047 tst_fusion_kernel samplingTermFollowsTheDerivation
+1047 audit fusion-model
+
 # 1050 - (11) test: a file with every key imports them; a malformed one is an import error naming the key; a file without them takes the default
 1050 tst_importer configurationStoredAsRecorded
 1050 tst_importer rejectsMalformedConfiguration
 1050 tst_fusion_session configurationDefaults
-1050 tst_fusion_runner successMatchesDirectRun
+1050 tst_fusion_runner matchesTheApplicationImportPath
+
+# 1051 - (11) test: a fixture whose readings sit on the +/-8 g lattice with a header stating +/-16 g is rejected naming both; the lattice check identifies the range of every committed fixture and of the reference recordings
+1051 tst_fusion_golden rejectionFixturesMatchGolden
+1051 tst_fusion_kernel latticeCheckIdentifiesEveryFixture
+1051 manual M47
+
+# 1052 - (11) test: the per-sample noise and the density follow the table for every configuration the fixtures state, bit for bit against the formula
+1052 tst_fusion_kernel noiseFollowsTheTable
+
+# 1053 - (11) test: a step with a constant signal has no sampling term; the sampling term of a step follows the derivation on a synthetic signal with a known second derivative; the rotation remainder follows its derivation on a constant turn
+1053 tst_fusion_kernel constantSignalHasNoSamplingTerm
+1053 tst_fusion_kernel samplingTermFollowsTheDerivation
+1053 tst_fusion_kernel rotationRemainderFollowsTheDerivation
 
 # 1061 - (11, as settled) test: on a build where the configuration is carried and defaulted and the noise model is the previous one (the end of phase 1), the existing channels and diagnostics of every fixture are bit-identical to the goldens
 1061 tst_fusion_golden successFixturesMatchGolden
@@ -3006,3 +3089,6 @@
 1061 tst_fusion_kernel fitTraceMatchesGolden
 1061 tst_fusion_session configurationReachesTheKernel
 1061 tst_fusion_runner successMatchesDirectRun
+
+# 1062 - (11) test: a stored fit from before the change is stale
+1062 tst_fusion_store codeStampChangeDropsRecordOnLoad

@@ -116,9 +116,41 @@ accelerometer's and the gyro's full-scale range and output data rate, as
 ([DATA_SCHEMA.md](DATA_SCHEMA.md), section 2, gives the keys, their values and
 the default). They are therefore always available: a recording never lacks
 them. They reach the kernel as numbers in `Channels::imuConfiguration`, as the
-origin does, and do not yet change the model: the fit's numbers are the same
-for every configuration. The receiver's dynamic model and rate and the other
-sensors' rates are stored with the recording and are not inputs.
+origin does, and the model is built from them: the noise of every reading is
+the datasheet's at the configured range and rate (section 4), and the
+diagnostics report the configuration the fit ran under. The kernel also checks
+the recording against its configuration, stated or defaulted, after every
+other check (section 6): the readings must lie on the lattice of the
+configured ranges, and the IMU must be logged at the configured rates. The
+receiver's dynamic model and rate and the other sensors' rates are stored with
+the recording and are not inputs.
+
+**The lattice.** A FlySight writes a reading as a count times its sensor's
+step at the configured range: the range over 32768 counts for the
+accelerometer (16 / 32768 g at +/-16 g), the datasheet's sensitivity for the
+gyro (70 mdps at +/-2000 deg/s, which the legacy correction of
+[DATA_SCHEMA.md](DATA_SCHEMA.md), section 4, restores for a legacy file). The
+readings of a range therefore lie on a lattice of multiples of its step, and
+the coarsest range whose lattice every reading of the three axes fits is the
+range the recording shows; it must be the configured one, or the fit rejects
+the recording naming both, and does not guess. The check reads every reading
+as the kernel receives it (effective values in m/s^2 and deg/s, inside the
+fitted window or not), before any correction of the kernel's own. A reading
+fits when it is within one unit of the file's last decimal, carried through
+the conversion layer's largest factor, of a lattice point: 1e-5 g x 9.80665 =
+9.8e-5 m/s^2, and 1e-3 deg/s x 1.14688 = 1.15e-3 deg/s. One unit and not
+half of one, because firmware v2023.09.22 truncates: the recording `17-26-24`
+(24,511 samples) has residuals up to 63/64 and 255/256 of a unit, at least
+three times below half the finest step. Against the printed 0.488 mg/LSB the
+same file would be 2.4e-3 m/s^2 off: the lattice is the range over 32768, as
+the firmware writes it, not the printed sensitivity.
+
+**The rate.** The median logged IMU interval of the whole recording must be
+within 10 % of the nominal interval, one over the rate, of each of
+`ACCEL_ODR_HZ` and `GYRO_ODR_HZ`. The datasheet states no tolerance for its
+oscillator; the recordings on disk log at 13.2-13.3 Hz against their 12.5 Hz
+(5-7 % fast), and the listed rates are a factor of two apart, so 10 % neither
+rejects a healthy unit nor mistakes one rate for another.
 
 **Effective values only.** Like every calculation, the fit reads effective
 values: the recorded data after the conversion layer. Accelerations arrive in
@@ -167,12 +199,14 @@ in the form that takes `b0` and `b1`, each interval evaluated at the bias of
 its first fix. There are no attitude, stationary, zero-velocity or magnetic
 measurement factors. The zero-centered bias priors have sigmas 0.3 m/s^2 for
 the accelerometer, 0.03 rad/s for `b0` and 0.010 deg/s per degC for `b1`, the
-datasheet's typical drift: a recording without a temperature change leaves
-`b1` at its prior, and a well-behaved unit loses nothing. The initializer
+datasheet's typical offsets and drift (Table 2: LA_TyOff +/-20 mg, 0.2 m/s^2;
+G_TyOff +/-1 deg/s, 0.017 rad/s; G_OffDr +/-0.010 deg/s per degC): a
+recording without a temperature change leaves `b1` at its prior, and a
+well-behaved unit loses nothing. The initializer
 (section 5) only chooses where the solver starts; its own prefix and segment
 fits hold the gyro bias constant.
 
-**Integration and noise.** IMU integration splits at exact GNSS boundaries and
+**Integration.** IMU integration splits at exact GNSS boundaries and
 original IMU timestamps, using linearly interpolated midpoint inputs. The
 solver library applies a step's accelerometer reading at the attitude of the
 step's start, half a step behind the reading, an error of about
@@ -180,27 +214,135 @@ step's start, half a step behind the reading, an error of about
 rad/s, as a helmet does through a parachute opening. So the kernel turns each
 step's reading by half the step's bias-corrected rotation before the library
 applies it, and the reading then acts at the attitude of the step's middle;
-what remains is second order in the step's rotation (section 8). The
-modelling noise densities are 0.015 m/s^2/sqrt(Hz) and 0.001 rad/s/sqrt(Hz),
-with integration covariance `I x 1e-8`. The integration treats the IMU stream
-as piecewise linear between samples. At the default 12.5 Hz output rate that is
-wrong during manoeuvres by an amount that grows with the change of the signal
-across a step, so each step adds a white-noise term in quadrature:
-`sigma = slope x dt x |change of the interpolated signal across the step|`,
-with slopes 0.026 s (gyro; `sigma` in radians) and 0.40 s (accelerometer;
-m/s), and the step's covariance is `(density^2 + sigma^2 x dt) I`, i.e. a
-per-step variance of `density^2 / dt + sigma^2`. The slopes were calibrated
-at a 0.076 s step. The `dt` factor is what keeps them valid at higher output
-rates: the sampling error falls with the square of the sample interval, and
-so does the term, so at 50 Hz and above it vanishes against the density and
-the model is the density-only one. A step with no signal change has the
-density covariance exactly, whatever the slopes. These are modelling weights,
-not sensor specifications; the slopes are reported under `model.per_step`.
+what remains is second order in the step's rotation, and is modelled below.
+The integration covariance is `I x 1e-8`.
+
+**Noise: the datasheet.** Every number of the noise model is the IMU's
+datasheet (LSM6DSO, DS12140 Rev 3) at the recording's configuration, or is
+derived from it; none is chosen because recordings fit better with it. The
+table, which exists in the code in one unit (`src/fusion/sensornoise.cpp`):
+
+| Quantity | Value | Source |
+| --- | --- | --- |
+| accelerometer noise density An, high-performance mode | 70, 75, 80, 110 ug/sqrt(Hz) at +/-2, 4, 8, 16 g | Table 2 (note 8: independent of the rate) |
+| gyro noise density Rn, high-performance mode | 3.8 mdps/sqrt(Hz) | Table 2 (note 6: independent of the rate and the range) |
+| accelerometer step (LA_So) | the range over 32768 counts: 1/16384, 1/8192, 1/4096, 1/2048 g | Table 2 prints 0.061, 0.122, 0.244, 0.488 mg/LSB: these to three decimals |
+| gyro step (G_So) | 8.75, 17.50, 35, 70 mdps at +/-250, 500, 1000, 2000 deg/s | Table 2 |
+| accelerometer bandwidth | the rate / 2 | Figure 17, note 1 (LPF1 at ODR / 2 in high-performance mode), and Table 65 (LPF2_XL_EN = 0) |
+| gyro bandwidth (LPF2 cutoff, no LPF1) | 4.2, 8.3, 16.6, 33.0, 66.8, 135.9, 295.5, 1108.1, 1320.7, 1441.8 Hz at 12.5, 26, 52, 104, 208, 416, 833, 1666, 3333, 6666 Hz | Table 18 |
+| sensitivity tolerance | 1 % for both sensors | Table 2, G_So% (the table has no row for the accelerometer, whose tolerance section 4.6.1 places there) |
+
+The step is the quantization step and the lattice of section 3. The
+accelerometer's is the range over 32768 exactly, not the printed 0.488 mg:
+the firmware writes `counts x range / 32768`, and the printed figure would put
+a 1 g reading 0.58 mg off. The gyro's is the sensitivity, 1.14688 times the
+range over 32768 ([DATA_SCHEMA.md](DATA_SCHEMA.md), section 4). Table 18
+prints the rates 417, 1667, 3333 and 6667 and Table 2 prints 416, 1666, 3332
+and 6664; the keys write 416, 1666, 3333 and 6666. The table assumes what
+firmware v2023.09.22 runs: both sensors in high-performance mode (XL_HM_MODE
+and G_HM_MODE at their reset value, which that firmware does not change), the
+gyro's LPF2 alone and the accelerometer's LPF1 alone, the fixed filters
+[DATA_SCHEMA.md](DATA_SCHEMA.md), section 2, records with the default. A
+configuration the table has no entry for (a value outside a key's list, the
+accelerometer's 1.6 Hz, which exists only in low-power mode, or a value that
+is not a number) is a rejection naming the key (section 6). The sensitivity
+tolerance is not used yet.
+
+**Per-sample noise and density.** One reading of a sensor, on each axis, has
+the standard deviation `sigma = sqrt(density^2 x bandwidth + step^2 / 12)`:
+the datasheet's noise density over the bandwidth, and the uniform rounding
+error of one step. The bandwidth stands in for the filter's noise-equivalent
+bandwidth, which the datasheet does not give (it gives cutoffs, not filter
+orders). The density the integration uses is `D = sigma x sqrt(1 / rate)`,
+at the configured rate, so that a step of the nominal length carries one
+sample's variance; no density of the model is derived otherwise. At +/-16 g
+and +/-2000 deg/s:
+
+| Rate | accelerometer sigma, m/s^2 | accelerometer `D`, m/s^2/sqrt(Hz) | gyro sigma, rad/s (deg/s) | gyro `D`, rad/s/sqrt(Hz) |
+| --- | --- | --- | --- | --- |
+| 12.5 Hz (the default) | 0.0030304 | 8.5714e-4 | 3.7797e-4 (0.02166) | 1.0691e-4 |
+| 26 Hz | 0.0041278 | 8.0952e-4 | 4.0112e-4 (0.02298) | 7.8665e-5 |
+| 104 Hz | 0.0079007 | 7.7473e-4 | 5.1917e-4 (0.02975) | 5.0909e-5 |
+
+The default's accelerometer sigma, 0.0030 m/s^2, is what the quietest windows
+of the reference corpus show, 0.0029-0.0035 m/s^2 per sample; its gyro sigma
+is below the corpus median, 0.030 deg/s. These are checks of the model, not
+its source.
+
+**The integration's own errors.** Each step adds two errors of the
+integration itself to the densities' noise, in quadrature, each derived and
+with no constant of its own.
+
+*The sampling term.* The integration treats the samples as a
+piecewise-linear signal `L`, and the midpoint reading integrates each linear
+piece exactly, so a step's whole sampling error is the interpolant's. For a
+signal `f` with a constant second derivative across the sample interval
+`[t_k, t_k+1]`, `f - L = (f''/2)(t - t_k)(t - t_k+1)`, so over a step
+`[a, b]` inside it the error is `-f'' w`, with
+
+```
+w = 1/2 integral_a^b (t - t_k)(t_k+1 - t) dt
+  = 1/2 [h (u_b^2 - u_a^2) / 2 - (u_b^3 - u_a^3) / 3],   u = t - t_k,  h = t_k+1 - t_k
+```
+
+For a step that is a whole interval `w` is `h^3 / 12`, the trapezoid rule's
+error; the parts of an interval that a fix splits sum to it (taking the whole
+interval's weight for each part would understate a half-interval part
+fourfold). `f''` is estimated per sample interval as the larger norm of the
+changes of slope at its two ends, `D_i = 2 (s_i - s_i-1) / (h_i-1 + h_i)` at
+sample `i`, `s_i` the slope of interval `i` (exact for a quadratic at any
+spacing); the first and last interval have one end, and fewer than three
+samples give no term. The terms are `s_v = w c(f)` for the velocity (m/s)
+and `s_theta = w c(omega)` for the angle (rad), `c` that estimate; the gyro
+bias, constant within an interval, cancels.
+
+*The remainder of the mid-step scheme.* With `theta = (omega_mid - b_g) dt`,
+`dtheta = (omega(b) - omega(a)) dt`, `fbar = f_mid - b_a` and
+`df = f(b) - f(a)`, the true velocity change of a step,
+`R_a integral_0^dt Exp(phi(s)) f(s) ds`, minus the scheme's,
+`R_a Exp(theta / 2) fbar dt`, expanded to second order for a rate and a force
+linear across the step, is
+
+```
+r_v     = | (dt/24) theta x (theta x fbar) + (dt/12) (theta x df - dtheta x fbar) |    m/s
+r_theta = | theta x dtheta | / 12                                                     rad
+```
+
+The first term is the pure rotation remainder, second order in the step's
+rotation; the bracket and `r_theta` (coning: the rotation of a rate that
+turns within the step) are the same expansion's other second-order terms.
+On real data the pure term is the smallest of them: at 13 Hz, 1 rad/s, a
+turn-rate change of 0.2 rad/s per step and 15 m/s^2 it is 2.7e-4 m/s and the
+term in the change of rate 1.4e-3 m/s, against 2.3e-4 m/s of noise per step.
+Position remainders are fourth order in `dt` and stay in the integration
+covariance.
+
+*The step's covariance.* The library adds a covariance per unit time, so a
+step's variance is that times `dt`; the step's sensor covariances are
+therefore `(D_a^2 + (s_v^2 + r_v^2) / dt) I` and
+`(D_g^2 + (s_theta^2 + r_theta^2) / dt) I`. They are isotropic, from vector
+norms, so the half-step turn leaves them as they are. A step of the nominal
+length without either error carries one sample's variance; a step with a
+constant signal and no rotation has the densities' covariance exactly; and
+the added variance of a sliver step beside a fix vanishes as `dt^3` or
+faster, so a fix next to a sample costs nothing.
+
+*What the derivations assume.* A smooth signal between samples: a step change
+of the signal at a sample is underestimated (on a recording whose force steps
+by 2 m/s^2 the true error is six times the term). The samples exact: on noisy
+readings the changes of slope read noise as curvature, which for noise at the
+model's level adds about 4-8 % of a full step's noise variance. And in the
+remainder, a rate and a force linear across the step.
 
 **Solver and stopping.** Batch Levenberg-Marquardt uses QR, 100 iterations per
-pass, a relative cost-change threshold of 1e-8, and up to five bias
-reintegrations. A pass has settled when an iteration lowers the cost by at
-most 1e-8 of max(1, cost). The fit has converged when the graph
+pass, a relative cost-change threshold of 1e-8, a ceiling of 1e12 on its
+damping, and up to five bias reintegrations. GTSAM's default ceiling, 1e5, is
+below the damping a resting recording needs under the datasheet's densities
+(the IMU blocks of the Hessian are about 1e9): at that ceiling every iteration
+returns the same values. A pass has settled when an iteration lowers the cost
+by at most 1e-8 of max(1, cost), also when the step did not move while the
+damping is below its ceiling (no better point at that damping). The fit has
+converged when the graph
 re-preintegrated at the settled pass's bias changes that cost by at most
 1e-6 relative (of max(1, cost)): the bias has stopped moving as far as the
 preintegration can tell. A fifth pass that reaches its iteration limit
@@ -213,10 +355,13 @@ RMS of 0.3-0.5 m); a fit that is still descending faster, or that disagrees
 with GNSS, remains a solver failure. The diagnostics name the rule that ended
 the fit: `settled`, `slow tail accepted`, `iteration limit` (the last pass
 reached its limit and the slow tail was refused), `bias not settled` (the
-last pass settled but re-preintegrating still moved the cost) or
-`cost increased` (an iteration made the cost non-finite or larger, the one
-failure the fit cannot continue from). Reported factors are reintegrated at
-the final bias.
+last pass settled but re-preintegrating still moved the cost),
+`cost increased` (an iteration made the cost non-finite or larger) or
+`damping saturated` (an iteration left the cost unchanged with the damping at
+its ceiling: the optimizer has given up there, and the start it would have
+called converged may be far from a minimum). The last two are the failures
+the fit cannot continue from, and are solver failures, never a convergence.
+Reported factors are reintegrated at the final bias.
 
 **The state at every IMU sample.** The fit estimates the state at each GNSS
 fix; what it publishes is the state at every IMU sample between the first and
@@ -313,9 +458,11 @@ about d^2/2R at a distance d from the origin (R the Earth's radius), some
 The attribute `_FUSION_DIAGNOSTICS` is compact JSON. After a successful fit
 its top-level keys are, grouped:
 
-- *identity and audit*: `algorithm` (`batch-temperature-bias-v5`) and `input`
+- *identity and audit*: `algorithm` (`batch-temperature-bias-v6`), `input`
   (the input audit: `epoch_utc_s`, `imu_count`, `gnss_count`, `origin_index`,
-  `origin`, `height_method`, `time_method`);
+  `origin`, `height_method`, `time_method`) and `configuration` (the
+  configuration the fit ran under: `accel_fs_g`, `gyro_fs_deg_s`,
+  `accel_odr_hz`, `gyro_odr_hz`);
 - *the initializer*: `initialization` (`segmented initialization; heading
   from segment fits`); `stationary_interval_s`, `anchor_time_s` and
   `selected_heading_deg`, all `null` (the keys remain for readers of older
@@ -343,14 +490,19 @@ its top-level keys are, grouped:
   the fix intervals, m/s; `max_step_correction_m_s2`, the largest step
   correction of the fit, m/s^2; `max_step_correction_time_s`, the middle of
   that step, seconds since the epoch like `start_s`;
-- `stopping`: `rule` (one of the five texts above), `passes`,
+- `stopping`: `rule` (one of the six texts above), `passes`,
   `last_pass_mean_relative_decrease`, `repreintegration_cost_difference`,
-  `bias_settled_tolerance`, and `slow_tail` with `window`,
-  `max_mean_relative_decrease` and `max_nrms` (the thresholds in force);
+  `bias_settled_tolerance`, `lambda_upper_bound` (the damping ceiling), and
+  `slow_tail` with `window`, `max_mean_relative_decrease` and `max_nrms` (the
+  thresholds in force);
 - `quality`: `imu_nrms`, `position_nrms`, `velocity_nrms` (the normalized RMS
   of each factor kind's whitened residuals) and `objective_per_state`;
-- `model`: `per_step` with `gyro_slope_s` and `acc_slope_s`, and `gyro_bias`
-  with `b0_rad_s`, `b1_rad_s_per_degc` and `t_ref_degc`, always numbers (the
+- `model`: `noise`, the datasheet's noise at the configuration (above), with
+  `acc` (`datasheet_density_m_s2_rthz`, `bandwidth_hz`, `step_m_s2`,
+  `sample_sigma_m_s2`, `density_m_s2_rthz`) and `gyro`
+  (`datasheet_density_rad_s_rthz`, `bandwidth_hz`, `step_rad_s`,
+  `sample_sigma_rad_s`, `density_rad_s_rthz`); and `gyro_bias` with
+  `b0_rad_s`, `b1_rad_s_per_degc` and `t_ref_degc`, always numbers (the
   temperature is a required input);
 - `dense_output` and `limitations`, as text: `dense_output` is
   "IMU-rate reconstruction at original IMU times: between fixes the IMU integrated from the fitted state, the mismatch with the next fitted state shared over the steps by their noise, in one linearized pass", and `limitations` is
@@ -360,9 +512,9 @@ When the recording was rejected, or the fit stage raised anything but a
 stopping-rule failure, the diagnostics are `{"algorithm", "failure"}` with the
 reason. When the fit completed a pass and did not converge (`iteration limit`,
 `bias not settled`) they are `{"algorithm", "failure", "quality", "stopping"}`.
-When a pass raised the cost (`cost increased`) they are
-`{"algorithm", "failure", "stopping"}`: there is no rebuilt graph, so no
-quality. A successful stop describes the optimizer's numerical behaviour, not
+When a pass raised the cost (`cost increased`) or saturated the damping
+(`damping saturated`) they are `{"algorithm", "failure", "stopping"}`: there
+is no rebuilt graph, so no quality. A successful stop describes the optimizer's numerical behaviour, not
 an independent accuracy assessment.
 
 ## 5. Initialization and limitations
@@ -427,8 +579,8 @@ temperature model exists for two units of the reference corpus whose gyro bias
 follows the temperature at 0.10-0.13 deg/s per degC on one axis, ten times the
 datasheet's typical value; with a constant bias their fits converge with an
 IMU normalized RMS of about 1.1 where their 600 s segments reach 0.2-0.5. The
-stopping test can treat a no-update step as settled, and a slow tail is
-accepted on numerical grounds alone. Heading ambiguity, local minima, the
+stopping test treats a no-update step below the damping ceiling as settled,
+and a slow tail is accepted on numerical grounds alone. Heading ambiguity, local minima, the
 shared accelerometer bias and the linear temperature model of the gyro bias,
 and sampling limits remain material limitations. Not in scope: the
 magnetometer is not read, and a per-unit gyro scale factor is not fitted (the
@@ -458,10 +610,33 @@ in the status bar's warning and on its logbook row
   recording is unavailable rather than joined into one trajectory;
 - a local origin index outside the GNSS samples.
 
+Then, after every check above, the configuration (section 3), in this order:
+
+- a configuration the datasheet table has no entry for, naming the first key
+  in key order: `No datasheet entry for ACCEL_ODR_HZ = 1.6; sensor fusion
+  unavailable`;
+- readings whose coarsest lattice is not the configured range, the
+  accelerometer before the gyro: `ACCEL_FS_G states +/-16 g but the
+  accelerometer readings lie on the +/-8 g lattice; sensor fusion
+  unavailable`, or `... lie on no range's lattice; ...` when none fits
+  (`GYRO_FS_DEG_S states +/-2000 deg/s but the gyro readings ...` for the
+  gyro);
+- a median logged IMU interval more than 10 % from a stated rate's,
+  `ACCEL_ODR_HZ` before `GYRO_ODR_HZ`: `ACCEL_ODR_HZ states 12.5 Hz but the IMU
+  is logged at 100.0 Hz; sensor fusion unavailable`, the realistic case of a
+  file without keys from a firmware that logs faster than the default.
+
+A consequence for the escape hatch of [DATA_SCHEMA.md](DATA_SCHEMA.md),
+section 7: a legacy file given `$VAR,SCHEMA_VER,2` by hand is read without the
+legacy correction, so its gyro readings are multiples of the range over 32768
+rather than of the sensitivity, show no range's lattice (or a finer range's),
+and the fit rejects the recording.
+
 A solver that does not converge is reported the same way, with the stopping
 rule that ended it in the reason (`Batch fusion did not converge (iteration
 limit); sensor fusion unavailable`, or `bias not settled`, or `Nonfinite or
-increasing optimizer cost`).
+increasing optimizer cost`, or `Optimizer damping saturated without
+progress`).
 
 GNSS fixes outside IMU coverage are trimmed, not rejected. A recording with no
 IMU data, no `IMU/temperature` column, no local origin, or no shared time fit
@@ -529,8 +704,8 @@ not.
 success, a rejection or a solver failure. It is restored bit for bit when the
 recording is loaded, and the restored result is indistinguishable from a fresh
 one. Its code stamp is the algorithm string of the diagnostics
-(`batch-temperature-bias-v5` since the mid-step rotation of the accelerometer
-reading, `v4` having been the reconstruction at the IMU samples): a
+(`batch-temperature-bias-v6` since the documented noise model, `v5` having
+been the mid-step rotation of the accelerometer reading): a
 change that can alter what the fit returns changes that string, and every
 stored fit is then dropped at its recording's next load. So the first start
 after such an update finds every stored fit stale when its recording is
@@ -575,9 +750,9 @@ demonstrated by tests, all labelled `fusion`:
 
 | Test | What it holds |
 | --- | --- |
-| `tst_fusion_golden` | the kernel through its public API reproduces its goldens for twelve synthetic fixtures (three fits, nine rejections), the progress texts at its boundaries, cancellation at each kind of boundary (prefix, segment and full-fit iterations included), determinism and thread independence |
-| `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the two stopping rules forced through the tuning, the per-step covariance, the temperature factor's Jacobians and the three temperature cases, the fit trace iteration by iteration against the goldens; the reconstruction at the IMU samples (the ends are the fitted states, sharing by noise, zero mismatch with and without rotation, consistency, equivalence with a graph with a state at every sample), the channels and diagnostics the fit publishes as that reconstruction bit for bit, and the time axis on the three fits and on a recording whose GNSS rate is above its IMU's |
-| `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
+| `tst_fusion_golden` | the kernel through its public API reproduces its goldens for fourteen synthetic fixtures (three fits, eleven rejections; every fixture states its configuration and lies on its lattice), the progress texts at its boundaries, cancellation at each kind of boundary (prefix, segment and full-fit iterations included), determinism and thread independence |
+| `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the stopping rules forced through the tuning (damping saturation a solver failure, the damping ceiling changing nothing below it), the datasheet's noise by configuration bit for bit against its formula and the configurations without an entry, the step model (no sampling term on a constant signal, the sampling term against its derivation on a quadratic signal, the rotation remainder against its derivation on a constant turn and against a thousand-fold subdivided integration on a ramp), the lattice and rate checks and their order after every other check, the noise model in the diagnostics, the temperature factor's Jacobians and the three temperature cases, the fit trace iteration by iteration against the goldens; the reconstruction at the IMU samples (the ends are the fitted states, sharing by noise, zero mismatch with and without rotation, consistency, equivalence with a graph with a state at every sample), the channels and diagnostics the fit publishes as that reconstruction bit for bit, and the time axis on the three fits and on a recording whose GNSS rate is above its IMU's |
+| `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, the configuration reaches the kernel (a session stating it fits to the golden, the same session without the keys reads the 12.5 Hz default and is rejected by the rate check, and a recording without keys logged at 12.5 Hz fits under the default), a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
 | `tst_fusion_derived` | what is derived from the outputs, without the solver: the outputs stored as data, elevation and the track accelerations held to exact known answers, the track accelerations equal to the GNSS ones on the same samples, and each derived value waiting on the fit and never starting it; the orientation vocabulary (24 pairs, each a proper rotation, the attribute's choices), heading, pitch and roll held to hand-built known answers, finite with pitch at +90 or -90 where the forward axis is exactly vertical, side mounts, a GNSS track and a course reference that change nothing, and the fit's own angles for the device frame, an invalid or changed orientation without a fit, and the Orientation column's display, edit and bulk edit |
 | `tst_fusion_jobs` | the real fit through the executor: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result and kept, for an unloaded session, through an altitude marker added at run time or at the next start |
 | `tst_fusion_rows` | the demand layer with the real fusion plots, end to end: fits started and dropped by what is checked and visible, with no gesture; progress and failures as each fit ends |
@@ -610,16 +785,23 @@ edge, a one-step IMU factor across every step with the same per-step
 covariance and the same interval bias as the fit's factor, the states at the
 fixes and the biases held at the fit's values, solved by the fit's solver from
 the forward states. At every IMU sample the two agree to within the one
-linearization. On `coarse_maneuver`, whose largest mismatch is 1.1e-4 degrees
-of attitude, 9.1e-5 m/s of velocity and 9.1e-6 m of position, they differ by
-3.6e-12 degrees, 3.0e-13 m/s and 4.3e-14 m (3.3e-8, 3.2e-9 and 4.7e-9 of the
-mismatch); on a synthetic recording that turns at 3 rad/s about a horizontal
-axis (IMU 25 Hz, GNSS 5 Hz, exact readings, the true states as the fit), whose
-velocity mismatch is 0.0035 m/s and position mismatch 0.00036 m, by 1.3e-10 m/s
-and 7.0e-12 m (3.6e-8 and 2.0e-8 of the mismatch) and 6.4e-8 degrees of
-attitude. The test allows 1e-5 of the largest mismatch plus 1e-12 per
-component, and on the turning recording 5e-5 degrees of attitude, whose
-mismatch there is at rounding. The reference holds the fix states because,
+linearization and the difference between one preintegration of many steps
+and a chain of one-step factors. On `coarse_maneuver`, whose largest mismatch
+is 3.7e-7 degrees of attitude, 3.8e-7 m/s of velocity and 3.9e-8 m of
+position, they differ by 9.1e-11 degrees, 3.0e-9 m/s and 1.1e-10 m (2.5e-4,
+7.8e-3 and 2.9e-3 of the mismatch); on a synthetic recording that turns at
+3 rad/s about a horizontal axis (IMU 25 Hz, GNSS 5 Hz, exact readings, the
+true states as the fit), whose velocity mismatch is 0.0035 m/s and position
+mismatch 0.00036 m, by 2.0e-6 m/s and 3.5e-7 m (5.7e-4 and 9.8e-4 of the
+mismatch) and 1.1e-8 degrees of attitude. Under the earlier modelling
+densities they agreed to a few 1e-8 of the mismatch; the difference is the
+chain's, and grows as the accelerometer's noise ceases to dominate: with an
+accelerometer density twenty times the datasheet's, `coarse_maneuver`'s
+agree to below 4e-6 of the mismatch again. Either way it is far below anything
+physical. The test allows 2e-2 of the largest mismatch plus 1e-12 per
+component on `coarse_maneuver`, 5e-3 on the turning recording (where applying
+the sharing unmapped misses by 5-15 %), and there 5e-5 degrees of attitude,
+whose mismatch is at rounding. The reference holds the fix states because,
 freed with their GNSS factors and the biases, they move along the unobservable
 heading, which is not what the test measures: by 0.9 times the attitude
 mismatch on `coarse_maneuver`, 0.18 degrees on `stationary_spin` and 5.7
@@ -641,13 +823,19 @@ kernel's rule from sample `a` to sample `b`, the published acceleration
 reproduces the published velocity change to within
 `dt_a / 4 |c_before(a) - c_after(a)| + dt_b / 4 |c_after(b) - c_before(b)|`,
 plus, for every sample step that contains a fix, `dt / 2` times the largest
-difference between the corrections of its part-steps. Over the whole fitted
-interval the same bound holds, its fix terms included: the corrections of the
-part-steps beside a fix do not cancel. The test allows 1.01 times the
-bound plus 1e-12 m/s. The bound is tight: the worst ratio of error to bound is
-0.50 on `coarse_linear`, 0.9993 on `coarse_maneuver` and 0.99999 on
-`stationary_spin`, and over the whole fitted interval the error is 4.1e-13,
-2.6e-7 and 8.8e-6 m/s.
+difference between the corrections of its part-steps, and the kink of the
+rotated reading at the fix: the part-steps integrate the bias-corrected
+reading rotated by the corrected attitude at each edge, the fix's own
+included, where the kernel's rule takes the straight line between the two
+samples, so the bound adds the difference between the part-steps' trapezoids
+and the sample step's (half the step's length times the rotated reading at
+the fix's departure from that line). Over the whole fitted interval the same
+bound holds, its fix terms included: the corrections of the part-steps beside
+a fix do not cancel. The test allows 1.01 times the bound plus 1e-12 m/s.
+The bound is tight: the worst ratio of error to bound is 1.0009 on
+`coarse_linear` (whose errors are rounding, 1e-15 m/s), 0.99997 on
+`coarse_maneuver` and 1 on `stationary_spin`, and over the whole fitted
+interval the error is 1.7e-15, 2.7e-7 and 8.9e-6 m/s.
 
 Under fast rotation the corrections carry what remains of the integration's
 own discretization error. The solver library applies a step's reading at the
@@ -660,8 +848,8 @@ published acceleration against the true one:
 
 | IMU rate | velocity mismatch, m/s | published acceleration, error, m/s^2 | the rotated reading alone, error, m/s^2 |
 | --- | --- | --- | --- |
-| 13 Hz | 0.013 | 0.017 | 3.7e-6 |
-| 25 Hz | 0.0035 | 0.0063 | 1.8e-6 |
+| 13 Hz | 0.013 | 0.017 | 1.3e-7 |
+| 25 Hz | 0.0035 | 0.0033 | 3.6e-7 |
 | 100 Hz | 0.00023 | 0.00050 | 1.2e-7 |
 
 With the library's start-of-step rotation alone the errors were 0.136, 0.133
@@ -711,4 +899,6 @@ recorded objective was reached only with a copy of `SENSOR.CSV` that carries
 `$VAR,SCHEMA_VER,2`: the reference read the gyro channels of every file
 literally, while this implementation applies the legacy gyroscope correction
 to a file without `SCHEMA_VER` ([DATA_SCHEMA.md](DATA_SCHEMA.md), section 4).
-With the unmodified file a different objective is expected and correct.
+Such a copy is now rejected: its gyro readings, read literally, lie on no
+range's lattice (section 6). With the unmodified file a different objective
+is expected and correct.

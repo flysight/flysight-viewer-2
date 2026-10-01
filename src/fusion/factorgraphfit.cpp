@@ -46,7 +46,7 @@ void addGnssFactors(gtsam::NonlinearFactorGraph &graph, const Samples &d, size_t
 void addImuFactor(gtsam::NonlinearFactorGraph &graph, const Samples &d, size_t k,
                   const gtsam::imuBias::ConstantBias &bias, const Tuning &c)
 {
-    graph.emplace_shared<gtsam::ImuFactor>(X(k-1), V(k-1), X(k), V(k), B(0), preintegrateImu(d, d.gnssTime[k-1], d.gnssTime[k], bias, c));
+    graph.emplace_shared<gtsam::ImuFactor>(X(k-1), V(k-1), X(k), V(k), B(0), preintegrateImu(d, d.gnssTime[k-1], d.gnssTime[k], bias, c.noise));
 }
 
 /// The IMU between fixes k-1 and k under the temperature model: the interval
@@ -59,7 +59,7 @@ void addTemperatureImuFactor(gtsam::NonlinearFactorGraph &graph, const Samples &
     const double dT = temperatureAtFix(d, k-1)-model.tRef;
     const gtsam::imuBias::ConstantBias bias = intervalBias(d, k-1, at.bias, at.slope, model);
     graph.emplace_shared<TemperatureImuFactor>(X(k-1), V(k-1), X(k), V(k), B(0), T(0),
-                                               preintegrateImu(d, d.gnssTime[k-1], d.gnssTime[k], bias, c), dT);
+                                               preintegrateImu(d, d.gnssTime[k-1], d.gnssTime[k], bias, c.noise), dT);
 }
 
 /// A weak zero-mean prior on the shared bias: sensor biases are small, and
@@ -93,6 +93,7 @@ Stopping thresholdsOf(const Tuning &c)
 {
     Stopping stopping;
     stopping.biasSettledTolerance = c.biasSettledTolerance;
+    stopping.lambdaUpperBound = c.lambdaUpperBound;
     stopping.slowTailWindow = c.slowTailWindow;
     stopping.slowTailMaxMeanRelativeDecrease = c.slowTailMaxMeanRelativeDecrease;
     stopping.slowTailMaxNrms = c.slowTailMaxNrms;
@@ -118,14 +119,31 @@ double meanRelativeDecrease(const std::vector<FitIteration> &history, int outer,
     return sum/n;
 }
 
+/// The account of a pass that failed: the rule, the pass it happened in and
+/// the mean over that pass's iterations (the failing one is already in the
+/// history: its mean may be negative or NaN, which is the point of reporting
+/// it).
+Stopping failedPass(const Tuning &c, const char *rule, int outer, const std::vector<FitIteration> &history)
+{
+    Stopping stopping = thresholdsOf(c);
+    stopping.rule = rule;
+    stopping.passes = outer+1;
+    stopping.lastPassMeanRelativeDecrease = meanRelativeDecrease(history, outer, c.slowTailWindow);
+    return stopping;
+}
+
 /// One Levenberg-Marquardt pass over a fixed graph, driven by hand so that
 /// every iteration is a boundary. Updates `values`; returns whether the cost
 /// settled before the iteration limit. A pass may settle on a step that did
-/// not move (before == after): that is accepted, as it means LM found no
-/// better point at its current damping. A non-finite or increasing cost
-/// throws FitFailure with the account of the pass it happened in. Each
-/// iteration's boundary text is `passFormat` with the pass and the iteration
-/// filled in (fitFactorGraph()'s contract).
+/// not move (before == after) while the damping is below its ceiling: that is
+/// accepted, as it means LM found no better point at its current damping. The
+/// same step at the ceiling (`lambdaUpperBound`) is not: LM has given up
+/// there, every further iteration returns the same values, and the start it
+/// would call converged may be far from a minimum, so it throws FitFailure
+/// (`damping saturated`). A non-finite or increasing cost throws FitFailure
+/// (`cost increased`). Either carries the account of the pass it happened in.
+/// Each iteration's boundary text is `passFormat` with the pass and the
+/// iteration filled in (fitFactorGraph()'s contract).
 bool runOptimizerPass(const gtsam::NonlinearFactorGraph &graph, gtsam::Values &values,
                       const Tuning &c, int outer, const QString &passFormat,
                       const Checkpoint &checkpoint, std::vector<FitIteration> &history)
@@ -133,6 +151,7 @@ bool runOptimizerPass(const gtsam::NonlinearFactorGraph &graph, gtsam::Values &v
     gtsam::LevenbergMarquardtParams params;
     params.setLinearSolverType("MULTIFRONTAL_QR");
     params.maxIterations = c.maxIterations;
+    params.lambdaUpperBound = c.lambdaUpperBound;
     gtsam::LevenbergMarquardtOptimizer optimizer(graph, values, params);
 
     bool settled = false;
@@ -142,15 +161,12 @@ bool runOptimizerPass(const gtsam::NonlinearFactorGraph &graph, gtsam::Values &v
         optimizer.iterate();
         const double after = optimizer.error();
         history.push_back({outer, i, before, after});
-        if (!std::isfinite(after) || after > before+kCostIncreaseTolerance) {
-            // The failing iteration is already in the history: its mean may
-            // be negative or NaN, which is the point of reporting it.
-            Stopping stopping = thresholdsOf(c);
-            stopping.rule = StopRule::kCostIncreased;
-            stopping.passes = outer+1;
-            stopping.lastPassMeanRelativeDecrease = meanRelativeDecrease(history, outer, c.slowTailWindow);
-            throw FitFailure("Nonfinite or increasing optimizer cost", std::move(stopping));
-        }
+        if (!std::isfinite(after) || after > before+kCostIncreaseTolerance)
+            throw FitFailure("Nonfinite or increasing optimizer cost",
+                             failedPass(c, StopRule::kCostIncreased, outer, history));
+        if (after == before && optimizer.lambda() >= c.lambdaUpperBound)
+            throw FitFailure("Optimizer damping saturated without progress",
+                             failedPass(c, StopRule::kDampingSaturated, outer, history));
         if (before-after <= c.relativeTolerance*std::max(1., before)) {
             settled = true;
             break;

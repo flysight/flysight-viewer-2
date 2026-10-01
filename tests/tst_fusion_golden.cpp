@@ -288,12 +288,15 @@ void FusionGoldenTest::comparatorHoldsItsBounds()
 void FusionGoldenTest::fixturesAreDeterministic()
 {
     const QList<FusionFixture> first = fusionFixtures(), second = fusionFixtures();
-    QCOMPARE(first.size(), 12);
+    QCOMPARE(first.size(), 14);
     QCOMPARE(second.size(), first.size());
     for (qsizetype i = 0; i < first.size(); ++i) {
         const FusionFixture &a = first[i], &b = second[i];
         QCOMPARE(a.name, b.name);
         QCOMPARE(a.originIndex, b.originIndex);
+        // The stated configuration: copies, so ==.
+        QVERIFY(a.accelFsG == b.accelFsG && a.gyroFsDegS == b.gyroFsDegS);
+        QVERIFY(a.accelOdrHz == b.accelOdrHz && a.gyroOdrHz == b.gyroOdrHz);
         const QVector<double> *as[] = {&a.gnssTime, &a.north, &a.east, &a.down, &a.velN, &a.velE, &a.velD,
                                        &a.hAcc, &a.vAcc, &a.sAcc, &a.imuTime, &a.ax, &a.ay, &a.az,
                                        &a.wx, &a.wy, &a.wz, &a.imuTemperature};

@@ -100,9 +100,13 @@ whichever file declares it: the importer does not identify files by name. An
 absent key is not an error and stays absent.
 
 The four IMU keys are inputs of sensor fusion
-([SENSOR_FUSION.md](SENSOR_FUSION.md), section 3). The receiver's dynamic
-model and rate and the barometer's, humidity sensor's and magnetometer's
-rates are read and stored so that recordings carry them; nothing uses them.
+([SENSOR_FUSION.md](SENSOR_FUSION.md), section 3): its noise model is the
+IMU datasheet's at the stated ranges and rates (section 4 there), and it
+rejects a recording whose readings do not lie on the stated ranges' lattices
+or whose IMU is not logged at the stated rates (section 6 there). The
+receiver's dynamic model and rate and the barometer's, humidity sensor's and
+magnetometer's rates are read and stored so that recordings carry them;
+nothing uses them.
 
 **The default.** A recording that lacks a key takes the configuration of
 firmware v2023.09.22, the firmware of the recordings on disk: +/-16 g,
@@ -245,6 +249,14 @@ session appears.
 If the file's explicit value differs from the session's explicit value (`1`
 versus `2`), the import fails with a message naming `SCHEMA_VER` and both
 values: delete the session and re-import its files.
+
+The hatch is for files whose values are already correct. A legacy FlySight
+file given `$VAR,SCHEMA_VER,2` by hand is read without the correction of
+section 4, so its gyro readings are counts times `2000 / 32768` deg/s rather
+than counts times the sensitivity, `0.070` deg/s: they lie on the lattice of
+no gyro range, and sensor fusion rejects the recording, naming the range
+stated and the lattice the readings show
+([SENSOR_FUSION.md](SENSOR_FUSION.md), sections 3 and 6).
 
 Caveat: matching needs a recorded `SESSION_ID`. A file without one is matched
 by a hash of its contents, so an edited copy imports as a new session.
@@ -420,7 +432,7 @@ a calculation is valid only together with this stamp. For a session with a
 stored sensor fusion result:
 
 ```json
-"records": {"builtin.fusion.fit": "batch-temperature-bias-v5"}
+"records": {"builtin.fusion.fit": "batch-temperature-bias-v6"}
 ```
 
 Each session entry may also have `"recordReasons"`: an object mapping the

@@ -9,12 +9,20 @@
 #include <QString>
 
 #include "fusion/samplestatistics.h"
+#include "sensorconfiguration.h"
 
 namespace FlySight::Fusion::Detail {
 
 const gtsam::Vector3 kGravity(0, 0, 9.80665);
 
 namespace {
+
+// The largest relative difference between the logged IMU interval and the
+// nominal one of a stated rate. The datasheet states no oscillator tolerance;
+// the recordings on disk log 5-7 % fast, and the listed rates are a factor of
+// two apart, so this neither rejects a healthy unit nor mistakes one rate for
+// another.
+constexpr double kRateTolerance = .10;
 
 // Rejection reasons that more than one check reports. The whole recording
 // and the fitted window are checked for the same defects in different words;
@@ -64,18 +72,15 @@ void requirePositiveSigmas(const Samples &samples)
     }
 }
 
+/// The noise is not checked here: planFit() derives it after every check of
+/// the recording, so that a recording's own defect is reported before its
+/// configuration's, and preintegrateImu() refuses a noise that was never set.
 void requireValidTuning(const Tuning &tuning)
 {
-    for (double value : { tuning.accDensity, tuning.gyroDensity, tuning.accBiasSigma,
-                          tuning.gyroBiasSigma, tuning.gyroBiasSlopeSigma, tuning.maxGap,
-                          tuning.segmentLength, tuning.minFinalSegment }) {
+    for (double value : { tuning.accBiasSigma, tuning.gyroBiasSigma, tuning.gyroBiasSlopeSigma,
+                          tuning.maxGap, tuning.lambdaUpperBound, tuning.segmentLength,
+                          tuning.minFinalSegment }) {
         if (!std::isfinite(value) || value <= 0)
-            throw std::invalid_argument("Invalid fusion configuration");
-    }
-    // The per-step slopes may be zero (the term is then exactly absent) but
-    // not negative or non-finite.
-    for (double value : { tuning.accStepSlope, tuning.gyroStepSlope }) {
-        if (!std::isfinite(value) || value < 0)
             throw std::invalid_argument("Invalid fusion configuration");
     }
     // The tolerances and bounds need only be finite: a negative value is a
@@ -239,6 +244,49 @@ void requireNoGnssOutage(const Samples &window, double limit)
     for (size_t k = 1; k < window.gnssTime.size(); ++k) {
         if (window.gnssTime[k] - window.gnssTime[k - 1] > limit)
             throw std::invalid_argument("GNSS gap: fusion unavailable for a disconnected session");
+    }
+}
+
+void requireReadingsOnLattice(const Channels &channels)
+{
+    const ImuConfiguration &stated = channels.imuConfiguration;
+    const struct {
+        const char *key, *unit, *sensor;
+        double stated, shown;
+    } sensors[] = {
+        {SensorConfiguration::AccelFsG, "g", "accelerometer", stated.accelFsG,
+         rangeShownByReadings(ImuSensor::Accelerometer, channels.ax, channels.ay, channels.az)},
+        {SensorConfiguration::GyroFsDegS, "deg/s", "gyro", stated.gyroFsDegS,
+         rangeShownByReadings(ImuSensor::Gyroscope, channels.wx, channels.wy, channels.wz)}};
+    for (const auto &s : sensors) {
+        if (s.shown == s.stated)
+            continue;
+        // The fit does not guess: a range the readings do not show, or none,
+        // is a rejection naming both.
+        const QString shown = std::isnan(s.shown)
+            ? QStringLiteral("no range's lattice")
+            : QStringLiteral("the +/-%1 %2 lattice").arg(QString::number(s.shown), QLatin1String(s.unit));
+        throw std::invalid_argument(
+            QStringLiteral("%1 states +/-%2 %3 but the %4 readings lie on %5; sensor fusion unavailable")
+                .arg(QLatin1String(s.key), QString::number(s.stated), QLatin1String(s.unit),
+                     QLatin1String(s.sensor), shown)
+                .toStdString());
+    }
+}
+
+void requireStatedRates(double medianImuInterval, const ImuConfiguration &configuration)
+{
+    for (const auto &[key, rate] : { std::pair<const char *, double>{SensorConfiguration::AccelOdrHz,
+                                                                     configuration.accelOdrHz},
+                                     std::pair<const char *, double>{SensorConfiguration::GyroOdrHz,
+                                                                     configuration.gyroOdrHz} }) {
+        const double nominal = 1/rate;
+        if (std::abs(medianImuInterval-nominal)/nominal > kRateTolerance) {
+            throw std::invalid_argument(
+                QStringLiteral("%1 states %2 Hz but the IMU is logged at %3 Hz; sensor fusion unavailable")
+                    .arg(QLatin1String(key), QString::number(rate), QString::number(1/medianImuInterval, 'f', 1))
+                    .toStdString());
+        }
     }
 }
 

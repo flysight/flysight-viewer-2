@@ -145,15 +145,15 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | Test | Covers |
 |------|--------|
 | `tst_solver_smoke` | GTSAM's exported CMake target compiles, links and runs in a test: the install is the shipped configuration (`4.3a0`, TBB on, bundled Eigen 3.4, built without Boost: `GTSAM_ENABLE_BOOST_SERIALIZATION` and `GTSAM_USE_BOOST_FEATURES` are `0`), a small pose graph optimizes to its analytic answer (Eigen, METIS, TBB, library loading), and the main thread really has the 64 MiB stack of `flysight_solver_stack()` (the test uses 48 MiB of it; with a default stack it crashes). Label `fusion`. Nothing from the fusion model is involved |
-| `tst_fusion_golden` | The fusion kernel (`flysight_fusion`) through its public API, `src/fusion/fusion.h`, only. What it reaches: `Fusion::run()` on the twelve committed synthetic fixtures and nothing internal. In spec order: the initializer's prefix and segment fits are boundaries of the same kinds as the full fit's, so cancellation at each kind of boundary (`Starting fit`, graph construction, a prefix fit iteration, a segment fit iteration, a full fit iteration) leaves an empty result and no state behind, and preparation has no boundary of its own (the first is `Starting fit`); the progress texts at the kernel's boundaries, prefix and segment texts included, are the golden's; two runs are bit-identical with TBB on, a 64 MiB worker thread matches the main thread, and nothing depends on the caller's data. The golden comparison: for every fixture the fit reproduces the goldens captured from the kernel by `fusion_golden_capture` (three successes: seventeen channels and the diagnostics with their `initializer`, `stopping`, `quality` and `model` objects; nine rejections: the exact reason), the channel writer of the capture tool is the inverse of the loader on the committed files (and the hex sample form round-trips signed zero, a NaN and a subnormal by bit pattern), and the comparator holds its bounds, among them the rule for the time of the largest step correction, an argmax: not compared in portable mode, bit for bit in exact mode (sensor-fusion-jobs acceptance 4; section 11; fusion-reconstruction items 917-919, 923, 925, 929, 937). Label `fusion` |
-| `tst_fusion_kernel` | The kernel's internals through the seams of `src/fusion/` (the only test that includes those headers), with the literal expectations of the reference's self-test: the shared unwrap rule, preintegration across exact boundaries, every validation defect, backward attitude propagation, heading freedom, the reconstruction's timing and its yaw share between two states at rest, an exact constant-velocity fit published exactly by the reconstruction, TBB really on. In spec order: the segmented initializer (segment cutting on fixes and the merge of a short final piece, a window shorter than one segment, the smallest-sAcc anchor and the carried-back start, prefix growth on the marginal yaw sigma about the vertical, the growth stop when a doubling gains nothing, the prefix budget of one pass and 50 iterations and starts that end on the limit, the fallback when every prefix start fails, its progress texts and diagnostics keys, the four synthetic initializer recordings of the specification and `coarse_maneuver`); the stopping rule (the bias-settled cost test, the slow tail accepted and refused on each bound, non-convergence and a never-settling bias as solver failures with their failure shapes); the per-step IMU noise term (the density covariance exactly without a signal change, the specified covariance for a known change, the `dt` scaling, the constants in `model.per_step`); the temperature-dependent gyro bias (the custom IMU factor's six Jacobians against finite differences and its equivalence with `ImuFactor` at zero slope, the graph shape with `T_ref` and the slope prior last, the reconstruction at each interval's own bias (the attitude part of the mismatch), a recording without the temperature channel rejected by name, a constant temperature leaving `b1` at its prior and agreeing with the constant-bias fit, the drifting-bias recording recovering `b1` within 20 % in at most 30 iterations). The IMU-rate reconstruction pass (`reconstructAtImuRate()` and its per-interval seam `reconstructInterval()`): equivalence with the held-ends dense graph on `coarse_maneuver` and on a rotating recording (whose published acceleration is also measured against the truth at 13, 25 and 100 Hz), exact ends and P_n equal to the factor covariance, the published time axis with a sample on a fix published once, the summaries equal to the seam's maxima, sharing by noise, zero mismatch (the step corrections zero without rotation, and minus the integration's rotation lag under it), and consistency of the published acceleration with the published velocity. The publication: the seventeen channels the pipeline publishes are, bit for bit, the reconstruction on the test's own fit of each success fixture, and the four numbers of the diagnostics its summaries (`imuRateIsWhatTheFitPublishes`); the success diagnostics' key set with `dense_output`, `max_step_correction_m_s2`, `max_step_correction_time_s` and `max_velocity_mismatch_m_s`, and limitations that no longer disclaim the reconstruction; the time axis is the IMU samples in `[first fix, last fix)` of the window, in the number `imu_outputs` says, on the three fits and on a recording whose GNSS (10 Hz) is faster than its IMU (5 Hz) (`imuRateAxisWhenGnssIsFasterThanImu`). The golden comparison: the fit trace (the segment account and the cost before and after every optimizer iteration) against the goldens, which localizes a golden failure to a stage, and the chosen prefix fit's iteration count against the golden's (acceptance 4; section 11; fusion-reconstruction items 901-919, 923-927, 931-937). Label `fusion` |
-| `tst_fusion_session` | Sensor fusion as a registered calculation (`src/fusion/fusionregistration.cpp`) on real `SessionData` engines bound to the global registry, with the real fit on the test's main thread. What it reaches: the engine's request, prepare / compute / publish and blocker paths on fixture sessions whose effective inputs are bit-identical to the kernel's fixtures, and a natural session through the real input chain. The registration's shape: twelve registrations, the four configuration defaults first, the fit with 26 inputs (all required, `IMU/temperature` the last measurement, the four configuration attributes last) and 18 outputs, explicit, title "Sensor fusion". The configuration: the four constant defaults (no inputs, one output each, the default's text), a stored value winning and its removal returning to the default (`configurationDefaults`); the configuration reaching the kernel as numbers for a stated and a defaulted session and as NaN for a stored value that is not a number, and a fit on a stated configuration bit-identical, channels and diagnostics, to the fit on the default and to the golden (`configurationReachesTheKernel`) (noise-model items 1004, 1006, 1007, 1050, 1061). In spec order: cancellation at each kind of boundary through the engine's facility publishes and caches nothing (sensor-fusion-jobs acceptance 10); a session with the temperature column carries it to the kernel bit for bit and matches the kernel's direct run, and a session without `IMU/temperature` is `MissingInput` / `NotApplicable` like one without IMU data, a local origin or a time fit (11). The lifecycle: reads of every fusion value, `accH`, the system-time axis, the diagnostics and an interpolated logbook value never run the fit, in any order, nor does the exporter (5); a request runs once, publishes all outputs together, and brings `accH` and `_system_time` with it (6); prepare / compute / publish equals `request()` bit for bit (7); an input change after publication drops everything while markers do not (8); a rejection is a cached result with its reason, `NotProduced` for inspection, and requestable again after an input change (9); blocker inspection reports the fit through on-demand intermediates and never starts it (12); two sessions are independent. The fit declares its kernel's algorithm string as its result version, no output of an explicit built-in has another candidate (`explicitOutputsHaveOneCandidate`), and a fit exported from one session and restored into another is indistinguishable from the fresh one: every channel bit for bit, the diagnostics byte for byte, status, detail, dependency edges (`SCHEMA_VER` among its leaves), blockers and invalidation, and the fit's snapshot lists what provided each name it looked up (`restoredFitIsIndistinguishable`) (fusion-reconstruction items 912, 921, 930). The golden comparison: every published result equals the kernel's goldens. Label `fusion` |
+| `tst_fusion_golden` | The fusion kernel (`flysight_fusion`) through its public API, `src/fusion/fusion.h`, only. What it reaches: `Fusion::run()` on the fourteen committed synthetic fixtures and nothing internal. In spec order: the initializer's prefix and segment fits are boundaries of the same kinds as the full fit's, so cancellation at each kind of boundary (`Starting fit`, graph construction, a prefix fit iteration, a segment fit iteration, a full fit iteration) leaves an empty result and no state behind, and preparation has no boundary of its own (the first is `Starting fit`); the progress texts at the kernel's boundaries, prefix and segment texts included, are the golden's; two runs are bit-identical with TBB on, a 64 MiB worker thread matches the main thread, and nothing depends on the caller's data. The golden comparison: for every fixture the fit reproduces the goldens captured from the kernel by `fusion_golden_capture` (three successes: seventeen channels and the diagnostics with their `configuration`, `initializer`, `stopping`, `quality` and `model` objects; eleven rejections: the exact reason, two of them the configuration's checks, `reject_lattice` and `reject_rate`), the channel writer of the capture tool is the inverse of the loader on the committed files (and the hex sample form round-trips signed zero, a NaN and a subnormal by bit pattern), and the comparator holds its bounds, among them the rule for the time of the largest step correction, an argmax: not compared in portable mode, bit for bit in exact mode (sensor-fusion-jobs acceptance 4; section 11; fusion-reconstruction items 917-919, 923, 925, 929, 937; noise-model items 1008, 1010, 1040, 1045, 1051). Label `fusion` |
+| `tst_fusion_kernel` | The kernel's internals through the seams of `src/fusion/` (the only test that includes those headers), with the literal expectations of the reference's self-test: the shared unwrap rule, preintegration across exact boundaries, every validation defect, backward attitude propagation, heading freedom, the reconstruction's timing and its yaw share between two states at rest, an exact constant-velocity fit published exactly by the reconstruction, TBB really on. In spec order: the segmented initializer (segment cutting on fixes and the merge of a short final piece, a window shorter than one segment, the smallest-sAcc anchor and the carried-back start, prefix growth on the marginal yaw sigma about the vertical, the growth stop when a doubling gains nothing, the prefix budget of one pass and 50 iterations and starts that end on the limit, the fallback when every prefix start fails, its progress texts and diagnostics keys, the four synthetic initializer recordings of the specification and `coarse_maneuver`); the stopping rule (the bias-settled cost test, the slow tail accepted and refused on each bound, non-convergence and a never-settling bias as solver failures with their failure shapes, damping saturated at a forced ceiling of 1e5 as the solver failure `damping saturated`, and the three fits and their prefix fits bit for bit the same under a ceiling of 1e5 and of 1e12); the noise model by configuration (the datasheet's per-sample sigma and integration density bit for bit against the formula for the fixtures' configurations, an entry for every listed value of every key, the configurations without one rejected naming the key; the lattice check finding the coarsest range, a legacy-style truncated reading, the tolerance's edges and every fixture's range; the rate check's 10 % either side; the configuration's checks after every other check; `configuration` and `model.noise` in the diagnostics) and the step model (no sampling term on a constant signal, the sampling term against its derivation for whole and part steps of an unevenly sampled quadratic and against the integration's own departure from the exact integral, the rotation remainder against its derivation on a constant turn and against a thousand-fold subdivided integration on a ramp, the covariances read through the observer); the temperature-dependent gyro bias (the custom IMU factor's six Jacobians against finite differences and its equivalence with `ImuFactor` at zero slope, the graph shape with `T_ref` and the slope prior last, the reconstruction at each interval's own bias (the attitude part of the mismatch), a recording without the temperature channel rejected by name, a constant temperature leaving `b1` at its prior and agreeing with the constant-bias fit, the drifting-bias recording recovering `b1` within 20 % in at most 30 iterations). The IMU-rate reconstruction pass (`reconstructAtImuRate()` and its per-interval seam `reconstructInterval()`): equivalence with the held-ends dense graph on `coarse_maneuver` and on a rotating recording (whose published acceleration is also measured against the truth at 13, 25 and 100 Hz), exact ends and P_n equal to the factor covariance, the published time axis with a sample on a fix published once, the summaries equal to the seam's maxima, sharing by noise, zero mismatch (the step corrections zero without rotation, and minus the integration's rotation lag under it), and consistency of the published acceleration with the published velocity. The publication: the seventeen channels the pipeline publishes are, bit for bit, the reconstruction on the test's own fit of each success fixture, and the four numbers of the diagnostics its summaries (`imuRateIsWhatTheFitPublishes`); the success diagnostics' key set with `dense_output`, `max_step_correction_m_s2`, `max_step_correction_time_s` and `max_velocity_mismatch_m_s`, and limitations that no longer disclaim the reconstruction; the time axis is the IMU samples in `[first fix, last fix)` of the window, in the number `imu_outputs` says, on the three fits and on a recording whose GNSS (25 Hz) is faster than its IMU (12.5 Hz) (`imuRateAxisWhenGnssIsFasterThanImu`). The golden comparison: the fit trace (the segment account and the cost before and after every optimizer iteration) against the goldens, which localizes a golden failure to a stage, and the chosen prefix fit's iteration count against the golden's (acceptance 4; section 11; fusion-reconstruction items 901-919, 923-927, 931-937; noise-model items 1008-1011, 1013-1015, 1017, 1040, 1046, 1047, 1051-1053). Label `fusion` |
+| `tst_fusion_session` | Sensor fusion as a registered calculation (`src/fusion/fusionregistration.cpp`) on real `SessionData` engines bound to the global registry, with the real fit on the test's main thread. What it reaches: the engine's request, prepare / compute / publish and blocker paths on fixture sessions whose effective inputs are bit-identical to the kernel's fixtures, and a natural session through the real input chain. The registration's shape: twelve registrations, the four configuration defaults first, the fit with 26 inputs (all required, `IMU/temperature` the last measurement, the four configuration attributes last) and 18 outputs, explicit, title "Sensor fusion". The configuration: the four constant defaults (no inputs, one output each, the default's text), a stored value winning and its removal returning to the default (`configurationDefaults`); the configuration reaching the kernel as numbers for a stated and a defaulted session and as NaN for a stored value that is not a number, a fixture session (which stores its fixture's configuration) fitted to the golden, channels and diagnostics, and the same session without the keys, reading the 12.5 Hz default, rejected by the rate check (`configurationReachesTheKernel`); a recording without keys, logged at 12.5 Hz, fitted under the default (`naturalSessionEndToEnd`) (noise-model items 1004, 1006, 1007, 1010, 1043, 1045, 1050, 1061). In spec order: cancellation at each kind of boundary through the engine's facility publishes and caches nothing (sensor-fusion-jobs acceptance 10); a session with the temperature column carries it to the kernel bit for bit and matches the kernel's direct run, and a session without `IMU/temperature` is `MissingInput` / `NotApplicable` like one without IMU data, a local origin or a time fit (11). The lifecycle: reads of every fusion value, `accH`, the system-time axis, the diagnostics and an interpolated logbook value never run the fit, in any order, nor does the exporter (5); a request runs once, publishes all outputs together, and brings `accH` and `_system_time` with it (6); prepare / compute / publish equals `request()` bit for bit (7); an input change after publication drops everything while markers do not (8); a rejection is a cached result with its reason, `NotProduced` for inspection, and requestable again after an input change (9); blocker inspection reports the fit through on-demand intermediates and never starts it (12); two sessions are independent. The fit declares its kernel's algorithm string as its result version, no output of an explicit built-in has another candidate (`explicitOutputsHaveOneCandidate`), and a fit exported from one session and restored into another is indistinguishable from the fresh one: every channel bit for bit, the diagnostics byte for byte, status, detail, dependency edges (`SCHEMA_VER` among its leaves), blockers and invalidation, and the fit's snapshot lists what provided each name it looked up (`restoredFitIsIndistinguishable`) (fusion-reconstruction items 912, 921, 930). The golden comparison: every published result equals the kernel's goldens. Label `fusion` |
 | `tst_fusion_derived` | What is derived on demand from the fit's published outputs (`src/fusion/fusionregistration.cpp`), without the solver: the fit's outputs are stored as data on real `SessionData` engines bound to the global registry (`syntheticFitSession()`, section 11), and every expected value is an exactly representable literal or, for "one definition", the GNSS calculation on the same samples. The seam's premise: stored `Fusion/<name>` reads back bit for bit and the fit never runs. The registrations of `builtin.fusion.z`, `accAlongTrack` and `accCrossTrack`: on demand, no title or result version, their inputs in order (the track accelerations those of the GNSS ones), one candidate each, the fit their one explicit dependency, and `Fusion/accD` with no second producer (vertical acceleration). On a fixture session that has the fit's inputs and no fit, each waits on the fit alone: `Blocked` by it, merely uncomputed, unavailable, and nothing runs it. Elevation is `_LOCAL_ORIGIN_HMSL` less `down` less `_GROUND_ELEV`, recomputed from an attribute edit without the fit and unavailable when either attribute is not a number. The track accelerations' known answers: along north, reversed, a vertical descent, a wind that turns a skewed ground velocity north, no motion through the air, a wind that is not a number (zero), no stored wind (the constant zero default) and unequal lengths (unavailable). The fused and the GNSS track accelerations agree on the same samples and wind (bit-exact in exact mode, within 4 ulp otherwise). The orientation vocabulary (`src/fusion/orientation.h`): exactly 24 pairs in the enumeration order, the default first, distinct tokens and labels, each token parsing back and nothing else parsing, every body-to-device rotation exact and proper with the columns forward, forward x up and -up; the attribute's one definition, its choices the enumeration, also after the entry point registers on a private registry. The attitude (`builtin.fusion.attitude`, after the orientation's constant default `builtin.default._ORIENTATION`): its registration, waiting on the fit on a fixture session, and on the quaternion stored as data (expected values built by hand from Euler angles and a hand-written default mount, within 1e-9 degrees): a level north-facing body, known heading, pitch and roll, two turns of heading unwrapped and measured from north (unchanged by a GNSS track or a course reference of any kind, and available without GNSS data), roll and pitch in their ranges through a barrel roll and a loop, the forward axis exactly vertical (the body pitched straight up and down between ordinary samples under the default orientation, and a level device under the mounts forward +z and forward -z, the sample whose pitch argument rounds past 1): all three angles published and finite, pitch at +90 or -90, roll in range and the later samples still reading their own angles, side mounts, the fit's own yaw, pitch and roll from a success golden's quaternion under forward +x, up -z (within 1e-6 degrees), an invalid stored orientation (unavailable) and a stored one recomputed without a fit. The Orientation column's model and bulk edit through `ChoiceFixture` on fixture sessions, loaded and as stubs: the default's label with nothing written and its token cached, a token stored and written verbatim, a token outside the list, a label, an empty and an invalid value refused, and the bulk edit setting and refusing (fusion-plots items 806-827, 831, 835, 843, 844, 849, 850, 856-858). Nothing is held to a golden bit for bit (the one golden it reads, `coarse_maneuver`'s, is compared within 1e-6 degrees), so no `_exact` run. Label `fusion` |
 | `tst_fusion_jobs` | The real fit through the executor on a real `SessionModel`, on the executor's 64 MiB worker: one job publishes all outputs together and announces them through the session model (acceptance 6); the executor gives the bits a synchronous request gives (7); the solver's oneTBB helper threads run at the worker's below-normal priority while they help a fit (`solverThreadsRunAtWorkerPriority`); an input edit during the fit asks the fit to stop at once, ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job (11); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before the fit, from the published result after it (with the `"records"` stamp in `index.json`), shown by the unloaded row after a restart without a load, and dropped with the record by an input change (`columnOnFusionOutputIsCachedFromRecord`); an altitude marker added at run time and registered again after a restart keeps that column's and the description's cached values of an unloaded session - no load, nothing pending (`altitudeMarkerKeepsColumnsOfUnloadedSession`); once that value of an unloaded session is gone from `index.json` (cleared, or dropped by an exit-marker move made while the application was closed: `_EXIT_TIME` is not bulk-editable, so the test repeats the `LogbookManager` calls of the bulk edit's stub path - temporary load, column marked unsaved, save), the column worker refills it after a restart from the stored fit restored into its temporary copy: the roll at the marker's time, bit-identical to the loaded session's, with no load of the row, no job, no fit and the record's bytes unchanged (`workerRefillsColumnFromStoredFit`); while the loaded row's cell shows the golden's number the moment the job publishes (`dataChanged` for that row only, and the number already there when the view is told); shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the executor delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 11 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit, driven as a child process on fixtures written out as `TRACK.CSV` / `SENSOR.CSV`: its diagnostics equal a direct `Fusion::run()` on the fixture and equal the application's own import-and-fit path (`SessionImport` on a `SessionModel`); the CSV output reloads bit for bit; `--dump-inputs` shows the twenty-six effective inputs, including the legacy gyro scale of a file without `SCHEMA_VER` and the default text of the configuration a recording does not state (noise-model items 1007, 1050, 1061); a rejection exits 1 with the failure JSON and writes no CSV; usage and import failures exit 64 and 3; no calculation on the fit's input path declares a preference (the premise of the model-free import); and the seventeen output channels of `fitOutputChannels()` are the golden's columns in order (fusion-reconstruction items 912, 923). Label `fusion` |
 | `tst_fusion_golden_exact`, `tst_fusion_kernel_exact`, `tst_fusion_session_exact`, `tst_fusion_jobs_exact`, `tst_fusion_rows_exact`, `tst_fusion_store_exact`, `tst_fusion_runner_exact` | Not executables: the seven tests above that compare with the goldens, run a second time with `FLYSIGHT_FUSION_EXACT=1` and otherwise the same environment, so that every golden comparison is bit equality (section 11, "Tolerance policy"). Registered only where that is a fair demand, the compiler the goldens were captured with (`FLYSIGHT_FUSION_EXACT_TESTS`, section 3). The first two decide bit-identity; the next four show that the bits survive the engine, the executor's worker thread, the demand layer's plot demand and a stored and restored record; the last is bit identity across the process boundary (the runner's output against an in-process run). Labels `fusion` and `exact` |
 | `tst_fusion_rows` | The plot-row script with the **real** fusion plots: `PlotModel` + `CalculationDemand` + the executor + `SessionModel` + the fusion registration, with real fits on the executor's 64 MiB worker and the eight plots of `fusionPlots()` (`tests/fusion/fusionsessions.h`, which mirrors `MainWindow::registerBuiltInPlots()`; `audit_cleanup` pins the application's list at eight rows). All eight plots are explicit-backed (the fit their one requested calculation) and every one is drawn after the one fit, on the fit's time axis (`allEightFusionPlotsAreExplicitBacked`); the row script of acceptance 15 on three real tracks (checking fits them one after another with no other action, the sessions still to compute falling as each publishes; unchecking mid-way drops the waiting one and lets the running one finish; checking again resumes; a fourth track shown is fitted with no other action), with every published track held to the kernel's goldens and the job history as a literal; Heading, Pitch and Roll share one job and one progress text (`headingPitchRollShareOneJob`); `accH` is blocked by the fit and never has a job of its own; a session without IMU data is never counted and never listed among failures before, during and after a fit (11); a rejected recording is listed among failures with the reason, offers no retry, and is fitted again after its input changes and settles (9); sessions are edited, tracks hidden and shown and other values read while a real fit runs, without disturbing it, and are fitted afterwards with no other action (19, the half that needs no widget); the demand layer's items on demand, failures and chains unchanged in what they assert with real fits (status-bar item 753); the measurements of the removed plots still serve a logbook column kept from before (the fit's roll and the local frame's north at the exit marker, labelled with the measurement's name, `Fusion/roll @ ...`, beside a column over the Roll row labelled `Roll @ ...`) and the fit's stored record carries every fit channel that has no plot (`removedPlotMeasurementsStayAvailable`) (fusion-plots items 801-804, 806, 808, 842, 853, 854, 856; fusion-reconstruction item 930). Steered by the first progress text of a job and by `jobFinished`: no gate, no sleeps. Label `fusion` |
-| `tst_fusion_store` | The fit's stored result: bit-identical after unload and restart (also when fitted before the first save), rejection / solver failure listed with its reason, dependency (a declared input, a configuration attribute stored over its default, `SCHEMA_VER`) and code-stamp invalidation (the fit's result version stamped as the previous algorithm string, the one users' logbooks hold), merges, session file untouched, not requested after the `cache/` folder was deleted while closed (one fit offered while the Roll plot is checked, dropped when unchecked, nothing run); kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a provider's result version in the record; a logbook column over roll filled for sessions that are not loaded, and nothing fitted again after a restart (`columnOverFusionFillsUnloadedSessions`, `fusionColumnWithStoredFitsRunsNothing`); also run as `_exact` (fusion-reconstruction items 920-922, 938) |
+| `tst_fusion_store` | The fit's stored result: bit-identical after unload and restart (also when fitted before the first save), rejection / solver failure listed with its reason, dependency (a declared input, a configuration attribute stored over its default, `SCHEMA_VER`) and code-stamp invalidation (the fit's result version stamped as `batch-temperature-bias-v5`, the algorithm string the documented noise model retired, the one users' logbooks hold; noise-model items 1041, 1062), merges, session file untouched, not requested after the `cache/` folder was deleted while closed (one fit offered while the Roll plot is checked, dropped when unchecked, nothing run); kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a provider's result version in the record; a logbook column over roll filled for sessions that are not loaded, and nothing fitted again after a restart (`columnOverFusionFillsUnloadedSessions`, `fusionColumnWithStoredFitsRunsNothing`); also run as `_exact` (fusion-reconstruction items 920-922, 938) |
 
 Three executables are built with these but are not tests and are not counted
 above. `solver_deploy_probe` is a plain executable (no Qt) around the same
@@ -169,7 +169,7 @@ cp build/FlySightViewer-build/Release/solver_deploy_probe.exe build/install/
 rm build/install/solver_deploy_probe.exe
 ```
 
-`fusion_golden_capture` is the second: it runs the product kernel on the twelve
+`fusion_golden_capture` is the second: it runs the product kernel on the fourteen
 synthetic fixtures and writes the goldens of `tests/data/fusion/` (section 11,
 "The capture tool" and "Re-capture procedure"). `fusion_runner` is the third:
 the fit on one recording imported as the application imports it, with the
@@ -852,8 +852,10 @@ the first numbering, the budgets of prefix and segment fits (3.3) and the
 on-limit starts (section 10, test 2b), are second rows of items 210 and 239
 rather than items of their own, so that the range stays 201-247. Item 228 is
 stated as amended by the specification "One status bar for background work"
-(9.8), and item 221 by the specification "The documented noise model and the
-accuracy, part 1" (9.11).
+(9.8), and items 215, 216, 217, 221, 227, 245 and 247 by the specification
+"The documented noise model and the accuracy, part 1" (9.11): the per-step
+term and its slopes give way to the datasheet's noise by configuration and
+the derived sampling term and rotation remainder.
 
 | # | Section | Clause | Evidence |
 |---|---|---|---|
@@ -872,10 +874,10 @@ accuracy, part 1" (9.11).
 | 212 | 3.3 rule 4 | no stationary-window detector takes part; it decides nothing | `audit fusion-model` (the detector, its gates and the silent poll are absent from the tree); `tst_fusion_golden::cancelDuringPreparation` (preparation asks nothing: the first boundary is `Starting fit`) |
 | 213 | 4.1 | the bias-settled test is the re-preintegration cost test at 1e-6 relative; the pass structure (at most five passes) and the settle tolerance 1e-8 are unchanged | `tst_fusion_kernel::biasSettledByCostTest`, `biasNeverSettlesIsSolverFailure` (five passes, `bias not settled`), `exactConstantVelocityFit`, `nonConvergenceIsSolverFailure` (five passes); `tst_fusion_golden::successFixturesMatchGolden` (`stopping.passes` and the thresholds) |
 | 214 | 4.2 | a final pass at the limit is accepted when the last 20 iterations' mean relative decrease is below 1e-4 and the position and velocity nRMS are below 2; the diagnostics say so; a fit meeting neither stays a solver failure | `tst_fusion_kernel::slowTailAtTheIterationLimit` (rows `accepted`, `nrms bound fails`, `decrease bound fails`), `nonConvergenceIsSolverFailure` (one iteration cannot fill the window) |
-| 215 | 5 formula | `sigma_w = slope x dt x norm(delta omega)`, `sigma_a = slope x dt x norm(delta f)`, change of the interpolated signal across the step, covariance `(density^2 + sigma^2 x dt) I`; zero change gives the density covariance exactly | `tst_fusion_kernel::perStepTermMatchesSpecifiedCovariance`, `perStepTermIsZeroWithoutSignalChange`; `tst_fusion_golden::successFixturesMatchGolden` (`coarse_linear`'s numbers are the density-only model) |
-| 216 | 5 constants | slopes 0.026 (gyro) and 0.40 (accelerometer); densities, step boundaries and midpoint sampling unchanged | `tst_fusion_kernel::diagnosticsReportPerStepConstants` (`Tuning{}` values and `model.per_step`), `preintegrationHonoursExactBoundaries` |
-| 217 | 5 dt scaling | the dt factor keeps the constants valid at higher rates | `tst_fusion_kernel::perStepTermScalesWithStep` (a wrong-dt expectation is rejected) |
-| 218 | 5 constraint | the per-step covariance is applied by setting the shared parameters before each `integrateMeasurement` call | `audit fusion-model` (exactly one `.integrateMeasurement(` call in `imuintegration.cpp`); `tst_fusion_kernel::perStepTermMatchesSpecifiedCovariance` (the effect) |
+| 215 | 5 formula, as amended | the per-step term is the sampling term and the rotation remainder of the specification of 1001-1065, in quadrature as `(D^2 + eps^2 / dt) I`; a step without signal change and without rotation has the density covariance exactly | `tst_fusion_kernel::constantSignalHasNoSamplingTerm`, `samplingTermFollowsTheDerivation`; `tst_fusion_golden::successFixturesMatchGolden` (`coarse_linear`'s numbers are the density-only model) |
+| 216 | 5 constants, as amended | no slopes; the densities are derived from the configuration; the step boundaries and the midpoint sampling are unchanged | `tst_fusion_kernel::noiseFollowsTheTable`, `preintegrationHonoursExactBoundaries` |
+| 217 | 5 dt scaling, as amended | the term has no constant and falls with the step as the sampling error does | `tst_fusion_kernel::samplingTermFollowsTheDerivation` (whole and part steps of an unevenly sampled quadratic) |
+| 218 | 5 constraint | the per-step covariance is applied by setting the shared parameters before each `integrateMeasurement` call | `audit fusion-model` (exactly one `.integrateMeasurement(` call in `imuintegration.cpp`, and a sensor covariance assigned nowhere else); `tst_fusion_kernel::samplingTermFollowsTheDerivation` (the effect, read through the observer) |
 | 219 | 6 model | `b(t) = b0 + b1 (T(t) - T_ref)`, `T_ref` the mean IMU temperature over the fitted window, the accelerometer bias constant; each interval evaluated at its own bias in the fit and in the reconstruction | `tst_fusion_kernel::temperatureGraphShape` (`tRef` the index-order mean; the factor's `temperatureDelta`), `temperatureFactorJacobians` (six Jacobians; equal to `ImuFactor` at zero slope), `reconstructionUsesIntervalBias`, `driftingBiasSegmentsConverge` (`b1` within 20 %, `t_ref_degc` 35, `b0` at `T_ref`; `t_ref_degc` and `b1_rad_s_per_degc` are always numbers) |
 | 220 | 6 priors | `b0` under today's prior (0.03 rad/s); `b1` zero-mean with sigma 0.010 deg/s per degC | `tst_fusion_kernel::temperatureGraphShape` (the slope prior's sigmas equal `Tuning{}.gyroBiasSlopeSigma`), `validationRejectsEachDefect` (a non-positive `gyroBiasSlopeSigma` is refused), `driftingBiasSegmentsConverge` (`slope_prior` last, after `bias_prior`) |
 | 221 | 6 input channel, as amended | `IMU/temperature` is a required input of the fit (the twenty-second when it was added; the fit has twenty-six since the specification of 1001-1065), one value per IMU sample; a recording handed no temperature is rejected by the kernel with a reason naming `IMU/temperature`, and a session without the column is blocked like any missing input | `tst_fusion_kernel::validationRejectsEachDefect` (absent, wrong length, non-finite: the reason names `IMU/temperature`, and after every other channel's defect); `tst_fusion_session::registrationShape` (26 inputs, all required), `missingInputsAreNotApplicable` (the `no-temperature` row), `temperatureReachesTheKernel`, `inputsAreBitIdenticalToFixture` (there is no temperature rejection golden: the twelve fixtures all carry the channel) |
@@ -884,7 +886,7 @@ accuracy, part 1" (9.11).
 | 224 | 7 initializer | the diagnostics report the segments (start, end, prefix length, yaw sigma, iterations) and any fallback | `tst_fusion_kernel::initializerDiagnosticsShape` (the key sets), `allPrefixFitsFailFallsBack` (`fallback_segments`); `tst_fusion_golden::successFixturesMatchGolden` |
 | 225 | 7 stopping | which rule ended the fit, the last pass's mean relative decrease, the re-preintegration cost difference | `tst_fusion_kernel::biasSettledByCostTest`, `slowTailAtTheIterationLimit`, `failureDiagnosticsShape` (`cost increased` with nulls), `nonConvergenceIsSolverFailure` (the failure key set) |
 | 226 | 7 quality | normalized RMS of the IMU, position and velocity factors, and the objective per state | `tst_fusion_kernel::biasSettledByCostTest` (recomputed from the residual array), `exactConstantVelocityFit` |
-| 227 | 7 model | the per-step constants and the fitted `b0`, `b1` with `T_ref` (always numbers: the temperature is required) | `tst_fusion_kernel::diagnosticsReportPerStepConstants`, `driftingBiasSegmentsConverge`, `constantTemperatureKeepsSlopeAtPrior` |
+| 227 | 7 model, as amended | the configuration, `model.noise` and the fitted `b0`, `b1` with `T_ref` (always numbers: the temperature is required) | `tst_fusion_kernel::diagnosticsReportTheNoiseModel`, `driftingBiasSegmentsConverge`, `constantTemperatureKeepsSlopeAtPrior` |
 | 228 | 7 tooltip / account, as amended | the failure text (the status bar's and the logbook row's hover) keeps showing the reason; the diagnostics are an account, not an input | `tst_fusion_rows::rejectedTrackShowsBadge` (the reason in the failure entry); `tst_fusion_session::registrationShape` (`_FUSION_DIAGNOSTICS` is an output and no input) |
 | 229 | 8 input | a folder or two paths; imported as the application imports (parser, conversion layer, on-demand derivation, the legacy gyro scale); the kernel gets the job queue's channels | `tst_fusion_runner::matchesTheApplicationImportPath`, `successMatchesDirectRun`, `legacySchemaScalesTheGyro`, `outputTableMatchesGolden` |
 | 230 | 8 output | diagnostics JSON on stdout; `--csv` writes the seventeen channels; exit 0 for Succeeded, non-zero otherwise with the outcome and reason on stderr | `tst_fusion_runner::successMatchesDirectRun`, `rejectionExitsOne`, `usageAndImportFailures` |
@@ -903,9 +905,9 @@ accuracy, part 1" (9.11).
 | 242 | 10 test 5 | a segment whose prefix fits all fail falls back, the diagnostics say so, the full fit still runs | `tst_fusion_kernel::allPrefixFitsFailFallsBack` |
 | 243 | 10 test 6 | bias-settled test: a fit whose cost stops changing converges within two passes | `tst_fusion_kernel::biasSettledByCostTest` |
 | 244 | 10 test 7 | slow tail: a forced final pass at the limit is accepted when both conditions hold and fails when either fails | `tst_fusion_kernel::slowTailAtTheIterationLimit` |
-| 245 | 10 test 8 | per-step term: zero change gives the density covariance exactly; a known change gives the specified covariance; the term scales with dt | `tst_fusion_kernel::perStepTermIsZeroWithoutSignalChange`, `perStepTermMatchesSpecifiedCovariance`, `perStepTermScalesWithStep` |
+| 245 | 10 test 8, as amended | per-step term: a step without signal change and without rotation has the density covariance exactly; a known second derivative gives the derived sampling term; a constant turn the derived remainder | `tst_fusion_kernel::constantSignalHasNoSamplingTerm`, `samplingTermFollowsTheDerivation`, `rotationRemainderFollowsTheDerivation` |
 | 246 | 10 test 9 | section 6, as amended: a recording without `IMU/temperature` is rejected by the kernel (the reason names the channel) and blocked in a session like any missing input; constant temperature leaves `b1` at its prior | `tst_fusion_kernel::validationRejectsEachDefect`, `constantTemperatureKeepsSlopeAtPrior`; `tst_fusion_session::missingInputsAreNotApplicable` |
-| 247 | 11 | `docs/` describes the segmented initializer, the stopping rule with its slow tail, the per-step term and its meaning at other output rates, and the temperature-dependent bias, in the place that documents the fusion model | `docs/SENSOR_FUSION.md` sections 4 and 5; `audit fusion-model` (the document describes no retired mechanism: no resting-window detector, candidate window, coarse-only initializer, frozen algorithm, bias-shift test, branch name, or input count from before the temperature channel) |
+| 247 | 11, as amended | `docs/` describes the segmented initializer, the stopping rule with its slow tail, the noise model of the specification of 1001-1065 in place of the per-step term, and the temperature-dependent bias, in the place that documents the fusion model | `docs/SENSOR_FUSION.md` sections 4 and 5; `audit fusion-model` (the document describes no retired mechanism: no resting-window detector, candidate window, coarse-only initializer, frozen algorithm, bias-shift test, branch name, or input count from before the temperature channel); `audit noise-model` (no modelling weights, no calibrated slopes; the datasheet's tables and the derivation cited) |
 
 ### 9.4 Stored requested calculation results (items 301-350)
 
@@ -1308,9 +1310,10 @@ helper; the legacy backfill no longer writes wind; the attribute registry
 moves to the model library and the helpers the fusion library calls are
 header-only. The specification amends those of 9.1 (item 6), 9.2 (item 115)
 and 9.6 (item 509). Items 847 and 861 are stated as amended by the
-specification "The fused state at every IMU sample" (9.10), and item 847
-again by the specification "The documented noise model and the accuracy, part
-1" (9.11).
+specification "The fused state at every IMU sample" (9.10), and again by the
+specification "The documented noise model and the accuracy, part 1" (9.11):
+item 847 for the four configuration inputs, both for the algorithm string,
+the goldens and the stored results, which are now that specification's.
 
 | # | Section | Clause | Evidence |
 |---|---|---|---|
@@ -1360,7 +1363,7 @@ again by the specification "The documented noise model and the accuracy, part
 | 844 | 11, as amended | the orientation column, once added, shows "forward +y, up +z" for every recording not set and the chosen label for one that is; editing offers the 24 orientations; changing it redraws the attitude plots without a fit; the Import preferences page offers the same list for new imports | `tst_fusion_derived::orientationColumnShowsTheDefaultWithoutAWrite`, `orientationEditStoresATokenAndRefusesOthers`, `storedOrientationRecomputesWithoutAFit`; `tst_choice_attribute::cellEditorOffersTheList`; `manual M41` |
 | 845 | 11 | profiles that name removed plots apply without complaint | `tst_calculation_demand::profileNamingRemovedPlotsAppliesWithoutThem`; `manual M43` |
 | 846 | 11 | wind reads zero where nothing was stored, as before | `tst_builtins_engine::constantDefaults`; `tst_smoke::importAppliesCreationDefaults` |
-| 847 | 12, as amended | the fusion plots leave the fusion kernel and the fit calculation as they are (inputs, outputs, diagnostics, algorithm string), except that the specification of 1001-1065 adds the four configuration inputs, and derive what they add from the fit's published outputs, whose values, diagnostics and algorithm string are those of the specification of 901-940, with its goldens and stored results | `tst_fusion_session::registrationShape`; `tst_fusion_golden::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; `tst_fusion_store::restoredAfterRestartIsBitIdentical` |
+| 847 | 12, as amended | the fusion plots leave the fusion kernel and the fit calculation as they are (inputs, outputs, diagnostics, algorithm string), except that the specification of 1001-1065 adds the four configuration inputs, and derive what they add from the fit's published outputs, whose values, diagnostics and algorithm string are those of the specification of 1001-1065, with its goldens and stored results | `tst_fusion_session::registrationShape`; `tst_fusion_golden::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; `tst_fusion_store::restoredAfterRestartIsBitIdentical` |
 | 848 | 12 | GTSAM stays confined to the fusion kernel, the new fusion files include neither GTSAM nor Eigen, and the rules on the fusion tooling hold | `audit solver-confinement`, `audit fusion-tooling` |
 | 849 | 12 | the fusion registration gains the derived kinematics, the attitude derivation, the orientation type and the orientation attribute with its constant default; each derivation is an ordinary on-demand calculation with declared inputs, the attitude's including the orientation attribute | `tst_fusion_session::registrationShape`; `tst_fusion_derived::derivedRegistrationShape`, `attitudeRegistrationShape` |
 | 850 | 12, as settled | the fusion library reaches nothing of the core library: the attribute registry lives in the model library, the constant-default and track helpers are header-only, and the calculations never name the fusion library | `tst_fusion_derived::orientationDefinitionIsTheEnumeration`; `audit solver-confinement` |
@@ -1374,7 +1377,7 @@ again by the specification "The documented noise model and the accuracy, part
 | 858 | 13, as amended | test: the orientation attribute: every recording reads the default without a stored value and without any write to its file; a stored token wins and the attitude recomputes without a fit; a token outside the list, an empty and an invalid value are refused by the model, the editor and the bulk edit; the labels and tokens come from one enumeration of 24; a new import stores the preference's orientation | `tst_fusion_derived::orientationColumnShowsTheDefaultWithoutAWrite`, `storedOrientationRecomputesWithoutAFit`, `orientationEditStoresATokenAndRefusesOthers`, `orientationBulkEdit`, `tst_importer::orientationFromThePreference`, `orientationDefinitionIsTheEnumeration`; `tst_choice_attribute::cellEditorOffersTheList` |
 | 859 | 13 | test: the choice type: display and sort by label; the in-place editor and the context menu offer the list; the bulk edit sets the token for the selected sessions | `tst_choice_attribute::choiceShowsTheLabelOfTheEffectiveToken`, `choiceSortsByLabel`, `cellEditorOffersTheList`, `setDialogOffersTheList`, `bulkEditSetsAToken` |
 | 860 | 13 | test: constant defaults: the helper registers a calculation that the engine serves as a default (the existing engine test covers the mechanism); wind north and east read zero for a recording without stored wind, keep a stored value, and the importer no longer writes them | `tst_builtins_engine::constantDefaults`; `tst_calcengine::constantCalculationIsADefault`; `tst_smoke::importAppliesCreationDefaults`; `tst_importer::creationDefaultsOnlyFillAbsent`; `tst_import_merge::newSessionGetsDefaults` |
-| 861 | 13, as amended | test: the fusion plots leave the fit as the golden fixtures and the stored-result tests hold it, against the goldens and the algorithm string of the specification of 901-940 | `tst_fusion_golden::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`, `codeStampChangeDropsRecordOnLoad`; `tst_fusion_session::registrationShape` |
+| 861 | 13, as amended | test: the fusion plots leave the fit as the golden fixtures and the stored-result tests hold it, against the goldens and the algorithm string of the specification of 1001-1065 | `tst_fusion_golden::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`, `codeStampChangeDropsRecordOnLoad`; `tst_fusion_session::registrationShape` |
 | 862 | 13 | test: the audit keeps the removed plot names out of the registry, and the documents describe the eight plots, the attitude convention, the orientation attribute and the rule for defaults | `audit naming` |
 | 863 | 14 | `docs/` describes the eight fusion plots and the derived quantities, the attitude convention with the orientation attribute, its default and its limits (it describes the mount, not the wearer's posture; a forward axis pointing straight up or down makes heading and roll meaningless), the choice type and the orientation in the session file, the rule for defaults and its helper, and that wind is no longer written at import; no document describes a removed plot or the "GNSS (Local frame)" category | `audit naming` |
 
@@ -1415,7 +1418,8 @@ beside a fix uncancelled (15, 35);
 the diagnostics' new keys are named, `dense_output` replacing the previous
 account (17, 18); the algorithm string of a rejected or failed fit does
 change, where the specification calls those diagnostics unchanged (19); the
-string is `batch-temperature-bias-v5` (21); a stale fit is computed again when
+string is `batch-temperature-bias-v4`, then `v5` with the mid-step rotation (and `v6`
+since the documented noise model of 9.11) (21); a stale fit is computed again when
 something switched on needs it, not all at the next start (22); the time axis
 was compared before and after once, at the re-capture (section 11), and is
 held permanently against its definition, not by a test that compares two
@@ -1424,9 +1428,13 @@ equivalence reference holds the fix states and the biases at the fit's
 values, not the GNSS factors and free biases the specification describes
 (31); in portable mode the time of the largest step correction, an argmax,
 is not compared at all (37). The
-specification amends those of 9.9 (items 847 and 861). Item 930 is stated as
-amended by the specification "The documented noise model and the accuracy,
-part 1" (9.11).
+specification amends those of 9.9 (items 847 and 861). Items 915, 921, 925,
+930 and 935 are stated as amended by the specification "The documented noise
+model and the accuracy, part 1" (9.11): the algorithm string `v6`, the noise
+model the pass reads, the configuration inputs, and the bound on the
+published acceleration, which also includes the kink of the rotated reading
+at a fix (the kernel has not changed; under the datasheet's noise the
+corrections are small enough that this term shows).
 
 | # | Section | Clause | Evidence |
 |---|---|---|---|
@@ -1444,17 +1452,17 @@ part 1" (9.11).
 | 912 | 6 | the fit publishes the seventeen channels of the fusion document's section 4, no more (no uncertainty is published), on the same time axis | `tst_fusion_session::registrationShape`; `tst_fusion_runner::outputTableMatchesGolden`; `tst_fusion_kernel::imuRateIsWhatTheFitPublishes`, `imuRateAxisWhenGnssIsFasterThanImu`; `manual M46` |
 | 913 | 6 | at every IMU sample the attitude (the quaternion, and roll, pitch and yaw from it) is the corrected attitude at the sample's edge, and velocity and position are the corrected state there | `tst_fusion_kernel::imuRateIsWhatTheFitPublishes`, `imuRateMatchesHeldEndsGraph`, `exactConstantVelocityFit`; `manual M45` |
 | 914 | 6, as settled | the acceleration is the sample's own reading, bias removed, rotated by the corrected attitude, plus gravity, plus the mean of the corrections of the steps beside its edge (a step beside a fix being the part-step in that fix interval); only a sample exactly on the first fix has one such step, since the last fix is never published; where the corrections are negligible it is the rotated reading | `tst_fusion_kernel::imuRateZeroMismatchIsForward`, `imuRateAccelerationIntegratesToVelocity`, `imuRateIsWhatTheFitPublishes`, `imuRateSampleOnAFixIsPublishedOnce`; `manual M45` |
-| 915 | 6, as settled | integrated by the kernel's rule, the published acceleration reproduces the published velocity change over any run of samples, the whole fitted interval included, to within the spread of the corrections at its ends and at the fixes inside it, the bound the fusion document's section 8 states; not step by step | `tst_fusion_kernel::imuRateAccelerationIntegratesToVelocity` |
+| 915 | 6, as settled, as amended | integrated by the kernel's rule, the published acceleration reproduces the published velocity change over any run of samples, the whole fitted interval included, to within the spread of the corrections at its ends and at the fixes inside it plus, for a sample step that contains a fix, the difference between the part-steps' trapezoids of the rotated reading and the sample step's (the kink at the fix), the bound the fusion document's section 8 states; not step by step | `tst_fusion_kernel::imuRateAccelerationIntegratesToVelocity` |
 | 916 | 6 | the time axis is the IMU samples in the half-open interval from the first fix to the last, whatever the GNSS rate, a GNSS rate above the IMU's included: no fix time added, nothing resampled, a sample on a fix published once | `tst_fusion_kernel::imuRateEndsAreTheFit`, `imuRateSampleOnAFixIsPublishedOnce`, `imuRateIsWhatTheFitPublishes`, `imuRateAxisWhenGnssIsFasterThanImu`; `manual M45`, `M46` |
 | 917 | 7, as settled | the success diagnostics' account of the dense output names the reconstruction (`dense_output`, in place of the previous key), and `limitations` no longer denies that the output is the IMU-rate posterior; the documentation quotes both texts | `tst_fusion_kernel::initializerDiagnosticsShape`; `tst_fusion_golden::successFixturesMatchGolden`; `audit fusion-reconstruction`; `manual M46` |
 | 918 | 7, as settled | the success diagnostics report the largest step correction (`max_step_correction_m_s2`), the middle of its step in seconds since the epoch (`max_step_correction_time_s`) and the largest velocity mismatch of any interval (`max_velocity_mismatch_m_s`), beside `max_endpoint_correction_deg`, which stays | `tst_fusion_kernel::imuRateEndsAreTheFit`, `imuRateIsWhatTheFitPublishes`, `reconstructionUsesIntervalBias`, `reconstructionTimingAndEndpointCorrection`; `tst_fusion_golden::successFixturesMatchGolden`, `comparatorHoldsItsBounds`; `manual M46` |
 | 919 | 7, as settled | the diagnostics of a rejected or failed fit are unchanged but for the algorithm string, which changes for every outcome (the specification's section 8) | `tst_fusion_golden::rejectionFixturesMatchGolden`; `tst_fusion_kernel::failureDiagnosticsShape` |
 | 920 | 8 | the record stores and restores the same channels, with the new values, in the record format as it is | `tst_fusion_store::restoredAfterRestartIsBitIdentical`; `tst_result_records::layoutIsPinned` |
-| 921 | 8, as settled | the algorithm string changes (to `batch-temperature-bias-v4` with the reconstruction, and to `v5` with the mid-step rotation of the accelerometer reading that followed it), so a fit stored under the previous one is stale at its recording's next load, by the existing validity rules | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_fusion_session::registrationShape`; `audit stored-results`; `manual M46` |
+| 921 | 8, as settled, as amended | the algorithm string changes (to `batch-temperature-bias-v4` with the reconstruction, to `v5` with the mid-step rotation of the accelerometer reading that followed it, and to `v6` with the specification of 1001-1065), so a fit stored under the previous one is stale at its recording's next load, by the existing validity rules | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_fusion_session::registrationShape`; `audit stored-results`; `manual M46` |
 | 922 | 8, as settled | after the change every stored fit is computed again once, when something switched on needs it, not all at the next start (a stale record is deleted at its recording's load), and the status bar shows it as any computation | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`; `tst_result_columns::staleRecordDeletedByWorkerCreatesDemand`; `manual M45` |
 | 923 | 8 | the goldens are captured again from the changed kernel with the existing capture tool, and the golden tests compare against them | `tst_fusion_golden::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; `tst_fusion_runner::outputTableMatchesGolden` |
 | 924 | 8, as settled | every fixture's time axis is unchanged: checked once, at the re-capture, each success fixture's `_time` byte for byte against the previous capture (section 11), and permanently against the IMU samples of its fitted interval | `tst_fusion_kernel::imuRateIsWhatTheFitPublishes`, `imuRateEndsAreTheFit` |
-| 925 | 9 | the fit is unchanged (the graph, the noise model, the initializer, the solver and the stopping rule), and so are its states at the fixes and its biases: the pass reads the converged solution and changes nothing in it | `tst_fusion_kernel::fitTraceMatchesGolden`, `imuRateEndsAreTheFit`; `tst_fusion_golden::successFixturesMatchGolden`; `manual M46` |
+| 925 | 9, as amended | the fit is unchanged by the pass (the specification of 1001-1065 changes the noise model, the damping ceiling and the stopping rules), and so are its states at the fixes and its biases: the pass reads the converged solution and changes nothing in it | `tst_fusion_kernel::fitTraceMatchesGolden`, `imuRateEndsAreTheFit`; `tst_fusion_golden::successFixturesMatchGolden`; `manual M46` |
 | 926 | 9 | the pass replaces the kernel's linear reconstruction, which no code, test, golden or document names | `tst_fusion_kernel::imuRateIsWhatTheFitPublishes`; `audit fusion-reconstruction` |
 | 927 | 9 | the step model is read from the library's preintegration as it advances, never written again: one integration call and one author of the per-step covariance, and the tests check the pass's covariance against the factor's | `tst_fusion_kernel::imuRateEndsAreTheFit`; `audit fusion-model` |
 | 928 | 9 | GTSAM stays confined to the kernel, and the rules on the fusion tooling hold | `audit solver-confinement`, `audit fusion-tooling` |
@@ -1464,7 +1472,7 @@ part 1" (9.11).
 | 932 | 10 | test: on every success fixture, the corrected state at each interval's second fix is the fitted state to rounding, and the pass's covariance there equals the factor's | `tst_fusion_kernel::imuRateEndsAreTheFit` |
 | 933 | 10 | test: a step carrying more noise takes the larger share; with uniform noise the velocity share grows with elapsed time | `tst_fusion_kernel::imuRateSharesByNoise` |
 | 934 | 10, as settled | test: on a recording that does not rotate and whose readings integrate exactly to the fitted states, the reconstruction is the forward integration, the step corrections are zero and the acceleration is the rotated reading | `tst_fusion_kernel::imuRateZeroMismatchIsForward` |
-| 935 | 10, as settled | test: on every success fixture the published acceleration integrated by the kernel's rule reproduces the published velocity change over runs of samples, the whole fitted interval included, within the stated spread | `tst_fusion_kernel::imuRateAccelerationIntegratesToVelocity` |
+| 935 | 10, as settled, as amended | test: on every success fixture the published acceleration integrated by the kernel's rule reproduces the published velocity change over runs of samples, the whole fitted interval included, within the stated bound, the kink of the rotated reading at a fix included | `tst_fusion_kernel::imuRateAccelerationIntegratesToVelocity` |
 | 936 | 10, as settled | test: the published time axis of every success fixture and of a synthetic recording whose GNSS rate exceeds its IMU rate is exactly the IMU samples of the fitted interval; the before-and-after identity is the re-capture's check | `tst_fusion_kernel::imuRateEndsAreTheFit`, `imuRateSampleOnAFixIsPublishedOnce`, `imuRateIsWhatTheFitPublishes`, `imuRateAxisWhenGnssIsFasterThanImu` |
 | 937 | 10, as settled | test: the diagnostics carry the account of the specification's section 7, and the golden comparison covers it; the time of the largest step correction, an argmax, is compared in exact mode only | `tst_fusion_kernel::initializerDiagnosticsShape`, `imuRateIsWhatTheFitPublishes`; `tst_fusion_golden::successFixturesMatchGolden`, `comparatorHoldsItsBounds` |
 | 938 | 10 | test: a fit stored under the previous algorithm string is stale at the next load, and one stored after the change restores bit for bit | `tst_fusion_store::codeStampChangeDropsRecordOnLoad`, `restoredAfterRestartIsBitIdentical` |
@@ -1484,8 +1492,8 @@ tests and clause 65 its section 12. The specification is implemented in
 phases, and the table holds the rows whose evidence exists so far; the
 audit's completeness check covers exactly those items, an explicit list that
 each phase extends until the last replaces it with the range. Clauses 6, 8,
-9, 10, 11, 25, 26, 31, 44 and 61 are stated as settled, and where the plan
-departs from the specification's letter they say so: only the four IMU keys
+9, 10, 11, 14, 15, 25, 26, 31, 44 and 61 are stated as settled, and where the
+plan departs from the specification's letter they say so: only the four IMU keys
 are inputs of the fit, the dynamic model, the GNSS rate and the other
 sensors' rates being read and stored and used by nothing, where the
 specification's architecture has the registration declare "them" (6); the
@@ -1495,7 +1503,15 @@ sensitivity exceeds by the factor 1.14688 (8, 11); the lattice check reads
 the readings the kernel receives, before any correction of the kernel's own,
 not the raw readings, which only the conversion layer may read (9); the
 oscillator's tolerance is 10 %, where "a few percent" read as 2-3 % would
-reject every recording on disk (10); the covariance at a sample also needs
+reject every recording on disk (10); the sampling term of a step that is part
+of a sample interval (a fix splits most intervals) is the derivation's
+integral over the part, not `dt^3 / 12` of the part, which would understate
+a half-interval part fourfold, and the second derivative is estimated per
+sample interval as the larger change of slope at its two ends, the
+specification's "bounded by" (14); the rotation remainder includes the same
+second-order expansion's terms in the change of force and of rate (coning
+included), which on real data are larger than the pure rotation term (15);
+the covariance at a sample also needs
 the joint covariance of each pair of adjacent fixes, which the specification
 does not list (25, 26); the widening window is the fixes within 2.5 s of the
 sample, at least the two around it (31); the goldens are captured again at the
@@ -1505,10 +1521,18 @@ defaulted and the noise model is still the previous one, with no switch that
 reproduces the previous model (61).
 
 The specification amends those of 9.3 (item 221: the fit has twenty-six
-inputs), 9.9 (item 847: the fit calculation gains the four configuration
-inputs) and 9.10 (item 930: the registration declares the configuration
-inputs and registers their constant defaults); each is stated "(as amended)"
-in its row, its appendix and the map.
+inputs; items 215, 216, 217, 227, 245 and 247: the per-step term and its
+slopes give way to the datasheet's noise and the derived sampling term and
+remainder, reported under `model.noise`), 9.9 (item 847: the fit calculation
+gains the four configuration inputs; items 847 and 861: the algorithm string,
+goldens and stored results are this specification's) and 9.10 (item 930: the
+registration declares the configuration inputs and registers their constant
+defaults; item 921: the algorithm string `v6`; item 925: the noise model the
+pass reads; items 915 and 935: the bound on the published acceleration also
+includes the kink of the rotated reading at a fix); each is stated "(as amended)" in its row, its appendix and the
+map. Searched and holding: 202, 211, 218, 220, 237, 239 and 241 (the fixtures
+change under them, not the statements; `rest_throughout`, its noise at the
+datasheet's level, still stops growing at 120 s), and 902, 907, 919 and 927.
 
 | # | Section | Clause | Evidence |
 |---|---|---|---|
@@ -1519,8 +1543,28 @@ in its row, its appendix and the map.
 | 1005 | 5 | the IMU's low-pass filters have no key: that firmware's fixed setting (the gyro's LPF2 at the cutoff of its 12.5 Hz rate and no LPF1, the accelerometer at its ODR bandwidth) is documented as part of the default, with the firmware version | `tst_sensor_configuration::keysAndValueForms`; `audit sensor-configuration` |
 | 1006 | 5, as settled | the dynamic model, the GNSS rate and the barometer's, humidity sensor's and magnetometer's rates are read and stored with the other attributes; nothing uses them, and they are not inputs of the fit | `tst_importer::configurationStoredAsRecorded`; `tst_fusion_session::registrationShape`; `audit sensor-configuration` |
 | 1007 | 5, 10 | the configuration reaches the kernel as part of its channels, as the origin does: the fit declares the four IMU keys as inputs, as it declares the origin, the input adapter carries them, the kernel reads no preference or constant for them, and nothing above the registration changes | `tst_fusion_session::registrationShape`, `configurationReachesTheKernel`; `tst_fusion_runner::successMatchesDirectRun`; `tst_fusion_store::dependencyEditDropsRecord`; `audit solver-confinement` |
-| 1050 | 11 | test: a file with every key imports them; a malformed one is an import error naming the key; a file without them takes the default | `tst_importer::configurationStoredAsRecorded`, `rejectsMalformedConfiguration`; `tst_fusion_session::configurationDefaults`; `tst_fusion_runner::successMatchesDirectRun` |
-| 1061 | 11, as settled | test: on a build where the configuration is carried and defaulted and the noise model is the previous one (the end of phase 1), the existing channels and diagnostics of every fixture are bit-identical to the goldens | `tst_fusion_golden::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; `tst_fusion_session::configurationReachesTheKernel`; `tst_fusion_runner::successMatchesDirectRun` |
+| 1008 | 5, as settled | whether stated or defaulted, each IMU sensor's range is checked against the lattice of its readings (the datasheet's sensitivity at the range, in effective units, within the rounding of the file's decimals): the coarsest range whose lattice every reading fits must be the configured one; otherwise the fit rejects the recording with a reason that names the range stated and the range the values show, and does not guess | `tst_fusion_kernel::latticeCheckFindsTheCoarsestRange` (each range's lattice, a legacy-style truncated reading, the tolerance's edges, no range, the texts); `tst_fusion_golden::rejectionFixturesMatchGolden` (`reject_lattice`); `manual M47` |
+| 1009 | 10, as settled | the lattice check is a kernel validation rule, one of the rules that decide whether a recording can be fitted, and reads the readings as the kernel receives them, before any correction of its own | `tst_fusion_kernel::latticeCheckFindsTheCoarsestRange` (a reading outside the fitted window counts), `configurationChecksComeAfterTheOthers` |
+| 1010 | 5, as settled | a logged IMU interval that disagrees with a stated rate by more than the oscillator's tolerance (10 %) is a rejection that names both | `tst_fusion_kernel::rateCheckToleratesTenPercent` (9.9 % passes, 10.1 % rejects, the accelerometer first, a gyro-only mismatch); `tst_fusion_golden::rejectionFixturesMatchGolden` (`reject_rate`); `tst_fusion_session::configurationReachesTheKernel` (the default path of a 100 Hz recording) |
+| 1011 | 6, as settled | the per-sample noise of each sensor and axis is `sqrt(density^2 x bandwidth + step^2 / 12)`: the datasheet's density at the configured range, the datasheet's bandwidth for the configured rate and filter, and the quantization step at the range (the datasheet's sensitivity) | `tst_fusion_kernel::noiseFollowsTheTable` |
+| 1012 | 6 | the documentation carries the table: the density per range for each sensor and the bandwidth per rate and filter, with the datasheet's table numbers | `audit noise-model` (`docs/SENSOR_FUSION.md` cites Table 2, Table 18, Table 65 and Figure 17) |
+| 1013 | 6 | the density the integration uses is the per-sample noise times the square root of the nominal sample interval at the configured rate, so that a step of the nominal length carries one sample's variance; `accDensity` and `gyroDensity` are gone, and no density in the model is derived otherwise | `tst_fusion_kernel::noiseFollowsTheTable`; `audit noise-model` |
+| 1014 | 6, as settled | the sampling term replaces the slopes: per step, the trapezoid rule's error on a piecewise-linear signal, `dt^3 / 12` times the second derivative for a step that is a whole sample interval, and for a part of one the same derivation's integral over the part, the second derivative estimated per sample interval as the larger of the changes of slope at its two ends, for velocity from the specific force and for the angle from the rate, added in quadrature per step, with no fitted coefficient | `tst_fusion_kernel::samplingTermFollowsTheDerivation`, `constantSignalHasNoSamplingTerm`; `audit noise-model` |
+| 1015 | 6, as settled | the remainder of the mid-step scheme to second order, for rate and force linear across the step: its pure rotation term, second order in the step's rotation, and the same expansion's terms in the change of force and of rate across the step (coning included), derived and added the same way | `tst_fusion_kernel::rotationRemainderFollowsTheDerivation` (a constant turn: the pure term, and the library's one-step error within 1 %), `rotationRemainderMatchesTheSchemeError` (a ramp: the vector and the coning against a thousand-fold subdivided integration, within 5 %) |
+| 1016 | 6 | the documentation writes the derivations out, including what they assume (a smooth signal between samples, the samples exact) | `audit noise-model` (`docs/SENSOR_FUSION.md` writes `h^3 / 12`) |
+| 1017 | 6 | the bias priors stay at 0.3 m/s^2, 0.03 rad/s and 0.010 deg/s per degC, and the documentation cites the datasheet's table for each | `tst_fusion_kernel::validationRejectsEachDefect`, `temperatureGraphShape` (the priors' values); `audit noise-model` |
+| 1040 | 8 | the diagnostics show the configuration the fit ran under | `tst_fusion_kernel::diagnosticsReportTheNoiseModel`; `tst_fusion_golden::successFixturesMatchGolden`; `manual M47` |
+| 1041 | 8, 9 | the first start after the change finds every stored fit stale at its recording's load and recomputes it when something switched on needs it, counted in the status bar as any computation | `tst_fusion_store::codeStampChangeDropsRecordOnLoad` (a record stamped `batch-temperature-bias-v5`); `manual M48` |
+| 1043 | 9 | the algorithm string changes once, for the whole specification | `tst_fusion_session::registrationShape` (`batch-temperature-bias-v6`); `audit stored-results` |
+| 1045 | 9 | the fixtures state their configuration explicitly, so that the stated path (the kernel's and the sessions' fixtures) and the default path (a session without the keys) are both exercised | `tst_fusion_session::configurationReachesTheKernel`, `naturalSessionEndToEnd`, `inputsAreBitIdenticalToFixture`; `tst_fusion_golden::successFixturesMatchGolden` |
+| 1046 | 10 | the kernel derives its noise from the configuration in one unit, the only place the datasheet table exists in code | `tst_fusion_kernel::noiseFollowsTheTable`, `configurationWithoutEntryIsRejected`; `audit noise-model` |
+| 1047 | 10 | the sampling term and the rotation remainder are computed where the steps are integrated, from the readings, with no constant of their own | `tst_fusion_kernel::samplingTermFollowsTheDerivation`; `audit fusion-model` |
+| 1050 | 11 | test: a file with every key imports them; a malformed one is an import error naming the key; a file without them takes the default | `tst_importer::configurationStoredAsRecorded`, `rejectsMalformedConfiguration`; `tst_fusion_session::configurationDefaults`; `tst_fusion_runner::matchesTheApplicationImportPath` |
+| 1051 | 11 | test: a fixture whose readings sit on the +/-8 g lattice with a header stating +/-16 g is rejected naming both; the lattice check identifies the range of every committed fixture and of the reference recordings | `tst_fusion_golden::rejectionFixturesMatchGolden` (`reject_lattice`); `tst_fusion_kernel::latticeCheckIdentifiesEveryFixture`; `manual M47` (the reference recordings) |
+| 1052 | 11 | test: the per-sample noise and the density follow the table for every configuration the fixtures state, bit for bit against the formula | `tst_fusion_kernel::noiseFollowsTheTable` |
+| 1053 | 11 | test: a step with a constant signal has no sampling term; the sampling term of a step follows the derivation on a synthetic signal with a known second derivative; the rotation remainder follows its derivation on a constant turn | `tst_fusion_kernel::constantSignalHasNoSamplingTerm`, `samplingTermFollowsTheDerivation`, `rotationRemainderFollowsTheDerivation` |
+| 1061 | 11, as settled | test: on a build where the configuration is carried and defaulted and the noise model is the previous one (the end of phase 1), the existing channels and diagnostics of every fixture are bit-identical to the goldens | `tst_fusion_golden::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; `tst_fusion_session::configurationReachesTheKernel`; `tst_fusion_runner::successMatchesDirectRun` (at the end of phase 1; the goldens have been captured again since) |
+| 1062 | 11 | test: a stored fit from before the change is stale | `tst_fusion_store::codeStampChangeDropsRecordOnLoad` |
 
 ## 10. Cleanup audit
 
@@ -1635,7 +1679,7 @@ takes about a second. It fails, listing **all** violations, when
   `CMakeLists.txt`; the silent cancellation
   poll or the retired single-anchor initial-attitude type reappears in `src`
   or `tests`; a retired constant-bias algorithm string (the `v1` / `v2`
-  strings the goldens once carried; the goldens say `batch-temperature-bias-v5`,
+  strings the goldens once carried; the goldens say `batch-temperature-bias-v6`,
   and a hit under `tests/data/fusion` means a stale capture) appears in `src`,
   `tests`, `docs` or `README.md`; the name of the branch the kernel was ported
   from appears anywhere but in this file's historical notes and in the
@@ -1644,17 +1688,34 @@ takes about a second. It fails, listing **all** violations, when
   fit`, the pass iteration, `Integrating IMU factors`: the three kinds of
   boundary) or other than one `.integrateMeasurement(` call in
   `imuintegration.cpp` (the per-step covariance is set before it); an
-  integration call (the member-call form of `integrateMeasurement(`), the
-  library's static tangent update (`UpdatePreintegrated`) or a per-step
-  covariance setter (`accelerometerCovariance`, `gyroscopeCovariance`,
-  `integrationCovariance`) appears anywhere in `src` or `tests` but
-  `imuintegration.cpp`: the step model has one author, and the
-  reconstruction and its tests read it; or `docs/SENSOR_FUSION.md` names a
+  integration call (the member-call form of `integrateMeasurement(`) or the
+  library's static tangent update (`UpdatePreintegrated`) appears anywhere in
+  `src` or `tests` but `imuintegration.cpp`, or a sensor covariance
+  (`accelerometerCovariance`, `gyroscopeCovariance`, `integrationCovariance`)
+  is assigned there: the step model has one author, and the reconstruction
+  and its tests read it (the step-model tests read the covariances through
+  the observer and `pim.p()`, which is not an assignment); or
+  `docs/SENSOR_FUSION.md` names a
   retired mechanism (a resting or candidate window, the coarse-only
   initializer, a frozen algorithm, the bias-shift test, the branch, or the
   input count from before the configuration inputs).
   This file is excluded from the text rules of this group because this
   section spells the patterns;
+- **group `noise-model`** (items 247, 1012-1014, 1016, 1017, 1046): a
+  retired tuning constant of the noise (`accDensity`, `gyroDensity`,
+  `accStepSlope`, `gyroStepSlope`, `stepSigma`) or the retired diagnostics
+  keys (`per_step`, `gyro_slope_s`, `acc_slope_s`) appear in `src`, `tests`
+  (the goldens included: a hit under `tests/data/fusion` is a stale capture),
+  `docs` or the root `README.md`; a figure of the datasheet's table (the
+  gyro's LPF2 cutoffs `1441.8`, `1320.7`, `1108.1`, `295.5`, `135.9`, and the
+  noise densities as `src/fusion/sensornoise.cpp` spells them, `110e-6`,
+  `80e-6`, `75e-6`, `70e-6`, `3.8e-3`) appears in `src` outside that unit; the
+  unit includes GTSAM or Eigen; `docs/SENSOR_FUSION.md` calls the densities
+  modelling weights or the slopes calibrated; or that document stops citing
+  Table 2 (seven lines), Table 18 (two), Table 65 and Figure 17 (one each), or
+  stops writing the derivation's `h^3 / 12` (one line). This file and the
+  acceptance map are excluded from the first rule because they name the
+  retired constants in their history;
 - **group `fusion-tooling`** (items 231, 233, 848, 928, 939):
   `fusion_runner.cpp` names the preferences singleton, the logbook manager, the engine's preference
   provider, the session model, the application's import driver, the
@@ -1663,7 +1724,8 @@ takes about a second. It fails, listing **all** violations, when
   shortest-form flag, `std::to_chars`, `QLocale`, a `'g', 17` format); an
   install rule names `fusion_runner`, `fusion_golden_capture` or
   `solver_deploy_probe`; or anything under `tests` other than
-  `tst_fusion_kernel.cpp` includes an internal fusion header (the runner sees
+  `tst_fusion_kernel.cpp` includes an internal fusion header (`sensornoise.h`
+  among them; the runner sees
   `fusion/fusion.h` and `fusion/fusionregistration.h` only; the capture tool
   and `fusiontrace.h` see the trace seam `fusion/fusionpipeline.h`, which is
   not in the pattern);
@@ -1844,7 +1906,7 @@ a second authority.
 ## 11. Fusion golden regression
 
 `tests/data/fusion/` holds what the product kernel (`src/fusion/`, library
-`flysight_fusion`) produced for twelve synthetic fixtures when the goldens were
+`flysight_fusion`) produced for fourteen synthetic fixtures when the goldens were
 last captured by `fusion_golden_capture`, the capture tool built with the
 fusion tests. `tst_fusion_golden` and `tst_fusion_kernel` compare the kernel
 with them, and so, through the registered calculation and the executor, do
@@ -1866,7 +1928,8 @@ wording of the progress texts, which is now the kernel's own; since that
 capture the branch is the source of nothing. Since then every phase that
 changed numerical results re-captured (the stopping rule, the per-step term,
 the segmented initializer, the temperature model, the reconstruction at the IMU
-samples); the goldens on disk are the capture of the last of them.
+samples, the mid-step rotation, the documented noise model); the goldens on
+disk are the capture of the last of them.
 
 The capture of 2026-09-30 (the reconstruction at the IMU samples): the
 published channels became the fitted state at every IMU sample
@@ -1895,6 +1958,26 @@ numbers) and every channel but `_time`; in the nine rejections, `algorithm`
 alone. What did not: the time axis, checked byte for byte as before, the
 row counts, and every rejection's reason.
 
+The capture of 2026-10-01 (the documented noise model, part 1, phase 2): the
+fit's noise is the IMU datasheet's at each fixture's stated configuration,
+with the derived sampling term and mid-step remainder in place of the
+per-step slopes, the damping ceiling is 1e12, every fixture states its
+configuration and its readings are rounded onto that configuration's lattice,
+and the algorithm string changed to `batch-temperature-bias-v6`
+(`docs/SENSOR_FUSION.md` sections 3, 4 and 6). What changed: in the three
+successes everything but `_time`, `rows` and the counts (every channel, the
+`trace`, and in the diagnostics `algorithm`, the new `configuration`,
+`model.noise` in place of `model.per_step`, `stopping` with its new
+`lambda_upper_bound`, `objective`, `residuals`, `seeds`, `quality`, the
+`initializer` account and the reconstruction's four numbers); in the nine
+rejections that were there, `algorithm` alone; and two new rejections,
+`reject_lattice.json` and `reject_rate.json`, whose reasons are the new
+checks'. What did not: the time axis (`coarse_linear` 160 lines,
+`coarse_maneuver` 540, `stationary_spin` 995, each `_time` column
+byte-identical to the previous capture's), the row and state counts, every
+GNSS value of every fixture (the rounding draws nothing), and every earlier
+rejection's reason, the configuration's checks coming after every other.
+
 ### Fixtures
 
 Generated in code by `tests/fusion/fusionfixtures.cpp`, which uses Qt Core and
@@ -1902,18 +1985,27 @@ the standard library only, includes nothing from `src/`, and is compiled once,
 into `flysight_fusion_test_support`, for the tests and for
 `fusion_golden_capture`, so the goldens and the tests see the same bits
 (`capture.json` records the generator's hash). To be
-bit-identical with any IEEE-754 compiler the generators use only `+ - * /`,
-compute every sample from its index, and draw noise from SplitMix64 mapped to
-[-1, 1) in one fixed order (all GNSS fixes in time order, each drawing north,
-east, down, velN, velE, velD; then all IMU samples, each drawing ax, ay, az, wx,
-wy, wz). All times are UTC seconds, `1700000000.0 + t`. The local origin
-attributes are 45, -75, 100 (they appear in the diagnostics only).
+bit-identical with any IEEE-754 compiler the generators use only `+ - * /` and
+`std::round` (exact by definition), compute every sample from its index, and
+draw noise from SplitMix64 mapped to [-1, 1) in one fixed order (all GNSS
+fixes in time order, each drawing north, east, down, velN, velE, velD; then
+all IMU samples, each drawing ax, ay, az, wx, wy, wz). All times are UTC
+seconds, `1700000000.0 + t`. The local origin attributes are 45, -75, 100
+(they appear in the diagnostics only). Every fixture states its
+configuration (`FusionFixture::accelFsG`, `gyroFsDegS`, `accelOdrHz`,
+`gyroOdrHz`, which `toChannels()` copies and `sessionFromFixture()` stores):
++/-16 g, +/-2000 deg/s and the listed rate nearest its IMU sampling, within
+4 %; and after the noise its readings are rounded onto that configuration's
+lattice, `round(v / s) * s` with `s = 16 / 32768 x 9.80665` m/s^2 for the
+accelerometer and `0.070` deg/s for the gyro, as a FlySight's readings are
+counts times the step. The rounding draws nothing, so every GNSS value is
+what it was before it.
 
 | Fixture | Content | Exercises |
 |---|---|---|
-| `coarse_linear` | The exact constant-velocity case. IMU `t = i*.01`, `i = 0..200`, force `(0, 0, -9.80665)`, rate 0. GNSS `t = .037 + i*.2`, `i = 0..8`, position `(7, 8, 9) + t*(12, -4, 2)`, velocity `(12, -4, 2)`, `hAcc = vAcc = 1`, `sAcc = .1`. Origin index 0. No noise | a window shorter than one segment (one segment, the 60 s prefix covers it), an exactly unobservable yaw (the four prefix starts tie and the first wins), near-zero objective, boundary timing; 9 states, 160 output samples; zero signal change, so the per-step IMU noise term is identically zero and this golden's numbers are the density-only model (they did not change when the term was added); a constant 25 degC IMU temperature (`model.gyro_bias`: `b1` at its prior, `t_ref_degc` 25) |
-| `coarse_maneuver` | 6 s. IMU `i = 0..600` at `.01`. GNSS `t = -.163 + j*.2`, `j = 0..32` (one fix before and two after IMU coverage). Origin index 3; `hAcc = 12` for `j < 3`, else `1.5`; `vAcc = 2.5`, `sAcc = .3`. NED acceleration `(1.5 - .4t, .8t, -.6 + .1t^2)`, `v(0) = (20, -5, 3)`, `p(0) = 0`, velocity and position its exact polynomial integrals; attitude identity, so force `= a - (0, 0, 9.80665) + (.05, -.03, .08)` and rate `= (.2, -.15, .3)` deg/s. Uniform noise: force `.02`, rate `.05` deg/s, position `.3`, velocity `.1`; seed `0x8F050002` | trimming of fixes outside IMU coverage, a fit that starts after the first fix, the full fit started from the segment fit's solution, non-zero biases and residuals; 28 states, 540 output samples; the per-step term on a noisy 100 Hz stream, where it is small against the density; a constant 25 degC IMU temperature (`model.gyro_bias`: `b1` at its prior, `t_ref_degc` 25) |
-| `stationary_spin` | 40 s. IMU `i = 0..1000` at `.04` (25 Hz keeps the golden small). GNSS `t = .1 + j*.2`, `j = 0..199`. Position and velocity zero. Force `(0, 0, -9.80665) + (.03, -.02, .05)`; rate `(.2, -.1, .15)` deg/s plus 90 deg/s on `wz` for `t >= 31`. `hAcc = 1`, `vAcc = 1.5`, `sAcc = .1`. Noise: force `.005`, rate `.02`, position `.2`, velocity `.03`; seed `0x8F050003` | one segment at rest whose prefix grows from 60 s to 120 s to cover it (yaw unobservable and arbitrary; the anchor is the first fix, every sAcc being equal), yaw through more than two turns (unwrap); 200 states, 995 output samples; the per-step term at 25 Hz, including the 90 deg/s step at 31 s (one step with a change of 1.57 rad/s); a constant 25 degC IMU temperature (`model.gyro_bias`: `b1` at its prior, `t_ref_degc` 25) |
+| `coarse_linear` | The exact constant-velocity case. IMU `t = i*.01`, `i = 0..200`, force `(0, 0, -9.80665)`, rate 0. GNSS `t = .037 + i*.2`, `i = 0..8`, position `(7, 8, 9) + t*(12, -4, 2)`, velocity `(12, -4, 2)`, `hAcc = vAcc = 1`, `sAcc = .1`. Origin index 0. No noise. States 104 Hz; its readings (0 and -2048 counts) are on the lattice already | a window shorter than one segment (one segment, the 60 s prefix covers it), an exactly unobservable yaw (the four prefix starts tie and the first wins), near-zero objective, boundary timing; 9 states, 160 output samples; zero signal change and no rotation, so the sampling term and the remainder are identically zero and this golden's numbers are the densities' alone; a constant 25 degC IMU temperature (`model.gyro_bias`: `b1` at its prior, `t_ref_degc` 25) |
+| `coarse_maneuver` | 6 s. IMU `i = 0..600` at `.01`. GNSS `t = -.163 + j*.2`, `j = 0..32` (one fix before and two after IMU coverage). Origin index 3; `hAcc = 12` for `j < 3`, else `1.5`; `vAcc = 2.5`, `sAcc = .3`. NED acceleration `(1.5 - .4t, .8t, -.6 + .1t^2)`, `v(0) = (20, -5, 3)`, `p(0) = 0`, velocity and position its exact polynomial integrals; attitude identity, so force `= a - (0, 0, 9.80665) + (.05, -.03, .08)` and rate `= (.2, -.15, .3)` deg/s. Uniform noise: force `.02`, rate `.05` deg/s, position `.3`, velocity `.1`; seed `0x8F050002`. States 104 Hz; readings rounded onto the lattice | trimming of fixes outside IMU coverage, a fit that starts after the first fix, the full fit started from the segment fit's solution, non-zero biases and residuals; 28 states, 540 output samples; the sampling term on a noisy 100 Hz stream, where it reads the noise as curvature; a constant 25 degC IMU temperature (`model.gyro_bias`: `b1` at its prior, `t_ref_degc` 25) |
+| `stationary_spin` | 40 s. IMU `i = 0..1000` at `.04` (25 Hz keeps the golden small). GNSS `t = .1 + j*.2`, `j = 0..199`. Position and velocity zero. Force `(0, 0, -9.80665) + (.03, -.02, .05)`; rate `(.2, -.1, .15)` deg/s plus 90 deg/s on `wz` for `t >= 31`. `hAcc = 1`, `vAcc = 1.5`, `sAcc = .1`. Noise: force `.005`, rate `.02`, position `.2`, velocity `.03`; seed `0x8F050003`. States 26 Hz; readings rounded onto the lattice | one segment at rest whose prefix grows from 60 s to 120 s to cover it (yaw unobservable and arbitrary; the anchor is the first fix, every sAcc being equal), yaw through more than two turns (unwrap); 200 states, 995 output samples; the sampling term and the remainder at 25 Hz, including the 90 deg/s step at 31 s and the turn after it; a constant 25 degC IMU temperature (`model.gyro_bias`: `b1` at its prior, `t_ref_degc` 25) |
 
 Rejections, each one mutation, with the reason the kernel gives:
 
@@ -1928,8 +2020,10 @@ Rejections, each one mutation, with the reason the kernel gives:
 | `reject_sigma` | `coarse_linear`, `sAcc[0] = 0` | GNSS measurement sigmas must be positive |
 | `reject_length` | `coarse_linear`, last `velE` sample removed | Missing or mismatched Local/velE |
 | `reject_origin` | `coarse_linear`, `originIndex = 9` | Local origin index outside GNSS samples |
+| `reject_lattice` | `coarse_maneuver`'s generator with the accelerometer rounded onto the +/-8 g lattice, +/-16 g stated | ACCEL_FS_G states +/-16 g but the accelerometer readings lie on the +/-8 g lattice; sensor fusion unavailable |
+| `reject_rate` | `coarse_linear` stating 12.5 Hz for both rates (a file without keys from a firmware that logs faster than the default) | ACCEL_ODR_HZ states 12.5 Hz but the IMU is logged at 100.0 Hz; sensor fusion unavailable |
 
-There is no temperature rejection fixture: every one of the twelve carries the
+There is no temperature rejection fixture: every one of the fourteen carries the
 channel (a constant 25 degC, `kFixtureTemperatureDegC`, exactly representable
 and noise-free), and the missing or malformed temperature is asserted in
 `tst_fusion_kernel::validationRejectsEachDefect` on mutated channels of
@@ -1950,23 +2044,25 @@ apply.
 
 | Recording | Content | Exercises |
 |---|---|---|
-| `motion_start` | 90 s that start in motion. GNSS 5 Hz, `t = j * .2`, `j = 0..449`; IMU 25 Hz, `t = i * .04`, `i = 0..2250`. Attitude `Rz(psi)`, `cos psi = .6`, `sin psi = .8` (53.13 deg). `vN = 20`, `pN = 20 t`; `aE = 2` for `40 <= t < 50`, else 0; `vE` and `pE` its exact integrals; down zero. Body force `(.8 aE + .05, .6 aE - .03, -9.80665 + .08)`; gyro `(.2, -.15, .3)` deg/s. `hAcc = 1.5`, `vAcc = 2.5`, `sAcc = .3` (every fix: the anchor is the first). Noise force `.005`, gyro `.02` deg/s, position `.2`, velocity `.03`; seed `0x8F050004`. 450 states. Temperature 25 degC | test 1, "starts in motion" (`startsInMotionGrowsToTheManoeuvre`): the 60 s window `[0, 30]` has no yaw information, the 120 s window `[0, 60]` holds the manoeuvre, so the prefix grows once (`prefix_fits` 8) and stops `observable`; the full fit within 2 degrees of the truth. Also the growth of a prefix whose starts all fail (`allPrefixFitsFailFallsBack`: 60, 120, 240 s, twelve failed starts) |
-| `rest_throughout` | 300 s at rest, tilted. IMU 25 Hz, `i = 0..7500`; GNSS `t = .1 + j * .2`, `j = 0..1499`; position and velocity zero. Attitude `Ry(theta)`, `cos theta = .96`, `sin theta = .28`; body force `(.28 * 9.80665 + .03, -.02, -.96 * 9.80665 + .05)`; gyro `(.2, -.1, .15)` deg/s. `hAcc = 1`, `vAcc = 1.5`, `sAcc = .1`. Noise as `stationary_spin`; seed `0x8F050005`. 1500 states. Temperature 25 degC | test 2, "at rest throughout, longer than two doublings" (`atRestPrefixStopsGrowing`): neither the 60 s nor the 120 s window has yaw information, the second sigma is not 20 % below the first, so growth stops at 120 s (`no_gain`); the full fit converges with roll and pitch within 0.5 degrees; the yaw is arbitrary and logged |
-| `sacc_anchor` | 300 s at 15 m/s north with a 3 m/s^2 east manoeuvre from `t = 190` to `200` s. GNSS 1 Hz, `t = j`, `j = 0..300`; IMU 10 Hz, `t = i * .1`, `i = 0..3000`. Attitude identity. Body force `(.05, aE - .03, -9.80665 + .08)`; gyro `(.2, -.15, .3)` deg/s. `hAcc = 1.5`, `vAcc = 2.5`; `sAcc = 2` for every fix except `j == 200`, where it is `.3`. Noise `.005, .02, .2, .03`; seed `0x8F050006`. 301 states. Temperature 25 degC | test 3, the sAcc anchor (`smallestSaccFixIsTheAnchor`): the fix at 200 s is the anchor, the first prefix is the unclipped window 170-230 s (61 fixes) and contains the manoeuvre (`prefix_fits` 4, observable at 60 s), and the segment's start attitude is the prefix fit's carried back by the gyro with the prefix fit's bias |
-| `drifting_bias` | 200 s at 15 m/s north with an east manoeuvre in every 30 s block (`aE = 2` for `10 <= s < 15`, `-2` for `15 <= s < 20`, `s` the time within the block) and a gyro z bias that drifts linearly by exactly 1 deg/s over the length while the attitude does not rotate. GNSS 1 Hz, `j = 0..200`; IMU 10 Hz, `i = 0..2000`. Attitude identity. Body force `(.05, aE - .03, -9.80665 + .08)`; gyro `(.2, -.15, .3 + t / 200)` deg/s. `hAcc = 1.5`, `vAcc = 2.5`, `sAcc = .3`. Noise `.005, .02, .2, .03`; seed `0x8F050007`. 201 states. The temperature ramps `25 + t / 10` degC (25 to 45 over 200 s), so the drift is `b1 = (0, 0, 0.05 deg/s per degC)` by construction, `T_ref = 35` (the mean of the ramp) and `b0 = (.2, -.15, .8)` deg/s, the bias at `T_ref` | test 4, the drifting bias (`driftingBiasSegmentsConverge`, under `segmentLength = 60`, `minFinalSegment = 12`: four segments of 60, 60, 60 and 21 fixes, each with its manoeuvre inside the anchor's 30 s half-window): every segment fit converges on a constant bias; the full fit with the temperature model recovers `b1` within 20 % in at most 30 iterations, `t_ref_degc` 35, `b0` at `T_ref`, the two priors last. The constant-temperature variant of test 9 (`constantTemperatureKeepsSlopeAtPrior`: 2001 values of 35.0) is made in the test, not in the generator; `tst_fusion_session::temperatureReachesTheKernel` runs the recording through a session |
+| `motion_start` | 90 s that start in motion. GNSS 5 Hz, `t = j * .2`, `j = 0..449`; IMU 25 Hz, `t = i * .04`, `i = 0..2250`. Attitude `Rz(psi)`, `cos psi = .6`, `sin psi = .8` (53.13 deg). `vN = 20`, `pN = 20 t`; `aE = 2` for `40 <= t < 50`, else 0; `vE` and `pE` its exact integrals; down zero. Body force `(.8 aE + .05, .6 aE - .03, -9.80665 + .08)`; gyro `(.2, -.15, .3)` deg/s. `hAcc = 1.5`, `vAcc = 2.5`, `sAcc = .3` (every fix: the anchor is the first). Noise force `.005`, gyro `.02` deg/s, position `.2`, velocity `.03`; seed `0x8F050004`. 450 states. Temperature 25 degC. States 26 Hz; readings rounded onto the lattice | test 1, "starts in motion" (`startsInMotionGrowsToTheManoeuvre`): the 60 s window `[0, 30]` has no yaw information, the 120 s window `[0, 60]` holds the manoeuvre, so the prefix grows once (`prefix_fits` 8) and stops `observable`; the full fit within 2 degrees of the truth. Also the growth of a prefix whose starts all fail (`allPrefixFitsFailFallsBack`: 60, 120, 240 s, twelve failed starts) |
+| `rest_throughout` | 300 s at rest, tilted. IMU 25 Hz, `i = 0..7500`; GNSS `t = .1 + j * .2`, `j = 0..1499`; position and velocity zero. Attitude `Ry(theta)`, `cos theta = .96`, `sin theta = .28`; body force `(.28 * 9.80665 + .03, -.02, -.96 * 9.80665 + .05)`; gyro `(.2, -.1, .15)` deg/s. `hAcc = 1`, `vAcc = 1.5`, `sAcc = .1`. States 26 Hz. IMU noise at the level the datasheet gives a resting unit, amplitudes the per-sample sigmas of the stated configuration (force `.0041278` m/s^2, gyro `.022982` deg/s), readings rounded onto the lattice; position `.2`, velocity `.03`; seed `0x8F050005`. 1500 states. Temperature 25 degC | test 2, "at rest throughout, longer than two doublings" (`atRestPrefixStopsGrowing`): neither the 60 s nor the 120 s window has yaw information (yaw sigmas 180 and 151 degrees), the second sigma is not 20 % below the first, so growth stops at 120 s (`no_gain`); the full fit converges (`settled`) with roll and pitch within 0.5 degrees; the yaw is arbitrary and logged. Under a damping ceiling of 1e5, from its coarse start, the full fit is the solver failure `damping saturated` (`dampingSaturationIsASolverFailure`) |
+| `sacc_anchor` | 300 s at 15 m/s north with a 3 m/s^2 east manoeuvre from `t = 190` to `200` s. GNSS 1 Hz, `t = j`, `j = 0..300`; IMU 12.5 Hz, `t = i / 12.5`, `i = 0..3750` (exact at the integer manoeuvre bounds). Attitude identity. Body force `(.05, aE - .03, -9.80665 + .08)`; gyro `(.2, -.15, .3)` deg/s. `hAcc = 1.5`, `vAcc = 2.5`; `sAcc = 2` for every fix except `j == 200`, where it is `.3`. Noise `.005, .02, .2, .03`; seed `0x8F050006`. 301 states. Temperature 25 degC. States 12.5 Hz; readings rounded onto the lattice | test 3, the sAcc anchor (`smallestSaccFixIsTheAnchor`): the fix at 200 s is the anchor, the first prefix is the unclipped window 170-230 s (61 fixes) and contains the manoeuvre (`prefix_fits` 4, observable at 60 s), and the segment's start attitude is the prefix fit's carried back by the gyro with the prefix fit's bias |
+| `drifting_bias` | 200 s at 15 m/s north with an east manoeuvre in every 30 s block (`aE = 2` for `10 <= s < 15`, `-2` for `15 <= s < 20`, `s` the time within the block) and a gyro z bias that drifts linearly by exactly 1 deg/s over the length while the attitude does not rotate. GNSS 1 Hz, `j = 0..200`; IMU 12.5 Hz, `t = i / 12.5`, `i = 0..2500` (the block of a sample `i / 375`). Attitude identity. Body force `(.05, aE - .03, -9.80665 + .08)`; gyro `(.2, -.15, .3 + t / 200)` deg/s. `hAcc = 1.5`, `vAcc = 2.5`, `sAcc = .3`. Noise `.005, .02, .2, .03`; seed `0x8F050007`. 201 states. The temperature ramps `25 + t / 10` degC (25 to 45 over 200 s), so the drift is `b1 = (0, 0, 0.05 deg/s per degC)` by construction, `T_ref = 35` (the mean of the ramp) and `b0 = (.2, -.15, .8)` deg/s, the bias at `T_ref`. States 12.5 Hz; readings rounded onto the lattice | test 4, the drifting bias (`driftingBiasSegmentsConverge`, under `segmentLength = 60`, `minFinalSegment = 12`: four segments of 60, 60, 60 and 21 fixes, each with its manoeuvre inside the anchor's 30 s half-window): every segment fit converges on a constant bias; the full fit with the temperature model recovers `b1` within 20 % in at most 30 iterations, `t_ref_degc` 35, `b0` at `T_ref`, the two priors last. The constant-temperature variant of test 9 (`constantTemperatureKeepsSlopeAtPrior`: 2501 values of 35.0) is made in the test, not in the generator; `tst_fusion_session::temperatureReachesTheKernel` runs the recording through a session |
 
 The other three initializer recordings carry the constant 25 degC of every
 golden fixture: the temperature is a required input, so none is
-temperature-free.
+temperature-free. `sacc_anchor` and `drifting_bias` logged at 10 Hz until the
+documented noise model: no listed rate is within 10 % of it, so they were
+resampled at 12.5 Hz; neither is a golden.
 
 ### Files in `tests/data/fusion/`
 
-- `<fixture>.json` (all twelve; `QJsonDocument::Indented`, so every double is
+- `<fixture>.json` (all fourteen; `QJsonDocument::Indented`, so every double is
   in shortest round-trip form and therefore exact): `fixture`; `outcome`
   (`"succeeded"` or `"rejected"`); `diagnostics`, the kernel's diagnostics
   object (the key list of `docs/SENSOR_FUSION.md` section 4: the input audit,
-  the segment account, objective, biases, residuals, `stopping`, `quality`,
-  `model`; for a rejection it is
+  the configuration, the segment account, objective, biases, residuals,
+  `stopping`, `quality`, `model`; for a rejection it is
   `{"algorithm", "failure"}`); `progress`, the kernel's progress texts in
   order (`Starting fit`, `Integrating IMU factors`, `Pass N, iteration M`;
   empty for rejections, since nothing is reported before the fit starts); and
@@ -1993,7 +2089,7 @@ temperature-free.
   `gtsam_use_boost_features`, `gtsam_dir`, and `pinned_in`, the file that
   fixes the solver revision at the recorded repository revision);
   `determinism` (two runs in one process, byte-identical, and the method);
-  `sha256_lf`, the SHA-256 of each of the fifteen fixture files as written
+  `sha256_lf`, the SHA-256 of each of the seventeen fixture files as written
   (LF line endings; `sha256_note`); and `fixture_generator_sha256_lf`, the
   SHA-256 of `tests/fusion/fusionfixtures.cpp` and `.h` with CRLF normalized
   to LF (`fixture_generator_note`: the goldens are valid for those inputs
@@ -2005,7 +2101,7 @@ temperature-free.
   time. The commit that holds the goldens is
   `git log -1 -- tests/data/fusion/capture.json`.
 
-About 670 KB in total.
+About 690 KB in total.
 
 ### Tolerance policy
 
@@ -2240,9 +2336,9 @@ cmake --build <tree> --config Release
 #    metis-gtsam.dll, cephes-gtsam.dll, tbb12.dll, tbbmalloc.dll). No other solver on PATH.
 PATH="/c/Qt/6.9.3/msvc2022_64/bin:$PWD/third-party/GTSAM-install/bin:$PWD/third-party/oneTBB-install/bin:$PATH" \
   <tree>/FlySightViewer-build/Release/fusion_golden_capture.exe --revision "$(git rev-parse HEAD)"
-#    Check: twelve lines, one per fixture, in fixture order; the three success fixtures
-#    "succeeded", the nine reject_* "rejected (<reason>)"; no "** UNEXPECTED **";
-#    then "wrote 16 files to .../tests/data/fusion"; exit status 0. In the written
+#    Check: fourteen lines, one per fixture, in fixture order; the three success fixtures
+#    "succeeded", the eleven reject_* "rejected (<reason>)"; no "** UNEXPECTED **";
+#    then "wrote 18 files to .../tests/data/fusion"; exit status 0. In the written
 #    stationary_spin.json, initializer.segments[0].prefix_length_s is 120; in
 #    capture.json, solver.gtsam_dir is under third-party/GTSAM-install.
 
@@ -2282,10 +2378,10 @@ What changes, and what it means:
 - `capture.json` changes on every capture (date, revision, hashes).
 - A `<fixture>.json` / `.channels.txt` changes when the phase changed that
   fixture's numbers or texts. A phase that changes the `algorithm` string
-  changes all twelve `.json` files; the nine `reject_*.json` otherwise change
-  only when a rejection reason changes. The `algorithm` string is
-  `batch-temperature-bias-v5` since the mid-step rotation of the accelerometer
-  reading; a capture that prints another string is from a stale build.
+  changes all fourteen `.json` files; the eleven `reject_*.json` otherwise
+  change only when a rejection reason changes. The `algorithm` string is
+  `batch-temperature-bias-v6` since the documented noise model; a capture
+  that prints another string is from a stale build.
 - Two captures of the same build are byte-identical; the tool verifies this
   in-process and refuses to write otherwise (exit 3).
 - A `** UNEXPECTED **` line (exit 2) means a success fixture no longer
@@ -2305,10 +2401,10 @@ What changes, and what it means:
 `tst_fusion_rows` and `tst_fusion_store` test sensor fusion as a registered
 calculation, on real sessions. `tests/fusion/fusionsessions.h`
 (`flysight_fusion_session_support`) turns a fixture into a `SessionData` whose
-eighteen measurements and four origin attributes are bit-identical to the
-fixture and whose four configuration attributes are read from their constant
-defaults (the fixtures state no configuration), so that session-level results
-are held to the same goldens as the kernel. It relies on
+eighteen measurements, four origin attributes and four configuration
+attributes are the fixture's (the configuration stored as the header text
+`QString::number` makes of the fixture's values: the stated path), so that
+session-level results are held to the same goldens as the kernel. It relies on
 "stored data always wins": the fit's inputs are stored as source data under
 their own names - `Local/north` ... `velD`, `IMU/_time`, the
 `_LOCAL_ORIGIN_*` attributes, an exact stored time fit (`_TIME_FIT_A = "1"`,
@@ -2320,8 +2416,10 @@ channels by 1.14688 and nothing matches. `inputsAreBitIdenticalToFixture`
 asserts the premise. Only fixtures with equal-length columns per sensor can go
 into a `SessionModel` (the saver refuses a ragged sensor): not `reject_length`.
 `naturalSession()` is the opposite: a recording as the importer leaves it
-(GNSS, IMU, TIME; nothing under `Local`, no stored origin, no stored fit), for
-the real input chain; its expectations are structural, not golden.
+(GNSS, IMU at 12.5 Hz, TIME; nothing under `Local`, no stored origin, no
+stored fit, no configuration key), for the real input chain and the default
+path, its readings on the default's lattices; its expectations are
+structural, not golden.
 `syntheticFitSession()` is the opposite premise to the fixture sessions: the
 fit's outputs, not its inputs, stored as source data `Fusion/<name>` (the
 seventeen names only, each with its output's unit text, which the conversion
@@ -2378,18 +2476,20 @@ Nothing in code asserts the reference's numbers. The counts should match as
 they are. **The objective matches only if the gyro input is the branch's**:
 the branch predates the legacy gyroscope correction, while here a recording
 without `SCHEMA_VER` has its gyro channels multiplied by 1.14688
-(`docs/DATA_SCHEMA.md` section 4). To reproduce the branch's objective, run the
-check on a copy of the folder whose `SENSOR.CSV` has `$VAR,SCHEMA_VER,2` added
-after the `$FLYS,1` line (the documented escape hatch). With the unmodified
-legacy file a different objective is expected and correct. With the current
-kernel the counts (9247 GNSS states, 24411 outputs) still hold and the
-objective is not the branch's whatever the file says: the model changed. The
+(`docs/DATA_SCHEMA.md` section 4). The branch's objective was reproduced on a
+copy of the folder whose `SENSOR.CSV` had `$VAR,SCHEMA_VER,2` added after the
+`$FLYS,1` line; since the documented noise model such a copy is rejected,
+because read literally its gyro readings lie on no range's lattice
+(`docs/SENSOR_FUSION.md` section 6), so the branch's objective can no longer
+be reproduced. With the unmodified legacy file the counts (9247 GNSS states,
+24411 outputs) still hold and the objective is not the branch's: the model
+changed. The
 four reference recordings of the specification, with their expected
 objectives, are in section 12.2.
 
 ## 12. Manual verification
 
-Eight scripts. Each step opens with its bold id and, in parentheses, the items
+Nine scripts. Each step opens with its bold id and, in parentheses, the items
 of `tests/acceptance_map.txt` it is evidence for; the map cites the ids
 (`manual M<k>`) and `audit_cleanup` checks that they exist here.
 
@@ -2646,6 +2746,35 @@ python -c "import json,csv,sys; d=json.load(open(sys.argv[1])); t=[float(r[0]) f
 Pass / fail and the numbers per step go in the phase report. A step that fails
 is reported as it failed, not adjusted.
 
+### 12.9 The documented noise model and the accuracy, part 1
+
+What the automated tests cannot show: the configuration checks and the noise
+model on the reference recordings, and the first start of this build over fits
+stored by an earlier one. Use the preamble of 12.2 for M47 and the preamble of
+12.1 (a COPY of a logbook, never the real one) for M48.
+
+**M47 The configuration on the reference recordings (1008, 1040, 1051).** M11-M14's commands, each run again: each exits 0 or names its outcome. In each diagnostics, `configuration` is 16 / 2000 / 12.5 / 12.5 (the default: the recordings state no keys), and no recording is rejected by the lattice or the rate check. Record `stopping.rule`, the iterations per pass (`seeds[0].iterations`, `stopping.passes`), `objective`, `quality`, `model.noise`, the segments, and whether any fit ended `damping saturated`, which the stopping rule now reports instead of calling a stuck start converged. The numbers, in one line per recording:
+
+```bash
+python -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('failure'), d.get('configuration'), d['stopping']['rule'], d['stopping']['passes'], d.get('seeds', [{}])[0].get('iterations'), d.get('objective'), d.get('quality'), d.get('model', {}).get('noise'), [(s['prefix_length_s'], s['yaw_sigma_deg'], s['iterations'], s['fallback']) for s in d.get('initializer', {}).get('segments', [])])" TEMP/runs/<name>.json
+```
+
+Then the lattice of each recording's readings, by Python on its `SENSOR.CSV`: the largest distance of an accelerometer reading (g x 9.80665) from the +/-16 g lattice (16 / 32768 x 9.80665 m/s^2) and of a gyro reading (deg/s x 1.14688, the legacy correction: the recordings state no `SCHEMA_VER`) from the +/-2000 deg/s lattice (0.070 deg/s), against the tolerances 9.80665e-5 m/s^2 and 1.14688e-3 deg/s:
+
+```bash
+python -c "import sys; c=None; a=[]; w=[]
+for l in open(sys.argv[1]):
+    p=l.strip().split(',')
+    if p[0]=='\$COL' and p[1]=='IMU': c=p[2:]
+    elif p[0]=='\$IMU' and c: a+=[float(p[1+c.index(k)])*9.80665 for k in ('ax','ay','az')]; w+=[float(p[1+c.index(k)])*1.14688 for k in ('wx','wy','wz')]
+s=16/32768*9.80665; print(len(a)//3, max(abs(v-round(v/s)*s) for v in a), max(abs(v-round(v/.07)*.07) for v in w))" "<recording>/SENSOR.CSV"
+```
+
+**M48 The first start (1041).** As M45's first start: a logbook copy whose recordings have fits stored by a build from before this change (a `v5` build), with a logbook column over a Sensor fusion measurement enabled. Start this build: each stored fit is dropped when its recording is loaded and fitted again once when something switched on needs it, counted in the status bar ("Computing results: k / n"); each record file in `cache/` is written again with `batch-temperature-bias-v6`; quit and start again: nothing is computed.
+
+Pass / fail and the numbers per step go in the phase report. A step that fails
+is reported as it failed, not adjusted.
+
 ## Appendix A. The acceptance items (1-19)
 
 The numbered acceptance list that section 9.1, `tests/acceptance_map.txt`, and
@@ -2813,8 +2942,10 @@ front. These are items 201-247 of `tests/acceptance_map.txt` (item = 200 + the
 number below) and the rows of section 9.3. Two requirements the specification
 added after the first numbering are stated as the second sentence of items
 10 and 39. Clause 28 is stated as amended by the specification "One status
-bar for background work" (appendix H), and clause 21 by the specification "The
-documented noise model and the accuracy, part 1" (appendix K).
+bar for background work" (appendix H), and clauses 15, 16, 17, 21, 27, 45 and
+47 by the specification "The documented noise model and the accuracy, part 1"
+(appendix K), which replaces the per-step term and its slopes by the
+datasheet's noise and the derived sampling term and remainder.
 
 1. (3.2, step 1) The fitted window is cut into consecutive segments of 600 s
    from its first fix; a final piece shorter than 120 s is merged into the
@@ -2862,13 +2993,15 @@ documented noise model and the accuracy, part 1" (appendix K).
     iterations' mean relative decrease is below 1e-4 and the position and
     velocity normalized RMS are both below 2, the diagnostics say so, and a
     fit that meets neither stays a solver failure.
-15. (5) The per-step term is `sigma = slope x dt x |change of the interpolated
-    signal across the step|`, added in quadrature so that the step's
-    covariance is `(density^2 + sigma^2 x dt) I`, and a step without signal
-    change has the density covariance exactly.
-16. (5) The slopes are 0.026 (gyro) and 0.40 (accelerometer); the densities,
-    the step boundaries and the midpoint sampling are unchanged.
-17. (5) The `dt` factor keeps the constants valid at higher output rates.
+15. (5, as amended) The per-step term is the sampling term and the rotation
+    remainder of the specification of 1001-1065, added in quadrature so that
+    the step's covariance is `(D^2 + eps^2 / dt) I`, and a step without
+    signal change and without rotation has the density covariance exactly.
+16. (5, as amended) There are no slopes; the densities are derived from the
+    configuration (the specification of 1001-1065); the step boundaries and
+    the midpoint sampling are unchanged.
+17. (5, as amended) The term has no constant and falls with the step as the
+    sampling error does.
 18. (5) The per-step covariance is applied by setting the preintegration's
     shared parameters before each `integrateMeasurement` call.
 19. (6) The gyro bias is `b(t) = b0 + b1 (T(t) - T_ref)` with `T_ref` the mean
@@ -2892,8 +3025,9 @@ documented noise model and the accuracy, part 1" (appendix K).
     relative decrease and the re-preintegration cost difference.
 26. (7) The diagnostics report the normalized RMS of the IMU, position and
     velocity factors and the objective per state.
-27. (7) The diagnostics report the per-step constants and the fitted `b0` and
-    `b1` with `T_ref`, always as numbers.
+27. (7, as amended) The diagnostics report the configuration, the noise
+    model (`model.noise`, the specification of 1001-1065) and the fitted `b0`
+    and `b1` with `T_ref`, always as numbers.
 28. (7, as amended) The failure text, the status bar warning's hover and the
     logbook row's, keeps showing the reason, as the tooltip did; the
     diagnostics remain an account, not an input.
@@ -2939,16 +3073,18 @@ documented noise model and the accuracy, part 1" (appendix K).
     within two passes.
 44. (10, test 7) Slow tail: a forced final pass at the limit is accepted when
     both conditions hold and is a failure when either fails.
-45. (10, test 8) Per-step term: zero signal change gives the density
-    covariance exactly, a known change gives the specified covariance, and the
-    term scales with `dt`.
+45. (10, test 8, as amended) Per-step term: a step without signal change and
+    without rotation has the density covariance exactly, a signal with a known
+    second derivative gives the derived sampling term, and a constant turn the
+    derived remainder (the specification of 1001-1065).
 46. (10, test 9) A recording without `IMU/temperature` is rejected by the
     kernel and blocked in a session like any missing input; a constant
     temperature leaves `b1` at its prior and reproduces the constant-bias fit.
-47. (11) `docs/` describes the segmented initializer, the stopping rule with
-    its slow-tail acceptance, the per-step term and its meaning at other
-    output rates, and the temperature-dependent bias, in the place that
-    documents the fusion model.
+47. (11, as amended) `docs/` describes the segmented initializer, the
+    stopping rule with its slow-tail acceptance, the noise model of the
+    specification of 1001-1065 in place of the per-step term, and the
+    temperature-dependent bias, in the place that documents the fusion
+    model.
 
 ## Appendix D. The acceptance items of stored requested results (301-350)
 
@@ -3959,9 +4095,10 @@ two statements of its section 3 that a test can observe are clauses 4 and 40.
 Clauses 54-62 are its section 13 tests, one per bullet, and clause 63 its
 section 14. Clauses 2, 7, 8, 10, 14, 22, 26, 36, 39 and 50 are stated as
 settled (9.9 says how). Clauses 47 and 61 are stated as amended by the
-specification "The fused state at every IMU sample" (appendix J), and clause
-47 again by the specification "The documented noise model and the accuracy,
-part 1" (appendix K).
+specification "The fused state at every IMU sample" (appendix J), and again by
+the specification "The documented noise model and the accuracy, part 1"
+(appendix K): it adds the four configuration inputs, and the fit's values,
+diagnostics, algorithm string, goldens and stored results are its own.
 
 1. (5) The "Sensor fusion" category holds exactly eight plots, in this order:
    Elevation, Horizontal acceleration, Vertical acceleration, Along-track
@@ -4098,9 +4235,9 @@ part 1" (appendix K).
 47. (12, as amended) The fusion plots leave the fusion kernel and the fit
     calculation as they are (inputs, outputs, diagnostics, algorithm string),
     except that the specification of 1001-1065 adds the four configuration
-    inputs, and derive what they add from the fit's published outputs, whose values,
-    diagnostics and algorithm string are those of the specification of
-    901-940, with its goldens and stored results.
+    inputs, and derive what they add from the fit's published outputs, whose
+    values, diagnostics and algorithm string are those of the specification
+    of 1001-1065, with its goldens and stored results.
 48. (12) GTSAM stays confined to the fusion kernel, the new fusion files
     include neither GTSAM nor Eigen, and the rules on the fusion tooling hold.
 49. (12) The fusion registration gains the derived kinematics, the attitude
@@ -4153,7 +4290,7 @@ part 1" (appendix K).
     stored value, and the importer no longer writes them.
 61. (13, as amended) Test: the fusion plots leave the fit as the golden
     fixtures and the stored-result tests hold it, against the goldens and the
-    algorithm string of the specification of 901-940.
+    algorithm string of the specification of 1001-1065.
 62. (13) Test: the audit keeps the removed plot names out of the registry, and
     the documents describe the eight plots, the attitude convention, the
     orientation attribute and the rule for defaults.
@@ -4178,9 +4315,13 @@ carried by the clauses of the sections that apply them; the statements of its
 sections 2 and 3 that a test can observe are clauses 12, 16, 20, 25, 27 and 30.
 Clauses 31-39 are its section 10 tests, one per bullet, and clause 40 its
 section 11. Clauses 4, 5, 10, 11, 14, 15, 17, 18, 19, 21, 22, 24, 29, 31 and
-34-37 are stated as settled (9.10 says how). Clause 30 is stated as amended by
-the specification "The documented noise model and the accuracy, part 1"
-(appendix K).
+34-37 are stated as settled (9.10 says how). Clauses 15, 21, 25, 30 and 35
+are stated as amended by the specification "The documented noise model and
+the accuracy, part 1" (appendix K): it changes the algorithm string again,
+and the noise model the pass reads, under which the bound on the published
+acceleration also includes the kink of the rotated reading at a fix (the
+kernel has not changed; under the datasheet's noise the corrections are
+small enough that this term shows).
 
 1. (5) For every fix interval of a fit that succeeds, the pass integrates gyro
    and accelerometer together from the fitted state at the interval's first fix
@@ -4234,11 +4375,13 @@ the specification "The documented noise model and the accuracy, part 1"
     part-step in that fix interval); only a sample exactly on the first fix has
     one such step, since the last fix is never published; where the corrections
     are negligible it is the rotated reading.
-15. (6, as settled) Integrated by the kernel's rule, the published acceleration
-    reproduces the published velocity change over any run of samples, the whole
-    fitted interval included, to within the spread of the corrections at its
-    ends and at the fixes inside it, the bound the fusion document's section 8
-    states; not step by step.
+15. (6, as settled, as amended) Integrated by the kernel's rule, the
+    published acceleration reproduces the published velocity change over any
+    run of samples, the whole fitted interval included, to within the spread
+    of the corrections at its ends and at the fixes inside it plus, for a
+    sample step that contains a fix, the difference between the part-steps'
+    trapezoids of the rotated reading and the sample step's (the kink at the
+    fix), the bound the fusion document's section 8 states; not step by step.
 16. (6) The time axis is the IMU samples in the half-open interval from the
     first fix to the last, whatever the GNSS rate, a GNSS rate above the IMU's
     included: no fix time added, nothing resampled, a sample on a fix published
@@ -4257,11 +4400,12 @@ the specification "The documented noise model and the accuracy, part 1"
     specification's section 8).
 20. (8) The record stores and restores the same channels, with the new values,
     in the record format as it is.
-21. (8, as settled) The algorithm string changes (to
-    `batch-temperature-bias-v4` with the reconstruction, and to `v5` with the
-    mid-step rotation of the accelerometer reading that followed it), so a fit
-    stored under the previous one is stale at its recording's next load, by
-    the existing validity rules.
+21. (8, as settled, as amended) The algorithm string changes (to
+    `batch-temperature-bias-v4` with the reconstruction, to `v5` with the
+    mid-step rotation of the accelerometer reading that followed it, and to
+    `v6` with the specification of 1001-1065), so a fit stored under the
+    previous one is stale at its recording's next load, by the existing
+    validity rules.
 22. (8, as settled) After the change every stored fit is computed again once,
     when something switched on needs it, not all at the next start (a stale
     record is deleted at its recording's load), and the status bar shows it as
@@ -4272,9 +4416,12 @@ the specification "The documented noise model and the accuracy, part 1"
     the re-capture, each success fixture's `_time` byte for byte against the
     previous capture (section 11), and permanently against the IMU samples of
     its fitted interval.
-25. (9) The fit is unchanged (the graph, the noise model, the initializer, the
-    solver and the stopping rule), and so are its states at the fixes and its
-    biases: the pass reads the converged solution and changes nothing in it.
+25. (9, as amended) The fit is unchanged by the pass (the graph, the noise
+    model, the initializer, the solver and the stopping rule; the
+    specification of 1001-1065 changes the noise model, the damping ceiling
+    and the stopping rules), and so are its states at the fixes and its
+    biases: the pass reads the converged solution and changes nothing in
+    it.
 26. (9) The pass replaces the kernel's linear reconstruction, which no code,
     test, golden or document names.
 27. (9) The step model is read from the library's preintegration as it
@@ -4306,10 +4453,11 @@ the specification "The documented noise model and the accuracy, part 1"
     readings integrate exactly to the fitted states, the reconstruction is the
     forward integration, the step corrections are zero and the acceleration is
     the rotated reading.
-35. (10, as settled) Test: on every success fixture the published
-    acceleration integrated by the kernel's rule reproduces the published
-    velocity change over runs of samples, the whole fitted interval included,
-    within the stated spread.
+35. (10, as settled, as amended) Test: on every success fixture the
+    published acceleration integrated by the kernel's rule reproduces the
+    published velocity change over runs of samples, the whole fitted interval
+    included, within the stated bound, the kink of the rotated reading at a
+    fix included.
 36. (10, as settled) Test: the published time axis of every success fixture and
     of a synthetic recording whose GNSS rate exceeds its IMU rate is exactly
     the IMU samples of the fitted interval; the before-and-after identity is
@@ -4341,7 +4489,8 @@ clauses; the numbers below are this list's, and item = 1000 + the number
 sections 1-4 (motivation, principles, scope, terms) have no item, their
 principles being carried by the clauses of the sections that apply them.
 Clauses 50-64 are its section 11 tests and clause 65 its section 12. Clauses
-6, 8, 9, 10, 11, 25, 26, 31, 44 and 61 are stated as settled (9.11 says how).
+6, 8, 9, 10, 11, 14, 15, 25, 26, 31, 44 and 61 are stated as settled (9.11
+says how).
 
 1. (5) The configuration keys, with actual values and the unit in the name:
    in `SENSOR.CSV` `ACCEL_FS_G` (2, 4, 8, 16), `GYRO_FS_DEG_S` (250, 500,
@@ -4402,14 +4551,19 @@ Clauses 50-64 are its section 11 tests and clause 65 its section 12. Clauses
     a step of the nominal length carries one sample's variance; `accDensity`
     and `gyroDensity` are gone, and no density in the model is derived
     otherwise.
-14. (6) The sampling term replaces the slopes: per step, the trapezoid rule's
-    error on a piecewise-linear signal, `dt^3 / 12` times the second
-    derivative that the change of the signal's slope between the step and its
-    neighbours estimates, for velocity from the specific force and for the
+14. (6, as settled) The sampling term replaces the slopes: per step, the
+    trapezoid rule's error on a piecewise-linear signal, `dt^3 / 12` times the
+    second derivative for a step that is a whole sample interval, and for a
+    part of one the same derivation's integral over the part, the second
+    derivative estimated per sample interval as the larger of the changes of
+    slope at its two ends, for velocity from the specific force and for the
     angle from the rate, added in quadrature per step, with no fitted
     coefficient.
-15. (6) The rotation remainder of the mid-step scheme, second order in the
-    step's rotation, is derived and added the same way.
+15. (6, as settled) The remainder of the mid-step scheme to second order, for
+    rate and force linear across the step: its pure rotation term, second
+    order in the step's rotation, and the same expansion's terms in the change
+    of force and of rate across the step (coning included), derived and added
+    the same way.
 16. (6) The documentation writes the derivations out, including what they
     assume (a smooth signal between samples, the samples exact).
 17. (6) The bias priors stay at 0.3 m/s^2, 0.03 rad/s and 0.010 deg/s per

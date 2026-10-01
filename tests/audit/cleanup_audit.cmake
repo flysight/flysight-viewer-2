@@ -594,7 +594,7 @@ expect_none("the stationary-window detector is gone"
 expect_none("the silent poll is gone" "pollCancel" src tests)
 expect_none("the anchor-attitude initializer is gone"
   "InitialAttitude|initialAttitude\\(|kInitialHeadingDeg|attitudeFromStationaryWindow" src tests)
-# Allow: none expected. The goldens say batch-temperature-bias-v5; a hit under
+# Allow: none expected. The goldens say batch-temperature-bias-v6; a hit under
 # tests/data/fusion means a stale capture (re-capture, tests/README.md section 11).
 expect_none("the retired algorithm strings are gone" "batch-shared-bias-v[12]"
   src tests docs README.md ":!tests/README.md")
@@ -624,12 +624,20 @@ expect_count("one integrateMeasurement, per-step covariance" "[.>]integrateMeasu
 # one author: preintegrateImu() integrates every IMU step and sets its
 # covariance, and whatever else needs a step reads it from there (the
 # reconstruction through the observer, the tests' one-step reference factors
-# by preintegrating one step); no other kernel file and no test integrates a
-# step or sets a sensor covariance, and the reconstruction's transition is the
-# library's update() on a copy, not the static tangent update. A second reader
-# of the step model takes it from preintegrateImu() instead of restating it.
+# by preintegrating one step, tst_fusion_kernel's step-model tests reading the
+# covariances through the observer and pim.p()); no other kernel file and no
+# test integrates a step or sets a sensor covariance, and the reconstruction's
+# transition is the library's update() on a copy, not the static tangent
+# update. A second reader of the step model takes it from preintegrateImu()
+# instead of restating it; reading a covariance is not setting one, so the
+# second rule matches an assignment only, a compound one (`+=`, `*=`)
+# included.
 expect_only("the step model has one author"
-  "[.>]integrateMeasurement\\(|UpdatePreintegrated|(accelerometer|gyroscope|integration)Covariance"
+  "[.>]integrateMeasurement\\(|UpdatePreintegrated"
+  "^src/fusion/imuintegration\\.cpp$|^tests/README\\.md$"
+  src tests)
+expect_only("the step model has one author"
+  "(accelerometer|gyroscope|integration)Covariance *[-+*/]?=([^=]|$)"
   "^src/fusion/imuintegration\\.cpp$|^tests/README\\.md$"
   src tests)
 # Allow: none expected. The fusion document describes the model as it is:
@@ -640,6 +648,41 @@ expect_only("the step model has one author"
 expect_none("the fusion document describes the current model"
   "stationary window|candidate window|coarse initializer|frozen|bias shifts below|zero bias shift|sensor-fusion-clean-port|twenty-two"
   docs/SENSOR_FUSION.md)
+
+# ─────────────────────────────── noise-model (items 1012-1014, 1016, 1017, 1046)
+# The fit's noise is the datasheet's at the recording's configuration
+# (src/fusion/sensornoise.*), and the integration's own errors are derived
+# per step in preintegrateImu(): no density, slope or per-step constant of the
+# tuning is left, and the datasheet's table exists in one unit.
+audit_group(noise-model)
+# Allow: none expected. tests/README.md and the acceptance map name the
+# retired constants in their history. The goldens under tests/data/fusion are
+# searched: a capture from before the noise model (model.per_step) fails here.
+expect_none("the tuning's noise constants are gone"
+  "accDensity|gyroDensity|accStepSlope|gyroStepSlope|stepSigma|per_step|gyro_slope_s|acc_slope_s"
+  src tests docs README.md ":!tests/README.md" ":!tests/acceptance_map.txt")
+# Allow: none expected. The figures of the datasheet's table (the gyro's LPF2
+# cutoffs of Table 18 above 100 Hz, the noise densities of Table 2 as
+# sensornoise.cpp spells them) appear in src only in the unit; code that needs
+# one asks imuNoise().
+expect_only("one authority: the datasheet table"
+  "1441\\.8|1320\\.7|1108\\.1|295\\.5|135\\.9|110e-6|80e-6|75e-6|70e-6|3\\.8e-3"
+  "^src/fusion/sensornoise\\.cpp$" src)
+# Allow: none expected. The datasheet unit is Qt Core and std only.
+expect_none("the datasheet unit is solver-free" "#include <(gtsam|Eigen)"
+  src/fusion/sensornoise.h src/fusion/sensornoise.cpp)
+# Allow: none expected. The densities are the datasheet's, not modelling
+# weights, and nothing is calibrated on a recording.
+expect_none("the fusion document describes the documented noise model"
+  "modelling weights|calibrated at a 0.076 s step" docs/SENSOR_FUSION.md)
+# The fusion document cites its sources and writes the derivation out
+# (clauses 12, 16, 17). Allow: these count LINES; a new citation of a table
+# raises its count here with the sentence that needs it.
+expect_count("the fusion document cites Table 2" "Table 2${WB_END}" 7 docs/SENSOR_FUSION.md)
+expect_count("the fusion document cites Table 18" "Table 18" 2 docs/SENSOR_FUSION.md)
+expect_count("the fusion document cites Table 65" "Table 65" 1 docs/SENSOR_FUSION.md)
+expect_count("the fusion document cites Figure 17" "Figure 17" 1 docs/SENSOR_FUSION.md)
+expect_count("the fusion document writes the sampling derivation" "h\\^3 / 12" 1 docs/SENSOR_FUSION.md)
 
 # ─────────────────────────────── fusion-tooling (items 231, 233, 848, 928, 939)
 audit_group(fusion-tooling)
@@ -670,7 +713,7 @@ expect_none("the fusion tools are not installed"
 # tests/fusion/fusiontrace.h include fusion/fusionpipeline.h, the trace seam,
 # which is not in the pattern.
 expect_only("the tools see the public header or the trace seam only"
-  "#include \"fusion/(factorgraphfit|initializer|imuintegration|inputadapter|fusionsamples|fusionoutput|fusionprogress|trajectoryreconstruction|temperatureimufactor|samplestatistics)\\.h\""
+  "#include \"fusion/(factorgraphfit|initializer|imuintegration|inputadapter|fusionsamples|fusionoutput|fusionprogress|trajectoryreconstruction|temperatureimufactor|samplestatistics|sensornoise)\\.h\""
   "^src/fusion/|^tests/tst_fusion_kernel\\.cpp$"
   src tests)
 
@@ -746,8 +789,8 @@ expect_none("stored results are widget-free"
 # Fusion's result version is its kernel's algorithm string, spelled once.
 # Allow: none expected. A changed algorithm changes the one literal; a comment
 # or test in src that quotes it names Fusion::Algorithm instead.
-expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v5" 1 src)
-expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v5"
+expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v6" 1 src)
+expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v6"
   "^src/fusion/fusion\\.h$" src)
 # The compatibility rule names the result version, in the code and in the note.
 # Allow: reword the sentence, never duplicate it; the count is 1 in each file.
@@ -1260,7 +1303,9 @@ else()
   # The documented noise model and the accuracy, part 1, is implemented in
   # phases: the items whose evidence exists so far. Each phase appends its
   # items to this list; the last replaces the list with RANGE 1001 1065.
-  foreach(item IN ITEMS 1001 1002 1003 1004 1005 1006 1007 1050 1061)
+  foreach(item IN ITEMS 1001 1002 1003 1004 1005 1006 1007 1050 1061
+                        1008 1009 1010 1011 1012 1013 1014 1015 1016 1017 1040 1041 1043 1045 1046 1047
+                        1051 1052 1053 1062)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

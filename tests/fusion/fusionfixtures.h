@@ -1,6 +1,8 @@
 #ifndef FLYSIGHTTEST_FUSIONFIXTURES_H
 #define FLYSIGHTTEST_FUSIONFIXTURES_H
 
+#include <limits>
+
 #include <QList>
 #include <QString>
 #include <QVector>
@@ -8,7 +10,7 @@
 namespace FlySightTest {
 
 /// One synthetic recording for the fusion kernel: the effective values of the
-/// twenty-two inputs the fit consumes, as plain arrays.
+/// twenty-six inputs the fit consumes, as plain arrays and numbers.
 ///
 /// This header and its source use Qt Core and the C++ standard library only
 /// and include nothing from src/. They are compiled once, into
@@ -25,6 +27,13 @@ struct FusionFixture {
     QVector<double> imuTemperature;                ///< IMU/temperature, degC, per imuTime sample
     qint64 originIndex = 0;
     double originLat = 45.0, originLon = -75.0, originHMSL = 100.0;
+    /// The stated configuration, the four attributes' values (ACCEL_FS_G g,
+    /// GYRO_FS_DEG_S deg/s, ACCEL_ODR_HZ and GYRO_ODR_HZ Hz); a quiet NaN unless
+    /// set. Every fixture of this file sets all four.
+    double accelFsG = std::numeric_limits<double>::quiet_NaN();
+    double gyroFsDegS = std::numeric_limits<double>::quiet_NaN();
+    double accelOdrHz = std::numeric_limits<double>::quiet_NaN();
+    double gyroOdrHz = std::numeric_limits<double>::quiet_NaN();
     bool expectSuccess = true;                     ///< false: the recording must be rejected
 };
 
@@ -32,8 +41,8 @@ struct FusionFixture {
 /// temperature (exactly representable; no noise).
 constexpr double kFixtureTemperatureDegC = 25;
 
-/// All twelve fixtures: coarse_linear, coarse_maneuver, stationary_spin, then
-/// the nine rejections, each a single mutation of one of the first two.
+/// All fourteen fixtures: coarse_linear, coarse_maneuver, stationary_spin,
+/// then the eleven rejections, each a single mutation of one of the first two.
 QList<FusionFixture> fusionFixtures();
 
 /// The fixture called `name`; a default-constructed fixture (empty name) when

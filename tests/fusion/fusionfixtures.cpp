@@ -1,11 +1,12 @@
 #include "fusionfixtures.h"
 
+#include <cmath>
 #include <limits>
 
 // Rules that keep these recordings bit-identical with any IEEE-754 compiler
 // (the capture harness and the ported tests must see the same inputs):
-//   - only + - * / are used; no transcendental function, no <random>
-//     distribution;
+//   - only + - * / and std::round (exact by definition) are used; no
+//     transcendental function, no <random> distribution;
 //   - every sample is computed from its index (t = i * .01), never by
 //     accumulation;
 //   - noise comes from SplitMix64, mapped to [-1, 1), drawn in one documented
@@ -13,6 +14,13 @@
 //     down, velN, velE, velD; then all IMU samples in time order, each drawing
 //     ax, ay, az, wx, wy, wz. Accuracies, times and the temperature carry
 //     no noise.
+// Every fixture states its configuration: +/-16 g, +/-2000 deg/s and the
+// listed rate nearest its IMU sampling (within 4 %), and its readings are
+// rounded onto the stated ranges' lattices after the noise is added,
+// round(v / s) * s, as a FlySight's readings are counts times the step: s is
+// 16 / 32768 x 9.80665 m/s^2 for the accelerometer and .070 deg/s for the gyro
+// (the datasheet's sensitivity at +/-2000 deg/s). The rounding draws nothing,
+// so the GNSS samples are what they were before it.
 // All times are UTC seconds: kEpochUtc + t.
 
 namespace FlySightTest {
@@ -21,6 +29,12 @@ namespace {
 
 constexpr double kEpochUtc = 1700000000.0;
 constexpr double kStandardGravity = 9.80665;
+
+// The stated ranges of every fixture, g and deg/s, and the gyro's lattice step
+// at that range, deg/s.
+constexpr double kAccelerometerRangeG = 16;
+constexpr double kGyroRangeDegS = 2000;
+constexpr double kGyroStepDegS = .070;
 
 /// SplitMix64: a complete, portable generator in four lines of integer
 /// arithmetic, so the noise is the same on every platform.
@@ -72,6 +86,32 @@ void appendImu(FusionFixture &f, double t,
     f.imuTemperature.append(temperature);
 }
 
+/// The fixtures' configuration: the stated ranges, and `rateHz` for both
+/// sensors.
+void stateConfiguration(FusionFixture &f, double rateHz)
+{
+    f.accelFsG = kAccelerometerRangeG;
+    f.gyroFsDegS = kGyroRangeDegS;
+    f.accelOdrHz = rateHz;
+    f.gyroOdrHz = rateHz;
+}
+
+/// Every reading of `f` rounded onto a lattice: the gyro onto the stated
+/// range's, the accelerometer onto that of `accelerometerRangeG` (the stated
+/// range, except for the fixture whose readings must show another).
+void roundOntoLattice(FusionFixture &f, double accelerometerRangeG = kAccelerometerRangeG)
+{
+    const double accelerometerStep = accelerometerRangeG / 32768 * kStandardGravity;
+    for (QVector<double> *axis : { &f.ax, &f.ay, &f.az }) {
+        for (double &value : *axis)
+            value = std::round(value / accelerometerStep) * accelerometerStep;
+    }
+    for (QVector<double> *axis : { &f.wx, &f.wy, &f.wz }) {
+        for (double &value : *axis)
+            value = std::round(value / kGyroStepDegS) * kGyroStepDegS;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Success fixtures
 // ---------------------------------------------------------------------------
@@ -82,7 +122,8 @@ void appendImu(FusionFixture &f, double t,
 /// sAcc = .1; origin index 0. Shorter than one segment (the 60 s prefix
 /// covers it), with an exactly unobservable yaw (the four prefix starts tie
 /// and the first wins), and its objective is nearly zero. IMU temperature
-/// 25 degC throughout.
+/// 25 degC throughout. States 104 Hz; its readings (0 and -9.80665 m/s^2,
+/// -2048 counts) are on the lattice already.
 FusionFixture coarseLinear()
 {
     FusionFixture f;
@@ -94,6 +135,8 @@ FusionFixture coarseLinear()
     for (int i = 0; i <= 200; ++i)
         appendImu(f, i * .01, 0, 0, -kStandardGravity, 0, 0, 0, kFixtureTemperatureDegC);
     f.originIndex = 0;
+    stateConfiguration(f, 104);
+    roundOntoLattice(f);
     return f;
 }
 
@@ -107,8 +150,10 @@ FusionFixture coarseLinear()
 /// and two after IMU coverage (trimmed, not rejected). Origin index 3; hAcc is
 /// 12 m before the origin and 1.5 m from it on; vAcc = 2.5, sAcc = .3.
 /// Uniform noise: force .02, gyro .05 deg/s, position .3, velocity .1;
-/// seed 0x8F050002. IMU temperature 25 degC throughout.
-FusionFixture coarseManeuver()
+/// seed 0x8F050002. IMU temperature 25 degC throughout. States 104 Hz; the
+/// accelerometer is rounded onto the lattice of `accelerometerRangeG` (the
+/// stated +/-16 g unless reject_lattice asks for another).
+FusionFixture coarseManeuver(double accelerometerRangeG = kAccelerometerRangeG)
 {
     FusionFixture f;
     f.name = QStringLiteral("coarse_maneuver");
@@ -143,6 +188,8 @@ FusionFixture coarseManeuver()
                   kFixtureTemperatureDegC);
     }
     f.originIndex = 3;
+    stateConfiguration(f, 104);
+    roundOntoLattice(f, accelerometerRangeG);
     return f;
 }
 
@@ -156,7 +203,7 @@ FusionFixture coarseManeuver()
 /// force .005, gyro .02 deg/s, position .2, velocity .03; seed 0x8F050003.
 /// One segment at rest whose prefix grows from 60 s to 120 s to cover it
 /// (yaw unobservable and arbitrary; the anchor is the first fix, every sAcc
-/// being equal). IMU temperature 25 degC throughout.
+/// being equal). IMU temperature 25 degC throughout. States 26 Hz.
 FusionFixture stationarySpin()
 {
     FusionFixture f;
@@ -185,6 +232,8 @@ FusionFixture stationarySpin()
                   kFixtureTemperatureDegC);
     }
     f.originIndex = 0;
+    stateConfiguration(f, 26);
+    roundOntoLattice(f);
     return f;
 }
 
@@ -194,7 +243,9 @@ FusionFixture stationarySpin()
 // rationals (.6 / .8 and .96 / .28, Pythagorean), so no transcendental
 // function appears; the body force is R^T (a - g) + b_a with g = (0, 0,
 // 9.80665) in NED, and the gyro reads its bias only (the attitude is constant
-// in every recording).
+// in every recording). Each states its configuration and is rounded onto its
+// lattice like the golden fixtures; the two at 1 Hz GNSS log the IMU at
+// 12.5 Hz, the nearest listed rate's own.
 // ---------------------------------------------------------------------------
 
 /// 90 s that start in motion: constant 20 m/s north with a 2 m/s^2 east
@@ -208,7 +259,7 @@ FusionFixture stationarySpin()
 /// Body force (.8 aE + .05, .6 aE - .03, -9.80665 + .08); gyro (.2, -.15, .3)
 /// deg/s. hAcc = 1.5, vAcc = 2.5, sAcc = .3 (every fix: the anchor is the
 /// first). Noise: force .005, gyro .02 deg/s, position .2, velocity .03;
-/// seed 0x8F050004. 450 states.
+/// seed 0x8F050004. 450 states. States 26 Hz.
 FusionFixture motionStart()
 {
     FusionFixture f;
@@ -240,25 +291,29 @@ FusionFixture motionStart()
                   kFixtureTemperatureDegC);
     }
     f.originIndex = 0;
+    stateConfiguration(f, 26);
+    roundOntoLattice(f);
     return f;
 }
 
 /// 300 s at rest, tilted: longer than two prefix doublings, so that the
-/// growth stop of spec 3.2 d is exercised (the 120 s window has no more yaw
-/// information than the 60 s one). Roll and pitch are the truth's; yaw is
-/// arbitrary.
+/// growth stop of spec 3.2 d can be exercised. Roll and pitch are the
+/// truth's; yaw is arbitrary.
 ///
 /// IMU 25 Hz, t = i * .04, i = 0..7500; GNSS t = .1 + j * .2, j = 0..1499;
 /// position and velocity zero. Attitude Ry(theta), cos theta = .96,
 /// sin theta = .28, as the matrix [[.96, 0, .28], [0, 1, 0], [-.28, 0, .96]];
 /// body force (.28 * 9.80665 + .03, -.02, -.96 * 9.80665 + .05); gyro
-/// (.2, -.1, .15) deg/s. hAcc = 1, vAcc = 1.5, sAcc = .1. Noise as
-/// stationary_spin (.005, .02, .2, .03); seed 0x8F050005. 1500 states.
+/// (.2, -.1, .15) deg/s. hAcc = 1, vAcc = 1.5, sAcc = .1. States 26 Hz. The
+/// IMU noise is at the level the datasheet gives a resting unit: its
+/// amplitudes are the per-sample sigmas of the stated configuration (force
+/// .0041278 m/s^2, gyro .022982 deg/s: docs/SENSOR_FUSION.md section 4);
+/// position .2, velocity .03; seed 0x8F050005. 1500 states.
 FusionFixture restThroughout()
 {
     FusionFixture f;
     f.name = QStringLiteral("rest_throughout");
-    const NoiseLevels noise{ .005, .02, .2, .03 };
+    const NoiseLevels noise{ .0041278, .022982, .2, .03 };
     NoiseSource source(0x8F050005ull);
 
     for (int j = 0; j <= 1499; ++j) {
@@ -281,6 +336,8 @@ FusionFixture restThroughout()
                   kFixtureTemperatureDegC);
     }
     f.originIndex = 0;
+    stateConfiguration(f, 26);
+    roundOntoLattice(f);
     return f;
 }
 
@@ -289,12 +346,12 @@ FusionFixture restThroughout()
 /// fix is the anchor, the first prefix is the window 170..230 s (length 60,
 /// unclipped) and it contains the manoeuvre.
 ///
-/// GNSS 1 Hz, t = j, j = 0..300; IMU 10 Hz, t = i * .1, i = 0..3000. Attitude
-/// identity. vN = 15, pN = 15 t; aE = 3 for 190 <= t < 200, else 0; vE =
+/// GNSS 1 Hz, t = j, j = 0..300; IMU 12.5 Hz, t = i / 12.5, i = 0..3750
+/// (exact at the integer manoeuvre bounds). Attitude identity. vN = 15, pN = 15 t; aE = 3 for 190 <= t < 200, else 0; vE =
 /// 0 / 3 (t - 190) / 30 and pE = 0 / 1.5 (t - 190)^2 / 150 + 30 (t - 200) on
 /// the three pieces. Body force (.05, aE - .03, -9.80665 + .08); gyro
 /// (.2, -.15, .3) deg/s. hAcc = 1.5, vAcc = 2.5. Noise .005, .02, .2, .03;
-/// seed 0x8F050006. 301 states; the prefix is 61.
+/// seed 0x8F050006. 301 states; the prefix is 61. States 12.5 Hz.
 FusionFixture saccAnchor()
 {
     FusionFixture f;
@@ -313,8 +370,8 @@ FusionFixture saccAnchor()
                    15 + noise.velocity * n3, velE + noise.velocity * n4, noise.velocity * n5,
                    1.5, 2.5, j == 200 ? .3 : 2);
     }
-    for (int i = 0; i <= 3000; ++i) {
-        const double t = i * .1;
+    for (int i = 0; i <= 3750; ++i) {
+        const double t = i / 12.5;
         const double aE = t >= 190 && t < 200 ? 3 : 0;
         const double n0 = source.next(), n1 = source.next(), n2 = source.next();
         const double n3 = source.next(), n4 = source.next(), n5 = source.next();
@@ -325,6 +382,8 @@ FusionFixture saccAnchor()
                   kFixtureTemperatureDegC);
     }
     f.originIndex = 0;
+    stateConfiguration(f, 12.5);
+    roundOntoLattice(f);
     return f;
 }
 
@@ -336,20 +395,21 @@ FusionFixture saccAnchor()
 /// which is the segment's first fix), and every segment fit converges on a
 /// constant bias.
 ///
-/// GNSS 1 Hz, t = j, j = 0..200; IMU 10 Hz, t = i * .1, i = 0..2000. Attitude
-/// identity. vN = 15, pN = 15 t. With k = j / 30 (GNSS) or i / 300 (IMU) as
-/// integer division and s = t - 30 k: aE = 2 for 10 <= s < 15, -2 for
+/// GNSS 1 Hz, t = j, j = 0..200; IMU 12.5 Hz, t = i / 12.5, i = 0..2500.
+/// Attitude identity. vN = 15, pN = 15 t. With k = j / 30 (GNSS) or i / 375
+/// (IMU) as integer division and s = t - 30 k: aE = 2 for 10 <= s < 15, -2 for
 /// 15 <= s < 20, else 0; vE = 0 / 2 (s - 10) / 10 - 2 (s - 15) / 0; pE = 50 k
 /// + (0 / (s - 10)^2 / 25 + 10 (s - 15) - (s - 15)^2 / 50) on the four pieces
 /// (continuous: 25 at s = 15, 50 at s = 20). Body force (.05, aE - .03,
 /// -9.80665 + .08); gyro (.2, -.15, .3 + t / 200) deg/s. hAcc = 1.5,
 /// vAcc = 2.5, sAcc = .3. Noise .005, .02, .2, .03; seed 0x8F050007. 201 states.
+/// States 12.5 Hz.
 ///
 /// The IMU temperature ramps linearly, 25 + t / 10 degC (25 at t = 0 to 45
 /// at t = 200), so the z bias .3 + t / 200 deg/s is .3 + (T - 25) / 20 deg/s:
 /// exactly 0.05 deg/s per degC. Under the temperature model this is
-/// b1 = (0, 0, 0.05 deg/s/degC), T_ref = 35 (the mean of 25 + i * .1 / 10 over
-/// i = 0..2000) and b0 = (.2, -.15, .8) deg/s, the bias at T_ref. The 20 degC
+/// b1 = (0, 0, 0.05 deg/s/degC), T_ref = 35 (the mean of 25 + (i / 12.5) / 10
+/// over i = 0..2500) and b0 = (.2, -.15, .8) deg/s, the bias at T_ref. The 20 degC
 /// excursion is what makes the data dominate the slope's prior (the model's
 /// information on b1 grows with the square of the excursion).
 FusionFixture driftingBias()
@@ -376,9 +436,9 @@ FusionFixture driftingBias()
                    15 + noise.velocity * n3, velE + noise.velocity * n4, noise.velocity * n5,
                    1.5, 2.5, .3);
     }
-    for (int i = 0; i <= 2000; ++i) {
-        const double t = i * .1;
-        const int k = i / 300;
+    for (int i = 0; i <= 2500; ++i) {
+        const double t = i / 12.5;
+        const int k = i / 375;
         const double aE = eastAcceleration(t - 30 * k);
         const double n0 = source.next(), n1 = source.next(), n2 = source.next();
         const double n3 = source.next(), n4 = source.next(), n5 = source.next();
@@ -389,6 +449,8 @@ FusionFixture driftingBias()
                   25 + t / 10);
     }
     f.originIndex = 0;
+    stateConfiguration(f, 12.5);
+    roundOntoLattice(f);
     return f;
 }
 
@@ -475,6 +537,15 @@ QList<FusionFixture> rejectionFixtures()
     // Local origin index past the last fix
     f = rejection(coarseLinear(), "reject_origin");
     f.originIndex = 9;
+    fixtures.append(f);
+
+    // Accelerometer readings on the +/-8 g lattice under a stated +/-16 g
+    fixtures.append(rejection(coarseManeuver(8), "reject_lattice"));
+
+    // 12.5 Hz stated for both sensors of a recording logged at 100 Hz: a
+    // key-less file from a faster firmware
+    f = rejection(coarseLinear(), "reject_rate");
+    stateConfiguration(f, 12.5);
     fixtures.append(f);
 
     return fixtures;

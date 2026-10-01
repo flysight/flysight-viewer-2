@@ -2,8 +2,10 @@
 
 #include <cmath>
 #include <cstring>
+#include <utility>
 
 #include "fusion/fusionregistration.h"
+#include "sensorconfiguration.h"
 #include "sessionmodel.h"
 #include "testenvironment.h"
 
@@ -43,6 +45,25 @@ void addGnssSide(SessionData &session, const FusionFixture &f, const QString &sA
     // An exact fit, as strings like the calculated ones: system = utc - b
     session.setAttribute(SessionKeys::TimeFitA, QStringLiteral("1"));
     session.setAttribute(SessionKeys::TimeFitB, QStringLiteral("1699999900"));
+}
+
+/// The fixture's stated configuration, key by key; the header's spelling of a
+/// value is QString::number's ("16", "2000", "104", "26", "12.5").
+QList<std::pair<const char *, double>> statedConfiguration(const FusionFixture &f)
+{
+    return {{SensorConfiguration::AccelFsG, f.accelFsG}, {SensorConfiguration::GyroFsDegS, f.gyroFsDegS},
+            {SensorConfiguration::AccelOdrHz, f.accelOdrHz}, {SensorConfiguration::GyroOdrHz, f.gyroOdrHz}};
+}
+
+/// The configuration as header attributes, stored as the importer stores
+/// them: the recorded text. A member that is not set is not stored, so the
+/// session reads that key's constant default.
+void addConfiguration(SessionData &session, const FusionFixture &f)
+{
+    for (const auto &[key, value] : statedConfiguration(f)) {
+        if (!std::isnan(value))
+            session.setAttribute(QString::fromLatin1(key), QString::number(value));
+    }
 }
 
 void addImuSide(SessionData &session, const FusionFixture &f)
@@ -96,6 +117,10 @@ bool inputsMatchFixture(const SessionData &session, const FusionFixture &f, bool
         && sameSamples(probe.getMeasurement("GNSS", "vAcc"), f.vAcc)
         && sameSamples(probe.getMeasurement("GNSS", "sAcc"), f.sAcc)
         && probe.getAttribute(SessionKeys::LocalOriginIndex).toLongLong() == f.originIndex;
+    for (const auto &[key, value] : statedConfiguration(f)) {
+        const QVariant stored = probe.getAttribute(QString::fromLatin1(key));
+        same = same && (std::isnan(value) || stored.toString() == QString::number(value));
+    }
     if (withImu) {
         same = same
             && sameSamples(probe.getMeasurement("IMU", SessionKeys::Time), f.imuTime)
@@ -125,6 +150,7 @@ SessionData sessionFromFixture(const FusionFixture &fixture, const QString &sess
     addIdentity(session, sessionId);
     addGnssSide(session, fixture);
     addImuSide(session, fixture);
+    addConfiguration(session, fixture);
     Q_ASSERT(inputsMatchFixture(session, fixture, true));
     return session;
 }
@@ -154,6 +180,7 @@ SessionData fixtureSessionWithSAccStoredAs(const QString &fixtureName, const QSt
     addIdentity(session, sessionId);
     addGnssSide(session, fixture, storedAs);
     addImuSide(session, fixture);
+    addConfiguration(session, fixture);
     addPlotInputs(session, fixture);
     return session;
 }
@@ -162,7 +189,7 @@ SessionData naturalSession(const QString &sessionId)
 {
     constexpr double epoch = 1700000000.0;
     constexpr int fixes = 200;
-    constexpr int lastImuSample = 4000;
+    constexpr int lastImuSample = 500;
 
     SessionData session;
     addIdentity(session, sessionId);
@@ -181,9 +208,12 @@ SessionData naturalSession(const QString &sessionId)
     session.setSourceMeasurement("GNSS", "vAcc", QVector<double>(fixes, 1.0), "m");
     session.setSourceMeasurement("GNSS", "sAcc", QVector<double>(fixes, .1), "m/s");
 
+    // 12.5 Hz, the rate of the default configuration, which the session
+    // reads: it stores no configuration attribute. Its readings are on the
+    // default's lattice (-9.80665 m/s^2 is -2048 counts at +/-16 g).
     QVector<double> imuTime;
     for (int i = 0; i <= lastImuSample; ++i)
-        imuTime.append(100 + i * .01);
+        imuTime.append(100 + i * .08);
     const QVector<double> zeros(imuTime.size(), 0.0);
     session.setSourceMeasurement("IMU", "time", imuTime, "s");
     session.setSourceMeasurement("IMU", "ax", zeros, "m/s^2");

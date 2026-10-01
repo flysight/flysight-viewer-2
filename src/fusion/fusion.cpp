@@ -42,10 +42,18 @@ FitPlan planFit(const Channels &channels, const Tuning &baseTuning)
     requireUsableRecording(full, plan.prepared.epoch, plan.prepared.usableStart);
 
     plan.tuning = baseTuning;
-    plan.tuning.maxGap = kImuGapMedians*medianInterval(full.imuTime);
+    const double imuInterval = medianInterval(full.imuTime);
+    plan.tuning.maxGap = kImuGapMedians*imuInterval;
     plan.window = fittedWindow(full, plan.prepared.usableStart, full.gnssTime.back());
     validateSamples(plan.window, plan.tuning);
     requireNoGnssOutage(plan.window, std::max(kGnssOutageSeconds, kGnssOutageMedians*medianInterval(full.gnssTime)));
+    // The configuration's checks come after every check of the recording
+    // itself, so that a recording's own defect is the reason it reports: the
+    // datasheet entry, then the lattice of every reading, then the rates.
+    const ImuNoise noise = imuNoise(channels.imuConfiguration);
+    requireReadingsOnLattice(channels);
+    requireStatedRates(imuInterval, channels.imuConfiguration);
+    plan.tuning.noise = noise;
     // T_ref is a property of the fitted window (the mean of its IMU samples'
     // temperature), decided before the fit starts.
     plan.biasModel = gyroBiasModelFor(plan.window);

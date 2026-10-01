@@ -33,10 +33,11 @@ struct PipelineTrace {
 /// Outcome::SolverFailed; std::bad_alloc propagates. The initializer's prefix
 /// and segment fits are part of the fit stage: they run after "Starting fit".
 ///
-/// `baseTuning` is Tuning{} in production (maxGap is always replaced by the
-/// value derived from the recording). It is a parameter only so that a test
-/// can force a stopping rule, e.g. non-convergence with maxIterations = 1 and
-/// a negative relativeTolerance (no pass can settle).
+/// `baseTuning` is Tuning{} in production (maxGap and the noise are always
+/// replaced by the values derived from the recording). It is a parameter only
+/// so that a test can force a stopping rule, e.g. non-convergence with
+/// maxIterations = 1 and a negative relativeTolerance (no pass can settle), or
+/// damping saturation with a lower lambdaUpperBound.
 Result runPipeline(const Channels &channels, const Tuning &baseTuning,
                    const Checkpoint &checkpoint, PipelineTrace *trace = nullptr);
 

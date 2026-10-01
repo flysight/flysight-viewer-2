@@ -71,7 +71,7 @@ IntervalReconstruction reconstructInterval(const Samples &window, const FitResul
         transition.push_back(F);
     };
     const gtsam::PreintegratedImuMeasurements pim =
-        preintegrateImu(window, window.gnssTime[k], window.gnssTime[k+1], r.bias, tuning, observer);
+        preintegrateImu(window, window.gnssTime[k], window.gnssTime[k+1], r.bias, tuning.noise, observer);
     atEdge(pim);
     const size_t n = transition.size();
 
