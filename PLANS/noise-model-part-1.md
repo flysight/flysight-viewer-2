@@ -118,17 +118,19 @@ Out of scope, unchanged:
 ## 5. Configuration attributes
 
 - **The keys**, as the firmware will write them, with actual values rather
-  than register codes, as the rest of the file is written. SENSOR.CSV:
-  `ACCEL_FS` (full-scale range, g: 2, 4, 8 or 16), `GYRO_FS` (deg/s: 250,
-  500, 1000 or 2000), `ACCEL_ODR` and `GYRO_ODR` (output data rate, Hz, as
-  the part names it: 12.5, 26, 52, 104, 208, 416, 833, 1666, 3333, 6666, and
-  1.6 for the accelerometer's low-power rate), and, for completeness,
-  `BARO_ODR`, `HUM_ODR` and `MAG_ODR` (Hz), which nothing in this
-  specification uses. TRACK.CSV: `GNSS_MODEL`, the receiver's dynamic model
-  by name rather than by its code, so that the file explains itself
-  (`portable`, `stationary`, `pedestrian`, `automotive`, `sea`,
-  `airborne_1g`, `airborne_2g`, `airborne_4g`), and `GNSS_RATE`, the
-  measurement rate in Hz. The IMU's low-pass filters are not configurable in
+  than register codes, as the rest of the file is written, and with the
+  unit in the key's name, as the fusion diagnostics name theirs
+  (`anchor_sacc_m_s`, `yaw_sigma_deg`), since a `$VAR` line has one value
+  and no unit field. SENSOR.CSV: `ACCEL_FS_G` (full-scale range: 2, 4, 8 or
+  16), `GYRO_FS_DEG_S` (250, 500, 1000 or 2000), `ACCEL_ODR_HZ` and
+  `GYRO_ODR_HZ` (output data rate as the part names it: 12.5, 26, 52, 104,
+  208, 416, 833, 1666, 3333, 6666, and 1.6 for the accelerometer's low-power
+  rate), and, for completeness, `BARO_ODR_HZ`, `HUM_ODR_HZ` and `MAG_ODR_HZ`,
+  which nothing in this specification uses. TRACK.CSV: `GNSS_MODEL`, the
+  receiver's dynamic model by name rather than by its code, so that the file
+  explains itself (`portable`, `stationary`, `pedestrian`, `automotive`,
+  `sea`, `airborne_1g`, `airborne_2g`, `airborne_4g`), and `GNSS_RATE_HZ`,
+  the measurement rate. The IMU's low-pass filters are not configurable in
   the firmware, so they have no key: the fixed setting is documented as part
   of the default, with the firmware version, and a key is added only if a
   firmware makes them configurable. The keys and their value forms are
