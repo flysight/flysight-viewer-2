@@ -24,7 +24,7 @@ const char kDenseOutput[] = "IMU-rate reconstruction at original IMU times: betw
                             "from the fitted state, the mismatch with the next fitted state shared over the "
                             "steps by their noise, in one linearized pass";
 const char kLimitations[] = "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass "
-                            "with the fitted fix states and biases held; no uncertainty is published.";
+                            "with the fitted fix states, biases and scale factors held; no uncertainty is published.";
 
 QJsonArray toJsonArray(const gtsam::Vector3 &v)
 {
@@ -136,8 +136,18 @@ QJsonObject configurationObject(const ImuConfiguration &c)
         {"gyro_odr_hz", c.gyroOdrHz}};
 }
 
+/// The fitted scale factors, the factors themselves (one is the datasheet's
+/// nominal sensitivity): accelerometer x, y, z and gyro x, y, z.
+QJsonObject scaleObject(const FitResult &fit)
+{
+    return QJsonObject{
+        {"acc", QJsonArray{fit.scale(0), fit.scale(1), fit.scale(2)}},
+        {"gyro", QJsonArray{fit.scale(3), fit.scale(4), fit.scale(5)}}};
+}
+
 /// The model of this fit: the noise the datasheet gives for its
-/// configuration, which is not fitted, and the fitted gyro bias model.
+/// configuration, which is not fitted, the fitted gyro bias model and the
+/// fitted scale factors.
 QJsonObject modelSummary(const ImuNoise &noise, const FitResult &fit)
 {
     const SensorNoise &a = noise.accelerometer, &g = noise.gyroscope;
@@ -155,7 +165,8 @@ QJsonObject modelSummary(const ImuNoise &noise, const FitResult &fit)
                 {"step_rad_s", g.step},
                 {"sample_sigma_rad_s", g.sampleSigma},
                 {"density_rad_s_rthz", g.density}}}}},
-        {"gyro_bias", gyroBiasObject(fit)}};
+        {"gyro_bias", gyroBiasObject(fit)},
+        {"scale", scaleObject(fit)}};
 }
 
 QJsonArray residualArray(const FitResult &fit)

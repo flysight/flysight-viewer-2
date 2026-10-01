@@ -8,7 +8,10 @@
 // the tuning, the datasheet's noise by configuration, the lattice and rate
 // checks, the step model (the sampling term and the mid-step remainder against
 // their derivations), the temperature-dependent gyro
-// bias (the custom factor's Jacobians, the section 6 cases), the
+// bias (the custom factor's Jacobians, the section 6 cases), the scale state
+// (the divided readings, the scale Jacobian against central differences, the
+// scaled factor's Jacobians, the graph, the re-preintegration, the
+// reconstruction, at rest and on the scale recording, its diagnostics), the
 // solver-failure path and its diagnostics shapes, the IMU-rate reconstruction
 // pass against a dense reference graph and its per-interval seam, the
 // channels the fit publishes as that pass and their time axis), with the literal expectations of the reference's own
@@ -52,6 +55,7 @@
 #include "fusion/imuintegration.h"
 #include "fusion/initializer.h"
 #include "fusion/inputadapter.h"
+#include "fusion/scaledimufactor.h"
 #include "fusion/sensornoise.h"
 #include "fusion/temperatureimufactor.h"
 #include "fusion/trajectoryreconstruction.h"
@@ -68,7 +72,9 @@ using namespace FlySightTest;
 using FlySight::Fusion::ImuConfiguration;
 using gtsam::Rot3;
 using gtsam::Vector3;
+using gtsam::Vector6;
 using gtsam::symbol_shorthand::B;
+using gtsam::symbol_shorthand::S;
 using gtsam::symbol_shorthand::T;
 using gtsam::symbol_shorthand::V;
 using gtsam::symbol_shorthand::X;
@@ -159,6 +165,41 @@ Samples signalSamples(const std::vector<double> &times, const std::function<Vect
     return d;
 }
 
+/// 1 s of 100 Hz IMU turning at about 2 rad/s and accelerating, every axis
+/// of both sensors changing smoothly, with two GNSS fixes between samples:
+/// the window of the scale state's integration and factor tests.
+Samples turningSamples()
+{
+    Samples d;
+    for (int i = 0; i <= 100; ++i) {
+        const double t = i*.01;
+        d.imuTime.push_back(t);
+        d.force.emplace_back(2+std::sin(3*t), -1+std::cos(2*t), -9.8+.5*t);
+        d.gyro.emplace_back(.5*std::sin(2*t), 2+.3*t, -.4*std::cos(t));
+    }
+    d.gnssTime = {.037, .863};
+    d.position = Vectors(2, Vector3::Zero());
+    d.velocity = d.position;
+    d.positionSigma = Vectors(2, Vector3::Ones());
+    d.velocitySigma = d.positionSigma;
+    return d;
+}
+
+/// A scale away from one on every axis: the linearization of the scale
+/// state's integration and factor tests.
+Vector6 offNominalScale()
+{
+    Vector6 scale;
+    scale << 1.01, .99, 1.02, .98, 1.015, 1.005;
+    return scale;
+}
+
+/// max |got - expected| over max |expected|, entry by entry.
+double relativeDifference(const gtsam::Matrix &got, const gtsam::Matrix &expected)
+{
+    return (got-expected).cwiseAbs().maxCoeff()/expected.cwiseAbs().maxCoeff();
+}
+
 /// Each step of a preintegration and the two sensor covariances it was
 /// integrated with, read through the observer and pim.p(): at the observer's
 /// call for a step the shared params hold the step before's, and after the
@@ -181,7 +222,8 @@ StepCovariances stepCovariances(const Samples &d, double start, double end,
         }
         steps.push_back(step);
     };
-    const gtsam::PreintegratedImuMeasurements pim = preintegrateImu(d, start, end, bias, noise, observer);
+    const gtsam::PreintegratedImuMeasurements pim = preintegrateImu(d, start, end, bias, Vector6::Ones(), noise,
+                                                                    observer);
     accelerometer.push_back(pim.p().accelerometerCovariance);
     gyroscope.push_back(pim.p().gyroscopeCovariance);
     return {steps, accelerometer, gyroscope, pim};
@@ -350,9 +392,10 @@ struct WindowFit {
 
 /// A fixture's full fit through the internal seams, in the order of planFit()
 /// and fitAndAssemble(): the prepared recording, the derived IMU gap limit,
-/// the fitted window validated, the temperature model, the initializer and
-/// the fit. The fits dominate this executable's time, so each is made once
-/// per run; the caller checks convergence.
+/// the fitted window validated, the temperature model with the scale state on
+/// (as planFit() turns it on), the initializer and the fit. The fits dominate
+/// this executable's time, so each is made once per run; the caller checks
+/// convergence.
 const WindowFit &fixtureFit(const QString &name)
 {
     static std::map<QString, WindowFit> fits;
@@ -362,7 +405,8 @@ const WindowFit &fixtureFit(const QString &name)
     WindowFit f;
     f.tuning = pipelineTuning(name, Tuning{});
     f.window = windowOf(name, Tuning{});
-    const GyroBiasModel model = gyroBiasModelFor(f.window);
+    GyroBiasModel model = gyroBiasModelFor(f.window);
+    model.scaleState = true;
     const Initialization init = initialize(f.window, f.tuning);
     f.fit = fitFactorGraph(f.window, init.state, f.tuning, QString::fromLatin1(kFullFitPassFormat), Checkpoint(), model);
     return fits.emplace(name, std::move(f)).first->second;
@@ -448,7 +492,9 @@ Mismatch largestMismatch(const WindowSeams &w)
 /// bias (and slope) held at the fit's values, solved from the forward states.
 /// Each step's factor is preintegrated by preintegrateImu() over that step
 /// alone, which gives the loop's own midpoint reading and per-step covariance
-/// without restating either, at its interval's bias under the fit's model.
+/// without restating either, at its interval's bias under the fit's model and
+/// at the fit's scale. The scale is held, so the temperature factor (the
+/// scaled factor with S at its linearization) serves.
 /// The fix states are held because, freed with GNSS factors, they move along
 /// the unobservable heading, which is not what the tests measure.
 NavStates heldEndsReference(const WindowFit &f, const WindowSeams &w, int &iterations)
@@ -479,7 +525,8 @@ NavStates heldEndsReference(const WindowFit &f, const WindowSeams &w, int &itera
     for (size_t j = 0; j+1 < w.edges.size(); ++j) {
         const size_t k = w.stepInterval[j];
         const auto pim = preintegrateImu(f.window, w.edges[j], w.edges[j+1],
-                                         intervalBias(f.window, k, bias, f.fit.gyroBiasSlope, model), f.tuning.noise);
+                                         intervalBias(f.window, k, bias, f.fit.gyroBiasSlope, model), f.fit.scale,
+                                         f.tuning.noise);
         if (model.temperatureLinear)
             graph.emplace_shared<TemperatureImuFactor>(X(j), V(j), X(j+1), V(j+1), B(0), T(0), pim,
                                                        temperatureAtFix(f.window, k)-model.tRef);
@@ -574,6 +621,8 @@ gtsam::Matrix imuFactorCovariance(const gtsam::NonlinearFactorGraph &graph, size
     for (const auto &factor : graph) {
         if (!factor || factor->keys().size() < 4 || factor->keys()[0] != X(k) || factor->keys()[2] != X(k+1))
             continue;
+        if (const auto *scaled = dynamic_cast<const ScaledImuFactor *>(factor.get()))
+            return scaled->preintegratedMeasurements().preintMeasCov();
         if (const auto *temperature = dynamic_cast<const TemperatureImuFactor *>(factor.get()))
             return temperature->preintegratedMeasurements().preintMeasCov();
         if (const auto *stock = dynamic_cast<const gtsam::ImuFactor *>(factor.get()))
@@ -583,8 +632,9 @@ gtsam::Matrix imuFactorCovariance(const gtsam::NonlinearFactorGraph &graph, size
 }
 
 /// The fixes and IMU samples of a WindowFit whose fitted states are each the
-/// prediction of the one before, perturbed by `perturbation` (zero: the
-/// forward integration exactly, interval by interval).
+/// prediction of the one before, at the fit's scale (ones unless the caller
+/// set another), perturbed by `perturbation` (zero: the forward integration
+/// exactly, interval by interval).
 void predictFits(WindowFit &f, const gtsam::imuBias::ConstantBias &bias, const gtsam::NavState &first,
                  const gtsam::Vector9 &perturbation)
 {
@@ -592,7 +642,8 @@ void predictFits(WindowFit &f, const gtsam::imuBias::ConstantBias &bias, const g
     gtsam::NavState state = first;
     for (size_t k = 0; k < f.window.gnssTime.size(); ++k) {
         if (k) {
-            const auto pim = preintegrateImu(f.window, f.window.gnssTime[k-1], f.window.gnssTime[k], bias, f.tuning.noise);
+            const auto pim = preintegrateImu(f.window, f.window.gnssTime[k-1], f.window.gnssTime[k], bias, f.fit.scale,
+                                             f.tuning.noise);
             state = pim.predict(state, bias);
             if (!perturbation.isZero(0))
                 state = state.retract(perturbation);
@@ -637,7 +688,8 @@ void verifyTimeAxis(const QVector<double> &time, const QVector<double> &expected
 
 /// The published acceleration at sample `i` as spec section 6 states it, from
 /// the seam's corrections: the step before and the step after the sample's
-/// edge, the step after alone on the window's first edge.
+/// edge, the step after alone on the window's first edge; the reading divided
+/// by the fitted accelerometer scale.
 Vector3 expectedAcceleration(const WindowFit &f, const WindowSeams &w, const ImuRateTrajectory &out, size_t i)
 {
     const size_t e = edgeAt(w, out.time[i]);
@@ -645,7 +697,8 @@ Vector3 expectedAcceleration(const WindowFit &f, const WindowSeams &w, const Imu
                                  -f.window.imuTime.begin());
     const Vector3 correction = e ? Vector3((w.stepCorrection[e-1]+w.stepCorrection[e])/2) : w.stepCorrection[e];
     const Vector3 accBias = f.fit.values.at<gtsam::imuBias::ConstantBias>(B(0)).accelerometer();
-    return out.rotation[i].rotate(f.window.force[sample]-accBias)+kGravity+correction;
+    const Vector3 accScale = f.fit.scale.head<3>();
+    return out.rotation[i].rotate(f.window.force[sample].cwiseQuotient(accScale)-accBias)+kGravity+correction;
 }
 
 } // namespace
@@ -701,6 +754,15 @@ private slots:
     void temperatureGraphShape();
     void reconstructionUsesIntervalBias();
     void constantTemperatureKeepsSlopeAtPrior();
+    void preintegrationDividesByTheScale();
+    void scaleJacobianMatchesCentralDifferences();
+    void scaleFactorJacobians();
+    void scaleGraphShape();
+    void fitRepreintegratesAtTheFittedScale();
+    void reconstructionUsesTheFittedScale();
+    void restLeavesTheScaleAtItsPrior();
+    void scaleRecordingRecoversTheFactor();
+    void diagnosticsReportTheScale();
     void imuRateEndsAreTheFit_data();
     void imuRateEndsAreTheFit();
     void imuRateSampleOnAFixIsPublishedOnce();
@@ -748,7 +810,7 @@ void FusionKernelTest::preintegrationHonoursExactBoundaries()
     validateSamples(d, tuning);
 
     const gtsam::imuBias::ConstantBias bias;
-    const auto pim = preintegrateImu(d, .037, .863, bias, tuning.noise);
+    const auto pim = preintegrateImu(d, .037, .863, bias, Vector6::Ones(), tuning.noise);
     const auto predicted = pim.predict(gtsam::NavState(gtsam::Pose3(), Vector3::Zero()), bias);
     const double duration = .863-.037;
     QVERIFY((predicted.velocity()-acceleration*duration).norm() < 1e-10);
@@ -889,7 +951,7 @@ void FusionKernelTest::configurationWithoutEntryIsRejected()
     // The integration refuses a noise that was never derived.
     QVERIFY_THROWS_EXCEPTION(std::invalid_argument,
                              preintegrateImu(boundarySamples(Vector3::Zero()), .037, .863,
-                                             gtsam::imuBias::ConstantBias(), ImuNoise{}));
+                                             gtsam::imuBias::ConstantBias(), Vector6::Ones(), ImuNoise{}));
 }
 
 void FusionKernelTest::constantSignalHasNoSamplingTerm()
@@ -1013,7 +1075,7 @@ void FusionKernelTest::rotationRemainderFollowsTheDerivation()
         const double step = theta/omega;
         const Samples one = signalSamples({0, step}, [force](double) { return Vector3(force, 0, 0); },
                                           [omega](double) { return Vector3(0, 0, omega); });
-        const auto pim = preintegrateImu(one, 0, step, gtsam::imuBias::ConstantBias(), noise);
+        const auto pim = preintegrateImu(one, 0, step, gtsam::imuBias::ConstantBias(), Vector6::Ones(), noise);
         const Vector3 truth = force/omega*Vector3(std::sin(theta), 1-std::cos(theta), 0);
         const double difference = (truth-pim.deltaVij()).norm();
         const double remainder = step*theta*theta*force/24;
@@ -1038,12 +1100,14 @@ void FusionKernelTest::rotationRemainderMatchesTheSchemeError()
     const auto force = [&](double t) { return Vector3(forceStart+(forceEnd-forceStart)*(t/dt)); };
     const ImuNoise noise = fixtureNoise(12.5);
 
-    const auto one = preintegrateImu(signalSamples({0, dt}, force, rate), 0, dt, gtsam::imuBias::ConstantBias(), noise);
+    const auto one = preintegrateImu(signalSamples({0, dt}, force, rate), 0, dt, gtsam::imuBias::ConstantBias(),
+                                     Vector6::Ones(), noise);
     std::vector<double> fine;
     for (int j = 0; j <= 1000; ++j)
         fine.push_back(dt*j/1000);
     fine.back() = dt;
-    const auto many = preintegrateImu(signalSamples(fine, force, rate), 0, dt, gtsam::imuBias::ConstantBias(), noise);
+    const auto many = preintegrateImu(signalSamples(fine, force, rate), 0, dt, gtsam::imuBias::ConstantBias(),
+                                      Vector6::Ones(), noise);
 
     const Vector3 theta = rate(dt/2)*dt, dTheta = (rateEnd-rateStart)*dt;
     const Vector3 fbar = force(dt/2), dForce = forceEnd-forceStart;
@@ -1155,9 +1219,9 @@ void FusionKernelTest::latticeCheckIdentifiesEveryFixture()
     // (tst_fusion_session; this executable does not build sessions) are 0
     // and -9.80665 m/s^2 and 0 deg/s: the default's +/-16 g and +/-2000 deg/s.
     QList<FusionFixture> fixtures = fusionFixtures();
-    for (const char *name : {"motion_start", "rest_throughout", "sacc_anchor", "drifting_bias"})
+    for (const char *name : {"motion_start", "rest_throughout", "sacc_anchor", "drifting_bias", "scale_recording"})
         fixtures.append(initializerFixture(QLatin1String(name)));
-    QCOMPARE(fixtures.size(), 18);
+    QCOMPARE(fixtures.size(), 19);
     for (const FusionFixture &f : fixtures) {
         const double accelerometer = rangeShownByReadings(ImuSensor::Accelerometer, f.ax, f.ay, f.az);
         const double gyro = rangeShownByReadings(ImuSensor::Gyroscope, f.wx, f.wy, f.wz);
@@ -1255,8 +1319,9 @@ void FusionKernelTest::diagnosticsReportTheNoiseModel()
     // Clause 40 and criterion 9: a successful fit's diagnostics carry the
     // configuration it ran under and model.noise, with exactly these keys
     // and the values of imuNoise() for the fixture's configuration (the
-    // diagnostics' JSON round-trips a double exactly); model holds the noise
-    // and the gyro bias model; stopping reports the damping ceiling.
+    // diagnostics' JSON round-trips a double exactly); model holds the noise,
+    // the gyro bias model and the scale factors; stopping reports the damping
+    // ceiling.
     const FusionFixture fixture = fusionFixture(QStringLiteral("coarse_linear"));
     const Fusion::Result result = runPipeline(toChannels(fixture), Tuning{}, Checkpoint());
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
@@ -1270,7 +1335,7 @@ void FusionKernelTest::diagnosticsReportTheNoiseModel()
     QCOMPARE(configuration.value("gyro_odr_hz").toDouble(), fixture.gyroOdrHz);
 
     const QJsonObject model = diagnostics.value("model").toObject();
-    QCOMPARE(model.keys(), QStringList({QStringLiteral("gyro_bias"), QStringLiteral("noise")}));
+    QCOMPARE(model.keys(), QStringList({QStringLiteral("gyro_bias"), QStringLiteral("noise"), QStringLiteral("scale")}));
     // A constant 25 degC series (kFixtureTemperatureDegC) has exactly that mean.
     QCOMPARE(model.value("gyro_bias").toObject().value("t_ref_degc").toDouble(), kFixtureTemperatureDegC);
     const QJsonObject noise = model.value("noise").toObject();
@@ -1836,7 +1901,7 @@ void FusionKernelTest::exactConstantVelocityFit()
 
 void FusionKernelTest::initializerFixturesAreDeterministic()
 {
-    for (const char *name : {"motion_start", "rest_throughout", "sacc_anchor", "drifting_bias"}) {
+    for (const char *name : {"motion_start", "rest_throughout", "sacc_anchor", "drifting_bias", "scale_recording"}) {
         const FusionFixture a = initializerFixture(QLatin1String(name));
         const FusionFixture b = initializerFixture(QLatin1String(name));
         QCOMPARE(a.name, QLatin1String(name));
@@ -1845,7 +1910,7 @@ void FusionKernelTest::initializerFixturesAreDeterministic()
         QVERIFY(a.expectSuccess);
         // Every recording states its configuration: +/-16 g, +/-2000 deg/s and
         // a listed rate within 4 % of its sampling (12.5 Hz for the two that
-        // log at 12.5 Hz, 26 Hz for the two at 25 Hz).
+        // log at 12.5 Hz, 26 Hz for the three at 25 Hz).
         QCOMPARE(a.accelFsG, 16.);
         QCOMPARE(a.gyroFsDegS, 2000.);
         QCOMPARE(a.accelOdrHz, b.accelOdrHz);
@@ -2470,12 +2535,13 @@ void FusionKernelTest::driftingBiasSegmentsConverge()
         QVERIFY(b0.at(i).toDouble() == bias.at(i).toDouble());
     QVERIFY(std::abs(b0.at(2).toDouble()-.8*kPi/180) < .1*kPi/180);
 
-    // The residuals: the two priors last, in order, and one IMU factor per
+    // The residuals: the three priors last, in order, and one IMU factor per
     // interval (201 states).
     const QJsonArray residuals = run.diagnostics.value("residuals").toArray();
-    QVERIFY(residuals.size() >= 2);
-    QCOMPARE(residuals.last().toObject().value("kind").toString(), QStringLiteral("slope_prior"));
-    QCOMPARE(residuals.at(residuals.size()-2).toObject().value("kind").toString(), QStringLiteral("bias_prior"));
+    QVERIFY(residuals.size() >= 3);
+    QCOMPARE(residuals.last().toObject().value("kind").toString(), QStringLiteral("scale_prior"));
+    QCOMPARE(residuals.at(residuals.size()-2).toObject().value("kind").toString(), QStringLiteral("slope_prior"));
+    QCOMPARE(residuals.at(residuals.size()-3).toObject().value("kind").toString(), QStringLiteral("bias_prior"));
     int imuResiduals = 0;
     for (const QJsonValue &entry : residuals) {
         if (entry.toObject().value("kind").toString() == QStringLiteral("imu"))
@@ -2707,7 +2773,7 @@ void FusionKernelTest::temperatureFactorJacobians()
         rate = Vector3(.1, -.05, .2);
     validateSamples(d, Tuning{});
     const ConstantBias linearizedAt(Vector3(.05, -.03, .08), Vector3(.003, -.002, .004));
-    const auto pim = preintegrateImu(d, .037, .863, linearizedAt, fixtureNoise(104));
+    const auto pim = preintegrateImu(d, .037, .863, linearizedAt, Vector6::Ones(), fixtureNoise(104));
     const double dT = 4.5;
     const TemperatureImuFactor factor(X(0), V(0), X(1), V(1), B(0), T(0), pim, dT);
     QCOMPARE(factor.temperatureDelta(), dT);
@@ -2939,10 +3005,11 @@ void FusionKernelTest::reconstructionUsesIntervalBias()
 
 void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
 {
-    // The spec's "constant temperature" case: with T_k - T_ref exactly zero
-    // at every fix the factor's H6 is zero, the slope's normal equation is
-    // its prior's alone with a zero right-hand side, and every LM step
-    // leaves it at 0.0. The bound is 1 % of the prior sigma, the margin
+    // The spec's "constant temperature" case (item 246 as amended): with
+    // T_k - T_ref exactly zero at every fix the factor's H6 is zero, the
+    // slope's normal equation is its prior's alone with a zero right-hand
+    // side, and every LM step leaves it at 0.0, the scale state on as the
+    // pipeline runs it. The bound is 1 % of the prior sigma, the margin
     // against a solver that visits a rounding-size value and steps back.
     Tuning t;
     t.segmentLength = 60;
@@ -2964,9 +3031,9 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     // 2501 copies of 35: the sum 87535 and the quotient are exact.
     QCOMPARE(gyroBias.value("t_ref_degc").toDouble(), 35.);
     const QJsonArray residuals = diagnostics.value("residuals").toArray();
-    const QJsonObject last = residuals.last().toObject();
-    QCOMPARE(last.value("kind").toString(), QStringLiteral("slope_prior"));
-    QVERIFY(last.value("squared_whitened_error").toDouble(1) < 1e-10);
+    const QJsonObject slopePrior = residuals.at(residuals.size()-2).toObject();
+    QCOMPARE(slopePrior.value("kind").toString(), QStringLiteral("slope_prior"));
+    QVERIFY(slopePrior.value("squared_whitened_error").toDouble(1) < 1e-10);
     const QJsonArray b0 = gyroBias.value("b0_rad_s").toArray();
     const QJsonArray seedBias = diagnostics.value("seeds").toArray().first().toObject().value("gyro_bias_rad_s").toArray();
     QCOMPARE(b0.size(), 3);
@@ -2975,9 +3042,12 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
 
     // The consistency check with the stock path through the internal seams:
     // the same window, the same initializer, the constant-bias fit (the
-    // default model) is the same model at b1 = 0, so both converge to the
-    // same objective under the settle tolerance (1e-6 relative is the margin
-    // for a different elimination ordering).
+    // default model) is the same model at b1 = 0, so it converges to the
+    // objective of the full fit with the scale state off under the settle
+    // tolerance (1e-6 relative is the margin for a different elimination
+    // ordering). With the state on the scale moves the objective by about
+    // 4.5 % on this recording (246.3 against 258.0 without it), so the
+    // constant-bias fit is reproduced only without it.
     const PreparedInput prepared = prepareInput(toChannels(f));
     Tuning derived = t;
     derived.maxGap = kImuGapMedians*medianInterval(prepared.recording.imuTime);
@@ -2990,10 +3060,588 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     QVERIFY(!stock.biasModel.temperatureLinear);
     QVERIFY(stock.gyroBiasSlope.isZero(0));
     QCOMPARE(stock.residuals.back().kind, std::string("bias_prior"));
+    const GyroBiasModel stateOff = gyroBiasModelFor(window);
+    QVERIFY(!stateOff.scaleState);
+    const FitResult temperature = fitFactorGraph(window, init.state, derived, QString::fromLatin1(kFullFitPassFormat),
+                                                 Checkpoint(), stateOff);
+    QVERIFY(temperature.converged);
+    QVERIFY(temperature.scale == Vector6::Ones());
+    QCOMPARE(temperature.residuals.back().kind, std::string("slope_prior"));
     const double objective = diagnostics.value("objective").toDouble();
-    qInfo() << "constant temperature: objective" << objective << ", stock fit" << stock.objective
-            << ", full fit" << trace.history.size() << "iterations";
-    QVERIFY(std::abs(stock.objective-objective) <= 1e-6*std::max(1., objective));
+    qInfo() << "constant temperature: objective" << objective << "with the scale state," << temperature.objective
+            << "without it, stock fit" << stock.objective << "; full fit" << trace.history.size() << "iterations";
+    QVERIFY(std::abs(stock.objective-temperature.objective) <= 1e-6*std::max(1., temperature.objective));
+}
+
+void FusionKernelTest::preintegrationDividesByTheScale()
+{
+    // Clause 19 and criterion 1: preintegrating the readings f at the scale s
+    // is preintegrating the readings f ./ s at unit scale: the preintegrated
+    // vector to 1e-12, the covariance and the last step's two sensor
+    // covariances to 1e-9 (relative to their largest entry), so the turn, the
+    // sampling term and the remainder are all of the divided readings. A
+    // turning, accelerating window, a non-zero bias. And at unit scale (or
+    // any other) asking for the scale Jacobian or passing an observer
+    // changes no bit of the result, and the transition the observer is
+    // handed is the library's update() of the step.
+    using gtsam::imuBias::ConstantBias;
+    const Samples d = turningSamples();
+    const ImuNoise noise = fixtureNoise(104);
+    const ConstantBias bias(Vector3(.05, -.03, .08), Vector3(.003, -.002, .004));
+    const Vector6 scale = offNominalScale();
+    Samples divided = d;
+    for (size_t i = 0; i < d.imuTime.size(); ++i) {
+        divided.force[i] = d.force[i].cwiseQuotient(scale.head<3>());
+        divided.gyro[i] = d.gyro[i].cwiseQuotient(scale.tail<3>());
+    }
+    const auto atScale = preintegrateImu(d, .037, .863, bias, scale, noise);
+    const auto atOne = preintegrateImu(divided, .037, .863, bias, Vector6::Ones(), noise);
+    const double delta = relativeDifference(atScale.preintegrated(), atOne.preintegrated());
+    const double covariance = relativeDifference(atScale.preintMeasCov(), atOne.preintMeasCov());
+    const double accelerometer = relativeDifference(atScale.p().accelerometerCovariance,
+                                                    atOne.p().accelerometerCovariance);
+    const double gyroscope = relativeDifference(atScale.p().gyroscopeCovariance, atOne.p().gyroscopeCovariance);
+    qInfo() << "divided readings: preintegrated" << delta << ", covariance" << covariance
+            << ", last step's sensor covariances" << accelerometer << gyroscope << "(relative)";
+    QVERIFY(delta <= 1e-12);
+    QVERIFY(covariance <= 1e-9);
+    QVERIFY(accelerometer <= 1e-9);
+    QVERIFY(gyroscope <= 1e-9);
+    // Not vacuous: the scale moves the preintegration and its covariance, and
+    // the last step's sensor covariances, whose sampling terms and remainders
+    // are of the readings the step integrates.
+    const auto undivided = preintegrateImu(d, .037, .863, bias, Vector6::Ones(), noise);
+    QVERIFY(relativeDifference(undivided.preintegrated(), atScale.preintegrated()) > 1e-3);
+    QVERIFY(!(undivided.preintMeasCov() == atScale.preintMeasCov()));
+    QVERIFY(!(undivided.p().accelerometerCovariance == atScale.p().accelerometerCovariance));
+    QVERIFY(!(undivided.p().gyroscopeCovariance == atScale.p().gyroscopeCovariance));
+
+    for (const Vector6 &at : {Vector6(Vector6::Ones()), scale}) {
+        const auto plain = preintegrateImu(d, .037, .863, bias, at, noise);
+        gtsam::Matrix96 jacobian;
+        const auto withJacobian = preintegrateImu(d, .037, .863, bias, at, noise, ImuStepObserver(), &jacobian);
+        int steps = 0;
+        bool transitionsAgree = true;
+        const auto observed = preintegrateImu(d, .037, .863, bias, at, noise,
+            [&](const gtsam::PreintegratedImuMeasurements &pim, const ImuStep &step) {
+                gtsam::PreintegratedImuMeasurements copy = pim;
+                gtsam::Matrix9 A;
+                gtsam::Matrix93 byForce, byRate;
+                copy.update(step.force, step.gyro, step.dt, &A, &byForce, &byRate);
+                transitionsAgree = transitionsAgree && A == step.transition;
+                ++steps;
+            });
+        QCOMPARE(steps, 84);
+        QVERIFY(transitionsAgree);
+        for (const gtsam::PreintegratedImuMeasurements *other : {&withJacobian, &observed}) {
+            QVERIFY(other->preintegrated() == plain.preintegrated());
+            QVERIFY(other->preintMeasCov() == plain.preintMeasCov());
+            QVERIFY(other->deltaTij() == plain.deltaTij());
+            QVERIFY(other->p().accelerometerCovariance == plain.p().accelerometerCovariance);
+            QVERIFY(other->p().gyroscopeCovariance == plain.p().gyroscopeCovariance);
+        }
+    }
+}
+
+void FusionKernelTest::scaleJacobianMatchesCentralDifferences()
+{
+    // Clause 19 and criterion 2: the scale Jacobian the integration
+    // accumulates against central differences of preintegrated() (step 1e-6,
+    // all six factors) at a scale away from one, a non-zero bias, on a
+    // window turning at about 2 rad/s and accelerating, to 1e-7 of the
+    // differences' largest entry. Without the half-step turn's dependence on
+    // the gyro scale it would not agree: the test accumulates that Jacobian
+    // itself, from the library's own per-step Jacobians the observer is
+    // handed, and its gyro columns miss by far more.
+    using gtsam::imuBias::ConstantBias;
+    const Samples d = turningSamples();
+    const ImuNoise noise = fixtureNoise(104);
+    const ConstantBias bias(Vector3(.05, -.03, .08), Vector3(.003, -.002, .004));
+    const Vector6 at = offNominalScale();
+    gtsam::Matrix96 H;
+    preintegrateImu(d, .037, .863, bias, at, noise, ImuStepObserver(), &H);
+
+    const double step = 1e-6;
+    gtsam::Matrix96 N;
+    for (int c = 0; c < 6; ++c) {
+        Vector6 plus = at, minus = at;
+        plus(c) += step;
+        minus(c) -= step;
+        N.col(c) = (preintegrateImu(d, .037, .863, bias, plus, noise).preintegrated()
+                    - preintegrateImu(d, .037, .863, bias, minus, noise).preintegrated())/(2*step);
+    }
+    const double largest = N.cwiseAbs().maxCoeff();
+    const double worst = (H-N).cwiseAbs().maxCoeff();
+
+    // The same accumulation without the turn term: G = [-B R F | -C W].
+    gtsam::Matrix96 withoutTurn = gtsam::Matrix96::Zero();
+    preintegrateImu(d, .037, .863, bias, at, noise,
+        [&](const gtsam::PreintegratedImuMeasurements &pim, const ImuStep &s) {
+            gtsam::PreintegratedImuMeasurements copy = pim;
+            gtsam::Matrix9 A;
+            gtsam::Matrix93 byForce, byRate;
+            copy.update(s.force, s.gyro, s.dt, &A, &byForce, &byRate);
+            const Rot3 halfStep = Rot3::Expmap((s.gyro-bias.gyroscope())*(s.dt/2));
+            const Vector3 forceMid = halfStep.unrotate(s.force-bias.accelerometer())+bias.accelerometer();
+            const gtsam::Matrix3 F = forceMid.cwiseQuotient(at.head<3>()).asDiagonal();
+            const gtsam::Matrix3 W = s.gyro.cwiseQuotient(at.tail<3>()).asDiagonal();
+            gtsam::Matrix96 input;
+            input.leftCols<3>() = -byForce*halfStep.matrix()*F;
+            input.rightCols<3>() = -byRate*W;
+            withoutTurn = A*withoutTurn+input;
+        });
+    const double accelerometerColumns = (withoutTurn-H).leftCols<3>().cwiseAbs().maxCoeff();
+    const double gyroColumnsWithoutTurn = (withoutTurn-N).rightCols<3>().cwiseAbs().maxCoeff();
+    qInfo() << "scale Jacobian against central differences:" << worst/largest << "of the largest entry" << largest
+            << "; without the turn term the gyro columns miss by" << gyroColumnsWithoutTurn/largest
+            << "; the accelerometer columns of both" << accelerometerColumns/largest << "apart";
+    QVERIFY(worst <= 1e-7*largest);
+    QVERIFY(gyroColumnsWithoutTurn > 1e-3*largest);
+    QVERIFY(accelerometerColumns <= 1e-9*largest);
+}
+
+void FusionKernelTest::scaleFactorJacobians()
+{
+    // Clauses 18 and 48, criterion 3: the scaled factor's seven Jacobians
+    // against numerical derivatives (each block with the six other
+    // variables bound: numericalDerivative.h stops at six arguments) at a
+    // point where every variable differs from the linearization, the scale
+    // included; at S = s^ the error and H1..H6 are TemperatureImuFactor's on
+    // the same preintegration bit for bit, and H7 is not zero; the clone and
+    // the whitened error through Values.
+    using gtsam::imuBias::ConstantBias;
+    using gtsam::Pose3;
+    using gtsam::Vector9;
+    const Samples d = turningSamples();
+    const ConstantBias linearizedAt(Vector3(.05, -.03, .08), Vector3(.003, -.002, .004));
+    const Vector6 sHat = offNominalScale();
+    gtsam::Matrix96 Hs;
+    const auto pim = preintegrateImu(d, .037, .863, linearizedAt, sHat, fixtureNoise(104), ImuStepObserver(), &Hs);
+    const double dT = 4.5;
+    const ScaledImuFactor factor(X(0), V(0), X(1), V(1), B(0), T(0), S(0), pim, dT, Hs, sHat);
+    QCOMPARE(factor.temperatureDelta(), dT);
+    QVERIFY(factor.scaleJacobian() == Hs);
+    QVERIFY(factor.linearizationScale() == sHat);
+    QVERIFY(factor.keys() == gtsam::KeyVector({X(0), V(0), X(1), V(1), B(0), T(0), S(0)}));
+    QVERIFY(factor.preintegratedMeasurements().preintegrated() == pim.preintegrated());
+
+    const Pose3 pose_i(Rot3::RzRyRx(.3, -.2, .1), Vector3(1, 2, 3));
+    const Vector3 vel_i(2, -1, .5);
+    const Pose3 pose_j(Rot3::RzRyRx(.35, -.15, .12), Vector3(2.5, 1.2, 3.4));
+    const Vector3 vel_j(2.6, -2.4, .9);
+    const ConstantBias bias(Vector3(.04, -.02, .07), Vector3(.002, -.001, .005));
+    const Vector3 slope(2e-4, -1e-4, 3e-4);
+    Vector6 scale;
+    scale << 1.012, .985, 1.03, .975, 1.02, 1.0;
+
+    gtsam::Matrix H1, H2, H3, H4, H5, H6, H7;
+    const gtsam::Vector error = factor.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, slope, scale,
+                                                     &H1, &H2, &H3, &H4, &H5, &H6, &H7);
+    QCOMPARE(error.size(), Eigen::Index(9));
+    const auto e = [&factor](const Pose3 &pi, const Vector3 &vi, const Pose3 &pj, const Vector3 &vj,
+                             const ConstantBias &b, const Vector3 &sl, const Vector6 &sc) -> Vector9 {
+        return factor.evaluateError(pi, vi, pj, vj, b, sl, sc);
+    };
+    const gtsam::Matrix N1 = gtsam::numericalDerivative11<Vector9, Pose3>(
+        [&](const Pose3 &x) { return e(x, vel_i, pose_j, vel_j, bias, slope, scale); }, pose_i);
+    const gtsam::Matrix N2 = gtsam::numericalDerivative11<Vector9, Vector3>(
+        [&](const Vector3 &x) { return e(pose_i, x, pose_j, vel_j, bias, slope, scale); }, vel_i);
+    const gtsam::Matrix N3 = gtsam::numericalDerivative11<Vector9, Pose3>(
+        [&](const Pose3 &x) { return e(pose_i, vel_i, x, vel_j, bias, slope, scale); }, pose_j);
+    const gtsam::Matrix N4 = gtsam::numericalDerivative11<Vector9, Vector3>(
+        [&](const Vector3 &x) { return e(pose_i, vel_i, pose_j, x, bias, slope, scale); }, vel_j);
+    const gtsam::Matrix N5 = gtsam::numericalDerivative11<Vector9, ConstantBias>(
+        [&](const ConstantBias &x) { return e(pose_i, vel_i, pose_j, vel_j, x, slope, scale); }, bias);
+    const gtsam::Matrix N6 = gtsam::numericalDerivative11<Vector9, Vector3>(
+        [&](const Vector3 &x) { return e(pose_i, vel_i, pose_j, vel_j, bias, x, scale); }, slope);
+    const gtsam::Matrix N7 = gtsam::numericalDerivative11<Vector9, Vector6>(
+        [&](const Vector6 &x) { return e(pose_i, vel_i, pose_j, vel_j, bias, slope, x); }, scale);
+    const struct { const char *name; const gtsam::Matrix *analytic, *numeric; } blocks[] = {
+        {"H1", &H1, &N1}, {"H2", &H2, &N2}, {"H3", &H3, &N3}, {"H4", &H4, &N4}, {"H5", &H5, &N5}, {"H6", &H6, &N6},
+        {"H7", &H7, &N7}};
+    for (const auto &block : blocks) {
+        QCOMPARE(block.analytic->rows(), block.numeric->rows());
+        QCOMPARE(block.analytic->cols(), block.numeric->cols());
+        const double worst = (*block.analytic-*block.numeric).cwiseAbs().maxCoeff();
+        qInfo() << block.name << "max |analytic - numeric|" << worst;
+        QVERIFY2(worst < 1e-6, block.name);
+    }
+    QCOMPARE(H7.cols(), Eigen::Index(6));
+
+    // At S = s^ the temperature factor on the same preintegration, bit for
+    // bit (Eigen's == is element-wise equality); H7 is the scale's chain.
+    const TemperatureImuFactor temperature(X(0), V(0), X(1), V(1), B(0), T(0), pim, dT);
+    gtsam::Matrix G1, G2, G3, G4, G5, G6, Z1, Z2, Z3, Z4, Z5, Z6, Z7;
+    const gtsam::Vector temperatureError = temperature.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, slope,
+                                                                     &G1, &G2, &G3, &G4, &G5, &G6);
+    const gtsam::Vector atLinearization = factor.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, slope, sHat,
+                                                               &Z1, &Z2, &Z3, &Z4, &Z5, &Z6, &Z7);
+    QVERIFY(atLinearization == temperatureError);
+    QVERIFY(Z1 == G1 && Z2 == G2 && Z3 == G3 && Z4 == G4 && Z5 == G5 && Z6 == G6);
+    QVERIFY(Z7.cwiseAbs().maxCoeff() > 1e-3);
+    QVERIFY(!(error == temperatureError));   // and away from s^ it is not
+
+    // Through Values: at S = s^ the whitened errors agree (the same
+    // covariance); the clone evaluates like the original.
+    gtsam::Values values;
+    values.insert(X(0), pose_i);
+    values.insert(V(0), vel_i);
+    values.insert(X(1), pose_j);
+    values.insert(V(1), vel_j);
+    values.insert(B(0), bias);
+    values.insert(T(0), slope);
+    values.insert(S(0), sHat);
+    QVERIFY(factor.whitenedError(values) == temperature.whitenedError(values));
+    values.update(S(0), scale);
+    const gtsam::NonlinearFactor::shared_ptr clone = factor.clone();
+    QVERIFY(clone != nullptr);
+    QVERIFY(clone.get() != &factor);
+    QVERIFY(clone->error(values) == factor.error(values));
+    QVERIFY(factor.error(values) > 0);
+}
+
+void FusionKernelTest::scaleGraphShape()
+{
+    // Clauses 18 and 48, criterion 4: with the scale state the graph holds,
+    // per state, the position and velocity factors and the scaled IMU factor
+    // over X(k-1), V(k-1), X(k), V(k), B(0), T(0), S(0), preintegrated at
+    // the interval's bias and the linearization's scale with its Jacobian;
+    // then the bias prior, the slope prior and last the scale prior: mean
+    // ones, sigmas the noise unit's sensitivity tolerances (G_So%, 1 %, for
+    // both sensors). A full fit's values hold S(0). With the state off there
+    // is no S(0) and the IMU factors are the temperature factor; the state
+    // without the temperature model is a programming error.
+    using gtsam::imuBias::ConstantBias;
+    Samples d = boundarySamples(Vector3(1, -2, .5));
+    for (Vector3 &rate : d.gyro)
+        rate = Vector3(.1, -.05, .2);
+    for (size_t i = 0; i < d.imuTime.size(); ++i)
+        d.temperature.push_back(40+.01*double(i));
+    validateSamples(d, Tuning{});
+    const Tuning tuning = tuningAt(104);
+    GyroBiasModel model = gyroBiasModelFor(d);
+    QVERIFY(!model.scaleState);   // the temperature model alone; planFit() turns the state on
+    model.scaleState = true;
+    const ConstantBias bias(Vector3(.05, -.03, .08), Vector3(.003, -.002, .004));
+    const Vector3 slope(1e-3, 0, 0);
+    const Vector6 at = offNominalScale();
+    const auto graph = buildFactorGraph(d, BiasLinearization{bias, slope, at}, model, tuning);
+    QCOMPARE(graph.size(), size_t(8));
+    QVERIFY(dynamic_cast<const gtsam::GPSFactor *>(graph.at(0).get()));
+    QVERIFY(dynamic_cast<const gtsam::PriorFactor<Vector3> *>(graph.at(1).get()));
+    QVERIFY(dynamic_cast<const gtsam::GPSFactor *>(graph.at(2).get()));
+    QVERIFY(dynamic_cast<const gtsam::PriorFactor<Vector3> *>(graph.at(3).get()));
+    const auto *imu = dynamic_cast<const ScaledImuFactor *>(graph.at(4).get());
+    QVERIFY(imu);
+    QVERIFY(imu->keys() == gtsam::KeyVector({X(0), V(0), X(1), V(1), B(0), T(0), S(0)}));
+    QVERIFY(imu->temperatureDelta() == temperatureAtFix(d, 0)-model.tRef);
+    QVERIFY(imu->linearizationScale() == at);
+    gtsam::Matrix96 Hs;
+    const auto pim = preintegrateImu(d, .037, .863, intervalBias(d, 0, bias, slope, model), at, tuning.noise,
+                                     ImuStepObserver(), &Hs);
+    QVERIFY(imu->preintegratedMeasurements().preintegrated() == pim.preintegrated());
+    QVERIFY(imu->preintegratedMeasurements().preintMeasCov() == pim.preintMeasCov());
+    QVERIFY(imu->scaleJacobian() == Hs);
+    QVERIFY(dynamic_cast<const gtsam::PriorFactor<ConstantBias> *>(graph.at(5).get()));
+    const auto *slopePrior = dynamic_cast<const gtsam::PriorFactor<Vector3> *>(graph.at(6).get());
+    QVERIFY(slopePrior && slopePrior->keys() == gtsam::KeyVector({T(0)}));
+    const auto *scalePrior = dynamic_cast<const gtsam::PriorFactor<Vector6> *>(graph.at(7).get());
+    QVERIFY(scalePrior);
+    QVERIFY(scalePrior->keys() == gtsam::KeyVector({S(0)}));
+    QVERIFY(scalePrior->prior() == Vector6::Ones());
+    const auto sigmas = std::dynamic_pointer_cast<gtsam::noiseModel::Diagonal>(scalePrior->noiseModel());
+    QVERIFY(sigmas != nullptr);
+    const double accelerometer = tuning.noise.accelerometer.sensitivityTolerance;
+    const double gyroscope = tuning.noise.gyroscope.sensitivityTolerance;
+    Vector6 expectedSigmas;
+    expectedSigmas << accelerometer, accelerometer, accelerometer, gyroscope, gyroscope, gyroscope;
+    QVERIFY(sigmas->sigmas() == gtsam::Vector(expectedSigmas));
+    QCOMPARE(accelerometer, .01);
+    QCOMPARE(gyroscope, .01);
+
+    // The same graph with the state off: seven factors, the temperature
+    // factor at 4, no factor on S(0).
+    GyroBiasModel off = model;
+    off.scaleState = false;
+    const auto graphOff = buildFactorGraph(d, BiasLinearization{bias, slope}, off, tuning);
+    QCOMPARE(graphOff.size(), size_t(7));
+    QVERIFY(dynamic_cast<const TemperatureImuFactor *>(graphOff.at(4).get()));
+    for (const auto &factor : graphOff)
+        QVERIFY(std::find(factor->keys().begin(), factor->keys().end(), S(0)) == factor->keys().end());
+
+    // The state under the constant model: refused by the build and the fit.
+    GyroBiasModel constantWithScale;
+    constantWithScale.scaleState = true;
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, buildFactorGraph(d, BiasLinearization{}, constantWithScale, tuning));
+    const Samples linear = linearSamples(Vector3(12, -4, 2), Vector3(7, 8, 9));
+    const Initialization init = initialize(linear, tuning);
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument,
+                             fitFactorGraph(linear, init.state, tuning, QString::fromLatin1(kFullFitPassFormat),
+                                            Checkpoint(), constantWithScale));
+
+    // A full fit with the state (coarse_linear's, as the pipeline runs it)
+    // and the same fit with it off.
+    const WindowFit &f = fixtureFit(QStringLiteral("coarse_linear"));
+    QVERIFY(f.fit.converged);
+    QVERIFY(f.fit.biasModel.scaleState);
+    QVERIFY(f.fit.values.exists(S(0)));
+    QVERIFY(f.fit.scale == f.fit.values.at<Vector6>(S(0)));
+    const size_t n = f.window.gnssTime.size();
+    QCOMPARE(f.fit.graph.size(), 3*n-1+3);
+    for (size_t k = 1; k < n; ++k) {
+        const auto *scaled = dynamic_cast<const ScaledImuFactor *>(f.fit.graph.at(3*k+1).get());
+        QVERIFY2(scaled, qPrintable(QString::number(k)));
+        QVERIFY(scaled->keys() == gtsam::KeyVector({X(k-1), V(k-1), X(k), V(k), B(0), T(0), S(0)}));
+    }
+    QVERIFY(dynamic_cast<const gtsam::PriorFactor<Vector6> *>(f.fit.graph.at(f.fit.graph.size()-1).get()));
+    const FitResult stateOff = fitFactorGraph(f.window, initialize(f.window, f.tuning).state, f.tuning,
+                                              QString::fromLatin1(kFullFitPassFormat), Checkpoint(),
+                                              gyroBiasModelFor(f.window));
+    QVERIFY(stateOff.converged);
+    QVERIFY(!stateOff.values.exists(S(0)));
+    QVERIFY(stateOff.scale == Vector6::Ones());
+    QCOMPARE(stateOff.graph.size(), 3*n-1+2);
+    for (size_t k = 1; k < n; ++k)
+        QVERIFY2(dynamic_cast<const TemperatureImuFactor *>(stateOff.graph.at(3*k+1).get()), qPrintable(QString::number(k)));
+}
+
+void FusionKernelTest::fitRepreintegratesAtTheFittedScale()
+{
+    // Clause 19 and criterion 5: after a converged fit every IMU factor of
+    // the reported graph was preintegrated at the fitted scale (its
+    // linearization scale is fit.scale bit for bit, which is S(0) of the
+    // values), its preintegration and scale Jacobian are preintegrateImu()'s
+    // at the interval's bias and that scale, so at the fit's values its
+    // S - s^ is zero and it evaluates as the temperature factor on the same
+    // preintegration; the scale prior is the graph's last factor, and the
+    // fit settled under the same cost test.
+    using gtsam::imuBias::ConstantBias;
+    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin"}) {
+        const WindowFit &f = fixtureFit(QLatin1String(name));
+        QVERIFY2(f.fit.converged, name);
+        QCOMPARE(f.fit.stopping.rule, std::string(StopRule::kSettled));
+        QVERIFY(f.fit.scale == f.fit.values.at<Vector6>(S(0)));
+        const ConstantBias bias = f.fit.values.at<ConstantBias>(B(0));
+        size_t factors = 0;
+        bool sameScale = true, samePreintegration = true, sameJacobian = true, temperatureError = true;
+        for (const auto &factor : f.fit.graph) {
+            const auto *scaled = dynamic_cast<const ScaledImuFactor *>(factor.get());
+            if (!scaled)
+                continue;
+            ++factors;
+            const size_t k = gtsam::Symbol(scaled->keys()[2]).index();
+            gtsam::Matrix96 Hs;
+            const auto pim = preintegrateImu(f.window, f.window.gnssTime[k-1], f.window.gnssTime[k],
+                                             intervalBias(f.window, k-1, bias, f.fit.gyroBiasSlope, f.fit.biasModel),
+                                             f.fit.scale, f.tuning.noise, ImuStepObserver(), &Hs);
+            sameScale = sameScale && scaled->linearizationScale() == f.fit.scale;
+            samePreintegration = samePreintegration
+                && scaled->preintegratedMeasurements().preintegrated() == pim.preintegrated()
+                && scaled->preintegratedMeasurements().preintMeasCov() == pim.preintMeasCov();
+            sameJacobian = sameJacobian && scaled->scaleJacobian() == Hs;
+            const TemperatureImuFactor held(X(k-1), V(k-1), X(k), V(k), B(0), T(0), scaled->preintegratedMeasurements(),
+                                            scaled->temperatureDelta());
+            temperatureError = temperatureError && scaled->error(f.fit.values) == held.error(f.fit.values);
+        }
+        qInfo() << name << ": fitted scale acc" << f.fit.scale(0) << f.fit.scale(1) << f.fit.scale(2) << "gyro"
+                << f.fit.scale(3) << f.fit.scale(4) << f.fit.scale(5) << "after" << f.fit.stopping.passes << "passes";
+        QCOMPARE(factors, f.window.gnssTime.size()-1);
+        QVERIFY2(sameScale, name);
+        QVERIFY2(samePreintegration, name);
+        QVERIFY2(sameJacobian, name);
+        QVERIFY2(temperatureError, name);
+        const auto *last = dynamic_cast<const gtsam::PriorFactor<Vector6> *>(f.fit.graph.at(f.fit.graph.size()-1).get());
+        QVERIFY2(last && last->keys() == gtsam::KeyVector({S(0)}), name);
+        QCOMPARE(f.fit.residuals.back().kind, std::string("scale_prior"));
+    }
+}
+
+void FusionKernelTest::reconstructionUsesTheFittedScale()
+{
+    // Clause 19 and criterion 6, in the pattern of
+    // reconstructionUsesIntervalBias: one fix interval whose second state is
+    // the forward integration of the readings divided by a scale s away from
+    // one (predictFits() at fit.scale = s), turning and accelerating, with a
+    // non-zero bias. Reconstructed with fit.scale = s the mismatch is at
+    // rounding; with ones the forward integration misses the fitted end by
+    // the scale's share of the force over the interval. The published
+    // acceleration is R (f ./ s_a - b_a) + g + the mean of the corrections.
+    using gtsam::imuBias::ConstantBias;
+    WindowFit f;
+    f.window = boundarySamples(Vector3(1, -2, .5));
+    for (Vector3 &rate : f.window.gyro)
+        rate = Vector3(.1, -.05, .2);
+    f.tuning = tuningAt(104);
+    f.tuning.maxGap = kImuGapMedians*medianInterval(f.window.imuTime);
+    Vector6 s;
+    s << 1.02, .99, 1.01, 1.01, .98, 1.02;
+    f.fit.scale = s;
+    predictFits(f, ConstantBias(Vector3(.05, -.03, .08), Vector3(.003, -.002, .004)),
+                gtsam::NavState(Rot3::RzRyRx(.1, -.2, .3), Vector3(1, 2, 3), Vector3(20, -3, 5)),
+                gtsam::Vector9::Zero());
+
+    const IntervalReconstruction atScale = reconstructInterval(f.window, f.fit, f.tuning, 0);
+    WindowFit unit = f;
+    unit.fit.scale = Vector6::Ones();
+    const IntervalReconstruction atOne = reconstructInterval(unit.window, unit.fit, unit.tuning, 0);
+    qInfo() << "mismatch: at the fitted scale" << atScale.mismatch.cwiseAbs().maxCoeff() << ", at ones: attitude"
+            << atOne.mismatch.head<3>().norm() << "rad, velocity" << atOne.mismatch.tail<3>().norm() << "m/s";
+    QVERIFY(atScale.mismatch.cwiseAbs().maxCoeff() <= 1e-12);
+    QVERIFY(atOne.mismatch.tail<3>().norm() > 1e-2);
+    QVERIFY(atOne.mismatch.head<3>().norm() > 1e-4);
+
+    const WindowSeams w = seamsOf(f);
+    const ImuRateTrajectory out = reconstructAtImuRate(f.window, f.fit, f.tuning);
+    QVERIFY(out.time.size() > 80);
+    double scaleShare = 0;
+    for (size_t i = 0; i < out.time.size(); ++i) {
+        const Vector3 expected = expectedAcceleration(f, w, out, i);
+        QVERIFY2((out.acceleration[i]-expected).norm() <= 1e-12*(1+expected.norm()), qPrintable(QString::number(i)));
+        // Not vacuous: the undivided reading would publish something else.
+        const Vector3 undivided = expectedAcceleration(unit, w, out, i);
+        scaleShare = std::max(scaleShare, (expected-undivided).norm());
+    }
+    QVERIFY(scaleShare > .05);
+}
+
+void FusionKernelTest::restLeavesTheScaleAtItsPrior()
+{
+    // Clause 20 (as settled) and clause 54, criterion 7 (as settled): at rest
+    // every fitted factor of rest_throughout stays at one within its prior's
+    // sigma, the sensitivity tolerance. The accelerometer's stay within a
+    // tenth of it: the data constrain only the corrected reading along
+    // gravity, which the scale and the bias of each axis share in proportion
+    // to their priors' variances (about a tenth of a 0.05 m/s^2 bias is
+    // 5e-4 of the factor). That sharing holds for the deterministic part of a
+    // reading, and the gyro's are not bound that tightly: the factor whitens
+    // the residual of the divided readings with a noise model that does not
+    // depend on the scale, so a factor above one shrinks the noise left in
+    // that residual while its weight stays the same, and at rest the noise is
+    // all the gyro reads besides its bias. Dividing the density by the
+    // linearization scale would not remove this, since the covariance is
+    // fixed within a pass; only a weight that changes with the scale itself
+    // would. On this recording the y axis, whose bias of -.1 deg/s lies
+    // between two lattice points so that its readings dither by a whole step,
+    // fits 1.0033 (a third of its tolerance); the departure grows with the
+    // noise's variance and the prior's, and with the gyro's noise removed
+    // every gyro factor fits one.
+    const InitializerRun &run = restThroughoutRun();
+    QVERIFY2(run.result.outcome == Fusion::Outcome::Succeeded, qPrintable(run.result.reason));
+    const ImuNoise noise = imuNoise(toChannels(initializerFixture(QStringLiteral("rest_throughout"))).imuConfiguration);
+    const QJsonObject scale = run.diagnostics.value("model").toObject().value("scale").toObject();
+    const QJsonArray acc = scale.value("acc").toArray(), gyro = scale.value("gyro").toArray();
+    QCOMPARE(acc.size(), 3);
+    QCOMPARE(gyro.size(), 3);
+    double accelerometer = 0, gyroscope = 0;
+    for (int i = 0; i < 3; ++i) {
+        accelerometer = std::max(accelerometer, std::abs(acc.at(i).toDouble()-1));
+        gyroscope = std::max(gyroscope, std::abs(gyro.at(i).toDouble()-1));
+    }
+    qInfo() << "rest_throughout: scale acc" << acc.at(0).toDouble() << acc.at(1).toDouble() << acc.at(2).toDouble()
+            << "gyro" << gyro.at(0).toDouble() << gyro.at(1).toDouble() << gyro.at(2).toDouble()
+            << "; largest departure: accelerometer" << accelerometer/noise.accelerometer.sensitivityTolerance
+            << "of its tolerance, gyro" << gyroscope/noise.gyroscope.sensitivityTolerance;
+    QVERIFY(accelerometer <= .1*noise.accelerometer.sensitivityTolerance);
+    QVERIFY(gyroscope <= noise.gyroscope.sensitivityTolerance);
+}
+
+void FusionKernelTest::scaleRecordingRecoversTheFactor()
+{
+    // Clause 54, criterion 8: on scale_recording, whose accelerometer x axis
+    // reads 2 % high under a zero-mean periodic north acceleration, the full
+    // fit converges and recovers the factor within the prior's tolerance;
+    // the other axes stay at one (y and the gyro within a tenth of their
+    // tolerance; z, which shares the z bias under gravity, within its
+    // tolerance); and the position misfit (FitResult::positionRms) is at most
+    // 0.9 of that of the full fit with the state off, on the same window from
+    // the same initialization.
+    const QString name = QStringLiteral("scale_recording");
+    const Tuning tuning = pipelineTuning(name, Tuning{});
+    const Samples window = windowOf(name, Tuning{});
+    const Initialization init = initialize(window, tuning);
+    QCOMPARE(init.account.segments.size(), size_t(1));
+    QVERIFY(!init.account.segments.front().fallback);
+    GyroBiasModel on = gyroBiasModelFor(window);
+    on.scaleState = true;
+    const FitResult with = fitFactorGraph(window, init.state, tuning, QString::fromLatin1(kFullFitPassFormat),
+                                          Checkpoint(), on);
+    const FitResult without = fitFactorGraph(window, init.state, tuning, QString::fromLatin1(kFullFitPassFormat),
+                                             Checkpoint(), gyroBiasModelFor(window));
+    for (const auto &[label, fit] : {std::pair<const char *, const FitResult *>{"with the state", &with},
+                                     std::pair<const char *, const FitResult *>{"without it", &without}}) {
+        const auto bias = fit->values.at<gtsam::imuBias::ConstantBias>(B(0));
+        qInfo() << "scale_recording" << label << ": rule" << fit->stopping.rule.c_str() << ", passes"
+                << fit->stopping.passes << ", iterations" << fit->history.size() << ", objective" << fit->objective
+                << "; scale acc" << fit->scale(0) << fit->scale(1) << fit->scale(2) << "gyro" << fit->scale(3)
+                << fit->scale(4) << fit->scale(5) << "; acc bias" << bias.accelerometer().x()
+                << bias.accelerometer().y() << bias.accelerometer().z() << "; position RMS" << fit->positionRms
+                << "m, velocity RMS" << fit->velocityRms << "m/s";
+    }
+    qInfo() << "scale_recording: s_ax" << with.scale(0) << "against 1.02 (" << (with.scale(0)-1.02)/.01
+            << "of the tolerance); position RMS ratio" << with.positionRms/without.positionRms;
+    QVERIFY(with.converged);
+    QVERIFY(without.converged);
+    const double accelerometer = tuning.noise.accelerometer.sensitivityTolerance;
+    const double gyroscope = tuning.noise.gyroscope.sensitivityTolerance;
+    QVERIFY(std::abs(with.scale(0)-1.02) <= accelerometer);
+    QVERIFY(std::abs(with.scale(1)-1) <= .1*accelerometer);
+    QVERIFY(std::abs(with.scale(2)-1) <= accelerometer);
+    for (int i = 3; i < 6; ++i)
+        QVERIFY2(std::abs(with.scale(i)-1) <= .1*gyroscope, qPrintable(QString::number(i)));
+    QVERIFY(with.positionRms <= .9*without.positionRms);
+}
+
+void FusionKernelTest::diagnosticsReportTheScale()
+{
+    // Clause 21, criterion 9: a successful fit's diagnostics carry
+    // model.scale, the fitted factors themselves (acc x, y, z and gyro x, y,
+    // z: fit.scale of the same fit through the seams, bit for bit); model
+    // holds exactly gyro_bias, noise and scale; the residuals end with the
+    // three priors, bias, slope and scale, the scale prior's the squared
+    // whitened departure from one; the IMU kind stays `imu`; and the
+    // limitations name the scale factors the reconstruction holds.
+    const QString name = QStringLiteral("coarse_maneuver");
+    const Fusion::Result result = runPipeline(toChannels(fusionFixture(name)), Tuning{}, Checkpoint());
+    QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
+    const QJsonObject diagnostics = diagnosticsOf(result);
+    const QJsonObject model = diagnostics.value("model").toObject();
+    QCOMPARE(model.keys(), QStringList({QStringLiteral("gyro_bias"), QStringLiteral("noise"), QStringLiteral("scale")}));
+    const QJsonObject scale = model.value("scale").toObject();
+    QCOMPARE(scale.keys(), QStringList({QStringLiteral("acc"), QStringLiteral("gyro")}));
+    const QJsonArray acc = scale.value("acc").toArray(), gyro = scale.value("gyro").toArray();
+    QCOMPARE(acc.size(), 3);
+    QCOMPARE(gyro.size(), 3);
+    const WindowFit &f = fixtureFit(name);
+    for (int i = 0; i < 3; ++i) {
+        QVERIFY(acc.at(i).toDouble() == f.fit.scale(i));
+        QVERIFY(gyro.at(i).toDouble() == f.fit.scale(3+i));
+    }
+
+    const QJsonArray residuals = diagnostics.value("residuals").toArray();
+    QVERIFY(residuals.size() >= 3);
+    const QJsonObject scalePrior = residuals.last().toObject();
+    QCOMPARE(scalePrior.value("kind").toString(), QStringLiteral("scale_prior"));
+    QCOMPARE(residuals.at(residuals.size()-2).toObject().value("kind").toString(), QStringLiteral("slope_prior"));
+    QCOMPARE(residuals.at(residuals.size()-3).toObject().value("kind").toString(), QStringLiteral("bias_prior"));
+    const ImuNoise noise = imuNoise(toChannels(fusionFixture(name)).imuConfiguration);
+    double expected = 0;
+    for (int i = 0; i < 6; ++i) {
+        const double tolerance = i < 3 ? noise.accelerometer.sensitivityTolerance : noise.gyroscope.sensitivityTolerance;
+        expected += (f.fit.scale(i)-1)*(f.fit.scale(i)-1)/(tolerance*tolerance);
+    }
+    const double got = scalePrior.value("squared_whitened_error").toDouble(-1);
+    qInfo() << name << ": scale prior's squared whitened error" << got << "(recomputed" << expected << ")";
+    QVERIFY(std::abs(got-expected) <= 1e-9*expected);
+    QVERIFY(expected > 0);
+    int imu = 0;
+    for (const QJsonValue &entry : residuals) {
+        if (entry.toObject().value("kind").toString() == QStringLiteral("imu"))
+            ++imu;
+    }
+    QCOMPARE(imu, diagnostics.value("gnss_states").toInt()-1);
+    QCOMPARE(diagnostics.value("limitations").toString(), QStringLiteral(
+        "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass with the fitted fix "
+        "states, biases and scale factors held; no uncertainty is published."));
 }
 
 void FusionKernelTest::imuRateEndsAreTheFit_data()
@@ -3120,8 +3768,8 @@ void FusionKernelTest::imuRateMatchesHeldEndsGraph()
     // the dense graph with a state at every edge and the fix states and biases
     // held (heldEndsReference()). What the linearization costs is quadratic in
     // the mismatch, which on this fixture is a few 1e-7 m/s; under the
-    // datasheet's densities the two differ by more, linearly: by 2.5e-4 (attitude),
-    // 7.8e-3 (velocity) and 2.9e-3 (position) of the mismatch, which falls to
+    // datasheet's densities the two differ by more, linearly: by 1.9e-4 (attitude),
+    // 8.2e-3 (velocity) and 2.9e-3 (position) of the mismatch, which falls to
     // below 4e-6 with an accelerometer density twenty times the datasheet's.
     // The difference is that of one preintegration of many steps against a
     // chain of one-step factors, in which the accelerometer's noise no longer
@@ -3449,11 +4097,12 @@ void FusionKernelTest::imuRateAccelerationIntegratesToVelocity()
     const auto before = [&](size_t i) { return edge[i] ? c[edge[i]-1] : c[edge[i]]; };
     const auto after = [&](size_t i) { return c[edge[i]]; };
 
-    // The bias-corrected reading at edge `e` rotated by the corrected
-    // attitude there, with the bias of the interval of step `step` (the
-    // reconstruction's trapezoid of that step).
+    // The reading at edge `e` divided by the fitted scale and bias-corrected,
+    // rotated by the corrected attitude there, with the bias of the interval
+    // of step `step` (the reconstruction's trapezoid of that step).
     const auto rotatedReading = [&](size_t e, size_t step) {
-        const Vector3 reading = interpolateAt(f.window.imuTime, f.window.force, w.edges[e]);
+        const Vector3 reading = interpolateAt(f.window.imuTime, f.window.force, w.edges[e])
+                                    .cwiseQuotient(f.fit.scale.head<3>());
         return Vector3(w.corrected[e].attitude().rotate(reading-w.intervals[w.stepInterval[step]].bias.accelerometer()));
     };
 

@@ -61,17 +61,13 @@ IntervalReconstruction reconstructInterval(const Samples &window, const FitResul
         r.edges.push_back(step.end);
         atEdge(pim);
         // F_j is the A of the library's own update, bit for bit what the step
-        // propagates its covariance with: integrateMeasurement() calls update()
-        // qualified, so the step itself cannot be intercepted, and a copy
-        // updated with the same raw readings computes the same A.
-        gtsam::PreintegratedImuMeasurements copy = pim;
-        gtsam::Matrix9 F;
-        gtsam::Matrix93 byAcc, byGyro;
-        copy.update(step.force, step.gyro, step.dt, &F, &byAcc, &byGyro);
-        transition.push_back(F);
+        // propagates its covariance with, taken once by the integration.
+        transition.push_back(step.transition);
     };
+    // At the fitted scale, as the fit's reported graph is preintegrated: the
+    // forward states are predict() at the preintegration's own linearization.
     const gtsam::PreintegratedImuMeasurements pim =
-        preintegrateImu(window, window.gnssTime[k], window.gnssTime[k+1], r.bias, tuning.noise, observer);
+        preintegrateImu(window, window.gnssTime[k], window.gnssTime[k+1], r.bias, fit.scale, tuning.noise, observer);
     atEdge(pim);
     const size_t n = transition.size();
 
@@ -97,12 +93,14 @@ IntervalReconstruction reconstructInterval(const Samples &window, const FitResul
         r.corrected[j] = r.forward[j].retract(retraction[j]*(covariance[j]*lambda));
     }
 
-    // The readings at the edges (the sample's own at a sample), bias removed.
+    // The readings at the edges (the sample's own at a sample), divided by
+    // the scale and bias removed: what the integration integrates.
     const gtsam::Vector3 &accBias = r.bias.accelerometer();
+    const gtsam::Vector3 accScale = fit.scale.head<3>();
     Vectors reading;
     reading.reserve(n+1);
     for (double e : r.edges)
-        reading.push_back(interpolateAt(window.imuTime, window.force, e)-accBias);
+        reading.push_back(interpolateAt(window.imuTime, window.force, e).cwiseQuotient(accScale)-accBias);
     // The trapezoid of the edge-rotated readings: with it the published
     // acceleration integrates to the published velocity change over the
     // window. The start-of-step rotation the integration applies would leave
@@ -128,6 +126,7 @@ ImuRateTrajectory reconstructAtImuRate(const Samples &window, const FitResult &f
     for (size_t k = 0; k+1 < window.gnssTime.size(); ++k) {
         const IntervalReconstruction r = reconstructInterval(window, fit, tuning, k);
         const gtsam::Vector3 &accBias = r.bias.accelerometer();
+        const gtsam::Vector3 accScale = fit.scale.head<3>();
 
         out.maxEndpointCorrectionDeg = std::max(out.maxEndpointCorrectionDeg, r.mismatch.head<3>().norm()*180/kPi);
         out.maxVelocityMismatch = std::max(out.maxVelocityMismatch, r.mismatch.tail<3>().norm());
@@ -158,7 +157,8 @@ ImuRateTrajectory reconstructAtImuRate(const Samples &window, const FitResult &f
             out.rotation.push_back(state.attitude());
             out.position.push_back(state.position());
             out.velocity.push_back(state.velocity());
-            out.acceleration.push_back(state.attitude().rotate(window.force[sample]-accBias)+kGravity+correction);
+            out.acceleration.push_back(state.attitude().rotate(window.force[sample].cwiseQuotient(accScale)-accBias)
+                                       +kGravity+correction);
         }
         endingStep = r.stepCorrection.back();
     }

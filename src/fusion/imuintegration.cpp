@@ -45,17 +45,28 @@ gtsam::Vector3 slopeChange(const std::vector<double> &times, const Vectors &valu
     return 2*(slopeAfter-slopeBefore)/(before+after);
 }
 
-/// The second derivative of `values` on sample interval k, as the bound the
-/// sampling term takes: the larger norm of the changes of slope at its two
-/// ends, of those that exist; 0 when neither does (fewer than three samples).
-double curvature(const std::vector<double> &times, const Vectors &values, size_t k)
+/// The second derivative of `values` divided axis by axis by `scale` on
+/// sample interval k, as the bound the sampling term takes: the larger norm of
+/// the changes of slope at its two ends, of those that exist; 0 when neither
+/// does (fewer than three samples). The change of slope is linear in the
+/// values, so dividing it is dividing the readings, and at unit scale it is
+/// exact.
+double curvature(const std::vector<double> &times, const Vectors &values, size_t k, const gtsam::Vector3 &scale)
 {
     double c = 0;
     if (k >= 1)
-        c = slopeChange(times, values, k).norm();
+        c = slopeChange(times, values, k).cwiseQuotient(scale).norm();
     if (k+2 < times.size())
-        c = std::max(c, slopeChange(times, values, k+1).norm());
+        c = std::max(c, slopeChange(times, values, k+1).cwiseQuotient(scale).norm());
     return c;
+}
+
+/// The reading of `values` at `t`, divided axis by axis by `scale`: what a
+/// step integrates.
+gtsam::Vector3 dividedAt(const std::vector<double> &times, const Vectors &values, double t,
+                         const gtsam::Vector3 &scale)
+{
+    return interpolateAt(times, values, t).cwiseQuotient(scale);
 }
 
 /// w = 1/2 integral_a^b (t - t_k)(t_k+1 - t) dt for the step [a, b] inside
@@ -158,7 +169,8 @@ std::shared_ptr<gtsam::PreintegrationParams> preintegrationParams(const ImuNoise
 
 gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, double start, double end,
                                                     const gtsam::imuBias::ConstantBias &bias,
-                                                    const ImuNoise &noise, const ImuStepObserver &observer)
+                                                    const gtsam::Vector6 &scale, const ImuNoise &noise,
+                                                    const ImuStepObserver &observer, gtsam::Matrix96 *scaleJacobian)
 {
     // The params are shared with `pim`, and integrateMeasurement() reads the
     // two sensor covariances on every call, so writing them before each call
@@ -167,13 +179,16 @@ gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, doub
     gtsam::PreintegratedImuMeasurements pim(params, bias);
     const std::vector<double> &t = samples.imuTime;
     const std::vector<double> e = integrationEdges(samples, start, end);
+    const gtsam::Vector3 accScale = scale.head<3>(), gyroScale = scale.tail<3>();
+    // The scale Jacobian of the steps so far.
+    gtsam::Matrix96 H = gtsam::Matrix96::Zero();
     // The signal at the start of the step: the end of the previous one.
-    gtsam::Vector3 forceStart = interpolateAt(samples.imuTime, samples.force, e[0]);
-    gtsam::Vector3 gyroStart = interpolateAt(samples.imuTime, samples.gyro, e[0]);
+    gtsam::Vector3 forceStart = dividedAt(t, samples.force, e[0], accScale);
+    gtsam::Vector3 gyroStart = dividedAt(t, samples.gyro, e[0], gyroScale);
     for (size_t i = 1; i < e.size(); ++i) {
         const double dt = e[i]-e[i-1], mid = (e[i]+e[i-1])/2;
-        const gtsam::Vector3 gyroMid = interpolateAt(samples.imuTime, samples.gyro, mid);
-        const gtsam::Vector3 forceMid = interpolateAt(samples.imuTime, samples.force, mid);
+        const gtsam::Vector3 gyroMid = dividedAt(t, samples.gyro, mid, gyroScale);
+        const gtsam::Vector3 forceMid = dividedAt(t, samples.force, mid, accScale);
         // The library rotates a step's reading by the attitude at the step's
         // start, half a step behind the reading: an error of about
         // |omega x f| dt / 2, several m/s^2 at 13 Hz through a parachute
@@ -183,16 +198,41 @@ gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, doub
         // removed for the turn and put back, since the library removes it
         // itself.
         const gtsam::Vector3 &accBias = bias.accelerometer();
-        const gtsam::Rot3 halfStep = gtsam::Rot3::Expmap((gyroMid-bias.gyroscope())*(dt/2));
-        const ImuStep step{e[i-1], e[i], dt, halfStep.rotate(forceMid-accBias)+accBias, gyroMid};
+        const gtsam::Vector3 halfAngle = (gyroMid-bias.gyroscope())*(dt/2);
+        const gtsam::Rot3 halfStep = gtsam::Rot3::Expmap(halfAngle);
+        ImuStep step{e[i-1], e[i], dt, halfStep.rotate(forceMid-accBias)+accBias, gyroMid, gtsam::Matrix9::Zero()};
+        if (observer || scaleJacobian) {
+            // The library's own transition and input Jacobians of the step:
+            // integrateMeasurement() calls update() qualified, so the step
+            // itself cannot be intercepted, and a copy updated with the same
+            // readings computes the same A that the step propagates its
+            // covariance with. Taken here once, for the observer (the
+            // reconstruction's F_j) and for the scale Jacobian.
+            gtsam::PreintegratedImuMeasurements copy = pim;
+            gtsam::Matrix93 byForce, byRate;
+            copy.update(step.force, step.gyro, step.dt, &step.transition, &byForce, &byRate);
+            if (scaleJacobian) {
+                // The step's input with respect to the scale: the divided
+                // force through the turn, and the divided rate both directly
+                // and through the half-step turn it sets.
+                const gtsam::Matrix3 R = halfStep.matrix();
+                const gtsam::Matrix3 F = forceMid.cwiseQuotient(accScale).asDiagonal();
+                const gtsam::Matrix3 W = gyroMid.cwiseQuotient(gyroScale).asDiagonal();
+                gtsam::Matrix96 input;
+                input.leftCols<3>() = -byForce*R*F;
+                input.rightCols<3>() = byForce*R*gtsam::skewSymmetric(forceMid-accBias)
+                                       *gtsam::Rot3::ExpmapDerivative(halfAngle)*W*(dt/2) - byRate*W;
+                H = step.transition*H + input;
+            }
+        }
         // Before the step's covariance is written, so the two sensor
         // covariances the step integrates with are always the ones set
         // below. The observer can still reach the other shared params
         // through p(), which GTSAM does not make const; it must only read.
         if (observer)
             observer(pim, step);
-        const gtsam::Vector3 forceEnd = interpolateAt(samples.imuTime, samples.force, e[i]);
-        const gtsam::Vector3 gyroEnd = interpolateAt(samples.imuTime, samples.gyro, e[i]);
+        const gtsam::Vector3 forceEnd = dividedAt(t, samples.force, e[i], accScale);
+        const gtsam::Vector3 gyroEnd = dividedAt(t, samples.gyro, e[i], gyroScale);
 
         // The sampling term: the midpoint reading integrates the linear
         // interpolant exactly, so the step's error is the interpolant's,
@@ -201,7 +241,8 @@ gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, doub
         // gyro bias is constant there and cancels.
         const size_t k = size_t(std::upper_bound(t.begin(), t.end(), mid)-t.begin())-1;
         const double w = samplingWeight(t[k], t[k+1], e[i-1], e[i]);
-        const double samplingV = w*curvature(t, samples.force, k), samplingTheta = w*curvature(t, samples.gyro, k);
+        const double samplingV = w*curvature(t, samples.force, k, accScale);
+        const double samplingTheta = w*curvature(t, samples.gyro, k, gyroScale);
         // The remainder of the mid-step scheme against the true integral, to
         // second order, for rate and force linear across the step: the pure
         // rotation term, and the terms in the change of force and of rate
@@ -228,6 +269,8 @@ gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, doub
     // two states over the wrong duration.
     if (std::abs(pim.deltaTij()-(end-start)) > kDurationTolerance)
         throw std::runtime_error("Preintegration duration mismatch");
+    if (scaleJacobian)
+        *scaleJacobian = H;
     return pim;
 }
 

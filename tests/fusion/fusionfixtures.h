@@ -49,11 +49,12 @@ QList<FusionFixture> fusionFixtures();
 /// there is none.
 FusionFixture fusionFixture(const QString &name);
 
-/// The synthetic recordings of the initializer's tests: motion_start,
-/// rest_throughout, sacc_anchor, drifting_bias. Not golden fixtures: their
-/// expected values are stated in tst_fusion_kernel, and fusion_golden_capture
-/// does not see them. Same bit-reproducibility rules as the rest of this file.
-/// A default-constructed fixture (empty name) for any other name.
+/// The synthetic recordings of the kernel's model tests: the initializer's
+/// motion_start, rest_throughout, sacc_anchor and drifting_bias, and the scale
+/// state's scale_recording. Not golden fixtures: their expected values are
+/// stated in tst_fusion_kernel, and fusion_golden_capture does not see them.
+/// Same bit-reproducibility rules as the rest of this file. A
+/// default-constructed fixture (empty name) for any other name.
 FusionFixture initializerFixture(const QString &name);
 
 } // namespace FlySightTest

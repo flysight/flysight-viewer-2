@@ -58,7 +58,10 @@
 #     901-940);
 #   - the sensor configuration attributes have one authority: the key names
 #     and the firmware version their default describes are spelled in one
-#     vocabulary, and the keys nothing uses stay unused (items 1001-1065).
+#     vocabulary, and the keys nothing uses stay unused; the datasheet's table
+#     exists in one unit; the scale state is the full fit's, built in one
+#     place, and the legacy gyro correction is not part of it (items
+#     1001-1065).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -626,12 +629,13 @@ expect_count("one integrateMeasurement, per-step covariance" "[.>]integrateMeasu
 # reconstruction through the observer, the tests' one-step reference factors
 # by preintegrating one step, tst_fusion_kernel's step-model tests reading the
 # covariances through the observer and pim.p()); no other kernel file and no
-# test integrates a step or sets a sensor covariance, and the reconstruction's
-# transition is the library's update() on a copy, not the static tangent
-# update. A second reader of the step model takes it from preintegrateImu()
-# instead of restating it; reading a covariance is not setting one, so the
-# second rule matches an assignment only, a compound one (`+=`, `*=`)
-# included.
+# test integrates a step or sets a sensor covariance, and every step's
+# transition is the library's update() on a copy, taken in preintegrateImu()
+# (handed to the observer as ImuStep::transition and used there for the scale
+# Jacobian), not the static tangent update. A second reader of the step model
+# takes it from preintegrateImu() instead of restating it; reading a
+# covariance is not setting one, so the second rule matches an assignment
+# only, a compound one (`+=`, `*=`) included.
 expect_only("the step model has one author"
   "[.>]integrateMeasurement\\(|UpdatePreintegrated"
   "^src/fusion/imuintegration\\.cpp$|^tests/README\\.md$"
@@ -678,11 +682,39 @@ expect_none("the fusion document describes the documented noise model"
 # The fusion document cites its sources and writes the derivation out
 # (clauses 12, 16, 17). Allow: these count LINES; a new citation of a table
 # raises its count here with the sentence that needs it.
-expect_count("the fusion document cites Table 2" "Table 2${WB_END}" 7 docs/SENSOR_FUSION.md)
+expect_count("the fusion document cites Table 2" "Table 2${WB_END}" 9 docs/SENSOR_FUSION.md)
 expect_count("the fusion document cites Table 18" "Table 18" 2 docs/SENSOR_FUSION.md)
 expect_count("the fusion document cites Table 65" "Table 65" 1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document cites Figure 17" "Figure 17" 1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document writes the sampling derivation" "h\\^3 / 12" 1 docs/SENSOR_FUSION.md)
+
+# ─────────────────────────────── scale-state (items 1018, 1023, 1048)
+# The full fit's scale factors S(0) are variables of the graph, beside the
+# biases, through one factor built in one place (factorgraphfit.cpp); the
+# legacy gyro correction of the conversion layer is applied before the kernel
+# and is not part of the scale state; the fusion document describes the
+# scale state and no longer says the scale is not fitted.
+audit_group(scale-state)
+# Allow: none expected. The 1.14688 correction is the conversion layer's
+# (src/conversion/schematable.cpp, group "one authority: gyro factor"); the
+# kernel receives corrected readings and never names it, and S(0) is the
+# unit's departure from the nominal sensitivity after it.
+expect_none("the kernel never names the legacy gyro correction" "1\\.14688|kLegacyGyroScale"
+  src/fusion)
+# Allow: none expected. The scaled IMU factor is defined in its own unit and
+# built by the fit's graph builder only; another user of the scale state reads
+# the fit's graph or FitResult::scale, and a test that needs the class is under
+# tests/, which this rule does not search.
+expect_only("one builder of the scaled IMU factor" "ScaledImuFactor"
+  "^src/fusion/(scaledimufactor\\.(h|cpp)|factorgraphfit\\.cpp)$" src)
+# Allow: none expected. The scale factors are fitted (docs/SENSOR_FUSION.md
+# sections 4 and 5); say what is fitted and what is not instead.
+expect_none("the documents describe the fitted scale" "scale factor is not fitted" docs)
+# The fusion document names the scale prior's residual kind and the
+# diagnostics key. Allow: these count LINES; a second sentence that needs the
+# name raises its count here.
+expect_count("the fusion document names the scale prior" "scale_prior" 1 docs/SENSOR_FUSION.md)
+expect_count("the fusion document names the scale diagnostics" "model\\.scale" 1 docs/SENSOR_FUSION.md)
 
 # ─────────────────────────────── fusion-tooling (items 231, 233, 848, 928, 939)
 audit_group(fusion-tooling)
@@ -713,7 +745,7 @@ expect_none("the fusion tools are not installed"
 # tests/fusion/fusiontrace.h include fusion/fusionpipeline.h, the trace seam,
 # which is not in the pattern.
 expect_only("the tools see the public header or the trace seam only"
-  "#include \"fusion/(factorgraphfit|initializer|imuintegration|inputadapter|fusionsamples|fusionoutput|fusionprogress|trajectoryreconstruction|temperatureimufactor|samplestatistics|sensornoise)\\.h\""
+  "#include \"fusion/(factorgraphfit|initializer|imuintegration|inputadapter|fusionsamples|fusionoutput|fusionprogress|trajectoryreconstruction|temperatureimufactor|scaledimufactor|samplestatistics|sensornoise)\\.h\""
   "^src/fusion/|^tests/tst_fusion_kernel\\.cpp$"
   src tests)
 
@@ -1305,7 +1337,8 @@ else()
   # items to this list; the last replaces the list with RANGE 1001 1065.
   foreach(item IN ITEMS 1001 1002 1003 1004 1005 1006 1007 1050 1061
                         1008 1009 1010 1011 1012 1013 1014 1015 1016 1017 1040 1041 1043 1045 1046 1047
-                        1051 1052 1053 1062)
+                        1051 1052 1053 1062
+                        1018 1019 1020 1021 1023 1048 1054)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

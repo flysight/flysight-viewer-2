@@ -21,11 +21,13 @@
 // Internal to the fusion library: the batch fit. One state (pose X(k),
 // velocity V(k)) per GNSS fix, one accelerometer-and-gyro bias B(0) shared by
 // the whole recording and, in the full fit, one slope T(0) that makes the gyro
-// bias linear in the IMU temperature (temperatureimufactor.h); the
-// initializer's fits keep the constant bias. Each fix contributes a position and a velocity factor;
-// successive states are tied by the preintegrated IMU between them; a weak
-// prior keeps the bias near zero. Heading is not constrained by any factor of
-// its own: it is observable only through motion.
+// bias linear in the IMU temperature (temperatureimufactor.h) and the six
+// scale factors S(0) by which the readings are divided (scaledimufactor.h);
+// the initializer's fits keep the constant bias and unit scale. Each fix
+// contributes a position and a velocity factor; successive states are tied by
+// the preintegrated IMU between them; weak priors keep the bias near zero, the
+// slope near zero and the scale factors near one. Heading is not constrained
+// by any factor of its own: it is observable only through motion.
 
 namespace FlySight::Fusion::Detail {
 
@@ -56,9 +58,9 @@ struct Stopping {
     /// Mean of (before - after) / max(1, before) over the last
     /// min(slowTailWindow, n) iterations of the last pass, n its iteration count.
     double lastPassMeanRelativeDecrease = std::numeric_limits<double>::quiet_NaN();
-    /// |cost of the graph rebuilt at the last pass's fitted bias, evaluated at
-    /// that pass's values - the pass's final cost| / max(1, the pass's final
-    /// cost). NaN when no pass completed.
+    /// |cost of the graph rebuilt at the last pass's fitted bias and scale,
+    /// evaluated at that pass's values - the pass's final cost| / max(1, the
+    /// pass's final cost). NaN when no pass completed.
     double repreintegrationCostDifference = std::numeric_limits<double>::quiet_NaN();
     double biasSettledTolerance = 0;
     double lambdaUpperBound = 0;                 ///< the ceiling of the optimizer's damping
@@ -73,23 +75,33 @@ struct Stopping {
 /// (IMU); objectivePerState is the objective divided by the number of states.
 struct Quality { double imuNrms = 0, positionNrms = 0, velocityNrms = 0, objectivePerState = 0; };
 
-/// How a fit models the gyro bias. The full fit uses the temperature model
-/// (the public boundary always supplies a temperature); the initializer's
-/// prefix and segment fits use the constant model.
+/// How a fit models the gyro bias and, beside it, whether it carries the
+/// scale state. The full fit uses the temperature model (the public boundary
+/// always supplies a temperature) with the scale state on (planFit() sets
+/// it); the initializer's prefix and segment fits use the constant model with
+/// it off. A fit without the scale state is the same fit with the readings
+/// taken at unit scale, as the constant model is the temperature model at a
+/// zero slope.
 struct GyroBiasModel {
-    bool temperatureLinear = false;   ///< true: b(t) = b0 + b1 (T(t) - tRef) through TemperatureImuFactor and T(0); false: constant bias, stock ImuFactor, no T(0)
+    bool temperatureLinear = false;   ///< true: b(t) = b0 + b1 (T(t) - tRef) with T(0); false: constant bias, stock ImuFactor, no T(0)
     double tRef = 0;                  ///< degC; the mean IMU temperature of the fitted window; meaningful only when temperatureLinear
+    /// true: the six scale factors S(0) are variables of the graph, with their
+    /// prior, and every IMU factor depends on them; false: no S(0), unit
+    /// scale. Requires temperatureLinear: the state belongs to the full fit only.
+    bool scaleState = false;
 };
 
 /// The temperature model for `window`, tRef its plain mean temperature (index
-/// order). Throws std::invalid_argument("Temperature model without a temperature series") on an empty series.
+/// order), the scale state off. Throws std::invalid_argument("Temperature model without a temperature series") on an empty series.
 GyroBiasModel gyroBiasModelFor(const Samples &window);
 
-/// Where a graph is linearized: the constant bias and, with the temperature
-/// model, the slope (zero under the constant model).
+/// Where a graph is linearized: the constant bias, with the temperature
+/// model the slope (zero under the constant model), and with the scale state
+/// the scale factors (ones without it).
 struct BiasLinearization {
     gtsam::imuBias::ConstantBias bias;
     gtsam::Vector3 slope = gtsam::Vector3::Zero();
+    gtsam::Vector6 scale = gtsam::Vector6::Ones();
 };
 
 /// The bias the model assigns to the interval that starts at fix `k`: `bias`
@@ -101,15 +113,17 @@ gtsam::imuBias::ConstantBias intervalBias(const Samples &d, size_t k, const gtsa
 struct FitResult {
     gtsam::Values values;
     bool converged = false;                      ///< true for `settled` and `slow tail accepted`
-    double objective = 0;                        ///< graph error at `values`, preintegrated at the fitted bias
+    double objective = 0;                        ///< graph error at `values`, preintegrated at the fitted bias and scale
     double positionRms = 0, velocityRms = 0;     ///< fitted state vs GNSS measurement, vector RMS
     std::vector<FitIteration> history;
-    std::vector<FactorResidual> residuals;       ///< in factor order; the bias prior, then (temperature model) the slope prior, last
+    std::vector<FactorResidual> residuals;       ///< in factor order; the bias prior, then (temperature model) the slope prior, then (scale state) the scale prior, last
     Stopping stopping;
     Quality quality;
     gtsam::NonlinearFactorGraph graph;           ///< the graph the objective, residuals and quality were evaluated on:
-                                                 ///< rebuilt at the fitted bias; the initializer takes the marginal yaw sigma from it
+                                                 ///< rebuilt at the fitted bias and scale, so linearized at `values` with every
+                                                 ///< IMU factor's S - s^ zero; the initializer takes the marginal yaw sigma from it
     gtsam::Vector3 gyroBiasSlope = gtsam::Vector3::Zero();   ///< the fitted b1, rad/s per degC; zero under the constant model
+    gtsam::Vector6 scale = gtsam::Vector6::Ones();           ///< the fitted S(0), accelerometer x, y, z then gyro; ones without the scale state
     GyroBiasModel biasModel;                     ///< the model this fit used (tRef for the diagnostics and the reconstruction)
 };
 
@@ -139,19 +153,26 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples,
                                              const Checkpoint &checkpoint = Checkpoint());
 
 /// The factor graph of `samples` under `model`, every IMU factor preintegrated
-/// at its interval's bias (intervalBias of `at`). Factor order is part of the
-/// numerical behavior (it fixes the elimination ordering): per state the
-/// position factor, the velocity factor, then for every state but the first
-/// the IMU factor; the bias prior; and, with the temperature model, the slope
-/// prior last.
+/// at its interval's bias (intervalBias of `at`) and at `at.scale`. Factor
+/// order is part of the numerical behavior (it fixes the elimination
+/// ordering): per state the position factor, the velocity factor, then for
+/// every state but the first the IMU factor; the bias prior; with the
+/// temperature model the slope prior; and with the scale state the scale prior
+/// last: mean one, sigmas the sensitivity tolerances of tuning.noise
+/// (accelerometer x, y, z, then gyro). The IMU factor is stock under the
+/// constant model, the temperature factor (temperatureimufactor.h) under the
+/// temperature model, and with the scale state the factor of
+/// scaledimufactor.h, given the preintegration's scale Jacobian. Throws
+/// std::invalid_argument("Scale state without the temperature model") for a
+/// scale state under the constant model.
 gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples, const BiasLinearization &at,
                                              const GyroBiasModel &model, const Tuning &tuning,
                                              const Checkpoint &checkpoint = Checkpoint());
 
 /// Fits `samples` from `initial`. Preintegration is linearized at a fixed
-/// bias, so the fit alternates: optimize, re-preintegrate at the new bias,
-/// optimize again, for at most `maxPasses` passes. A settled pass has
-/// converged when the graph rebuilt at its bias changes the cost by at most
+/// bias and scale, so the fit alternates: optimize, re-preintegrate at the
+/// new bias and scale, optimize again, for at most `maxPasses` passes. A
+/// settled pass has converged when the graph rebuilt at its bias and scale changes the cost by at most
 /// `biasSettledTolerance` (relative to max(1, cost)); a last pass that reaches
 /// its iteration limit is accepted as a slow tail when its last
 /// `slowTailWindow` iterations lowered the cost by less than
@@ -162,7 +183,7 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples, const BiasL
 /// the cost unchanged while the damping is at `lambdaUpperBound`: the
 /// optimizer is stuck there, and that is never a convergence. The reported
 /// objective, residuals, quality and `graph` are those of the graph rebuilt at
-/// the fitted bias.
+/// the fitted bias and scale.
 ///
 /// Every iteration is reported through `checkpoint` as `passFormat` with its
 /// two remaining QString::arg placeholders filled: the lower-numbered one with
@@ -173,8 +194,12 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples, const BiasL
 /// Under the temperature model (`model.temperatureLinear`) the graph carries
 /// T(0), started at zero; every interval is preintegrated and evaluated at
 /// its own bias in every build, and the fitted slope is returned in
-/// `gyroBiasSlope`. The default is the constant model: the initializer's
-/// prefix and segment fits are stock.
+/// `gyroBiasSlope`. With the scale state (`model.scaleState`) it also
+/// carries S(0), started at ones; every build preintegrates at the scale of
+/// the current values, and the fitted factors are returned in `scale`. The
+/// default is the constant model without the scale state: the initializer's
+/// prefix and segment fits are stock. A scale state under the constant model
+/// throws std::invalid_argument, a programming error.
 FitResult fitFactorGraph(const Samples &samples, const InitialState &initial, const Tuning &tuning,
                          const QString &passFormat = QString::fromLatin1(kFullFitPassFormat),
                          const Checkpoint &checkpoint = Checkpoint(),

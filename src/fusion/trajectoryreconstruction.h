@@ -15,11 +15,12 @@
 //
 // The IMU-rate reconstruction (reconstructAtImuRate()) is the state a fit with
 // a state at every integration edge would give, to within one linearization,
-// with the fitted states at the fixes and the biases held: each fix interval
-// is solved on its own, in one pass over its steps. It takes its step model
-// from the fit's own preintegration, through preintegrateImu()'s observer
-// (imuintegration.h): the forward states are the library's prediction, the
-// covariance P_j and the transition F_j of every step are the library's, and
+// with the fitted states at the fixes and the biases and scale factors held:
+// each fix interval is solved on its own, in one pass over its steps. It
+// takes its step model from the fit's own preintegration, at the fitted bias
+// and scale, through preintegrateImu()'s observer (imuintegration.h): the
+// forward states are the library's prediction, the covariance P_j and the
+// transition F_j of every step (ImuStep::transition) are the library's, and
 // nothing restates how a step integrates or what noise it carries.
 
 namespace FlySight::Fusion::Detail {
@@ -37,9 +38,9 @@ using NavStates = std::vector<gtsam::NavState, Eigen::aligned_allocator<gtsam::N
 /// order of the IMU factor); the corrected state at edge j is the forward state
 /// with its share of d applied, and at the last edge it is the fitted state
 /// itself (to rounding). The step correction c_j is the corrected velocity
-/// change across step j over its length, less the mean of the bias-corrected
-/// readings at its two edges each rotated by the corrected attitude there, less
-/// gravity.
+/// change across step j over its length, less the mean of the readings at its
+/// two edges, divided by the fitted scale and bias removed, each rotated by the
+/// corrected attitude there, less gravity.
 struct IntervalReconstruction {
     gtsam::imuBias::ConstantBias bias;   ///< the interval's bias: intervalBias() of the fit
     std::vector<double> edges;           ///< the integration edges, s since the epoch: fix k first, fix k+1 last
@@ -51,8 +52,8 @@ struct IntervalReconstruction {
 };
 
 /// Interval k (fix k to fix k+1) of `window` under `fit`, preintegrated at the
-/// interval's bias with `tuning`, which must be the tuning the fit ran with, so
-/// that the step model is the fit's. Lets what preintegrateImu() throws
+/// interval's bias and at `fit.scale` with `tuning`, which must be the tuning
+/// the fit ran with, so that the step model is the fit's. Lets what preintegrateImu() throws
 /// propagate. The sharing: P_j and F_j are in the preintegration's tangent
 /// coordinates (the frame of the state at fix k), and M_j, the Jacobian of
 /// the retraction at the forward state with respect to that tangent, maps
@@ -84,8 +85,9 @@ struct ImuRateTrajectory {
 /// of its own time; a sample exactly on a fix is published once, at the first
 /// edge of the interval that fix starts. Attitude, position and velocity are
 /// the corrected state at the sample's edge; the acceleration is
-/// R (f - b_a) + g + (c_before + c_after) / 2, f the sample's own reading, b_a
-/// the fitted accelerometer bias, and c_before, c_after the corrections of the
+/// R (f ./ s_a - b_a) + g + (c_before + c_after) / 2, f the sample's own
+/// reading, s_a the fitted accelerometer scale factors (./ divides axis by
+/// axis), b_a the fitted accelerometer bias, and c_before, c_after the corrections of the
 /// steps that end and start at the sample's edge in the window's sequence of
 /// steps (a sample on a fix takes c_before from the last step of the interval
 /// before it; a sample on the first fix has only c_after and takes it alone).

@@ -157,6 +157,11 @@ and `IMU/wz` by **1.14688**, and nothing else.
 
 - This is a nominal scale correction, not a per-device calibration. It cannot
   recover precision lost to rounding, clipping, or overflow.
+- It restores the nominal sensitivity of legacy files and is not the sensor
+  fusion's scale state, which is centred on one after it: the fit's scale
+  factors are each unit's departure from the datasheet's nominal sensitivity,
+  fitted on the corrected readings
+  ([SENSOR_FUSION.md](SENSOR_FUSION.md), section 4).
 - A *recorded* `IMU/wTotal` column is not in the table and is not corrected.
   The *derived* `IMU/wTotal`, and values interpolated at a marker, are computed
   from the corrected `wx`, `wy`, `wz`.

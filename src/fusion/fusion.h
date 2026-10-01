@@ -65,7 +65,8 @@ struct Result {
     /// under (`configuration`), initializer, objective, biases, the model
     /// (`model.noise`: each sensor's datasheet density, bandwidth, step,
     /// per-sample sigma and integration density; `model.gyro_bias`: `b0`,
-    /// `b1`, the reference temperature), residuals. On Rejected /
+    /// `b1`, the reference temperature; `model.scale`: the fitted scale
+    /// factors, `acc` and `gyro`, each [x, y, z]), residuals. On Rejected /
     /// SolverFailed: the algorithm name and the failure. Empty only when
     /// Cancelled.
     QString diagnosticsJson;
@@ -76,9 +77,10 @@ struct Result {
     /// integrated from the fitted state at the first, joined to the fitted
     /// state at the second by sharing the mismatch over the steps by their
     /// noise (docs/SENSOR_FUSION.md section 4). Acceleration m/s^2 is
-    /// inertial, NED: the bias-corrected reading rotated by that attitude,
-    /// plus gravity, plus the model's share of the correction, so that
-    /// integrated it reproduces the velocity. roll, pitch and yaw are
+    /// inertial, NED: the reading divided by the fitted accelerometer scale
+    /// factors, with the bias removed, rotated by that attitude, plus
+    /// gravity, plus the model's share of the correction, so that integrated
+    /// it reproduces the velocity. roll, pitch and yaw are
     /// degrees, unwrapped across the whole fit with the rule the GNSS course
     /// uses; qx..qw is the same body-to-NED attitude as a quaternion.
     QVector<double> time, north, east, down, velN, velE, velD, accN, accE, accD,

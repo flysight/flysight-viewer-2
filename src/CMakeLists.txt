@@ -384,6 +384,7 @@ add_library(flysight_fusion STATIC
   fusion/initializer.cpp               fusion/initializer.h
   fusion/factorgraphfit.cpp            fusion/factorgraphfit.h
   fusion/temperatureimufactor.cpp      fusion/temperatureimufactor.h
+  fusion/scaledimufactor.cpp           fusion/scaledimufactor.h
   fusion/trajectoryreconstruction.cpp  fusion/trajectoryreconstruction.h
   fusion/fusionoutput.cpp              fusion/fusionoutput.h
   # The solver's oneTBB helper threads at the priority of the thread that runs

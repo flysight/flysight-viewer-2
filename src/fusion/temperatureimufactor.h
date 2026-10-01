@@ -12,6 +12,12 @@
 // constant bias B(0) and the slope T(0): b = B(0) + [0; T(0) * dT], where dT is
 // this interval's IMU temperature at its first fix minus the fitted window's
 // reference temperature, both fixed at construction.
+//
+// It is the factor of the temperature model with the scale state off: the
+// full fit runs the scale state, whose factor (scaledimufactor.h) reproduces
+// this one where the scale factors equal those of the preintegration; this
+// one serves a full fit with the state off (the comparison of the scale
+// tests) and the tests' references in which the scale is held.
 
 namespace FlySight::Fusion::Detail {
 

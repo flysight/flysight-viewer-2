@@ -18,20 +18,20 @@
     },
     "fixture_generator_note": "The fixture generator the goldens were captured with. The goldens are valid for these inputs only: if either file changes, re-capture (tests/README.md, section 11).",
     "fixture_generator_sha256_lf": {
-        "tests/fusion/fusionfixtures.cpp": "45a4637d5411cb31cff470426fb108cd8770d2b27488d9e53b0757af663b7030",
-        "tests/fusion/fusionfixtures.h": "b0ccab2ba37db349370f8a2a76bdf1b90241b3c635e2cef4dae64905624d1755"
+        "tests/fusion/fusionfixtures.cpp": "8ae3ac45cc83b02e3c3cdfcf3f82660745b2d82bd718365065c483f4bcda74c1",
+        "tests/fusion/fusionfixtures.h": "f96b4218366096a0af874daafa1437f58617bc90a533ddce8bd88b8590072478"
     },
     "machine": {
         "cpu_architecture": "x86_64",
         "os": "Windows 11 Version 25H2"
     },
     "qt": "6.9.3",
-    "repository_revision": "e7ac7a8bc9621ced4d01daefc3c6bc199161affe",
+    "repository_revision": "236dfad6877bbf80cef223bff1539b92480ad810",
     "sha256_lf": {
-        "coarse_linear.channels.txt": "21378a278ee1a21f6fc1966bf2e1183975d0302892754d5673aaf55af4c242f0",
-        "coarse_linear.json": "c99b75723f31f745728c62d07ebc5adc531dad9c30abb8aea1a0327b0c65d3d7",
-        "coarse_maneuver.channels.txt": "828ff1554a62fa632179dabb2671b3c1d575686602391c1d55cef430a471603b",
-        "coarse_maneuver.json": "cf77600d0d7f942e70198b4f735f47273f570dbb102e896dc743be1a641afc7f",
+        "coarse_linear.channels.txt": "167adcd92df04358526d2379ca38e0e1dc1dc234d2ca9728729ed8c98524cced",
+        "coarse_linear.json": "2d6bba96f12065d1b0376f90e2d76e1c1216b54a03ceb30ea862ed5a85bfddb6",
+        "coarse_maneuver.channels.txt": "8db2b446c2b49ee8f8775d17ee86137036f645f7ee65801d7d6b359980d62aec",
+        "coarse_maneuver.json": "a096ad1a8b0b1a7d0d325e4d2d0daccdb7dd1cbb8a5b60dd31794bbf0b397830",
         "reject_coverage.json": "3d4b04d250422d178d4966db54de4c7ebd715c83b9dbd2edd984e93229fe9ad2",
         "reject_gnss_gap.json": "e203b5f42a84b29e588acd15e808407d01df06dba951bcd87e7cc257d6eaf59a",
         "reject_imu_gap.json": "27aa55749baa2e170d2976f601feea82ac1398414a45ec97afda962bc2013d1c",
@@ -43,8 +43,8 @@
         "reject_sigma.json": "3d5e404b54a5c1f8b0bb0308997a5dba47ed4843e3a3a9751c69c3eb89cfb583",
         "reject_time_order.json": "7ea057449747d475729b7fa3d2e02e37f3d5d5ef9aba46a4416eaffa776df57f",
         "reject_too_few_fixes.json": "faec6977d87b8a6e69ccc75ba9b8097979f7b154fcaafdc8b73d22436a98a4dd",
-        "stationary_spin.channels.txt": "77382b3c4c27e1d0f4f2af8d71f97a8b95e6ba5f4420854c2a815d32bd3bfd11",
-        "stationary_spin.json": "bf02430bf792ff5c89ae5aec6eab95d9470942f8acdb25688ff34a6459152a70"
+        "stationary_spin.channels.txt": "26887b4520231f31a348e644de7272842a0cedb4a1b107dce8606160f19fa988",
+        "stationary_spin.json": "bba214322446b316d6d98d2487e60602fcb8d9c6c2cbe517b9d17522e17fbd24"
     },
     "sha256_note": "Hashes of the files as written (LF line endings). A checkout with core.autocrlf=true has CRLF in the working tree; the loader accepts both.",
     "solver": {

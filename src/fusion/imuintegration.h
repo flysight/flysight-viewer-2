@@ -13,9 +13,12 @@
 // Internal to the fusion library: integration of IMU samples between exact
 // boundary times. IMU samples are treated as a piecewise-linear signal, and
 // every integration step takes the signal at the midpoint of the step, so a
-// boundary that falls between two samples is honoured exactly. The
-// accelerometer reading of a step is turned by half the step's rotation
-// before the library applies it, so that it acts at the attitude of the
+// boundary that falls between two samples is honoured exactly. The readings
+// are divided, axis by axis, by the scale the integration is linearized at
+// (the fit's scale factors, docs/SENSOR_FUSION.md section 4; one for every fit
+// without the scale state), and everything a step computes is computed from
+// the divided readings. The accelerometer reading of a step is turned by half
+// the step's rotation before the library applies it, so that it acts at the attitude of the
 // step's middle and not, as the library would have it, at the attitude of
 // the step's start. Each step's measurement covariance is the integration
 // density of the datasheet's noise (sensornoise.h) plus, in quadrature, the
@@ -59,7 +62,8 @@ std::shared_ptr<gtsam::PreintegrationParams> preintegrationParams(const ImuNoise
 struct ImuStep {
     double start, end;          ///< the step's two integration edges, s
     double dt;                  ///< end - start, the length passed to the integration
-    gtsam::Vector3 force, gyro; ///< the readings passed to the integration, not bias-corrected: the midpoint rate, and the midpoint reading turned by half the step's bias-corrected rotation
+    gtsam::Vector3 force, gyro; ///< the readings passed to the integration, divided by the scale and not bias-corrected: the midpoint rate, and the midpoint reading turned by half the step's bias-corrected rotation
+    gtsam::Matrix9 transition;  ///< A, the library's transition of the preintegration across this step (its update() on a copy, the same bits the step propagates its covariance with)
 };
 
 /// Sees each step of preintegrateImu() before it is integrated, with the
@@ -67,7 +71,13 @@ struct ImuStep {
 using ImuStepObserver = std::function<void(const gtsam::PreintegratedImuMeasurements &, const ImuStep &)>;
 
 /// The preintegrated IMU measurement between two times (in practice two
-/// successive fixes), linearized at `bias`, with the step model of `noise`.
+/// successive fixes), linearized at `bias` and at `scale`, with the step model
+/// of `noise`.
+///
+/// `scale` holds the accelerometer's factors x, y, z, then the gyro's: every
+/// reading enters divided by its axis's factor (f~ = f ./ s_a, w~ = w ./ s_g),
+/// and below "force" and "rate" are the divided readings. At unit scale every
+/// division is exact, so the result is the bits of the undivided readings.
 ///
 /// Step [a, b], dt = b - a, lies inside one sample interval [t_k, t_k+1] of
 /// `samples` (the edges include every IMU time), whose second derivative is
@@ -81,14 +91,28 @@ using ImuStepObserver = std::function<void(const gtsam::PreintegratedImuMeasurem
 /// r_v = |(dt/24) theta x (theta x fbar) + (dt/12)(theta x df - dtheta x fbar)|
 /// and r_theta = |theta x dtheta| / 12. The step's sensor covariances are
 /// (D_a^2 + (s_v^2 + r_v^2) / dt) I and (D_g^2 + (s_theta^2 + r_theta^2) / dt) I,
-/// D the integration densities: a step with a constant signal and no rotation
-/// has the densities' covariance exactly.
+/// D the integration densities (the datasheet's, which are not divided): a
+/// step with a constant signal and no rotation has the densities'
+/// covariance exactly.
+///
+/// `scaleJacobian`, when given, receives H, the derivative of the returned
+/// preintegrated() with respect to the scale at `scale` (rows theta, position,
+/// velocity of the tangent preintegration; columns the six factors), from the
+/// library's own per-step Jacobians: with A, B, C its update()'s transition and
+/// input Jacobians of the step, R = Exp(phi) the half-step turn, phi =
+/// (rate_mid - b_g) dt / 2, u = force_mid - b_a, F = diag(force_mid ./ s_a)
+/// and W = diag(rate_mid ./ s_g), the step's input is
+/// G = [-B R F | B R [u]x Jr(phi) W dt/2 - C W] and H_(j+1) = A H_j + G from
+/// H_0 = 0. The middle term is the half-step turn's dependence on the gyro
+/// scale.
 ///
 /// `observer`, when given, is called once per step, in time order, before
 /// that step's covariance is written into the shared params and before the
 /// step is integrated: with the preintegration after the steps before it (so
 /// its preintMeasCov(), preintegrated() and deltaTij() are those of the step's
-/// first edge) and with the step. The returned preintegration is that of the
+/// first edge) and with the step, its transition included. A, B and C are
+/// taken (update() on a copy) only when an observer or the Jacobian is asked
+/// for; neither changes a bit of the result. The returned preintegration is that of the
 /// last edge. The observer receives both by const reference, but GTSAM's p()
 /// and params() still hand out the shared params mutably, so the observer
 /// must only read them. The step's two sensor covariances are written after
@@ -102,8 +126,9 @@ using ImuStepObserver = std::function<void(const gtsam::PreintegratedImuMeasurem
 /// preintegration instead of restating the step model.
 gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, double start, double end,
                                                     const gtsam::imuBias::ConstantBias &bias,
-                                                    const ImuNoise &noise,
-                                                    const ImuStepObserver &observer = ImuStepObserver());
+                                                    const gtsam::Vector6 &scale, const ImuNoise &noise,
+                                                    const ImuStepObserver &observer = ImuStepObserver(),
+                                                    gtsam::Matrix96 *scaleJacobian = nullptr);
 
 /// `rotation` (body to NED at `start`) carried to `end` by the bias-corrected
 /// gyro. `end` may precede `start`; the increments are then undone in reverse

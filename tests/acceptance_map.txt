@@ -18,7 +18,7 @@
 #             full in tests/README.md, appendix C. It is amended by the
 #             specification of 701-754: item 228 is stated as amended. It is
 #             amended by the specification of 1001-1065: items 215, 216, 217,
-#             221, 227, 245 and 247 are stated as amended.
+#             221, 227, 245, 246 and 247 are stated as amended.
 #   301-350   storing requested calculation results with the session (record
 #             files, restore on load, validity, logbook columns over them):
 #             item = 300 + clause number. Stated in full in
@@ -76,8 +76,8 @@
 #             the algorithm string and the goldens captured again): item =
 #             900 + clause number. Stated in full in tests/README.md,
 #             appendix J. It amends the specification of 801-863. It is
-#             amended by the specification of 1001-1065: items 915, 921, 925,
-#             930 and 935 are stated as amended.
+#             amended by the specification of 1001-1065: items 901, 910, 914,
+#             915, 921, 925, 930 and 935 are stated as amended.
 #   1001-1065 the documented noise model and the accuracy, part 1 (the sensor
 #             configuration attributes, the noise model by configuration,
 #             the scale-factor state, the accuracy and its four channels and
@@ -658,7 +658,7 @@
 245 tst_fusion_kernel samplingTermFollowsTheDerivation
 245 tst_fusion_kernel rotationRemainderFollowsTheDerivation
 
-# 246 - test 9: a recording without IMU/temperature is rejected by the kernel by name and blocked in a session; constant temperature leaves b1 at its prior
+# 246 - (as amended) test 9: a recording without IMU/temperature is rejected by the kernel by name and blocked in a session; a constant temperature leaves b1 at its prior, and with the scale state of the specification of 1001-1065 off, reproduces the constant-bias fit
 246 tst_fusion_kernel validationRejectsEachDefect
 246 tst_fusion_kernel constantTemperatureKeepsSlopeAtPrior
 246 tst_fusion_session missingInputsAreNotApplicable
@@ -2762,10 +2762,11 @@
 
 # ---- The fused state at every IMU sample: item = 900 + clause number ----
 
-# 901 - (5) for every fix interval of a fit that succeeds, the pass integrates gyro and accelerometer together from the fitted state at the interval's first fix with the biases the fit assigns to that interval: the attitude advances with the gyro, the reading, bias removed, is rotated by it and gravity added, and velocity and position advance with the result
+# 901 - (5, as amended) for every fix interval of a fit that succeeds, the pass integrates gyro and accelerometer together from the fitted state at the interval's first fix with the biases and scale factors the fit assigns to that interval: the attitude advances with the gyro, the reading, divided by the scale and bias removed, is rotated by it and gravity added, and velocity and position advance with the result
 901 tst_fusion_kernel imuRateMatchesHeldEndsGraph
 901 tst_fusion_kernel imuRateEndsAreTheFit
 901 tst_fusion_kernel reconstructionUsesIntervalBias
+901 tst_fusion_kernel reconstructionUsesTheFittedScale
 901 tst_fusion_kernel exactConstantVelocityFit
 
 # 902 - (5) the integration is the fit's own: its edges are every IMU sample in the interval and the two fix times, with the same midpoint interpolation of the readings and the same per-step noise as the fit's IMU factors
@@ -2802,7 +2803,7 @@
 909 tst_fusion_kernel imuRateMatchesHeldEndsGraphUnderRotation
 909 tst_fusion_kernel imuRateEndsAreTheFit
 
-# 910 - (5, as settled) a step correction for every step: the corrected velocity change over the step length, less the mean of the readings at its two edges, bias removed, each rotated by the corrected attitude at its own edge, less gravity (at a fix the reading is the one the integration uses there)
+# 910 - (5, as settled, as amended) a step correction for every step: the corrected velocity change over the step length, less the mean of the readings at its two edges, divided by the scale, bias removed, each rotated by the corrected attitude at its own edge, less gravity (at a fix the reading is the one the integration uses there)
 910 tst_fusion_kernel imuRateAccelerationIntegratesToVelocity
 910 tst_fusion_kernel imuRateZeroMismatchIsForward
 
@@ -2823,8 +2824,9 @@
 913 tst_fusion_kernel exactConstantVelocityFit
 913 manual M45
 
-# 914 - (6, as settled) the acceleration is the sample's own reading, bias removed, rotated by the corrected attitude, plus gravity, plus the mean of the corrections of the steps beside its edge (a step beside a fix being the part-step in that fix interval); only a sample exactly on the first fix has one such step, since the last fix is never published; where the corrections are negligible it is the rotated reading
+# 914 - (6, as settled, as amended) the acceleration is the sample's own reading, divided by the fitted scale, bias removed, rotated by the corrected attitude, plus gravity, plus the mean of the corrections of the steps beside its edge (a step beside a fix being the part-step in that fix interval); only a sample exactly on the first fix has one such step, since the last fix is never published; where the corrections are negligible it is the rotated reading
 914 tst_fusion_kernel imuRateZeroMismatchIsForward
+914 tst_fusion_kernel reconstructionUsesTheFittedScale
 914 tst_fusion_kernel imuRateAccelerationIntegratesToVelocity
 914 tst_fusion_kernel imuRateIsWhatTheFitPublishes
 914 tst_fusion_kernel imuRateSampleOnAFixIsPublishedOnce
@@ -2885,7 +2887,7 @@
 924 tst_fusion_kernel imuRateIsWhatTheFitPublishes
 924 tst_fusion_kernel imuRateEndsAreTheFit
 
-# 925 - (9, as amended) the fit is unchanged by the pass (the specification of 1001-1065 changes the noise model, the damping ceiling and the stopping rules), and so are its states at the fixes and its biases: the pass reads the converged solution and changes nothing in it
+# 925 - (9, as amended) the fit is unchanged by the pass (the specification of 1001-1065 changes the noise model, the damping ceiling and the stopping rules, and adds the scale state to the graph), and so are its states at the fixes, its biases and its scale factors: the pass reads the converged solution (states, biases and scale factors) and changes nothing in it
 925 tst_fusion_kernel fitTraceMatchesGolden
 925 tst_fusion_golden successFixturesMatchGolden
 925 tst_fusion_kernel imuRateEndsAreTheFit
@@ -3036,6 +3038,31 @@
 1017 tst_fusion_kernel temperatureGraphShape
 1017 audit noise-model
 
+# 1018 - (6, as settled) a scale-factor state: per fit, one factor per axis for each sensor, starting at one, with the datasheet's sensitivity tolerance (G_So%, +/-1 %, for both sensors: Table 2 states none for the accelerometer) as a zero-mean prior on its departure from one
+1018 tst_fusion_kernel scaleGraphShape
+1018 tst_fusion_kernel scaleFactorJacobians
+1018 audit scale-state
+
+# 1019 - (6) the readings enter the integration divided by the scale, and the graph is re-preintegrated at the fitted scale as it is at the fitted bias, under the same settled test
+1019 tst_fusion_kernel preintegrationDividesByTheScale
+1019 tst_fusion_kernel scaleJacobianMatchesCentralDifferences
+1019 tst_fusion_kernel fitRepreintegratesAtTheFittedScale
+1019 tst_fusion_kernel reconstructionUsesTheFittedScale
+
+# 1020 - (6, as settled) a recording without motion leaves the scale at one within its prior: the data then constrain only the corrected reading along gravity, which the scale and the bias of that axis share in proportion to their priors' variances; this holds for the deterministic part of the readings, and on a noise-dominated gyro axis the noise moves the factor within its prior
+1020 tst_fusion_kernel restLeavesTheScaleAtItsPrior
+1020 manual M49
+
+# 1021 - (6) the fitted scale factors are reported in the diagnostics beside the biases
+1021 tst_fusion_kernel diagnosticsReportTheScale
+1021 tst_fusion_golden successFixturesMatchGolden
+1021 manual M49
+
+# 1023 - (6) the 1.14688 schema correction of legacy recordings is not a scale factor and is untouched
+1023 tst_conversion_engine legacyGyroCorrected
+1023 tst_fusion_runner legacySchemaScalesTheGyro
+1023 audit scale-state
+
 # 1040 - (8) the diagnostics show the configuration the fit ran under
 1040 tst_fusion_kernel diagnosticsReportTheNoiseModel
 1040 tst_fusion_golden successFixturesMatchGolden
@@ -3064,6 +3091,10 @@
 1047 tst_fusion_kernel samplingTermFollowsTheDerivation
 1047 audit fusion-model
 
+# 1048 - (10) the scale factors are variables of the graph beside the biases
+1048 tst_fusion_kernel scaleGraphShape
+1048 audit scale-state
+
 # 1050 - (11) test: a file with every key imports them; a malformed one is an import error naming the key; a file without them takes the default
 1050 tst_importer configurationStoredAsRecorded
 1050 tst_importer rejectsMalformedConfiguration
@@ -3082,6 +3113,10 @@
 1053 tst_fusion_kernel constantSignalHasNoSamplingTerm
 1053 tst_fusion_kernel samplingTermFollowsTheDerivation
 1053 tst_fusion_kernel rotationRemainderFollowsTheDerivation
+
+# 1054 - (11) test: a synthetic recording with the accelerometer 2 % high on one axis recovers the factor within the prior's tolerance, and its position misfit falls against a fit without the state; a recording at rest leaves the scale at one within its prior
+1054 tst_fusion_kernel scaleRecordingRecoversTheFactor
+1054 tst_fusion_kernel restLeavesTheScaleAtItsPrior
 
 # 1061 - (11, as settled) test: on a build where the configuration is carried and defaulted and the noise model is the previous one (the end of phase 1), the existing channels and diagnostics of every fixture are bit-identical to the goldens
 1061 tst_fusion_golden successFixturesMatchGolden

@@ -238,7 +238,8 @@ FusionFixture stationarySpin()
 }
 
 // ---------------------------------------------------------------------------
-// The initializer's recordings (spec section 10). Not golden fixtures: their
+// The synthetic recordings of the kernel's model tests: the initializer's
+// (spec section 10) and the scale state's. Not golden fixtures: their
 // expectations are stated in tst_fusion_kernel. Rotation constants are exact
 // rationals (.6 / .8 and .96 / .28, Pythagorean), so no transcendental
 // function appears; the body force is R^T (a - g) + b_a with g = (0, 0,
@@ -454,6 +455,67 @@ FusionFixture driftingBias()
     return f;
 }
 
+/// 60 s level, heading north and not rotating, with the accelerometer's x
+/// axis 2 % high: the recording of the scale-state test (the documented noise
+/// model, clause 54). The north acceleration is periodic with zero mean, so
+/// that the scale of the x axis is not confounded with its bias.
+///
+/// GNSS 5 Hz, t = .1 + j * .2, j = 0..299; IMU 25 Hz, t = i * .04,
+/// i = 0..1500. Period P = 10 s, amplitude A = 5 m/s^2, c = 10; the period
+/// index k and the phase tau by integer arithmetic: k = i / 250 and
+/// tau = (i - 250 k) * .04 for the IMU, k = (2 j + 1) / 100 and
+/// tau = .1 + (j - 50 k) * .2 for GNSS (no fix falls on a period boundary).
+/// With x = tau / P: north acceleration a = A c x (1 - x)(1 - 2 x) (zero mean
+/// per period, C1 across period ends, peak 4.8 m/s^2); vN = 10 + A P c x^2
+/// (1 - x)^2 / 2 (a swing of 15.6 m/s); pN = k (10 P + A P^2 c / 60) + 10 tau
+/// + A P^2 c (x^3 / 3 - x^4 / 2 + x^5 / 5) / 2; east and down zero. Body force
+/// (1.02 (a + .05), -.03, -9.80665 + .08): the x reading, bias included, 2 %
+/// high, the other axes nominal; gyro (.2, -.15, .3) deg/s. hAcc = 1,
+/// vAcc = 1.5, sAcc = .1. Noise: force .005, gyro .02 deg/s, position .2,
+/// velocity .03; seed 0x8F050009. 300 states. States 26 Hz.
+FusionFixture scaleRecording()
+{
+    FusionFixture f;
+    f.name = QStringLiteral("scale_recording");
+    const NoiseLevels noise{ .005, .02, .2, .03 };
+    NoiseSource source(0x8F050009ull);
+    const double A = 5, c = 10, P = 10, vNominal = 10, accelerometerScaleX = 1.02;
+
+    for (int j = 0; j <= 299; ++j) {
+        const double t = .1 + j * .2;
+        const int k = (2 * j + 1) / 100;
+        const double tau = .1 + (j - 50 * k) * .2;
+        const double x = tau / P;
+        const double velN = vNominal + A * P * c * x * x * (1 - x) * (1 - x) / 2;
+        const double north = k * (vNominal * P + A * P * P * c / 60) + vNominal * tau
+                             + A * P * P * c * (x * x * x / 3 - x * x * x * x / 2 + x * x * x * x * x / 5) / 2;
+        const double n0 = source.next(), n1 = source.next(), n2 = source.next();
+        const double n3 = source.next(), n4 = source.next(), n5 = source.next();
+        appendGnss(f, t,
+                   north + noise.position * n0, noise.position * n1, noise.position * n2,
+                   velN + noise.velocity * n3, noise.velocity * n4, noise.velocity * n5,
+                   1, 1.5, .1);
+    }
+    for (int i = 0; i <= 1500; ++i) {
+        const double t = i * .04;
+        const int k = i / 250;
+        const double tau = (i - 250 * k) * .04;
+        const double x = tau / P;
+        const double aN = A * c * x * (1 - x) * (1 - 2 * x);
+        const double n0 = source.next(), n1 = source.next(), n2 = source.next();
+        const double n3 = source.next(), n4 = source.next(), n5 = source.next();
+        appendImu(f, t,
+                  accelerometerScaleX * (aN + .05) + noise.force * n0, -.03 + noise.force * n1,
+                  (-kStandardGravity + .08) + noise.force * n2,
+                  .2 + noise.gyro * n3, -.15 + noise.gyro * n4, .3 + noise.gyro * n5,
+                  kFixtureTemperatureDegC);
+    }
+    f.originIndex = 0;
+    stateConfiguration(f, 26);
+    roundOntoLattice(f);
+    return f;
+}
+
 // ---------------------------------------------------------------------------
 // Rejection fixtures: one mutation each
 // ---------------------------------------------------------------------------
@@ -580,6 +642,8 @@ FusionFixture initializerFixture(const QString &name)
         return saccAnchor();
     if (name == QStringLiteral("drifting_bias"))
         return driftingBias();
+    if (name == QStringLiteral("scale_recording"))
+        return scaleRecording();
     return FusionFixture();
 }
 

@@ -27,7 +27,7 @@ struct FitPlan {
     PreparedInput prepared;
     Tuning tuning;
     Samples window;             ///< what the graph covers
-    GyroBiasModel biasModel;    ///< the full fit's gyro bias model: temperature-linear about the window's mean temperature
+    GyroBiasModel biasModel;    ///< the full fit's model: the gyro bias temperature-linear about the window's mean temperature, with the scale state
 };
 
 /// Stage 1: is this a recording the model can use, and what does the fit
@@ -55,8 +55,10 @@ FitPlan planFit(const Channels &channels, const Tuning &baseTuning)
     requireStatedRates(imuInterval, channels.imuConfiguration);
     plan.tuning.noise = noise;
     // T_ref is a property of the fitted window (the mean of its IMU samples'
-    // temperature), decided before the fit starts.
+    // temperature), decided before the fit starts. The scale factors are
+    // the full fit's alone: the initializer's fits keep the stock model.
     plan.biasModel = gyroBiasModelFor(plan.window);
+    plan.biasModel.scaleState = true;
     return plan;
 }
 
@@ -84,9 +86,10 @@ Result fitAndAssemble(const FitPlan &plan, const Checkpoint &checkpoint, Pipelin
     // Before the full fit: a cancelled or failed full fit keeps the account.
     if (trace)
         trace->initializer = init.account;
-    // The fit still refreshes preintegration as the fitted biases change. The
-    // full fit alone runs the temperature model; the initializer's fits above
-    // took the constant one by default.
+    // The fit still refreshes preintegration as the fitted biases and scale
+    // factors change. The full fit alone runs the temperature model with the
+    // scale state; the initializer's fits above took the stock model by
+    // default.
     const FitResult fit = fitFactorGraph(plan.window, init.state, plan.tuning,
                                          QString::fromLatin1(kFullFitPassFormat), checkpoint, plan.biasModel);
     if (trace) {
