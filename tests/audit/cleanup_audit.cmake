@@ -55,7 +55,10 @@
 #     linear reconstruction it replaced (states interpolated between fixes,
 #     an attitude correction spread by elapsed time), its diagnostics key and
 #     any text calling the fused output interpolated stay gone (items
-#     901-940).
+#     901-940);
+#   - the sensor configuration attributes have one authority: the key names
+#     and the firmware version their default describes are spelled in one
+#     vocabulary, and the keys nothing uses stay unused (items 1001-1065).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -258,6 +261,32 @@ expect_none("the replaced default helpers stay gone" "register(Sp|Wsp)Default" s
 # a wind the user sets is stored by the logbook's edit, not by these files.
 expect_none("no wind default in the importer or the backfill" "_WIND_|WindN|WindE"
   src/dataimporter.cpp src/dataimporter.h src/logbookmanager.cpp src/logbookmanager.h)
+
+# ─────────────────────────────── sensor-configuration (items 1001, 1004-1006)
+# The vocabulary of the sensor configuration attributes
+# (src/sensorconfiguration.*) is the one place in src that spells a key or
+# the firmware version the default describes: the importer, the exporter and
+# the fusion registration name the keys through its constants, and the
+# default's values come from it. Tests and documents spell the keys
+# legitimately, so only src is searched.
+audit_group(sensor-configuration)
+# Allow: none expected; code that needs a key uses the constant
+# (SensorConfiguration::AccelFsG ...). A comment names a key without quotes.
+expect_only("one authority: configuration keys"
+  "\"(ACCEL_FS_G|GYRO_FS_DEG_S|ACCEL_ODR_HZ|GYRO_ODR_HZ|BARO_ODR_HZ|HUM_ODR_HZ|MAG_ODR_HZ|GNSS_MODEL|GNSS_RATE_HZ)\""
+  "^src/sensorconfiguration\\.(h|cpp)$" src)
+# Allow: none expected. These count LINES, comments included: a comment that
+# quotes the version refers to SensorConfiguration::FirmwareVersion instead.
+expect_count("one authority: the default's firmware version" "v2023\\.09\\.22" 1 src)
+expect_only("one authority: the default's firmware version" "v2023\\.09\\.22"
+  "^src/sensorconfiguration\\.(h|cpp)$" src)
+# The receiver's model and rate and the barometer's, humidity sensor's and
+# magnetometer's rates are read and stored, and nothing uses them: they are
+# not inputs of the fit. Allow: none in this specification; a feature that
+# uses one adds its file here and says so in docs/DATA_SCHEMA.md section 2.
+expect_only("the unused configuration keys stay unused"
+  "${WB_START}(BaroOdrHz|HumOdrHz|MagOdrHz|GnssModel|GnssRateHz)${WB_END}"
+  "^src/sensorconfiguration\\.(h|cpp)$" src)
 
 # ─────────────────────────────── orientation (item 821)
 # The orientation type (Fusion::Orientation) is the one place that spells the
@@ -605,11 +634,11 @@ expect_only("the step model has one author"
   src tests)
 # Allow: none expected. The fusion document describes the model as it is:
 # no stationary or candidate window, no coarse-only initializer, no frozen
-# algorithm, no bias-shift settled test, no branch, twenty-two inputs. Say
+# algorithm, no bias-shift settled test, no branch, twenty-six inputs. Say
 # "the previous initializer", "a resting window", "the coarse attitude at the
 # anchor" when the history must be mentioned.
 expect_none("the fusion document describes the current model"
-  "stationary window|candidate window|coarse initializer|frozen|bias shifts below|zero bias shift|sensor-fusion-clean-port|twenty-one"
+  "stationary window|candidate window|coarse initializer|frozen|bias shifts below|zero bias shift|sensor-fusion-clean-port|twenty-two"
   docs/SENSOR_FUSION.md)
 
 # ─────────────────────────────── fusion-tooling (items 231, 233, 848, 928, 939)
@@ -1085,8 +1114,10 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # (calculation refinements, item = 600 + clause number), 701-754 (one
 # status bar for background work, item = 700 + clause number), 801-863
 # (sensor fusion plots, attitude and the orientation attribute, item = 800 +
-# clause number) and 901-940 (the fused state at every IMU sample, item =
-# 900 + clause number). Four line forms; see the head of the map.
+# clause number), 901-940 (the fused state at every IMU sample, item =
+# 900 + clause number) and 1001-1065 (the documented noise model and the
+# accuracy, part 1, item = 1000 + clause number). Four line forms; see the
+# head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -1159,8 +1190,9 @@ else()
             OR (item GREATER_EQUAL 201 AND item LESS_EQUAL 247) OR (item GREATER_EQUAL 301 AND item LESS_EQUAL 350)
             OR (item GREATER_EQUAL 401 AND item LESS_EQUAL 442) OR (item GREATER_EQUAL 501 AND item LESS_EQUAL 563)
             OR (item GREATER_EQUAL 601 AND item LESS_EQUAL 662) OR (item GREATER_EQUAL 701 AND item LESS_EQUAL 754)
-            OR (item GREATER_EQUAL 801 AND item LESS_EQUAL 863) OR (item GREATER_EQUAL 901 AND item LESS_EQUAL 940)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863 and 901-940: ${line}")
+            OR (item GREATER_EQUAL 801 AND item LESS_EQUAL 863) OR (item GREATER_EQUAL 901 AND item LESS_EQUAL 940)
+            OR (item GREATER_EQUAL 1001 AND item LESS_EQUAL 1065)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940 and 1001-1065: ${line}")
     endif()
   endforeach()
 
@@ -1220,6 +1252,15 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 901 940)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  # The documented noise model and the accuracy, part 1, is implemented in
+  # phases: the items whose evidence exists so far. Each phase appends its
+  # items to this list; the last replaces the list with RANGE 1001 1065.
+  foreach(item IN ITEMS 1001 1002 1003 1004 1005 1006 1007 1050 1061)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

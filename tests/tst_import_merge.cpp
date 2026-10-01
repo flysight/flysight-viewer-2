@@ -258,6 +258,7 @@ private slots:
     void escapeHatch();
     void explicitSchemaMismatch();
     void absenceNeverConflicts();
+    void configurationTravelsWithTheSession();
 
     void failedLoadIsAnError();
     void failedPlaceholderIsNeverSaved();
@@ -954,6 +955,47 @@ void ImportMergeTest::absenceNeverConflicts()
         QCOMPARE(importOne(writeTo(folder, QStringLiteral("SENSOR.CSV"), sensorVariant(two))).outcome, Outcome::Merged);
         QCOMPARE(session().storedAttribute("SCHEMA_VER").toString(), QStringLiteral("2"));
         QCOMPARE(session().getMeasurement("IMU", "wx"), QVector<double>({62.5}));
+    }
+}
+
+// Item 1002: the sensor configuration keys travel with the session as
+// SCHEMA_VER does. SENSOR.CSV's seven and TRACK.CSV's two end on the one
+// session in either order, as recorded, and the saved file writes each once.
+void ImportMergeTest::configurationTravelsWithTheSession()
+{
+    const struct { const char *key; const char *value; } expected[] = {
+        {"ACCEL_FS_G", "8"}, {"GYRO_FS_DEG_S", "1000"}, {"ACCEL_ODR_HZ", "104"}, {"GYRO_ODR_HZ", " 104"},
+        {"BARO_ODR_HZ", "75"}, {"HUM_ODR_HZ", "1"}, {"MAG_ODR_HZ", "10"},
+        {"GNSS_MODEL", "airborne_4g"}, {"GNSS_RATE_HZ", "5"}};
+    Fs2FileBuilder sensor = Fixtures::sensorFile();
+    for (int i = 0; i < 7; ++i)
+        sensor.var(expected[i].key, expected[i].value);
+    Fs2FileBuilder track = Fixtures::trackFile();
+    for (int i = 7; i < 9; ++i)
+        track.var(expected[i].key, expected[i].value);
+
+    for (const bool trackFirst : {true, false}) {
+        freshStart();
+        const QString folder = deviceFolder();
+        const QString trackPath = writeTo(folder, QStringLiteral("TRACK.CSV"), track);
+        const QString sensorPath = writeTo(folder, QStringLiteral("SENSOR.CSV"), sensor);
+
+        QCOMPARE(importOne(trackFirst ? trackPath : sensorPath).outcome, Outcome::Created);
+        QCOMPARE(importOne(trackFirst ? sensorPath : trackPath).outcome, Outcome::Merged);
+        QCOMPARE(m_model->rowCount(), 1);
+
+        for (const auto &entry : expected) {
+            QCOMPARE(session().storedAttribute(QString::fromLatin1(entry.key)).userType(), int(QMetaType::QString));
+            QCOMPARE(session().storedAttribute(QString::fromLatin1(entry.key)).toString(),
+                     QString::fromLatin1(entry.value));
+        }
+
+        QVERIFY(waitForIdle(*m_model));
+        const QByteArray csv = readFileBytes(sessionFilePath(kId));
+        for (const auto &entry : expected) {
+            const QByteArray line = QByteArray("$VAR,") + entry.key + ',' + entry.value + '\n';
+            QVERIFY2(csv.count(line) == 1, line.constData());
+        }
     }
 }
 

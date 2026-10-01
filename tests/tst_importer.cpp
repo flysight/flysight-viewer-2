@@ -1,10 +1,14 @@
 // The importer: what it publishes (samples, unit text and header attributes
 // exactly as recorded, nothing stamped), what it rejects (unsupported
-// SCHEMA_VER, structural header errors) without touching the target session,
-// and what it tolerates (malformed data rows). Every expectation is a literal.
+// SCHEMA_VER, a malformed sensor configuration value, structural header
+// errors) without touching the target session, and what it tolerates
+// (malformed data rows). Every expectation is a literal.
 //
 // Acceptance 3 (a file declaring SCHEMA_VER 3 / abc is rejected and the target
-// session is unmodified) is demonstrated here at the importer level.
+// session is unmodified) is demonstrated here at the importer level, and so
+// are the configuration keys of the noise model's specification (items 1002,
+// 1003, 1004, 1006, 1050): stored as recorded, a malformed value an import
+// error after SCHEMA_VER's, no default written.
 //
 // Parsing versus creation: parseFile() carries nothing the file did
 // not say; applyCreationDefaults() is the one writer of import-time defaults
@@ -64,6 +68,12 @@ private slots:
     void acceptsSchema1And2();
     void neverStampsSchema();
     void lastErrorClearedAtEntry();
+
+    // the sensor configuration keys (noise-model items 1002-1004, 1050)
+    void configurationStoredAsRecorded();
+    void rejectsMalformedConfiguration_data();
+    void rejectsMalformedConfiguration();
+    void neverStampsConfiguration();
 
     // header grammar
     void varValueKeepsCommas();
@@ -259,6 +269,172 @@ void ImporterTest::lastErrorClearedAtEntry()
     SessionData good2;
     QVERIFY(importer.readFile(writeTemp(Fixtures::trackFile().toBytes()), good2));
     QVERIFY(importer.getLastError().isEmpty());
+}
+
+// ─────────────────────────────── the sensor configuration keys
+
+// Items 1002, 1006, 1050: a SENSOR.CSV with its seven keys and a TRACK.CSV
+// with its two import, each value stored as the recorded QString, surrounding
+// whitespace kept; nothing converts or computes them.
+void ImporterTest::configurationStoredAsRecorded()
+{
+    const QString sensorPath = writeTemp(Fixtures::sensorFile()
+                                             .var("ACCEL_FS_G", " 16")
+                                             .var("GYRO_FS_DEG_S", "2000")
+                                             .var("ACCEL_ODR_HZ", "1.6")
+                                             .var("GYRO_ODR_HZ", "104")
+                                             .var("BARO_ODR_HZ", "75")
+                                             .var("HUM_ODR_HZ", "1")
+                                             .var("MAG_ODR_HZ", "12.5 ")
+                                             .toBytes(),
+                                         QStringLiteral("SENSOR.CSV"));
+    const QString trackPath = writeTemp(Fixtures::trackFile()
+                                            .var("GNSS_MODEL", "airborne_4g")
+                                            .var("GNSS_RATE_HZ", "5")
+                                            .toBytes(),
+                                        QStringLiteral("TRACK.CSV"));
+
+    DataImporter importer;
+    SessionData sensor;
+    QVERIFY2(importer.importFile(sensorPath, sensor), qPrintable(importer.getLastError()));
+    const struct { const char *key; const char *value; } sensorKeys[] = {
+        {"ACCEL_FS_G", " 16"}, {"GYRO_FS_DEG_S", "2000"}, {"ACCEL_ODR_HZ", "1.6"}, {"GYRO_ODR_HZ", "104"},
+        {"BARO_ODR_HZ", "75"}, {"HUM_ODR_HZ", "1"}, {"MAG_ODR_HZ", "12.5 "}};
+    for (const auto &entry : sensorKeys) {
+        QVERIFY2(sensor.hasStoredAttribute(QString::fromLatin1(entry.key)), entry.key);
+        QCOMPARE(sensor.storedAttribute(QString::fromLatin1(entry.key)).userType(), int(QMetaType::QString));
+        QCOMPARE(sensor.storedAttribute(QString::fromLatin1(entry.key)).toString(), QString::fromLatin1(entry.value));
+    }
+    QVERIFY(!sensor.hasStoredAttribute("GNSS_MODEL"));
+    QVERIFY(!sensor.hasStoredAttribute("GNSS_RATE_HZ"));
+
+    SessionData track;
+    QVERIFY2(importer.importFile(trackPath, track), qPrintable(importer.getLastError()));
+    QCOMPARE(track.storedAttribute("GNSS_MODEL").userType(), int(QMetaType::QString));
+    QCOMPARE(track.storedAttribute("GNSS_MODEL").toString(), QStringLiteral("airborne_4g"));
+    QCOMPARE(track.storedAttribute("GNSS_RATE_HZ").toString(), QStringLiteral("5"));
+    QVERIFY(!track.hasStoredAttribute("ACCEL_FS_G"));
+
+    // The parse result carries them as the file says them, and importing
+    // computes nothing
+    ParsedFile parsed;
+    QVERIFY(importer.parseFile(sensorPath, parsed));
+    QCOMPARE(parsed.data.storedAttribute("ACCEL_FS_G").toString(), QStringLiteral(" 16"));
+    QCOMPARE(sensor.calculationEngine().totalRunCount(), 0);
+    QCOMPARE(track.calculationEngine().totalRunCount(), 0);
+}
+
+void ImporterTest::rejectsMalformedConfiguration_data()
+{
+    QTest::addColumn<QByteArray>("bytes");
+    QTest::addColumn<QString>("error");
+
+    QTest::newRow("ACCEL_FS_G 16.0") << Fixtures::sensorFile().var("ACCEL_FS_G", "16.0").toBytes()
+                                     << "Unsupported ACCEL_FS_G '16.0' (supported: 2, 4, 8, 16)";
+    QTest::newRow("GYRO_FS_DEG_S +2000") << Fixtures::sensorFile().var("GYRO_FS_DEG_S", "+2000").toBytes()
+                                         << "Unsupported GYRO_FS_DEG_S '+2000' (supported: 250, 500, 1000, 2000)";
+    QTest::newRow("ACCEL_ODR_HZ empty") << Fixtures::sensorFile().var("ACCEL_ODR_HZ", "").toBytes()
+                                        << "Unsupported ACCEL_ODR_HZ '' (supported: 1.6, 12.5, 26, 52, 104, 208, "
+                                           "416, 833, 1666, 3333, 6666)";
+    QTest::newRow("GYRO_ODR_HZ 1.6") << Fixtures::sensorFile().var("GYRO_ODR_HZ", "1.6").toBytes()
+                                     << "Unsupported GYRO_ODR_HZ '1.6' (supported: 12.5, 26, 52, 104, 208, 416, "
+                                        "833, 1666, 3333, 6666)";
+    QTest::newRow("BARO_ODR_HZ no value") << Fixtures::sensorFile().rawHeaderLine("$VAR,BARO_ODR_HZ").toBytes()
+                                          << "Unsupported BARO_ODR_HZ '' (supported: a positive decimal number)";
+    QTest::newRow("HUM_ODR_HZ 0") << Fixtures::sensorFile().var("HUM_ODR_HZ", "0").toBytes()
+                                  << "Unsupported HUM_ODR_HZ '0' (supported: a positive decimal number)";
+    QTest::newRow("MAG_ODR_HZ abc") << Fixtures::sensorFile().var("MAG_ODR_HZ", "abc").toBytes()
+                                    << "Unsupported MAG_ODR_HZ 'abc' (supported: a positive decimal number)";
+    QTest::newRow("track file GNSS_MODEL") << Fixtures::trackFile().var("GNSS_MODEL", "Portable").toBytes()
+                                           << "Unsupported GNSS_MODEL 'Portable' (supported: portable, stationary, "
+                                              "pedestrian, automotive, sea, airborne_1g, airborne_2g, airborne_4g)";
+    QTest::newRow("track file GNSS_RATE_HZ") << Fixtures::trackFile().var("GNSS_RATE_HZ", "1e2").toBytes()
+                                             << "Unsupported GNSS_RATE_HZ '1e2' (supported: a positive decimal number)";
+    // Either file: the importer does not know which file it reads
+    QTest::newRow("ACCEL_FS_G in a track file") << Fixtures::trackFile().var("ACCEL_FS_G", "32").toBytes()
+                                                << "Unsupported ACCEL_FS_G '32' (supported: 2, 4, 8, 16)";
+    // The first malformed value in file order
+    QTest::newRow("first in file order") << Fixtures::sensorFile()
+                                                .var("GYRO_ODR_HZ", "nan")
+                                                .var("ACCEL_FS_G", "16")
+                                                .var("ACCEL_ODR_HZ", "0")
+                                                .toBytes()
+                                         << "Unsupported GYRO_ODR_HZ 'nan' (supported: 12.5, 26, 52, 104, 208, "
+                                            "416, 833, 1666, 3333, 6666)";
+    // SCHEMA_VER keeps its precedence, whatever the file order
+    QTest::newRow("SCHEMA_VER first") << Fixtures::sensorFile()
+                                             .var("ACCEL_FS_G", "16.0")
+                                             .var("SCHEMA_VER", "3")
+                                             .toBytes()
+                                      << "Unsupported SCHEMA_VER '3' (supported: 1, 2)";
+}
+
+// Items 1003, 1050: a malformed value of any key, in either file, fails the
+// import with the vocabulary's message and publishes nothing; a target that
+// already holds a session is left exactly as it was.
+void ImporterTest::rejectsMalformedConfiguration()
+{
+    QFETCH(QByteArray, bytes);
+    QFETCH(QString, error);
+
+    const QString path = writeTemp(bytes);
+
+    DataImporter importer;
+    SessionData session;
+    QVERIFY(!importer.importFile(path, session));
+    QCOMPARE(importer.getLastError(), error);
+    QVERIFY(nothingPublished(session));
+
+    DataImporter reader;
+    SessionData readTarget;
+    QVERIFY(!reader.readFile(path, readTarget));
+    QCOMPARE(reader.getLastError(), error);
+    QVERIFY(nothingPublished(readTarget));
+
+    SessionData target;
+    target.setAttribute("SESSION_ID", QStringLiteral("test-session"));
+    target.setAttribute("_DESCRIPTION", QStringLiteral("edited"));
+    target.setSourceMeasurement("IMU", "wx", {1.0, 2.0}, "deg/s");
+    const QStringList keysBefore = target.attributeKeys();
+    const SourceData sourceBefore = target.sourceData();
+
+    DataImporter merger;
+    QVERIFY(!merger.importFile(path, target));
+    QCOMPARE(merger.getLastError(), error);
+    QCOMPARE(target.attributeKeys(), keysBefore);
+    QCOMPARE(target.getAttribute("_DESCRIPTION").toString(), QStringLiteral("edited"));
+    QVERIFY(target.sourceData() == sourceBefore);
+    QVERIFY(!target.hasAttribute("_IMPORT_TIME"));
+}
+
+// Item 1004: a file without the keys yields a session without them; the
+// importer writes no default, neither at parse nor at creation (FS1 files
+// have no $VAR at all).
+void ImporterTest::neverStampsConfiguration()
+{
+    const QStringList keys = {"ACCEL_FS_G", "GYRO_FS_DEG_S", "ACCEL_ODR_HZ", "GYRO_ODR_HZ", "BARO_ODR_HZ",
+                              "HUM_ODR_HZ", "MAG_ODR_HZ", "GNSS_MODEL", "GNSS_RATE_HZ"};
+    for (const QByteArray &bytes : {Fixtures::sensorFile().toBytes(), Fixtures::trackFile().toBytes()}) {
+        DataImporter importer;
+        SessionData session;
+        QVERIFY(importer.importFile(writeTemp(bytes), session));
+        for (const QString &key : keys)
+            QVERIFY2(!session.hasStoredAttribute(key), qPrintable(key));
+    }
+    {
+        Fs1FileBuilder fs1;
+        fs1.columns({"time", "lat", "lon", "hMSL"})
+           .units({"", "(deg)", "(deg)", "(m)"})
+           .row("2024-01-01T12:00:00.00Z,45.5,-73.25,4000.5");
+        const QString path = writeTemp(fs1.toBytes());
+
+        WarningCapture quiet;   // FS1 has no DEVICE_ID: the FLYSIGHT.TXT search warns
+        DataImporter importer;
+        SessionData session;
+        QVERIFY(importer.importFile(path, session));
+        for (const QString &key : keys)
+            QVERIFY2(!session.hasStoredAttribute(key), qPrintable(key));
+    }
 }
 
 // ─────────────────────────────── header grammar

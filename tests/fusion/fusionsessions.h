@@ -21,8 +21,10 @@
 // conversion layer, not by a registered calculation. A fixture session stores
 // the fit's inputs under their own names (Local/north, IMU/_time, the origin
 // attributes, ...) with units the conversion layer passes through unchanged,
-// so the twenty-two effective inputs are bit-identical to the fixture and the
-// session-level results can be held to the goldens of the kernel.
+// so the eighteen measurements and the four origin attributes are
+// bit-identical to the fixture, the four configuration attributes are read
+// from their constant defaults, and the session-level results can be held to
+// the goldens of the kernel.
 
 namespace FlySight {
 class SessionModel;
@@ -37,8 +39,9 @@ constexpr double kFixtureTimeFitB = 1699999900.0;
 /// (after TestEnvironment::registerBuiltIns(), as the application does).
 void registerFusionOnce();
 
-/// Stored source data such that the 22 declared inputs read back bit-identical
-/// to the fixture:
+/// Stored source data such that the 22 declared inputs other than the four
+/// configuration attributes read back bit-identical to the fixture (those
+/// four are not stored: the session reads their constant defaults):
 ///   GNSS/time (unit "s")            -> GNSS/_time through builtin.time.utc.GNSS
 ///   GNSS/hAcc, vAcc ("m"), sAcc ("m/s")
 ///   Local/north|east|down ("m"), Local/velN|velE|velD ("m/s")

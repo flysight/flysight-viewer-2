@@ -17,9 +17,11 @@ namespace FlySight::Fusion {
 /// requests it by id.
 inline constexpr char FitCalculationId[] = "builtin.fusion.fit";
 
-/// The declared inputs of builtin.fusion.fit: the measurements, in the order
-/// the kernel's Channels take them, then the four origin attributes
-/// (_LOCAL_ORIGIN_INDEX, _LAT, _LON, _HMSL). One table serves the declaration,
+/// The twenty-six declared inputs of builtin.fusion.fit: the eighteen
+/// measurements, in the order the kernel's Channels take them, then the four
+/// origin attributes (_LOCAL_ORIGIN_INDEX, _LAT, _LON, _HMSL), then the four
+/// IMU configuration attributes (ACCEL_FS_G, GYRO_FS_DEG_S, ACCEL_ODR_HZ,
+/// GYRO_ODR_HZ; sensorconfiguration.h). One table serves the declaration,
 /// the hand-over and the tooling (fusion_runner --dump-inputs).
 QList<CalcInput> fitInputs();
 
@@ -28,9 +30,11 @@ using MeasurementReader = std::function<QVector<double>(const QString &sensor, c
 using AttributeReader   = std::function<QVariant(const QString &key)>;
 
 /// The kernel's input assembled from effective values: every measurement of
-/// fitInputs() into its Channels member, and the origin attributes (an origin
+/// fitInputs() into its Channels member, the origin attributes (an origin
 /// index that is not a number becomes -1, the kernel's "outside the GNSS
-/// samples"). Field-by-field copies of implicitly shared vectors. The
+/// samples"), and the configuration attributes into
+/// Channels::imuConfiguration (a value that is not a number stays NaN).
+/// Field-by-field copies of implicitly shared vectors. The
 /// registered calculation and fusion_runner both call this, so the two cannot
 /// drift apart.
 Channels channelsFrom(const MeasurementReader &measurement, const AttributeReader &attribute);
@@ -46,8 +50,15 @@ QList<FitOutputChannel> fitOutputChannels(const Result &result);
 
 /// Register sensor fusion with the calculation engine:
 ///
+///  - builtin.default.ACCEL_FS_G, builtin.default.GYRO_FS_DEG_S,
+///    builtin.default.ACCEL_ODR_HZ and builtin.default.GYRO_ODR_HZ
+///    (Calculations::addConstantDefault), in that order: the constant defaults
+///    of the four configuration inputs of the fit, as text, from
+///    SensorConfiguration::defaultValue (sensorconfiguration.h). A recording
+///    that states a key reads its own value.
 ///  - builtin.fusion.fit (explicit, title "Sensor fusion"): the batch GNSS/IMU
-///    fit of fusion.h as one calculation with eighteen outputs published
+///    fit of fusion.h as one calculation of the twenty-six inputs of
+///    fitInputs(), with eighteen outputs published
 ///    together: the measurements Fusion/_time, north, east, down, velN, velE,
 ///    velD, accN, accE, accD, roll, pitch, yaw, qx, qy, qz, qw and the
 ///    attribute _FUSION_DIAGNOSTICS. A recording the model rejects and a

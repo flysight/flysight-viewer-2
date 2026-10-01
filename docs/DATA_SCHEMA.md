@@ -55,6 +55,8 @@ and `-inf` are accepted.
 A file is **rejected with an error**, and nothing is imported from it, when
 
 - it declares an unsupported or malformed `SCHEMA_VER` (section 3);
+- it declares a malformed sensor configuration value (below), checked after
+  `SCHEMA_VER`; the first in file order is reported;
 - a `$VAR` has an empty key, or the same key is declared twice with different
   values;
 - a `$COL` names no sensor, lists no columns, has an empty or repeated column
@@ -66,6 +68,53 @@ A file is **rejected with an error**, and nothing is imported from it, when
 Malformed or truncated data rows (for example the last line after a power
 loss) are **tolerated**: they are skipped and counted in one log line. A file
 with a header and no rows is valid.
+
+### Sensor configuration keys
+
+How the sensors were configured is stated by `$VAR` lines, one per setting,
+with the setting's actual value rather than a register code and with the unit
+in the key's name (a `$VAR` line has one value and no unit field):
+
+| Key | File | Unit | Value |
+| --- | --- | --- | --- |
+| `ACCEL_FS_G` | `SENSOR.CSV` | g | accelerometer full-scale range: exactly `2`, `4`, `8` or `16` |
+| `GYRO_FS_DEG_S` | `SENSOR.CSV` | deg/s | gyro full-scale range: exactly `250`, `500`, `1000` or `2000` |
+| `ACCEL_ODR_HZ` | `SENSOR.CSV` | Hz | accelerometer output data rate, as the part names it: exactly `1.6` (low power), `12.5`, `26`, `52`, `104`, `208`, `416`, `833`, `1666`, `3333` or `6666` |
+| `GYRO_ODR_HZ` | `SENSOR.CSV` | Hz | gyro output data rate: the same list without `1.6` |
+| `BARO_ODR_HZ` | `SENSOR.CSV` | Hz | barometer output data rate: a positive decimal number |
+| `HUM_ODR_HZ` | `SENSOR.CSV` | Hz | humidity sensor output data rate: a positive decimal number |
+| `MAG_ODR_HZ` | `SENSOR.CSV` | Hz | magnetometer output data rate: a positive decimal number |
+| `GNSS_MODEL` | `TRACK.CSV` | - | the receiver's dynamic model, by name: exactly `portable`, `stationary`, `pedestrian`, `automotive`, `sea`, `airborne_1g`, `airborne_2g` or `airborne_4g` (case-sensitive) |
+| `GNSS_RATE_HZ` | `TRACK.CSV` | Hz | the receiver's measurement rate: a positive decimal number |
+
+A value is checked after surrounding whitespace is trimmed, as `SCHEMA_VER`
+is, and stored as recorded, whitespace included. A listed value is matched
+exactly: `16.0`, `+16` and `016` are not `16`. A positive decimal number is
+digits with an optional fraction (`[0-9]+(\.[0-9]+)?`), without sign or
+exponent, and above zero: `0`, `-1`, `1e2`, `nan` and `inf` are not. Anything
+else, the empty value and a `$VAR,<key>` line without a value included, is an
+**import error** naming the key and the value, for example
+`Unsupported ACCEL_FS_G '16.0' (supported: 2, 4, 8, 16)`; a key without a
+list says `(supported: a positive decimal number)`. A key is checked in
+whichever file declares it: the importer does not identify files by name. An
+absent key is not an error and stays absent.
+
+The four IMU keys are inputs of sensor fusion
+([SENSOR_FUSION.md](SENSOR_FUSION.md), section 3). The receiver's dynamic
+model and rate and the barometer's, humidity sensor's and magnetometer's
+rates are read and stored so that recordings carry them; nothing uses them.
+
+**The default.** A recording that lacks a key takes the configuration of
+firmware v2023.09.22, the firmware of the recordings on disk: +/-16 g,
++/-2000 deg/s, and 12.5 Hz for both the accelerometer and the gyro; no dynamic
+model and no rate (the other five keys have no default). The IMU's low-pass
+filters are not configurable in that firmware and have no key; it fixes them
+as the gyro's LPF2 at the cutoff of its 12.5 Hz rate, 4.2 Hz (LSM6DSO
+datasheet DS12140, Table 18), with no LPF1, and the accelerometer at its ODR
+bandwidth. The default is a calculation (`docs/CALCULATIONS.md` section 5,
+`builtin.default.<key>`), so it is never stored in a session and never
+written to a file. The keys are written by the firmware; every recording on
+disk lacks them, and reads this default.
 
 ## 3. `SCHEMA_VER`
 
@@ -232,7 +281,10 @@ section 5), and a file that carries wind keeps it.
 | has it | lacks it | nothing changes |
 
 Absence on either side is never a conflict: a `TRACK.CSV` without `SCHEMA_VER`
-merges cleanly with a `SENSOR.CSV` that declares it.
+merges cleanly with a `SENSOR.CSV` that declares it. The sensor configuration
+keys (section 2) follow the same rule: the keys of `SENSOR.CSV` and of
+`TRACK.CSV` merge cleanly in either order, and two files stating different
+values of one key conflict.
 
 - Viewer's own attributes (keys starting with `_`) in an incoming file, which
   happens when a Viewer-saved file is imported: the existing value wins, absent
@@ -292,8 +344,10 @@ Orientation heading, pitch and roll are then unavailable
 
 A save **fails and leaves the previous file intact** when a sensor has columns
 of unequal length, when a sensor name, column label, or unit contains a comma
-or a line break, or when the session holds a `SCHEMA_VER` the importer would
-reject (section 3). Viewer never writes a file it could not read back.
+or a line break, when the session holds a `SCHEMA_VER` the importer would
+reject (section 3), or when it holds a sensor configuration value the
+importer would reject (section 2), with the importer's message. Viewer never
+writes a file it could not read back.
 
 Byte identity holds from the first Viewer-written file onward. The device file
 may differ from it textually (`62.50` becomes `62.5`, an ISO time becomes

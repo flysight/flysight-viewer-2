@@ -98,7 +98,7 @@ document describes what is computed, from what, and how far to trust it.
 
 ## 3. Inputs
 
-The fit declares twenty-two inputs, all required, and reads nothing else:
+The fit declares twenty-six inputs, all required, and reads nothing else:
 
 ```
 GNSS/_time
@@ -107,7 +107,18 @@ GNSS/hAcc    GNSS/vAcc   GNSS/sAcc
 IMU/_time
 IMU/ax  IMU/ay  IMU/az  IMU/wx  IMU/wy  IMU/wz  IMU/temperature
 _LOCAL_ORIGIN_INDEX  _LOCAL_ORIGIN_LAT  _LOCAL_ORIGIN_LON  _LOCAL_ORIGIN_HMSL
+ACCEL_FS_G  GYRO_FS_DEG_S  ACCEL_ODR_HZ  GYRO_ODR_HZ
 ```
+
+**Configuration.** The last four are the IMU's configuration: the
+accelerometer's and the gyro's full-scale range and output data rate, as
+`SENSOR.CSV` states them, or their constant defaults where it does not
+([DATA_SCHEMA.md](DATA_SCHEMA.md), section 2, gives the keys, their values and
+the default). They are therefore always available: a recording never lacks
+them. They reach the kernel as numbers in `Channels::imuConfiguration`, as the
+origin does, and do not yet change the model: the fit's numbers are the same
+for every configuration. The receiver's dynamic model and rate and the other
+sensors' rates are stored with the recording and are not inputs.
 
 **Effective values only.** Like every calculation, the fit reads effective
 values: the recorded data after the conversion layer. Accelerations arrive in
@@ -475,7 +486,7 @@ Loading a recording whose stored result is still valid restores that result:
 no job.
 
 **Three steps.** *Prepare*, on the main thread, resolves and captures the
-twenty-two inputs. *Compute* runs on the application's one worker thread, which
+twenty-six inputs. *Compute* runs on the application's one worker thread, which
 has a 64 MiB stack for GTSAM's deep elimination trees, and sees the captured
 inputs and nothing else: no session, no engine, no preference. *Publish*, back
 on the main thread, installs all eighteen outputs at once; ordinary

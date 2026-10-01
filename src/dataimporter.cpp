@@ -5,6 +5,7 @@
 #include "csvformat.h"
 #include "preferences/preferencesmanager.h"
 #include "preferences/preferencekeys.h"
+#include "sensorconfiguration.h"
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDebug>
@@ -350,6 +351,17 @@ bool DataImporter::importFS2(QTextStream& in, StagedFile& staged) {
         if (attribute.first == QLatin1String(Schema::AttributeKey)
             && !Schema::parseVersion(attribute.second).has_value()) {
             m_lastError = Schema::unsupportedMessage(attribute.second);
+            return false;
+        }
+    }
+
+    // Then the sensor configuration: the first malformed value in file order
+    // rejects the file, in either file, since the importer does not know which
+    // file it reads. An absent key stays absent; its default is a calculation.
+    for (const auto &attribute : std::as_const(staged.attributes)) {
+        if (SensorConfiguration::isKey(attribute.first)
+            && !SensorConfiguration::isValidValue(attribute.first, attribute.second)) {
+            m_lastError = SensorConfiguration::unsupportedMessage(attribute.first, attribute.second);
             return false;
         }
     }

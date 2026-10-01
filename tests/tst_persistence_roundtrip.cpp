@@ -213,6 +213,7 @@ private slots:
     void secondCycleIsByteIdentical();
     void canonicalInputIsReproduced();
     void typedAttributesRoundTrip();
+    void configurationAttributesRoundTrip();
     void warmAndColdCachesSameFile();
 
     // Precision: non-finite values; what cannot be written
@@ -221,6 +222,7 @@ private slots:
     void headerOnlySensor();
     void unrepresentableText();
     void unsupportedSchemaIsNotSaved();
+    void malformedConfigurationIsNotSaved();
     void fileAndMemoryWritersAgree();
 
     // acceptance 6
@@ -486,6 +488,46 @@ void PersistenceRoundTripTest::typedAttributesRoundTrip()
     QCOMPARE(exportBytes(b), bytes);
 }
 
+// Item 1002: the nine sensor configuration keys are written back as stored
+// and reload byte for byte, whitespace included; a second cycle changes
+// nothing, and nothing is added for a key the session does not hold.
+void PersistenceRoundTripTest::configurationAttributesRoundTrip()
+{
+    const struct { const char *key; const char *value; } keys[] = {
+        {"ACCEL_FS_G", " 16"}, {"GYRO_FS_DEG_S", "250"}, {"ACCEL_ODR_HZ", "1.6"}, {"GYRO_ODR_HZ", "6666 "},
+        {"BARO_ODR_HZ", "75"}, {"HUM_ODR_HZ", "0.5"}, {"MAG_ODR_HZ", "10"},
+        {"GNSS_MODEL", "airborne_1g"}, {"GNSS_RATE_HZ", "25"}};
+    Fs2FileBuilder file = awkwardFile();
+    for (const auto &entry : keys)
+        file.var(entry.key, entry.value);
+
+    SessionData a;
+    QVERIFY(readBuilder(file, a));
+    const QByteArray bytes = exportBytes(a);
+    QVERIFY(!bytes.isEmpty());
+    const QList<QByteArray> fileLines = lines(bytes);
+    for (const auto &entry : keys) {
+        const QByteArray line = QByteArray("$VAR,") + entry.key + ',' + entry.value;
+        QVERIFY2(fileLines.count(line) == 1, line.constData());
+    }
+
+    SessionData b;
+    QVERIFY(reload(bytes, b));
+    for (const auto &entry : keys) {
+        QCOMPARE(b.storedAttribute(QString::fromLatin1(entry.key)).userType(), int(QMetaType::QString));
+        QCOMPARE(b.storedAttribute(QString::fromLatin1(entry.key)).toString(), QString::fromLatin1(entry.value));
+    }
+    QCOMPARE(b.attributeKeys(), a.attributeKeys());
+    QCOMPARE(exportBytes(b), bytes);
+
+    // A session without them is written without them
+    SessionData plain;
+    QVERIFY(readBuilder(awkwardFile(), plain));
+    const QByteArray plainBytes = exportBytes(plain);
+    for (const auto &entry : keys)
+        QVERIFY2(!plainBytes.contains(entry.key), entry.key);
+}
+
 // Acceptance 5: the result does not depend on the state of any cache. Also
 // A save neither computes nor creates anything in the engine.
 void PersistenceRoundTripTest::warmAndColdCachesSameFile()
@@ -729,6 +771,51 @@ void PersistenceRoundTripTest::unsupportedSchemaIsNotSaved()
     const QByteArray bytes = readFileBytes(path);
     QCOMPARE(bytes.count("SCHEMA_VER"), 1);
     QVERIFY(lines(bytes).contains(QByteArray("$VAR,SCHEMA_VER,2")));
+}
+
+// Item 1003: a stored sensor configuration value the importer would reject is
+// never written either, with the importer's message, and the previous file is
+// left intact. It too can only be stored programmatically. SCHEMA_VER keeps
+// its precedence, as in the importer.
+void PersistenceRoundTripTest::malformedConfigurationIsNotSaved()
+{
+    SessionData session;
+    QVERIFY(readBuilder(awkwardFile().var("ACCEL_FS_G", "16").var("GNSS_MODEL", "sea"), session));
+    session.setAttribute("ACCEL_FS_G", QStringLiteral("16.0"));
+
+    const QString path = tempFile(QStringLiteral("config"));
+    QVERIFY(writeFile(path, "keep"));
+
+    QString error;
+    QVERIFY(!DataExporter::exportSession(path, session, &error));
+    QCOMPARE(error, QStringLiteral("Unsupported ACCEL_FS_G '16.0' (supported: 2, 4, 8, 16)"));
+    QCOMPARE(readFileBytes(path), QByteArray("keep"));
+
+    QString bytesError;
+    QVERIFY(!DataExporter::toBytes(session, &bytesError).has_value());
+    QCOMPARE(bytesError, error);
+
+    // A free-form key, and a value set as a number rather than text
+    session.setAttribute("ACCEL_FS_G", QStringLiteral("16"));
+    session.setAttribute("GNSS_RATE_HZ", 0.0);
+    QVERIFY(!DataExporter::exportSession(path, session, &error));
+    QCOMPARE(error, QStringLiteral("Unsupported GNSS_RATE_HZ '0' (supported: a positive decimal number)"));
+    QCOMPARE(readFileBytes(path), QByteArray("keep"));
+
+    // SCHEMA_VER first
+    session.setAttribute("SCHEMA_VER", QStringLiteral("3"));
+    QVERIFY(!DataExporter::exportSession(path, session, &error));
+    QCOMPARE(error, QStringLiteral("Unsupported SCHEMA_VER '3' (supported: 1, 2)"));
+    session.removeAttribute("SCHEMA_VER");
+
+    // Valid values are written, once each, exactly as stored
+    session.setAttribute("GNSS_RATE_HZ", QStringLiteral("5"));
+    QVERIFY2(DataExporter::exportSession(path, session, &error), qPrintable(error));
+    QVERIFY(error.isEmpty());
+    const QList<QByteArray> fileLines = lines(readFileBytes(path));
+    QCOMPARE(fileLines.count(QByteArray("$VAR,ACCEL_FS_G,16")), 1);
+    QCOMPARE(fileLines.count(QByteArray("$VAR,GNSS_MODEL,sea")), 1);
+    QCOMPARE(fileLines.count(QByteArray("$VAR,GNSS_RATE_HZ,5")), 1);
 }
 
 // Acceptance 5: the streaming file writer and the in-memory writer are two

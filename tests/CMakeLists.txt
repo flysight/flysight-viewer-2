@@ -195,9 +195,11 @@ if(FLYSIGHT_BUILD_WIDGET_TESTS)
   set_tests_properties(tst_choice_attribute PROPERTIES LABELS "core;widgets")
 endif()
 
-# Source layer and conversion layer: the schema and unit tables, the conversion
-# families on a private registry, the importer, and the session-level suite
+# Source layer and conversion layer: the schema and unit tables, the sensor
+# configuration vocabulary, the conversion families on a private registry, the
+# importer, and the session-level suite
 flysight_add_test(tst_schema_units      SOURCES tst_schema_units.cpp)
+flysight_add_test(tst_sensor_configuration SOURCES tst_sensor_configuration.cpp)
 flysight_add_test(tst_conversion_engine SOURCES tst_conversion_engine.cpp)
 flysight_add_test(tst_importer          SOURCES tst_importer.cpp)
 flysight_add_test(tst_source_layer      SOURCES tst_source_layer.cpp)

@@ -36,7 +36,9 @@ namespace FlySight {
 ///
 /// Error policy:
 ///  - header problems are structural errors and reject the file (see readFile);
-///  - an unsupported or malformed SCHEMA_VER rejects the file;
+///  - an unsupported or malformed SCHEMA_VER rejects the file; after it, so
+///    does a malformed sensor configuration value (sensorconfiguration.h),
+///    the first in file order;
 ///  - malformed data rows (truncated last line after power loss, a glitched
 ///    row, a row for an undeclared sensor) are skipped and summarized in one
 ///    warning per file;

@@ -63,6 +63,7 @@ private slots:
     void absenceNeverConflicts();
     void explicitSchemaMismatch();
     void multipleConflictsSorted();
+    void configurationFollowsConflictRule();
     void typedVersusTextEquality();
     void viewerAttributesExistingWins();
     void deviceIdPlaceholder();
@@ -184,6 +185,67 @@ void SessionMergeTest::multipleConflictsSorted()
                             "Attribute 'FIRMWARE_VER' conflicts with the existing session "
                             "(session: 'v2023.09.22', file: 'v2024.01.01')."));
     QCOMPARE(plan.hint, QStringLiteral("To replace the session, delete it and re-import its files."));
+}
+
+// Item 1002: the sensor configuration keys are header attributes and follow
+// the conflict rule as it stands: SENSOR.CSV's seven and TRACK.CSV's two merge
+// cleanly in either order, and two files stating different values of one key
+// conflict, naming the key and both values, with the replace-session hint.
+void SessionMergeTest::configurationFollowsConflictRule()
+{
+    SessionData sensor = baseSession();
+    sensor.setAttribute("ACCEL_FS_G", QStringLiteral("16"));
+    sensor.setAttribute("GYRO_FS_DEG_S", QStringLiteral("2000"));
+    sensor.setAttribute("ACCEL_ODR_HZ", QStringLiteral("12.5"));
+    sensor.setAttribute("GYRO_ODR_HZ", QStringLiteral("12.5"));
+    sensor.setAttribute("BARO_ODR_HZ", QStringLiteral("75"));
+    sensor.setAttribute("HUM_ODR_HZ", QStringLiteral("1"));
+    sensor.setAttribute("MAG_ODR_HZ", QStringLiteral("10"));
+    SessionData track = baseSession();
+    track.setAttribute("GNSS_MODEL", QStringLiteral("airborne_4g"));
+    track.setAttribute("GNSS_RATE_HZ", QStringLiteral("5"));
+
+    // TRACK into SENSOR, and SENSOR into TRACK
+    {
+        SessionData existing = sensor;
+        const MergePlan plan = SessionMerge::plan(existing, track);
+        QVERIFY2(plan.ok(), qPrintable(plan.error));
+        QCOMPARE(plannedAttributeKeys(plan), QStringList({"GNSS_MODEL", "GNSS_RATE_HZ"}));
+        SessionMerge::apply(existing, plan);
+        QCOMPARE(existing.storedAttribute("ACCEL_FS_G").toString(), QStringLiteral("16"));
+        QCOMPARE(existing.storedAttribute("GNSS_MODEL").toString(), QStringLiteral("airborne_4g"));
+    }
+    {
+        SessionData existing = track;
+        const MergePlan plan = SessionMerge::plan(existing, sensor);
+        QVERIFY2(plan.ok(), qPrintable(plan.error));
+        QCOMPARE(plannedAttributeKeys(plan),
+                 QStringList({"ACCEL_FS_G", "ACCEL_ODR_HZ", "BARO_ODR_HZ", "GYRO_FS_DEG_S", "GYRO_ODR_HZ",
+                              "HUM_ODR_HZ", "MAG_ODR_HZ"}));
+        SessionMerge::apply(existing, plan);
+        QCOMPARE(existing.storedAttribute("MAG_ODR_HZ").toString(), QStringLiteral("10"));
+        QCOMPARE(existing.storedAttribute("GNSS_RATE_HZ").toString(), QStringLiteral("5"));
+    }
+
+    // The same values again: nothing to do
+    const MergePlan same = SessionMerge::plan(sensor, sensor);
+    QVERIFY(same.ok());
+    QVERIFY(same.isEmpty());
+
+    // A different value of one key conflicts
+    SessionData eight = baseSession();
+    eight.setAttribute("ACCEL_FS_G", QStringLiteral("8"));
+    const MergePlan plan = SessionMerge::plan(sensor, eight);
+    QVERIFY(!plan.ok());
+    QCOMPARE(plan.error,
+             QStringLiteral("Attribute 'ACCEL_FS_G' conflicts with the existing session (session: '16', file: '8')."));
+    QCOMPARE(plan.hint, QStringLiteral("To replace the session, delete it and re-import its files."));
+    QVERIFY(plan.attributesToSet.isEmpty());
+
+    // The text decides, as for any header attribute: " 16" is not "16"
+    SessionData spaced = baseSession();
+    spaced.setAttribute("ACCEL_FS_G", QStringLiteral(" 16"));
+    QVERIFY(!SessionMerge::plan(sensor, spaced).ok());
 }
 
 void SessionMergeTest::typedVersusTextEquality()

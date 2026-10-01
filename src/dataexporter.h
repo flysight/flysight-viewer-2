@@ -45,8 +45,11 @@ namespace FlySight {
 ///    format cannot express unequal lengths; padding would make the reloaded
 ///    source differ from the saved one and truncating would lose data.
 ///    All-empty sensors (header-only recordings) are valid;
-///  - a stored SCHEMA_VER that Schema::parseVersion rejects makes the save
-///    FAIL. Never writes a file that DataImporter would reject.
+///  - a stored SCHEMA_VER that Schema::parseVersion rejects, and after it a
+///    stored sensor configuration value that SensorConfiguration::isValidValue
+///    rejects (the first in the order the header writes them), make the save
+///    FAIL with the importer's message. Never writes a file that DataImporter
+///    would reject.
 ///  Validation happens before the target file is opened; on any failure nothing
 ///  is written and a previous file at the path is left intact (QSaveFile).
 class DataExporter {
@@ -57,6 +60,8 @@ public:
     ///   "Sensor '<s>': name/column/unit text cannot be written ('<text>')"
     ///   "Sensor '<s>' has columns of unequal length (<c1>: <n1>, <c2>: <n2>)"
     ///   "Unsupported SCHEMA_VER '<text>' (supported: 1, 2)"
+    ///   "Unsupported <key> '<text>' (supported: <values>)" for a sensor
+    ///   configuration key (SensorConfiguration::unsupportedMessage)
     ///   "Couldn't write file '<path>': <reason>"
     static bool exportSession(const QString &filePath, const SessionData &sessionData,
                               QString *error = nullptr);

@@ -119,8 +119,11 @@ output is the attribute, registered with `Calculations::addConstantDefault`
 (`src/calculations/attributecalculations.h`) under the id
 `builtin.default.<key>`. Every constant default is found by searching for that
 name; wind north and east (zero) and the SP and WS-P parameters are constant
-defaults, and so is the orientation (`_ORIENTATION`, forward +y, up +z), which
-the sensor fusion registration registers (section 17). A stored value wins
+defaults, and so are the orientation (`_ORIENTATION`, forward +y, up +z) and
+the four IMU configuration attributes (`ACCEL_FS_G`, `GYRO_FS_DEG_S`,
+`ACCEL_ODR_HZ`, `GYRO_ODR_HZ`, the configuration of the firmware of the
+recordings on disk, `docs/DATA_SCHEMA.md` section 2), which the sensor fusion
+registration registers (section 17). A stored value wins
 even when it is invalid or empty (step 1 of the resolution below), so
 returning a session to its default removes the stored attribute; it never
 stores a blank.
@@ -2092,11 +2095,15 @@ The entry point also registers the definition of the orientation attribute
 (`AttributeRegistry`, in `flysight_model` so that the fusion library can reach
 it), once per process: the tests call the entry point for more than one
 registry, so it skips the definition when `findByKey()` already finds it.
-Eight calculations are registered, in this order:
+Twelve calculations are registered, in this order:
 
 | Id | Policy | Inputs | Outputs |
 | --- | --- | --- | --- |
-| `builtin.fusion.fit` (title "Sensor fusion") | Explicit | the 22 below | the 18 below |
+| `builtin.default.ACCEL_FS_G` | OnDemand | none | `ACCEL_FS_G` (the default's text, a string) |
+| `builtin.default.GYRO_FS_DEG_S` | OnDemand | none | `GYRO_FS_DEG_S` (the default's text, a string) |
+| `builtin.default.ACCEL_ODR_HZ` | OnDemand | none | `ACCEL_ODR_HZ` (the default's text, a string) |
+| `builtin.default.GYRO_ODR_HZ` | OnDemand | none | `GYRO_ODR_HZ` (the default's text, a string) |
+| `builtin.fusion.fit` (title "Sensor fusion") | Explicit | the 26 below | the 18 below |
 | `builtin.fusion.accH` | OnDemand | `Fusion/accN`, `Fusion/accE` | `Fusion/accH` |
 | `builtin.fusion.systemTime` | OnDemand | `Fusion/_time`, `_TIME_FIT_A`, `_TIME_FIT_B` | `Fusion/_system_time` |
 | `builtin.fusion.z` | OnDemand | `Fusion/down`, `_LOCAL_ORIGIN_HMSL`, `_GROUND_ELEV` | `Fusion/z` |
@@ -2106,7 +2113,8 @@ Eight calculations are registered, in this order:
 | `builtin.fusion.attitude` | OnDemand | `Fusion/qx`, `qy`, `qz`, `qw`, `_ORIENTATION`, `GNSS/velN`, `GNSS/velE`, `GNSS/_time`, `_COURSE_REF` | `Fusion/bodyHeading`, `bodyPitch`, `bodyRoll` |
 
 **Inputs of the fit** (all required; exactly the vector members of
-`Fusion::Channels`, in member order, then the four origin attributes):
+`Fusion::Channels`, in member order, then the four origin attributes, then the
+four IMU configuration attributes):
 
 ```
 GNSS/_time
@@ -2115,7 +2123,16 @@ GNSS/hAcc    GNSS/vAcc   GNSS/sAcc
 IMU/_time
 IMU/ax  IMU/ay  IMU/az  IMU/wx  IMU/wy  IMU/wz  IMU/temperature
 _LOCAL_ORIGIN_INDEX  _LOCAL_ORIGIN_LAT  _LOCAL_ORIGIN_LON  _LOCAL_ORIGIN_HMSL
+ACCEL_FS_G  GYRO_FS_DEG_S  ACCEL_ODR_HZ  GYRO_ODR_HZ
 ```
+
+The configuration attributes are header attributes of `SENSOR.CSV`; their
+keys, values and default are `docs/DATA_SCHEMA.md` section 2, and the
+vocabulary in code is `src/sensorconfiguration.h` (in `flysight_model`, which
+both the importer and this library reach). The four constant defaults above
+carry the default's text, the type the importer stores, so a stored value and
+the default of the same text read the same. They are registered first, the
+vocabulary before its reader.
 
 Effective values only: accelerations in m/s^2, rates in deg/s (the kernel
 converts to radians), temperatures in degC, times in shared UTC. Everything
@@ -2125,7 +2142,9 @@ dragging the exit marker does not drop a fit. A recording without IMU data,
 without `IMU/temperature`, without a local origin (no fix under 10 m), or
 without a time fit has a **missing input**: there is
 nothing to compute, no job can be created, and blocker inspection reports
-`NotApplicable`, never "not requested".
+`NotApplicable`, never "not requested". The four configuration attributes are
+never missing: a recording that does not state one reads its constant
+default.
 
 **Outputs of the fit**, published together: the measurements `Fusion/_time`,
 `north`, `east`, `down`, `velN`, `velE`, `velD`, `accN`, `accE`, `accD`, `roll`,
@@ -2139,7 +2158,9 @@ acceleration at every IMU sample of the fitted interval
 **No arithmetic in the adapter.** `channelsFrom()` copies the implicitly shared
 input vectors field by field; the only logic is that a stored
 `_LOCAL_ORIGIN_INDEX` that is not a number becomes -1 (the kernel's "outside
-the GNSS samples") instead of silently meaning fix 0. Every validation rule,
+the GNSS samples") instead of silently meaning fix 0, and that a configuration
+attribute is read as a number into `Channels::imuConfiguration`, a stored
+value that is not a number becoming NaN rather than 0. Every validation rule,
 unit conversion, and message is the kernel's and is held to the kernel's
 goldens by the golden tests (`tests/README.md` section 11), so the
 session-level outputs are bit-identical to the kernel's goldens.
@@ -2249,12 +2270,16 @@ the first start after that update finds every stored fit stale at its
 recording's load and fits each again once, when something switched on needs
 it. The record holds the seventeen measurements and `_FUSION_DIAGNOSTICS`, or, for
 a rejection or solver failure, the diagnostics and the reason. Its leaves are
-the source data and attributes behind the 22 inputs: the IMU and GNSS source
-columns, `SCHEMA_VER`, the `TIME` sensor, the stored origin attributes. Markers
-and preferences are not among them. Its resolutions name what provided each
-name the fit looked up (the conversion layer's instances for recorded
-measurements, the calculations behind derived channels such as the local frame
-and the time fit, the session's own attributes). With the built-ins, no
+the source data and attributes behind the 26 inputs: the IMU and GNSS source
+columns, `SCHEMA_VER`, the `TIME` sensor, the stored origin attributes, and
+the configuration attributes, absent ones included. Markers and preferences
+are not among them. Its resolutions name what provided each name the fit
+looked up (the conversion layer's instances for recorded measurements, the
+calculations behind derived channels such as the local frame and the time
+fit, the session's own attributes, and the configuration's constant defaults
+where the session states no value). A file merged later that states a
+configuration key therefore makes a stored fit stale: what provides that
+input changes, as for any input. With the built-ins, no
 altitude marker, no preference and no plugin calculation is among them, so
 adding or removing an altitude marker, changing the descent pause timeout, or
 editing a plugin keeps a stored fit; a plugin or a registration that declares

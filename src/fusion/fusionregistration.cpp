@@ -18,6 +18,7 @@
 #include "fusion/fusion.h"
 #include "fusion/orientation.h"
 #include "fusion/solverthreads.h"
+#include "sensorconfiguration.h"
 #include "sessiondata.h"
 
 // Sensor fusion as registered calculations: a thin adapter between the engine
@@ -89,14 +90,34 @@ constexpr FitInput kFitInputs[] = {
     { "IMU",   "temperature", &Fusion::Channels::imuTemperature }
 };
 
+// The four configuration attributes the fit reads and the member of the
+// kernel's ImuConfiguration each one fills, in input order. One table serves
+// the declaration, the hand-over and the constant defaults. The receiver's
+// model and rate and the other sensors' rates are not inputs: nothing in the
+// fit uses them, and declaring them would make a stored fit stale when one
+// changed.
+struct ConfigurationInput {
+    const char *key;
+    double Fusion::ImuConfiguration::*value;
+};
+
+constexpr ConfigurationInput kConfigurationInputs[] = {
+    { SensorConfiguration::AccelFsG,   &Fusion::ImuConfiguration::accelFsG },
+    { SensorConfiguration::GyroFsDegS, &Fusion::ImuConfiguration::gyroFsDegS },
+    { SensorConfiguration::AccelOdrHz, &Fusion::ImuConfiguration::accelOdrHz },
+    { SensorConfiguration::GyroOdrHz,  &Fusion::ImuConfiguration::gyroOdrHz }
+};
+
 } // namespace
 
 // ---- the tables, as the public header exposes them --------------------------
-// Three functions over kFitInputs and kFitOutputs for the registration below
-// and for the tooling (fusion_runner), so that the tool feeds the kernel what
-// computeFit() feeds it by construction: one table, one assembly.
+// Three functions over kFitInputs, kConfigurationInputs and kFitOutputs for
+// the registration below and for the tooling (fusion_runner), so that the
+// tool feeds the kernel what computeFit() feeds it by construction: one
+// table, one assembly.
 
-// The measurements of kFitInputs, then the four origin attributes. Everything
+// The eighteen measurements of kFitInputs, then the four origin attributes,
+// then the four configuration attributes of kConfigurationInputs. Everything
 // behind them (GNSS/lat, the TIME sensor, the time fit) is transitive and
 // tracked by the engine. Markers and preferences are not inputs: they do not
 // move the fit.
@@ -109,6 +130,8 @@ QList<CalcInput> Fusion::fitInputs()
     inputs.append(CalcInput::attribute(SessionKeys::LocalOriginLat));
     inputs.append(CalcInput::attribute(SessionKeys::LocalOriginLon));
     inputs.append(CalcInput::attribute(SessionKeys::LocalOriginHmsl));
+    for (const ConfigurationInput &input : kConfigurationInputs)
+        inputs.append(CalcInput::attribute(input.key));
     return inputs;
 }
 
@@ -128,6 +151,15 @@ Fusion::Channels Fusion::channelsFrom(const MeasurementReader &measurement, cons
     channels.originLat = attribute(SessionKeys::LocalOriginLat).toDouble();
     channels.originLon = attribute(SessionKeys::LocalOriginLon).toDouble();
     channels.originHMSL = attribute(SessionKeys::LocalOriginHmsl).toDouble();
+
+    // The configuration as numbers. A stored, hand-edited value that is not a
+    // number must not silently mean 0: it stays the kernel's NaN.
+    for (const ConfigurationInput &input : kConfigurationInputs) {
+        bool ok = false;
+        const double value = attribute(QString::fromLatin1(input.key)).toDouble(&ok);
+        if (ok)
+            channels.imuConfiguration.*(input.value) = value;
+    }
     return channels;
 }
 
@@ -362,6 +394,21 @@ void registerOrientation(CalculationRegistry &registry)
     Calculations::addConstantDefault(registry, key, Fusion::Orientation::defaultOrientation().token());
 }
 
+// The constant defaults of the four configuration attributes the fit reads,
+// in input order: the text of the vocabulary, a QString like the value the
+// importer stores, so that a stored value and a default of the same text read
+// the same. A
+// recording that states a key reads its own value; the defaults are what
+// every recording on disk reads, since the firmware that wrote them states
+// none. Nothing here spells a key or a value.
+void registerConfigurationDefaults(CalculationRegistry &registry)
+{
+    for (const ConfigurationInput &input : kConfigurationInputs) {
+        const QString key = QString::fromLatin1(input.key);
+        Calculations::addConstantDefault(registry, key, SensorConfiguration::defaultValue(key).value());
+    }
+}
+
 constexpr double kDegreesPerRadian = 57.295779513082320876798;
 
 // Heading, pitch and roll of the body frame, in degrees, for one sample.
@@ -480,6 +527,8 @@ void registerAttitude(CalculationRegistry &registry)
 
 void Fusion::registerFusionCalculations(CalculationRegistry &registry)
 {
+    // The vocabulary before its reader
+    registerConfigurationDefaults(registry);
     registerFit(registry);
     registerHorizontalAcceleration(registry);
     registerSystemTime(registry);

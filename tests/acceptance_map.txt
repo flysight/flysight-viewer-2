@@ -1,5 +1,5 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Ten specifications, ten item ranges:
+# (tests/audit/cleanup_audit.cmake). Eleven specifications, eleven item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
@@ -16,7 +16,9 @@
 #             per-step IMU noise, temperature-dependent gyro bias, the
 #             command-line runner): item = 200 + requirement number. Stated in
 #             full in tests/README.md, appendix C. It is amended by the
-#             specification of 701-754: item 228 is stated as amended.
+#             specification of 701-754: item 228 is stated as amended. It is
+#             amended by the specification of 1001-1065: item 221 is stated
+#             as amended.
 #   301-350   storing requested calculation results with the session (record
 #             files, restore on load, validity, logbook columns over them):
 #             item = 300 + clause number. Stated in full in
@@ -66,13 +68,25 @@
 #             Stated in full in tests/README.md, appendix I. It amends the
 #             specifications of 1-19, 101-120 and 501-563. It is amended by
 #             the specification of 901-940: items 847 and 861 are stated as
-#             amended.
+#             amended. It is amended by the specification of 1001-1065: item
+#             847 is stated as amended.
 #   901-940   the fused state at every IMU sample (the reconstruction between
 #             fixes, the published channels at the IMU rate with the model's
 #             acceleration, the diagnostics' account of the reconstruction,
 #             the algorithm string and the goldens captured again): item =
 #             900 + clause number. Stated in full in tests/README.md,
-#             appendix J. It amends the specification of 801-863.
+#             appendix J. It amends the specification of 801-863. It is
+#             amended by the specification of 1001-1065: item 930 is stated
+#             as amended.
+#   1001-1065 the documented noise model and the accuracy, part 1 (the sensor
+#             configuration attributes, the noise model by configuration,
+#             the scale-factor state, the accuracy and its four channels and
+#             plots): item = 1000 + clause number. Stated in full in
+#             tests/README.md, appendix K. It amends the specifications of
+#             201-247, 801-863 and 901-940. It is implemented in phases: the
+#             items with lines below are those whose evidence exists so far,
+#             and the audit's completeness check covers exactly them (an
+#             explicit list in cleanup_audit.cmake).
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -82,11 +96,12 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the ten ranges; every item 1-19 needs a line;
-# every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754,
-# 801-863 or 901-940 needs at least one test or audit line (manual and ci
+# Every item must lie in one of the eleven ranges; every item 1-19 needs a
+# line; every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662,
+# 701-754, 801-863 or 901-940, and every item of 1001-1065 the audit's
+# explicit list names, needs at least one test or audit line (manual and ci
 # lines never stand alone). The human-readable matrices are tests/README.md
-# sections 9.1 to 9.10; keep them in sync with this file.
+# sections 9.1 to 9.11; keep them in sync with this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -522,7 +537,7 @@
 220 tst_fusion_kernel validationRejectsEachDefect
 220 tst_fusion_kernel driftingBiasSegmentsConverge
 
-# 221 - IMU/temperature is the twenty-second input, required; a recording handed no temperature is rejected by name; a session without the column is blocked like any missing input
+# 221 - (as amended) IMU/temperature is a required input of the fit (the twenty-second when it was added; the fit has twenty-six since the specification of 1001-1065); a recording handed no temperature is rejected by name; a session without the column is blocked like any missing input
 221 tst_fusion_kernel validationRejectsEachDefect
 221 tst_fusion_session registrationShape
 221 tst_fusion_session missingInputsAreNotApplicable
@@ -2647,7 +2662,7 @@
 846 tst_builtins_engine constantDefaults
 846 tst_smoke importAppliesCreationDefaults
 
-# 847 - (12, as amended) the fusion plots leave the fusion kernel and the fit calculation as they are (inputs, outputs, diagnostics, algorithm string) and derive what they add from the fit's published outputs, whose values, diagnostics and algorithm string are those of the specification of 901-940, with its goldens and stored results
+# 847 - (12, as amended) the fusion plots leave the fusion kernel and the fit calculation as they are (inputs, outputs, diagnostics, algorithm string), except that the specification of 1001-1065 adds the four configuration inputs, and derive what they add from the fit's published outputs, whose values, diagnostics and algorithm string are those of the specification of 901-940, with its goldens and stored results
 847 tst_fusion_session registrationShape
 847 tst_fusion_golden successFixturesMatchGolden
 847 tst_fusion_golden rejectionFixturesMatchGolden
@@ -2892,7 +2907,7 @@
 929 tst_fusion_golden cancelAtEachKindOfBoundary
 929 tst_fusion_golden progressMatchesGoldenBoundaries
 
-# 930 - (9) the fit calculation publishes the same channels and its result version follows the algorithm string; the registration, the plot registry and everything above them are unchanged
+# 930 - (9, as amended) the fit calculation publishes the same channels and its result version follows the algorithm string; the registration, the plot registry and everything above them are unchanged by the reconstruction; since the specification of 1001-1065 the registration also declares the four configuration inputs and registers their constant defaults
 930 tst_fusion_session registrationShape
 930 audit stored-results
 930 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
@@ -2938,3 +2953,56 @@
 # 940 - (11) `docs/` describe the reconstruction and that its output is the IMU-rate posterior to within one linearization, what that leaves out, what is published (the acceleration's consequence, the time axis in one sentence), the diagnostics keys, the algorithm string and the first start, and what the fusion plots show between fixes; tests/README.md section 11 records the goldens captured again and why; the map gives the specification its range, with the amended items restated
 940 audit fusion-reconstruction
 940 audit fusion-model
+
+# ---- The documented noise model and the accuracy, part 1: item = 1000 + clause number ----
+
+# 1001 - (5) the configuration keys, with actual values and the unit in the name: in `SENSOR.CSV` `ACCEL_FS_G` (2, 4, 8, 16), `GYRO_FS_DEG_S` (250, 500, 1000, 2000), `ACCEL_ODR_HZ` and `GYRO_ODR_HZ` (12.5, 26, 52, 104, 208, 416, 833, 1666, 3333, 6666, and 1.6 for the accelerometer), `BARO_ODR_HZ`, `HUM_ODR_HZ` and `MAG_ODR_HZ`; in `TRACK.CSV` `GNSS_MODEL` by name (portable, stationary, pedestrian, automotive, sea, airborne_1g, airborne_2g, airborne_4g) and `GNSS_RATE_HZ`; recorded with their value forms in `docs/DATA_SCHEMA.md` section 2 beside `SCHEMA_VER`
+1001 tst_sensor_configuration keysAndValueForms
+1001 audit sensor-configuration
+
+# 1002 - (5, 9) the importer stores them as header attributes, as it stores `SCHEMA_VER`, and they travel with the session as `SCHEMA_VER` does: kept as recorded, merged by the attribute conflict rule, written back by the exporter
+1002 tst_importer configurationStoredAsRecorded
+1002 tst_session_merge configurationFollowsConflictRule
+1002 tst_import_merge configurationTravelsWithTheSession
+1002 tst_persistence_roundtrip configurationAttributesRoundTrip
+
+# 1003 - (5) a malformed value is an import error naming the key, and nothing of the file is imported, as for a malformed `SCHEMA_VER`
+1003 tst_importer rejectsMalformedConfiguration
+1003 tst_sensor_configuration malformedValues
+1003 tst_sensor_configuration unsupportedMessage
+1003 tst_persistence_roundtrip malformedConfigurationIsNotSaved
+
+# 1004 - (5) a recording that lacks a key takes the value of the firmware of the recordings on disk, v2023.09.22: +/-16 g, +/-2000 deg/s, 12.5 Hz for both sensors; no dynamic model and no rate; the default is written once in the documentation and once in the code, with the firmware version it describes
+1004 tst_sensor_configuration defaultIsTheFirmwareConfiguration
+1004 tst_fusion_session configurationDefaults
+1004 tst_importer neverStampsConfiguration
+1004 audit sensor-configuration
+
+# 1005 - (5) the IMU's low-pass filters have no key: that firmware's fixed setting (the gyro's LPF2 at the cutoff of its 12.5 Hz rate and no LPF1, the accelerometer at its ODR bandwidth) is documented as part of the default, with the firmware version
+1005 tst_sensor_configuration keysAndValueForms
+1005 audit sensor-configuration
+
+# 1006 - (5, as settled) the dynamic model, the GNSS rate and the barometer's, humidity sensor's and magnetometer's rates are read and stored with the other attributes; nothing uses them, and they are not inputs of the fit
+1006 tst_importer configurationStoredAsRecorded
+1006 tst_fusion_session registrationShape
+1006 audit sensor-configuration
+
+# 1007 - (5, 10) the configuration reaches the kernel as part of its channels, as the origin does: the fit declares the four IMU keys as inputs, as it declares the origin, the input adapter carries them, the kernel reads no preference or constant for them, and nothing above the registration changes
+1007 tst_fusion_session registrationShape
+1007 tst_fusion_session configurationReachesTheKernel
+1007 tst_fusion_runner successMatchesDirectRun
+1007 tst_fusion_store dependencyEditDropsRecord
+1007 audit solver-confinement
+
+# 1050 - (11) test: a file with every key imports them; a malformed one is an import error naming the key; a file without them takes the default
+1050 tst_importer configurationStoredAsRecorded
+1050 tst_importer rejectsMalformedConfiguration
+1050 tst_fusion_session configurationDefaults
+1050 tst_fusion_runner successMatchesDirectRun
+
+# 1061 - (11, as settled) test: on a build where the configuration is carried and defaulted and the noise model is the previous one (the end of phase 1), the existing channels and diagnostics of every fixture are bit-identical to the goldens
+1061 tst_fusion_golden successFixturesMatchGolden
+1061 tst_fusion_golden rejectionFixturesMatchGolden
+1061 tst_fusion_kernel fitTraceMatchesGolden
+1061 tst_fusion_session configurationReachesTheKernel
+1061 tst_fusion_runner successMatchesDirectRun

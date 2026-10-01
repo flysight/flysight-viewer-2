@@ -6,8 +6,21 @@
 #include <QtGlobal>
 
 #include <functional>
+#include <limits>
 
 namespace FlySight::Fusion {
+
+/// How the IMU was configured, as the recording's configuration attributes
+/// state it or their constant defaults supply it (docs/DATA_SCHEMA.md section
+/// 2): the full-scale ranges in g and deg/s and the output data rates in Hz,
+/// the keys' own values as numbers. A member is a quiet NaN when its attribute
+/// is not a number, and stays one unless set.
+struct ImuConfiguration {
+    double accelFsG = std::numeric_limits<double>::quiet_NaN();     ///< ACCEL_FS_G, g
+    double gyroFsDegS = std::numeric_limits<double>::quiet_NaN();   ///< GYRO_FS_DEG_S, deg/s
+    double accelOdrHz = std::numeric_limits<double>::quiet_NaN();   ///< ACCEL_ODR_HZ, Hz
+    double gyroOdrHz = std::numeric_limits<double>::quiet_NaN();    ///< GYRO_ODR_HZ, Hz
+};
 
 /// Effective values of the fit's inputs, exactly as the engine supplies them.
 ///
@@ -26,6 +39,9 @@ struct Channels {
     /// _LOCAL_ORIGIN_LAT|LON|HMSL. Recorded in the diagnostics only; the
     /// numbers do not depend on them.
     double originLat = 0, originLon = 0, originHMSL = 0;
+    /// The four IMU configuration attributes. Recorded nowhere and read by
+    /// nothing in the kernel: the numbers do not depend on them.
+    ImuConfiguration imuConfiguration;
 };
 
 /// How a run ended. Rejected and SolverFailed are both results: functions of

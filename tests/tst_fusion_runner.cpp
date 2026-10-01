@@ -394,14 +394,23 @@ void FusionRunnerTest::successMatchesDirectRun()
     QVERIFY2(firstColumnNotBitIdentical(columns, direct).isEmpty(),
              qPrintable(QStringLiteral("column %1 differs from the direct run").arg(firstColumnNotBitIdentical(columns, direct))));
 
-    // --dump-inputs: the table of fitInputs() (the twenty-two labels are
+    // --dump-inputs: the table of fitInputs() (the twenty-six labels are
     // derived from it), holding the fixture bit for bit. The temperature
     // column proves the CSV round trip: DataExporter writes it from its IMU
-    // column table, and the importer reads it back.
+    // column table, and the importer reads it back. The recording states no
+    // configuration, so the four configuration lines hold the defaults' text
+    // (items 1007, 1050), and the fit on them is the direct run's on an
+    // all-NaN configuration (item 1061).
     QList<QPair<QString, QStringList>> dump;
     QVERIFY2(readDump(dumpPath, dump), qPrintable(dumpPath));
     QCOMPARE(dumpLabels(dump), inputLabels());
-    QCOMPARE(dump.size(), 22);
+    QCOMPARE(dump.size(), 26);
+    const QList<QPair<QString, QStringList>> configuration = dump.mid(22);
+    QCOMPARE(configuration,
+             (QList<QPair<QString, QStringList>>{{QStringLiteral("ACCEL_FS_G"), {QStringLiteral("16")}},
+                                                 {QStringLiteral("GYRO_FS_DEG_S"), {QStringLiteral("2000")}},
+                                                 {QStringLiteral("ACCEL_ODR_HZ"), {QStringLiteral("12.5")}},
+                                                 {QStringLiteral("GYRO_ODR_HZ"), {QStringLiteral("12.5")}}}));
     QVector<double> samples;
     QVERIFY(dumpSamples(dump, QStringLiteral("GNSS/_time"), samples));
     QVERIFY(sameBitsEverywhere(samples, fixture.gnssTime));

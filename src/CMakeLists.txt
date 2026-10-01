@@ -265,6 +265,13 @@ add_library(flysight_model STATIC
   # the orientation attribute's definition without linking flysight_core; it
   # needs Qt Core only.
   attributeregistry.cpp      attributeregistry.h
+
+  # The sensor configuration keys (names, value forms, the default of the IMU
+  # keys). Here rather than in flysight_core because the importer validates
+  # them and the fusion registration, which does not link flysight_core,
+  # declares four of them as inputs of the fit and registers their defaults;
+  # it needs Qt Core only.
+  sensorconfiguration.cpp    sensorconfiguration.h
 )
 target_include_directories(flysight_model PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(flysight_model PUBLIC Qt${QT_VERSION_MAJOR}::Core)

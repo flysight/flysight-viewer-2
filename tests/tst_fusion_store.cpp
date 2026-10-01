@@ -901,6 +901,9 @@ void FusionStoreTest::dependencyEditDropsRecord_data()
     // Reached only through the schema conversion of the gyro (the fixture
     // records "2"; "1" is the other supported schema)
     QTest::newRow("SCHEMA_VER") << QStringLiteral("SCHEMA_VER") << QVariant(QStringLiteral("1"));
+    // A configuration attribute the fixture does not state: its constant
+    // default, "16", is replaced by a stored value (item 1007)
+    QTest::newRow("ACCEL_FS_G") << QStringLiteral("ACCEL_FS_G") << QVariant(QStringLiteral("8"));
 }
 
 // Spec 8: changing a dependency (a declared input, or SCHEMA_VER, which the
