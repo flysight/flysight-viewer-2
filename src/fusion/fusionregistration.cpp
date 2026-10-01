@@ -32,9 +32,10 @@ namespace {
 
 constexpr char kSensor[] = "Fusion";
 
-// The seventeen measurement outputs of the fit and the array of the kernel's
-// result behind each. One table serves the declaration and the publication,
-// so the two cannot drift apart.
+// The twenty-one measurement outputs of the fit and the array of the kernel's
+// result behind each: the seventeen of the state, then the four accuracies.
+// One table serves the declaration and the publication, so the two cannot
+// drift apart.
 struct FitOutput {
     const char *name;
     QVector<double> Fusion::Result::*samples;
@@ -57,7 +58,11 @@ constexpr FitOutput kFitOutputs[] = {
     { "qx",    &Fusion::Result::qx },
     { "qy",    &Fusion::Result::qy },
     { "qz",    &Fusion::Result::qz },
-    { "qw",    &Fusion::Result::qw }
+    { "qw",    &Fusion::Result::qw },
+    { "headingAcc", &Fusion::Result::headingAcc },
+    { "tiltAcc",    &Fusion::Result::tiltAcc },
+    { "accHAcc",    &Fusion::Result::accHAcc },
+    { "accDAcc",    &Fusion::Result::accDAcc }
 };
 
 // The eighteen measurement inputs of the fit and the member of the kernel's
@@ -195,7 +200,10 @@ Fusion::Channels channelsFrom(const EvaluationContext &ctx)
 // A fit that ended with a result, as the bundle the engine caches. A rejected
 // recording and a solver failure are functions of the inputs like a success:
 // the measurements stay unset (unavailable), the diagnostics carry the reason,
-// and asking again with the same inputs runs nothing.
+// and asking again with the same inputs runs nothing. A success whose
+// covariance could not be computed has no accuracies: those four stay unset
+// too, since an available measurement has samples (the record refuses one
+// without), and the diagnostics say why.
 CalculationResult publish(const Fusion::Result &fit)
 {
     CalculationResult result;
@@ -204,8 +212,11 @@ CalculationResult publish(const Fusion::Result &fit)
         result.setReason(fit.reason);
         return result;
     }
-    for (const FitOutput &output : kFitOutputs)
-        result.setMeasurement(kSensor, output.name, fit.*(output.samples));
+    for (const FitOutput &output : kFitOutputs) {
+        const QVector<double> &samples = fit.*(output.samples);
+        if (!samples.isEmpty())
+            result.setMeasurement(kSensor, output.name, samples);
+    }
     return result;
 }
 

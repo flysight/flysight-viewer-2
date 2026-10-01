@@ -1,6 +1,15 @@
 {
     "channels_file": "coarse_maneuver.channels.txt",
     "diagnostics": {
+        "accuracy": {
+            "computed": true,
+            "failure": null,
+            "heading_prior_sigma_rad": 1000,
+            "max_widening": 1,
+            "undetermined_heading_samples": 0,
+            "widened_samples": 0,
+            "widening_half_width_s": 2.5
+        },
         "algorithm": "batch-temperature-bias-v6",
         "anchor_time_s": null,
         "configuration": {
@@ -51,7 +60,7 @@
             "origin_index": 3,
             "time_method": "SessionData shared UTC conversion; common epoch subtraction only"
         },
-        "limitations": "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass with the fitted fix states, biases and scale factors held; no uncertainty is published.",
+        "limitations": "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass with the fitted fix states, biases and scale factors held. Accuracies are first-order, one standard deviation under the documented noise model, widened where the residuals exceed it.",
         "max_endpoint_correction_deg": 3.686517510794429e-07,
         "max_seed_vs_selected_acceleration_m_s2": null,
         "max_seed_vs_selected_angle_deg": null,
@@ -94,10 +103,20 @@
                     1.0000006348610668,
                     0.9991684807476373
                 ],
+                "acc_sigma": [
+                    0.009999712538273618,
+                    0.009961657474651484,
+                    0.00950191073367358
+                ],
                 "gyro": [
                     1.000001859620338,
                     1.0000009267823717,
                     1.0000022792572367
+                ],
+                "gyro_sigma": [
+                    0.0099999946229979,
+                    0.009999998730060905,
+                    0.0099999971880993
                 ]
             }
         },

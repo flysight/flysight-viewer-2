@@ -73,7 +73,7 @@ bool allArraysEmpty(const Fusion::Result &result)
 
 /// Empty when every channel of `result` matches the golden, else the first
 /// channel's difference. Every channel is compared even after a difference,
-/// so that the statistics in the log always cover all seventeen.
+/// so that the statistics in the log always cover all twenty-one.
 QString channelsDifference(const Fusion::Result &result, const FusionGolden &golden,
                            ParityStatistics *statistics = nullptr)
 {
@@ -219,6 +219,28 @@ void FusionGoldenTest::comparatorHoldsItsBounds()
         for (const char *name : {"north", "velD", "accE"})
             QVERIFY2(!samplesPass(QString::fromLatin1(name), 2e-7, 0.0), name);
         QVERIFY(!jsonPasses("gyro_bias_rad_s", 2e-7, 0.0));
+        // The accuracies: headingAcc, on a flat heading the sigma of that
+        // direction, has the heading's floor; tiltAcc the degrees'; the two
+        // acceleration accuracies, the scale sigmas and the largest widening
+        // the default; and the accuracy account's constants and counts are
+        // exact.
+        QVERIFY(samplesPass(QStringLiteral("headingAcc"), 2.2e-4, 0.0));
+        QVERIFY(!samplesPass(QStringLiteral("headingAcc"), 2.4e-4, 0.0));
+        QVERIFY(samplesPass(QStringLiteral("tiltAcc"), 5e-6, 0.0));
+        QVERIFY(!samplesPass(QStringLiteral("tiltAcc"), 6e-6, 0.0));
+        for (const char *name : {"accHAcc", "accDAcc"}) {
+            QVERIFY2(samplesPass(QString::fromLatin1(name), 9e-8, 0.0), name);
+            QVERIFY2(!samplesPass(QString::fromLatin1(name), 2e-7, 0.0), name);
+        }
+        for (const char *key : {"acc_sigma", "gyro_sigma", "max_widening"}) {
+            QVERIFY2(jsonPasses(key, 1.0 + 1.5e-7, 1.0), key);
+            QVERIFY2(!jsonPasses(key, 1.0 + 2.5e-7, 1.0), key);
+        }
+        for (const char *key : {"heading_prior_sigma_rad", "widening_half_width_s", "widened_samples",
+                                "undetermined_heading_samples"}) {
+            QVERIFY2(jsonPasses(key, 3, 3), key);
+            QVERIFY2(!jsonPasses(key, 3 + 1e-9, 3), key);
+        }
 
         // What CI observed passes (coarse_maneuver accN, sample 332; the worst
         // absolute difference of any channel, 1.06e-8) ...
@@ -403,7 +425,7 @@ void FusionGoldenTest::channelsWriterIsTheInverseOfTheLoader()
     for (const QString &name : kSuccessFixtures) {
         const FusionGolden golden = loadFusionGolden(name);
         Fusion::Result result;
-        // The seventeen arrays through the field order fusionChannel() defines
+        // The twenty-one arrays through the field order fusionChannel() defines
         // (the object is not const; only the accessor's view of it is).
         for (const QString &channel : fusionChannelNames())
             const_cast<QVector<double> &>(fusionChannel(result, channel)) = golden.channels.value(channel);

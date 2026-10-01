@@ -200,7 +200,8 @@ gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, doub
         const gtsam::Vector3 &accBias = bias.accelerometer();
         const gtsam::Vector3 halfAngle = (gyroMid-bias.gyroscope())*(dt/2);
         const gtsam::Rot3 halfStep = gtsam::Rot3::Expmap(halfAngle);
-        ImuStep step{e[i-1], e[i], dt, halfStep.rotate(forceMid-accBias)+accBias, gyroMid, gtsam::Matrix9::Zero()};
+        ImuStep step{e[i-1], e[i], dt, halfStep.rotate(forceMid-accBias)+accBias, gyroMid, gtsam::Matrix9::Zero(),
+                     gtsam::Matrix96::Zero()};
         if (observer || scaleJacobian) {
             // The library's own transition and input Jacobians of the step:
             // integrateMeasurement() calls update() qualified, so the step
@@ -222,6 +223,8 @@ gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, doub
                 input.leftCols<3>() = -byForce*R*F;
                 input.rightCols<3>() = byForce*R*gtsam::skewSymmetric(forceMid-accBias)
                                        *gtsam::Rot3::ExpmapDerivative(halfAngle)*W*(dt/2) - byRate*W;
+                // The step's first edge's, before this step joins it.
+                step.scaleJacobian = H;
                 H = step.transition*H + input;
             }
         }

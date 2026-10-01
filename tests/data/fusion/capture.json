@@ -26,12 +26,12 @@
         "os": "Windows 11 Version 25H2"
     },
     "qt": "6.9.3",
-    "repository_revision": "236dfad6877bbf80cef223bff1539b92480ad810",
+    "repository_revision": "06239e9d8826ee3b0be1fd1916f61b2cd26f66d4",
     "sha256_lf": {
-        "coarse_linear.channels.txt": "167adcd92df04358526d2379ca38e0e1dc1dc234d2ca9728729ed8c98524cced",
-        "coarse_linear.json": "2d6bba96f12065d1b0376f90e2d76e1c1216b54a03ceb30ea862ed5a85bfddb6",
-        "coarse_maneuver.channels.txt": "8db2b446c2b49ee8f8775d17ee86137036f645f7ee65801d7d6b359980d62aec",
-        "coarse_maneuver.json": "a096ad1a8b0b1a7d0d325e4d2d0daccdb7dd1cbb8a5b60dd31794bbf0b397830",
+        "coarse_linear.channels.txt": "f9930466340c0f3d101a5efbba9a89df6e232fbe6739a54a0086739fff10a4df",
+        "coarse_linear.json": "8d43f57ea9ca728796a8a4a50992dd444ca25066a03b3743ff7e6e3c91c6d720",
+        "coarse_maneuver.channels.txt": "c23057848b5cc77b2c57f45956f41920b5ef33927f3a36961f6295d8a1214a97",
+        "coarse_maneuver.json": "162d1f3fcf11c4ff5bd54add147667b8b538cf8fc6c1a80b1b0cd3c41006b2e4",
         "reject_coverage.json": "3d4b04d250422d178d4966db54de4c7ebd715c83b9dbd2edd984e93229fe9ad2",
         "reject_gnss_gap.json": "e203b5f42a84b29e588acd15e808407d01df06dba951bcd87e7cc257d6eaf59a",
         "reject_imu_gap.json": "27aa55749baa2e170d2976f601feea82ac1398414a45ec97afda962bc2013d1c",
@@ -43,8 +43,8 @@
         "reject_sigma.json": "3d5e404b54a5c1f8b0bb0308997a5dba47ed4843e3a3a9751c69c3eb89cfb583",
         "reject_time_order.json": "7ea057449747d475729b7fa3d2e02e37f3d5d5ef9aba46a4416eaffa776df57f",
         "reject_too_few_fixes.json": "faec6977d87b8a6e69ccc75ba9b8097979f7b154fcaafdc8b73d22436a98a4dd",
-        "stationary_spin.channels.txt": "26887b4520231f31a348e644de7272842a0cedb4a1b107dce8606160f19fa988",
-        "stationary_spin.json": "bba214322446b316d6d98d2487e60602fcb8d9c6c2cbe517b9d17522e17fbd24"
+        "stationary_spin.channels.txt": "811bd545c398c262855ad478d37f0e669c370a554e8e58b1f2756d41c5545804",
+        "stationary_spin.json": "2001bfffcbed71243388c11afbc578891e6d7a94838587cfe69800322c175fae"
     },
     "sha256_note": "Hashes of the files as written (LF line endings). A checkout with core.autocrlf=true has CRLF in the working tree; the loader accepts both.",
     "solver": {

@@ -60,8 +60,10 @@
 #     and the firmware version their default describes are spelled in one
 #     vocabulary, and the keys nothing uses stay unused; the datasheet's table
 #     exists in one unit; the scale state is the full fit's, built in one
-#     place, and the legacy gyro correction is not part of it (items
-#     1001-1065).
+#     place, and the legacy gyro correction is not part of it; the accuracy's
+#     covariance comes from one factorization in one unit, never from the
+#     library's joint marginals, under one cap, and its four channels are
+#     named in the registration alone (items 1001-1065).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -584,7 +586,7 @@ expect_none("the logic components see no widget"
 # tools isolated and uninstalled.
 # =============================================================================
 
-# ─────────────────────────────── fusion-model (items 212, 218, 234, 247, 902, 903, 927, 929, 939, 940)
+# ─────────────────────────────── fusion-model (items 212, 218, 234, 247, 902, 903, 927, 929, 939, 940, 1027)
 audit_group(fusion-model)
 # Allow: tests/README.md is excluded because its section 10 spells these
 # patterns. `kWindowLength` only at a word end (WB_END): the kernel's
@@ -648,9 +650,11 @@ expect_only("the step model has one author"
 # no stationary or candidate window, no coarse-only initializer, no frozen
 # algorithm, no bias-shift settled test, no branch, twenty-six inputs. Say
 # "the previous initializer", "a resting window", "the coarse attitude at the
-# anchor" when the history must be mentioned.
+# anchor" when the history must be mentioned. The earlier input counts are
+# banned as input counts only: since the accuracy the fit has twenty-two
+# outputs and twenty-one measurements, which section 7 counts.
 expect_none("the fusion document describes the current model"
-  "stationary window|candidate window|coarse initializer|frozen|bias shifts below|zero bias shift|sensor-fusion-clean-port|twenty-two"
+  "stationary window|candidate window|coarse initializer|frozen|bias shifts below|zero bias shift|sensor-fusion-clean-port|twenty-(one|two) inputs"
   docs/SENSOR_FUSION.md)
 
 # ─────────────────────────────── noise-model (items 1012-1014, 1016, 1017, 1046)
@@ -716,7 +720,55 @@ expect_none("the documents describe the fitted scale" "scale factor is not fitte
 expect_count("the fusion document names the scale prior" "scale_prior" 1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document names the scale diagnostics" "model\\.scale" 1 docs/SENSOR_FUSION.md)
 
-# ─────────────────────────────── fusion-tooling (items 231, 233, 848, 928, 939)
+# ─────────────────────────────── accuracy-channels (items 1022, 1025, 1030, 1032, 1036, 1049)
+# The accuracy of a converged fit (docs/SENSOR_FUSION.md section 4): one
+# factorization of the converged graph, in its own unit
+# (src/fusion/fitcovariance.*), whose clique marginals give the covariance,
+# never the library's joint marginals; one cap for every attitude sigma; the
+# four channels named once, in the registration's output table; and the
+# fusion document states the propagation, what it leaves out, the widening
+# and the accuracy's one sentence.
+audit_group(accuracy-channels)
+# Allow: none expected. The library's joint marginals factorize the system
+# again for every query (0.6 s per fix on the longest reference recording);
+# the covariance comes from the covariance step. The tests use them as a
+# reference: they are under tests/, which this rule does not search.
+expect_none("the covariance is not the library's joint marginals" "jointMarginalCovariance" src)
+# Allow: none expected. The one factorization of the covariance step is the
+# only elimination the kernel spells (the fit eliminates through its
+# optimizer); another reader of the covariance takes fitCovariance().
+expect_only("one factorization of the converged graph" "eliminateMultifrontal|eliminateSequential"
+  "^src/fusion/fitcovariance\\.cpp$" src)
+expect_count("one factorization of the converged graph" "eliminateMultifrontal\\(" 1 src/fusion/fitcovariance.cpp)
+# Allow: none expected. The heading check and the published heading and tilt
+# share one cap, defined in factorgraphfit.h.
+expect_count("one cap for every attitude sigma" "constexpr double kYawSigmaCapDeg" 1 src/fusion)
+# Allow: phase 5 adds the plot rows (src/mainwindow.cpp) to the allowed-file
+# regex. The four channel names are spelled once in src, in the registration's
+# output table; the kernel holds them as Result members.
+expect_only("the accuracy channels are named in the registration"
+  "\"(headingAcc|tiltAcc|accHAcc|accDAcc)\""
+  "^src/fusion/fusionregistration\\.cpp$" src)
+# Allow: none expected. The fit publishes its accuracy; say what it is and
+# what it leaves out instead.
+expect_none("nothing says that no uncertainty is published" "no uncertainty" src docs)
+# The fusion document states the propagation in symbols, what it leaves out,
+# what the widening's factor is, that it never tightens, and the accuracy's
+# one sentence (clauses 30, 32, 36). Allow: these count LINES; a second
+# sentence that needs the phrase raises its count here. "cross-axis
+# sensitivity" has two: the accuracy's omissions and section 5's limitations.
+expect_count("the fusion document states the propagation" "a = R \\(f / s - b\\) \\+ g" 1 docs/SENSOR_FUSION.md)
+expect_count("the fusion document says what the propagation leaves out" "gravity's own uncertainty" 1
+  docs/SENSOR_FUSION.md)
+expect_count("the fusion document says what the propagation leaves out" "cross-axis sensitivity" 2
+  docs/SENSOR_FUSION.md)
+expect_count("the fusion document says what the widening is" "a-posteriori variance factor" 1 docs/SENSOR_FUSION.md)
+expect_count("the fusion document says the widening never tightens" "never tightens" 1 docs/SENSOR_FUSION.md)
+expect_count("the fusion document states what the accuracy is"
+  "The accuracy is one standard deviation from the covariance of the converged solution under the documented model, widened where the residuals exceed what the model allows\\."
+  1 docs/SENSOR_FUSION.md)
+
+# ─────────────────────────────── fusion-tooling (items 231, 233, 848, 928, 939, 1049)
 audit_group(fusion-tooling)
 # Allow: none expected. The runner imports model-free (DataImporter::parseFile,
 # SessionMerge, the engine on a bare SessionData) and never names the
@@ -745,7 +797,7 @@ expect_none("the fusion tools are not installed"
 # tests/fusion/fusiontrace.h include fusion/fusionpipeline.h, the trace seam,
 # which is not in the pattern.
 expect_only("the tools see the public header or the trace seam only"
-  "#include \"fusion/(factorgraphfit|initializer|imuintegration|inputadapter|fusionsamples|fusionoutput|fusionprogress|trajectoryreconstruction|temperatureimufactor|scaledimufactor|samplestatistics|sensornoise)\\.h\""
+  "#include \"fusion/(factorgraphfit|initializer|imuintegration|inputadapter|fusionsamples|fusionoutput|fusionprogress|trajectoryreconstruction|temperatureimufactor|scaledimufactor|samplestatistics|sensornoise|fitcovariance)\\.h\""
   "^src/fusion/|^tests/tst_fusion_kernel\\.cpp$"
   src tests)
 
@@ -1338,7 +1390,9 @@ else()
   foreach(item IN ITEMS 1001 1002 1003 1004 1005 1006 1007 1050 1061
                         1008 1009 1010 1011 1012 1013 1014 1015 1016 1017 1040 1041 1043 1045 1046 1047
                         1051 1052 1053 1062
-                        1018 1019 1020 1021 1023 1048 1054)
+                        1018 1019 1020 1021 1023 1048 1054
+                        1022 1025 1026 1027 1028 1029 1030 1031 1032 1033 1034 1035 1036 1042 1044 1049
+                        1056 1057 1058 1059 1060)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

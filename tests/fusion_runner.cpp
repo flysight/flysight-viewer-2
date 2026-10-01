@@ -10,7 +10,8 @@
 // the kernel the channels the registered calculation would hand it
 // (Fusion::channelsFrom, the one assembly), and prints the fit's diagnostics
 // JSON on standard output. Progress texts and the outcome go to standard
-// error; --csv writes the seventeen output channels; --dump-inputs writes the
+// error; --csv writes the output channels (the twenty-one, or the seventeen
+// of the state when the accuracy is absent); --dump-inputs writes the
 // effective input channels the fit was given. Built in the fusion-tests block
 // of tests/CMakeLists.txt, not installed; run by hand with the Qt,
 // GeographicLib and solver library directories on the path.
@@ -89,7 +90,8 @@ const char kUsage[] =
     "Progress goes to standard error, one line per stage.\n"
     "\n"
     "Options:\n"
-    "  --csv <path>          write the seventeen output channels as CSV (Succeeded only)\n"
+    "  --csv <path>          write the output channels as CSV (Succeeded only): the\n"
+    "                        twenty-one, or the seventeen without the accuracy\n"
     "  --dump-inputs <path>  write the effective input channels the fit is given\n"
     "  -h, --help            this text\n"
     "\n"
@@ -209,13 +211,16 @@ QByteArray inputDump(const SessionData &session)
 }
 
 /// --csv: the derived header line, then one line per output sample with the
-/// seventeen channels of Fusion::fitOutputChannels(). A plain CSV, not a
-/// FlySight file: no $ prefixes, no units line. Empty (with `error` set) when
-/// the channels do not share one length, which the kernel's contract rules
-/// out for a Succeeded result.
+/// channels of Fusion::fitOutputChannels() whose arrays are not empty: all
+/// twenty-one on a normal success, the seventeen of the state when the
+/// covariance could not be computed (the four accuracies are then absent). A
+/// plain CSV, not a FlySight file: no $ prefixes, no units line. Empty (with
+/// `error` set) when the channels written do not share one length, which the
+/// kernel's contract rules out for a Succeeded result.
 QByteArray outputCsv(const Fusion::Result &result, QString &error)
 {
-    const QList<Fusion::FitOutputChannel> channels = Fusion::fitOutputChannels(result);
+    QList<Fusion::FitOutputChannel> channels = Fusion::fitOutputChannels(result);
+    channels.removeIf([](const Fusion::FitOutputChannel &channel) { return channel.samples.isEmpty(); });
     QStringList names;
     for (const Fusion::FitOutputChannel &channel : channels) {
         names.append(channel.name);

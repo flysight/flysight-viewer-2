@@ -66,9 +66,13 @@ struct Result {
     /// (`model.noise`: each sensor's datasheet density, bandwidth, step,
     /// per-sample sigma and integration density; `model.gyro_bias`: `b0`,
     /// `b1`, the reference temperature; `model.scale`: the fitted scale
-    /// factors, `acc` and `gyro`, each [x, y, z]), residuals. On Rejected /
-    /// SolverFailed: the algorithm name and the failure. Empty only when
-    /// Cancelled.
+    /// factors, `acc` and `gyro`, each [x, y, z], and their sigmas
+    /// `acc_sigma` and `gyro_sigma`, null when the covariance was not
+    /// computed), residuals, and the account of the accuracy (`accuracy`:
+    /// whether the covariance was computed and why not, the heading prior and
+    /// the widening window, and the widening's and the undetermined
+    /// heading's counts). On Rejected / SolverFailed: the algorithm name and
+    /// the failure. Empty only when Cancelled.
     QString diagnosticsJson;
     /// Succeeded only; otherwise all empty. All the same length and aligned
     /// with `time` (UTC s): the original IMU samples inside the fitted
@@ -85,6 +89,17 @@ struct Result {
     /// uses; qx..qw is the same body-to-NED attitude as a quaternion.
     QVector<double> time, north, east, down, velN, velE, velD, accN, accE, accD,
                     roll, pitch, yaw, qx, qy, qz, qw;
+    /// The accuracy at every sample, aligned with `time` (docs/SENSOR_FUSION.md
+    /// section 4): one standard deviation from the covariance of the converged
+    /// solution under the documented model, widened where the residuals
+    /// exceed what the model allows. headingAcc and tiltAcc are degrees in
+    /// (0, 180], 180 meaning undetermined; accHAcc and accDAcc are m/s^2, the
+    /// horizontal acceleration's along its direction and the vertical's.
+    /// Filled only for Succeeded with the covariance computed; empty for every
+    /// other outcome and for a success whose covariance failed, which the
+    /// diagnostics' `accuracy` says (the seventeen arrays above are then
+    /// filled as ever).
+    QVector<double> headingAcc, tiltAcc, accHAcc, accDAcc;
 };
 
 /// Receives a short text describing the stage the fit has reached. Must not throw.
@@ -105,8 +120,11 @@ using CancelFn = std::function<bool()>;
 /// `Integrating IMU factors`, every 256 states of every graph build; and
 /// every iteration of every optimizer pass, in the initializer's prefix and
 /// segment fits (whose texts name the segment) as in the full fit. A linear
-/// solve in progress finishes first, and so does the reconstruction at the
-/// IMU samples after the last iteration, which is not a boundary.
+/// solve in progress finishes first, and so does the work after the last
+/// iteration, which has no boundary: the covariance step (one factorization of
+/// the converged graph) and the reconstruction at the IMU samples, which
+/// composes the accuracy in the same pass, a few seconds on the longest
+/// recording.
 ///
 /// Every std::exception raised inside (the checks, the solver) becomes a
 /// Rejected or SolverFailed result. Two things propagate: std::bad_alloc,

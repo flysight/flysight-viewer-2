@@ -357,7 +357,7 @@ void FusionDerivedTest::syntheticOutputsAreServedWithoutAFit()
 {
     QHash<QString, QVector<double>> channels;
     const QStringList names = fusionMeasurementNames();
-    QCOMPARE(names.size(), 17);
+    QCOMPARE(names.size(), 21);
     for (qsizetype k = 0; k < names.size(); ++k) {
         QVector<double> samples;
         for (int i = 0; i < 5; ++i)

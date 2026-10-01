@@ -4,10 +4,12 @@
 #include <vector>
 
 #include "fusion/factorgraphfit.h"
+#include "fusion/fitcovariance.h"
 #include "fusion/fusion.h"
 #include "fusion/fusionprogress.h"
 #include "fusion/fusionsamples.h"
 #include "fusion/initializer.h"
+#include "fusion/inputadapter.h"
 
 // Internal to the fusion library: run() with its seams exposed, for the
 // kernel tests. Nothing outside src/fusion/ and tests/tst_fusion_kernel.cpp
@@ -27,8 +29,8 @@ struct PipelineTrace {
     Stopping stopping;              ///< filled whenever a pass ran, including for a FitFailure
 };
 
-/// The whole fit: adapter, checks, window, initializer, fit, reconstruction,
-/// channels and diagnostics, and the only place that catches. Anything thrown
+/// The whole fit: adapter, checks, window, initializer, fit, covariance step,
+/// reconstruction, channels and diagnostics, and the only place that catches. Anything thrown
 /// before the fit starts is Outcome::Rejected; anything from the fit onward is
 /// Outcome::SolverFailed; std::bad_alloc propagates. The initializer's prefix
 /// and segment fits are part of the fit stage: they run after "Starting fit".
@@ -40,6 +42,15 @@ struct PipelineTrace {
 /// damping saturation with a lower lambdaUpperBound.
 Result runPipeline(const Channels &channels, const Tuning &baseTuning,
                    const Checkpoint &checkpoint, PipelineTrace *trace = nullptr);
+
+/// What runPipeline() does with a converged `fit` of `window` once its
+/// covariance step has run: the reconstruction at every IMU sample, which
+/// composes `covariance` when it was computed, the widening, the channels and
+/// the success diagnostics. runPipeline() passes fitCovariance() of `fit`; a
+/// test passes one that failed, to see that nothing but the accuracy changes.
+/// No checkpoint.
+Result assembleSuccess(const PreparedInput &prepared, const InitializerAccount &account, const Samples &window,
+                       const FitResult &fit, const Tuning &tuning, const FitCovariance &covariance);
 
 } // namespace FlySight::Fusion::Detail
 

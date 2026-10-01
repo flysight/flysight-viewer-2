@@ -1,6 +1,15 @@
 {
     "channels_file": "coarse_linear.channels.txt",
     "diagnostics": {
+        "accuracy": {
+            "computed": true,
+            "failure": null,
+            "heading_prior_sigma_rad": 1000,
+            "max_widening": 1,
+            "undetermined_heading_samples": 160,
+            "widened_samples": 0,
+            "widening_half_width_s": 2.5
+        },
         "algorithm": "batch-temperature-bias-v6",
         "anchor_time_s": null,
         "configuration": {
@@ -51,7 +60,7 @@
             "origin_index": 0,
             "time_method": "SessionData shared UTC conversion; common epoch subtraction only"
         },
-        "limitations": "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass with the fitted fix states, biases and scale factors held; no uncertainty is published.",
+        "limitations": "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass with the fitted fix states, biases and scale factors held. Accuracies are first-order, one standard deviation under the documented noise model, widened where the residuals exceed it.",
         "max_endpoint_correction_deg": 1.0362004367921434e-14,
         "max_seed_vs_selected_acceleration_m_s2": null,
         "max_seed_vs_selected_angle_deg": null,
@@ -94,10 +103,20 @@
                     1,
                     0.999999999998749
                 ],
+                "acc_sigma": [
+                    0.01,
+                    0.01,
+                    0.009525409254143169
+                ],
                 "gyro": [
                     1,
                     1,
                     1
+                ],
+                "gyro_sigma": [
+                    0.01,
+                    0.010000000000000004,
+                    0.010000000000000002
                 ]
             }
         },

@@ -205,9 +205,15 @@ FitResult fitFactorGraph(const Samples &samples, const InitialState &initial, co
                          const Checkpoint &checkpoint = Checkpoint(),
                          const GyroBiasModel &model = GyroBiasModel());
 
+/// The cap of every attitude sigma the kernel reports, degrees: the heading
+/// check's below and the published heading and tilt accuracies
+/// (fitcovariance.h). An angle on a circle, so nothing above it says more, and
+/// it reads "undetermined".
+constexpr double kYawSigmaCapDeg = 180;
+
 /// The marginal standard deviation, in degrees, of the rotation of pose `key`
 /// about the navigation vertical, from `graph` linearized at `values`
-/// (QR factorization). Capped at 180 degrees: a rotation about the vertical is
+/// (QR factorization). Capped at kYawSigmaCapDeg: a rotation about the vertical is
 /// an angle on a circle, and an indeterminate system or a non-finite
 /// covariance means the yaw is simply undetermined, which is what 180 says.
 double yawSigmaDeg(const gtsam::NonlinearFactorGraph &graph, const gtsam::Values &values, gtsam::Key key);

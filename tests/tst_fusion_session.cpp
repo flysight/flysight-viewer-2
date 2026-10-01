@@ -267,12 +267,21 @@ void FusionSessionTest::registrationShape()
     QCOMPARE(inputs.size(), 26);
     QVERIFY(fit->descriptor->inputs == inputs);
 
+    // Twenty-two outputs: the seventeen measurements of the state, the four
+    // accuracies (clause 33 of the specification of 1001-1065), and the
+    // diagnostics, as literals.
     QList<DependencyKey> outputs;
-    for (const QString &name : fusionMeasurementNames())
-        outputs.append(fusionKey(name));
+    for (const char *name : {"_time", "north", "east", "down", "velN", "velE", "velD", "accN", "accE", "accD",
+                             "roll", "pitch", "yaw", "qx", "qy", "qz", "qw",
+                             "headingAcc", "tiltAcc", "accHAcc", "accDAcc"})
+        outputs.append(fusionKey(QString::fromLatin1(name)));
     outputs.append(DependencyKey::attribute(kDiagnostics));
-    QCOMPARE(outputs.size(), 18);
+    QCOMPARE(outputs.size(), 22);
     QVERIFY(fit->descriptor->outputs == outputs);
+    QStringList measurements;
+    for (const Fusion::FitOutputChannel &channel : Fusion::fitOutputChannels(Fusion::Result()))
+        measurements.append(channel.name);
+    QCOMPARE(measurements, fusionMeasurementNames());
 
     // The goldens' columns are these names
     QCOMPARE(fusionChannelNames(), fusionMeasurementNames());
@@ -509,10 +518,10 @@ void FusionSessionTest::readsNeverRunTheFit()
     const SessionData session = fixtureSession(QStringLiteral("coarse_linear"));
     CalculationEngine &engine = session.calculationEngine();
     const QList<DependencyKey> names = fusionNames();
-    QCOMPARE(names.size(), 21);
+    QCOMPARE(names.size(), 25);
 
     int runsAfterFirstRound = -1;
-    const int strides[] = {4, 5, 8};        // coprime with 21: every name, scrambled
+    const int strides[] = {4, 7, 8};        // coprime with 25: every name, scrambled
     for (int round = 0; round < 3; ++round) {
         for (int i = 0; i < names.size(); ++i) {
             const DependencyKey &name = names.at((i * strides[round] + round * 3) % names.size());
@@ -571,7 +580,7 @@ void FusionSessionTest::requestRunsOnceAndPublishesTogether()
         QVERIFY(outcome.invalidated.contains(name));
     QVERIFY(engine.resultDetail(kFit).isEmpty());
 
-    // All seventeen, aligned, and the golden's
+    // All twenty-one, aligned, and the golden's
     const qsizetype length = fusion(session, QStringLiteral("_time")).size();
     QVERIFY(length > 0);
     for (const QString &name : fusionMeasurementNames())

@@ -386,6 +386,7 @@ add_library(flysight_fusion STATIC
   fusion/temperatureimufactor.cpp      fusion/temperatureimufactor.h
   fusion/scaledimufactor.cpp           fusion/scaledimufactor.h
   fusion/trajectoryreconstruction.cpp  fusion/trajectoryreconstruction.h
+  fusion/fitcovariance.cpp             fusion/fitcovariance.h
   fusion/fusionoutput.cpp              fusion/fusionoutput.h
   # The solver's oneTBB helper threads at the priority of the thread that runs
   # the fit (the executor's worker is below normal)

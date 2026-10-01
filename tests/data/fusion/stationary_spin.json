@@ -1,6 +1,15 @@
 {
     "channels_file": "stationary_spin.channels.txt",
     "diagnostics": {
+        "accuracy": {
+            "computed": true,
+            "failure": null,
+            "heading_prior_sigma_rad": 1000,
+            "max_widening": 1,
+            "undetermined_heading_samples": 0,
+            "widened_samples": 0,
+            "widening_half_width_s": 2.5
+        },
         "algorithm": "batch-temperature-bias-v6",
         "anchor_time_s": null,
         "configuration": {
@@ -51,7 +60,7 @@
             "origin_index": 0,
             "time_method": "SessionData shared UTC conversion; common epoch subtraction only"
         },
-        "limitations": "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass with the fitted fix states, biases and scale factors held; no uncertainty is published.",
+        "limitations": "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass with the fitted fix states, biases and scale factors held. Accuracies are first-order, one standard deviation under the documented noise model, widened where the residuals exceed it.",
         "max_endpoint_correction_deg": 0.06160967496736419,
         "max_seed_vs_selected_acceleration_m_s2": null,
         "max_seed_vs_selected_angle_deg": null,
@@ -94,10 +103,20 @@
                     1.0000006040666738,
                     0.9995116312958469
                 ],
+                "acc_sigma": [
+                    0.009999991403679898,
+                    0.0099999941793906,
+                    0.009508802427880037
+                ],
                 "gyro": [
                     1.0000014816107026,
                     1.0000056718865054,
                     0.9999772137210163
+                ],
+                "gyro_sigma": [
+                    0.009999992534599086,
+                    0.00999992216294222,
+                    0.009998206673511088
                 ]
             }
         },

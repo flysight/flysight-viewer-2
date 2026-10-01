@@ -101,12 +101,14 @@ QHash<QString, QVector<double>> loadChannels(const QString &fileName, int rows)
 
 /// Numbers under these keys are counts or copies of an input (the tuning
 /// thresholds under `stopping` among them, the configuration and the
-/// datasheet's bandwidths under `model.noise`, and the initializer account's
+/// datasheet's bandwidths under `model.noise`, the initializer account's
 /// counts, flags, copied lengths and fix times: an epoch-relative fix time is
 /// one exact-rounded subtraction of two fixture doubles, the same bits on
-/// every IEEE platform), never the result of solver arithmetic: they are
-/// exact in both modes. The noise model's other numbers are products of
-/// datasheet figures and take the default bound.
+/// every IEEE platform; and under `accuracy` the kernel's two constants and
+/// its two counts), never the result of solver arithmetic: they are exact in
+/// both modes. The noise model's other numbers are products of datasheet
+/// figures and take the default bound, as do the scale factors' sigmas and
+/// the largest widening.
 bool isExactKey(const QString &key)
 {
     static const QSet<QString> keys{
@@ -123,7 +125,9 @@ bool isExactKey(const QString &key)
         QStringLiteral("start_s"), QStringLiteral("end_s"), QStringLiteral("anchor_s"),
         QStringLiteral("anchor_sacc_m_s"), QStringLiteral("fallback_segments"),
         QStringLiteral("prefix_iterations"), QStringLiteral("prefix_passes"),
-        QStringLiteral("prefix_on_limit"), QStringLiteral("segment_on_limit"), QStringLiteral("growth_stop")};
+        QStringLiteral("prefix_on_limit"), QStringLiteral("segment_on_limit"), QStringLiteral("growth_stop"),
+        QStringLiteral("heading_prior_sigma_rad"), QStringLiteral("widening_half_width_s"),
+        QStringLiteral("widened_samples"), QStringLiteral("undetermined_heading_samples")};
     return keys.contains(key);
 }
 
@@ -202,7 +206,8 @@ const QStringList &fusionChannelNames()
         QStringLiteral("velN"), QStringLiteral("velE"), QStringLiteral("velD"),
         QStringLiteral("accN"), QStringLiteral("accE"), QStringLiteral("accD"),
         QStringLiteral("roll"), QStringLiteral("pitch"), QStringLiteral("yaw"),
-        QStringLiteral("qx"), QStringLiteral("qy"), QStringLiteral("qz"), QStringLiteral("qw")};
+        QStringLiteral("qx"), QStringLiteral("qy"), QStringLiteral("qz"), QStringLiteral("qw"),
+        QStringLiteral("headingAcc"), QStringLiteral("tiltAcc"), QStringLiteral("accHAcc"), QStringLiteral("accDAcc")};
     return names;
 }
 
@@ -210,7 +215,8 @@ const QVector<double> &fusionChannel(const FlySight::Fusion::Result &r, const QS
 {
     const QVector<double> *arrays[] = {
         &r.time, &r.north, &r.east, &r.down, &r.velN, &r.velE, &r.velD, &r.accN, &r.accE, &r.accD,
-        &r.roll, &r.pitch, &r.yaw, &r.qx, &r.qy, &r.qz, &r.qw};
+        &r.roll, &r.pitch, &r.yaw, &r.qx, &r.qy, &r.qz, &r.qw,
+        &r.headingAcc, &r.tiltAcc, &r.accHAcc, &r.accDAcc};
     const qsizetype index = fusionChannelNames().indexOf(name);
     if (index < 0)
         qFatal("Fusion golden: no channel named %s", qPrintable(name));
@@ -284,7 +290,7 @@ bool exactParityRequested()
 
 double portableFloor(const QString &channelOrKey)
 {
-    if (channelOrKey == QStringLiteral("yaw"))
+    if (channelOrKey == QStringLiteral("yaw") || channelOrKey == QStringLiteral("headingAcc"))
         return kPortableAbsoluteHeadingDegrees;
     const bool quaternion = channelOrKey == QStringLiteral("qx") || channelOrKey == QStringLiteral("qy")
                             || channelOrKey == QStringLiteral("qz") || channelOrKey == QStringLiteral("qw")
@@ -292,7 +298,7 @@ double portableFloor(const QString &channelOrKey)
     if (quaternion)
         return kPortableAbsoluteQuaternion;
     const bool degrees = channelOrKey == QStringLiteral("roll") || channelOrKey == QStringLiteral("pitch")
-                         || channelOrKey.endsWith(QStringLiteral("_deg"));
+                         || channelOrKey == QStringLiteral("tiltAcc") || channelOrKey.endsWith(QStringLiteral("_deg"));
     return degrees ? kPortableAbsoluteDegrees : kPortableAbsolute;
 }
 

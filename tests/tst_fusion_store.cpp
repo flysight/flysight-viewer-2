@@ -5,7 +5,7 @@
 // for a visible session, the demand layer starts the fit; restoring is not
 // requesting.
 //
-//  - a fit survives unload and restart bit for bit (the seventeen channels,
+//  - a fit survives unload and restart bit for bit (the twenty-one channels,
 //    the derived values, the diagnostics and the detail equal the fresh
 //    publish, and the goldens), with no job, no run and nothing to compute;
 //  - a rejection and a solver failure come back listed with their reason;

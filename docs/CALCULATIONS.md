@@ -894,7 +894,9 @@ between links (16.4). Slots connected to the executor's signals may call
   job, and **waits for the worker without a timeout**. Quitting must neither hang nor crash, and
   abandoning a live thread inside a solver and letting teardown
   proceed is a crash. The bound "one solver step" (or, after the fit's last
-  iteration, the reconstruction at the IMU samples, a fraction of a second) is
+  iteration, the covariance step and the reconstruction at the IMU samples,
+  which composes the accuracy, a few seconds on the longest reference
+  recording) is
   delivered by the compute function's cancellation boundaries; the executor
   adds nothing on top: the wait ends as soon as `compute()` returns, whatever
   it returns. Idempotent; called
@@ -1944,7 +1946,7 @@ starts hidden, so start-up starts no job for plots, while an enabled column
 over a requested output does start its fill. `closeEvent()` calls
 `JobQueue::shutdown()` **first**, before sessions are flushed and the layout
 is saved (with a wait cursor when the executor is busy; the wait is at most
-one solver step, or the reconstruction that follows the last one). A future veto of the close must be decided before that
+one solver step, or the covariance step and the reconstruction that follow the last one). A future veto of the close must be decided before that
 call: an executor that was shut down refuses every later offer.
 `~MainWindow()` deletes the demand layer, then the executor, explicitly and
 before everything else: `QObject` deletes children in creation order, which
@@ -2148,11 +2150,14 @@ default.
 
 **Outputs of the fit**, published together: the measurements `Fusion/_time`,
 `north`, `east`, `down`, `velN`, `velE`, `velD`, `accN`, `accE`, `accD`, `roll`,
-`pitch`, `yaw`, `qx`, `qy`, `qz`, `qw` (no unit reported, like every derived
-measurement), and the attribute `_FUSION_DIAGNOSTICS`
-(`SessionKeys::FusionDiagnostics`, compact JSON as a string; not a logbook
-attribute). The measurements are the fitted state and the model's
-acceleration at every IMU sample of the fitted interval
+`pitch`, `yaw`, `qx`, `qy`, `qz`, `qw`, then the four accuracies
+`headingAcc`, `tiltAcc`, `accHAcc`, `accDAcc` (no unit reported, like every
+derived measurement: degrees, degrees, m/s^2, m/s^2), and the attribute
+`_FUSION_DIAGNOSTICS` (`SessionKeys::FusionDiagnostics`, compact JSON as a
+string; not a logbook attribute): twenty-two outputs, one table
+(`kFitOutputs`) for the declaration and the publication. The measurements are
+the fitted state and the model's acceleration at every IMU sample of the
+fitted interval, and the accuracy of each sample
 ([SENSOR_FUSION.md](SENSOR_FUSION.md), section 4).
 
 **No arithmetic in the adapter.** `channelsFrom()` copies the implicitly shared
@@ -2169,7 +2174,7 @@ session-level outputs are bit-identical to the kernel's goldens.
 
 | `Fusion::Outcome` | The compute function |
 | --- | --- |
-| `Succeeded` | returns all seventeen measurements and `_FUSION_DIAGNOSTICS` |
+| `Succeeded` | returns the seventeen measurements of the state, the four accuracies when the covariance was computed, and `_FUSION_DIAGNOSTICS`. A success whose covariance could not be computed leaves the four unset, so unavailable (an available measurement has samples, and the record refuses one without); its diagnostics' `accuracy` says why, and nothing else of the result differs |
 | `Rejected`, `SolverFailed` | returns **only** `_FUSION_DIAGNOSTICS` and `setReason(reason)`: the measurements are unset, so unavailable. A function of the inputs, cached like any result (`ResultStatus::Ok`): the job ends Succeeded with that reason, `resultDetail()` returns it, blocker inspection reports `NotProduced` with that detail, and a second request runs nothing until a declared input changes. Stored and restored like a success (15.8) |
 | `Cancelled` | throws `CalculationCancelled`: nothing is published, nothing is cached, nothing is stored |
 | `std::bad_alloc` | not handled: it propagates to the engine (`ResourceExhausted` on the asynchronous path; nothing cached, nothing stored) |
@@ -2180,7 +2185,8 @@ callbacks over `ctx.progress()`: one forwards each progress text to
 order, at its boundaries only: before the fit, every 256 states of every
 graph build, and before each optimizer iteration of every fit, the
 initializer's prefix and segment fits included (`SENSOR_FUSION.md` section
-7); a linear solve in progress finishes first. `CalculationCancelled` is thrown by the compute function itself after
+7); a linear solve in progress finishes first, and so do the covariance step
+and the reconstruction after the last iteration, which have none. `CalculationCancelled` is thrown by the compute function itself after
 `run()` has returned `Cancelled`, never from a callback. On the synchronous
 path the facility is `CalculationProgress::none()`, so `request()` and the
 three-step path run the same fit on the same values. The compute function
@@ -2256,7 +2262,8 @@ fit; the others are the on-demand calculations above, blocked by the fit. All
 eight are requested (16.3): a checked fusion plot has the fit computed for the
 visible sessions, and nothing else about a plot starts one (section 16). The
 rest of the fit's outputs (`north`, `east`, `down`, `velN`, `velE`, `velD`,
-`accN`, `accE`, `roll`, `pitch`, `yaw`, `qx`, `qy`, `qz`, `qw`) have no plot;
+`accN`, `accE`, `roll`, `pitch`, `yaw`, `qx`, `qy`, `qz`, `qw`, and the four
+accuracies `headingAcc`, `tiltAcc`, `accHAcc`, `accDAcc`) have no plot;
 they remain measurements that a logbook column, a plugin input and the stored
 record read.
 
@@ -2270,8 +2277,11 @@ checks of the configuration against the readings; `v5` was the mid-step
 rotation of the accelerometer reading), so the first start after that update
 finds every stored fit stale at its recording's load and fits each again
 once, when something switched on needs it, counted in the status bar like any
-fit. The record holds the seventeen measurements and `_FUSION_DIAGNOSTICS`, or, for
-a rejection or solver failure, the diagnostics and the reason. Its leaves are
+fit. The record holds the measurements the fit set, the seventeen of the
+state and the four accuracies (the seventeen alone when the covariance could
+not be computed), and `_FUSION_DIAGNOSTICS`, or, for
+a rejection or solver failure, the diagnostics and the reason. The format is
+unchanged: it writes the outputs that are set, and restores them bit for bit. Its leaves are
 the source data and attributes behind the 26 inputs: the IMU and GNSS source
 columns, `SCHEMA_VER`, the `TIME` sensor, the stored origin attributes, and
 the configuration attributes, absent ones included. Markers and preferences

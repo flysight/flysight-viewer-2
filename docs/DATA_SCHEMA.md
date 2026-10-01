@@ -569,7 +569,10 @@ Since the sensor fusion result became the fitted state at every IMU sample,
 its record holds the same seventeen measurements and the diagnostics in the
 same format (version 2) with new values; a record written before that change
 is stale by its result version, deleted at its session's next load and
-computed again the same way.
+computed again the same way. Since the documented noise model it holds
+twenty-one measurements, the four accuracies after the seventeen (the
+seventeen alone for a fit whose covariance could not be computed), in the
+same format.
 Only a regular file whose name ends exactly in `.fvresult` (lower case) is a
 record: a directory at a record's path is never listed, so neither the
 start-up pass nor deleting its session removes it.

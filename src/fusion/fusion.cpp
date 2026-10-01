@@ -5,6 +5,7 @@
 #include <new>
 
 #include "fusion/factorgraphfit.h"
+#include "fusion/fitcovariance.h"
 #include "fusion/fusionoutput.h"
 #include "fusion/fusionpipeline.h"
 #include "fusion/initializer.h"
@@ -104,19 +105,34 @@ Result fitAndAssemble(const FitPlan &plan, const Checkpoint &checkpoint, Pipelin
             &fit.stopping, &fit.quality);
     }
 
-    // The fitted states at every IMU sample. Not a boundary: one pass over the
-    // samples after the last iteration, a fraction of a second, so it runs to
-    // its end once the fit has converged.
-    const ImuRateTrajectory trajectory = reconstructAtImuRate(plan.window, fit, plan.tuning);
-    Result result;
-    result.outcome = Outcome::Succeeded;
-    fillOutputChannels(trajectory, plan.prepared.epoch, result);
-    result.diagnosticsJson = toCompactJson(
-        successDiagnostics(plan.prepared, init.account, fit, plan.window, trajectory, plan.tuning));
-    return result;
+    // The covariance of the converged fit, then the fitted states and their
+    // accuracy at every IMU sample. Neither is a boundary: one factorization
+    // and one pass over the samples after the last iteration, a few seconds on
+    // the longest recording, so they run to their end once the fit has
+    // converged. A covariance that cannot be computed is part of the success.
+    return assembleSuccess(plan.prepared, init.account, plan.window, fit, plan.tuning,
+                           fitCovariance(fit, plan.window.gnssTime.size()));
 }
 
 } // namespace
+
+Result assembleSuccess(const PreparedInput &prepared, const InitializerAccount &account, const Samples &window,
+                       const FitResult &fit, const Tuning &tuning, const FitCovariance &covariance)
+{
+    const ImuRateTrajectory trajectory = reconstructAtImuRate(window, fit, tuning, &covariance);
+    // The widening of every sample, when there is an accuracy to widen.
+    std::vector<double> widenings;
+    if (!trajectory.headingAcc.empty()) {
+        for (const double factor : wideningFactors(window.gnssTime, fit.residuals, trajectory.time))
+            widenings.push_back(widening(factor));
+    }
+    Result result;
+    result.outcome = Outcome::Succeeded;
+    fillOutputChannels(trajectory, widenings, prepared.epoch, result);
+    result.diagnosticsJson = toCompactJson(
+        successDiagnostics(prepared, account, fit, window, trajectory, tuning, covariance, widenings, result));
+    return result;
+}
 
 Result runPipeline(const Channels &channels, const Tuning &baseTuning,
                    const Checkpoint &checkpoint, PipelineTrace *trace)

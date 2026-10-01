@@ -18,12 +18,14 @@
 #             full in tests/README.md, appendix C. It is amended by the
 #             specification of 701-754: item 228 is stated as amended. It is
 #             amended by the specification of 1001-1065: items 215, 216, 217,
-#             221, 227, 245, 246 and 247 are stated as amended.
+#             221, 227, 230, 235, 245, 246 and 247 are stated as amended.
 #   301-350   storing requested calculation results with the session (record
 #             files, restore on load, validity, logbook columns over them):
 #             item = 300 + clause number. Stated in full in
 #             tests/README.md, appendix D. It is amended by the specification
 #             of 701-754: items 306, 321, 337 and 339 are stated as amended.
+#             It is amended by the specification of 1001-1065: item 337 is
+#             stated as amended.
 #   401-442   stored results: validity that mirrors memory (resolutions,
 #             runtime registry drops, the plug-in code identity, unreadable
 #             records, record format 2): item = 400 + clause number. Stated
@@ -76,8 +78,8 @@
 #             the algorithm string and the goldens captured again): item =
 #             900 + clause number. Stated in full in tests/README.md,
 #             appendix J. It amends the specification of 801-863. It is
-#             amended by the specification of 1001-1065: items 901, 910, 914,
-#             915, 921, 925, 930 and 935 are stated as amended.
+#             amended by the specification of 1001-1065: items 901, 910, 912,
+#             914, 915, 921, 925, 930 and 935 are stated as amended.
 #   1001-1065 the documented noise model and the accuracy, part 1 (the sensor
 #             configuration attributes, the noise model by configuration,
 #             the scale-factor state, the accuracy and its four channels and
@@ -582,7 +584,7 @@
 229 tst_fusion_runner legacySchemaScalesTheGyro
 229 tst_fusion_runner outputTableMatchesGolden
 
-# 230 - diagnostics JSON on stdout; --csv writes the seventeen channels; exit 0 for Succeeded, non-zero otherwise with the outcome and reason on stderr
+# 230 - (as amended) diagnostics JSON on stdout; --csv writes the seventeen channels, since the specification of 1001-1065 the twenty-one, or the seventeen when the accuracy is absent; exit 0 for Succeeded, non-zero otherwise with the outcome and reason on stderr
 230 tst_fusion_runner successMatchesDirectRun
 230 tst_fusion_runner rejectionExitsOne
 230 tst_fusion_runner usageAndImportFailures
@@ -609,7 +611,7 @@
 234 audit solver-confinement
 234 audit fusion-model
 
-# 235 - the result contract (channels, outcomes) unchanged; a slow-tail acceptance is Succeeded
+# 235 - (as amended) the result contract (channels, outcomes) unchanged by that specification; the specification of 1001-1065 adds the four accuracy channels (twenty-two outputs); a slow-tail acceptance is Succeeded
 235 tst_fusion_kernel slowTailAtTheIterationLimit
 235 tst_fusion_session registrationShape
 235 tst_fusion_runner outputTableMatchesGolden
@@ -928,7 +930,7 @@
 336 tst_fusion_store sessionFileBytesUnaffectedByRecord
 336 tst_result_records saveSessionIgnoresRecords
 
-# 337 - (8, as amended) test: a fusion fixture fitted, saved, unloaded, reloaded: seventeen channels and diagnostics bit-identical to the goldens, no job, nothing counted in progress and nothing listed among the failures
+# 337 - (8, as amended) test: a fusion fixture fitted, saved, unloaded, reloaded: twenty-one channels (the seventeen of the state and, since the specification of 1001-1065, the four accuracies) and diagnostics bit-identical to the goldens, no job, nothing counted in progress and nothing listed among the failures
 337 tst_fusion_store restoredAfterEvictionIsBitIdentical
 
 # 338 - (8) test: the same after an application restart
@@ -2811,7 +2813,7 @@
 911 tst_fusion_kernel imuRateZeroMismatchIsForward
 911 tst_fusion_kernel imuRateZeroMismatchUnderRotation
 
-# 912 - (6) the fit publishes the seventeen channels of the fusion document's section 4, no more (no uncertainty is published), on the same time axis
+# 912 - (6, as amended) the fit publishes the twenty-one channels of the fusion document's section 4, the uncertainty among them since the specification of 1001-1065, on the same time axis
 912 tst_fusion_session registrationShape
 912 tst_fusion_runner outputTableMatchesGolden
 912 tst_fusion_kernel imuRateIsWhatTheFitPublishes
@@ -3058,10 +3060,59 @@
 1021 tst_fusion_golden successFixturesMatchGolden
 1021 manual M49
 
+# 1022 - (6) the sigma of each fitted scale factor is reported beside it, from the covariance of section 7
+1022 tst_fusion_kernel diagnosticsReportTheScaleSigma
+1022 tst_fusion_golden successFixturesMatchGolden
+
 # 1023 - (6) the 1.14688 schema correction of legacy recordings is not a scale factor and is untouched
 1023 tst_conversion_engine legacyGyroCorrected
 1023 tst_fusion_runner legacySchemaScalesTheGyro
 1023 audit scale-state
+
+# 1025 - (7, as settled) after convergence, from the converged graph and one factorization: the marginal covariance of every fix state, the joint covariance of each pair of adjacent fix states, and their cross-covariance with the biases and the scale factors, by the clique marginals of one factorization (one multifrontal QR elimination in time order with the globals last, each clique's marginal from its parent's), not by the library's joint marginals; a heading prior of 1000 rad on the first fix, in the factorization only, keeps an undetermined heading finite and moves a determined one by less than 5e-6 of itself
+1025 tst_fusion_kernel covarianceMatchesJointMarginals
+1025 audit accuracy-channels
+
+# 1026 - (7, as settled) through the reconstruction's pass, the conditional covariance of the state at every IMU sample given the two fixes around it, composed with the covariance of those fixes, the biases and the scales into the covariance of the state at the sample
+1026 tst_fusion_kernel sampleCovarianceMatchesTheEdgeGraph
+1026 tst_fusion_kernel sampleOnAFixHasTheFixMarginal
+
+# 1027 - (7) the covariance step runs inside the same cancellable job and is not a cancellation boundary
+1027 tst_fusion_golden cancelAtEachKindOfBoundary
+1027 tst_fusion_golden progressMatchesGoldenBoundaries
+1027 audit fusion-model
+
+# 1028 - (7) the heading accuracy of a sample is the square root of the navigation-frame rotation covariance's element about the vertical, the tilt accuracy the square root of the sum of its two horizontal elements, both in degrees and capped at 180, which means undetermined
+1028 tst_fusion_kernel attitudeAccuracyFollowsTheNavigationFrame
+
+# 1029 - (7) the acceleration accuracy of a sample is the first-order propagation of the joint covariance of attitude, accelerometer bias and accelerometer scale through a = R (f / s - b) + g, plus the accelerometer's per-sample noise rotated; the horizontal accuracy is the standard deviation along the horizontal acceleration's direction, or the larger horizontal principal value where the horizontal acceleration is below that accuracy, and the vertical accuracy is the vertical element; both in m/s^2
+1029 tst_fusion_kernel accelerationAccuracyFollowsItsPropagation
+1029 tst_fusion_kernel sampleCovarianceMatchesTheEdgeGraph
+
+# 1030 - (7) the documentation states the propagation in symbols and what it leaves out (gravity's own uncertainty, cross-axis sensitivity, the interpolation between nodes)
+1030 audit accuracy-channels
+
+# 1031 - (7, as settled) widening: over the fixes within 2.5 s of each sample, the sum of the squared whitened residuals of the window's factors divided by the window's degrees of freedom is a factor; the sample's four accuracies are multiplied by its square root where it exceeds one and are unchanged where it does not
+1031 tst_fusion_kernel wideningWindowAndFactor
+1031 tst_fusion_kernel wideningGrowsWithAnUnderstatedSigma
+
+# 1032 - (7) the documentation says what the factor is (the a-posteriori variance factor of the window), that it assumes every sigma is off by the same ratio, and that it never tightens
+1032 audit accuracy-channels
+
+# 1033 - (7) Fusion/headingAcc, Fusion/tiltAcc, Fusion/accHAcc and Fusion/accDAcc are outputs of the fit, aligned with Fusion/_time
+1033 tst_fusion_session registrationShape
+1033 tst_fusion_kernel imuRateIsWhatTheFitPublishes
+
+# 1034 - (7) they are absent for a rejected or failed fit and for a successful fit whose factorization failed, which the diagnostics say; nothing else about that fit changes
+1034 tst_fusion_kernel covarianceFailureLeavesTheFitAsItIs
+1034 tst_fusion_golden rejectionFixturesMatchGolden
+
+# 1035 - (7, as settled) an undetermined heading does not fail the computation: the cap applies, the heading's variance enters the acceleration's propagation at most at the cap's, and the acceleration accuracies use the horizontal magnitude's direction, which a heading error does not move
+1035 tst_fusion_kernel undeterminedHeadingIsCapped
+1035 tst_fusion_kernel accelerationAccuracyFollowsItsPropagation
+
+# 1036 - (2, 7) the documentation says in one sentence that the accuracy is one standard deviation from the covariance of the converged solution under the documented model, widened where the residuals exceed what the model allows
+1036 audit accuracy-channels
 
 # 1040 - (8) the diagnostics show the configuration the fit ran under
 1040 tst_fusion_kernel diagnosticsReportTheNoiseModel
@@ -3072,9 +3123,18 @@
 1041 tst_fusion_store codeStampChangeDropsRecordOnLoad
 1041 manual M48
 
+# 1042 - (9) the fit's outputs gain the four channels, and the record stores and restores them with the rest, in the record format as it is
+1042 tst_fusion_store restoredAfterRestartIsBitIdentical
+1042 tst_fusion_jobs jobPublishesAllOutputsTogether
+
 # 1043 - (9) the algorithm string changes once, for the whole specification
 1043 tst_fusion_session registrationShape
 1043 audit stored-results
+
+# 1044 - (9, as settled) the golden fixtures are captured again with the existing tool at the end of each phase that changes numerical results; their time axes are unchanged and checked byte for byte; the last capture's comparison covers the new channels, the scale factors and the configuration in the diagnostics
+1044 tst_fusion_golden successFixturesMatchGolden
+1044 tst_fusion_golden rejectionFixturesMatchGolden
+1044 tst_fusion_kernel fitTraceMatchesGolden
 
 # 1045 - (9) the fixtures state their configuration explicitly, so that the stated path (the kernel's and the sessions' fixtures) and the default path (a session without the keys) are both exercised
 1045 tst_fusion_session configurationReachesTheKernel
@@ -3094,6 +3154,11 @@
 # 1048 - (10) the scale factors are variables of the graph beside the biases
 1048 tst_fusion_kernel scaleGraphShape
 1048 audit scale-state
+
+# 1049 - (10) GTSAM stays confined to the kernel, and the covariance step is a unit of its own, as the reconstruction is
+1049 audit solver-confinement
+1049 audit accuracy-channels
+1049 audit fusion-tooling
 
 # 1050 - (11) test: a file with every key imports them; a malformed one is an import error naming the key; a file without them takes the default
 1050 tst_importer configurationStoredAsRecorded
@@ -3117,6 +3182,25 @@
 # 1054 - (11) test: a synthetic recording with the accelerometer 2 % high on one axis recovers the factor within the prior's tolerance, and its position misfit falls against a fit without the state; a recording at rest leaves the scale at one within its prior
 1054 tst_fusion_kernel scaleRecordingRecoversTheFactor
 1054 tst_fusion_kernel restLeavesTheScaleAtItsPrior
+
+# 1056 - (11) test: on the committed fixtures a successful fit publishes finite, positive accuracies for every sample, and scaling every GNSS accuracy up never lowers them
+1056 tst_fusion_kernel accuraciesFiniteAndPositive
+1056 tst_fusion_kernel gnssAccuracyScalingNeverLowersThem
+1056 manual M50
+
+# 1057 - (11) test: the heading accuracy of the first node agrees with the heading check
+1057 tst_fusion_kernel firstNodeHeadingIsTheHeadingCheck
+
+# 1058 - (11) test: the acceleration accuracy follows its propagation on synthetic inputs with known answers, and agrees with the library's joint marginals on a short fixture
+1058 tst_fusion_kernel accelerationAccuracyFollowsItsPropagation
+1058 tst_fusion_kernel sampleCovarianceMatchesTheEdgeGraph
+
+# 1059 - (11) test: the widening is one where the residuals are at the model, and grows where a factor's sigma is understated by a known ratio
+1059 tst_fusion_kernel wideningIsOneAtTheModel
+1059 tst_fusion_kernel wideningGrowsWithAnUnderstatedSigma
+
+# 1060 - (11) test: the cap holds on a fixture whose heading is undetermined
+1060 tst_fusion_kernel undeterminedHeadingIsCapped
 
 # 1061 - (11, as settled) test: on a build where the configuration is carried and defaulted and the noise model is the previous one (the end of phase 1), the existing channels and diagnostics of every fixture are bit-identical to the goldens
 1061 tst_fusion_golden successFixturesMatchGolden

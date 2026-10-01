@@ -39,9 +39,11 @@ using AttributeReader   = std::function<QVariant(const QString &key)>;
 /// drift apart.
 Channels channelsFrom(const MeasurementReader &measurement, const AttributeReader &attribute);
 
-/// The seventeen measurement outputs of the fit in publication order, each
-/// named as it is published under the Fusion sensor (_time, north, ..., qw),
-/// with the array of `result` that holds it (empty arrays unless Succeeded).
+/// The twenty-one measurement outputs of the fit in publication order, each
+/// named as it is published under the Fusion sensor (_time, north, ..., qw,
+/// then headingAcc, tiltAcc, accHAcc, accDAcc), with the array of `result`
+/// that holds it (empty arrays unless Succeeded; the four accuracies also
+/// empty for a success whose covariance failed).
 struct FitOutputChannel {
     QString name;
     QVector<double> samples;
@@ -58,12 +60,15 @@ QList<FitOutputChannel> fitOutputChannels(const Result &result);
 ///    that states a key reads its own value.
 ///  - builtin.fusion.fit (explicit, title "Sensor fusion"): the batch GNSS/IMU
 ///    fit of fusion.h as one calculation of the twenty-six inputs of
-///    fitInputs(), with eighteen outputs published
+///    fitInputs(), with twenty-two outputs published
 ///    together: the measurements Fusion/_time, north, east, down, velN, velE,
-///    velD, accN, accE, accD, roll, pitch, yaw, qx, qy, qz, qw and the
+///    velD, accN, accE, accD, roll, pitch, yaw, qx, qy, qz, qw, the
+///    accuracies headingAcc, tiltAcc (deg), accHAcc, accDAcc (m/s^2), and the
 ///    attribute _FUSION_DIAGNOSTICS. A recording the model rejects and a
 ///    solver failure are results: the measurements are unavailable, the
-///    diagnostics attribute and the result's reason say why.
+///    diagnostics attribute and the result's reason say why. A success whose
+///    covariance could not be computed publishes the seventeen and leaves the
+///    four accuracies unavailable; its diagnostics say why.
 ///  - builtin.fusion.accH (on demand): Fusion/accH, the horizontal magnitude
 ///    of accN and accE.
 ///  - builtin.fusion.systemTime (on demand): Fusion/_system_time, the inverse

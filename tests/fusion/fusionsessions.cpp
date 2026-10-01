@@ -247,7 +247,9 @@ SessionData syntheticFitSession(const QString &sessionId, const QHash<QString, Q
         {QStringLiteral("roll"), QStringLiteral("deg")}, {QStringLiteral("pitch"), QStringLiteral("deg")},
         {QStringLiteral("yaw"), QStringLiteral("deg")},
         {QStringLiteral("qx"), QString()}, {QStringLiteral("qy"), QString()},
-        {QStringLiteral("qz"), QString()}, {QStringLiteral("qw"), QString()}};
+        {QStringLiteral("qz"), QString()}, {QStringLiteral("qw"), QString()},
+        {QStringLiteral("headingAcc"), QStringLiteral("deg")}, {QStringLiteral("tiltAcc"), QStringLiteral("deg")},
+        {QStringLiteral("accHAcc"), QStringLiteral("m/s^2")}, {QStringLiteral("accDAcc"), QStringLiteral("m/s^2")}};
     Q_ASSERT(units.size() == fusionMeasurementNames().size());
 
     SessionData session;
@@ -267,7 +269,8 @@ QStringList fusionMeasurementNames()
         QStringLiteral("velN"), QStringLiteral("velE"), QStringLiteral("velD"),
         QStringLiteral("accN"), QStringLiteral("accE"), QStringLiteral("accD"),
         QStringLiteral("roll"), QStringLiteral("pitch"), QStringLiteral("yaw"),
-        QStringLiteral("qx"), QStringLiteral("qy"), QStringLiteral("qz"), QStringLiteral("qw")
+        QStringLiteral("qx"), QStringLiteral("qy"), QStringLiteral("qz"), QStringLiteral("qw"),
+        QStringLiteral("headingAcc"), QStringLiteral("tiltAcc"), QStringLiteral("accHAcc"), QStringLiteral("accDAcc")
     };
 }
 

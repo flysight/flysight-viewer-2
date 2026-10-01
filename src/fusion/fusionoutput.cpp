@@ -1,5 +1,6 @@
 #include "fusion/fusionoutput.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include <QJsonArray>
@@ -24,7 +25,9 @@ const char kDenseOutput[] = "IMU-rate reconstruction at original IMU times: betw
                             "from the fitted state, the mismatch with the next fitted state shared over the "
                             "steps by their noise, in one linearized pass";
 const char kLimitations[] = "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass "
-                            "with the fitted fix states, biases and scale factors held; no uncertainty is published.";
+                            "with the fitted fix states, biases and scale factors held. Accuracies are first-order, "
+                            "one standard deviation under the documented noise model, widened where the residuals "
+                            "exceed it.";
 
 QJsonArray toJsonArray(const gtsam::Vector3 &v)
 {
@@ -137,18 +140,62 @@ QJsonObject configurationObject(const ImuConfiguration &c)
 }
 
 /// The fitted scale factors, the factors themselves (one is the datasheet's
-/// nominal sensitivity): accelerometer x, y, z and gyro x, y, z.
-QJsonObject scaleObject(const FitResult &fit)
+/// nominal sensitivity): accelerometer x, y, z and gyro x, y, z; and their
+/// sigmas, the square roots of the diagonal of the covariance step's S(0)
+/// block, each null when the covariance was not computed.
+QJsonObject scaleObject(const FitResult &fit, const FitCovariance &covariance)
 {
+    const auto sigmas = [&](int first) -> QJsonValue {
+        if (!covariance.computed)
+            return QJsonValue::Null;
+        QJsonArray array;
+        for (int i = first; i < first+3; ++i)
+            array.append(std::sqrt(covariance.globals(9+i, 9+i)));
+        return array;
+    };
     return QJsonObject{
         {"acc", QJsonArray{fit.scale(0), fit.scale(1), fit.scale(2)}},
-        {"gyro", QJsonArray{fit.scale(3), fit.scale(4), fit.scale(5)}}};
+        {"gyro", QJsonArray{fit.scale(3), fit.scale(4), fit.scale(5)}},
+        {"acc_sigma", sigmas(0)},
+        {"gyro_sigma", sigmas(3)}};
+}
+
+/// The account of the accuracy: whether the covariance step computed it and,
+/// if not, its failure; the heading prior of that step and the widening's
+/// half-width, the kernel's constants; and over the published samples the
+/// largest widening, how many samples were widened (w > 1) and how many
+/// headings are at the cap, each null when nothing was computed.
+QJsonObject accuracyObject(const FitCovariance &covariance, const std::vector<double> &widenings,
+                           const Result &result)
+{
+    QJsonObject accuracy{
+        {"computed", covariance.computed},
+        {"failure", covariance.computed ? QJsonValue(QJsonValue::Null)
+                                        : QJsonValue(QString::fromStdString(covariance.failure))},
+        {"heading_prior_sigma_rad", kHeadingPriorSigmaRad},
+        {"widening_half_width_s", kWideningHalfWidthS},
+        {"max_widening", QJsonValue::Null},
+        {"widened_samples", QJsonValue::Null},
+        {"undetermined_heading_samples", QJsonValue::Null}};
+    if (!covariance.computed)
+        return accuracy;
+    double largest = 1;
+    int widened = 0;
+    for (const double w : widenings) {
+        largest = std::max(largest, w);
+        widened += w > 1;
+    }
+    accuracy.insert("max_widening", largest);
+    accuracy.insert("widened_samples", widened);
+    accuracy.insert("undetermined_heading_samples",
+                    int(std::count(result.headingAcc.begin(), result.headingAcc.end(), kYawSigmaCapDeg)));
+    return accuracy;
 }
 
 /// The model of this fit: the noise the datasheet gives for its
 /// configuration, which is not fitted, the fitted gyro bias model and the
-/// fitted scale factors.
-QJsonObject modelSummary(const ImuNoise &noise, const FitResult &fit)
+/// fitted scale factors with their sigmas.
+QJsonObject modelSummary(const ImuNoise &noise, const FitResult &fit, const FitCovariance &covariance)
 {
     const SensorNoise &a = noise.accelerometer, &g = noise.gyroscope;
     return QJsonObject{
@@ -166,7 +213,7 @@ QJsonObject modelSummary(const ImuNoise &noise, const FitResult &fit)
                 {"sample_sigma_rad_s", g.sampleSigma},
                 {"density_rad_s_rthz", g.density}}}}},
         {"gyro_bias", gyroBiasObject(fit)},
-        {"scale", scaleObject(fit)}};
+        {"scale", scaleObject(fit, covariance)}};
 }
 
 QJsonArray residualArray(const FitResult &fit)
@@ -184,7 +231,8 @@ QJsonArray residualArray(const FitResult &fit)
 
 } // namespace
 
-void fillOutputChannels(const ImuRateTrajectory &trajectory, double epoch, Result &result)
+void fillOutputChannels(const ImuRateTrajectory &trajectory, const std::vector<double> &widenings, double epoch,
+                        Result &result)
 {
     const qsizetype count = qsizetype(trajectory.time.size());
     for (QVector<double> *channel : { &result.time, &result.north, &result.east, &result.down,
@@ -210,16 +258,33 @@ void fillOutputChannels(const ImuRateTrajectory &trajectory, double epoch, Resul
     result.roll = Calculations::unwrapDegrees(result.roll);
     result.pitch = Calculations::unwrapDegrees(result.pitch);
     result.yaw = Calculations::unwrapDegrees(result.yaw);
+
+    // The accuracies, widened: heading and tilt before the cap, so that a
+    // widened sigma never exceeds it; the accelerations uncapped.
+    if (trajectory.headingAcc.empty())
+        return;
+    for (QVector<double> *channel : { &result.headingAcc, &result.tiltAcc, &result.accHAcc, &result.accDAcc })
+        channel->reserve(count);
+    for (size_t i = 0; i < trajectory.time.size(); ++i) {
+        const double w = widenings[i];
+        result.headingAcc.append(std::min(kYawSigmaCapDeg, w*trajectory.headingAcc[i]));
+        result.tiltAcc.append(std::min(kYawSigmaCapDeg, w*trajectory.tiltAcc[i]));
+        result.accHAcc.append(w*trajectory.accHAcc[i]);
+        result.accDAcc.append(w*trajectory.accDAcc[i]);
+    }
 }
 
 QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerAccount &account,
                                const FitResult &fit, const Samples &window,
-                               const ImuRateTrajectory &trajectory, const Tuning &tuning)
+                               const ImuRateTrajectory &trajectory, const Tuning &tuning,
+                               const FitCovariance &covariance, const std::vector<double> &widenings,
+                               const Result &result)
 {
     return QJsonObject{
         {"algorithm", Algorithm},
         {"configuration", configurationObject(tuning.noise.configuration)},
-        {"model", modelSummary(tuning.noise, fit)},
+        {"model", modelSummary(tuning.noise, fit, covariance)},
+        {"accuracy", accuracyObject(covariance, widenings, result)},
         {"input", prepared.audit},
         {"seeds", seedSummary(fit)},
         {"initialization", kInitializationMethod},

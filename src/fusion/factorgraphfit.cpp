@@ -34,9 +34,6 @@ constexpr size_t kStatesPerCheckpoint = 256;
 // an increase, which is a failure.
 constexpr double kCostIncreaseTolerance = 1e-6;
 
-// A yaw sigma is an angle on a circle: nothing above this (degrees) says more.
-constexpr double kYawSigmaCapDeg = 180;
-
 /// The GNSS measurement of state k: position, then velocity.
 void addGnssFactors(gtsam::NonlinearFactorGraph &graph, const Samples &d, size_t k)
 {

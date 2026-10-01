@@ -64,6 +64,10 @@ struct ImuStep {
     double dt;                  ///< end - start, the length passed to the integration
     gtsam::Vector3 force, gyro; ///< the readings passed to the integration, divided by the scale and not bias-corrected: the midpoint rate, and the midpoint reading turned by half the step's bias-corrected rotation
     gtsam::Matrix9 transition;  ///< A, the library's transition of the preintegration across this step (its update() on a copy, the same bits the step propagates its covariance with)
+    /// H at the step's first edge: the scale Jacobian of the steps before this
+    /// one (zero for the first), when preintegrateImu() was asked for the
+    /// scale Jacobian; zero otherwise.
+    gtsam::Matrix96 scaleJacobian;
 };
 
 /// Sees each step of preintegrateImu() before it is integrated, with the
@@ -104,7 +108,9 @@ using ImuStepObserver = std::function<void(const gtsam::PreintegratedImuMeasurem
 /// and W = diag(rate_mid ./ s_g), the step's input is
 /// G = [-B R F | B R [u]x Jr(phi) W dt/2 - C W] and H_(j+1) = A H_j + G from
 /// H_0 = 0. The middle term is the half-step turn's dependence on the gyro
-/// scale.
+/// scale. With the Jacobian asked for, each step the observer sees carries
+/// H_j, the Jacobian at its first edge (ImuStep::scaleJacobian): what the
+/// reconstruction composes the accuracy at an edge with.
 ///
 /// `observer`, when given, is called once per step, in time order, before
 /// that step's covariance is written into the shared params and before the

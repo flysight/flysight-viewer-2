@@ -14,7 +14,11 @@
 // reconstruction, at rest and on the scale recording, its diagnostics), the
 // solver-failure path and its diagnostics shapes, the IMU-rate reconstruction
 // pass against a dense reference graph and its per-interval seam, the
-// channels the fit publishes as that pass and their time axis), with the literal expectations of the reference's own
+// channels the fit publishes as that pass and their time axis, the accuracy
+// (the covariance step against the joint marginals and the heading check,
+// its composition at the samples against a graph with a state at every edge,
+// the accuracy formulas on known answers, the widening, the undetermined
+// heading, a failed covariance step, the scale sigmas)), with the literal expectations of the reference's own
 // self-test (sensor-fusion-clean-port, tests/fusion_regression.cpp), and the
 // fit trace that localizes a golden failure to a stage: the segment account
 // first, then each optimizer iteration.
@@ -43,12 +47,16 @@
 #include <gtsam/navigation/GPSFactor.h>
 #include <gtsam/navigation/ImuFactor.h>
 #include <gtsam/navigation/NavState.h>
+#include <gtsam/linear/GaussianFactorGraph.h>
+#include <gtsam/linear/JacobianFactor.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
+#include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/nonlinear/NonlinearEquality.h>
 #include <gtsam/slam/PriorFactor.h>
 
 #include "calculations/anglehelper.h"
 #include "fusion/factorgraphfit.h"
+#include "fusion/fitcovariance.h"
 #include "fusion/fusionoutput.h"
 #include "fusion/fusionpipeline.h"
 #include "fusion/fusionsamples.h"
@@ -297,7 +305,9 @@ const QStringList kCompletedPassFailureKeys{QStringLiteral("algorithm"), QString
 bool allChannelsEmpty(const Fusion::Result &result)
 {
     return result.time.isEmpty() && result.north.isEmpty() && result.accN.isEmpty()
-        && result.roll.isEmpty() && result.yaw.isEmpty() && result.qw.isEmpty();
+        && result.roll.isEmpty() && result.yaw.isEmpty() && result.qw.isEmpty()
+        && result.headingAcc.isEmpty() && result.tiltAcc.isEmpty() && result.accHAcc.isEmpty()
+        && result.accDAcc.isEmpty();
 }
 
 /// A golden fixture or one of the initializer's recordings, by name.
@@ -338,22 +348,19 @@ struct InitializerRun {
     QJsonArray segments;        ///< diagnostics["initializer"]["segments"]
 };
 
+/// `run` with its result's diagnostics parsed.
+void parseDiagnostics(InitializerRun &run)
+{
+    run.diagnostics = diagnosticsOf(run.result);
+    run.segments = run.diagnostics.value("initializer").toObject().value("segments").toArray();
+}
+
 InitializerRun runInitializerFixture(const QString &name, const Tuning &tuning,
                                      const Checkpoint &checkpoint = Checkpoint())
 {
     InitializerRun run;
     run.result = runPipeline(toChannels(fixtureNamed(name)), tuning, checkpoint, &run.trace);
-    run.diagnostics = diagnosticsOf(run.result);
-    run.segments = run.diagnostics.value("initializer").toObject().value("segments").toArray();
-    return run;
-}
-
-/// rest_throughout through the whole pipeline with the production tuning,
-/// once per run of this executable: its fit is the longest of them, and two
-/// tests read it (atRestPrefixStopsGrowing, dampingSaturationIsASolverFailure).
-const InitializerRun &restThroughoutRun()
-{
-    static const InitializerRun run = runInitializerFixture(QStringLiteral("rest_throughout"), Tuning{});
+    parseDiagnostics(run);
     return run;
 }
 
@@ -388,28 +395,172 @@ struct WindowFit {
     Samples window;
     Tuning tuning;
     FitResult fit;
+    InitializerAccount account;     ///< the initializer's, which assembleSuccess() reports
 };
 
-/// A fixture's full fit through the internal seams, in the order of planFit()
-/// and fitAndAssemble(): the prepared recording, the derived IMU gap limit,
-/// the fitted window validated, the temperature model with the scale state on
-/// (as planFit() turns it on), the initializer and the fit. The fits dominate
-/// this executable's time, so each is made once per run; the caller checks
-/// convergence.
+/// The full fit of `channels` through the internal seams, in the order of
+/// planFit() and fitAndAssemble(): the prepared recording, the derived IMU gap
+/// limit and noise, the fitted window validated, the temperature model with
+/// the scale state on (as planFit() turns it on), the initializer and the
+/// fit. The caller checks convergence.
+WindowFit fitOfChannels(const Fusion::Channels &channels)
+{
+    WindowFit f;
+    const PreparedInput prepared = prepareInput(channels);
+    const Samples &full = prepared.recording;
+    f.tuning.maxGap = kImuGapMedians*medianInterval(full.imuTime);
+    f.tuning.noise = imuNoise(channels.imuConfiguration);
+    f.window = fittedWindow(full, prepared.usableStart, full.gnssTime.back());
+    validateSamples(f.window, f.tuning);
+    GyroBiasModel model = gyroBiasModelFor(f.window);
+    model.scaleState = true;
+    const Initialization init = initialize(f.window, f.tuning);
+    f.account = init.account;
+    f.fit = fitFactorGraph(f.window, init.state, f.tuning, QString::fromLatin1(kFullFitPassFormat), Checkpoint(), model);
+    return f;
+}
+
+/// A fixture's full fit (fitOfChannels()). The fits dominate this
+/// executable's time, so each is made once per run.
 const WindowFit &fixtureFit(const QString &name)
 {
     static std::map<QString, WindowFit> fits;
     const auto found = fits.find(name);
     if (found != fits.end())
         return found->second;
-    WindowFit f;
-    f.tuning = pipelineTuning(name, Tuning{});
-    f.window = windowOf(name, Tuning{});
-    GyroBiasModel model = gyroBiasModelFor(f.window);
-    model.scaleState = true;
-    const Initialization init = initialize(f.window, f.tuning);
-    f.fit = fitFactorGraph(f.window, init.state, f.tuning, QString::fromLatin1(kFullFitPassFormat), Checkpoint(), model);
-    return fits.emplace(name, std::move(f)).first->second;
+    return fits.emplace(name, fitOfChannels(toChannels(fixtureNamed(name)))).first->second;
+}
+
+/// The covariance step on fixtureFit(name), once per run.
+const FitCovariance &fixtureCovariance(const QString &name)
+{
+    static std::map<QString, FitCovariance> covariances;
+    const auto found = covariances.find(name);
+    if (found != covariances.end())
+        return found->second;
+    const WindowFit &f = fixtureFit(name);
+    return covariances.emplace(name, fitCovariance(f.fit, f.window.gnssTime.size())).first->second;
+}
+
+/// The reconstruction of fixtureFit(name) with its covariance composed at
+/// every sample, once per run.
+const ImuRateTrajectory &fixtureTrajectory(const QString &name)
+{
+    static std::map<QString, ImuRateTrajectory> trajectories;
+    const auto found = trajectories.find(name);
+    if (found != trajectories.end())
+        return found->second;
+    const WindowFit &f = fixtureFit(name);
+    return trajectories.emplace(name, reconstructAtImuRate(f.window, f.fit, f.tuning, &fixtureCovariance(name)))
+        .first->second;
+}
+
+/// What the pipeline publishes for a fixture with the production tuning, once
+/// per run: the success assembly (assembleSuccess(), the pipeline's seam after
+/// the covariance step) on fixtureFit(name) with fixtureCovariance(name), so
+/// that no fixture is fitted twice. imuRateIsWhatTheFitPublishes holds the
+/// pipeline's own runs to the reconstruction of these fits bit for bit. A fit
+/// that did not converge is a SolverFailed result without channels, as the
+/// pipeline's is.
+const Fusion::Result &publishedRun(const QString &name)
+{
+    static std::map<QString, Fusion::Result> runs;
+    const auto found = runs.find(name);
+    if (found != runs.end())
+        return found->second;
+    const WindowFit &f = fixtureFit(name);
+    Fusion::Result result;
+    if (f.fit.converged) {
+        result = assembleSuccess(prepareInput(toChannels(fixtureNamed(name))), f.account, f.window, f.fit, f.tuning,
+                                 fixtureCovariance(name));
+    } else {
+        result.outcome = Fusion::Outcome::SolverFailed;
+        result.reason = QStringLiteral("the full fit did not converge (%1)")
+                            .arg(QString::fromStdString(f.fit.stopping.rule));
+    }
+    return runs.emplace(name, std::move(result)).first->second;
+}
+
+/// rest_throughout as the pipeline publishes it (publishedRun()), with the
+/// trace of its full fit and the initializer's account (fixtureFit()'s). Its
+/// fit is the longest of the fixtures', and the initializer's tests, the scale
+/// state's and the accuracy's all read it, so it is made once per run.
+const InitializerRun &restThroughoutRun()
+{
+    static const InitializerRun run = [] {
+        const QString name = QStringLiteral("rest_throughout");
+        const WindowFit &f = fixtureFit(name);
+        InitializerRun r;
+        r.result = publishedRun(name);
+        r.trace.initializer = f.account;
+        r.trace.history = f.fit.history;
+        r.trace.converged = f.fit.converged;
+        r.trace.stopping = f.fit.stopping;
+        parseDiagnostics(r);
+        return r;
+    }();
+    return run;
+}
+
+/// The joint covariance of `keys` (in that order) from the library's joint
+/// marginals, as one dense matrix.
+gtsam::Matrix jointOf(const gtsam::Marginals &marginals, const gtsam::KeyVector &keys, const gtsam::Values &values)
+{
+    const gtsam::JointMarginal joint = marginals.jointMarginalCovariance(keys);
+    std::vector<Eigen::Index> offset{0};
+    for (const gtsam::Key key : keys)
+        offset.push_back(offset.back()+Eigen::Index(values.at(key).dim()));
+    gtsam::Matrix m(offset.back(), offset.back());
+    for (size_t a = 0; a < keys.size(); ++a) {
+        for (size_t b = 0; b < keys.size(); ++b)
+            m.block(offset[a], offset[b], offset[a+1]-offset[a], offset[b+1]-offset[b]) = joint(keys[a], keys[b]);
+    }
+    return m;
+}
+
+/// The keys of z_k = (x_k, x_k+1, B(0), T(0), S(0)), FitCovariance::pair()'s order.
+gtsam::KeyVector pairKeys(size_t k)
+{
+    return {X(k), V(k), X(k+1), V(k+1), B(0), T(0), S(0)};
+}
+
+/// The Frobenius norm of got - expected over that of expected.
+double frobeniusRelative(const gtsam::Matrix &got, const gtsam::Matrix &expected)
+{
+    return (got-expected).norm()/expected.norm();
+}
+
+/// The 9x9 joint of (phi body, b_a, s_a) at fix k from the covariance step:
+/// what a sample on that fix composes to.
+gtsam::Matrix9 fixAttitudeBiasScale(const FitCovariance &c, size_t k)
+{
+    gtsam::Matrix9 joint;
+    joint.block<3, 3>(0, 0) = c.node[k].block<3, 3>(0, 0);
+    joint.block<3, 3>(0, 3) = c.global[k].block<3, 3>(0, 0);
+    joint.block<3, 3>(0, 6) = c.global[k].block<3, 3>(0, 9);
+    joint.block<3, 3>(3, 0) = joint.block<3, 3>(0, 3).transpose();
+    joint.block<3, 3>(6, 0) = joint.block<3, 3>(0, 6).transpose();
+    joint.block<3, 3>(3, 3) = c.globals.block<3, 3>(0, 0);
+    joint.block<3, 3>(3, 6) = c.globals.block<3, 3>(0, 9);
+    joint.block<3, 3>(6, 3) = c.globals.block<3, 3>(9, 0);
+    joint.block<3, 3>(6, 6) = c.globals.block<3, 3>(9, 9);
+    return joint;
+}
+
+/// |got - expected| <= relative |expected|.
+bool withinRelative(double got, double expected, double relative)
+{
+    return std::abs(got-expected) <= relative*std::abs(expected);
+}
+
+/// A 9x9 joint of (phi, b_a, s_a) from its three diagonal blocks.
+gtsam::Matrix9 blockDiagonal(const gtsam::Matrix3 &attitude, const gtsam::Matrix3 &bias, const gtsam::Matrix3 &scale)
+{
+    gtsam::Matrix9 joint = gtsam::Matrix9::Zero();
+    joint.block<3, 3>(0, 0) = attitude;
+    joint.block<3, 3>(3, 3) = bias;
+    joint.block<3, 3>(6, 6) = scale;
+    return joint;
 }
 
 /// The fitted state at fix `k` of `fit`.
@@ -776,6 +927,20 @@ private slots:
     void imuRateIsWhatTheFitPublishes_data();
     void imuRateIsWhatTheFitPublishes();
     void imuRateAxisWhenGnssIsFasterThanImu();
+    void covarianceMatchesJointMarginals();
+    void firstNodeHeadingIsTheHeadingCheck();
+    void sampleCovarianceMatchesTheEdgeGraph();
+    void sampleOnAFixHasTheFixMarginal();
+    void attitudeAccuracyFollowsTheNavigationFrame();
+    void accelerationAccuracyFollowsItsPropagation();
+    void wideningWindowAndFactor();
+    void wideningIsOneAtTheModel();
+    void wideningGrowsWithAnUnderstatedSigma();
+    void accuraciesFiniteAndPositive();
+    void gnssAccuracyScalingNeverLowersThem();
+    void undeterminedHeadingIsCapped();
+    void covarianceFailureLeavesTheFitAsItIs();
+    void diagnosticsReportTheScaleSigma();
 };
 
 void FusionKernelTest::solverUsesTbb()
@@ -1798,7 +1963,7 @@ void FusionKernelTest::initializerDiagnosticsShape()
     // Every key of a successful fit's diagnostics, `initializer` among them
     // (QJsonObject sorts its keys).
     QCOMPARE(diagnostics.keys(), QStringList({
-        "algorithm", "anchor_time_s", "configuration", "dense_output", "end_s", "gnss_states", "imu_outputs",
+        "accuracy", "algorithm", "anchor_time_s", "configuration", "dense_output", "end_s", "gnss_states", "imu_outputs",
         "initialization", "initializer", "input", "limitations", "max_endpoint_correction_deg",
         "max_seed_vs_selected_acceleration_m_s2", "max_seed_vs_selected_angle_deg", "max_step_correction_m_s2",
         "max_step_correction_time_s", "max_velocity_mismatch_m_s", "model", "objective",
@@ -3595,11 +3760,12 @@ void FusionKernelTest::diagnosticsReportTheScale()
 {
     // Clause 21, criterion 9: a successful fit's diagnostics carry
     // model.scale, the fitted factors themselves (acc x, y, z and gyro x, y,
-    // z: fit.scale of the same fit through the seams, bit for bit); model
-    // holds exactly gyro_bias, noise and scale; the residuals end with the
-    // three priors, bias, slope and scale, the scale prior's the squared
-    // whitened departure from one; the IMU kind stays `imu`; and the
-    // limitations name the scale factors the reconstruction holds.
+    // z: fit.scale of the same fit through the seams, bit for bit) beside
+    // their sigmas (diagnosticsReportTheScaleSigma); model holds exactly
+    // gyro_bias, noise and scale; the residuals end with the three priors,
+    // bias, slope and scale, the scale prior's the squared whitened departure
+    // from one; the IMU kind stays `imu`; and the limitations name the scale
+    // factors the reconstruction holds and the accuracy published.
     const QString name = QStringLiteral("coarse_maneuver");
     const Fusion::Result result = runPipeline(toChannels(fusionFixture(name)), Tuning{}, Checkpoint());
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
@@ -3607,7 +3773,8 @@ void FusionKernelTest::diagnosticsReportTheScale()
     const QJsonObject model = diagnostics.value("model").toObject();
     QCOMPARE(model.keys(), QStringList({QStringLiteral("gyro_bias"), QStringLiteral("noise"), QStringLiteral("scale")}));
     const QJsonObject scale = model.value("scale").toObject();
-    QCOMPARE(scale.keys(), QStringList({QStringLiteral("acc"), QStringLiteral("gyro")}));
+    QCOMPARE(scale.keys(), QStringList({QStringLiteral("acc"), QStringLiteral("acc_sigma"), QStringLiteral("gyro"),
+                                        QStringLiteral("gyro_sigma")}));
     const QJsonArray acc = scale.value("acc").toArray(), gyro = scale.value("gyro").toArray();
     QCOMPARE(acc.size(), 3);
     QCOMPARE(gyro.size(), 3);
@@ -3641,7 +3808,8 @@ void FusionKernelTest::diagnosticsReportTheScale()
     QCOMPARE(imu, diagnostics.value("gnss_states").toInt()-1);
     QCOMPARE(diagnostics.value("limitations").toString(), QStringLiteral(
         "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass with the fitted fix "
-        "states, biases and scale factors held; no uncertainty is published."));
+        "states, biases and scale factors held. Accuracies are first-order, one standard deviation under the "
+        "documented noise model, widened where the residuals exceed it."));
 }
 
 void FusionKernelTest::imuRateEndsAreTheFit_data()
@@ -4156,12 +4324,14 @@ void FusionKernelTest::imuRateIsWhatTheFitPublishes_data()
 void FusionKernelTest::imuRateIsWhatTheFitPublishes()
 {
     // Spec sections 6, 7 and 9: what the pipeline publishes is the IMU-rate
-    // pass on the fit, bit for bit, not something like it. The seventeen
+    // pass on the fit, bit for bit, not something like it. The twenty-one
     // channels of runPipeline() against reconstructAtImuRate() on this
     // executable's own fit of the fixture (fixtureFit(), the pipeline's
-    // stages in its order) through fillOutputChannels(), and the four
-    // numbers of the diagnostics against the pass's summaries. Section 6 and
-    // decision 12: the published time axis is the fixture's IMU samples in
+    // stages in its order), with its own covariance step composed and its
+    // own widening, through fillOutputChannels() (clause 33 of the
+    // specification of 1001-1065: the four accuracies are the fit's), and the
+    // four numbers of the diagnostics against the pass's summaries. Section 6
+    // and decision 12: the published time axis is the fixture's IMU samples in
     // [first fix, last fix) of the window, in the number imu_outputs says.
     QFETCH(QString, name);
     const Fusion::Channels channels = toChannels(fusionFixture(name));
@@ -4171,10 +4341,17 @@ void FusionKernelTest::imuRateIsWhatTheFitPublishes()
 
     const WindowFit &f = fixtureFit(name);
     QVERIFY(f.fit.converged);
-    const ImuRateTrajectory out = reconstructAtImuRate(f.window, f.fit, f.tuning);
+    const FitCovariance covariance = fitCovariance(f.fit, f.window.gnssTime.size());
+    QVERIFY(covariance.computed);
+    const ImuRateTrajectory out = reconstructAtImuRate(f.window, f.fit, f.tuning, &covariance);
+    std::vector<double> widenings;
+    for (const double factor : wideningFactors(f.window.gnssTime, f.fit.residuals, out.time))
+        widenings.push_back(widening(factor));
     Fusion::Result expected;
-    fillOutputChannels(out, prepareInput(channels).epoch, expected);
+    fillOutputChannels(out, widenings, prepareInput(channels).epoch, expected);
+    QCOMPARE(fusionChannelNames().size(), 21);
     for (const QString &channel : fusionChannelNames()) {
+        QVERIFY(!fusionChannel(result, channel).isEmpty());
         QVERIFY2(sameBitsEverywhere(fusionChannel(result, channel), fusionChannel(expected, channel)),
                  qPrintable(channel));
     }
@@ -4269,6 +4446,731 @@ void FusionKernelTest::imuRateAxisWhenGnssIsFasterThanImu()
             << diagnostics.value("max_endpoint_correction_deg").toDouble() << "deg, velocity mismatch"
             << diagnostics.value("max_velocity_mismatch_m_s").toDouble() << "m/s, step correction"
             << diagnostics.value("max_step_correction_m_s2").toDouble() << "m/s^2";
+}
+
+// ---- The accuracy (the specification of 1001-1065, section 7) -----------------------
+
+namespace {
+
+/// The success fixtures and the initializer's recordings: every fit whose
+/// covariance the accuracy tests read.
+const char *const kAccuracyFixtures[] = {"coarse_linear", "coarse_maneuver", "stationary_spin", "motion_start",
+                                         "rest_throughout", "sacc_anchor", "drifting_bias", "scale_recording"};
+
+/// The four accuracy channels, by golden column name.
+const QStringList kAccuracyChannels{QStringLiteral("headingAcc"), QStringLiteral("tiltAcc"),
+                                    QStringLiteral("accHAcc"), QStringLiteral("accDAcc")};
+
+/// scale_recording with its GNSS accuracies at the standard deviations of its
+/// noise (uniform, amplitudes .2 m and .03 m/s: .2/sqrt(3) and .03/sqrt(3)),
+/// divided by `ratio` over [20, 40) s of the fixture's own time: a stretch
+/// whose sigmas are understated by that ratio.
+Fusion::Channels scaleRecordingAtItsNoise(double ratio)
+{
+    Fusion::Channels c = toChannels(initializerFixture(QStringLiteral("scale_recording")));
+    for (qsizetype j = 0; j < c.gnssTime.size(); ++j) {
+        const double t = c.gnssTime[j]-1700000000.;
+        const double divide = t >= 20 && t < 40 ? ratio : 1.;
+        c.hAcc[j] = .2/std::sqrt(3.)/divide;
+        c.vAcc[j] = .2/std::sqrt(3.)/divide;
+        c.sAcc[j] = .03/std::sqrt(3.)/divide;
+    }
+    return c;
+}
+
+/// The median of `values` (the upper one of an even count).
+double medianOf(std::vector<double> values)
+{
+    std::sort(values.begin(), values.end());
+    return values[values.size()/2];
+}
+
+} // namespace
+
+void FusionKernelTest::covarianceMatchesJointMarginals()
+{
+    // Clause 25 (as settled), criterion 2: the covariance step's joint
+    // covariance of every adjacent pair z_k = (x_k, x_k+1, B, T, S), from the
+    // clique marginals of one factorization with the heading prior, against
+    // the library's joint marginals of the reported graph (no prior): on
+    // coarse_maneuver at every pair, on drifting_bias (1 Hz fixes, 201
+    // states, where the covariance-form recursion fails) at nodes 0, N/2 and
+    // N-2. Within 1e-6 relative (Frobenius); the prior moves a determined
+    // heading by sigma^2 / (2 x 1000^2) of itself, far below that.
+    for (const auto &[name, everyPair] : {std::pair<const char *, bool>{"coarse_maneuver", true},
+                                          std::pair<const char *, bool>{"drifting_bias", false}}) {
+        const WindowFit &f = fixtureFit(QLatin1String(name));
+        QVERIFY2(f.fit.converged, name);
+        const FitCovariance &c = fixtureCovariance(QLatin1String(name));
+        QVERIFY2(c.computed, name);
+        QVERIFY(c.failure.empty());
+        const size_t n = f.window.gnssTime.size();
+        QCOMPARE(c.node.size(), n);
+        QCOMPARE(c.next.size(), n-1);
+        QCOMPARE(c.global.size(), n);
+        std::vector<size_t> nodes;
+        if (everyPair) {
+            for (size_t k = 0; k+1 < n; ++k)
+                nodes.push_back(k);
+        } else {
+            nodes = {0, n/2, n-2};
+        }
+        const gtsam::Marginals marginals(f.fit.graph, f.fit.values, gtsam::Marginals::QR);
+        double worst = 0;
+        for (const size_t k : nodes) {
+            const gtsam::Matrix reference = jointOf(marginals, pairKeys(k), f.fit.values);
+            const double difference = frobeniusRelative(c.pair(k), reference);
+            worst = std::max(worst, difference);
+            QVERIFY2(difference <= 1e-6, qPrintable(QStringLiteral("%1 pair %2: %3").arg(QLatin1String(name)).arg(k)
+                                                        .arg(difference)));
+        }
+        qInfo() << name << ": the covariance step against the joint marginals at" << nodes.size()
+                << "pairs: largest relative difference" << worst;
+    }
+}
+
+void FusionKernelTest::firstNodeHeadingIsTheHeadingCheck()
+{
+    // Clauses 25 and 57, criterion 2: on every success fixture and every
+    // initializer recording, the heading accuracy of the first node from the
+    // covariance step equals the heading check (yawSigmaDeg() on the reported
+    // graph, which has no prior) within 1e-5 relative, or both are at the
+    // 180-degree cap; and so does the first published sample, unwidened,
+    // within 1e-3, where it lies within one IMU interval of fix 0 (the step
+    // chain from the fix adds what that part step carries).
+    for (const char *name : kAccuracyFixtures) {
+        const WindowFit &f = fixtureFit(QLatin1String(name));
+        QVERIFY2(f.fit.converged, name);
+        const FitCovariance &c = fixtureCovariance(QLatin1String(name));
+        QVERIFY2(c.computed, name);
+        const gtsam::Matrix3 R = f.fit.values.at<gtsam::Pose3>(X(0)).rotation().matrix();
+        const double node = attitudeAccuracy(R*c.node[0].block<3, 3>(0, 0)*R.transpose()).heading;
+        const double check = yawSigmaDeg(f.fit.graph, f.fit.values, X(0));
+        const auto agrees = [&](double got, double relative) {
+            return (got == kYawSigmaCapDeg && check == kYawSigmaCapDeg) || withinRelative(got, check, relative);
+        };
+        const ImuRateTrajectory &out = fixtureTrajectory(QLatin1String(name));
+        QVERIFY(!out.headingAcc.empty());
+        const double after = out.time.front()-f.window.gnssTime.front();
+        qInfo() << name << ": first node heading" << node << "deg, the heading check" << check
+                << "deg; first sample" << out.headingAcc.front() << "deg," << after << "s after fix 0";
+        QVERIFY2(agrees(node, 1e-5), name);
+        if (after < medianInterval(f.window.imuTime))
+            QVERIFY2(agrees(out.headingAcc.front(), 1e-3), name);
+    }
+}
+
+void FusionKernelTest::sampleCovarianceMatchesTheEdgeGraph()
+{
+    // Clauses 26, 29 and 58, criterion 3: the composition at every tenth
+    // sample of coarse_maneuver against a graph with a state at every
+    // integration edge (heldEndsReference()'s construction with the fixes,
+    // the biases, the slope and the scale free: GNSS factors at the fix
+    // edges, a one-step scaled IMU factor across every step at its interval's
+    // bias and the fit's scale, and the fit's three priors), solved to
+    // convergence: the attitude covariance in the navigation frame and the
+    // four unwidened accuracies, against the library's joint marginals of
+    // (X(j), V(j), B(0), S(0)) at the sample's edge, within 1e-5 relative.
+    using gtsam::imuBias::ConstantBias;
+    const QString name = QStringLiteral("coarse_maneuver");
+    const WindowFit &f = fixtureFit(name);
+    QVERIFY(f.fit.converged);
+    const ImuRateTrajectory &out = fixtureTrajectory(name);
+    QCOMPARE(out.attitudeCovariance.size(), out.time.size());
+    const WindowSeams w = seamsOf(f);
+
+    const ConstantBias bias = f.fit.values.at<ConstantBias>(B(0));
+    const GyroBiasModel &model = f.fit.biasModel;
+    gtsam::NonlinearFactorGraph graph;
+    gtsam::Values values;
+    for (size_t j = 0; j < w.edges.size(); ++j) {
+        values.insert(X(j), w.corrected[j].pose());
+        values.insert(V(j), Vector3(w.corrected[j].velocity()));
+    }
+    values.insert(B(0), bias);
+    values.insert(T(0), f.fit.gyroBiasSlope);
+    values.insert(S(0), f.fit.scale);
+    for (size_t k = 0; k < w.fixEdge.size(); ++k) {
+        graph.emplace_shared<gtsam::GPSFactor>(X(w.fixEdge[k]), f.window.position[k],
+                                               gtsam::noiseModel::Diagonal::Sigmas(f.window.positionSigma[k]));
+        graph.emplace_shared<gtsam::PriorFactor<Vector3>>(V(w.fixEdge[k]), f.window.velocity[k],
+                                                          gtsam::noiseModel::Diagonal::Sigmas(f.window.velocitySigma[k]));
+    }
+    for (size_t j = 0; j+1 < w.edges.size(); ++j) {
+        const size_t k = w.stepInterval[j];
+        gtsam::Matrix96 scaleJacobian;
+        const auto pim = preintegrateImu(f.window, w.edges[j], w.edges[j+1],
+                                         intervalBias(f.window, k, bias, f.fit.gyroBiasSlope, model), f.fit.scale,
+                                         f.tuning.noise, ImuStepObserver(), &scaleJacobian);
+        graph.emplace_shared<ScaledImuFactor>(X(j), V(j), X(j+1), V(j+1), B(0), T(0), S(0), pim,
+                                              temperatureAtFix(f.window, k)-model.tRef, scaleJacobian, f.fit.scale);
+    }
+    // The bias, slope and scale priors, the reported graph's last three factors.
+    for (size_t i = f.fit.graph.size()-3; i < f.fit.graph.size(); ++i)
+        graph.push_back(f.fit.graph.at(i));
+    gtsam::LevenbergMarquardtParams params;
+    params.setLinearSolverType("MULTIFRONTAL_QR");
+    gtsam::LevenbergMarquardtOptimizer optimizer(graph, values, params);
+    int iterations = 0;
+    for (; iterations < 100; ++iterations) {
+        const double before = optimizer.error();
+        optimizer.iterate();
+        if (before-optimizer.error() <= 1e-14*std::max(1., before))
+            break;
+    }
+    const gtsam::Values solution = optimizer.values();
+    const gtsam::Marginals marginals(graph, solution, gtsam::Marginals::QR);
+    const ConstantBias solvedBias = solution.at<ConstantBias>(B(0));
+    const Vector3 solvedScale = solution.at<Vector6>(S(0)).head<3>();
+
+    double worst[5] = {0, 0, 0, 0, 0};
+    size_t compared = 0;
+    for (size_t i = 0; i < out.time.size(); i += 10, ++compared) {
+        const size_t j = edgeAt(w, out.time[i]);
+        const size_t sample = size_t(std::lower_bound(f.window.imuTime.begin(), f.window.imuTime.end(), out.time[i])
+                                     -f.window.imuTime.begin());
+        // X(j) 0..5 (its rotation 0..2), V(j) 6..8, B(0) 9..14 (the
+        // accelerometer's 9..11), S(0) 15..20 (the accelerometer's 15..17).
+        const gtsam::Matrix joint = jointOf(marginals, {X(j), V(j), B(0), S(0)}, solution);
+        gtsam::Matrix9 reference;
+        const int at[3] = {0, 9, 15};
+        for (int a = 0; a < 3; ++a) {
+            for (int b = 0; b < 3; ++b)
+                reference.block<3, 3>(3*a, 3*b) = joint.block<3, 3>(at[a], at[b]);
+        }
+        const Rot3 attitude = solution.at<gtsam::Pose3>(X(j)).rotation();
+        const gtsam::Matrix3 navigation = attitude.matrix()*reference.block<3, 3>(0, 0)*attitude.matrix().transpose();
+        const AttitudeAccuracy expectedAttitude = attitudeAccuracy(navigation);
+        const AccelerationAccuracy expectedAcceleration = accelerationAccuracy(
+            reference, attitude, f.window.force[sample], solvedScale, solvedBias.accelerometer(), out.acceleration[i],
+            f.tuning.noise.accelerometer.sampleSigma);
+        const double differences[5] = {
+            frobeniusRelative(out.attitudeCovariance[i], navigation),
+            std::abs(out.headingAcc[i]-expectedAttitude.heading)/expectedAttitude.heading,
+            std::abs(out.tiltAcc[i]-expectedAttitude.tilt)/expectedAttitude.tilt,
+            std::abs(out.accHAcc[i]-expectedAcceleration.horizontal)/expectedAcceleration.horizontal,
+            std::abs(out.accDAcc[i]-expectedAcceleration.vertical)/expectedAcceleration.vertical};
+        for (int d = 0; d < 5; ++d) {
+            worst[d] = std::max(worst[d], differences[d]);
+            QVERIFY2(differences[d] <= 1e-5, qPrintable(QStringLiteral("sample %1, quantity %2: %3").arg(i).arg(d)
+                                                            .arg(differences[d])));
+        }
+    }
+    qInfo() << name << ": the composition against the edge graph (" << w.edges.size() << "states," << iterations
+            << "iterations) at" << compared << "samples: attitude covariance" << worst[0] << ", heading" << worst[1]
+            << ", tilt" << worst[2] << ", accHAcc" << worst[3] << ", accDAcc" << worst[4];
+    QVERIFY(compared >= 50);
+}
+
+void FusionKernelTest::sampleOnAFixHasTheFixMarginal()
+{
+    // Clause 26, criterion 3: a sample exactly on a fix (sacc_anchor logs
+    // 12.5 Hz against 1 Hz fixes on whole seconds, so every other fix is a
+    // sample) has P_0 = 0 and Psi_0 = I: its attitude covariance is the fix's
+    // marginal from the covariance step, rotated into the navigation frame,
+    // and its accuracies are the formulas' on the fix's joint of attitude,
+    // accelerometer bias and scale, to rounding.
+    const QString name = QStringLiteral("sacc_anchor");
+    const WindowFit &f = fixtureFit(name);
+    QVERIFY(f.fit.converged);
+    const FitCovariance &c = fixtureCovariance(name);
+    QVERIFY(c.computed);
+    const ImuRateTrajectory &out = fixtureTrajectory(name);
+    const Vector3 accBias = f.fit.values.at<gtsam::imuBias::ConstantBias>(B(0)).accelerometer();
+    size_t onFixes = 0;
+    double worst = 0;
+    for (size_t i = 0; i < out.time.size(); ++i) {
+        const auto fix = std::lower_bound(f.window.gnssTime.begin(), f.window.gnssTime.end(), out.time[i]);
+        if (fix == f.window.gnssTime.end() || *fix != out.time[i])
+            continue;
+        ++onFixes;
+        const size_t k = size_t(fix-f.window.gnssTime.begin());
+        const size_t sample = size_t(std::lower_bound(f.window.imuTime.begin(), f.window.imuTime.end(), out.time[i])
+                                     -f.window.imuTime.begin());
+        const Rot3 attitude = f.fit.values.at<gtsam::Pose3>(X(k)).rotation();
+        const gtsam::Matrix3 navigation = attitude.matrix()*c.node[k].block<3, 3>(0, 0)*attitude.matrix().transpose();
+        const AttitudeAccuracy expectedAttitude = attitudeAccuracy(navigation);
+        const AccelerationAccuracy expectedAcceleration = accelerationAccuracy(
+            fixAttitudeBiasScale(c, k), attitude, f.window.force[sample], f.fit.scale.head<3>(), accBias,
+            out.acceleration[i], f.tuning.noise.accelerometer.sampleSigma);
+        const double difference = frobeniusRelative(out.attitudeCovariance[i], navigation);
+        worst = std::max(worst, difference);
+        QVERIFY2(difference <= 1e-9, qPrintable(QStringLiteral("fix %1: %2").arg(k).arg(difference)));
+        QVERIFY2(withinRelative(out.headingAcc[i], expectedAttitude.heading, 1e-9), qPrintable(QString::number(k)));
+        QVERIFY2(withinRelative(out.tiltAcc[i], expectedAttitude.tilt, 1e-9), qPrintable(QString::number(k)));
+        QVERIFY2(withinRelative(out.accHAcc[i], expectedAcceleration.horizontal, 1e-9), qPrintable(QString::number(k)));
+        QVERIFY2(withinRelative(out.accDAcc[i], expectedAcceleration.vertical, 1e-9), qPrintable(QString::number(k)));
+    }
+    qInfo() << name << ":" << onFixes << "samples on a fix; largest relative difference of the attitude covariance"
+            << worst;
+    QVERIFY(onFixes > 100);
+}
+
+void FusionKernelTest::attitudeAccuracyFollowsTheNavigationFrame()
+{
+    // Clause 28, criterion 4: heading is the square root of the navigation
+    // frame's vertical element and tilt of the sum of the two horizontal
+    // ones, in degrees; the off-diagonal elements do not enter.
+    const double degrees = 180/kPi;
+    gtsam::Matrix3 navigation;
+    navigation << 4e-4, 1e-4, -2e-5,
+                  1e-4, 9e-4, 3e-5,
+                  -2e-5, 3e-5, 1e-4;
+    const AttitudeAccuracy a = attitudeAccuracy(navigation);
+    QVERIFY(withinRelative(a.heading, std::sqrt(1e-4)*degrees, 1e-15));
+    QVERIFY(withinRelative(a.tilt, std::sqrt(13e-4)*degrees, 1e-15));
+
+    // The attitude is perturbed on the right, R Exp(phi) with phi in the
+    // body frame, so its covariance enters the navigation frame as
+    // R Sigma R^T. Pitched up a quarter turn, the body's x axis is the
+    // vertical: the heading is the body x's sigma and the tilt the other two's.
+    const Rot3 pitched = Rot3::Ry(kPi/2);
+    const gtsam::Matrix3 body = Vector3(1e-6, 4e-6, 9e-6).asDiagonal();
+    const AttitudeAccuracy p = attitudeAccuracy(pitched.matrix()*body*pitched.matrix().transpose());
+    QVERIFY(withinRelative(p.heading, 1e-3*degrees, 1e-12));
+    QVERIFY(withinRelative(p.tilt, std::sqrt(13e-6)*degrees, 1e-12));
+
+    // The cap: 180 degrees for a variance above pi^2 rad^2, and for one that
+    // is not a number, infinite or negative; each of the two alone (the
+    // tilt's the sum of its two elements, here the north one with east zero).
+    const double NaN = std::numeric_limits<double>::quiet_NaN();
+    const double infinity = std::numeric_limits<double>::infinity();
+    for (const double variance : {kPi*kPi*1.0001, 1e6, NaN, infinity, -1e-6}) {
+        gtsam::Matrix3 m = navigation;
+        m(2, 2) = variance;
+        QCOMPARE(attitudeAccuracy(m).heading, kYawSigmaCapDeg);
+        QCOMPARE(attitudeAccuracy(m).tilt, a.tilt);
+        m = navigation;
+        m(0, 0) = variance;
+        m(1, 1) = 0;
+        QCOMPARE(attitudeAccuracy(m).tilt, kYawSigmaCapDeg);
+        QCOMPARE(attitudeAccuracy(m).heading, a.heading);
+    }
+    QCOMPARE(kYawSigmaCapDeg, 180.);
+}
+
+void FusionKernelTest::accelerationAccuracyFollowsItsPropagation()
+{
+    // Clauses 29, 35 and 58, criterion 4: the propagation through
+    // a = R (f / s - b) + g on inputs with known answers, the accelerometer's
+    // per-sample sigma zero unless stated.
+    const double g = 9.80665;
+    const gtsam::Matrix3 zero = gtsam::Matrix3::Zero();
+    const Vector3 noBias = Vector3::Zero(), unitScale = Vector3::Ones();
+    const Vector3 atRest(0, 0, -g);
+
+    // The per-sample noise alone, isotropic.
+    AccelerationAccuracy r = accelerationAccuracy(blockDiagonal(zero, zero, zero), Rot3(), atRest, unitScale, noBias,
+                                                  Vector3(2, 0, 0), .003);
+    QVERIFY(withinRelative(r.horizontal, .003, 1e-15));
+    QVERIFY(withinRelative(r.vertical, .003, 1e-15));
+
+    // The bias alone, rotated into the navigation frame: turned a quarter
+    // turn about the vertical, the body's x axis points east and its y axis
+    // south, so the north variance is the body y's and the east the body x's.
+    const gtsam::Matrix3 biasVariance = Vector3(1e-4, 4e-4, 9e-4).asDiagonal();
+    r = accelerationAccuracy(blockDiagonal(zero, biasVariance, zero), Rot3::Rz(kPi/2), atRest, unitScale, noBias,
+                             Vector3(2, 0, 0), 0);
+    QVERIFY(withinRelative(r.horizontal, .02, 1e-12));
+    QVERIFY(withinRelative(r.vertical, .03, 1e-12));
+    r = accelerationAccuracy(blockDiagonal(zero, biasVariance, zero), Rot3::Rz(kPi/2), atRest, unitScale, noBias,
+                             Vector3(0, -2, 0), 0);
+    QVERIFY(withinRelative(r.horizontal, .01, 1e-12));
+
+    // The tilt alone: at rest, an attitude error about a horizontal axis
+    // turns gravity's reaction into the horizontal, across that axis, by
+    // g sigma. Level, a body x error moves the force east; turned a quarter
+    // turn about the vertical, the body x axis points east and the force
+    // moves north.
+    const gtsam::Matrix3 aboutBodyX = Vector3(1e-6, 0, 0).asDiagonal();
+    r = accelerationAccuracy(blockDiagonal(aboutBodyX, zero, zero), Rot3(), atRest, unitScale, noBias,
+                             Vector3(0, 1, 0), 0);
+    QVERIFY(withinRelative(r.horizontal, g*1e-3, 1e-12));
+    QVERIFY(r.vertical <= 1e-15);
+    r = accelerationAccuracy(blockDiagonal(aboutBodyX, zero, zero), Rot3::Rz(kPi/2), atRest, unitScale, noBias,
+                             Vector3(1, 0, 0), 0);
+    QVERIFY(withinRelative(r.horizontal, g*1e-3, 1e-12));
+
+    // The scale alone: a reading f on a factor s moves by f / s^2 per unit of s.
+    const Vector3 reading(3, -2, -9), scale(1.02, .99, 1.01), bias(.05, 0, 0);
+    const gtsam::Matrix3 scaleVariance = Vector3(1e-4, 1e-4, 1e-4).asDiagonal();
+    r = accelerationAccuracy(blockDiagonal(zero, zero, scaleVariance), Rot3(), reading, scale, bias,
+                             Vector3(2.9, 0, 0), 0);
+    QVERIFY(withinRelative(r.horizontal, 3/(1.02*1.02)*1e-2, 1e-12));
+    QVERIFY(withinRelative(r.vertical, 9/(1.01*1.01)*1e-2, 1e-12));
+
+    // Under a horizontal force a heading error moves the force across it,
+    // never along it and never vertically: the directional accuracy is the
+    // same whatever the heading variance, the cap's and beyond included.
+    const Vector3 northForce(3, 0, -g);
+    const gtsam::Matrix3 smallBias = Vector3(1e-4, 1e-4, 1e-4).asDiagonal();
+    const AccelerationAccuracy level = accelerationAccuracy(blockDiagonal(zero, smallBias, zero), Rot3(), northForce,
+                                                            unitScale, noBias, Vector3(3, 0, 0), .003);
+    QVERIFY(withinRelative(level.horizontal, std::sqrt(1e-4+9e-6), 1e-12));
+    for (const double headingVariance : {1e-2, 1., kPi*kPi, 1e6}) {
+        const gtsam::Matrix3 heading = Vector3(0, 0, headingVariance).asDiagonal();
+        const AccelerationAccuracy turned = accelerationAccuracy(blockDiagonal(heading, smallBias, zero), Rot3(),
+                                                                 northForce, unitScale, noBias, Vector3(3, 0, 0), .003);
+        QVERIFY2(turned.horizontal == level.horizontal, qPrintable(QString::number(headingVariance)));
+        QVERIFY2(turned.vertical == level.vertical, qPrintable(QString::number(headingVariance)));
+    }
+
+    // The principal-value fallback: where the horizontal acceleration is
+    // below its directional accuracy, the larger horizontal principal value;
+    // where it has no horizontal part, the same.
+    const gtsam::Matrix3 unequalBias = Vector3(.01, .04, 0).asDiagonal();
+    const auto horizontal = [&](const Vector3 &published) {
+        return accelerationAccuracy(blockDiagonal(zero, unequalBias, zero), Rot3(), atRest, unitScale, noBias,
+                                    published, 0).horizontal;
+    };
+    QVERIFY(withinRelative(horizontal(Vector3(.15, 0, 0)), .1, 1e-12));
+    QVERIFY(withinRelative(horizontal(Vector3(.1, 0, 0)), .1, 1e-12));
+    QVERIFY(withinRelative(horizontal(Vector3(.05, 0, 0)), .2, 1e-12));
+    QVERIFY(withinRelative(horizontal(Vector3(0, 0, -g)), .2, 1e-12));
+    QVERIFY(withinRelative(horizontal(Vector3(0, .3, 0)), .2, 1e-12));
+
+    // The yaw cap inside the propagation: a heading variance above pi^2
+    // enters as pi^2. Under a 3 m/s^2 north force with no horizontal
+    // acceleration published, the fallback reads 3 pi, not 3 sqrt(1e6);
+    // below the cap the variance enters whole.
+    for (const auto &[headingVariance, expected] : {std::pair<double, double>{4., 6.},
+                                                    std::pair<double, double>{1e6, 3*kPi}}) {
+        const gtsam::Matrix3 heading = Vector3(0, 0, headingVariance).asDiagonal();
+        r = accelerationAccuracy(blockDiagonal(heading, zero, zero), Rot3(), northForce, unitScale, noBias,
+                                 Vector3::Zero(), 0);
+        QVERIFY2(withinRelative(r.horizontal, expected, 1e-12), qPrintable(QString::number(r.horizontal)));
+        QVERIFY(r.vertical == 0);
+    }
+}
+
+void FusionKernelTest::wideningWindowAndFactor()
+{
+    // Clause 31 (as settled), criterion 5, on hand-built residuals: the
+    // window of a sample is the fixes within 2.5 s of it (both bounds
+    // included) and at least the two around it; the factor is the window's
+    // position and velocity residuals and the IMU residuals between its
+    // fixes (an IMU residual's node is the later fix), over 6N - 9; the
+    // priors are not the window's. Every number is an integer, so every sum
+    // is exact and so is every factor.
+    QCOMPARE(kWideningHalfWidthS, 2.5);
+    std::vector<double> fixes;
+    std::vector<FactorResidual> residuals;
+    for (size_t k = 0; k <= 10; ++k) {
+        fixes.push_back(double(k));
+        residuals.push_back({"position", k, double(k), 1});
+        residuals.push_back({"velocity", k, double(k), 2});
+        if (k)
+            residuals.push_back({"imu", k, double(k), 10.+double(k)});
+    }
+    residuals.push_back({"bias_prior", 0, 0, 1000});
+    residuals.push_back({"slope_prior", 0, 0, 1000});
+    residuals.push_back({"scale_prior", 0, 0, 1000});
+    // 5.3: fixes 3..7 (N = 5), 5 x 3 + (14 + 15 + 16 + 17) over 21. 0.2:
+    // fixes 0..2, 9 + 11 + 12 over 9. 2.5: fixes 0..5, both bounds, 18 +
+    // (11 + ... + 15) over 27. 9.9: fixes 8..10, 9 + 19 + 20 over 9.
+    QCOMPARE(wideningFactors(fixes, residuals, {5.3, .2, 2.5, 9.9}), std::vector<double>({77./21, 32./9, 83./27, 48./9}));
+
+    // Fixes 10 s apart: none within 2.5 s, so the two around the sample
+    // (N = 2, three degrees of freedom); a fix within reach is the same one.
+    const std::vector<double> sparse{0, 10, 20};
+    std::vector<FactorResidual> sparseResiduals;
+    for (size_t k = 0; k < 3; ++k) {
+        sparseResiduals.push_back({"position", k, sparse[k], 1});
+        sparseResiduals.push_back({"velocity", k, sparse[k], 1});
+        if (k)
+            sparseResiduals.push_back({"imu", k, sparse[k], 5});
+    }
+    QCOMPARE(wideningFactors(sparse, sparseResiduals, {4, 12, 8.5, 0}), std::vector<double>({3., 3., 3., 3.}));
+
+    // The widening: the square root where the factor exceeds one, one
+    // otherwise: it never tightens.
+    QCOMPARE(widening(4), 2.);
+    QCOMPARE(widening(1), 1.);
+    QCOMPARE(widening(.25), 1.);
+    QCOMPARE(widening(0), 1.);
+}
+
+void FusionKernelTest::wideningIsOneAtTheModel()
+{
+    // Clause 59, criterion 5. On every committed fixture the widening is
+    // exactly one: their noise is below the accuracies they state. And on
+    // scale_recording with its GNSS accuracies at the standard deviations of
+    // its noise, the residuals are at the model: every widening is at most
+    // 1.25 and the median factor within [0.9, 1.1].
+    for (const char *name : kAccuracyFixtures) {
+        const WindowFit &f = fixtureFit(QLatin1String(name));
+        const std::vector<double> factors =
+            wideningFactors(f.window.gnssTime, f.fit.residuals, samplesBetweenFirstAndLastFix(f.window));
+        const double largest = *std::max_element(factors.begin(), factors.end());
+        qInfo() << name << ": largest widening factor" << largest;
+        QVERIFY2(widening(largest) == 1, name);
+    }
+    const WindowFit f = fitOfChannels(scaleRecordingAtItsNoise(1));
+    QVERIFY(f.fit.converged);
+    const std::vector<double> factors =
+        wideningFactors(f.window.gnssTime, f.fit.residuals, samplesBetweenFirstAndLastFix(f.window));
+    double largest = 0;
+    for (const double factor : factors)
+        largest = std::max(largest, widening(factor));
+    const double median = medianOf(factors);
+    qInfo() << "scale_recording at its noise: median factor" << median << ", largest widening" << largest
+            << "; position and velocity nrms" << f.fit.quality.positionNrms << f.fit.quality.velocityNrms;
+    QVERIFY(largest <= 1.25);
+    QVERIFY(median >= .9 && median <= 1.1);
+}
+
+void FusionKernelTest::wideningGrowsWithAnUnderstatedSigma()
+{
+    // Clauses 31 and 59, criterion 5: scale_recording at its noise with the
+    // GNSS accuracies understated three times over [20, 40) s. Every sample
+    // whose window lies inside the stretch, [22.5, 37.5) s, is widened by
+    // 2.6 to 3.4, the median within 10 % of 3; every sample farther than
+    // 2.5 s from the stretch by at most 1.25.
+    const Fusion::Channels channels = scaleRecordingAtItsNoise(3);
+    const double epoch = prepareInput(channels).epoch;
+    const WindowFit f = fitOfChannels(channels);
+    QVERIFY(f.fit.converged);
+    const std::vector<double> times = samplesBetweenFirstAndLastFix(f.window);
+    const std::vector<double> factors = wideningFactors(f.window.gnssTime, f.fit.residuals, times);
+    std::vector<double> inside, outside;
+    for (size_t i = 0; i < times.size(); ++i) {
+        const double t = epoch+times[i]-1700000000.;
+        if (t >= 22.5 && t < 37.5)
+            inside.push_back(widening(factors[i]));
+        else if (t < 17.5 || t >= 42.5)
+            outside.push_back(widening(factors[i]));
+    }
+    QVERIFY(inside.size() > 300);
+    QVERIFY(outside.size() > 500);
+    const auto [insideLow, insideHigh] = std::minmax_element(inside.begin(), inside.end());
+    const double median = medianOf(inside);
+    const double outsideHigh = *std::max_element(outside.begin(), outside.end());
+    qInfo() << "scale_recording understated three times over [20, 40) s: inside" << *insideLow << "to" << *insideHigh
+            << "(median" << median << "), outside at most" << outsideHigh;
+    QVERIFY(*insideLow >= 2.6 && *insideHigh <= 3.4);
+    QVERIFY(std::abs(median-3) <= .3);
+    QVERIFY(outsideHigh <= 1.25);
+}
+
+void FusionKernelTest::accuraciesFiniteAndPositive()
+{
+    // Clause 56, criterion 6: every sample's four published accuracies are
+    // finite and positive on the three success fixtures and the four
+    // initializer recordings of the specification; heading and tilt lie in
+    // (0, 180].
+    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin", "motion_start",
+                             "rest_throughout", "sacc_anchor", "drifting_bias"}) {
+        const Fusion::Result &result = publishedRun(QLatin1String(name));
+        QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, name);
+        QVERIFY2(diagnosticsOf(result).value("accuracy").toObject().value("computed").toBool(), name);
+        for (const QString &channel : kAccuracyChannels) {
+            const QVector<double> &values = fusionChannel(result, channel);
+            QCOMPARE(values.size(), result.time.size());
+            const bool good = std::all_of(values.begin(), values.end(),
+                                          [](double v) { return std::isfinite(v) && v > 0; });
+            QVERIFY2(good, qPrintable(QStringLiteral("%1 %2").arg(QLatin1String(name), channel)));
+            if (channel == QStringLiteral("headingAcc") || channel == QStringLiteral("tiltAcc"))
+                QVERIFY(*std::max_element(values.begin(), values.end()) <= kYawSigmaCapDeg);
+            qInfo() << name << channel << ": from" << *std::min_element(values.begin(), values.end()) << "to"
+                    << *std::max_element(values.begin(), values.end());
+        }
+    }
+}
+
+void FusionKernelTest::gnssAccuracyScalingNeverLowersThem()
+{
+    // Clause 56, criterion 6: with every hAcc, vAcc and sAcc doubled and the
+    // fit run again, no published accuracy of the three successes falls below
+    // (1 - 1e-6) times its value.
+    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin"}) {
+        const Fusion::Result &before = publishedRun(QLatin1String(name));
+        Fusion::Channels channels = toChannels(fusionFixture(QLatin1String(name)));
+        for (QVector<double> *sigmas : {&channels.hAcc, &channels.vAcc, &channels.sAcc}) {
+            for (double &sigma : *sigmas)
+                sigma *= 2;
+        }
+        const Fusion::Result after = runPipeline(channels, Tuning{}, Checkpoint());
+        QVERIFY2(after.outcome == Fusion::Outcome::Succeeded, qPrintable(after.reason));
+        for (const QString &channel : kAccuracyChannels) {
+            const QVector<double> &a = fusionChannel(before, channel), &b = fusionChannel(after, channel);
+            QCOMPARE(b.size(), a.size());
+            double smallest = std::numeric_limits<double>::infinity();
+            for (qsizetype i = 0; i < a.size(); ++i)
+                smallest = std::min(smallest, b[i]/a[i]);
+            qInfo() << name << channel << ": smallest ratio after doubling" << smallest;
+            QVERIFY2(smallest >= 1-1e-6, qPrintable(QStringLiteral("%1 %2").arg(QLatin1String(name), channel)));
+        }
+    }
+}
+
+void FusionKernelTest::undeterminedHeadingIsCapped()
+{
+    // Clauses 35 and 60, criterion 7: on coarse_linear, whose heading the data
+    // do not determine, the heading accuracy is 180 at every sample, and the
+    // tilt and the acceleration accuracies (estimable, so independent of the
+    // gauge) are finite and agree within 1e-6 relative with a gauge-fixed
+    // reference: the linearized reported graph with a 1e-9 rad heading prior
+    // on X(0), through the library's marginals of that linear graph, composed
+    // at the samples by the same pass.
+    const QString name = QStringLiteral("coarse_linear");
+    const Fusion::Result &result = publishedRun(name);
+    QVERIFY(result.outcome == Fusion::Outcome::Succeeded);
+    QVERIFY(!result.headingAcc.isEmpty());
+    QVERIFY(std::all_of(result.headingAcc.begin(), result.headingAcc.end(),
+                        [](double v) { return v == kYawSigmaCapDeg; }));
+    QCOMPARE(diagnosticsOf(result).value("accuracy").toObject().value("undetermined_heading_samples").toInt(-1),
+             int(result.time.size()));
+
+    const WindowFit &f = fixtureFit(name);
+    gtsam::GaussianFactorGraph linear = *f.fit.graph.linearize(f.fit.values);
+    const gtsam::Matrix3 R0 = f.fit.values.at<gtsam::Pose3>(X(0)).rotation().matrix();
+    gtsam::Matrix prior = gtsam::Matrix::Zero(1, 6);
+    prior.leftCols<3>() = (R0.transpose()*Vector3::UnitZ()).transpose()/1e-9;
+    linear.push_back(std::make_shared<gtsam::JacobianFactor>(X(0), prior, gtsam::Vector1::Zero()));
+    const gtsam::Marginals marginals(linear, f.fit.values, gtsam::Marginals::QR);
+    const size_t n = f.window.gnssTime.size();
+    FitCovariance reference;
+    reference.computed = true;
+    reference.node.resize(n);
+    reference.next.resize(n-1);
+    reference.global.resize(n);
+    for (size_t k = 0; k+1 < n; ++k) {
+        const gtsam::Matrix z = jointOf(marginals, pairKeys(k), f.fit.values);
+        reference.node[k] = z.block<9, 9>(0, 0);
+        reference.next[k] = z.block<9, 9>(0, 9);
+        reference.global[k] = z.block<9, 15>(0, 18);
+        reference.node[k+1] = z.block<9, 9>(9, 9);
+        reference.global[k+1] = z.block<9, 15>(9, 18);
+        reference.globals = z.block<15, 15>(18, 18);
+    }
+    const ImuRateTrajectory gauged = reconstructAtImuRate(f.window, f.fit, f.tuning, &reference);
+    const ImuRateTrajectory &out = fixtureTrajectory(name);
+    QCOMPARE(gauged.tiltAcc.size(), out.tiltAcc.size());
+    double worst[3] = {0, 0, 0};
+    for (size_t i = 0; i < out.time.size(); ++i) {
+        const double got[3] = {out.tiltAcc[i], out.accHAcc[i], out.accDAcc[i]};
+        const double expected[3] = {gauged.tiltAcc[i], gauged.accHAcc[i], gauged.accDAcc[i]};
+        for (int q = 0; q < 3; ++q) {
+            QVERIFY(std::isfinite(got[q]) && got[q] > 0);
+            const double difference = std::abs(got[q]-expected[q])/expected[q];
+            worst[q] = std::max(worst[q], difference);
+            QVERIFY2(difference <= 1e-6, qPrintable(QStringLiteral("sample %1, quantity %2: %3")
+                                                        .arg(i).arg(q).arg(difference)));
+        }
+        QCOMPARE(out.headingAcc[i], kYawSigmaCapDeg);
+    }
+    qInfo() << name << ": against the gauge-fixed reference: tilt" << worst[0] << ", accHAcc" << worst[1]
+            << ", accDAcc" << worst[2] << "; first sample tilt" << out.tiltAcc.front() << "deg, accHAcc"
+            << out.accHAcc.front() << ", accDAcc" << out.accDAcc.front() << "m/s^2";
+}
+
+void FusionKernelTest::covarianceFailureLeavesTheFitAsItIs()
+{
+    // Clause 34, criterion 8: a covariance step that fails is a result, not a
+    // thrown error: computed from a copy of the converged fit whose values
+    // carry a NaN, it reports the fixed failure and no block. Given to the
+    // success assembly (assembleSuccess(), the pipeline's seam after the
+    // covariance step) with the real fit, it leaves the four accuracies
+    // empty (which the registration's publish() leaves unset, and of which
+    // the runner's --csv writes no column), says so in `accuracy`, nulls the
+    // scale sigmas, and leaves
+    // the seventeen channels and every other diagnostics key bit-identical to
+    // the published run (publishedRun(): the same assembly on the same fit
+    // with the covariance computed, as the pipeline runs it).
+    const QString name = QStringLiteral("coarse_maneuver");
+    const Fusion::Channels channels = toChannels(fusionFixture(name));
+    const Fusion::Result &computed = publishedRun(name);
+    QVERIFY(computed.outcome == Fusion::Outcome::Succeeded);
+    QVERIFY(!computed.headingAcc.isEmpty());
+
+    const WindowFit &f = fixtureFit(name);
+    FitResult broken = f.fit;
+    broken.values.update(V(0), Vector3(std::numeric_limits<double>::quiet_NaN(), 0, 0));
+    const FitCovariance failed = fitCovariance(broken, f.window.gnssTime.size());
+    QVERIFY(!failed.computed);
+    QCOMPARE(QString::fromStdString(failed.failure),
+             QStringLiteral("covariance unavailable: the factorization of the converged graph failed"));
+    QCOMPARE(QString::fromLatin1(kCovarianceFailure), QString::fromStdString(failed.failure));
+    QVERIFY(failed.node.empty() && failed.next.empty() && failed.global.empty());
+
+    const Fusion::Result without = assembleSuccess(prepareInput(channels), f.account, f.window, f.fit, f.tuning, failed);
+    QVERIFY(without.outcome == Fusion::Outcome::Succeeded);
+    QVERIFY(without.reason.isEmpty());
+    const QStringList names = fusionChannelNames();
+    for (const QString &channel : names.mid(0, 17)) {
+        QVERIFY(!fusionChannel(without, channel).isEmpty());
+        QVERIFY2(sameBitsEverywhere(fusionChannel(without, channel), fusionChannel(computed, channel)),
+                 qPrintable(channel));
+    }
+    for (const QString &channel : kAccuracyChannels)
+        QVERIFY2(fusionChannel(without, channel).isEmpty(), qPrintable(channel));
+
+    QJsonObject a = diagnosticsOf(computed), b = diagnosticsOf(without);
+    const QJsonObject accuracy = b.value("accuracy").toObject();
+    QCOMPARE(accuracy.value("computed").toBool(true), false);
+    QCOMPARE(accuracy.value("failure").toString(),
+             QStringLiteral("covariance unavailable: the factorization of the converged graph failed"));
+    QCOMPARE(accuracy.value("heading_prior_sigma_rad").toDouble(), 1000.);
+    QCOMPARE(accuracy.value("widening_half_width_s").toDouble(), 2.5);
+    for (const char *key : {"max_widening", "widened_samples", "undetermined_heading_samples"})
+        QVERIFY2(accuracy.value(QLatin1String(key)).isNull(), key);
+    QCOMPARE(a.value("accuracy").toObject().value("computed").toBool(false), true);
+    QVERIFY(a.value("accuracy").toObject().value("failure").isNull());
+    // Everything else, key for key, the two scale sigmas aside.
+    for (QJsonObject *diagnostics : {&a, &b}) {
+        diagnostics->remove("accuracy");
+        QJsonObject model = diagnostics->value("model").toObject();
+        QJsonObject scale = model.value("scale").toObject();
+        const bool isFailed = diagnostics == &b;
+        QCOMPARE(scale.value("acc_sigma").isNull(), isFailed);
+        QCOMPARE(scale.value("gyro_sigma").isNull(), isFailed);
+        scale.remove("acc_sigma");
+        scale.remove("gyro_sigma");
+        model.insert("scale", scale);
+        diagnostics->insert("model", model);
+    }
+    QCOMPARE(b, a);
+}
+
+void FusionKernelTest::diagnosticsReportTheScaleSigma()
+{
+    // Clause 22, criterion 9: model.scale's acc_sigma and gyro_sigma are the
+    // square roots of the diagonal of S(0)'s marginal covariance (the
+    // library's, on the reported graph) within 1e-6 relative; `accuracy` has
+    // exactly its keys; the limitations no longer say that no uncertainty is
+    // published.
+    const QString name = QStringLiteral("coarse_maneuver");
+    const Fusion::Result &result = publishedRun(name);
+    QVERIFY(result.outcome == Fusion::Outcome::Succeeded);
+    const QJsonObject diagnostics = diagnosticsOf(result);
+    const QJsonObject scale = diagnostics.value("model").toObject().value("scale").toObject();
+    const QJsonArray acc = scale.value("acc_sigma").toArray(), gyro = scale.value("gyro_sigma").toArray();
+    QCOMPARE(acc.size(), 3);
+    QCOMPARE(gyro.size(), 3);
+    const WindowFit &f = fixtureFit(name);
+    const gtsam::Marginals marginals(f.fit.graph, f.fit.values, gtsam::Marginals::QR);
+    const gtsam::Matrix covariance = marginals.marginalCovariance(S(0));
+    for (int i = 0; i < 3; ++i) {
+        QVERIFY2(withinRelative(acc.at(i).toDouble(), std::sqrt(covariance(i, i)), 1e-6),
+                 qPrintable(QString::number(i)));
+        QVERIFY2(withinRelative(gyro.at(i).toDouble(), std::sqrt(covariance(3+i, 3+i)), 1e-6),
+                 qPrintable(QString::number(i)));
+    }
+    qInfo() << name << ": scale sigmas acc" << acc.at(0).toDouble() << acc.at(1).toDouble() << acc.at(2).toDouble()
+            << "gyro" << gyro.at(0).toDouble() << gyro.at(1).toDouble() << gyro.at(2).toDouble();
+
+    const QJsonObject accuracy = diagnostics.value("accuracy").toObject();
+    QCOMPARE(accuracy.keys(), QStringList({"computed", "failure", "heading_prior_sigma_rad", "max_widening",
+                                           "undetermined_heading_samples", "widened_samples",
+                                           "widening_half_width_s"}));
+    QCOMPARE(accuracy.value("computed").toBool(false), true);
+    QVERIFY(accuracy.value("failure").isNull());
+    QCOMPARE(accuracy.value("heading_prior_sigma_rad").toDouble(), kHeadingPriorSigmaRad);
+    QCOMPARE(accuracy.value("widening_half_width_s").toDouble(), kWideningHalfWidthS);
+    QCOMPARE(accuracy.value("max_widening").toDouble(), 1.);
+    QCOMPARE(accuracy.value("widened_samples").toInt(-1), 0);
+    QCOMPARE(accuracy.value("undetermined_heading_samples").toInt(-1), 0);
+    QVERIFY(!diagnostics.value("limitations").toString().contains(QStringLiteral("no uncertainty")));
 }
 
 FLYSIGHT_TEST_MAIN(FusionKernelTest)

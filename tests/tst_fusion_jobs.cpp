@@ -299,9 +299,16 @@ void FusionJobsTest::jobPublishesAllOutputsTogether()
                                                loadFusionGolden(QStringLiteral("coarse_maneuver")).diagnostics);
     QVERIFY2(jsonDifference.isEmpty(), qPrintable(jsonDifference));
 
-    // The derived values, never requested
+    // All twenty-two outputs of the fit together: the twenty-one measurements
+    // (the state and the four accuracies), aligned, and the diagnostics
     const qsizetype length = fusion("a", "_time").size();
     QVERIFY(length > 0);
+    QCOMPARE(fusionMeasurementNames().size(), 21);
+    for (const QString &name : fusionMeasurementNames())
+        QCOMPARE(fusion("a", name).size(), length);
+    QVERIFY(session("a").getAttribute(kDiagnostics).isValid());
+
+    // The derived values, never requested
     QCOMPARE(fusion("a", "accH").size(), length);
     QCOMPARE(fusion("a", "_system_time").size(), length);
     QVERIFY(session("a").getAttribute(fusionRollAtExit()).isValid());

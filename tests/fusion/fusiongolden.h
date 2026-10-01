@@ -25,7 +25,9 @@ struct FusionGolden {
     QHash<QString, QVector<double>> channels;   ///< by column name (successes only), exact bits
 };
 
-/// The seventeen output channels in golden column order: "_time", "north", ...
+/// The twenty-one output channels in golden column order: "_time", "north",
+/// ..., "qw", then the four accuracies "headingAcc", "tiltAcc", "accHAcc",
+/// "accDAcc".
 const QStringList &fusionChannelNames();
 
 /// The array of `result` that the column `name` of fusionChannelNames() holds.
@@ -33,7 +35,7 @@ const QVector<double> &fusionChannel(const FlySight::Fusion::Result &result, con
 
 /// The channels file of `result`, byte for byte as loadFusionGolden() reads it
 /// back: the v1 header line, the column line, then one line per output sample
-/// with the seventeen channels of fusionChannelNames() as toHexBits(), space
+/// with the twenty-one channels of fusionChannelNames() as toHexBits(), space
 /// separated; LF line endings, a final LF, nothing else. The writer used by
 /// fusion_golden_capture; channelsWriterIsTheInverseOfTheLoader
 /// (tst_fusion_golden) holds it to the committed files.
@@ -73,7 +75,9 @@ bool exactParityRequested();
 /// 6.4e-7 rad in the initializer's start attitude on CI (2026-09-30). So the
 /// yaw channel, the quaternion channels and the JSON keys ending in
 /// "_quaternion_xyzw" take kPortableAbsoluteHeading, 4e-6 rad, in their unit
-/// (a unit quaternion component moves by at most half the angle). The
+/// (a unit quaternion component moves by at most half the angle), and so does
+/// headingAcc, which on such a recording is the sigma of that flat direction;
+/// tiltAcc takes the degree floor and accHAcc and accDAcc the default. The
 /// relative term serves the large numbers (positions in metres, unwrapped
 /// angles, costs). False for a NaN on either side.
 constexpr double kPortableAbsolute = 1e-7;

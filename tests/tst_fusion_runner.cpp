@@ -252,7 +252,7 @@ QStringList dumpLabels(const QList<QPair<QString, QStringList>> &lines)
 }
 
 /// The first channel of `columns` that differs from `result`'s; empty when
-/// all seventeen match bit for bit.
+/// all twenty-one match bit for bit.
 QString firstColumnNotBitIdentical(const QHash<QString, QVector<double>> &columns, const Fusion::Result &result)
 {
     for (const QString &name : fusionChannelNames()) {
@@ -336,14 +336,15 @@ void FusionRunnerTest::noPreferenceOnTheFitPath()
 }
 
 // The output table the tool derives its CSV from is the goldens' column list,
-// each entry sharing the buffer of the corresponding Result array.
+// the twenty-one channels in order (the seventeen of the state, then the four
+// accuracies), each entry sharing the buffer of the corresponding Result array.
 void FusionRunnerTest::outputTableMatchesGolden()
 {
     const Fusion::Result result = Fusion::run(toChannels(fusionFixture(QStringLiteral("coarse_maneuver"))));
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
 
     const QList<Fusion::FitOutputChannel> channels = Fusion::fitOutputChannels(result);
-    QCOMPARE(channels.size(), 17);
+    QCOMPARE(channels.size(), 21);
     QStringList names;
     for (const Fusion::FitOutputChannel &channel : channels)
         names.append(channel.name);
@@ -386,10 +387,12 @@ void FusionRunnerTest::successMatchesDirectRun()
     QVERIFY2(run.stderrLines.last() == QStringLiteral("Succeeded"), qPrintable(run.describe()));
     QVERIFY2(run.stderrLines.mid(0, run.stderrLines.size() - 1) == progress, qPrintable(run.describe()));
 
-    // --csv: derived header, one row per output sample, bit-identical columns
+    // --csv: derived header (the twenty-one channels: the accuracy was
+    // computed), one row per output sample, bit-identical columns
     QStringList header;
     QHash<QString, QVector<double>> columns;
     QVERIFY2(readCsv(csvPath, header, columns), qPrintable(csvPath));
+    QCOMPARE(header.size(), 21);
     QCOMPARE(header.join(QLatin1Char(',')), fusionChannelNames().join(QLatin1Char(',')));
     QCOMPARE(columns.value(QStringLiteral("_time")).size(), direct.time.size());
     QVERIFY2(firstColumnNotBitIdentical(columns, direct).isEmpty(),
