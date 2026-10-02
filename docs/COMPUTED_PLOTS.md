@@ -23,6 +23,13 @@ and any logbook column over a Sensor fusion value
 recording whose computation did not produce the accuracy, while that
 computation's other plots are drawn.
 
+Not every accuracy plot is computed in the background. "Acceleration
+accuracy" in the "GNSS (Advanced)" category is instant: it is worked out from
+the receiver's own speed accuracy for every recording with GNSS data, and is
+a cautious figure for each of the GNSS accelerations beside it.
+[CALCULATIONS.md](CALCULATIONS.md) section 18 says how it is computed and how
+cautious it was measured to be.
+
 Between two GNSS fixes the Sensor fusion plots follow the IMU at its own rate,
 pulled onto the fitted fixes, so a line no longer runs straight from one fix
 to the next or bends where two samples straddle a fix. After the update that

@@ -968,12 +968,19 @@ void MainWindow::registerBuiltInPlots()
         {"GNSS (Basic)", "Speed accuracy",        "m/s",   QColor::fromHsl(240, S_dk, L_db), "GNSS", "sAcc",          "speed"},
         {"GNSS (Basic)", "Number of satellites",  "",      QColor::fromHsl(300, S_dk, L_db), "GNSS", "numSV",         "count"},
 
-        // Category: GNSS (Advanced)
+        // Category: GNSS (Advanced). Acceleration accuracy is drawn in the
+        // deep scheme of the GNSS accuracy rows, warm like the fused
+        // acceleration accuracy. Its hue, 330, is the middle of the widest
+        // gap in the category (270 to 30), so it is at least group_a from
+        // every row here, the accelerations included; it is told apart from
+        // the nearest hues elsewhere (the deep 0 and 300 of GNSS (Basic), 30
+        // away; the fused Horizontal acceleration's 340) by the deep scheme.
         {"GNSS (Advanced)", "Horizontal acceleration",         "m/s^2", QColor::fromHsl( 30, S,    L_w),  "GNSS", "accH",              "acceleration"},
         {"GNSS (Advanced)", "Vertical acceleration",           "m/s^2", QColor::fromHsl(120, S,    L_c),  "GNSS", "accD",              "acceleration"},
         {"GNSS (Advanced)", "Wind-corrected horizontal speed", "m/s",   QColor::fromHsl(200, S,    L_b),  "GNSS", "wcVelH",            "speed"},
         {"GNSS (Advanced)", "Along-track acceleration",        "m/s^2", QColor::fromHsl( 60, S,    L_c),  "GNSS", "accAlongTrack",     "acceleration"},
         {"GNSS (Advanced)", "Cross-track acceleration",        "m/s^2", QColor::fromHsl(270, S,    L_b),  "GNSS", "accCrossTrack",     "acceleration"},
+        {"GNSS (Advanced)", "Acceleration accuracy",           "m/s^2", QColor::fromHsl(330, S_dk, L_dw), "GNSS", "accAcc",            "acceleration"},
         {"GNSS (Advanced)", "Lift coefficient",                "",      Qt::darkGreen,                     "GNSS", "lift",              "coefficient"},
         {"GNSS (Advanced)", "Drag coefficient",                "",      Qt::darkBlue,                      "GNSS", "drag",              "coefficient"},
         {"GNSS (Advanced)", "Specific energy",                 "kJ/kg", Qt::darkGreen,                     "GNSS", "specificEnergy",    "specific_energy"},

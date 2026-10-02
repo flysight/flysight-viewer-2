@@ -1,5 +1,5 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Eleven specifications, eleven item ranges:
+# (tests/audit/cleanup_audit.cmake). Twelve specifications, twelve item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
@@ -98,6 +98,9 @@
 #             501-563 (item 509), 801-863 (items 801, 802, 842, 847, 854,
 #             861, 862 and 863) and 901-940 (items 901, 910, 912, 914, 915,
 #             921, 925, 930 and 935): each is stated as amended.
+#   1101      the GNSS acceleration accuracy (GNSS/accAcc, its plot and what
+#             the documentation says of it): one item. Stated in full in
+#             tests/README.md, appendix L.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -107,11 +110,12 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the eleven ranges; every item 1-19 needs a
+# Every item must lie in one of the twelve ranges; every item 1-19 needs a
 # line; every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662,
-# 701-754, 801-863, 901-940 or 1001-1065 needs at least one test or audit
-# line (manual and ci lines never stand alone). The human-readable matrices are tests/README.md
-# sections 9.1 to 9.11; keep them in sync with this file.
+# 701-754, 801-863, 901-940, 1001-1065 or 1101 needs at least one test or
+# audit line (manual and ci lines never stand alone). The human-readable
+# matrices are tests/README.md sections 9.1 to 9.12; keep them in sync with
+# this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -3269,3 +3273,14 @@
 1065 audit accuracy-channels
 1065 audit model-validation
 1065 audit naming
+
+# ---- GNSS acceleration accuracy (PLANS/gnss-acceleration-accuracy.md): one item ----
+
+# 1101 - (2, 3, 4) GNSS/accAcc, m/s^2 on GNSS/_time, from sAcc and _time only: sqrt(sAcc[i+1]^2 + sAcc[i-1]^2) / (t[i+1] - t[i-1]) inside and computeDerivative's one-interval forms at the ends, no correction factor, nothing from the fusion, unavailable where the derivative is; the "Acceleration accuracy" plot of "GNSS (Advanced)", type acceleration, deep scheme, a hue at least 40 degrees from the category's accelerations; the documentation states the assumption, that it is conservative, and the measurement on the reference recording, without applying it
+1101 tst_builtins_engine accelerationAccuracyKnownAnswers
+1101 tst_builtins_engine accelerationAccuracyUnavailable
+1101 tst_builtins_engine inventory
+1101 tst_builtins_golden sessionDataMatchesGolden
+1101 tst_plot_format gnssAccelerationAccuracyIsAnAcceleration
+1101 audit gnss-acceleration-accuracy
+1101 manual M53

@@ -3,6 +3,7 @@
 // declared inputs only, multi-output groups, ordered candidates, the declared
 // preference input, the interpolation family, and the altitude descriptor.
 
+#include <cmath>
 #include <memory>
 #include <utility>
 
@@ -83,6 +84,9 @@ private slots:
 
     void timeFitRunsOnce();
 
+    void accelerationAccuracyKnownAnswers();
+    void accelerationAccuracyUnavailable();
+
     void analysisRangeFollowsPreference();
     void analysisRangeNeedsPreference();
     void startTimeCandidateOrder();
@@ -160,6 +164,7 @@ void BuiltinsEngineTest::inventory()
         "builtin.gnss.accD",
         "builtin.gnss.accN",
         "builtin.gnss.accE",
+        "builtin.gnss.accAcc",
         "builtin.gnss.wcVel",
         "builtin.gnss.course",
         "builtin.gnss.courseRate",
@@ -219,7 +224,7 @@ void BuiltinsEngineTest::inventory()
 
     const QStringList ids = m_world->registry.registeredIds();
     QCOMPARE(ids, expected);
-    QCOMPARE(ids.size(), 75);   // 2 conversion families + 72 calculations + 1 family
+    QCOMPARE(ids.size(), 76);   // 2 conversion families + 73 calculations + 1 family
 
     const QStringList families = {"builtin.conversion.schema", "builtin.conversion.default",
                                   "builtin.interpolation"};
@@ -286,7 +291,7 @@ void BuiltinsEngineTest::noUndeclaredReads()
         QVERIFY2(status.has_value(), qPrintable(id));
         QVERIFY2(*status == ResultStatus::Ok || *status == ResultStatus::MissingInput, qPrintable(id));
     }
-    QCOMPARE(plain, 72);
+    QCOMPARE(plain, 73);
 
     QCOMPARE(engine.undeclaredReadCount(), 0);
     QCOMPARE(engine.cycleCount(), 0);
@@ -378,6 +383,72 @@ void BuiltinsEngineTest::timeFitRunsOnce()
     QCOMPARE(engine.measurement("MAG", "_time"), QVector<double>({T0 + 10.0, T0 + 20.0, T0 + 30.0}));
 
     QCOMPARE(engine.runCount("builtin.time.fit"), 1);
+}
+
+// GNSS/accAcc is sqrt(sAcc[i+1]^2 + sAcc[i-1]^2) / (t[i+1] - t[i-1]) inside
+// and the one-interval form at each end, bit for bit. The speed accuracies
+// are dyadic with short mantissas, so every square and every sum of two is
+// exact and a compiler that fuses the sum into a multiply-add, here or in the
+// calculation, cannot move a bit; the times are a quarter second apart (on
+// the epoch's scale a quarter is exact) with one missed fix, so the interior
+// steps are not all equal.
+void BuiltinsEngineTest::accelerationAccuracyKnownAnswers()
+{
+    World world;
+    const QVector<double> t = {T0, T0 + 0.25, T0 + 0.5, T0 + 0.75, T0 + 1.25, T0 + 1.5};
+    const QVector<double> sAcc = {0.75, 1.0, 1.0, 0.5, 2.25, 3.0};
+    world.state.setMeasurement("GNSS", "time", t);
+    world.state.setMeasurement("GNSS", "sAcc", sAcc);
+    CalculationEngine &engine = *world.engine;
+
+    const QVector<double> accAcc = engine.measurement("GNSS", "accAcc");
+    QCOMPARE(accAcc.size(), engine.measurement("GNSS", "_time").size());
+    QCOMPARE(accAcc.size(), t.size());
+
+    const int last = t.size() - 1;
+    QVector<double> expected;
+    expected.append(std::sqrt(sAcc[1] * sAcc[1] + sAcc[0] * sAcc[0]) / (t[1] - t[0]));
+    for (int i = 1; i < last; ++i)
+        expected.append(std::sqrt(sAcc[i + 1] * sAcc[i + 1] + sAcc[i - 1] * sAcc[i - 1]) / (t[i + 1] - t[i - 1]));
+    expected.append(std::sqrt(sAcc[last] * sAcc[last] + sAcc[last - 1] * sAcc[last - 1]) / (t[last] - t[last - 1]));
+    for (int i = 0; i < t.size(); ++i) {
+        QVERIFY2(accAcc[i] == expected[i],
+                 qPrintable(QStringLiteral("accAcc[%1] = %2, the formula %3")
+                                .arg(i).arg(accAcc[i], 0, 'g', 17).arg(expected[i], 0, 'g', 17)));
+    }
+
+    // Three that are exact by hand: each end divides by its one interval,
+    // the first interior sample by two
+    QVERIFY(accAcc[0] == 5.0);      // sqrt(1.0^2 + 0.75^2) / 0.25
+    QVERIFY(accAcc[1] == 2.5);      // sqrt(1.0^2 + 0.75^2) / 0.5
+    QVERIFY(accAcc[last] == 15.0);  // sqrt(3.0^2 + 2.25^2) / 0.25
+
+    QCOMPARE(engine.undeclaredReadCount(), 0);
+}
+
+// Unavailable, as the derivative is: without the speed accuracy or the time,
+// with one sample, and with lengths that differ
+void BuiltinsEngineTest::accelerationAccuracyUnavailable()
+{
+    const DependencyKey accAcc = measKey("GNSS", "accAcc");
+    const auto unavailable = [&accAcc](const QVector<double> &time, const QVector<double> &sAcc) {
+        World world;
+        if (!time.isEmpty())
+            world.state.setMeasurement("GNSS", "time", time);
+        if (!sAcc.isEmpty())
+            world.state.setMeasurement("GNSS", "sAcc", sAcc);
+        CalculationEngine &engine = *world.engine;
+        return engine.measurement("GNSS", "accAcc").isEmpty() && !engine.isAvailable(accAcc)
+            && engine.undeclaredReadCount() == 0;
+    };
+
+    QVERIFY(unavailable({T0, T0 + 1.0, T0 + 2.0}, {}));
+    QVERIFY(unavailable({}, {0.5, 0.5, 0.5}));
+    QVERIFY(unavailable({T0}, {0.5}));
+    QVERIFY(unavailable({T0, T0 + 1.0, T0 + 2.0}, {0.5, 0.5}));
+    QVERIFY(unavailable({T0, T0 + 1.0}, {0.5, 0.5, 0.5}));
+    // and the same world with two samples has it
+    QVERIFY(!unavailable({T0, T0 + 1.0}, {0.5, 0.5}));
 }
 
 // Acceptance 15: the descent pause is a declared preference input.

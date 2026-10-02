@@ -62,7 +62,7 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 |------|--------|
 | `tst_harness` | The test-support code itself: settings and logbook isolation, fixture builders |
 | `tst_plot_color` | `plotColor()` (`src/plotutils.h`), the one colour a plot is drawn in: the registry's default without a stored preference, the stored colour when one is valid, the default again for a stored value that is not a colour, and the same answer for the plot, the legend and the measure tool, which all read it there |
-| `tst_plot_format` | `formatValue()` and `formatXAxisValue()` (`src/plotutils.h`), the one way a plot's value is written as text in the legend, the analysis tab and the measure tool: converted and rounded by the row's measurement type through the unit converter, the same text a logbook column shows; one decimal unconverted without a type; `--` for NaN; the x axis in seconds as a time. The measurement's name plays no part (a substring test on it once printed the along-track accelerations raw, "lon" being in `accAlongTrack`). The fused accelerations' accuracies have a type of their own, `acceleration_accuracy`: the acceleration's g in both unit systems, at four decimals, so that 0.0046 m/s^2 reads `0.0005` where `acceleration` reads `0.00` (`accelerationAccuracyKeepsItsDigits`; noise-model item 1037) |
+| `tst_plot_format` | `formatValue()` and `formatXAxisValue()` (`src/plotutils.h`), the one way a plot's value is written as text in the legend, the analysis tab and the measure tool: converted and rounded by the row's measurement type through the unit converter, the same text a logbook column shows; one decimal unconverted without a type; `--` for NaN; the x axis in seconds as a time. The measurement's name plays no part (a substring test on it once printed the along-track accelerations raw, "lon" being in `accAlongTrack`). The fused accelerations' accuracies have a type of their own, `acceleration_accuracy`: the acceleration's g in both unit systems, at four decimals, so that 0.0046 m/s^2 reads `0.0005` where `acceleration` reads `0.00` (`accelerationAccuracyKeepsItsDigits`; noise-model item 1037). The GNSS acceleration accuracy is of the `acceleration` type: 1.8633 m/s^2 reads `0.19` in both unit systems (`gnssAccelerationAccuracyIsAnAcceleration`; item 1101) |
 | `tst_smoke` | End-to-end characterization of importer, session, calculations, exporter, logbook, and model (started as a pin of v2026.04.1; expectations the rework changed on purpose were rewritten with the change that altered them) |
 
 **Calculation engine (synthetic calculations)**
@@ -82,7 +82,7 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | Test | Covers |
 |------|--------|
 | `tst_builtins_golden` | Every built-in calculation read through `SessionData` on the generated descent fixture, against hand-derived golden literals |
-| `tst_builtins_engine` | The built-ins on a private registry and `FakeSessionState`: golden values, registration inventory, declared inputs only, multi-output groups, candidate order, the declared preference, interpolation family, altitude descriptor, the constant defaults (`constantDefaults`), the column environment digest: per set of names, changed only by what their static closure reaches (`digestChanges`), covering every candidate's result version (`digestCoversResultVersions`) and the conversion layer (`digestCoversConversionLayer`), the same for an altitude marker registered at run time or at the next start and unchanged for every other name (`digestSurvivesRuntimeAltitudeMarker`), and the altitude-marker manager's destructor removing its registrations as teardown, which reports no drop while a marker removed at run time does (`altitudeMarkerTeardownReportsNothing`) (fusion-plots items 810, 834-836, 838, 846, 851, 860) |
+| `tst_builtins_engine` | The built-ins on a private registry and `FakeSessionState`: golden values, registration inventory, declared inputs only, multi-output groups, candidate order, the declared preference, interpolation family, altitude descriptor, the constant defaults (`constantDefaults`), the column environment digest: per set of names, changed only by what their static closure reaches (`digestChanges`), covering every candidate's result version (`digestCoversResultVersions`) and the conversion layer (`digestCoversConversionLayer`), the same for an altitude marker registered at run time or at the next start and unchanged for every other name (`digestSurvivesRuntimeAltitudeMarker`), and the altitude-marker manager's destructor removing its registrations as teardown, which reports no drop while a marker removed at run time does (`altitudeMarkerTeardownReportsNothing`) (fusion-plots items 810, 834-836, 838, 846, 851, 860); the GNSS acceleration accuracy, bit for bit against its formula with the ends included (`accelerationAccuracyKnownAnswers`), and unavailable without the speed accuracy or the time, with one sample and with lengths that differ (`accelerationAccuracyUnavailable`) (item 1101) |
 | `tst_time_fit` | The system-time-to-UTC fit: microsecond-level conversion of an exact synthetic clock at high device uptime (the regression test of the centered sums), invalidation through the TIME sensor, GPS week rollover, degenerate clocks |
 | `tst_local_coordinates` | The recording-wide `Local` frame: origin gates, analytically known displacements and velocity rotation on WGS84, NaN at the index of an invalid sample only, all outputs unavailable without a qualifying fix, the shared GNSS time axes, invalidation on source changes and independence from markers on a real `SessionData` |
 | `tst_simplified_track` | The simplified map track on the shared `Local` frame: all seven outputs at the same retained sample indices, every dropped sample within 0.5 m of the path and the strictly-greater rule, duplicate-position endpoints, closed, degenerate and empty tracks, non-finite samples left out, one projection per recording, unavailable without a local origin and back after a source correction, siblings invalidated together |
@@ -704,8 +704,8 @@ missing invalidation in the code under test.
 
 ## 9. Acceptance traceability
 
-Eleven specifications, eleven ranges of items in `tests/acceptance_map.txt`,
-the machine-checked form of the eleven tables below (section 10); keep them in
+Twelve specifications, twelve ranges of items in `tests/acceptance_map.txt`,
+the machine-checked form of the twelve tables below (section 10); keep them in
 sync.
 
 ### 9.1 Schema and calculation engine (items 1-19)
@@ -1685,6 +1685,17 @@ M51; the measurement tree of M44 lists twelve).
 | 1064 | 11 | test: the audit's confinement rules hold, and the documents carry the table, the derivations and the validation | `audit solver-confinement`; `audit fusion-tooling`; `audit noise-model`; `audit scale-state`; `audit accuracy-channels`; `audit model-validation` |
 | 1065 | 12 | `docs/` describe the change: `DATA_SCHEMA.md` (section 2, the keys; section 11, the algorithm string; section 12, the record), `SENSOR_FUSION.md` (section 3, the configuration inputs and the lattice check; section 4, the noise model with its table and derivations, the scale state, the covariance and its propagation, the widening, the outputs and diagnostics; section 8, the validation results and what is and is not validated), `CALCULATIONS.md` section 17, `COMPUTED_PLOTS.md` (the four plots); `tests/README.md` section 11 records the goldens captured again and why; the map gives the specification its range, with the amended items restated | `audit sensor-configuration`; `audit noise-model`; `audit scale-state`; `audit accuracy-channels`; `audit model-validation`; `audit naming`; section 11's history paragraphs |
 
+### 9.12 GNSS acceleration accuracy (item 1101)
+
+The specification "GNSS acceleration accuracy", stated in
+[appendix L](#appendix-l-the-acceptance-item-of-the-gnss-acceleration-accuracy-1101),
+has one acceptance item, 1101; the same four line forms as 9.2. "Section" is
+the section of the specification; its section 1 (motivation) has no item.
+
+| Item | Section | Statement | Evidence |
+| --- | --- | --- | --- |
+| 1101 | 2, 3, 4 | one on-demand calculation, `GNSS/accAcc` in m/s^2 on `GNSS/_time`, from `GNSS/sAcc` and `GNSS/_time` only: `sqrt(sAcc[i+1]^2 + sAcc[i-1]^2) / (t[i+1] - t[i-1])` inside and the one-interval forms of `computeDerivative` at the ends, no correction factor and nothing from the fusion, unavailable where the derivative is; one plot, "Acceleration accuracy" in "GNSS (Advanced)", type `acceleration`, in the deep scheme of the GNSS accuracy rows at a hue at least 40 degrees from the category's accelerations; the documentation states the assumption, that it is conservative, and the measurement on the reference recording, without applying it | `tst_builtins_engine::accelerationAccuracyKnownAnswers` (bit for bit, the ends included), `accelerationAccuracyUnavailable` (no `sAcc`, no time, one sample, two lengths), `inventory`; `tst_builtins_golden::sessionDataMatchesGolden` (`GNSS/accAcc` on the descent fixture); `tst_plot_format::gnssAccelerationAccuracyIsAnAcceleration`; `audit gnss-acceleration-accuracy` (one stencil, the name in the registration and the row, the row's type and scheme, the document's sentences); `manual M53` (the plot in the window) |
+
 ## 10. Cleanup audit
 
 `audit_cleanup` runs `tests/audit/cleanup_audit.cmake`, a CMake script over
@@ -1904,6 +1915,16 @@ takes about a second. It fails, listing **all** violations, when
   posterior", "distributed correction"; the linear interpolation of the
   readings between samples that the integration applies matches none of
   them). This file is excluded because this section spells the patterns;
+- **group `gnss-acceleration-accuracy`** (item 1101): `src` holds a central
+  difference over two intervals (`[i + 1] - <name>[i - 1]`) other than once,
+  the derivative's stencil that `GNSS/accAcc` shares; `"accAcc"` is spelled in
+  `src` outside its registration (`gnsscalculations.cpp`) and its plot row
+  (`mainwindow.cpp`); `src/mainwindow.cpp` has other than one "GNSS
+  (Advanced)" row "Acceleration accuracy" in m/s^2 of the `acceleration` type
+  in the deep scheme at hue 330 (`QColor::fromHsl(330, S_dk, L_dw)`); or
+  `docs/CALCULATIONS.md` stops writing, on one line each, the assumption
+  ("the two fixes' velocity errors are independent") and the measurement
+  ("0.09 g RMS"). Each rule was planted once when it was written;
 - **group `stored-results`** (items 304, 305, 316, 317, 326, 327, 330, 333,
   334, 346, 348, 349, 921, 930): the record file extension is spelled as a literal in a
   `.cpp` other than `calculationrecord.cpp`; a record file name is built or
@@ -2031,11 +2052,10 @@ takes about a second. It fails, listing **all** violations, when
 - a line of `tests/acceptance_map.txt` is malformed, names a test function, a
   manual step (`**M<k> ` in this file), a CI token or an audit group that does
   not exist, or an item outside 1-19, 101-120, 201-247, 301-350, 401-442,
-  501-563, 601-662, 701-754, 801-863, 901-940 and 1001-1065; an item 1-19 has
-  no line; an item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662,
-  701-754, 801-863 or 901-940 has no test or audit line; or an item of
-  1001-1065 that the script's explicit list names (the items whose evidence
-  exists so far: 1001-1007, 1050 and 1061) has no test or audit line.
+  501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065 and 1101; an item
+  1-19 has no line; or an item 101-120, 201-247, 301-350, 401-442, 501-563,
+  601-662, 701-754, 801-863, 901-940, 1001-1065 or 1101 has no test or audit
+  line.
 
 Whether a target **links** GTSAM is not a text question (link items come from
 variables and from other targets' link interfaces). That half of the
@@ -3062,6 +3082,15 @@ and the script on each golden fixture that fits, with `-` for the exit code and 
 
 Pass / fail and the numbers per step go in the phase report. A step that fails
 is reported as it failed, not adjusted.
+
+### 12.10 GNSS acceleration accuracy
+
+What the automated tests cannot show: the plot in the real window. Use the
+preamble of 12.1 (a COPY of a logbook, never the real one).
+
+**M53 The GNSS acceleration accuracy plot (1101).** Show one recording with GNSS data. "GNSS (Advanced)" lists "Acceleration accuracy" after Cross-track acceleration; check it: it is drawn at once, nothing appears in the status bar for it, its axis reads "(g)", and its colour, a deep pink, is told apart from Horizontal, Vertical, Along-track and Cross-track acceleration checked beside it, from the GNSS accuracy plots of "GNSS (Basic)" and from the fused accuracies. Hovering over the plot, the legend shows two decimals of g; on a 5 Hz recording with `sAcc` near 0.5 m/s it reads about 0.18 (sqrt(2) x 0.5 m/s over 0.4 s), and it rises where the speed accuracy does. At the first and last fix it is about twice its neighbour's, having one interval in place of two.
+
+Pass / fail per step goes in the phase report.
 
 ## Appendix A. The acceptance items (1-19)
 
@@ -5070,3 +5099,32 @@ row of section 9 and the map.
     plots); `tests/README.md` section 11 records the goldens captured again
     and why; the map gives the specification its range, with the amended
     items restated.
+
+## Appendix L. The acceptance item of the GNSS acceleration accuracy (1101)
+
+The testable statement of the specification "GNSS acceleration accuracy",
+with the specification's section numbers in front: one item, 1101 of
+`tests/acceptance_map.txt`, the row of section 9.12. Its section 1
+(motivation) has no item.
+
+1. (2, 3, 4) One on-demand GNSS calculation, `GNSS/accAcc`, m/s^2, aligned
+   with `GNSS/_time`, from `GNSS/_time` and `GNSS/sAcc` only:
+   `accAcc[i] = sqrt(sAcc[i+1]^2 + sAcc[i-1]^2) / (t[i+1] - t[i-1])` for the
+   interior samples and, at the two ends, the forward and backward forms that
+   `computeDerivative` uses there; strictly the receiver's `sAcc` and the
+   sample times, with no correction factor, nothing from the fusion and
+   nothing measured on a corpus; unavailable when `sAcc` or `_time` is
+   missing or shorter than two samples, as the derivative is. One plot,
+   "Acceleration accuracy" in "GNSS (Advanced)", type `acceleration`, in the
+   deep palette of the GNSS accuracy rows, a hue at least 40 degrees from
+   every other acceleration row of its category. The documentation says, in
+   one sentence each, that the figure is the receiver's stated speed accuracy
+   propagated through the central difference assuming the two fixes' errors
+   are independent; that the assumption is conservative; and the measurement
+   on the reference recording `24-09-05/11-17-12` (0.09 g RMS overall and
+   0.058 g in steady flight against the formula's 0.19 g, a velocity error
+   of 0.18 m/s against a stated 0.52, an autocorrelation over two fixes of
+   0.36), which describes the gap and is not applied. Tests: known answers bit
+   for bit, the ends included; unavailable without `sAcc`, with one sample,
+   with lengths that differ; the plot row's type and palette, and a legend
+   value over it formatted as an acceleration.

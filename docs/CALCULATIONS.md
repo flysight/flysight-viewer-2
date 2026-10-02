@@ -9,7 +9,8 @@ Sections 1-11 are about writing a calculation. Sections 12-17 are about
 explicit calculations that run in the background: the asynchronous request
 (12), blocker inspection (13), the threading rule (14), the executor of
 background jobs (15), the demand layer that decides what they compute (16),
-and sensor fusion as a registered calculation (17).
+and sensor fusion as a registered calculation (17). Section 18 states what
+one built-in calculation means, the GNSS acceleration accuracy.
 What the user sees of it is in [COMPUTED_PLOTS.md](COMPUTED_PLOTS.md); the
 fusion model itself is in [SENSOR_FUSION.md](SENSOR_FUSION.md).
 
@@ -2395,3 +2396,53 @@ their stored results by the column worker), and with a real fit in
 `tst_fusion_jobs::altitudeMarkerKeepsColumnsOfUnloadedSession` and
 `tst_fusion_jobs::workerRefillsColumnFromStoredFit`. The model, its
 limitations and what is rejected are in [SENSOR_FUSION.md](SENSOR_FUSION.md).
+
+## 18. The GNSS acceleration accuracy
+
+`builtin.gnss.accAcc` (OnDemand; inputs `GNSS/sAcc` and `GNSS/_time`; output
+`GNSS/accAcc`, m/s^2, one sample per fix, no unit reported) is the accuracy
+of the GNSS accelerations. `GNSS/accN`, `accE` and `accD` are
+`Calculations::computeDerivative()` of the receiver's velocity
+(`src/calculations/derivativehelper.h`): a centred difference over two fix
+intervals, and a one-interval difference at each end.
+`Calculations::computeDerivativeAccuracy()` carries the receiver's speed
+accuracy through the same stencil, which the two functions share
+(`differenceOverStencil()`), so an accuracy always qualifies the samples its
+acceleration differenced:
+
+```
+accAcc[0]   = sqrt(sAcc[1]^2 + sAcc[0]^2) / (t[1] - t[0])
+accAcc[i]   = sqrt(sAcc[i+1]^2 + sAcc[i-1]^2) / (t[i+1] - t[i-1])    for 0 < i < n-1
+accAcc[n-1] = sqrt(sAcc[n-1]^2 + sAcc[n-2]^2) / (t[n-1] - t[n-2])
+```
+
+It is unavailable where the derivative is: `sAcc` or `_time` missing, shorter
+than two samples or of another length than the other, or two equal times in
+the stencil. Because `sAcc` is one figure for the three velocity components,
+it is the standard deviation of each of `accN`, `accE` and `accD`, and, to the
+usual approximation for a magnitude well above its sigma, of `accH`,
+`accAlongTrack` and `accCrossTrack` too. Its plot is "Acceleration accuracy"
+in "GNSS (Advanced)", of type `acceleration`, in the deep scheme of the GNSS
+accuracy plots (hue 330, at least 40 degrees from every row of its category,
+the accelerations included).
+
+What the figure means:
+
+- It is the receiver's stated speed accuracy propagated through the central
+  difference under the assumption that the two fixes' velocity errors are independent.
+- The assumption is conservative: a receiver's velocity errors are correlated
+  between fixes, so part of the error cancels in the difference, and its
+  stated accuracy is itself cautious.
+- On the reference recording `24-09-05/11-17-12`, with the fused velocity as
+  the reference, the actual error of the central-difference acceleration was
+  0.09 g RMS overall and 0.058 g in steady flight against the formula's
+  0.19 g, the receiver's velocity error 0.18 m/s against a stated 0.52, and
+  its autocorrelation over two fixes 0.36.
+
+These numbers describe the gap; they are not applied. The figure is strictly
+the receiver's `sAcc` and the sample times: no correction factor, nothing from
+the fusion, nothing measured on a corpus. Its tests are
+`tst_builtins_engine::accelerationAccuracyKnownAnswers` (the formula bit for
+bit, the ends included), `accelerationAccuracyUnavailable`, the descent
+fixture's golden (`tst_builtins_golden`) and
+`tst_plot_format::gnssAccelerationAccuracyIsAnAcceleration`.

@@ -234,6 +234,22 @@ void Calculations::registerGnssCalculations(CalculationRegistry &registry)
     registerGnssDerivative(registry, "accN", "velN");
     registerGnssDerivative(registry, "accE", "velE");
 
+    // GNSS acceleration accuracy (accAcc): the receiver's speed accuracy
+    // carried through the derivative's stencil, the standard deviation of
+    // each acceleration above if the fixes' velocity errors are independent.
+    // Nothing is corrected for how conservative that is (docs/CALCULATIONS.md
+    // section 18 says how much).
+    registerGnss(registry, "accAcc", { gnss("sAcc"), gnss(SessionKeys::Time) },
+        [](const EvaluationContext &ctx) -> std::optional<QVector<double>> {
+            const QVector<double> sAcc = ctx.measurement("GNSS", "sAcc");
+            if (sAcc.isEmpty()) {
+                return std::nullopt;
+            }
+
+            return Calculations::computeDerivativeAccuracy(
+                sAcc, ctx.measurement("GNSS", SessionKeys::Time));
+        });
+
     // GNSS wind-corrected total speed (wcVel)
     registerGnss(registry, "wcVel",
         { gnss("velN"), gnss("velE"), gnss("velD"),

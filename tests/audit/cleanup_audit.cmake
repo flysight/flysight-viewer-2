@@ -68,7 +68,10 @@
 #     channel names are spelled in the registration and the plot rows alone;
 #     the sensor fusion category has twelve plots, the accuracies in the deep
 #     scheme; and the fusion document carries the validation of the model
-#     (items 1001-1065).
+#     (items 1001-1065);
+#   - the GNSS acceleration accuracy is the receiver's speed accuracy through
+#     the derivative's one stencil, named by its calculation and its row, and
+#     drawn in the deep scheme as an acceleration (item 1101).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -1258,6 +1261,41 @@ expect_none("no text says the fused output is interpolated"
   "interpolated linearly onto|states interpolated|interpolation of (the )?optimi[sz]ed GNSS states|interpolated for display|[Dd]isplay-only (linear )?interpolation|not (an|a full) IMU-rate smoothing posterior|distributed correction"
   src tests docs README.md ":!tests/README.md")
 
+# =============================================================================
+# GNSS acceleration accuracy: GNSS/accAcc is the receiver's speed accuracy
+# carried through the derivative's own stencil, plotted in GNSS (Advanced) as
+# an acceleration in the deep scheme of the GNSS accuracies, and documented
+# with the assumption it makes and how conservative that was measured to be.
+# =============================================================================
+
+# ─────────────────────────────── gnss-acceleration-accuracy (item 1101)
+audit_group(gnss-acceleration-accuracy)
+# Allow: none expected. The derivative and its accuracy share one stencil
+# (derivativehelper.cpp, differenceOverStencil()), so the accuracy qualifies
+# the samples the derivative differenced; a second central difference over
+# two intervals is a second authority for the end treatment.
+expect_count("one stencil for the derivative and its accuracy"
+  "\\[i \\+ 1\\] - [A-Za-z]+\\[i - 1\\]" 1 src)
+# Allow: none expected. The name is spelled by its registration and its plot
+# row; a reader names it through the row.
+expect_only("accAcc is named by its calculation and its plot row" "\"accAcc\""
+  "^src/(calculations/gnsscalculations\\.cpp|mainwindow\\.cpp)$" src)
+# The row: GNSS (Advanced), the acceleration type and unit, the deep scheme of
+# the GNSS accuracy rows (S_dk with the deep lightness of its hue's family).
+# Allow: none expected; a change of hue keeps it at least group_a from every
+# row of the category (the spec asks it of the accelerations; hue 200 was
+# Wind-corrected horizontal speed's) and changes this pattern with the row.
+expect_count("the GNSS acceleration accuracy row"
+  "^ *\\{\"GNSS \\(Advanced\\)\", +\"Acceleration accuracy\", +\"m/s\\^2\", +QColor::fromHsl\\(330, S_dk, L_dw\\), +\"GNSS\", +\"accAcc\", +\"acceleration\"\\}"
+  1 src/mainwindow.cpp)
+# The calculations document states the assumption, that it is conservative,
+# and the measurement on the reference recording, each once. Allow: these
+# count LINES; rewrap so that each phrase stays on one line.
+expect_count("the GNSS acceleration accuracy states its assumption"
+  "the two fixes' velocity errors are independent" 1 docs/CALCULATIONS.md)
+expect_count("the GNSS acceleration accuracy states its measurement"
+  "0\\.09 g RMS" 1 docs/CALCULATIONS.md)
+
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 
@@ -1273,9 +1311,9 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # status bar for background work, item = 700 + clause number), 801-863
 # (sensor fusion plots, attitude and the orientation attribute, item = 800 +
 # clause number), 901-940 (the fused state at every IMU sample, item =
-# 900 + clause number) and 1001-1065 (the documented noise model and the
-# accuracy, part 1, item = 1000 + clause number). Four line forms; see the
-# head of the map.
+# 900 + clause number), 1001-1065 (the documented noise model and the
+# accuracy, part 1, item = 1000 + clause number) and 1101 (the GNSS
+# acceleration accuracy, one item). Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -1349,8 +1387,8 @@ else()
             OR (item GREATER_EQUAL 401 AND item LESS_EQUAL 442) OR (item GREATER_EQUAL 501 AND item LESS_EQUAL 563)
             OR (item GREATER_EQUAL 601 AND item LESS_EQUAL 662) OR (item GREATER_EQUAL 701 AND item LESS_EQUAL 754)
             OR (item GREATER_EQUAL 801 AND item LESS_EQUAL 863) OR (item GREATER_EQUAL 901 AND item LESS_EQUAL 940)
-            OR (item GREATER_EQUAL 1001 AND item LESS_EQUAL 1065)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940 and 1001-1065: ${line}")
+            OR (item GREATER_EQUAL 1001 AND item LESS_EQUAL 1065) OR item EQUAL 1101))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065 and 1101: ${line}")
     endif()
   endforeach()
 
@@ -1416,6 +1454,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 1001 1065)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 1101 1101)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

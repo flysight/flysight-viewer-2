@@ -220,6 +220,8 @@ QList<GoldenValue> goldenValues()
       << meas("GNSS", "accD", 296, {{0, 0.0}, {11, 5.0}})
       << meas("GNSS", "accN", 296, {{19, 0.0}})
       << meas("GNSS", "accE", 296, {{19, 0.0}})
+      << meas("GNSS", "accAcc", 296, {{0, 0.70710678118654757}, {19, 0.35355339059327379},
+                                      {295, 0.70710678118654757}})   // sAcc 0.5 at 1 s: sqrt(0.5) / 1 at the ends, / 2 inside
       << meas("GNSS", "wcVel", 296, {{19, 70.710678118654755}})
       << meas("GNSS", "course", 296, {{0, 0.0}, {19, 0.0}, {295, 0.0}})
       << meas("GNSS", "courseRate", 296, {{19, 0.0}})

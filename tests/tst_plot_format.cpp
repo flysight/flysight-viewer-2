@@ -29,6 +29,7 @@ private slots:
     void typedValueIsTheConverterFormat();
     void alongTrackIsAnAcceleration();
     void accelerationAccuracyKeepsItsDigits();
+    void gnssAccelerationAccuracyIsAnAcceleration();
     void untypedValueHasOneDecimal();
     void xAxisSecondsHaveThreeDecimals();
     void nanIsDashes();
@@ -77,6 +78,23 @@ void PlotFormatTest::accelerationAccuracyKeepsItsDigits()
         QCOMPARE(units.getUnitLabel(type), units.getUnitLabel(acceleration));
         QCOMPARE(units.convert(0.0046, type), units.convert(0.0046, acceleration));
         QCOMPARE(units.getPrecision(type), 4);
+    }
+    units.setSystem(previous);
+}
+
+// The GNSS acceleration accuracy (GNSS/accAcc) is a row of the acceleration
+// type: its tenths of a g read at the acceleration's two decimals, as the
+// accelerations it qualifies do, in both unit systems
+void PlotFormatTest::gnssAccelerationAccuracyIsAnAcceleration()
+{
+    UnitConverter &units = UnitConverter::instance();
+    const QString type = QStringLiteral("acceleration");
+    const QString previous = units.currentSystem();
+    for (const QString &system : units.availableSystems()) {
+        units.setSystem(system);
+        // 1.8633 m/s^2 is 0.19 g, the formula's figure on the reference recording
+        QCOMPARE(formatValue(1.8633, type), QStringLiteral("0.19"));
+        QCOMPARE(formatValue(1.8633, type), units.formatValue(1.8633, type));
     }
     units.setSystem(previous);
 }
