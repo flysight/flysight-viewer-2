@@ -150,7 +150,7 @@ QJsonObject scaleObject(const FitResult &fit, const FitCovariance &covariance)
             return QJsonValue::Null;
         QJsonArray array;
         for (int i = first; i < first+3; ++i)
-            array.append(std::sqrt(covariance.globals(9+i, 9+i)));
+            array.append(std::sqrt(covariance.globals(kScaleOffset+i, kScaleOffset+i)));
         return array;
     };
     return QJsonObject{
@@ -171,7 +171,7 @@ QJsonObject accuracyObject(const FitCovariance &covariance, const std::vector<do
     QJsonObject accuracy{
         {"computed", covariance.computed},
         {"failure", covariance.computed ? QJsonValue(QJsonValue::Null)
-                                        : QJsonValue(QString::fromStdString(covariance.failure))},
+                                        : QJsonValue(QString::fromLatin1(kCovarianceFailure))},
         {"heading_prior_sigma_rad", kHeadingPriorSigmaRad},
         {"widening_half_width_s", kWideningHalfWidthS},
         {"max_widening", QJsonValue::Null},

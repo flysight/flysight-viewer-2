@@ -34,6 +34,7 @@
 #include <set>
 #include <string>
 
+#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -4510,7 +4511,6 @@ void FusionKernelTest::covarianceMatchesJointMarginals()
         QVERIFY2(f.fit.converged, name);
         const FitCovariance &c = fixtureCovariance(QLatin1String(name));
         QVERIFY2(c.computed, name);
-        QVERIFY(c.failure.empty());
         const size_t n = f.window.gnssTime.size();
         QCOMPARE(c.node.size(), n);
         QCOMPARE(c.next.size(), n-1);
@@ -4932,7 +4932,14 @@ void FusionKernelTest::wideningGrowsWithAnUnderstatedSigma()
     // GNSS accuracies understated three times over [20, 40) s. Every sample
     // whose window lies inside the stretch, [22.5, 37.5) s, is widened by
     // 2.6 to 3.4, the median within 10 % of 3; every sample farther than
-    // 2.5 s from the stretch by at most 1.25.
+    // 2.5 s from the stretch by at most 1.25. And what is published is
+    // widened by them: the success assembly (assembleSuccess(), the
+    // pipeline's seam after the covariance step) on this fit gives, at every
+    // sample, accHAcc and accDAcc equal to w times the unwidened accuracy of
+    // the reconstruction (reconstructAtImuRate() with the fit's covariance)
+    // and headingAcc and tiltAcc equal to min(180, w times it), bit for bit,
+    // with w > 1 at hundreds of samples; and `accuracy.max_widening` and
+    // `widened_samples` are those widenings' largest and count.
     const Fusion::Channels channels = scaleRecordingAtItsNoise(3);
     const double epoch = prepareInput(channels).epoch;
     const WindowFit f = fitOfChannels(channels);
@@ -4957,6 +4964,40 @@ void FusionKernelTest::wideningGrowsWithAnUnderstatedSigma()
     QVERIFY(*insideLow >= 2.6 && *insideHigh <= 3.4);
     QVERIFY(std::abs(median-3) <= .3);
     QVERIFY(outsideHigh <= 1.25);
+
+    QElapsedTimer published;
+    published.start();
+    const FitCovariance covariance = fitCovariance(f.fit, f.window.gnssTime.size());
+    QVERIFY(covariance.computed);
+    const ImuRateTrajectory out = reconstructAtImuRate(f.window, f.fit, f.tuning, &covariance);
+    QVERIFY(out.time == times);
+    const Fusion::Result result = assembleSuccess(prepareInput(channels), f.account, f.window, f.fit, f.tuning,
+                                                  covariance);
+    QVERIFY(result.outcome == Fusion::Outcome::Succeeded);
+    QVector<double> headingAcc, tiltAcc, accHAcc, accDAcc;
+    double largest = 1;
+    int widened = 0;
+    for (size_t i = 0; i < times.size(); ++i) {
+        const double w = widening(factors[i]);
+        headingAcc.append(std::min(kYawSigmaCapDeg, w*out.headingAcc[i]));
+        tiltAcc.append(std::min(kYawSigmaCapDeg, w*out.tiltAcc[i]));
+        accHAcc.append(w*out.accHAcc[i]);
+        accDAcc.append(w*out.accDAcc[i]);
+        largest = std::max(largest, w);
+        widened += w > 1;
+    }
+    QVERIFY(sameBitsEverywhere(result.headingAcc, headingAcc));
+    QVERIFY(sameBitsEverywhere(result.tiltAcc, tiltAcc));
+    QVERIFY(sameBitsEverywhere(result.accHAcc, accHAcc));
+    QVERIFY(sameBitsEverywhere(result.accDAcc, accDAcc));
+    const QJsonObject accuracy = diagnosticsOf(result).value("accuracy").toObject();
+    QVERIFY(accuracy.value("computed").toBool(false));
+    QVERIFY(accuracy.value("max_widening").toDouble() == largest);
+    QCOMPARE(accuracy.value("widened_samples").toInt(-1), widened);
+    qInfo() << "published:" << widened << "of" << times.size() << "samples widened, largest" << largest << "; took"
+            << published.elapsed() << "ms";
+    QVERIFY(widened > 300);
+    QVERIFY(largest > 2.6);
 }
 
 void FusionKernelTest::accuraciesFiniteAndPositive()
@@ -5075,7 +5116,7 @@ void FusionKernelTest::covarianceFailureLeavesTheFitAsItIs()
 {
     // Clause 34, criterion 8: a covariance step that fails is a result, not a
     // thrown error: computed from a copy of the converged fit whose values
-    // carry a NaN, it reports the fixed failure and no block. Given to the
+    // carry a NaN, it is not computed and has no block. Given to the
     // success assembly (assembleSuccess(), the pipeline's seam after the
     // covariance step) with the real fit, it leaves the four accuracies
     // empty (which the registration's publish() leaves unset, and of which
@@ -5095,9 +5136,6 @@ void FusionKernelTest::covarianceFailureLeavesTheFitAsItIs()
     broken.values.update(V(0), Vector3(std::numeric_limits<double>::quiet_NaN(), 0, 0));
     const FitCovariance failed = fitCovariance(broken, f.window.gnssTime.size());
     QVERIFY(!failed.computed);
-    QCOMPARE(QString::fromStdString(failed.failure),
-             QStringLiteral("covariance unavailable: the factorization of the converged graph failed"));
-    QCOMPARE(QString::fromLatin1(kCovarianceFailure), QString::fromStdString(failed.failure));
     QVERIFY(failed.node.empty() && failed.next.empty() && failed.global.empty());
 
     const Fusion::Result without = assembleSuccess(prepareInput(channels), f.account, f.window, f.fit, f.tuning, failed);
@@ -5117,6 +5155,7 @@ void FusionKernelTest::covarianceFailureLeavesTheFitAsItIs()
     QCOMPARE(accuracy.value("computed").toBool(true), false);
     QCOMPARE(accuracy.value("failure").toString(),
              QStringLiteral("covariance unavailable: the factorization of the converged graph failed"));
+    QCOMPARE(QString::fromLatin1(kCovarianceFailure), accuracy.value("failure").toString());
     QCOMPARE(accuracy.value("heading_prior_sigma_rad").toDouble(), 1000.);
     QCOMPARE(accuracy.value("widening_half_width_s").toDouble(), 2.5);
     for (const char *key : {"max_widening", "widened_samples", "undetermined_heading_samples"})

@@ -33,14 +33,12 @@ namespace {
 // The globals g = (B(0), T(0), S(0)): each key with its offset in g and its
 // dimension.
 struct Global { gtsam::Key key; int offset, dimension; };
-const Global kGlobals[] = {{B(0), 0, 6}, {T(0), 6, 3}, {S(0), 9, 6}};
+const Global kGlobals[] = {{B(0), kBiasOffset, 6}, {T(0), kSlopeOffset, 3}, {S(0), kScaleOffset, 6}};
 
-/// The failed result: no block, the fixed text.
+/// The failed result: not computed, no block.
 FitCovariance failed()
 {
-    FitCovariance c;
-    c.failure = kCovarianceFailure;
-    return c;
+    return FitCovariance();
 }
 
 /// The linearized converged graph with the heading prior on X(0): a 1x6 row on
@@ -242,12 +240,7 @@ FitCovariance fitCovariance(const FitResult &fit, size_t states)
 
 AttitudeAccuracy attitudeAccuracy(const gtsam::Matrix3 &navigation)
 {
-    const auto degrees = [](double variance) {
-        if (!std::isfinite(variance) || variance < 0)
-            return kYawSigmaCapDeg;
-        return std::min(std::sqrt(variance)*180/kPi, kYawSigmaCapDeg);
-    };
-    return {degrees(navigation(2, 2)), degrees(navigation(0, 0)+navigation(1, 1))};
+    return {cappedSigmaDeg(navigation(2, 2)), cappedSigmaDeg(navigation(0, 0)+navigation(1, 1))};
 }
 
 AccelerationAccuracy accelerationAccuracy(const gtsam::Matrix9 &joint, const gtsam::Rot3 &attitude,
@@ -260,9 +253,11 @@ AccelerationAccuracy accelerationAccuracy(const gtsam::Matrix9 &joint, const gts
     gtsam::Matrix9 toNavigation = gtsam::Matrix9::Identity();
     toNavigation.block<3, 3>(0, 0) = R;
     gtsam::Matrix9 q = toNavigation*joint*toNavigation.transpose();
-    // An undetermined heading enters at most at the cap's variance, pi^2.
-    if (q(2, 2) > kPi*kPi) {
-        const double shrink = kPi/std::sqrt(q(2, 2));
+    // An undetermined heading enters at most at the cap's variance (the cap in
+    // radians, pi, squared).
+    constexpr double cap = kYawSigmaCapDeg*kPi/180;
+    if (q(2, 2) > cap*cap) {
+        const double shrink = cap/std::sqrt(q(2, 2));
         q.row(2) *= shrink;
         q.col(2) *= shrink;
     }

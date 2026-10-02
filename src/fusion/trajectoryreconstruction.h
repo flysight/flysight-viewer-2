@@ -30,8 +30,7 @@ namespace FlySight::Fusion::Detail {
 
 /// Navigation states in a standard container (see Vectors).
 using NavStates = std::vector<gtsam::NavState, Eigen::aligned_allocator<gtsam::NavState>>;
-/// 9x9 and 9x6 matrices in a standard container.
-using Matrices = std::vector<gtsam::Matrix9, Eigen::aligned_allocator<gtsam::Matrix9>>;
+/// 9x6 matrices in a standard container (Matrices, the 9x9, is fitcovariance.h's).
 using Matrices96 = std::vector<gtsam::Matrix96, Eigen::aligned_allocator<gtsam::Matrix96>>;
 
 /// One fix interval of the IMU-rate reconstruction, from fix k to fix k+1

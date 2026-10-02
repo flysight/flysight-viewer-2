@@ -1,7 +1,6 @@
 #ifndef FLYSIGHT_FUSION_FITCOVARIANCE_H
 #define FLYSIGHT_FUSION_FITCOVARIANCE_H
 
-#include <string>
 #include <vector>
 
 #include <gtsam/geometry/Rot3.h>
@@ -27,6 +26,12 @@ namespace FlySight::Fusion::Detail {
 using Matrix9x15 = Eigen::Matrix<double, 9, 15>;
 using Matrix15 = Eigen::Matrix<double, 15, 15>;
 using Matrix33 = Eigen::Matrix<double, 33, 33>;
+/// 9x9 matrices in a standard container (see Vectors).
+using Matrices = std::vector<gtsam::Matrix9, Eigen::aligned_allocator<gtsam::Matrix9>>;
+
+/// Where each global starts in g (FitCovariance), and so in the rows and
+/// columns of FitCovariance::globals and the columns of FitCovariance::global.
+constexpr int kBiasOffset = 0, kSlopeOffset = 6, kScaleOffset = 9;
 
 /// The sigma, rad, of the prior on the first fix's heading that the covariance
 /// step adds to its linearized graph, and only there: it keeps a heading the
@@ -38,7 +43,8 @@ constexpr double kHeadingPriorSigmaRad = 1000;
 /// sample (and at least the two around it).
 constexpr double kWideningHalfWidthS = 2.5;
 
-/// The covariance step's failure, the diagnostics' `accuracy.failure`.
+/// The covariance step's failure, the diagnostics' `accuracy.failure` when
+/// the covariance was not computed: its one cause.
 extern const char kCovarianceFailure[];
 
 /// The covariance of a converged fit, in the graph's tangent: a fix state x_k
@@ -47,12 +53,11 @@ extern const char kCovarianceFailure[];
 /// accelerometer, gyro), T(0) (3) and S(0) (6: accelerometer x, y, z, gyro),
 /// 15 numbers.
 struct FitCovariance {
-    bool computed = false;      ///< false: every block is empty and `failure` says why
-    std::string failure;        ///< kCovarianceFailure when not computed; empty otherwise
-    std::vector<gtsam::Matrix9, Eigen::aligned_allocator<gtsam::Matrix9>> node;   ///< Sigma_k, per fix
-    std::vector<gtsam::Matrix9, Eigen::aligned_allocator<gtsam::Matrix9>> next;   ///< Sigma_(k,k+1) = Cov(x_k, x_k+1), per fix but the last
-    std::vector<Matrix9x15, Eigen::aligned_allocator<Matrix9x15>> global;          ///< Sigma_(k,g) = Cov(x_k, g), per fix
-    Matrix15 globals = Matrix15::Zero();                                           ///< Sigma_gg
+    bool computed = false;      ///< false: the step failed (kCovarianceFailure) and every block is empty
+    Matrices node;              ///< Sigma_k, per fix
+    Matrices next;              ///< Sigma_(k,k+1) = Cov(x_k, x_k+1), per fix but the last
+    std::vector<Matrix9x15, Eigen::aligned_allocator<Matrix9x15>> global;   ///< Sigma_(k,g) = Cov(x_k, g), per fix
+    Matrix15 globals = Matrix15::Zero();                                    ///< Sigma_gg
 
     /// The 33x33 joint covariance of z_k = (x_k, x_k+1, B(0), T(0), S(0)), for
     /// k < the number of fixes - 1. Requires `computed`.
@@ -71,7 +76,7 @@ struct FitCovariance {
 /// R^-1 R^-T of the QR of that marginal. The tree is then discarded. Not the
 /// library's joint marginals, which factorize again for every query.
 ///
-/// Fails (computed false, failure kCovarianceFailure) when linearization or
+/// Fails (computed false: kCovarianceFailure) when linearization or
 /// elimination throws a std::exception, when a block is not finite, or when a
 /// diagonal entry of a fix's or the globals' covariance is not positive; it
 /// never throws then. std::bad_alloc propagates, as run() promises. An

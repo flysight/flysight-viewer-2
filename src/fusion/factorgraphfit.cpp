@@ -423,10 +423,7 @@ double yawSigmaDeg(const gtsam::NonlinearFactorGraph &graph, const gtsam::Values
         const gtsam::Matrix3 body = cov.block<3, 3>(0, 0);
         const gtsam::Matrix3 R = values.at<gtsam::Pose3>(key).rotation().matrix();
         const gtsam::Matrix3 navigation = R*body*R.transpose();
-        const double variance = navigation(2, 2);
-        if (!std::isfinite(variance) || variance < 0)
-            return kYawSigmaCapDeg;
-        return std::min(std::sqrt(variance)*180/kPi, kYawSigmaCapDeg);
+        return cappedSigmaDeg(navigation(2, 2));
     } catch (const gtsam::IndeterminantLinearSystemException &) {
         // A rank-deficient system: the yaw is undetermined.
         return kYawSigmaCapDeg;

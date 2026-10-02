@@ -75,24 +75,25 @@ public:
         J.block<3, 9>(0, 0) = (m_s.byStart[j].topRows<3>()+K*m_endByStart)*m_startToNav;
         J.block<3, 9>(0, 9) = K*m_s.byFitted*m_endToNav;
         const Eigen::Matrix<double, 3, 6> byBias = m_s.byBias[j].topRows<3>()+K*m_endByBias;
-        J.block<3, 6>(0, 18) = byBias;
-        J.block<3, 3>(0, 24) = byBias.rightCols<3>()*m_dT;
-        J.block<3, 6>(0, 27) = attitudeRetraction*m_s.byScale[j]+K*m_endByScale;
+        // g follows the two fix states in z_k.
+        J.block<3, 6>(0, 18+kBiasOffset) = byBias;
+        J.block<3, 3>(0, 18+kSlopeOffset) = byBias.rightCols<3>()*m_dT;
+        J.block<3, 6>(0, 18+kScaleOffset) = attitudeRetraction*m_s.byScale[j]+K*m_endByScale;
 
         gtsam::Matrix3 attitude = J*m_z*J.transpose()+conditional;
         attitude = (attitude+attitude.transpose())/2;
         const Eigen::Matrix<double, 3, 15> withGlobals = J*m_z.rightCols<15>();
-        // The accelerometer's parts of g: B(0) columns 0..2, S(0) columns 9..11.
+        // The accelerometer's parts of g: the first three of B(0) and of S(0).
         gtsam::Matrix9 joint;
         joint.block<3, 3>(0, 0) = attitude;
-        joint.block<3, 3>(0, 3) = withGlobals.block<3, 3>(0, 0);
-        joint.block<3, 3>(0, 6) = withGlobals.block<3, 3>(0, 9);
+        joint.block<3, 3>(0, 3) = withGlobals.block<3, 3>(0, kBiasOffset);
+        joint.block<3, 3>(0, 6) = withGlobals.block<3, 3>(0, kScaleOffset);
         joint.block<3, 3>(3, 0) = joint.block<3, 3>(0, 3).transpose();
         joint.block<3, 3>(6, 0) = joint.block<3, 3>(0, 6).transpose();
-        joint.block<3, 3>(3, 3) = m_globals.block<3, 3>(0, 0);
-        joint.block<3, 3>(3, 6) = m_globals.block<3, 3>(0, 9);
-        joint.block<3, 3>(6, 3) = m_globals.block<3, 3>(9, 0);
-        joint.block<3, 3>(6, 6) = m_globals.block<3, 3>(9, 9);
+        joint.block<3, 3>(3, 3) = m_globals.block<3, 3>(kBiasOffset, kBiasOffset);
+        joint.block<3, 3>(3, 6) = m_globals.block<3, 3>(kBiasOffset, kScaleOffset);
+        joint.block<3, 3>(6, 3) = m_globals.block<3, 3>(kScaleOffset, kBiasOffset);
+        joint.block<3, 3>(6, 6) = m_globals.block<3, 3>(kScaleOffset, kScaleOffset);
         return joint;
     }
 

@@ -1,6 +1,8 @@
 #ifndef FLYSIGHT_FUSION_FACTORGRAPHFIT_H
 #define FLYSIGHT_FUSION_FACTORGRAPHFIT_H
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -210,6 +212,18 @@ FitResult fitFactorGraph(const Samples &samples, const InitialState &initial, co
 /// (fitcovariance.h). An angle on a circle, so nothing above it says more, and
 /// it reads "undetermined".
 constexpr double kYawSigmaCapDeg = 180;
+
+/// A navigation-frame attitude variance, rad^2, as the sigma the kernel
+/// reports: its square root in degrees, capped at kYawSigmaCapDeg. A variance
+/// that is not finite, or is negative, says the angle is undetermined and
+/// reads as the cap. The one conversion of yawSigmaDeg() and the published
+/// heading and tilt (attitudeAccuracy(), fitcovariance.h).
+inline double cappedSigmaDeg(double variance)
+{
+    if (!std::isfinite(variance) || variance < 0)
+        return kYawSigmaCapDeg;
+    return std::min(std::sqrt(variance)*180/kPi, kYawSigmaCapDeg);
+}
 
 /// The marginal standard deviation, in degrees, of the rotation of pose `key`
 /// about the navigation vertical, from `graph` linearized at `values`
