@@ -99,16 +99,26 @@ bool onLattice(double value, double step, double tolerance)
     return std::abs(value-std::round(value/step)*step) <= tolerance;
 }
 
-bool allOnLattice(const QVector<double> &x, const QVector<double> &y, const QVector<double> &z,
-                  double step, double tolerance)
+/// Whether the readings show the lattice of `step`: all but one in a
+/// thousand of the three axes' values lie on it. Not every one: real
+/// recordings carry a few readings off their lattice (24-09-05/11-16-56 has
+/// two of 64,686, nine units of the last decimal off at 513 deg/s), and one
+/// such reading must not reject a recording whose range the other thousands
+/// show plainly. One in a thousand is far above what a healthy recording
+/// has (the corpus's recordings show none or a handful in tens of thousands)
+/// and far below what a wrong range leaves off (about a half of them).
+bool readingsShowLattice(const QVector<double> &x, const QVector<double> &y, const QVector<double> &z,
+                         double step, double tolerance)
 {
+    qsizetype off = 0, total = 0;
     for (const QVector<double> *axis : {&x, &y, &z}) {
+        total += axis->size();
         for (double value : *axis) {
             if (!onLattice(value, step, tolerance))
-                return false;
+                ++off;
         }
     }
-    return true;
+    return off*1000 <= total;
 }
 
 } // namespace
@@ -162,7 +172,7 @@ double rangeShownByReadings(ImuSensor sensor, const QVector<double> &x, const QV
         // The conversion layer multiplies g by standard gravity.
         const double tolerance = kAccelerometerUnitG*kStandardGravity;
         for (const AccelerometerRange &range : kAccelerometerRanges) {
-            if (allOnLattice(x, y, z, latticeStep(range), tolerance))
+            if (readingsShowLattice(x, y, z, latticeStep(range), tolerance))
                 return range.rangeG;
         }
     } else {
@@ -173,7 +183,7 @@ double rangeShownByReadings(ImuSensor sensor, const QVector<double> &x, const QV
         const GyroRange &any = kGyroRanges[0];
         const double tolerance = kGyroUnitDegS*(any.sensitivityDegS/(any.rangeDegS/kCountsPerRange));
         for (const GyroRange &range : kGyroRanges) {
-            if (allOnLattice(x, y, z, latticeStep(range), tolerance))
+            if (readingsShowLattice(x, y, z, latticeStep(range), tolerance))
                 return range.rangeDegS;
         }
     }

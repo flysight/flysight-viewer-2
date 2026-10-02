@@ -97,7 +97,7 @@ constexpr int kFitTimeoutMs = 120000;
 const QString kSolverFailureReason =
     QStringLiteral("Batch fusion did not converge (iteration limit); sensor fusion unavailable");
 const QString kSolverFailureDiagnostics = QStringLiteral(
-    "{\"algorithm\":\"batch-temperature-bias-v6\","
+    "{\"algorithm\":\"batch-temperature-bias-v7\","
     "\"failure\":\"Batch fusion did not converge (iteration limit); sensor fusion unavailable\"}");
 
 // The four accuracy channels, which a success whose covariance could not be

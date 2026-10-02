@@ -1,6 +1,6 @@
 {
     "diagnostics": {
-        "algorithm": "batch-temperature-bias-v6",
+        "algorithm": "batch-temperature-bias-v7",
         "failure": "Timestamps must be finite and strictly increasing"
     },
     "fixture": "reject_time_order",

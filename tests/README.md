@@ -1626,7 +1626,7 @@ M51; the measurement tree of M44 lists twelve).
 | 1005 | 5 | the IMU's low-pass filters have no key: that firmware's fixed setting (the gyro's LPF2 at the cutoff of its 12.5 Hz rate and no LPF1, the accelerometer at its ODR bandwidth) is documented as part of the default, with the firmware version | `tst_sensor_configuration::keysAndValueForms`; `audit sensor-configuration` |
 | 1006 | 5, as settled | the dynamic model, the GNSS rate and the barometer's, humidity sensor's and magnetometer's rates are read and stored with the other attributes; nothing uses them, and they are not inputs of the fit | `tst_importer::configurationStoredAsRecorded`; `tst_fusion_session::registrationShape`; `audit sensor-configuration` |
 | 1007 | 5, 10 | the configuration reaches the kernel as part of its channels, as the origin does: the fit declares the four IMU keys as inputs, as it declares the origin, the input adapter carries them, the kernel reads no preference or constant for them, and nothing above the registration changes | `tst_fusion_session::registrationShape`, `configurationReachesTheKernel`; `tst_fusion_runner::successMatchesDirectRun`; `tst_fusion_store::dependencyEditDropsRecord`; `audit solver-confinement` |
-| 1008 | 5, as settled | whether stated or defaulted, each IMU sensor's range is checked against the lattice of its readings (the gyro's sensitivity at the range, 70 mdps at +/-2000 deg/s, 1.14688 times the range over 32768; the accelerometer's range over 32768, which the printed sensitivity rounds; in effective units, within the rounding of the file's decimals): the coarsest range whose lattice every reading fits must be the configured one; otherwise the fit rejects the recording with a reason that names the range stated and the range the values show, and does not guess | `tst_fusion_kernel::latticeCheckFindsTheCoarsestRange` (each range's lattice, a legacy-style truncated reading, the tolerance's edges, no range, the texts); `tst_fusion_golden::rejectionFixturesMatchGolden` (`reject_lattice`); `manual M47` |
+| 1008 | 5, as settled | whether stated or defaulted, each IMU sensor's range is checked against the lattice of its readings (the gyro's sensitivity at the range, 70 mdps at +/-2000 deg/s, 1.14688 times the range over 32768; the accelerometer's range over 32768, which the printed sensitivity rounds; in effective units, within the rounding of the file's decimals): the coarsest range whose lattice all but one in a thousand of the readings fit must be the configured one (a few readings off the lattice do not decide); otherwise the fit rejects the recording with a reason that names the range stated and the range the values show, and does not guess | `tst_fusion_kernel::latticeCheckFindsTheCoarsestRange` (each range's lattice, a legacy-style truncated reading, the tolerance's edges, a few readings off the lattice among thousands, no range, the texts); `tst_fusion_golden::rejectionFixturesMatchGolden` (`reject_lattice`); `manual M47` |
 | 1009 | 10, as settled | the lattice check is a kernel validation rule, one of the rules that decide whether a recording can be fitted, and reads the readings as the kernel receives them, before any correction of its own | `tst_fusion_kernel::latticeCheckFindsTheCoarsestRange` (a reading outside the fitted window counts), `configurationChecksComeAfterTheOthers` |
 | 1010 | 5, as settled | a logged IMU interval that disagrees with a stated rate by more than the oscillator's tolerance (10 %) is a rejection that names both | `tst_fusion_kernel::rateCheckToleratesTenPercent` (9.9 % passes, 10.1 % rejects, the accelerometer first, a gyro-only mismatch); `tst_fusion_golden::rejectionFixturesMatchGolden` (`reject_rate`); `tst_fusion_session::configurationReachesTheKernel` (the default path of a 100 Hz recording) |
 | 1011 | 6, as settled | the per-sample noise of each sensor and axis is `sqrt(density^2 x bandwidth + step^2 / 12)`: the datasheet's density at the configured range, the datasheet's bandwidth for the configured rate and filter, and the quantization step at the range (the gyro's sensitivity, 70 mdps at +/-2000 deg/s, 1.14688 times the range over 32768; the accelerometer's range over 32768, which the printed sensitivity rounds) | `tst_fusion_kernel::noiseFollowsTheTable` |
@@ -1661,7 +1661,7 @@ M51; the measurement tree of M44 lists twelve).
 | 1040 | 8 | the diagnostics show the configuration the fit ran under | `tst_fusion_kernel::diagnosticsReportTheNoiseModel`; `tst_fusion_golden::successFixturesMatchGolden`; `manual M47` |
 | 1041 | 8, 9 | the first start after the change finds every stored fit stale at its recording's load and recomputes it when something switched on needs it, counted in the status bar as any computation | `tst_fusion_store::codeStampChangeDropsRecordOnLoad` (a record stamped `batch-temperature-bias-v5`); `manual M48` |
 | 1042 | 9 | the fit's outputs gain the four channels, and the record stores and restores them with the rest, in the record format as it is | `tst_fusion_store::restoredAfterRestartIsBitIdentical`, `restoredAfterEvictionIsBitIdentical` (twenty-one channels); `tst_fusion_jobs::jobPublishesAllOutputsTogether` (twenty-two outputs) |
-| 1043 | 9 | the algorithm string changes once, for the whole specification | `tst_fusion_session::registrationShape` (`batch-temperature-bias-v6`); `audit stored-results` |
+| 1043 | 9 | the algorithm string changes once, for the whole specification | `tst_fusion_session::registrationShape` (`batch-temperature-bias-v7`: `v6` for the specification, `v7` for the lattice rule's fixup after it); `audit stored-results` |
 | 1044 | 9, as settled | the golden fixtures are captured again with the existing tool at the end of each phase that changes numerical results; their time axes are unchanged and checked byte for byte; the last capture's comparison covers the new channels, the scale factors and the configuration in the diagnostics | `tst_fusion_golden::successFixturesMatchGolden` (twenty-one columns), `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; section 11's history paragraphs (the `_time` columns byte-identical at each capture) |
 | 1045 | 9 | the fixtures state their configuration explicitly, so that the stated path (the kernel's and the sessions' fixtures) and the default path (a session without the keys) are both exercised | `tst_fusion_session::configurationReachesTheKernel`, `naturalSessionEndToEnd`, `inputsAreBitIdenticalToFixture`; `tst_fusion_golden::successFixturesMatchGolden` |
 | 1046 | 10 | the kernel derives its noise from the configuration in one unit, the only place the datasheet table exists in code | `tst_fusion_kernel::noiseFollowsTheTable`, `configurationWithoutEntryIsRejected`; `audit noise-model` |
@@ -1802,7 +1802,7 @@ takes about a second. It fails, listing **all** violations, when
   `CMakeLists.txt`; the silent cancellation
   poll or the retired single-anchor initial-attitude type reappears in `src`
   or `tests`; a retired constant-bias algorithm string (the `v1` / `v2`
-  strings the goldens once carried; the goldens say `batch-temperature-bias-v6`,
+  strings the goldens once carried; the goldens say `batch-temperature-bias-v7`,
   and a hit under `tests/data/fusion` means a stale capture) appears in `src`,
   `tests`, `docs` or `README.md`; the name of the branch the kernel was ported
   from appears anywhere but in this file's historical notes and in the
@@ -2188,6 +2188,16 @@ factors at their prior's 0.01) and `limitations`. What did not: every number
 there was, the eleven rejection goldens, and the time axis (`coarse_linear`
 160 lines, `coarse_maneuver` 540, `stationary_spin` 995, each `_time` column
 byte-identical).
+
+The capture of 2026-10-01 (the lattice rule, a fixup after part 1): the
+range a recording shows is the coarsest lattice all but one in a thousand of
+its readings fit, where before every reading had to; two reference
+recordings (`24-09-05/11-16-56`, `24-09-04/16-16-09`) with one or two gyro
+readings nine units off at 500 deg/s had been rejected. The algorithm string
+changed to `batch-temperature-bias-v7` so that a stored rejection from
+before the rule is tried again. What changed: `algorithm` in all fourteen
+`.json` files and nothing else; every channel file and the time axes are
+byte-identical to the previous capture.
 
 ### Fixtures
 
@@ -2608,7 +2618,8 @@ What changes, and what it means:
   fixture's numbers or texts. A phase that changes the `algorithm` string
   changes all fourteen `.json` files; the eleven `reject_*.json` otherwise
   change only when a rejection reason changes. The `algorithm` string is
-  `batch-temperature-bias-v6` since the documented noise model; a capture
+  `batch-temperature-bias-v7` since the lattice rule (`v6` was the documented
+  noise model); a capture
   that prints another string is from a stale build.
 - Two captures of the same build are byte-identical; the tool verifies this
   in-process and refuses to write otherwise (exit 3).
@@ -4855,9 +4866,11 @@ row of section 9 and the map.
    range, 70 mdps at +/-2000 deg/s, 1.14688 times the range over 32768; the
    accelerometer's range over 32768, which the printed sensitivity rounds; in
    effective units, within the rounding of the file's decimals): the coarsest
-   range whose lattice every reading fits must be the configured one;
-   otherwise the fit rejects the recording with a reason that names the range
-   stated and the range the values show, and does not guess.
+   range whose lattice all but one in a thousand of the readings fit must be
+   the configured one (a real recording carries a few readings off its
+   lattice, and they do not decide); otherwise the fit rejects the recording
+   with a reason that names the range stated and the range the values show,
+   and does not guess.
 9. (10, as settled) The lattice check is a kernel validation rule, one of the
    rules that decide whether a recording can be fitted, and reads the
    readings as the kernel receives them, before any correction of its

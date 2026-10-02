@@ -146,8 +146,9 @@ accelerometer (16 / 32768 g at +/-16 g), the datasheet's sensitivity for the
 gyro (70 mdps at +/-2000 deg/s, which the legacy correction of
 [DATA_SCHEMA.md](DATA_SCHEMA.md), section 4, restores for a legacy file). The
 readings of a range therefore lie on a lattice of multiples of its step, and
-the coarsest range whose lattice every reading of the three axes fits is the
-range the recording shows; it must be the configured one, or the fit rejects
+the coarsest range whose lattice all but one in a thousand of the readings of
+the three axes fit is the range the recording shows; it must be the
+configured one, or the fit rejects
 the recording naming both, and does not guess. The check reads every reading
 as the kernel receives it (effective values in m/s^2 and deg/s, inside the
 fitted window or not), before any correction of the kernel's own. A reading
@@ -158,7 +159,12 @@ half of one, because firmware v2023.09.22 truncates: the recording `17-26-24`
 (24,511 samples) has residuals up to 63/64 and 255/256 of a unit, at least
 three times below half the finest step. Against the printed 0.488 mg/LSB the
 same file would be 2.4e-3 m/s^2 off: the lattice is the range over 32768, as
-the firmware writes it, not the printed sensitivity.
+the firmware writes it, not the printed sensitivity. Not every reading has
+to fit: a real recording carries a few that do not (`24-09-05/11-16-56` has
+two of 64,686 gyro readings nine units of the last decimal off, at 513
+deg/s, and `24-09-04/16-16-09` one of 32,880), and a wrong range leaves about
+half of the readings off, so one in a thousand separates the two with room
+on both sides.
 
 **The rate.** The median logged IMU interval of the whole recording must be
 within 10 % of the nominal interval, one over the rate, of each of
@@ -681,7 +687,7 @@ about d^2/2R at a distance d from the origin (R the Earth's radius), some
 The attribute `_FUSION_DIAGNOSTICS` is compact JSON. After a successful fit
 its top-level keys are, grouped:
 
-- *identity and audit*: `algorithm` (`batch-temperature-bias-v6`), `input`
+- *identity and audit*: `algorithm` (`batch-temperature-bias-v7`), `input`
   (the input audit: `epoch_utc_s`, `imu_count`, `gnss_count`, `origin_index`,
   `origin`, `height_method`, `time_method`) and `configuration` (the
   configuration the fit ran under: `accel_fs_g`, `gyro_fs_deg_s`,
@@ -945,8 +951,9 @@ success, a rejection or a solver failure. It is restored bit for bit when the
 recording is loaded, and the restored result is indistinguishable from a fresh
 one; the record holds the four accuracies with the state (none when the
 covariance could not be computed). Its code stamp is the algorithm string of the diagnostics
-(`batch-temperature-bias-v6` since the documented noise model, `v5` having
-been the mid-step rotation of the accelerometer reading): a
+(`batch-temperature-bias-v7` since the lattice rule let a few readings off
+the lattice pass, `v6` having been the documented noise model and `v5` the
+mid-step rotation of the accelerometer reading): a
 change that can alter what the fit returns changes that string, and every
 stored fit is then dropped at its recording's next load. So the first start
 after such an update finds every stored fit stale when its recording is

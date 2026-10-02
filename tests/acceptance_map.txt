@@ -3010,7 +3010,7 @@
 1007 tst_fusion_store dependencyEditDropsRecord
 1007 audit solver-confinement
 
-# 1008 - (5, as settled) whether stated or defaulted, each IMU sensor's range is checked against the lattice of its readings (the gyro's sensitivity at the range, 70 mdps at +/-2000 deg/s, 1.14688 times the range over 32768; the accelerometer's range over 32768, which the printed sensitivity rounds; in effective units, within the rounding of the file's decimals): the coarsest range whose lattice every reading fits must be the configured one; otherwise the fit rejects the recording with a reason that names the range stated and the range the values show, and does not guess
+# 1008 - (5, as settled) whether stated or defaulted, each IMU sensor's range is checked against the lattice of its readings (the gyro's sensitivity at the range, 70 mdps at +/-2000 deg/s, 1.14688 times the range over 32768; the accelerometer's range over 32768, which the printed sensitivity rounds; in effective units, within the rounding of the file's decimals): the coarsest range whose lattice all but one in a thousand of the readings fit must be the configured one (a few readings off the lattice do not decide); otherwise the fit rejects the recording with a reason that names the range stated and the range the values show, and does not guess
 1008 tst_fusion_kernel latticeCheckFindsTheCoarsestRange
 1008 tst_fusion_golden rejectionFixturesMatchGolden
 1008 manual M47

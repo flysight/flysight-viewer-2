@@ -1,6 +1,6 @@
 {
     "diagnostics": {
-        "algorithm": "batch-temperature-bias-v6",
+        "algorithm": "batch-temperature-bias-v7",
         "failure": "ACCEL_ODR_HZ states 12.5 Hz but the IMU is logged at 100.0 Hz; sensor fusion unavailable"
     },
     "fixture": "reject_rate",

@@ -1354,6 +1354,25 @@ void FusionKernelTest::latticeCheckFindsTheCoarsestRange()
     QVERIFY(same(gyroRange({gyroTolerance}, {0}, {0}), 2000));
     QVERIFY(same(gyroRange({1.5*gyroTolerance}, {0}, {0}), NaN));
 
+    // A few readings off the lattice among thousands do not decide: all but
+    // one in a thousand must fit. 24-09-05/11-16-56 has two gyro readings of
+    // 64,686 nine units off at 513 deg/s and was rejected before this rule.
+    // Here 3000 readings on the +/-2000 lattice with three off (one in a
+    // thousand) still show it, and four off show no range at all; a wrong
+    // range leaves about half off, nowhere near the line. The offset,
+    // 4.4e-3 deg/s, is half the finest step, so an offset reading lies on
+    // no range's lattice.
+    {
+        QVector<double> axis(1000);
+        for (int i = 0; i < 1000; ++i)
+            axis[i] = (2*i+1)*70e-3;
+        QVector<double> a = axis, b = axis, c = axis;
+        a[10] += 4.4e-3;  b[500] += 4.4e-3;  c[999] -= 4.4e-3;
+        QVERIFY(same(gyroRange(a, b, c), 2000));
+        a[11] += 4.4e-3;
+        QVERIFY(same(gyroRange(a, b, c), NaN));
+    }
+
     // The kernel rule names the range stated and the range shown, or none.
     Fusion::Channels c = toChannels(fusionFixture(QStringLiteral("coarse_linear")));
     const Fusion::Channels linear = c;
@@ -2187,7 +2206,7 @@ void FusionKernelTest::biasSettledByCostTest()
     const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
     QCOMPARE(seed.value("converged").toBool(false), true);
     QCOMPARE(seed.value("iterations").toInt(), int(trace.history.size()));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v6"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v7"));
 
     // The quality metrics recomputed from the residuals array: 28 states, so
     // 28 position and velocity factors of dimension 3 and 27 IMU factors of
@@ -2372,7 +2391,7 @@ void FusionKernelTest::failureDiagnosticsShape()
         const QJsonObject diagnostics = failureDiagnostics(QString::fromLatin1(failure.failure), &s);
         QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure"),
                                                   QStringLiteral("stopping")}));
-        QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v6"));
+        QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v7"));
         QCOMPARE(diagnostics.value("failure").toString(), QString::fromLatin1(failure.failure));
         const QJsonObject stopping = diagnostics.value("stopping").toObject();
         QCOMPARE(stopping.value("rule").toString(), QString::fromLatin1(failure.rule));
@@ -3195,7 +3214,7 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     const Fusion::Result result = runPipeline(toChannels(f), t, Checkpoint(), &trace);
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
     const QJsonObject diagnostics = diagnosticsOf(result);
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v6"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v7"));
     const QJsonObject gyroBias = diagnostics.value("model").toObject().value("gyro_bias").toObject();
     const QJsonArray b1 = gyroBias.value("b1_rad_s_per_degc").toArray();
     QCOMPARE(b1.size(), 3);

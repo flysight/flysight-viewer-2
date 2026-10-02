@@ -2276,7 +2276,8 @@ input and the stored record read.
 (`src/fusion/fusion.h`), the same string as the diagnostics' `"algorithm"`. The
 literal exists once in `src/`, in that header. Change it whenever a change can
 alter what the fit returns for the same channels; that drops every stored fit.
-It is `batch-temperature-bias-v6` since the documented noise model (the
+It is `batch-temperature-bias-v7` since the lattice check let a few readings
+off the lattice pass (`v6` was the documented noise model; the
 IMU's noise from its datasheet at the recording's configuration, and the
 checks of the configuration against the readings; `v5` was the mid-step
 rotation of the accelerometer reading), so the first start after that update

@@ -67,9 +67,11 @@ ImuNoise imuNoise(const ImuConfiguration &configuration);
 
 enum class ImuSensor { Accelerometer, Gyroscope };
 
-/// The coarsest full-scale range of `sensor` (g or deg/s) whose lattice every
-/// value of `x`, `y` and `z` fits, the three axes together; NaN when none
-/// does. The values are in the units of Channels (m/s^2, deg/s), as the
+/// The coarsest full-scale range of `sensor` (g or deg/s) whose lattice all
+/// but one in a thousand of the values of `x`, `y` and `z` fit, the three
+/// axes together; NaN when none does. (A real recording carries a few
+/// readings off its lattice; they must not decide.) The values are in the
+/// units of Channels (m/s^2, deg/s), as the
 /// kernel receives them and before any correction of its own. A value fits a
 /// lattice when it is within one unit of the last decimal the file writes (of
 /// g, of deg/s), carried through the conversion layer's largest factor, of a

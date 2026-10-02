@@ -619,7 +619,7 @@ void FusionJobsTest::columnOnFusionOutputIsCachedFromRecord()
     QVERIFY(isNear(cachedRoll().value(kRollColumn).toDouble(), liveRoll));
     QVERIFY(indexValue("a", column).isDouble());
     QVERIFY(isNear(indexValue("a", column).toDouble(), liveRoll));
-    const QJsonObject stamp{{QStringLiteral("builtin.fusion.fit"), QStringLiteral("batch-temperature-bias-v6")}};
+    const QJsonObject stamp{{QStringLiteral("builtin.fusion.fit"), QStringLiteral("batch-temperature-bias-v7")}};
     QCOMPARE(indexRecordStamp("a"), QJsonValue(stamp));
     QVERIFY(showsNumber());
 
@@ -857,7 +857,7 @@ void FusionJobsTest::workerRefillsColumnFromStoredFit()
     QVERIFY(waitForIdle(*m_model));
     const QVariant fitted = std::as_const(*m_model).rowAt(m_model->getSessionRow("a")).cachedValues.value(kRollColumn);
     QCOMPARE(fitted.typeId(), int(QMetaType::Double));
-    const QJsonObject stamp{{kFit, QStringLiteral("batch-temperature-bias-v6")}};
+    const QJsonObject stamp{{kFit, QStringLiteral("batch-temperature-bias-v7")}};
     QCOMPARE(indexRecordStamp("a"), QJsonValue(stamp));
     const QString recordPath = TestEnvironment::instance().cacheDir() + QLatin1Char('/')
         + sessionFileStem("a") + QStringLiteral(".builtin%2Efusion%2Efit.fvresult");

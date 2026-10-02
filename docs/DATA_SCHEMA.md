@@ -437,7 +437,7 @@ a calculation is valid only together with this stamp. For a session with a
 stored sensor fusion result:
 
 ```json
-"records": {"builtin.fusion.fit": "batch-temperature-bias-v6"}
+"records": {"builtin.fusion.fit": "batch-temperature-bias-v7"}
 ```
 
 Each session entry may also have `"recordReasons"`: an object mapping the
