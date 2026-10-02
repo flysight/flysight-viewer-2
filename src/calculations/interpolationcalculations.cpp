@@ -2,6 +2,7 @@
 #include "../dependencykey.h"
 #include "../engine/calculationdescriptor.h"
 #include "../engine/calculationregistry.h"
+#include "../samplecontinuity.h"
 #include <QStringList>
 #include <QVector>
 #include <algorithm>
@@ -62,7 +63,8 @@ void Calculations::registerInterpolationFamily(CalculationRegistry &registry)
             //    lower_bound returns cbegin() when markerTime <= first element, and
             //    cend() when markerTime > last element. Both cases mean the query
             //    falls outside the interpolatable range (we need two bracketing
-            //    points). This matches interpolateAtX() in plotutils.cpp.
+            //    points). The plot's point reads (interpolateAtX() in
+            //    plotutils.cpp) read the same way.
             auto it = std::lower_bound(timeVec.cbegin(), timeVec.cend(), markerTime);
             if (it == timeVec.cbegin() || it == timeVec.cend())
                 return CalculationResult::unavailable();
@@ -73,6 +75,16 @@ void Calculations::registerInterpolationFamily(CalculationRegistry &registry)
 
             if (t2 == t1)
                 return CalculationResult::unavailable();
+
+            // 5. Nothing is read across a hole of the time vector: a marker
+            //    strictly inside one is unavailable, as outside the range;
+            //    one at the sample after it reads that sample.
+            if (SampleContinuity::isHoleBefore(timeVec, std::size_t(idx),
+                                               SampleContinuity::holeThreshold(timeVec))) {
+                if (markerTime != t2)
+                    return CalculationResult::unavailable();
+                return CalculationResult().setAttribute(key, v2);
+            }
 
             const double result = v1 + (v2 - v1) * (markerTime - t1) / (t2 - t1);
             return CalculationResult().setAttribute(key, result);

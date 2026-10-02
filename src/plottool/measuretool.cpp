@@ -240,6 +240,10 @@ MeasureTool::Measurement MeasureTool::measure(double currentX,
     const double xLo = qMin(m_startX, currentX);
     const double xHi = qMax(m_startX, currentX);
 
+    // Each sensor's time axis once for this update (holes are judged on it,
+    // plotutils.h), however many of its series are read
+    SensorTimeAxes axes;
+
     // Helper: compute the reference offset for a given session
     auto offsetForSession = [&referenceMarkerKey, &xVariable](const SessionData &s) -> double {
         return markerOffsetSeconds(s, referenceMarkerKey, xVariable).value_or(0.0);
@@ -302,8 +306,9 @@ MeasureTool::Measurement MeasureTool::measure(double currentX,
                 const QVector<double> yData = session->getMeasurement(pv.sensorID, pv.measurementID);
 
                 // Interpolated endpoints
-                const double yAtLo = interpolateAtX(xData, yData, rawLo);
-                const double yAtHi = interpolateAtX(xData, yData, rawHi);
+                const SensorTimeAxis &axis = axes.of(*session, pv.sensorID);
+                const double yAtLo = interpolateAtX(xData, yData, axis, rawLo);
+                const double yAtHi = interpolateAtX(xData, yData, axis, rawHi);
                 if (!std::isnan(yAtLo)) samples.append(yAtLo);
                 if (!std::isnan(yAtHi)) samples.append(yAtHi);
 
@@ -395,8 +400,9 @@ MeasureTool::Measurement MeasureTool::measure(double currentX,
         const QVector<double> xData = session->getMeasurement(pv.sensorID, xVariable);
         const QVector<double> yData = session->getMeasurement(pv.sensorID, pv.measurementID);
 
-        const double initialVal = interpolateAtX(xData, yData, rawStartX);
-        const double finalVal   = interpolateAtX(xData, yData, rawCurrentX);
+        const SensorTimeAxis &axis = axes.of(*session, pv.sensorID);
+        const double initialVal = interpolateAtX(xData, yData, axis, rawStartX);
+        const double finalVal   = interpolateAtX(xData, yData, axis, rawCurrentX);
 
         if (std::isnan(initialVal) && std::isnan(finalVal)) {
             row.deltaValue = QStringLiteral("--");
@@ -423,8 +429,8 @@ MeasureTool::Measurement MeasureTool::measure(double currentX,
         QVector<double> samples;
 
         // Interpolated endpoints
-        const double yAtLo = interpolateAtX(xData, yData, rawLo);
-        const double yAtHi = interpolateAtX(xData, yData, rawHi);
+        const double yAtLo = interpolateAtX(xData, yData, axis, rawLo);
+        const double yAtHi = interpolateAtX(xData, yData, axis, rawHi);
         if (!std::isnan(yAtLo)) samples.append(yAtLo);
         if (!std::isnan(yAtHi)) samples.append(yAtHi);
 
@@ -476,12 +482,13 @@ MeasureTool::Measurement MeasureTool::measure(double currentX,
                                qint64(utcSecs * 1000.0), QTimeZone::UTC)
                                .toString(QStringLiteral("yy-MM-dd HH:mm:ss.zzz")));
 
+        const SensorTimeAxis &gnss = axes.of(*session, QStringLiteral("GNSS"));
         const double lat = interpolateSessionMeasurement(
-            *session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("lat"), utcSecs);
+            *session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("lat"), utcSecs, gnss);
         const double lon = interpolateSessionMeasurement(
-            *session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("lon"), utcSecs);
+            *session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("lon"), utcSecs, gnss);
         const double alt = interpolateSessionMeasurement(
-            *session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("hMSL"), utcSecs);
+            *session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("hMSL"), utcSecs, gnss);
 
         if (!std::isnan(lat) && !std::isnan(lon) && !std::isnan(alt)) {
             double displayAlt = UnitConverter::instance().convert(alt, QStringLiteral("altitude"));

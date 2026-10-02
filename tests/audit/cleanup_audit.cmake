@@ -71,7 +71,13 @@
 #     (items 1001-1065);
 #   - the GNSS acceleration accuracy is the receiver's speed accuracy through
 #     the derivative's one stencil, named by its calculation and its row, and
-#     drawn in the deep scheme as an acceleration (item 1101).
+#     drawn in the deep scheme as an acceleration (item 1101);
+#   - a hole in a sensor's samples is defined once: the factor and the phrase
+#     that define it are spelled in the continuity unit alone, nothing else
+#     takes a median of a time axis for it, the readers include the unit, the
+#     plot builds and reads its graphs through the plot utilities, the fusion
+#     kernel's former gap constant and statistics unit stay gone, and the
+#     documents say what a hole is (items 1201-1213).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -838,7 +844,7 @@ expect_none("the fusion tools are not installed"
 # tests/fusion/fusiontrace.h include fusion/fusionpipeline.h, the trace seam,
 # which is not in the pattern.
 expect_only("the tools see the public header or the trace seam only"
-  "#include \"fusion/(factorgraphfit|initializer|imuintegration|inputadapter|fusionsamples|fusionoutput|fusionprogress|trajectoryreconstruction|scaledimufactor|samplestatistics|sensornoise|fitcovariance)\\.h\""
+  "#include \"fusion/(factorgraphfit|initializer|imuintegration|inputadapter|fusionsamples|fusionoutput|fusionprogress|trajectoryreconstruction|scaledimufactor|sensornoise|fitcovariance)\\.h\""
   "^src/fusion/|^tests/tst_fusion_kernel\\.cpp$"
   src tests)
 
@@ -1303,6 +1309,72 @@ expect_count("the GNSS acceleration accuracy states its assumption"
 expect_count("the GNSS acceleration accuracy states its measurement"
   "0\\.09 g RMS" 1 docs/CALCULATIONS.md)
 
+# =============================================================================
+# Sample continuity: when the interval between two successive samples of a
+# sensor is a hole is decided by one unit of the model library
+# (src/samplecontinuity.*), which the plots, the point reads, the map, the
+# interpolation family, the derivative helper and the fusion kernel's IMU gap
+# rule all read. Nothing is drawn, read, interpolated or differenced across a
+# hole.
+# =============================================================================
+
+# ─────────────────────────────── sample-continuity (items 1201, 1202, 1204, 1205, 1208, 1211, 1213)
+audit_group(sample-continuity)
+# Allow: none expected. The factor is the unit's one constant; a reader asks
+# holeThreshold() instead of multiplying. A "1.5" in an unrelated sense (a
+# literal of another rule) is written so that it does not read as the factor,
+# or the file is excluded here with its reason.
+expect_only("the continuity factor is the authority's"
+  "(^|[^0-9.])1\\.5([^0-9]|$)" "^src/samplecontinuity\\.(h|cpp)$" src)
+# Allow: none expected. The contract defines a hole in these words once; other
+# comments refer to the continuity rule.
+expect_count("a hole is defined once"
+  "strictly greater than 1\\.5 times the nominal interval" 1 src)
+expect_only("a hole is defined in the authority"
+  "strictly greater than 1\\.5 times the nominal interval" "^src/samplecontinuity\\.h$" src)
+# Allow: none expected. The nominal interval is the authority's selection; a
+# second median of a time axis, or a second selection over its intervals, is
+# a second authority for where a hole is.
+expect_only("one median of a time axis"
+  "medianInterval|quantile\\(|nth_element" "^src/samplecontinuity\\.cpp$" src)
+# Allow: a new reader that consults the authority directly is added to the
+# list and the count; a reader that goes through the plot utilities
+# (graphData, interpolateSessionMeasurement, sensorTimeAxis) is not listed.
+expect_count("the readers consult the authority"
+  "#include \"(\\.\\./)?samplecontinuity\\.h\""
+  10
+  src/plotutils.cpp src/calculations/interpolationcalculations.cpp
+  src/calculations/derivativehelper.cpp src/calculations/attributecalculations.cpp
+  src/calculations/simplificationcalculations.cpp src/ui/docks/map/TrackMapModel.cpp
+  src/ui/docks/map/MapCursorDotModel.cpp src/fusion/fusion.cpp src/fusion/fusionsamples.cpp
+  src/fusion/imuintegration.cpp)
+# Allow: none expected. The plot builds every graph with graphData() (which
+# breaks it at each hole) and reads a graph with interpolateGraphAt() (which
+# does not read across a break); the Set Ground tool reads the elevation with
+# groundElevationAt() and searches no samples of its own.
+expect_count("the plot builds its graphs through the plot utilities" "graphData\\(" 1
+  src/ui/docks/plot/PlotWidget.cpp)
+expect_count("the plot reads its graphs through the plot utilities" "interpolateGraphAt\\(" 1
+  src/ui/docks/plot/PlotWidget.cpp)
+expect_count("the Set Ground tool reads through the plot utilities" "groundElevationAt\\(" 1
+  src/plottool/setgroundtool.cpp)
+expect_none("the Set Ground tool searches no samples of its own" "lower_bound|qFuzzyCompare"
+  src/plottool/setgroundtool.cpp)
+# Allow: none expected. The kernel's gap constant and its statistics unit were
+# replaced by the authority.
+expect_none("the kernel's former gap rule is gone" "kImuGapMedians|samplestatistics"
+  src tests docs README.md)
+# The documents. Allow: these count LINES; rewrap so that each phrase stays on
+# one line.
+expect_count("the plots document says what a hole is" "^## [0-9]+\\. Holes in the data$" 1
+  docs/COMPUTED_PLOTS.md)
+expect_count("the calculations document says a stencil never spans a hole"
+  "a stencil never spans a hole" 1 docs/CALCULATIONS.md)
+expect_none("the fusion document has no second gap factor" "1\\.6 times the median IMU interval"
+  docs/SENSOR_FUSION.md)
+expect_count("the fusion document states the continuity rule"
+  "longer than 1\\.5 times the median IMU interval" 1 docs/SENSOR_FUSION.md)
+
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 
@@ -1319,8 +1391,10 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # (sensor fusion plots, attitude and the orientation attribute, item = 800 +
 # clause number), 901-940 (the fused state at every IMU sample, item =
 # 900 + clause number), 1001-1065 (the documented noise model and the
-# accuracy, part 1, item = 1000 + clause number) and 1101 (the GNSS
-# acceleration accuracy, one item). Four line forms; see the head of the map.
+# accuracy, part 1, item = 1000 + clause number), 1101 (the GNSS
+# acceleration accuracy, one item) and 1201-1213 (sample continuity: the rule,
+# the nine bullets of what the user sees, the architecture, the kernel and its
+# goldens, the documents). Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -1394,8 +1468,9 @@ else()
             OR (item GREATER_EQUAL 401 AND item LESS_EQUAL 442) OR (item GREATER_EQUAL 501 AND item LESS_EQUAL 563)
             OR (item GREATER_EQUAL 601 AND item LESS_EQUAL 662) OR (item GREATER_EQUAL 701 AND item LESS_EQUAL 754)
             OR (item GREATER_EQUAL 801 AND item LESS_EQUAL 863) OR (item GREATER_EQUAL 901 AND item LESS_EQUAL 940)
-            OR (item GREATER_EQUAL 1001 AND item LESS_EQUAL 1065) OR item EQUAL 1101))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065 and 1101: ${line}")
+            OR (item GREATER_EQUAL 1001 AND item LESS_EQUAL 1065) OR item EQUAL 1101
+            OR (item GREATER_EQUAL 1201 AND item LESS_EQUAL 1213)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101 and 1201-1213: ${line}")
     endif()
   endforeach()
 
@@ -1467,6 +1542,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 1101 1101)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 1201 1213)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

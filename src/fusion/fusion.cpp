@@ -11,6 +11,7 @@
 #include "fusion/initializer.h"
 #include "fusion/inputadapter.h"
 #include "fusion/trajectoryreconstruction.h"
+#include "samplecontinuity.h"
 
 namespace FlySight::Fusion {
 
@@ -43,11 +44,17 @@ FitPlan planFit(const Channels &channels, const Tuning &baseTuning)
     requireUsableRecording(full, plan.prepared.epoch, plan.prepared.usableStart);
 
     plan.tuning = baseTuning;
-    const double imuInterval = medianInterval(full.imuTime);
-    plan.tuning.maxGap = kImuGapMedians*imuInterval;
+    // The IMU gap rule is the application's continuity rule on the whole
+    // recording's IMU axis: an interval longer than its hole threshold is
+    // missing data, for the window checks and the attitude propagation alike.
+    // prepareInput() guaranteed finite, strictly increasing axes and
+    // requireUsableRecording() three samples of each, so both are finite.
+    const double imuInterval = SampleContinuity::nominalInterval(full.imuTime);
+    plan.tuning.maxGap = SampleContinuity::holeThreshold(full.imuTime);
     plan.window = fittedWindow(full, plan.prepared.usableStart, full.gnssTime.back());
     validateSamples(plan.window, plan.tuning);
-    requireNoGnssOutage(plan.window, std::max(kGnssOutageSeconds, kGnssOutageMedians*medianInterval(full.gnssTime)));
+    requireNoGnssOutage(plan.window, std::max(kGnssOutageSeconds,
+                                              kGnssOutageMedians*SampleContinuity::nominalInterval(full.gnssTime)));
     // The configuration's checks come after every check of the recording
     // itself, so that a recording's own defect is the reason it reports: the
     // datasheet entry, then the lattice of every reading, then the rates.

@@ -123,6 +123,9 @@ flysight_add_test(tst_harness SOURCES tst_harness.cpp)
 # tst_python_bridge compiles its application sources
 flysight_add_test(tst_plot_color SOURCES tst_plot_color.cpp "${FLYSIGHT_SRC_DIR}/plotutils.cpp")
 flysight_add_test(tst_plot_format SOURCES tst_plot_format.cpp "${FLYSIGHT_SRC_DIR}/plotutils.cpp")
+# The continuity rule (flysight_model) and the plot utilities that read a
+# sensor's samples through it: a graph's points, the point reads, the crosshair
+flysight_add_test(tst_sample_continuity SOURCES tst_sample_continuity.cpp "${FLYSIGHT_SRC_DIR}/plotutils.cpp")
 flysight_add_test(tst_smoke   SOURCES tst_smoke.cpp)
 
 # Calculation engine (synthetic calculations against a fake session state)

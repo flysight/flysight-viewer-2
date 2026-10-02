@@ -4,8 +4,11 @@
 // track remains, and everything returns when the source is corrected. The
 // source is corrected the way the application does it, through
 // SessionModel::mergeSessions, and the models are left to rebuild from their
-// own signal connections and timers. TrackMapModel and MapCursorDotModel are
-// application sources compiled into this test (tests/CMakeLists.txt).
+// own signal connections and timers. The track is a list of runs of
+// connected fixes; a recording with a hole in its GNSS samples has two, which
+// the range filter never joins, and no cursor dot inside the hole.
+// TrackMapModel and MapCursorDotModel are application sources compiled into
+// this test (tests/CMakeLists.txt).
 
 #include <memory>
 
@@ -56,12 +59,15 @@ private slots:
     void recoversAfterSourceCorrection();
     void hiddenRecordingStaysOutAfterCorrection();
     void rangeFilterOnRecoveredTrack();
+    void holeBreaksTrackAndDot();
 
 private:
     static SessionData fixture(const QByteArray &id);
+    static SessionData withHole(const QByteArray &id);
     void correctSource(const QByteArray &id, double hAccValue);
     QStringList trackIds() const;
     QStringList dotIds() const;
+    QVariantList trackRuns(const QString &sessionId) const;
     QVariantList trackPoints(const QString &sessionId) const;
 
     std::unique_ptr<SessionModel> m_model;
@@ -168,7 +174,8 @@ QStringList MapModelsTest::dotIds() const
     return ids;
 }
 
-QVariantList MapModelsTest::trackPoints(const QString &sessionId) const
+// The trackPoints role of a session: its runs, each a list of points
+QVariantList MapModelsTest::trackRuns(const QString &sessionId) const
 {
     for (int row = 0; row < m_tracks->rowCount(); ++row) {
         const QModelIndex index = m_tracks->index(row);
@@ -176,6 +183,34 @@ QVariantList MapModelsTest::trackPoints(const QString &sessionId) const
             return m_tracks->data(index, TrackMapModel::TrackPointsRole).toList();
     }
     return {};
+}
+
+// The points of a track without a hole: its one run (empty, and a failure,
+// when it has another number of runs)
+QVariantList MapModelsTest::trackPoints(const QString &sessionId) const
+{
+    const QVariantList runs = trackRuns(sessionId);
+    if (runs.size() != 1) {
+        qWarning() << "track" << sessionId << "has" << runs.size() << "runs, expected one";
+        return {};
+    }
+    return runs.first().toList();
+}
+
+// The fixture with GNSS rows 100..109 removed from every recorded column: an
+// 11 s interval between the fixes at T0 + 99 and T0 + 110 among 1 s ones, a
+// hole of the continuity rule. The track is still one straight line, so each
+// run simplifies to its two ends.
+SessionData MapModelsTest::withHole(const QByteArray &id)
+{
+    SessionData session = fixture(id);
+    const QString gnss = QStringLiteral("GNSS");
+    for (const QString &key : session.measurementKeys(gnss)) {
+        QVector<double> samples = session.sourceMeasurement(gnss, key);
+        samples.remove(100, 10);
+        session.setMeasurement(gnss, key, samples);
+    }
+    return session;
 }
 
 void MapModelsTest::tracksDotsAndBounds()
@@ -365,6 +400,75 @@ void MapModelsTest::rangeFilterOnRecoveredTrack()
 
     QTRY_COMPARE(m_dots->rowCount(), 2);
     QCOMPARE(dotIds(), QStringList({"a", "b"}));
+}
+
+// A hole in the GNSS samples breaks the track: two runs, in order, holding
+// every point of the simplified track once; a range edge inside the hole is
+// not interpolated across it (the run after it starts at its first fix); and
+// the cursor dot is absent strictly inside the hole and present at its fixes.
+void MapModelsTest::holeBreaksTrackAndDot()
+{
+    m_model->mergeSessions({withHole("a")});
+    QTRY_VERIFY(trackRuns(QStringLiteral("a")).size() == 2);
+
+    const auto timeOf = [](const QVariant &point) {
+        return point.toMap().value(QStringLiteral("t")).toDouble();
+    };
+    const auto runTimes = [&timeOf](const QVariant &run) {
+        QVector<double> times;
+        for (const QVariant &point : run.toList())
+            times.append(timeOf(point));
+        return times;
+    };
+
+    // The simplified track keeps the fixes around the hole, and the runs hold
+    // exactly its points, in order
+    const SessionData &a = m_model->rowAt(m_model->getSessionRow(QStringLiteral("a"))).session.value();
+    QCOMPARE(a.getMeasurement(QStringLiteral("Simplified"), QString::fromLatin1(SessionKeys::Time)),
+             QVector<double>({T0, T0 + 99.0, T0 + 110.0, T0 + 295.0}));
+    QVariantList runs = trackRuns(QStringLiteral("a"));
+    QCOMPARE(runTimes(runs[0]), QVector<double>({T0, T0 + 99.0}));
+    QCOMPARE(runTimes(runs[1]), QVector<double>({T0 + 110.0, T0 + 295.0}));
+    QVERIFY(isNear(runs[0].toList().last().toMap().value(QStringLiteral("lat")).toDouble(), 45.0099));
+    QVERIFY(isNear(runs[1].toList().first().toMap().value(QStringLiteral("lat")).toDouble(), 45.0110));
+    // The other recording is untouched
+    QCOMPARE(trackRuns(QStringLiteral("b")).size(), 1);
+
+    // A range from inside the first run to inside the second: each run is cut
+    // at its own edge, and neither is joined to the other
+    QSignalSpy resetSpy(m_tracks.get(), &TrackMapModel::modelReset);
+    const QString time = QString::fromLatin1(SessionKeys::Time);
+    const QString exit = QString::fromLatin1(SessionKeys::ExitTime);    // T0 + 9
+    m_range->setRange(time, exit, 50.0, 150.0);
+    QTRY_VERIFY(resetSpy.count() >= 1);
+    runs = trackRuns(QStringLiteral("a"));
+    QCOMPARE(runs.size(), 2);
+    QCOMPARE(runTimes(runs[0]), QVector<double>({T0 + 59.0, T0 + 99.0}));
+    QCOMPARE(runTimes(runs[1]), QVector<double>({T0 + 110.0, T0 + 159.0}));
+
+    // A lower edge inside the hole: the first run is out of range and the
+    // second starts at its first fix, not at the edge
+    resetSpy.clear();
+    m_range->setRange(time, exit, 95.0, 150.0);
+    QTRY_VERIFY(resetSpy.count() >= 1);
+    runs = trackRuns(QStringLiteral("a"));
+    QCOMPARE(runs.size(), 1);
+    QCOMPARE(runTimes(runs[0]), QVector<double>({T0 + 110.0, T0 + 159.0}));
+
+    // The dot at the exit moment: absent strictly inside the hole, present at
+    // the fixes around it
+    m_range->clearRange();
+    QTRY_COMPARE(dotIds(), QStringList({"a", "b"}));
+    const auto dotsAtExit = [this](double exitTime) {
+        m_model->updateAttribute(QStringLiteral("a"), QString::fromLatin1(SessionKeys::ExitTime), exitTime);
+        m_dots->rebuild();
+        return dotIds();
+    };
+    QCOMPARE(dotsAtExit(T0 + 104.5), QStringList({"b"}));
+    QCOMPARE(dotsAtExit(T0 + 99.5), QStringList({"b"}));
+    QCOMPARE(dotsAtExit(T0 + 99.0), QStringList({"a", "b"}));
+    QCOMPARE(dotsAtExit(T0 + 110.0), QStringList({"a", "b"}));
+    QCOMPARE(dotsAtExit(T0 + 120.0), QStringList({"a", "b"}));
 }
 
 FLYSIGHT_TEST_MAIN(MapModelsTest)

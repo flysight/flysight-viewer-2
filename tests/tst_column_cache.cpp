@@ -292,7 +292,7 @@ void ColumnCacheTest::upgradeDiscardsAndRecomputes()
     QCOMPARE(m_model->columnWorkStats().valuesComputed, 3);
 
     const QJsonObject rewritten = readIndex();
-    QCOMPARE(rewritten[QStringLiteral("calculationCompatibility")].toInt(), 2);
+    QCOMPARE(rewritten[QStringLiteral("calculationCompatibility")].toInt(), 3);
     for (const LogbookColumn &col : {m_d, m_g, m_e}) {
         QCOMPARE(indexColumnEnvironment(rewritten, col), logbookColumnEnvironment(col, CalculationRegistry::instance()));
         QCOMPARE(indexColumnEnvironment(rewritten, col), logbook.columnEnvironment(col));

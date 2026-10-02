@@ -4,11 +4,13 @@
 #include "sessiondata.h"
 #include "plotrangemodel.h"
 #include "plotutils.h"
+#include "samplecontinuity.h"
 #include "calculations/timecalculations.h"
 
 #include <QtMath>
 #include <QVariantMap>
 #include <QDateTime>
+#include <algorithm>
 #include <limits>
 
 namespace FlySight {
@@ -69,7 +71,7 @@ QVariant TrackMapModel::data(const QModelIndex &index, int role) const
     case SessionIdRole:
         return t.sessionId;
     case TrackPointsRole:
-        return t.points;
+        return t.runs;
     case TrackColorRole:
         return t.color;
     default:
@@ -181,45 +183,21 @@ void TrackMapModel::rebuild()
             double filterUpper = std::numeric_limits<double>::infinity();
             computeSessionUtcRange(session, &filterLower, &filterUpper);
 
-            QVariantList points;
-            points.reserve(n);
+            // The runs of the GNSS samples, by their first fix's time: a
+            // simplified point belongs to the last run that starts at or
+            // before it (its samples are GNSS samples)
+            const QVector<double> gnssTime =
+                session.getMeasurement(QStringLiteral("GNSS"), QString::fromLatin1(SessionKeys::Time));
+            QVector<double> runStarts;
+            for (const SampleContinuity::Run &run : SampleContinuity::runs(gnssTime))
+                runStarts.append(gnssTime[qsizetype(run.begin)]);
+            const auto runOf = [&runStarts](double t) {
+                return qsizetype(std::upper_bound(runStarts.cbegin(), runStarts.cend(), t) - runStarts.cbegin());
+            };
 
-            int lastBeforeIdx = -1;
-            int firstInsideIdx = -1;
-            int lastInsideIdx = -1;
-            int firstAfterIdx = -1;
+            QVariantList runs;
 
-            for (int i = 0; i < n; ++i) {
-                const double la = lat[i];
-                const double lo = lon[i];
-                const double tt = tUtc[i];
-
-                if (!qIsFinite(la) || !qIsFinite(lo) || !qIsFinite(tt))
-                    continue;
-                if (la < -90.0 || la > 90.0 || lo < -180.0 || lo > 180.0)
-                    continue;
-
-                if (tt < filterLower) {
-                    lastBeforeIdx = i;
-                    continue;
-                }
-
-                if (tt > filterUpper) {
-                    firstAfterIdx = i;
-                    break;
-                }
-
-                // Point is inside the visible range
-                if (firstInsideIdx < 0)
-                    firstInsideIdx = i;
-                lastInsideIdx = i;
-
-                QVariantMap pt;
-                pt.insert(QStringLiteral("lat"), la);
-                pt.insert(QStringLiteral("lon"), lo);
-                pt.insert(QStringLiteral("t"), tt);
-                points.push_back(pt);
-
+            auto includeInBounds = [&](double la, double lo) {
                 if (!haveBounds) {
                     haveBounds = true;
                     minLat = maxLat = la;
@@ -230,54 +208,107 @@ void TrackMapModel::rebuild()
                     minLon = qMin(minLon, lo);
                     maxLon = qMax(maxLon, lo);
                 }
-            }
-
-            // Interpolate at range boundaries so tracks extend to the
-            // plot edges instead of stopping at the last data point.
-            auto addBoundaryPoint = [&](int idxA, int idxB, double targetT, bool prepend) {
-                const double t1 = tUtc[idxA], t2 = tUtc[idxB];
-                if (t2 == t1) return;
-                const double frac = (targetT - t1) / (t2 - t1);
-                const double iLat = lat[idxA] + frac * (lat[idxB] - lat[idxA]);
-                const double iLon = lon[idxA] + frac * (lon[idxB] - lon[idxA]);
-
-                QVariantMap pt;
-                pt.insert(QStringLiteral("lat"), iLat);
-                pt.insert(QStringLiteral("lon"), iLon);
-                pt.insert(QStringLiteral("t"), targetT);
-
-                if (prepend)
-                    points.prepend(pt);
-                else
-                    points.push_back(pt);
-
-                if (!haveBounds) {
-                    haveBounds = true;
-                    minLat = maxLat = iLat;
-                    minLon = maxLon = iLon;
-                } else {
-                    minLat = qMin(minLat, iLat);
-                    maxLat = qMax(maxLat, iLat);
-                    minLon = qMin(minLon, iLon);
-                    maxLon = qMax(maxLon, iLon);
-                }
             };
 
-            // Lower boundary interpolation
-            if (lastBeforeIdx >= 0) {
-                const int nextIdx = (firstInsideIdx >= 0) ? firstInsideIdx : firstAfterIdx;
-                if (nextIdx >= 0)
-                    addBoundaryPoint(lastBeforeIdx, nextIdx, filterLower, true);
-            }
+            // One run of simplified points [begin, end) at a time: the range
+            // filter and the edge interpolation never reach into another run
+            auto addRun = [&](int begin, int end) {
+                QVariantList points;
 
-            // Upper boundary interpolation
-            if (firstAfterIdx >= 0) {
-                const int prevIdx = (lastInsideIdx >= 0) ? lastInsideIdx : lastBeforeIdx;
-                if (prevIdx >= 0)
-                    addBoundaryPoint(prevIdx, firstAfterIdx, filterUpper, false);
-            }
+                int lastBeforeIdx = -1;
+                int firstInsideIdx = -1;
+                int lastInsideIdx = -1;
+                int firstAfterIdx = -1;
 
-            if (points.size() < 2)
+                for (int i = begin; i < end; ++i) {
+                    const double la = lat[i];
+                    const double lo = lon[i];
+                    const double tt = tUtc[i];
+
+                    if (!qIsFinite(la) || !qIsFinite(lo) || !qIsFinite(tt))
+                        continue;
+                    if (la < -90.0 || la > 90.0 || lo < -180.0 || lo > 180.0)
+                        continue;
+
+                    if (tt < filterLower) {
+                        lastBeforeIdx = i;
+                        continue;
+                    }
+
+                    if (tt > filterUpper) {
+                        firstAfterIdx = i;
+                        break;
+                    }
+
+                    // Point is inside the visible range
+                    if (firstInsideIdx < 0)
+                        firstInsideIdx = i;
+                    lastInsideIdx = i;
+
+                    QVariantMap pt;
+                    pt.insert(QStringLiteral("lat"), la);
+                    pt.insert(QStringLiteral("lon"), lo);
+                    pt.insert(QStringLiteral("t"), tt);
+                    points.push_back(pt);
+                    includeInBounds(la, lo);
+                }
+
+                // Interpolate at range boundaries so tracks extend to the
+                // plot edges instead of stopping at the last data point.
+                auto addBoundaryPoint = [&](int idxA, int idxB, double targetT, bool prepend) {
+                    const double t1 = tUtc[idxA], t2 = tUtc[idxB];
+                    if (t2 == t1) return;
+                    const double frac = (targetT - t1) / (t2 - t1);
+                    const double iLat = lat[idxA] + frac * (lat[idxB] - lat[idxA]);
+                    const double iLon = lon[idxA] + frac * (lon[idxB] - lon[idxA]);
+
+                    QVariantMap pt;
+                    pt.insert(QStringLiteral("lat"), iLat);
+                    pt.insert(QStringLiteral("lon"), iLon);
+                    pt.insert(QStringLiteral("t"), targetT);
+
+                    if (prepend)
+                        points.prepend(pt);
+                    else
+                        points.push_back(pt);
+                    includeInBounds(iLat, iLon);
+                };
+
+                // Lower boundary interpolation
+                if (lastBeforeIdx >= 0) {
+                    const int nextIdx = (firstInsideIdx >= 0) ? firstInsideIdx : firstAfterIdx;
+                    if (nextIdx >= 0)
+                        addBoundaryPoint(lastBeforeIdx, nextIdx, filterLower, true);
+                }
+
+                // Upper boundary interpolation
+                if (firstAfterIdx >= 0) {
+                    const int prevIdx = (lastInsideIdx >= 0) ? lastInsideIdx : lastBeforeIdx;
+                    if (prevIdx >= 0)
+                        addBoundaryPoint(prevIdx, firstAfterIdx, filterUpper, false);
+                }
+
+                if (points.size() >= 2)
+                    runs.push_back(points);
+            };
+
+            // A point without a finite time stays with the run it is in (it
+            // is skipped there like any invalid point)
+            int begin = 0;
+            qsizetype currentRun = -1;
+            for (int i = 0; i < n; ++i) {
+                if (!qIsFinite(tUtc[i]))
+                    continue;
+                const qsizetype run = runOf(tUtc[i]);
+                if (currentRun >= 0 && run != currentRun) {
+                    addRun(begin, i);
+                    begin = i;
+                }
+                currentRun = run;
+            }
+            addRun(begin, n);
+
+            if (runs.isEmpty())
                 continue;
 
             const QString sessionId =
@@ -285,7 +316,7 @@ void TrackMapModel::rebuild()
 
             Track t;
             t.sessionId = sessionId;
-            t.points = std::move(points);
+            t.runs = std::move(runs);
             t.color = colorForSession(sessionId);
             m_tracks.push_back(std::move(t));
         }

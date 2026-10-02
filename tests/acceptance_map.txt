@@ -1,5 +1,5 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Twelve specifications, twelve item ranges:
+# (tests/audit/cleanup_audit.cmake). Thirteen specifications, thirteen item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
@@ -106,6 +106,15 @@
 #   1101      the GNSS acceleration accuracy (GNSS/accAcc, its plot and what
 #             the documentation says of it): one item. Stated in full in
 #             tests/README.md, appendix L.
+#   1201-1213 sample continuity (one rule for a hole in a sensor's samples,
+#             in the model library, and every reader of the samples
+#             honouring it: the plots, the legend and crosshair, the measure
+#             tool, the map, logbook measurements at a marker, the ground
+#             elevation reads, the derivatives, the fusion kernel's IMU gap
+#             rule; the crossing times as the one exception): 1201 the rule,
+#             1202-1210 what the user sees, 1211 the architecture, 1212 the
+#             kernel and its goldens, 1213 the documents. Stated in full in
+#             tests/README.md, appendix M. No existing item is restated.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -115,12 +124,12 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the twelve ranges; every item 1-19 needs a
+# Every item must lie in one of the thirteen ranges; every item 1-19 needs a
 # line; every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662,
-# 701-754, 801-863, 901-940, 1001-1065 or 1101 needs at least one test or
-# audit line (manual and ci lines never stand alone). The human-readable
-# matrices are tests/README.md sections 9.1 to 9.12; keep them in sync with
-# this file.
+# 701-754, 801-863, 901-940, 1001-1065, 1101 or 1201-1213 needs at least one
+# test or audit line (manual and ci lines never stand alone). The
+# human-readable matrices are tests/README.md sections 9.1 to 9.13; keep them
+# in sync with this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -3289,3 +3298,74 @@
 1101 tst_plot_format gnssAccelerationAccuracyIsAnAcceleration
 1101 audit gnss-acceleration-accuracy
 1101 manual M53
+
+# ---- Sample continuity (PLANS/sample-continuity.md): thirteen items ----
+
+# 1201 - (3) a sensor's time axis is its _time; its nominal interval the median of the successive differences over the whole session; an interval is a hole when strictly greater than 1.5 nominal intervals; fewer than three samples have no nominal interval and no holes; the samples around a hole are ordinary samples and nothing is removed, inserted or altered
+1201 tst_sample_continuity nominalIntervalIsTheMedian
+1201 tst_sample_continuity holeIsStrictlyAboveOneAndAHalf
+1201 tst_sample_continuity shortAxisHasNoHoles
+1201 tst_sample_continuity malformedAxisHasNoHoles
+1201 tst_sample_continuity runsPartitionTheSamples
+1201 audit sample-continuity
+
+# 1202 - (4, plots) a series is drawn on its sensor's time axis and its line stops at the last sample before a hole and resumes at the first after it, for every series of the sensor, recorded and computed, whichever independent variable the plot uses
+1202 tst_sample_continuity graphBreaksAtGnssHole
+1202 audit sample-continuity
+1202 manual M54
+
+# 1203 - (2, 4, the fusion plots; per sensor) each sensor has its own holes: a hole in the GNSS samples is not a hole in the IMU's, and a series on the IMU's axis draws through it; a hole in the IMU's samples breaks a series on it like any other
+1203 tst_sample_continuity imuGraphHasNoBreak
+1203 tst_sample_continuity graphBreaksAtGnssHole
+
+# 1204 - (4, legend and crosshair) the legend and the crosshair show "--" for a series at a cursor time inside one of its holes, as beyond the series' ends, and the sample's value at the samples around it
+1204 tst_sample_continuity sessionReadInsideHole
+1204 tst_sample_continuity crosshairReadInsideHole
+1204 audit sample-continuity
+1204 manual M54
+
+# 1205 - (4, measure tool) an end of the measure tool inside a hole reads "--" and the measurement that needs it is not shown; a measurement whose two ends are on samples is shown even when a hole lies between them
+1205 tst_sample_continuity measureEndReadInsideHole
+1205 manual M54
+
+# 1206 - (4, map) the map draws one polyline per run of connected fixes, so the track has a visible break at a hole; the cursor dot is absent while the cursor is inside a GNSS hole; holes are judged on GNSS/_time, and the simplified track keeps both fixes around every hole
+1206 tst_map_models holeBreaksTrackAndDot
+1206 tst_simplified_track eachRunSimplifiedOnItsOwn
+1206 tst_map_models rangeFilterOnRecoveredTrack
+1206 manual M54
+
+# 1207 - (4, logbook measurements at a marker) a measurement at a marker (the interpolation calculation) is unavailable when the marker's time falls inside a hole of the sensor it reads, as outside the sensor's coverage
+1207 tst_builtins_engine interpolationInsideHole
+1207 tst_builtins_engine interpolationInstances
+1207 tst_logbook_index markerWrittenOnFlush
+
+# 1208 - (4, ground elevation reads) the Set Ground tool's elevation at the clicked time and the automatic ground elevation at the analysis end have no value at a time inside a hole, as outside the samples, so the click sets nothing and the attribute is unavailable
+1208 tst_sample_continuity groundElevationInsideHole
+1208 tst_builtins_engine groundElevationInsideHole
+1208 audit sample-continuity
+1208 manual M54
+
+# 1209 - (4, derived values) a stencil that spans a hole yields no value: the derivative and its accuracy are unavailable at the samples whose centred difference crosses a hole and at an end whose one interval is a hole, and bit for bit what they were everywhere else; a value of a single sample is unaffected
+1209 tst_builtins_engine accelerationAcrossHole
+1209 tst_builtins_engine accelerationAccuracyKnownAnswers
+1209 tst_builtins_golden sessionDataMatchesGolden
+
+# 1210 - (4, crossing times) the exit, the altitude markers and the analysis windows of WS-P and SP keep their linear interpolation between the samples around a crossing, also across a hole, and the documentation names them as the exception
+1210 tst_builtins_golden sessionDataMatchesGolden
+1210 tst_builtins_engine wspPartial
+1210 audit sample-continuity
+
+# 1211 - (5) one authority in flysight_model answers the nominal interval, whether an interval is a hole and the runs; its factor is its one constant; the kernel reads its IMU gap rule from it (maxGap is its threshold for the recording's IMU axis, the attitude propagation reads it from its caller), and the kernel's own gap constant, median and statistics unit are gone; every reader consults it and none re-derives it; nothing is stored
+1211 tst_fusion_kernel propagationRefusesIntervalAboveItsThreshold
+1211 tst_fusion_kernel imuGapRuleIsTheContinuityThreshold
+1211 tst_fusion_kernel validationRejectsEachDefect
+1211 audit sample-continuity
+1211 audit fusion-tooling
+
+# 1212 - (6) the fusion kernel: the IMU gap fixture still rejects with the same reason, and the goldens are unchanged bit for bit, the exact runs included
+1212 tst_fusion_golden rejectionFixturesMatchGolden
+1212 tst_fusion_golden successFixturesMatchGolden
+1212 tst_fusion_kernel segmentsAreCutOnFixes
+
+# 1213 - (7) COMPUTED_PLOTS.md section 10 "Holes in the data" (what a hole is, nothing drawn, read or differenced across one, the fusion plots on the IMU's axis, the crossing times as the exception); CALCULATIONS.md section 18 and the derivative helper's contract (a stencil never spans a hole) and section 17 (the marker is 3); SENSOR_FUSION.md section 6 (the IMU gap rule at 1.5, three IMU samples); LOCAL_COORDINATES.md section 9 (the track simplified per run); tests/README.md (appendix M, matrix 9.13, M54)
+1213 audit sample-continuity

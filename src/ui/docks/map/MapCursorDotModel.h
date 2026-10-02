@@ -24,7 +24,9 @@ class PlotRangeModel;
  * Dots are derived from all enabled moments with map presence, sampled from
  * the "Simplified" GNSS track (lat/lon vs SessionKeys::Time) for each
  * targeted visible session. A session whose Simplified track is unavailable
- * gets no dot.
+ * gets no dot, and neither does one whose moment lies strictly inside a hole
+ * of its GNSS samples (the continuity rule on GNSS/_time,
+ * samplecontinuity.h); at the fixes around the hole the dot is shown.
  */
 class MapCursorDotModel : public QAbstractListModel
 {

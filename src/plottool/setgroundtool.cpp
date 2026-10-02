@@ -9,6 +9,8 @@
 #include <QDateTime>
 #include <QDebug>
 
+#include <cmath>
+
 namespace FlySight {
 
 SetGroundTool::SetGroundTool(const PlotWidget::PlotContext &ctx)
@@ -20,46 +22,9 @@ SetGroundTool::SetGroundTool(const PlotWidget::PlotContext &ctx)
 
 double SetGroundTool::computeGroundElevation(SessionData &session, double xCoord) const
 {
-    // Fetch xVariable and referenceMarkerKey from PlotWidget
-    const QString xVar = m_widget->xVariable();
-    const QString refKey = m_widget->referenceMarkerKey();
-
-    constexpr char sensor[] = "GNSS";
-    constexpr char measH[]  = "hMSL";
-
-    // Compute offset to convert plot-space xCoord to raw data space
-    const double offset = markerOffsetSeconds(session, refKey, xVar).value_or(0.0);
-    const double rawX = xCoord + offset;
-
-    const auto times      = session.getMeasurement(sensor, xVar);
-    const auto elevations = session.getMeasurement(sensor, measH);
-
-    const int n = times.size();
-    if (n < 2 || n != elevations.size()) {
-        qWarning() << "[SetGroundTool] Bad data sizes:"
-                   << "times=" << n << "elevations=" << elevations.size();
-        return std::numeric_limits<double>::quiet_NaN();
-    }
-
-    // out-of-bounds?
-    if (rawX < times.first() || rawX > times.last()) {
-        return std::numeric_limits<double>::quiet_NaN();
-    }
-
-    // find insertion point
-    auto it = std::lower_bound(times.constBegin(), times.constEnd(), rawX);
-    int idx = std::clamp<int>(int(it - times.constBegin()), 1, n - 1);
-
-    // exact matches?
-    if (qFuzzyCompare(rawX, times[idx]))     return elevations[idx];
-    if (qFuzzyCompare(rawX, times[idx-1]))   return elevations[idx-1];
-
-    // linear interpolate
-    double x1 = times[idx-1], x2 = times[idx];
-    double y1 = elevations[idx-1], y2 = elevations[idx];
-    double t  = (rawX - x1) / (x2 - x1);
-
-    return y1 + t * (y2 - y1);
+    // A point read like the measure tool's (plotutils.h): no value outside
+    // the samples or strictly inside a hole of the GNSS samples
+    return groundElevationAt(session, m_widget->xVariable(), m_widget->referenceMarkerKey(), xCoord);
 }
 
 bool SetGroundTool::mousePressEvent(QMouseEvent *event)
@@ -82,7 +47,10 @@ bool SetGroundTool::mousePressEvent(QMouseEvent *event)
         if (row >= 0) {
             SessionData &session = m_model->sessionRef(row);
             double newElev = computeGroundElevation(session, xCoord);
-            m_model->updateAttribute(sessionId, SessionKeys::GroundElev, newElev);
+            // No value at the clicked time (outside the samples, inside a
+            // hole): the click sets nothing
+            if (!std::isnan(newElev))
+                m_model->updateAttribute(sessionId, SessionKeys::GroundElev, newElev);
         }
     }
 

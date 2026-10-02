@@ -86,6 +86,7 @@ private slots:
 
     void accelerationAccuracyKnownAnswers();
     void accelerationAccuracyUnavailable();
+    void accelerationAcrossHole();
 
     void analysisRangeFollowsPreference();
     void analysisRangeNeedsPreference();
@@ -97,6 +98,8 @@ private slots:
 
     void interpolationInstances();
     void interpolationUnavailableIsCached();
+    void interpolationInsideHole();
+    void groundElevationInsideHole();
     void altitudeDescriptor();
 
     // Logbook column cache: static closures and the column environment digest
@@ -390,12 +393,15 @@ void BuiltinsEngineTest::timeFitRunsOnce()
 // are dyadic with short mantissas, so every square and every sum of two is
 // exact and a compiler that fuses the sum into a multiply-add, here or in the
 // calculation, cannot move a bit; the times are a quarter second apart (on
-// the epoch's scale a quarter is exact) with one missed fix, so the interior
-// steps are not all equal.
+// the epoch's scale a quarter and a sixteenth are exact) with one late fix,
+// 5/16 s after the one before it, so the interior steps are not all equal.
+// That step is 1.25 nominal intervals, clearly not a hole (more than 1.5, the
+// continuity rule): the stencil divides by the actual intervals, and a hole
+// is accelerationAcrossHole()'s case.
 void BuiltinsEngineTest::accelerationAccuracyKnownAnswers()
 {
     World world;
-    const QVector<double> t = {T0, T0 + 0.25, T0 + 0.5, T0 + 0.75, T0 + 1.25, T0 + 1.5};
+    const QVector<double> t = {T0, T0 + 0.25, T0 + 0.5, T0 + 0.75, T0 + 1.0625, T0 + 1.3125};
     const QVector<double> sAcc = {0.75, 1.0, 1.0, 0.5, 2.25, 3.0};
     world.state.setMeasurement("GNSS", "time", t);
     world.state.setMeasurement("GNSS", "sAcc", sAcc);
@@ -449,6 +455,75 @@ void BuiltinsEngineTest::accelerationAccuracyUnavailable()
     QVERIFY(unavailable({T0, T0 + 1.0}, {0.5, 0.5, 0.5}));
     // and the same world with two samples has it
     QVERIFY(!unavailable({T0, T0 + 1.0}, {0.5, 0.5}));
+}
+
+// The derivative and its accuracy on the known-answer data with a hole cut
+// in (an interval of three quarter seconds among quarter seconds, above 1.5
+// nominal intervals): NaN exactly at the samples whose stencil holds the
+// hole, the ends' one-interval forms included, and at every other sample the
+// formula on the same data, bit for bit. The hole is an interior interval,
+// the first and the last. accN, accE and accD difference GNSS/time and
+// accAcc GNSS/_time, the same buffer, so all four are NaN at the same
+// samples.
+void BuiltinsEngineTest::accelerationAcrossHole()
+{
+    struct Case {
+        const char *name;
+        QVector<double> t;
+        QList<int> unavailable;
+    };
+    const Case cases[] = {
+        {"interior", {T0, T0 + 0.25, T0 + 0.5, T0 + 0.75, T0 + 1.5, T0 + 1.75, T0 + 2.0}, {3, 4}},
+        {"first", {T0, T0 + 0.75, T0 + 1.0, T0 + 1.25, T0 + 1.5, T0 + 1.75, T0 + 2.0}, {0, 1}},
+        {"last", {T0, T0 + 0.25, T0 + 0.5, T0 + 0.75, T0 + 1.0, T0 + 1.25, T0 + 2.0}, {5, 6}},
+    };
+    const QVector<double> sAcc = {0.75, 1.0, 1.0, 0.5, 2.25, 3.0, 0.5};
+    const QVector<double> velN = {10.0, 12.5, 11.0, 9.5, 20.0, 18.25, 17.0};
+    const QVector<double> velE = {-1.0, 0.5, 2.0, 2.5, -3.0, -3.5, 0.25};
+    const QVector<double> velD = {50.0, 49.5, 48.0, 51.0, 45.5, 44.0, 43.75};
+
+    for (const Case &c : cases) {
+        World world;
+        world.state.setMeasurement("GNSS", "time", c.t);
+        world.state.setMeasurement("GNSS", "sAcc", sAcc);
+        world.state.setMeasurement("GNSS", "velN", velN);
+        world.state.setMeasurement("GNSS", "velE", velE);
+        world.state.setMeasurement("GNSS", "velD", velD);
+        CalculationEngine &engine = *world.engine;
+        const QVector<double> &t = c.t;
+        const int last = t.size() - 1;
+
+        // The stencil's two samples at sample i
+        const auto stencil = [last](int i) {
+            return i == 0 ? std::pair<int, int>(0, 1)
+                 : i == last ? std::pair<int, int>(last - 1, last)
+                 : std::pair<int, int>(i - 1, i + 1);
+        };
+        const auto check = [&](const char *output, const QVector<double> &values, auto combine) {
+            const QVector<double> actual = engine.measurement("GNSS", output);
+            QVERIFY2(actual.size() == t.size(), qPrintable(QStringLiteral("%1 %2").arg(c.name, output)));
+            for (int i = 0; i <= last; ++i) {
+                const QString where = QStringLiteral("%1 %2[%3] = %4").arg(c.name, output).arg(i)
+                                          .arg(actual[i], 0, 'g', 17);
+                if (c.unavailable.contains(i)) {
+                    QVERIFY2(std::isnan(actual[i]), qPrintable(where));
+                } else {
+                    const auto [a, b] = stencil(i);
+                    const double expected = combine(values[a], values[b]) / (t[b] - t[a]);
+                    QVERIFY2(actual[i] == expected, qPrintable(where));
+                }
+            }
+        };
+        const auto difference = [](double earlier, double later) { return later - earlier; };
+        const auto rootSumSquare = [](double earlier, double later) {
+            return std::sqrt(later * later + earlier * earlier);
+        };
+        check("accN", velN, difference);
+        check("accE", velE, difference);
+        check("accD", velD, difference);
+        check("accAcc", sAcc, rootSumSquare);
+        QCOMPARE(engine.undeclaredReadCount(), 0);
+    }
 }
 
 // Acceptance 15: the descent pause is a declared preference input.
@@ -618,6 +693,60 @@ void BuiltinsEngineTest::interpolationUnavailableIsCached()
         QVERIFY2(!engine.attribute(key).isValid(), qPrintable(key));
     QCOMPARE(m_world->state.readCount(), 0);
     QCOMPARE(engine.totalRunCount(), runs);
+}
+
+// A marker strictly inside a hole of the time vector reads nothing, as one
+// outside the samples does; at the two samples around the hole it reads them.
+// GNSS/_time steps a second with a 5 s hole between T0 + 3 and T0 + 8.
+void BuiltinsEngineTest::interpolationInsideHole()
+{
+    const QVector<double> t = {T0, T0 + 1.0, T0 + 2.0, T0 + 3.0, T0 + 8.0, T0 + 9.0, T0 + 10.0};
+    const QVector<double> hMSL = {1000.0, 990.0, 980.0, 970.0, 920.0, 910.0, 900.0};
+    const QString key = SessionData::interpolationKey("_M", "GNSS", "_time", "hMSL");
+
+    const auto read = [&](double marker) {
+        World world;
+        world.state.setMeasurement("GNSS", "time", t);
+        world.state.setMeasurement("GNSS", "hMSL", hMSL);
+        world.state.setAttribute("_M", marker);
+        return world.engine->attribute(key);
+    };
+
+    QVERIFY(!read(T0 + 5.0).isValid());         // inside the hole
+    QVERIFY(!read(T0 + 3.5).isValid());
+    QVERIFY(!read(T0 + 7.999).isValid());
+    QCOMPARE(read(T0 + 3.0).toDouble(), 970.0); // the sample before it
+    QCOMPARE(read(T0 + 8.0).toDouble(), 920.0); // the sample after it
+    QCOMPARE(read(T0 + 1.5).toDouble(), 985.0); // between connected samples, as before
+    QCOMPARE(read(T0 + 8.5).toDouble(), 915.0);
+    QVERIFY(!read(T0 - 1.0).isValid());         // outside the samples, as before
+    QVERIFY(!read(T0 + 11.0).isValid());
+}
+
+// The automatic ground elevation is hMSL read at the analysis end: nothing
+// strictly inside a hole of GNSS/_time, the sample's value at the two samples
+// around it, and today's answers between connected samples and outside the
+// samples (the first or the last elevation).
+void BuiltinsEngineTest::groundElevationInsideHole()
+{
+    const QVector<double> t = {T0, T0 + 1.0, T0 + 2.0, T0 + 3.0, T0 + 8.0, T0 + 9.0, T0 + 10.0};
+    const QVector<double> hMSL = {1000.0, 990.0, 980.0, 970.0, 920.0, 910.0, 900.0};
+
+    const auto ground = [&](double analysisEnd) {
+        World world;
+        world.state.setMeasurement("GNSS", "time", t);
+        world.state.setMeasurement("GNSS", "hMSL", hMSL);
+        world.state.setAttribute(SessionKeys::AnalysisEndTime, analysisEnd);
+        return world.engine->attribute(SessionKeys::GroundElev);
+    };
+
+    QVERIFY(!ground(T0 + 5.0).isValid());
+    QVERIFY(!ground(T0 + 3.25).isValid());
+    QCOMPARE(ground(T0 + 3.0).toDouble(), 970.0);
+    QCOMPARE(ground(T0 + 8.0).toDouble(), 920.0);
+    QCOMPARE(ground(T0 + 1.5).toDouble(), 985.0);
+    QCOMPARE(ground(T0 - 5.0).toDouble(), 1000.0);
+    QCOMPARE(ground(T0 + 20.0).toDouble(), 900.0);
 }
 
 void BuiltinsEngineTest::altitudeDescriptor()

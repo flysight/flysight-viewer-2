@@ -8,7 +8,7 @@
 
 #include <QString>
 
-#include "fusion/samplestatistics.h"
+#include "samplecontinuity.h"
 #include "sensorconfiguration.h"
 
 namespace FlySight::Fusion::Detail {
@@ -108,12 +108,13 @@ void requireGnssInsideImuCoverage(const Samples &samples)
 
 /// GNSS outside IMU coverage can be trimmed away, but a hole in the IMU data
 /// between two fixes cannot: integrating across it would invent motion. A gap
-/// that touches the GNSS span is therefore fatal.
+/// that touches the GNSS span is therefore fatal. A gap is a hole of the
+/// continuity rule against `maxGap`, the threshold planFit() derived from it.
 void requireNoImuGapInsideGnssSpan(const Samples &samples, double maxGap)
 {
     const std::vector<double> &imuTime = samples.imuTime;
     for (size_t i = 1; i < imuTime.size(); ++i) {
-        if (imuTime[i] - imuTime[i - 1] > maxGap
+        if (SampleContinuity::isHoleBefore(imuTime, i, maxGap)
             && imuTime[i - 1] < samples.gnssTime.back()
             && imuTime[i] > samples.gnssTime.front()) {
             // QString::number, not std::to_string: same digits, but not
@@ -170,16 +171,6 @@ void requireIncreasingFiniteTimes(const std::vector<double> &times)
     }
 }
 
-double medianInterval(const std::vector<double> &times)
-{
-    requireIncreasingFiniteTimes(times);
-    std::vector<double> intervals;
-    intervals.reserve(times.size() - 1);
-    for (size_t i = 1; i < times.size(); ++i)
-        intervals.push_back(times[i] - times[i - 1]);
-    return quantile(intervals, .5);
-}
-
 void validateSamples(const Samples &samples, const Tuning &tuning)
 {
     requireIncreasingFiniteTimes(samples.imuTime);
@@ -220,10 +211,12 @@ void requireUsableRecording(const Samples &recording, double epoch, double usabl
 {
     // The input adapter enforces this contract too, but the pipeline must not
     // depend on that: fittedWindow() indexes these arrays and the initializer
-    // scans samples outside the fitted interval.
-    if (recording.gnssTime.size() < 3 || recording.imuTime.size() < 2)
+    // scans samples outside the fitted interval. Three IMU samples because the
+    // IMU gap rule needs the nominal interval of the whole IMU axis, which two
+    // samples do not have.
+    if (recording.gnssTime.size() < 3 || recording.imuTime.size() < 3)
         throw std::invalid_argument(
-            "Sensor fusion needs at least three GNSS fixes and two IMU samples");
+            "Sensor fusion needs at least three GNSS fixes and three IMU samples");
     if (!std::isfinite(epoch) || !std::isfinite(usableStart))
         throw std::invalid_argument("Nonfinite fusion epoch or usable start");
     requireFiniteArrays(recording.imuTime.size(), { &recording.force, &recording.gyro },

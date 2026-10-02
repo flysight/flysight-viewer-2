@@ -272,6 +272,13 @@ add_library(flysight_model STATIC
   # declares four of them as inputs of the fit and registers their defaults;
   # it needs Qt Core only.
   sensorconfiguration.cpp    sensorconfiguration.h
+
+  # Sample continuity: when the interval between two samples of a sensor is a
+  # hole. Here rather than in flysight_core because the fusion kernel, which
+  # does not link flysight_core, reads its IMU gap rule from it, and the plots,
+  # the map and the calculations read the same rule; it needs the standard
+  # library only.
+  samplecontinuity.cpp       samplecontinuity.h
 )
 target_include_directories(flysight_model PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(flysight_model PUBLIC Qt${QT_VERSION_MAJOR}::Core)
@@ -377,7 +384,6 @@ add_library(flysight_fusion STATIC
   fusion/fusionpipeline.h              fusion/fusionprogress.h
   fusion/fusionsamples.cpp             fusion/fusionsamples.h
   fusion/inputadapter.cpp              fusion/inputadapter.h
-  fusion/samplestatistics.cpp          fusion/samplestatistics.h
   # The IMU's datasheet: noise by configuration and the lattice of its readings
   fusion/sensornoise.cpp               fusion/sensornoise.h
   fusion/imuintegration.cpp            fusion/imuintegration.h

@@ -4,10 +4,14 @@
 #include "momentmodel.h"
 
 #include <QColor>
+#include <QHash>
+#include <QPair>
 #include <QString>
 #include <QVector>
 
+#include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <optional>
 
@@ -39,15 +43,106 @@ QString seriesDisplayName(const PlotValue &pv);
 /// same colour in each.
 QColor plotColor(const PlotValue &pv);
 
+// A sensor's time axis as the continuity rule judges it (samplecontinuity.h):
+// its own _time samples and their hole threshold, NaN when the axis has none.
+// Holes are judged on this axis by sample index whatever the plot's x
+// variable is, since _system_time is not the sensor's own sampling. The
+// threshold is a selection over the whole axis, so a reader builds this once
+// per sensor for a batch of reads and passes it to each read.
+struct SensorTimeAxis {
+    QVector<double> time;
+    double holeThreshold = kNaN;
+};
+
+SensorTimeAxis sensorTimeAxis(const SessionData &session, const QString &sensorId);
+
+// The time axes of the sensors one batch of point reads touches (a cursor
+// event of the legend, an update of the measure tool), each built on first
+// use: one selection per sensor and batch, whatever the number of series read.
+// It lives as long as the batch and is not kept between batches, so nothing
+// about holes is stored. The sessions must outlive it and stay in place, and
+// a reference of() returns is used before the next of() asks for another
+// sensor (which may move the axes).
+class SensorTimeAxes {
+public:
+    const SensorTimeAxis &of(const SessionData &session, const QString &sensorId);
+
+private:
+    QHash<QPair<const SessionData *, QString>, SensorTimeAxis> m_axes;
+};
+
+// The value of yData at x, linear between the two samples of xData that
+// bracket x; NaN when x is not bracketed (at or before the first sample,
+// after the last). `axis` is the sensor's time axis: when the two bracketing
+// samples are the sides of a hole of it, there is no value strictly inside
+// the hole, and at the sample after it the value is that sample's. A sensor
+// whose _time is missing or of another length than xData has no holes here.
+// The interpolation family (calculations/interpolationcalculations.cpp)
+// reads a measurement at a marker the same way, on the engine.
 double interpolateAtX(const QVector<double> &xData,
                       const QVector<double> &yData,
+                      const SensorTimeAxis &axis,
                       double x);
 
+// interpolateAtX() of a session's measurement against its xAxisKey, with the
+// sensor's time axis `axis` (sensorTimeAxis(session, sensorId)).
 double interpolateSessionMeasurement(const SessionData &session,
                                      const QString &sensorId,
                                      const QString &xAxisKey,
                                      const QString &measurementId,
-                                     double x);
+                                     double x,
+                                     const SensorTimeAxis &axis);
+
+// The ground elevation the Set Ground tool sets for a click at plot x
+// `xCoord`: GNSS/hMSL read at that time like any point read (NaN outside the
+// samples and strictly inside a hole of GNSS/_time).
+double groundElevationAt(const SessionData &session,
+                         const QString &xVariable,
+                         const QString &referenceMarkerKey,
+                         double xCoord);
+
+// A graph's points: what a plot draws for one measurement of one session.
+struct GraphData {
+    QVector<double> keys;
+    QVector<double> values;
+};
+
+// The points of the graph of a session's measurement against xVariable, the
+// reference offset subtracted from the keys: the samples in order, and
+// between the two samples around each hole of the sensor's own _time one
+// break, a NaN-valued point keyed halfway between them, which the plotting
+// library draws as an interruption of the line. Nothing else is added and no
+// sample is altered. Empty when the measurement is unavailable or the x
+// variable differs from it in length.
+GraphData graphData(const SessionData &session,
+                    const QString &sensorId,
+                    const QString &measurementId,
+                    const QString &xVariable,
+                    double referenceOffset);
+
+// The value of a graph's line at key x, for the crosshair and the tracers:
+// linear between the two points that bracket x, NaN when x is not bracketed
+// and across a break (graphData()). A point read at its own key beside a
+// break gives its own value, so the samples on either side of a hole read as
+// themselves. [begin, end) are the graph's points in key order, each with a
+// `key` and a `value` (QCPGraphData), read in place.
+template <class Iterator>
+double interpolateGraphAt(Iterator begin, Iterator end, double x)
+{
+    const Iterator upper = std::lower_bound(begin, end, x,
+        [](const auto &point, double key) { return point.key < key; });
+    if (upper == begin || upper == end)
+        return kNaN;
+    const Iterator lower = std::prev(upper);
+
+    const double x1 = lower->key, y1 = lower->value;
+    const double x2 = upper->key, y2 = upper->value;
+    if (x2 == x1)
+        return kNaN;
+    if (std::isnan(y1) && x == x2)
+        return y2;
+    return y1 + (y2 - y1) * (x - x1) / (x2 - x1);
+}
 
 // A plot's value as text, for the legend, the analysis tab and the measure
 // tool: converted to the display unit and rounded to the precision of its

@@ -167,8 +167,8 @@ void LogbookIndexTest::markerWrittenOnFlush()
 
     const QJsonObject root = readIndex();
     QVERIFY(root[QStringLiteral("calculationCompatibility")].isDouble());
-    QCOMPARE(root[QStringLiteral("calculationCompatibility")].toInt(), 2);
-    QCOMPARE(CalculationCompatibilityVersion, 2);
+    QCOMPARE(root[QStringLiteral("calculationCompatibility")].toInt(), 3);
+    QCOMPARE(CalculationCompatibilityVersion, 3);
 
     for (const LogbookColumn &col : {m_d, m_g}) {
         const QString environment = indexColumnEnvironment(root, col);
@@ -225,7 +225,7 @@ void LogbookIndexTest::missingMarkerDiscardsValues()
 
     // The rewritten index carries the current marker
     QVERIFY(logbook.flushIndex());
-    QCOMPARE(readIndex()[QStringLiteral("calculationCompatibility")].toInt(), 2);
+    QCOMPARE(readIndex()[QStringLiteral("calculationCompatibility")].toInt(), 3);
     QVERIFY(indexValue(readIndex(), QStringLiteral("s1"), m_g).isUndefined());
 }
 
@@ -235,9 +235,10 @@ void LogbookIndexTest::differentMarkerDiscards_data()
 
     QTest::newRow("0") << QJsonValue(0);
     QTest::newRow("1") << QJsonValue(1);
-    QTest::newRow("3") << QJsonValue(3);
+    QTest::newRow("2") << QJsonValue(2);
+    QTest::newRow("4") << QJsonValue(4);
     QTest::newRow("-1") << QJsonValue(-1);
-    QTest::newRow("string 2") << QJsonValue(QStringLiteral("2"));
+    QTest::newRow("string 3") << QJsonValue(QStringLiteral("3"));
 }
 
 void LogbookIndexTest::differentMarkerDiscards()

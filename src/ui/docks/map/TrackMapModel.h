@@ -20,12 +20,22 @@ class SessionData;
  * Exposes visible session GNSS tracks for display on a map.
  *
  * Each row corresponds to one visible session.
- * The "trackPoints" role is a QVariantList of QVariantMaps:
+ * The "trackPoints" role is a list of runs, in time order: each run a
+ * QVariantList of QVariantMaps, in time order,
  *   { "lat": <double>, "lon": <double>, "t": <UTC seconds> }
+ * A run is the part of the track between two holes of the GNSS samples (the
+ * continuity rule on GNSS/_time, samplecontinuity.h; never the spacing of
+ * the simplified samples, which the simplifier thinned). The page draws one
+ * line per run, so the track breaks at a hole. With a plot range, a run is
+ * cut at the range's edges by interpolation between two of its own points,
+ * never between two runs: a run that starts or ends inside the range starts
+ * or ends there.
  *
- * A visible recording whose "Simplified" track is unavailable (no local-frame
- * origin) or shorter than two points contributes no row and nothing to the
- * bounds. With no row, hasData is false and center and bounds are all 0.
+ * A run with fewer than two points in the range draws nothing and is left
+ * out of the role; its points still count towards the bounds. A visible
+ * recording whose "Simplified" track is unavailable (no local-frame origin)
+ * or has no run of two points contributes no row. With no row, hasData is
+ * false and center and bounds are all 0.
  *
  * Center and bounds are exposed as plain doubles so that QWebChannel
  * can serialize them natively (no QGeoCoordinate / QGeoRectangle).
@@ -82,7 +92,7 @@ signals:
 private:
     struct Track {
         QString sessionId;
-        QVariantList points; // [{lat:..., lon:...}, ...]
+        QVariantList runs; // [[{lat:..., lon:..., t:...}, ...], ...]
         QColor color;
     };
 

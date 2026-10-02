@@ -122,6 +122,15 @@ simplified track and the path is joined across it. One invalid fix does not
 cost the recording its track, and the track ends at the first and last samples
 that have coordinates.
 
+A hole in the GNSS samples (two successive fixes more than 1.5 nominal
+intervals apart on `GNSS/_time`, `src/samplecontinuity.h`;
+[COMPUTED_PLOTS.md](COMPUTED_PLOTS.md) section 10) is not joined: the track
+is simplified per run of connected fixes, each run on its own, so both fixes
+around every hole are kept. For a recording without a hole this is the
+simplification of the whole track, unchanged. The map splits the simplified
+points by the GNSS run they belong to, never by the spacing of the simplified
+samples, and draws one line per run.
+
 With no qualifying origin the simplified track is unavailable (a missing
 input). The map then shows no track and no cursor dot for that recording and
 leaves it out of its bounds; when no visible recording has a track, the model's
@@ -132,8 +141,10 @@ source brings track, dot and bounds back through ordinary invalidation.
 
 `tst_simplified_track` covers index alignment, the tolerance,
 duplicate-position endpoints, closed, degenerate and empty tracks, non-finite
-samples, the single projection, and the no-origin case with recovery.
-`tst_map_models` covers the two map models on a real session model. The golden
+samples, the single projection, the no-origin case with recovery, and a
+hole, across which each run is simplified on its own.
+`tst_map_models` covers the two map models on a real session model, a track
+broken into two runs at a hole and the absent cursor dot inside it included. The golden
 rows for the descent fixture are in `tests/support/builtinfixture.cpp`.
 
 ## 10. Consumers

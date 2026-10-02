@@ -137,7 +137,7 @@ std::optional<FitResult> growPrefix(const Samples &segment, size_t anchor, const
         // The coarse attitude carried from the anchor to the window's first
         // fix with zero bias (backwards; unchanged when the anchor is that fix).
         const gtsam::Rot3 first = propagateAttitude(prefix, coarse, anchorTime, prefix.gnssTime.front(),
-                                                    gtsam::Vector3::Zero());
+                                                    gtsam::Vector3::Zero(), prefixTuning.maxGap);
         const QString passFormat = QStringLiteral("Segment %1 of %2: prefix %3 s, pass %4, iteration %5")
             .arg(index+1).arg(count).arg(length);
         std::optional<FitResult> best;
@@ -215,7 +215,8 @@ SegmentAccount initializeSegment(const Samples &segment, int index, int count, c
         // coarse attitude at the anchor carried by the gyro with zero bias.
         // The account's prefix-fit fields stay at their defaults: no prefix
         // fit was used (initializer.h).
-        s.startRotation = propagateAttitude(segment, coarse, s.anchorTime, s.start, gtsam::Vector3::Zero());
+        s.startRotation = propagateAttitude(segment, coarse, s.anchorTime, s.start, gtsam::Vector3::Zero(),
+                                            tuning.maxGap);
         s.startGyroBias = gtsam::Vector3::Zero();
         rotations = attitudesCarriedForward(segment, s.startRotation, s.startGyroBias);
         s.gyroBias = s.startGyroBias;
@@ -228,7 +229,8 @@ SegmentAccount initializeSegment(const Samples &segment, int index, int count, c
     // last with the prefix fit's bias. Always run, even when the prefix
     // covered the segment: one path, and the segment's bias is then the bias
     // of a fit that started at its answer.
-    s.startRotation = propagateAttitude(segment, s.prefixRotation, s.prefixStart, s.start, s.prefixGyroBias);
+    s.startRotation = propagateAttitude(segment, s.prefixRotation, s.prefixStart, s.start, s.prefixGyroBias,
+                                        tuning.maxGap);
     s.startGyroBias = s.prefixGyroBias;
     const InitialState initial{attitudesCarriedForward(segment, s.startRotation, s.startGyroBias),
                                s.startGyroBias};

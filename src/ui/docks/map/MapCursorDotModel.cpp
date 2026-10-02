@@ -3,6 +3,7 @@
 #include "momentmodel.h"
 #include "plotrangemodel.h"
 #include "plotutils.h"
+#include "samplecontinuity.h"
 #include "sessiondata.h"
 #include "sessionmodel.h"
 #include "calculations/timecalculations.h"
@@ -38,9 +39,24 @@ static bool isMonotonic(const QVector<double> &t, int n, bool ascending)
     return true;
 }
 
-static bool sampleLatLonAtUtc(const SessionData &session, double utcSeconds, double *outLat, double *outLon)
+// True when utcSeconds lies strictly inside a hole of the GNSS samples (the
+// continuity rule on GNSS/_time, never on the simplified track's spacing,
+// which the simplifier thinned): the recording has no position there.
+static bool insideGnssHole(const SensorTimeAxis &gnss, double utcSeconds)
+{
+    const auto it = std::lower_bound(gnss.time.cbegin(), gnss.time.cend(), utcSeconds);
+    if (it == gnss.time.cbegin() || it == gnss.time.cend() || *it == utcSeconds)
+        return false;
+    return SampleContinuity::isHoleBefore(gnss.time, std::size_t(it - gnss.time.cbegin()),
+                                          gnss.holeThreshold);
+}
+
+static bool sampleLatLonAtUtc(const SessionData &session, const SensorTimeAxis &gnss, double utcSeconds,
+                              double *outLat, double *outLon)
 {
     if (!outLat || !outLon)
+        return false;
+    if (insideGnssHole(gnss, utcSeconds))
         return false;
 
     const QVector<double> t =
@@ -291,6 +307,9 @@ void MapCursorDotModel::onPreferenceChanged(const QString &key, const QVariant &
 void MapCursorDotModel::rebuild()
 {
     QVector<Dot> newDots;
+    // Each session's GNSS time axis once for this rebuild, however many
+    // moments read it
+    SensorTimeAxes axes;
 
     if (m_sessionModel && m_momentModel) {
         const auto moments = m_momentModel->enabledMoments();
@@ -372,7 +391,7 @@ void MapCursorDotModel::rebuild()
 
                 double lat = 0.0;
                 double lon = 0.0;
-                if (!sampleLatLonAtUtc(session, utcSeconds, &lat, &lon))
+                if (!sampleLatLonAtUtc(session, axes.of(session, QStringLiteral("GNSS")), utcSeconds, &lat, &lon))
                     continue;
 
                 // Determine color: use traits.color if valid, else colorForSession

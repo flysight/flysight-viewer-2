@@ -138,10 +138,13 @@ gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, doub
 
 /// `rotation` (body to NED at `start`) carried to `end` by the bias-corrected
 /// gyro. `end` may precede `start`; the increments are then undone in reverse
-/// order. Throws when the span contains an IMU gap: an attitude cannot be
-/// carried across missing data.
+/// order. Throws when the span contains an IMU gap, an IMU interval that is a
+/// hole against `maxGap` (the tuning's, which planFit() derived from the whole
+/// recording's IMU axis; the callers pass it, so a sub-window is judged by the
+/// recording's rule, not its own): an attitude cannot be carried across
+/// missing data.
 gtsam::Rot3 propagateAttitude(const Samples &samples, gtsam::Rot3 rotation, double start, double end,
-                              const gtsam::Vector3 &gyroBias);
+                              const gtsam::Vector3 &gyroBias, double maxGap);
 
 } // namespace FlySight::Fusion::Detail
 

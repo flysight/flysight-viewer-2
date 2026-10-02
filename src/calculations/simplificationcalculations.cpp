@@ -2,6 +2,7 @@
 #include "registration.h"
 #include "../sessiondata.h"
 #include "../dependencykey.h"
+#include "../samplecontinuity.h"
 #include <QVector>
 #include <algorithm>
 #include <cmath>
@@ -109,6 +110,28 @@ QVector<qsizetype> retainedIndices(const QVector<double> &north,
     return indices;
 }
 
+// The track's retained samples: Ramer-Douglas-Peucker over each run of
+// connected GNSS samples on its own (the continuity rule on GNSS/_time,
+// samplecontinuity.h), so the two samples around every hole survive and the
+// map can break the track there; for a recording without a hole this is one
+// run, the simplification of the whole track. The candidates are the
+// finite samples, ascending.
+QVector<qsizetype> retainedIndicesPerRun(const QVector<double> &north,
+                                         const QVector<double> &east,
+                                         const QVector<double> &time,
+                                         const QVector<qsizetype> &finite)
+{
+    QVector<qsizetype> indices;
+    qsizetype next = 0;     // the first candidate not yet assigned to a run
+    for (const SampleContinuity::Run &run : SampleContinuity::runs(time)) {
+        QVector<qsizetype> candidates;
+        while (next < finite.size() && std::size_t(finite[next]) < run.end)
+            candidates.append(finite[next++]);
+        indices.append(retainedIndices(north, east, candidates));
+    }
+    return indices;
+}
+
 // values[i] for each index
 QVector<double> samplesAt(const QVector<double> &values, const QVector<qsizetype> &indices)
 {
@@ -170,7 +193,7 @@ void Calculations::registerSimplificationCalculations(CalculationRegistry &regis
 
         // Every output is the recorded sample at the same retained indices,
         // so all seven always have the same length
-        const QVector<qsizetype> indices = retainedIndices(north, east, finite);
+        const QVector<qsizetype> indices = retainedIndicesPerRun(north, east, time, finite);
         return CalculationResult()
             .setMeasurement("Simplified", "lat", samplesAt(lat, indices))
             .setMeasurement("Simplified", "lon", samplesAt(lon, indices))

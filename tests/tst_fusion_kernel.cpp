@@ -69,6 +69,7 @@
 #include "fusion/trajectoryreconstruction.h"
 #include "fusionfixtures.h"
 #include "fusiongolden.h"
+#include "samplecontinuity.h"
 #include "fusiontrace.h"
 #include "sensorconfiguration.h"
 #include "testmain.h"
@@ -322,7 +323,7 @@ FusionFixture fixtureNamed(const QString &name)
 Tuning pipelineTuning(const QString &name, Tuning tuning)
 {
     const Fusion::Channels channels = toChannels(fixtureNamed(name));
-    tuning.maxGap = kImuGapMedians*medianInterval(prepareInput(channels).recording.imuTime);
+    tuning.maxGap = SampleContinuity::holeThreshold(prepareInput(channels).recording.imuTime);
     tuning.noise = imuNoise(channels.imuConfiguration);
     return tuning;
 }
@@ -408,7 +409,7 @@ WindowFit fitOfChannels(const Fusion::Channels &channels)
     WindowFit f;
     const PreparedInput prepared = prepareInput(channels);
     const Samples &full = prepared.recording;
-    f.tuning.maxGap = kImuGapMedians*medianInterval(full.imuTime);
+    f.tuning.maxGap = SampleContinuity::holeThreshold(full.imuTime);
     f.tuning.noise = imuNoise(channels.imuConfiguration);
     f.window = fittedWindow(full, prepared.usableStart, full.gnssTime.back());
     validateSamples(f.window, f.tuning);
@@ -760,7 +761,7 @@ WindowFit tumbleWindow(double imuRate)
     }
     for (int k = 0; .013+k*.2 <= d.imuTime.back()-.05; ++k)
         d.gnssTime.push_back(.013+k*.2);
-    f.tuning.maxGap = kImuGapMedians*medianInterval(d.imuTime);
+    f.tuning.maxGap = SampleContinuity::holeThreshold(d.imuTime);
     // The listed rate nearest the sampling: 12.5, 26 or 104 Hz.
     f.tuning.noise = fixtureNoise(imuRate < 19 ? 12.5 : imuRate < 60 ? 26 : 104);
     return f;
@@ -886,6 +887,8 @@ private slots:
     void diagnosticsReportTheNoiseModel();
     void validationRejectsEachDefect();
     void backwardPropagationUndoesForward();
+    void propagationRefusesIntervalAboveItsThreshold();
+    void imuGapRuleIsTheContinuityThreshold();
     void headingIsUnconstrained();
     void reconstructionTimingAndEndpointCorrection();
     void shortWindowIsOneSegment();
@@ -1717,10 +1720,61 @@ void FusionKernelTest::backwardPropagationUndoesForward()
         d.gyro[i] = bg+(i < 50 ? Vector3(.1, 0, 0) : Vector3(0, .2, 0));
 
     const Rot3 r = Rot3::RzRyRx(.3, -.2, .1);
-    const Rot3 forward = propagateAttitude(d, r, .037, .863, bg);
-    const Rot3 backward = propagateAttitude(d, forward, .863, .037, bg);
+    const double maxGap = SampleContinuity::holeThreshold(d.imuTime);
+    const Rot3 forward = propagateAttitude(d, r, .037, .863, bg, maxGap);
+    const Rot3 backward = propagateAttitude(d, forward, .863, .037, bg, maxGap);
     QVERIFY(Rot3::Logmap(forward.between(r)).norm() > 1e-3);
     QVERIFY(Rot3::Logmap(backward.between(r)).norm() < 1e-12);
+}
+
+// The attitude propagation judges IMU intervals against the threshold its
+// caller gives it (the tuning's maxGap), not one of its own over the samples
+// it is handed: across an interval above that threshold it refuses, and with
+// the threshold of the axis it carries the attitude.
+void FusionKernelTest::propagationRefusesIntervalAboveItsThreshold()
+{
+    Samples d = boundarySamples(Vector3(1, -2, .5));
+    // IMU samples 40..49 missing: an .11 s interval inside [.037, .863]
+    d.imuTime.erase(d.imuTime.begin()+40, d.imuTime.begin()+50);
+    d.force.erase(d.force.begin()+40, d.force.begin()+50);
+    d.gyro.erase(d.gyro.begin()+40, d.gyro.begin()+50);
+    const Rot3 r = Rot3::RzRyRx(.3, -.2, .1);
+    const double threshold = SampleContinuity::holeThreshold(d.imuTime);
+    QCOMPARE(threshold, .015);
+
+    try {
+        propagateAttitude(d, r, .037, .863, Vector3::Zero(), threshold);
+        QFAIL("propagateAttitude() carried an attitude across an interval above its threshold");
+    } catch (const std::invalid_argument &e) {
+        QCOMPARE(QString::fromLatin1(e.what()), QStringLiteral("Anchor propagation cannot bridge an IMU gap"));
+    }
+    // The same span under a threshold above the interval, and a span that
+    // ends before the hole under the axis's own threshold: carried
+    propagateAttitude(d, r, .037, .863, Vector3::Zero(), .12);
+    propagateAttitude(d, r, .037, .35, Vector3::Zero(), threshold);
+}
+
+// planFit() sets maxGap to the continuity rule's threshold over the whole
+// recording's IMU axis, 1.5 nominal intervals: one IMU interval of 1.55
+// nominal intervals inside the GNSS span is rejected as a gap, one of 1.45
+// is not (the old 1.6 factor accepted both). The seam is the rejection
+// reason of runPipeline().
+void FusionKernelTest::imuGapRuleIsTheContinuityThreshold()
+{
+    for (const auto &[stretch, rejected] : { std::pair<double, bool>{1.55, true},
+                                            std::pair<double, bool>{1.45, false} }) {
+        FusionFixture f = fusionFixture(QStringLiteral("coarse_linear"));
+        QVERIFY(!f.name.isEmpty());
+        // Samples 40 on move later: the interval between samples 39 and 40
+        // (.39 .. .40 s, inside the GNSS span) becomes `stretch` times .01 s
+        const double shift = (stretch-1)*.01;
+        for (qsizetype i = 40; i < f.imuTime.size(); ++i)
+            f.imuTime[i] += shift;
+        const Fusion::Result result = rejectedBy(toChannels(f));
+        const bool gap = result.outcome == Fusion::Outcome::Rejected
+                         && result.reason.startsWith(QStringLiteral("IMU gap at "));
+        QVERIFY2(gap == rejected, qPrintable(QStringLiteral("stretch %1: %2").arg(stretch).arg(result.reason)));
+    }
 }
 
 void FusionKernelTest::headingIsUnconstrained()
@@ -2682,7 +2736,8 @@ void FusionKernelTest::smallestSaccFixIsTheAnchor()
     // carried back by the gyro with the prefix fit's bias: the initializer
     // performs this very call.
     const Samples window = windowOf(QStringLiteral("sacc_anchor"), Tuning{});
-    const Rot3 expected = propagateAttitude(window, s.prefixRotation, s.prefixStart, s.start, s.prefixGyroBias);
+    const Rot3 expected = propagateAttitude(window, s.prefixRotation, s.prefixStart, s.start, s.prefixGyroBias,
+                                            pipelineTuning(QStringLiteral("sacc_anchor"), Tuning{}).maxGap);
     QVERIFY(Rot3::Logmap(s.startRotation.between(expected)).norm() < 1e-9);
     QVERIFY(s.startGyroBias == s.prefixGyroBias);
 }
@@ -2980,7 +3035,8 @@ void FusionKernelTest::startsOnTheLimitAreStillUsed()
     // The start was used, not the fallback: the prefix fit's attitude
     // carried back to the segment's first fix with the prefix fit's bias.
     const Samples window = windowOf(name, forced);
-    const Rot3 expected = propagateAttitude(window, s.prefixRotation, s.prefixStart, s.start, s.prefixGyroBias);
+    const Rot3 expected = propagateAttitude(window, s.prefixRotation, s.prefixStart, s.start, s.prefixGyroBias,
+                                            pipelineTuning(name, forced).maxGap);
     QVERIFY(Rot3::Logmap(s.startRotation.between(expected)).norm() < 1e-9);
     QVERIFY(s.startGyroBias == s.prefixGyroBias);
     // The failure diagnostics keep the completed-pass shape: no initializer object.
@@ -3129,7 +3185,9 @@ void FusionKernelTest::reconstructionUsesIntervalBias()
     fit.values.insert(B(0), b0);
     fit.values.insert(T(0), slope);
     fit.values.insert(X(0), gtsam::Pose3());
-    fit.values.insert(X(1), gtsam::Pose3(propagateAttitude(d, Rot3(), .037, .863, intervalGyroBias), Vector3::Zero()));
+    fit.values.insert(X(1), gtsam::Pose3(propagateAttitude(d, Rot3(), .037, .863, intervalGyroBias,
+                                                           SampleContinuity::holeThreshold(d.imuTime)),
+                                         Vector3::Zero()));
     fit.values.insert(V(0), Vector3(0, 0, 0));
     fit.values.insert(V(1), Vector3(0, 0, 0));
     fit.gyroBiasSlope = slope;
@@ -3194,7 +3252,7 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     // so the constant-bias fit is reproduced only with it held.
     const PreparedInput prepared = prepareInput(toChannels(f));
     Tuning derived = t;
-    derived.maxGap = kImuGapMedians*medianInterval(prepared.recording.imuTime);
+    derived.maxGap = SampleContinuity::holeThreshold(prepared.recording.imuTime);
     derived.noise = imuNoise(toChannels(f).imuConfiguration);
     const Samples window = fittedWindow(prepared.recording, prepared.usableStart, prepared.recording.gnssTime.back());
     validateSamples(window, derived);
@@ -3638,7 +3696,7 @@ void FusionKernelTest::reconstructionUsesTheFittedScale()
     for (Vector3 &rate : f.window.gyro)
         rate = Vector3(.1, -.05, .2);
     f.tuning = tuningAt(104);
-    f.tuning.maxGap = kImuGapMedians*medianInterval(f.window.imuTime);
+    f.tuning.maxGap = SampleContinuity::holeThreshold(f.window.imuTime);
     Vector6 s;
     s << 1.02, .99, 1.01, 1.01, .98, 1.02;
     f.fit.scale = s;
@@ -3900,7 +3958,7 @@ void FusionKernelTest::imuRateSampleOnAFixIsPublishedOnce()
     }
     d.gnssTime = {.25, .8125, 1.375, 1.9375};
     f.tuning = tuningAt(12.5);
-    f.tuning.maxGap = kImuGapMedians*medianInterval(d.imuTime);
+    f.tuning.maxGap = SampleContinuity::holeThreshold(d.imuTime);
     gtsam::Vector9 perturbation;
     perturbation << 1e-3, -2e-3, 1e-3, .01, -.02, .03, .05, -.04, .02;
     predictFits(f, ConstantBias(Vector3(.02, -.01, .03), Vector3(.001, 0, -.002)),
@@ -4137,7 +4195,7 @@ void FusionKernelTest::imuRateZeroMismatchIsForward()
     }
     d.gnssTime = {.037, .5, 1.013, 1.49, 1.963};
     f.tuning = tuningAt(104);
-    f.tuning.maxGap = kImuGapMedians*medianInterval(d.imuTime);
+    f.tuning.maxGap = SampleContinuity::holeThreshold(d.imuTime);
     const ConstantBias bias(Vector3(.05, -.08, .12), Vector3::Zero());
     predictFits(f, bias, gtsam::NavState(Rot3::RzRyRx(.3, -.2, 1.1), Vector3(10, -5, -300), Vector3(20, 5, 8)),
                 gtsam::Vector9::Zero());
@@ -4554,7 +4612,7 @@ void FusionKernelTest::firstNodeHeadingIsTheHeadingCheck()
         qInfo() << name << ": first node heading" << node << "deg, the heading check" << check
                 << "deg; first sample" << out.headingAcc.front() << "deg," << after << "s after fix 0";
         QVERIFY2(agrees(node, 1e-5), name);
-        if (after < medianInterval(f.window.imuTime))
+        if (after < SampleContinuity::nominalInterval(f.window.imuTime))
             QVERIFY2(agrees(out.headingAcc.front(), 1e-3), name);
     }
 }

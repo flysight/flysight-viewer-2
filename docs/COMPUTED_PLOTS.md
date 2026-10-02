@@ -9,6 +9,7 @@
 7. [When a track cannot be computed](#7-when-a-track-cannot-be-computed)
 8. [While computing](#8-while-computing)
 9. [Known limitations](#9-known-limitations)
+10. [Holes in the data](#10-holes-in-the-data)
 
 ## 1. Why some values need computing
 
@@ -262,3 +263,50 @@ Hover over the status bar to see both.
   column or uncheck the plot.
 - On Linux the background computation does not run at a lower
   operating-system priority. The application stays responsive all the same.
+
+## 10. Holes in the data
+
+A FlySight logs nothing from a sensor while it has nothing to log: the GNSS
+receiver in an aircraft cabin or under a canopy, for example, can go without
+a fix for several seconds. Such a stretch is a **hole**. Each sensor has its
+own: its samples' own time (`_time`), its nominal interval (the median
+interval between its successive samples over the whole recording), and a
+hole wherever two successive samples are more than 1.5 nominal intervals
+apart. A sensor with fewer than three samples has no holes. A hole in the
+GNSS samples is not a hole in the IMU's, and nothing about holes is shown
+apart from the data itself: no dialog, no badge, no count.
+
+Nothing is drawn, read, interpolated or differenced across a hole:
+
+- **Plots.** A line stops at the last sample before a hole and resumes at the
+  first after it, with nothing between. This holds for every value of the
+  sensor, recorded or computed (elevation, the GNSS speeds and accelerations,
+  the acceleration accuracy), and whichever time the plot is drawn against.
+- **The legend and the crosshair** show "--" for a value at a time inside one
+  of its holes, as they do beyond the ends of the recording.
+- **The measure tool** shows "--" for an end inside a hole, and no difference
+  that needs it. It compares its two ends, so a measurement whose ends are on
+  samples is shown even when a hole lies between them.
+- **The Set Ground tool** sets nothing for a click inside a hole, and the
+  **automatic ground elevation** has no value when the analysis ends inside
+  one, as for a time outside the recording.
+- **The map** draws the track as one line per stretch of connected fixes, so
+  it has a visible break at a hole, and the cursor dot is absent while the
+  cursor is inside one.
+- **Logbook measurements at a marker** have no value when the marker falls
+  inside a hole of the sensor they read.
+- **Derived values.** The GNSS accelerations and their accuracy are worked out
+  from the samples on either side of each sample; at the samples next to a
+  hole they have no value ([CALCULATIONS.md](CALCULATIONS.md) section 18). A
+  value worked out from one sample alone, such as the glide ratio, is
+  unaffected.
+
+The Sensor fusion plots follow the IMU's samples, so a hole in the GNSS
+samples is not a hole in them; a hole in the IMU's samples breaks them like
+any other plot.
+
+**The exception: crossing times.** The exit, the altitude markers and the
+analysis windows of the WS-P and SP methods find the moment a value crosses a
+threshold. When that crossing falls inside a hole, it is placed by linear
+interpolation between the two samples around the hole: the crossing happened
+somewhere in it, and that is the estimate the recording allows.

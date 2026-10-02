@@ -759,7 +759,7 @@ bool ModelRun::restart(bool crash)
     // environment it records for that column. Where that is the column's
     // current one, none of its values may disagree with the session file
     // next to it.
-    if (crash && crashIndex[QStringLiteral("calculationCompatibility")].toInt() == 2) {
+    if (crash && crashIndex[QStringLiteral("calculationCompatibility")].toInt() == 3) {
         const QStringList keys = columnAttributeKeys();
         const QVector<LogbookColumn> columns = LogbookColumnStore::instance().enabledColumns();
         if (columns.size() != keys.size())
@@ -951,8 +951,8 @@ bool ModelRun::persistedState()
 
     if (!logbook.flushIndex() && logbook.indexNeedsFlush())
         return fail(QStringLiteral("end: index.json could not be written"));
-    if (readIndex()[QStringLiteral("calculationCompatibility")].toInt() != 2)
-        return fail(QStringLiteral("end: index.json has no calculationCompatibility 2"));
+    if (readIndex()[QStringLiteral("calculationCompatibility")].toInt() != 3)
+        return fail(QStringLiteral("end: index.json has no calculationCompatibility 3"));
     return true;
 }
 

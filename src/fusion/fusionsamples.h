@@ -36,8 +36,9 @@ struct Samples {
 };
 
 /// The model's tuning. The defaults are the model; only maxGap and noise are
-/// derived from the recording (1.6 median IMU intervals; the datasheet's noise
-/// at the recording's configuration), and only a test changes anything else.
+/// derived from the recording (the hole threshold of its IMU axis,
+/// samplecontinuity.h; the datasheet's noise at the recording's
+/// configuration), and only a test changes anything else.
 /// The four stopping fields and relativeTolerance may be set to a negative
 /// value by a test, which makes the corresponding test impossible to satisfy
 /// ("never settles", "never accepted"); production never does. The
@@ -54,7 +55,7 @@ struct Tuning {
     // The gyro bias of the full fit is b(t) = b0 + b1 (T(t) - T_ref), T the
     // IMU temperature; b0's prior is gyroBiasSigma and b1's is this.
     double gyroBiasSlopeSigma = .010 * kPi / 180;  ///< prior on b1, the gyro bias change per degC of IMU temperature, rad/s/degC (Table 2, G_OffDr: 0.010 deg/s/degC)
-    double maxGap = .025;                           ///< longest IMU interval the fit integrates across, s
+    double maxGap = .025;                           ///< longest IMU interval the fit integrates across, s: planFit() sets it to the hole threshold of the recording's IMU axis (SampleContinuity::holeThreshold)
     // The ceiling of Levenberg-Marquardt's damping. GTSAM's default, 1e5, is
     // below the damping a resting recording needs under the datasheet's
     // densities (the IMU blocks of the Hessian are about 1e9): every iteration
@@ -78,15 +79,9 @@ struct Tuning {
 /// Gravity in the NED frame, m/s^2.
 extern const gtsam::Vector3 kGravity;
 
-/// An IMU interval above this many median intervals is missing data.
-constexpr double kImuGapMedians = 1.6;
-
 /// Throws unless `times` has at least two entries, all finite and strictly
 /// increasing. Every later stage searches these arrays by bisection.
 void requireIncreasingFiniteTimes(const std::vector<double> &times);
-
-/// The median of the successive differences of `times` (validated first).
-double medianInterval(const std::vector<double> &times);
 
 /// Everything the fit assumes about the samples it is given, checked in a
 /// fixed order because the first violation is the reported reason.
@@ -111,8 +106,9 @@ void requireNoGnssOutage(const Samples &window, double limit);
 /// checked first. The configuration must have a datasheet entry.
 void requireReadingsOnLattice(const Channels &channels);
 
-/// Throws unless the recording's median IMU interval is within 10 % of the
-/// nominal interval, 1 / rate, of each stated rate: ACCEL_ODR_HZ first, then
+/// Throws unless the recording's median IMU interval (the nominal interval of
+/// its IMU axis, SampleContinuity::nominalInterval) is within 10 % of the
+/// interval, 1 / rate, of each stated rate: ACCEL_ODR_HZ first, then
 /// GYRO_ODR_HZ.
 void requireStatedRates(double medianImuInterval, const ImuConfiguration &configuration);
 

@@ -200,7 +200,10 @@ case by case.
 instance on demand; instance ids are `family#key`. There are three:
 
 - `builtin.interpolation`: the attribute `{timeAttr}:{sensor}/{timeVector}/{measurement}`
-  (build the key with `SessionData::interpolationKey`);
+  (build the key with `SessionData::interpolationKey`), the measurement read
+  linearly at the time attribute: unavailable outside the time vector's
+  samples and strictly inside a hole of it (`src/samplecontinuity.h`,
+  [COMPUTED_PLOTS.md](COMPUTED_PLOTS.md) section 10);
 - `builtin.conversion.schema` and `builtin.conversion.default`: the conversion
   layer, one instance per recorded measurement
   (`src/conversion/sourceconversion.cpp`).
@@ -2354,9 +2357,12 @@ for a loaded row, by the column worker for a stub.
 `CalculationCompatibilityVersion` did not change for
 this: an index written before the stamp holds explicit-backed values only as
 "unavailable", and at start-up they are kept only for sessions without a
-record. The marker's current value, 2, identifies the
-centered time fit (`_TIME_FIT_A` / `_TIME_FIT_B`, and with them every non-GNSS
-`_time`); the constant's comment lists what each value stands for. A stored
+record. The marker's current value, 3, identifies sample
+continuity (no value is interpolated or differenced across a hole of a
+sensor's samples, and the sensor fusion kernel's IMU gap rule is the same
+rule); 2 was the centered time fit (`_TIME_FIT_A` / `_TIME_FIT_B`, and with
+them every non-GNSS `_time`). The constant's comment lists what each value
+stands for. A stored
 rejection of a session that is not loaded is a failed result with the reason
 the index recorded for it (16.7): not computed again, listed among the
 failures before and after a restart alike, and the session is not loaded for
@@ -2418,7 +2424,11 @@ accAcc[n-1] = sqrt(sAcc[n-1]^2 + sAcc[n-2]^2) / (t[n-1] - t[n-2])
 
 It is unavailable where the derivative is: `sAcc` or `_time` missing, shorter
 than two samples or of another length than the other, or two equal times in
-the stencil. Because `sAcc` is one figure for the three velocity components,
+the stencil. Like the derivative, a stencil never spans a hole of the samples
+(an interval more than 1.5 nominal intervals long, `src/samplecontinuity.h`;
+[COMPUTED_PLOTS.md](COMPUTED_PLOTS.md) section 10): at a sample whose stencil
+holds one, an end's single interval included, the acceleration and its
+accuracy are NaN, and every other sample is the formula above. Because `sAcc` is one figure for the three velocity components,
 it is the standard deviation of each of `accN`, `accE` and `accD`, and, to the
 usual approximation for a magnitude well above its sigma, of `accH`,
 `accAlongTrack` and `accCrossTrack` too. Its plot is "Acceleration accuracy"
@@ -2443,6 +2453,7 @@ These numbers describe the gap; they are not applied. The figure is strictly
 the receiver's `sAcc` and the sample times: no correction factor, nothing from
 the fusion, nothing measured on a corpus. Its tests are
 `tst_builtins_engine::accelerationAccuracyKnownAnswers` (the formula bit for
-bit, the ends included), `accelerationAccuracyUnavailable`, the descent
+bit, the ends included), `accelerationAccuracyUnavailable`,
+`accelerationAcrossHole` (NaN exactly where the stencil spans a hole), the descent
 fixture's golden (`tst_builtins_golden`) and
 `tst_plot_format::gnssAccelerationAccuracyIsAnAcceleration`.

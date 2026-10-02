@@ -4,6 +4,8 @@
 #include <cmath>
 #include <stdexcept>
 
+#include "samplecontinuity.h"
+
 namespace FlySight::Fusion::Detail {
 
 namespace {
@@ -15,11 +17,12 @@ constexpr double kIntegrationVariance = 1e-8;
 // to within this many seconds.
 constexpr double kDurationTolerance = 1e-10;
 
-/// No step between successive `edges` may exceed `limit` seconds.
-void requireNoImuGap(const std::vector<double> &edges, double limit)
+/// No step between successive `edges` may be a hole against `maxGap`, the
+/// continuity rule's threshold for the recording's IMU axis.
+void requireNoImuGap(const std::vector<double> &edges, double maxGap)
 {
     for (size_t i = 1; i < edges.size(); ++i) {
-        if (edges[i]-edges[i-1] > limit)
+        if (SampleContinuity::isHoleBefore(edges, i, maxGap))
             throw std::invalid_argument("Anchor propagation cannot bridge an IMU gap");
     }
 }
@@ -278,7 +281,7 @@ gtsam::PreintegratedImuMeasurements preintegrateImu(const Samples &samples, doub
 }
 
 gtsam::Rot3 propagateAttitude(const Samples &samples, gtsam::Rot3 rotation, double start, double end,
-                              const gtsam::Vector3 &gyroBias)
+                              const gtsam::Vector3 &gyroBias, double maxGap)
 {
     if (start == end)
         return rotation;
@@ -287,8 +290,7 @@ gtsam::Rot3 propagateAttitude(const Samples &samples, gtsam::Rot3 rotation, doub
     // The gap test looks at IMU samples only; the increments also break at
     // GNSS times, as every other integration in the model does.
     const std::vector<double> imuEdges = integrationEdges(samples, lo, hi);
-    const double gap = kImuGapMedians*medianInterval(samples.imuTime);
-    requireNoImuGap(imuEdges, gap);
+    requireNoImuGap(imuEdges, maxGap);
     const Vectors increments = gyroIncrements(samples, integrationEdges(samples, lo, hi, true), gyroBias);
 
     if (end < start) {

@@ -1,4 +1,5 @@
 #include "plotutils.h"
+#include "samplecontinuity.h"
 #include "sessiondata.h"
 #include "plotregistry.h"
 #include "preferences/preferencekeys.h"
@@ -59,15 +60,33 @@ QColor plotColor(const PlotValue &pv)
     return pv.defaultColor;
 }
 
+SensorTimeAxis sensorTimeAxis(const SessionData &session, const QString &sensorId)
+{
+    SensorTimeAxis axis;
+    axis.time = session.getMeasurement(sensorId, QLatin1String(SessionKeys::Time));
+    axis.holeThreshold = SampleContinuity::holeThreshold(axis.time);
+    return axis;
+}
+
+const SensorTimeAxis &SensorTimeAxes::of(const SessionData &session, const QString &sensorId)
+{
+    const QPair<const SessionData *, QString> key(&session, sensorId);
+    auto it = m_axes.find(key);
+    if (it == m_axes.end())
+        it = m_axes.insert(key, sensorTimeAxis(session, sensorId));
+    return it.value();
+}
+
 double interpolateAtX(const QVector<double> &xData,
                       const QVector<double> &yData,
+                      const SensorTimeAxis &axis,
                       double x)
 {
     if (xData.isEmpty() || yData.isEmpty() || xData.size() != yData.size())
         return kNaN;
 
-    // Reject queries outside the interpolatable range — we need two
-    // bracketing points. See also synthesizeInterpolation() in sessiondata.cpp.
+    // Reject queries outside the interpolatable range: we need two
+    // bracketing points.
     auto it = std::lower_bound(xData.cbegin(), xData.cend(), x);
     if (it == xData.cbegin() || it == xData.cend())
         return kNaN;
@@ -77,6 +96,12 @@ double interpolateAtX(const QVector<double> &xData,
     const double x2 = xData[idx],     y2 = yData[idx];
     if (x2 == x1)
         return kNaN;
+
+    // Nothing is read across a hole of the sensor's own time: the bracketing
+    // pair is judged by index on its _time, whatever x is.
+    if (axis.time.size() == xData.size()
+        && SampleContinuity::isHoleBefore(axis.time, std::size_t(idx), axis.holeThreshold))
+        return x == x2 ? y2 : kNaN;
     return y1 + (y2 - y1) * (x - x1) / (x2 - x1);
 }
 
@@ -84,11 +109,55 @@ double interpolateSessionMeasurement(const SessionData &session,
                                      const QString &sensorId,
                                      const QString &xAxisKey,
                                      const QString &measurementId,
-                                     double x)
+                                     double x,
+                                     const SensorTimeAxis &axis)
 {
     const QVector<double> xData = session.getMeasurement(sensorId, xAxisKey);
     const QVector<double> yData = session.getMeasurement(sensorId, measurementId);
-    return interpolateAtX(xData, yData, x);
+    return interpolateAtX(xData, yData, axis, x);
+}
+
+double groundElevationAt(const SessionData &session,
+                         const QString &xVariable,
+                         const QString &referenceMarkerKey,
+                         double xCoord)
+{
+    const QString sensor = QStringLiteral("GNSS");
+    const double offset = markerOffsetSeconds(session, referenceMarkerKey, xVariable).value_or(0.0);
+    return interpolateSessionMeasurement(session, sensor, xVariable, QStringLiteral("hMSL"),
+                                         xCoord + offset, sensorTimeAxis(session, sensor));
+}
+
+GraphData graphData(const SessionData &session,
+                    const QString &sensorId,
+                    const QString &measurementId,
+                    const QString &xVariable,
+                    double referenceOffset)
+{
+    const QVector<double> yData = session.getMeasurement(sensorId, measurementId);
+    const QVector<double> xData = session.getMeasurement(sensorId, xVariable);
+    if (yData.isEmpty() || xData.size() != yData.size())
+        return {};
+
+    const SensorTimeAxis axis = sensorTimeAxis(session, sensorId);
+    const bool judged = axis.time.size() == yData.size();
+    const auto key = [&xData, referenceOffset](qsizetype i) {
+        return referenceOffset != 0.0 ? xData[i] - referenceOffset : xData[i];
+    };
+
+    GraphData graph;
+    graph.keys.reserve(xData.size());
+    graph.values.reserve(yData.size());
+    for (qsizetype i = 0; i < yData.size(); ++i) {
+        if (judged && SampleContinuity::isHoleBefore(axis.time, std::size_t(i), axis.holeThreshold)) {
+            const double before = graph.keys.last(), after = key(i);
+            graph.keys.append(before + (after - before) / 2);
+            graph.values.append(kNaN);
+        }
+        graph.keys.append(key(i));
+        graph.values.append(yData[i]);
+    }
+    return graph;
 }
 
 QString formatValue(double value, const QString &measurementType)

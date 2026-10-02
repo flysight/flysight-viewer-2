@@ -131,24 +131,30 @@ void MapWidget::onTracksReset()
 
         const QString sessionId =
             m_trackModel->data(idx, TrackMapModel::SessionIdRole).toString();
-        const QVariantList pointsList =
+        const QVariantList runList =
             m_trackModel->data(idx, TrackMapModel::TrackPointsRole).toList();
         const QColor color =
             m_trackModel->data(idx, TrackMapModel::TrackColorRole).value<QColor>();
 
-        QJsonArray points;
-        for (const QVariant &pt : pointsList) {
-            const QVariantMap m = pt.toMap();
-            QJsonObject jpt;
-            jpt.insert(QStringLiteral("lat"), m.value(QStringLiteral("lat")).toDouble());
-            jpt.insert(QStringLiteral("lon"), m.value(QStringLiteral("lon")).toDouble());
-            jpt.insert(QStringLiteral("t"),   m.value(QStringLiteral("t")).toDouble());
-            points.append(jpt);
+        // One point list per run of connected fixes: the page draws a line
+        // per run, so the track breaks at a hole
+        QJsonArray runs;
+        for (const QVariant &run : runList) {
+            QJsonArray points;
+            for (const QVariant &pt : run.toList()) {
+                const QVariantMap m = pt.toMap();
+                QJsonObject jpt;
+                jpt.insert(QStringLiteral("lat"), m.value(QStringLiteral("lat")).toDouble());
+                jpt.insert(QStringLiteral("lon"), m.value(QStringLiteral("lon")).toDouble());
+                jpt.insert(QStringLiteral("t"),   m.value(QStringLiteral("t")).toDouble());
+                points.append(jpt);
+            }
+            runs.append(points);
         }
 
         QJsonObject track;
         track.insert(QStringLiteral("sessionId"), sessionId);
-        track.insert(QStringLiteral("points"), points);
+        track.insert(QStringLiteral("runs"), runs);
         track.insert(QStringLiteral("color"), color.name(QColor::HexArgb));
         tracks.append(track);
     }

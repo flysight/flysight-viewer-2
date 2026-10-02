@@ -518,8 +518,7 @@ void PlotWidget::updatePlot()
 
                 const SessionData &session = sr.session.value();
 
-                yData = session.getMeasurement(sensorID, measurementID);
-                if (yData.isEmpty()) {
+                if (session.getMeasurement(sensorID, measurementID).isEmpty()) {
                     // Silently absent when it is merely uncomputed: waiting on
                     // a requested calculation, or rejected by one. The status
                     // bar (the computations and the warning) and the
@@ -535,16 +534,15 @@ void PlotWidget::updatePlot()
                 if (!offset.has_value())
                     continue;  // session lacks reference marker value; skip it
 
-                xData = session.getMeasurement(sensorID, m_xVariable);
-                if (xData.isEmpty() || xData.size() != yData.size()) {
+                // The samples, with a break across each hole of the sensor's
+                // own time (plotutils.h)
+                GraphData graph = graphData(session, sensorID, measurementID, m_xVariable, offset.value());
+                if (graph.keys.isEmpty()) {
                     qWarning() << "Time and measurement data size mismatch for session:" << session.getAttribute(SessionKeys::SessionId);
                     continue;
                 }
-
-                if (offset.value() != 0.0) {
-                    for (double &x : xData)
-                        x -= offset.value();
-                }
+                xData = std::move(graph.keys);
+                yData = std::move(graph.values);
 
                 graphSessionId = session.getAttribute(SessionKeys::SessionId).toString();
             }
@@ -720,7 +718,11 @@ void PlotWidget::onXAxisRangeChanged(const QCPRange &newRange)
             auto itLower = graph->data()->findBegin(newRange.lower, false);
             auto itUpper = graph->data()->findEnd(newRange.upper, false);
             for (auto it = itLower; it != itUpper; ++it) {
+                // A break across a hole (a NaN-valued point, plotutils.h)
+                // and a missing value are not values
                 double y = it->value;
+                if (std::isnan(y))
+                    continue;
                 yMin = std::min(yMin, y);
                 yMax = std::max(yMax, y);
             }
@@ -1076,25 +1078,8 @@ void PlotWidget::updateXAxisTicker()
 // Utility Methods
 double PlotWidget::interpolateY(const QCPGraph* graph, double x)
 {
-    // find the closest data points for interpolation
-    auto itLower = graph->data()->findBegin(x, false);
-    if (itLower == graph->data()->constBegin() || itLower == graph->data()->constEnd()) {
-        return std::numeric_limits<double>::quiet_NaN();
-    }
-
-    auto itPrev = itLower;
-    --itPrev;
-
-    double x1 = itPrev->key;
-    double y1 = itPrev->value;
-    double x2 = itLower->key;
-    double y2 = itLower->value;
-
-    if (x2 == x1) {
-        return std::numeric_limits<double>::quiet_NaN();
-    }
-
-    return y1 + (y2 - y1) * (x - x1) / (x2 - x1);
+    // The graph's points in place: a cursor move copies nothing
+    return interpolateGraphAt(graph->data()->constBegin(), graph->data()->constEnd(), x);
 }
 
 QPen PlotWidget::determineGraphPen(const GraphInfo &info, const QString &hoveredSessionId) const

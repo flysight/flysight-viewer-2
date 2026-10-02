@@ -103,9 +103,11 @@ function qtColorRGB(qtColor) {
 var map = null;
 var bridge = null;
 
-// Track polylines and data (Task 4.5)
-var polylines = new Map();
-var trackData = new Map();
+// Track polylines and data (Task 4.5). A session's track is a list of runs
+// of connected fixes, broken at each hole of its GNSS samples: one polyline
+// per run, and nothing (no line, no hover segment) between two runs.
+var polylines = new Map();     // sessionId -> [google.maps.Polyline, ...], one per run
+var trackData = new Map();     // sessionId -> [[{lat, lon, t}, ...], ...], one point list per run
 var trackColors = new Map();   // sessionId -> "#AARRGGBB" (Qt HexArgb)
 
 // Cursor dot markers (Task 4.6)
@@ -146,7 +148,7 @@ var pendingHoverUtcSeconds = NaN; // latest computed utcSeconds (buffered)
 var pendingHoverDirty = false;    // true when buffer has unsent data
 
 // Pixel cache (Phase 3: pre-projected track vertices)
-var pixelCache = null;   // Map: sessionId -> { xs: Float64Array, ys: Float64Array, ts: Float64Array, lats: Float64Array, lons: Float64Array, count: number }
+var pixelCache = null;   // Map: sessionId -> [{ xs: Float64Array, ys: Float64Array, ts: Float64Array, lats: Float64Array, lons: Float64Array, count: number }, ...], one per run
 var cacheValid = false;  // true when pixelCache matches current projection
 
 // Spatial grid index (Phase 3: uniform grid for O(k) hover lookup)
@@ -155,7 +157,7 @@ var gridCols = 0;        // number of columns in the grid
 var gridRows = 0;        // number of rows in the grid
 var gridOffsetX = 0;     // pixel X offset (min X of all projected points)
 var gridOffsetY = 0;     // pixel Y offset (min Y of all projected points)
-var gridCells = null;    // flat array of arrays: gridCells[row * gridCols + col] = [{sessionId, segIdx}, ...]
+var gridCells = null;    // flat array of arrays: gridCells[row * gridCols + col] = [{sessionId, runIdx, segIdx}, ...]
 
 // Track draw order and sticky session (Phase 3: tie-breaking)
 var trackDrawOrder = new Map();  // sessionId -> integer draw index (higher = on top)
@@ -242,7 +244,9 @@ function onTracksChanged(tracks) {
     }
 
     // Remove existing polylines
-    polylines.forEach(function(pl) { pl.setMap(null); });
+    polylines.forEach(function(list) {
+        list.forEach(function(pl) { pl.setMap(null); });
+    });
     polylines.clear();
     trackData.clear();
     trackColors.clear();
@@ -252,24 +256,28 @@ function onTracksChanged(tracks) {
 
     for (var i = 0; i < tracks.length; i++) {
         var track = tracks[i];
-        trackData.set(track.sessionId, track.points);
+        var runs = track.runs || [];
+        trackData.set(track.sessionId, runs);
         trackColors.set(track.sessionId, track.color);
         trackDrawOrder.set(track.sessionId, i);
 
-        var path = [];
-        for (var j = 0; j < track.points.length; j++) {
-            path.push({ lat: track.points[j].lat, lng: track.points[j].lon });
-        }
+        var lines = [];
+        for (var r = 0; r < runs.length; r++) {
+            var path = [];
+            for (var j = 0; j < runs[r].length; j++) {
+                path.push({ lat: runs[r][j].lat, lng: runs[r][j].lon });
+            }
 
-        var polyline = new google.maps.Polyline({
-            path: path,
-            strokeColor: qtColorRGB(track.color),
-            strokeOpacity: prefTrackOpacity,
-            strokeWeight: prefLineThickness * dpiScale,
-            map: map,
-            zIndex: 10
-        });
-        polylines.set(track.sessionId, polyline);
+            lines.push(new google.maps.Polyline({
+                path: path,
+                strokeColor: qtColorRGB(track.color),
+                strokeOpacity: prefTrackOpacity,
+                strokeWeight: prefLineThickness * dpiScale,
+                map: map,
+                zIndex: 10
+            }));
+        }
+        polylines.set(track.sessionId, lines);
     }
 
     // Build pixel cache and spatial grid for the new track data
@@ -457,32 +465,38 @@ function rebuildPixelCache() {
     var newCache = new Map();
 
     var failed = false;
-    trackData.forEach(function(points, sessionId) {
+    trackData.forEach(function(runs, sessionId) {
         if (failed) return;
-        if (!points || points.length === 0) return;
+        if (!runs || runs.length === 0) return;
 
-        var count = points.length;
-        var xs = new Float64Array(count);
-        var ys = new Float64Array(count);
-        var ts = new Float64Array(count);
-        var lats = new Float64Array(count);
-        var lons = new Float64Array(count);
+        var entries = [];
+        for (var r = 0; r < runs.length; r++) {
+            var points = runs[r];
+            var count = points.length;
+            var xs = new Float64Array(count);
+            var ys = new Float64Array(count);
+            var ts = new Float64Array(count);
+            var lats = new Float64Array(count);
+            var lons = new Float64Array(count);
 
-        for (var i = 0; i < count; i++) {
-            var pt = latLngToPixel(points[i].lat, points[i].lon);
-            if (!pt) {
-                // Projection not ready -- abort the entire build
-                failed = true;
-                return;
+            for (var i = 0; i < count; i++) {
+                var pt = latLngToPixel(points[i].lat, points[i].lon);
+                if (!pt) {
+                    // Projection not ready -- abort the entire build
+                    failed = true;
+                    return;
+                }
+                xs[i] = pt.x;
+                ys[i] = pt.y;
+                ts[i] = points[i].t !== undefined ? points[i].t : NaN;
+                lats[i] = points[i].lat;
+                lons[i] = points[i].lon;
             }
-            xs[i] = pt.x;
-            ys[i] = pt.y;
-            ts[i] = points[i].t !== undefined ? points[i].t : NaN;
-            lats[i] = points[i].lat;
-            lons[i] = points[i].lon;
+
+            entries.push({ xs: xs, ys: ys, ts: ts, lats: lats, lons: lons, count: count });
         }
 
-        newCache.set(sessionId, { xs: xs, ys: ys, ts: ts, lats: lats, lons: lons, count: count });
+        newCache.set(sessionId, entries);
     });
 
     if (failed) {
@@ -514,16 +528,18 @@ function rebuildGrid() {
     var minY = Infinity, maxY = -Infinity;
     var hasPoints = false;
 
-    pixelCache.forEach(function(entry) {
-        var xs = entry.xs, ys = entry.ys, count = entry.count;
-        for (var i = 0; i < count; i++) {
-            var x = xs[i], y = ys[i];
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-            hasPoints = true;
-        }
+    pixelCache.forEach(function(entries) {
+        entries.forEach(function(entry) {
+            var xs = entry.xs, ys = entry.ys, count = entry.count;
+            for (var i = 0; i < count; i++) {
+                var x = xs[i], y = ys[i];
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+                hasPoints = true;
+            }
+        });
     });
 
     if (!hasPoints) return;
@@ -545,28 +561,31 @@ function rebuildGrid() {
         gridCells[k] = null;
     }
 
-    // Insert each segment into all grid cells its pixel bbox overlaps
-    pixelCache.forEach(function(entry, sessionId) {
-        var xs = entry.xs, ys = entry.ys, count = entry.count;
-        for (var i = 0; i < count - 1; i++) {
-            var cMin = Math.floor((Math.min(xs[i], xs[i + 1]) - gridOffsetX) / gridCellSize);
-            var cMax = Math.floor((Math.max(xs[i], xs[i + 1]) - gridOffsetX) / gridCellSize);
-            var rMin = Math.floor((Math.min(ys[i], ys[i + 1]) - gridOffsetY) / gridCellSize);
-            var rMax = Math.floor((Math.max(ys[i], ys[i + 1]) - gridOffsetY) / gridCellSize);
+    // Insert each segment into all grid cells its pixel bbox overlaps. A
+    // segment joins two points of one run: none spans a hole.
+    pixelCache.forEach(function(entries, sessionId) {
+        for (var r = 0; r < entries.length; r++) {
+            var xs = entries[r].xs, ys = entries[r].ys, count = entries[r].count;
+            for (var i = 0; i < count - 1; i++) {
+                var cMin = Math.floor((Math.min(xs[i], xs[i + 1]) - gridOffsetX) / gridCellSize);
+                var cMax = Math.floor((Math.max(xs[i], xs[i + 1]) - gridOffsetX) / gridCellSize);
+                var rMin = Math.floor((Math.min(ys[i], ys[i + 1]) - gridOffsetY) / gridCellSize);
+                var rMax = Math.floor((Math.max(ys[i], ys[i + 1]) - gridOffsetY) / gridCellSize);
 
-            // Clamp to grid bounds
-            if (cMin < 0) cMin = 0;
-            if (cMax >= gridCols) cMax = gridCols - 1;
-            if (rMin < 0) rMin = 0;
-            if (rMax >= gridRows) rMax = gridRows - 1;
+                // Clamp to grid bounds
+                if (cMin < 0) cMin = 0;
+                if (cMax >= gridCols) cMax = gridCols - 1;
+                if (rMin < 0) rMin = 0;
+                if (rMax >= gridRows) rMax = gridRows - 1;
 
-            for (var row = rMin; row <= rMax; row++) {
-                for (var col = cMin; col <= cMax; col++) {
-                    var idx = row * gridCols + col;
-                    if (gridCells[idx] === null) {
-                        gridCells[idx] = [];
+                for (var row = rMin; row <= rMax; row++) {
+                    for (var col = cMin; col <= cMax; col++) {
+                        var idx = row * gridCols + col;
+                        if (gridCells[idx] === null) {
+                            gridCells[idx] = [];
+                        }
+                        gridCells[idx].push({ sessionId: sessionId, runIdx: r, segIdx: i });
                     }
-                    gridCells[idx].push({ sessionId: sessionId, segIdx: i });
                 }
             }
         }
@@ -633,7 +652,9 @@ function updateHoverAt(mx, my) {
 
                 for (var ci = 0; ci < cell.length; ci++) {
                     var ref = cell[ci];
-                    var entry = pixelCache.get(ref.sessionId);
+                    var entries = pixelCache.get(ref.sessionId);
+                    if (!entries) continue;
+                    var entry = entries[ref.runIdx];
                     if (!entry) continue;
 
                     var segIdx = ref.segIdx;
@@ -652,30 +673,35 @@ function updateHoverAt(mx, my) {
             }
         }
     } else {
-        // Fallback path: brute-force O(N) iteration with per-vertex latLngToPixel()
-        trackData.forEach(function(points, sessionId) {
-            if (!points || points.length < 2) return;
+        // Fallback path: brute-force O(N) iteration with per-vertex latLngToPixel(),
+        // over the segments within each run (none spans a hole)
+        trackData.forEach(function(runs, sessionId) {
+            if (!runs) return;
 
-            for (var i = 0; i < points.length - 1; i++) {
-                var p0 = points[i];
-                var p1 = points[i + 1];
+            runs.forEach(function(points) {
+                if (!points || points.length < 2) return;
 
-                if (p0.t === undefined || p1.t === undefined) continue;
+                for (var i = 0; i < points.length - 1; i++) {
+                    var p0 = points[i];
+                    var p1 = points[i + 1];
 
-                var A = latLngToPixel(p0.lat, p0.lon);
-                var B = latLngToPixel(p1.lat, p1.lon);
-                if (!A || !B) continue;
+                    if (p0.t === undefined || p1.t === undefined) continue;
 
-                var r = distPointToSegment2(mx, my, A.x, A.y, B.x, B.y);
+                    var A = latLngToPixel(p0.lat, p0.lon);
+                    var B = latLngToPixel(p1.lat, p1.lon);
+                    if (!A || !B) continue;
 
-                if (bestSessionId === "" || shouldReplaceHoverCandidate(r.dist2, sessionId, bestDist2, bestSessionId)) {
-                    bestDist2 = r.dist2;
-                    bestSessionId = sessionId;
-                    bestUtc = p0.t + r.u * (p1.t - p0.t);
-                    bestLat = p0.lat + r.u * (p1.lat - p0.lat);
-                    bestLon = p0.lon + r.u * (p1.lon - p0.lon);
+                    var r = distPointToSegment2(mx, my, A.x, A.y, B.x, B.y);
+
+                    if (bestSessionId === "" || shouldReplaceHoverCandidate(r.dist2, sessionId, bestDist2, bestSessionId)) {
+                        bestDist2 = r.dist2;
+                        bestSessionId = sessionId;
+                        bestUtc = p0.t + r.u * (p1.t - p0.t);
+                        bestLat = p0.lat + r.u * (p1.lat - p0.lat);
+                        bestLon = p0.lon + r.u * (p1.lon - p0.lon);
+                    }
                 }
-            }
+            });
         });
     }
 
@@ -855,13 +881,17 @@ function onFitBounds(south, west, north, east) {
 function onPreferenceChanged(key, value) {
     if (key === "map/lineThickness") {
         prefLineThickness = value;
-        polylines.forEach(function(pl) {
-            pl.setOptions({ strokeWeight: value * dpiScale });
+        polylines.forEach(function(list) {
+            list.forEach(function(pl) {
+                pl.setOptions({ strokeWeight: value * dpiScale });
+            });
         });
     } else if (key === "map/trackOpacity") {
         prefTrackOpacity = value;
-        polylines.forEach(function(pl) {
-            pl.setOptions({ strokeOpacity: value });
+        polylines.forEach(function(list) {
+            list.forEach(function(pl) {
+                pl.setOptions({ strokeOpacity: value });
+            });
         });
     } else if (key === "map/largeDotSize") {
         prefLargeDotSize = value;

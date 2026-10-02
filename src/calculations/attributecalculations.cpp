@@ -3,6 +3,7 @@
 #include "../dependencykey.h"
 #include "../preferences/preferencekeys.h"
 #include "registration.h"
+#include "../samplecontinuity.h"
 #include <QVector>
 #include <algorithm>
 #include <cmath>
@@ -562,7 +563,9 @@ void Calculations::registerAttributeCalculations(CalculationRegistry &registry)
     // Ground elevation: automatic calculation by interpolating hMSL at analysis end time.
     // This serves as the data-derived default. If the user sets a value (via the
     // SetGround tool, logbook editing, or "Fixed" mode at import), that stored
-    // attribute takes precedence over this calculated fallback.
+    // attribute takes precedence over this calculated fallback. A point read
+    // like the plot's: an analysis end strictly inside a hole of the GNSS
+    // samples has no value (the continuity rule, samplecontinuity.h).
     {
         CalculationDescriptor d;
         d.id = QStringLiteral("builtin.attr.groundElev");
@@ -592,6 +595,10 @@ void Calculations::registerAttributeCalculations(CalculationRegistry &registry)
 
             for (int i = 1; i < n; ++i) {
                 if (time[i] >= analysisEndSec) {
+                    if (time[i] > analysisEndSec
+                        && SampleContinuity::isHoleBefore(time, std::size_t(i),
+                                                          SampleContinuity::holeThreshold(time)))
+                        return CalculationResult::unavailable();
                     double t0 = time[i - 1];
                     double t1 = time[i];
                     double a = (analysisEndSec - t0) / (t1 - t0);

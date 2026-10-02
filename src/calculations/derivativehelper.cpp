@@ -1,6 +1,8 @@
 #include "derivativehelper.h"
+#include "../samplecontinuity.h"
 #include <QDebug>
 #include <cmath>
+#include <limits>
 
 namespace FlySight {
 namespace Calculations {
@@ -12,7 +14,9 @@ namespace {
 // backward difference at the last. The derivative and its accuracy share it
 // so that an accuracy always qualifies the samples the derivative actually
 // differenced. combine(earlier, later) is the numerator over the stencil's
-// two samples; caller names the public function in the warnings.
+// two samples; caller names the public function in the warnings. A stencil
+// never spans a hole of times: the sample whose stencil holds one is NaN,
+// whatever the values are, and the differences elsewhere are untouched.
 template <typename Combine>
 std::optional<QVector<double>> differenceOverStencil(const char *caller,
                                                      const QVector<double>& values,
@@ -37,6 +41,14 @@ std::optional<QVector<double>> differenceOverStencil(const char *caller,
     QVector<double> result;
     result.reserve(values.size());
 
+    // The rule's threshold once for the whole vector; holeBefore(i) is the
+    // interval between samples i - 1 and i
+    const double threshold = SampleContinuity::holeThreshold(times);
+    const auto holeBefore = [&times, threshold](int i) {
+        return SampleContinuity::isHoleBefore(times, std::size_t(i), threshold);
+    };
+    constexpr double kNoValue = std::numeric_limits<double>::quiet_NaN();
+
     // Forward difference for first point
     {
         double dt = times[1] - times[0];
@@ -44,7 +56,7 @@ std::optional<QVector<double>> differenceOverStencil(const char *caller,
             qWarning("%s: zero time difference between indices 0 and 1.", caller);
             return std::nullopt;
         }
-        result.append(combine(values[0], values[1]) / dt);
+        result.append(holeBefore(1) ? kNoValue : combine(values[0], values[1]) / dt);
     }
 
     // Centered difference for interior points
@@ -54,7 +66,8 @@ std::optional<QVector<double>> differenceOverStencil(const char *caller,
             qWarning("%s: zero time difference for indices %d and %d", caller, i - 1, i + 1);
             return std::nullopt;
         }
-        result.append(combine(values[i - 1], values[i + 1]) / dt);
+        result.append(holeBefore(i) || holeBefore(i + 1) ? kNoValue
+                                                         : combine(values[i - 1], values[i + 1]) / dt);
     }
 
     // Backward difference for last point
@@ -65,7 +78,7 @@ std::optional<QVector<double>> differenceOverStencil(const char *caller,
             qWarning("%s: zero time difference at end indices %d and %d", caller, last - 1, last);
             return std::nullopt;
         }
-        result.append(combine(values[last - 1], values[last]) / dt);
+        result.append(holeBefore(last) ? kNoValue : combine(values[last - 1], values[last]) / dt);
     }
 
     return result;

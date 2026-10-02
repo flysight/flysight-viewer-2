@@ -607,10 +607,10 @@ void ResultRecordsTest::stampsAreCurrent()
 {
     const CalculationRecord record = CalculationRecord::stamped(sampleSnapshot());
     QVERIFY(record.stampsAreCurrent());
-    QCOMPARE(record.calculationCompatibility, 2);
+    QCOMPARE(record.calculationCompatibility, 3);
 
     CalculationRecord other = record;
-    other.calculationCompatibility = 3;
+    other.calculationCompatibility = 4;
     QVERIFY(!other.stampsAreCurrent());
 
     // A registration changes the calculation environment of the names it

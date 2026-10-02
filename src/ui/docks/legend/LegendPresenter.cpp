@@ -305,6 +305,10 @@ LegendContent legendContentForMoment(const SessionModel &sessionModel,
 
     bool hasData = false;
 
+    // Each sensor's time axis once for this cursor event (holes are judged on
+    // it, plotutils.h), however many of its series are read
+    SensorTimeAxes axes;
+
     if (pointMode) {
         const QString targetSessionId = *targets.constBegin();
         const SessionData *session = sessionById.value(targetSessionId, nullptr);
@@ -345,7 +349,8 @@ LegendContent legendContentForMoment(const SessionModel &sessionModel,
             row.name = seriesDisplayName(pv);
             row.color = plotColor(pv);
 
-            const double v = interpolateSessionMeasurement(*session, pv.sensorID, xVariable, pv.measurementID, rawX);
+            const double v = interpolateSessionMeasurement(*session, pv.sensorID, xVariable, pv.measurementID, rawX,
+                                                           axes.of(*session, pv.sensorID));
             if (!std::isnan(v)) {
                 hasData = true;
                 row.value = formatValue(v, pv.measurementType);
@@ -380,9 +385,10 @@ LegendContent legendContentForMoment(const SessionModel &sessionModel,
                                QTimeZone::UTC)
                                .toString(QStringLiteral("yy-MM-dd HH:mm:ss.zzz")));
 
-        const double lat = interpolateSessionMeasurement(*session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("lat"), utcSecs);
-        const double lon = interpolateSessionMeasurement(*session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("lon"), utcSecs);
-        const double alt = interpolateSessionMeasurement(*session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("hMSL"), utcSecs);
+        const SensorTimeAxis &gnss = axes.of(*session, QStringLiteral("GNSS"));
+        const double lat = interpolateSessionMeasurement(*session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("lat"), utcSecs, gnss);
+        const double lon = interpolateSessionMeasurement(*session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("lon"), utcSecs, gnss);
+        const double alt = interpolateSessionMeasurement(*session, QStringLiteral("GNSS"), SessionKeys::Time, QStringLiteral("hMSL"), utcSecs, gnss);
 
         if (!std::isnan(lat) && !std::isnan(lon) && !std::isnan(alt)) {
             // Convert altitude to display units
@@ -443,7 +449,8 @@ LegendContent legendContentForMoment(const SessionModel &sessionModel,
             const double offset = offsetForSession(*session);
             const double rawX = *xOpt + offset;
 
-            const double v = interpolateSessionMeasurement(*session, pv.sensorID, xVariable, pv.measurementID, rawX);
+            const double v = interpolateSessionMeasurement(*session, pv.sensorID, xVariable, pv.measurementID, rawX,
+                                                           axes.of(*session, pv.sensorID));
             if (!std::isnan(v)) {
                 valuesAtCursor.append(v);
             }

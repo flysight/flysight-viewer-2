@@ -860,9 +860,13 @@ in the status bar's warning and on its logbook row
 - no `IMU/temperature` handed to the kernel at all (the reason names the
   channel; inside the application this cannot happen, because a session
   without the column has a missing input and the fit never runs);
-- fewer than three GNSS fixes and two IMU samples, or fewer than three GNSS
+- fewer than three GNSS fixes and three IMU samples, or fewer than three GNSS
   fixes inside IMU coverage;
-- an IMU gap longer than 1.6 times the median IMU interval;
+- an IMU gap, an IMU interval longer than 1.5 times the median IMU interval
+  of the whole recording, between two fixes: the application's continuity
+  rule ([COMPUTED_PLOTS.md](COMPUTED_PLOTS.md) section 10,
+  `src/samplecontinuity.h`), which the attitude propagation of the
+  initializer applies too;
 - a GNSS gap longer than max(2 s, 5 median GNSS intervals): a disconnected
   recording is unavailable rather than joined into one trajectory;
 - a local origin index outside the GNSS samples.

@@ -46,7 +46,11 @@ void registerBuiltInCalculations(CalculationRegistry &registry = CalculationRegi
 /// gyro-derived columns were computed without the legacy-gyro schema correction.
 /// 2 - centered time fit: _TIME_FIT_A/B, and with them every non-GNSS _time,
 /// changed at high device uptime.
-constexpr int CalculationCompatibilityVersion = 2;
+/// 3 - sample continuity: no value is interpolated or differenced across a
+/// hole (the interpolation family, the derivatives, the automatic ground
+/// elevation), and the sensor fusion kernel's IMU gap rule is the
+/// application's continuity rule.
+constexpr int CalculationCompatibilityVersion = 3;
 
 /// The second half of cache validity, one per logbook column (index.json field
 /// "environment" of each column definition, logbookColumnEnvironment()): the

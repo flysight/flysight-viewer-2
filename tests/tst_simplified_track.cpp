@@ -1,8 +1,9 @@
 // The simplified map track (builtin.simplified.track) on the shared local
 // frame: seven outputs at the same retained sample indices, the 0.5 m
 // tolerance, duplicate-position endpoints, closed / degenerate / empty tracks,
-// non-finite samples, the single projection, and unavailability without a
-// local origin with recovery. Everything runs against a fake session state and
+// non-finite samples, the single projection, unavailability without a
+// local origin with recovery, and a hole in the GNSS samples, across which
+// each run is simplified on its own. Everything runs against a fake session state and
 // a private registry. Index selection is isolated from the projection by
 // storing Local/north, east, down directly (stored data wins over any
 // calculation), and GNSS/time is the sample index, so Simplified/_time reads
@@ -232,6 +233,7 @@ private slots:
     void projectionRunsOncePerRecording();
     void unavailableWithoutOriginAndRecovers();
     void siblingsInvalidateTogether();
+    void eachRunSimplifiedOnItsOwn();
 };
 
 // One calculation behind all seven names, and every one of them is the
@@ -608,6 +610,40 @@ void SimplifiedTrackTest::siblingsInvalidateTogether()
     QCOMPARE(engine.measurement("Simplified", "north"), QVector<double>({0.0, 2.0}));
     QCOMPARE(engine.runCount(TrackId), 2);
     QCOMPARE(engine.undeclaredReadCount(), 0);
+}
+
+// A hole in GNSS/time (a 6 s interval between samples 4 and 5 among 1 s
+// ones, the continuity rule's hole): each run of connected samples is
+// simplified on its own. The path is one straight line, which simplified
+// whole keeps its two ends only; per run it keeps both ends of each run, so
+// the two samples around the hole survive, and the seven outputs stay the
+// recorded samples at those indices.
+void SimplifiedTrackTest::eachRunSimplifiedOnItsOwn()
+{
+    World world;
+    QVector<double> north, east;
+    for (int i = 0; i < 10; ++i) {
+        north.append(11.0 * i);
+        east.append(0.0);
+    }
+    addPath(world.state, north, east);
+    const QVector<double> time = {0, 1, 2, 3, 4, 10, 11, 12, 13, 14};
+    world.state.setMeasurement("GNSS", "time", time);
+    CalculationEngine &engine = *world.engine;
+
+    const QVector<int> kept = {0, 4, 5, 9};
+    QCOMPARE(engine.measurement("Simplified", "_time"), QVector<double>({0, 4, 10, 14}));
+    for (const Channel &channel : channels) {
+        const QVector<double> output = engine.measurement("Simplified", channel.name);
+        const QVector<double> input = engine.measurement(channel.inputSensor, channel.inputName);
+        QCOMPARE(output.size(), kept.size());
+        for (int k = 0; k < kept.size(); ++k)
+            QVERIFY2(output[k] == input[kept[k]], channel.name);
+    }
+
+    // Without the hole the same path is one run: its two ends
+    world.state.setMeasurement(*world.engine, "GNSS", "time", {0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+    QCOMPARE(engine.measurement("Simplified", "_time"), QVector<double>({0, 9}));
 }
 
 FLYSIGHT_TEST_MAIN(SimplifiedTrackTest)
