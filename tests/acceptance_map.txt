@@ -3010,7 +3010,7 @@
 1007 tst_fusion_store dependencyEditDropsRecord
 1007 audit solver-confinement
 
-# 1008 - (5, as settled) whether stated or defaulted, each IMU sensor's range is checked against the lattice of its readings (the datasheet's sensitivity at the range, in effective units, within the rounding of the file's decimals): the coarsest range whose lattice every reading fits must be the configured one; otherwise the fit rejects the recording with a reason that names the range stated and the range the values show, and does not guess
+# 1008 - (5, as settled) whether stated or defaulted, each IMU sensor's range is checked against the lattice of its readings (the gyro's sensitivity at the range, 70 mdps at +/-2000 deg/s, 1.14688 times the range over 32768; the accelerometer's range over 32768, which the printed sensitivity rounds; in effective units, within the rounding of the file's decimals): the coarsest range whose lattice every reading fits must be the configured one; otherwise the fit rejects the recording with a reason that names the range stated and the range the values show, and does not guess
 1008 tst_fusion_kernel latticeCheckFindsTheCoarsestRange
 1008 tst_fusion_golden rejectionFixturesMatchGolden
 1008 manual M47
@@ -3024,7 +3024,7 @@
 1010 tst_fusion_golden rejectionFixturesMatchGolden
 1010 tst_fusion_session configurationReachesTheKernel
 
-# 1011 - (6, as settled) the per-sample noise of each sensor and axis is sqrt(density^2 x bandwidth + step^2 / 12): the datasheet's density at the configured range, the datasheet's bandwidth for the configured rate and filter, and the quantization step at the range (the datasheet's sensitivity)
+# 1011 - (6, as settled) the per-sample noise of each sensor and axis is sqrt(density^2 x bandwidth + step^2 / 12): the datasheet's density at the configured range, the datasheet's bandwidth for the configured rate and filter, and the quantization step at the range (the gyro's sensitivity, 70 mdps at +/-2000 deg/s, 1.14688 times the range over 32768; the accelerometer's range over 32768, which the printed sensitivity rounds)
 1011 tst_fusion_kernel noiseFollowsTheTable
 
 # 1012 - (6) the documentation carries the table: the density per range for each sensor and the bandwidth per rate and filter, with the datasheet's table numbers
@@ -3047,7 +3047,6 @@
 1016 audit noise-model
 
 # 1017 - (6) the bias priors stay at 0.3 m/s^2, 0.03 rad/s and 0.010 deg/s per degC, and the documentation cites the datasheet's table for each
-1017 tst_fusion_kernel validationRejectsEachDefect
 1017 tst_fusion_kernel temperatureGraphShape
 1017 audit noise-model
 

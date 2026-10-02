@@ -13,7 +13,7 @@
 
 namespace FlySight::Fusion::Detail {
 
-const gtsam::Vector3 kGravity(0, 0, 9.80665);
+const gtsam::Vector3 kGravity(0, 0, kStandardGravity);
 
 namespace {
 

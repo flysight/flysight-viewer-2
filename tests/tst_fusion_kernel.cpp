@@ -988,36 +988,41 @@ void FusionKernelTest::noiseFollowsTheTable()
     // per-sample sigma and the integration density are the formula of the
     // specification with the datasheet's literals (DS12140 Rev 3: An 110
     // ug/sqrt(Hz) at +/-16 g, Rn 3.8 mdps/sqrt(Hz), the gyro's LPF2 cutoff of
-    // Table 18, the accelerometer at ODR / 2, the step the sensitivity), bit
-    // for bit: the same operations in the same order.
+    // Table 18, the accelerometer at ODR / 2, the step the accelerometer's
+    // range over 32768 counts and the gyro's sensitivity). The datasheet's
+    // densities, the bandwidths and the steps involve no sum, so no compiler
+    // contracts them, and are compared exactly; the sigma and the density,
+    // from a sum of products, are recomputed values under tests/README.md
+    // section 11's policy (the same bits on the capture compiler, within
+    // 4 ulp where a compiler may contract the sum in one place only).
     const double g = 9.80665, radians = kPi/180;
     const struct { double rate, gyroBandwidth; } configurations[] = {{12.5, 4.2}, {26, 8.3}, {104, 33.0}};
     for (const auto &c : configurations) {
         const ImuNoise n = fixtureNoise(c.rate);
         QCOMPARE(n.configuration.accelFsG, 16.);
+        QCOMPARE(n.configuration.gyroFsDegS, 2000.);
         QCOMPARE(n.configuration.gyroOdrHz, c.rate);
 
         const double accDatasheet = 110e-6*g, accStep = 16./32768*g, accBandwidth = c.rate/2;
         const double accSigma = std::sqrt(accDatasheet*accDatasheet*accBandwidth + accStep*accStep/12);
         const SensorNoise &a = n.accelerometer;
-        QVERIFY(a.range == 16 && a.rate == c.rate);
+        QVERIFY(a.rate == c.rate);
         QVERIFY(a.datasheetDensity == accDatasheet);
         QVERIFY(a.bandwidth == accBandwidth);
-        QVERIFY(a.step == accStep && a.latticeStep == accStep);
-        QVERIFY(a.sampleSigma == accSigma);
-        QVERIFY(a.density == accSigma*std::sqrt(1/c.rate));
+        QVERIFY(a.step == accStep);
+        QVERIFY(sameRecomputedValue(a.sampleSigma, accSigma));
+        QVERIFY(sameRecomputedValue(a.density, accSigma*std::sqrt(1/c.rate)));
         QVERIFY(a.sensitivityTolerance == .01);
 
         const double gyroDatasheet = 3.8e-3*radians, gyroStep = 70e-3*radians;
         const double gyroSigma = std::sqrt(gyroDatasheet*gyroDatasheet*c.gyroBandwidth + gyroStep*gyroStep/12);
         const SensorNoise &w = n.gyroscope;
-        QVERIFY(w.range == 2000 && w.rate == c.rate);
+        QVERIFY(w.rate == c.rate);
         QVERIFY(w.datasheetDensity == gyroDatasheet);
         QVERIFY(w.bandwidth == c.gyroBandwidth);
         QVERIFY(w.step == gyroStep);
-        QVERIFY(w.latticeStep == 70e-3);
-        QVERIFY(w.sampleSigma == gyroSigma);
-        QVERIFY(w.density == gyroSigma*std::sqrt(1/c.rate));
+        QVERIFY(sameRecomputedValue(w.sampleSigma, gyroSigma));
+        QVERIFY(sameRecomputedValue(w.density, gyroSigma*std::sqrt(1/c.rate)));
         QVERIFY(w.sensitivityTolerance == .01);
         qInfo() << c.rate << "Hz: accelerometer sigma" << a.sampleSigma << "m/s^2, density" << a.density
                 << "; gyro sigma" << w.sampleSigma << "rad/s, density" << w.density;
@@ -1052,7 +1057,7 @@ void FusionKernelTest::noiseFollowsTheTable()
                 configuration.gyroOdrHz = rate.value;
                 const ImuNoise n = imuNoise(configuration);
                 QVERIFY(n.accelerometer.step == accelerometer.step);
-                QVERIFY(n.gyroscope.latticeStep == gyro.step);
+                QVERIFY(n.gyroscope.step == gyro.step*radians);
                 QVERIFY(n.accelerometer.bandwidth == rate.value/2);
                 QVERIFY(n.gyroscope.bandwidth == rate.gyroBandwidth);
                 for (const SensorNoise *s : {&n.accelerometer, &n.gyroscope})
@@ -3066,8 +3071,10 @@ void FusionKernelTest::temperatureGraphShape()
     const auto sigmas = std::dynamic_pointer_cast<gtsam::noiseModel::Diagonal>(slopePrior->noiseModel());
     QVERIFY(sigmas != nullptr);
     QVERIFY(sigmas->sigmas() == gtsam::Vector(Vector3::Constant(Tuning{}.gyroBiasSlopeSigma)));
-    // Spec section 6's priors, as literals: b0 keeps 0.03 rad/s, b1 is
-    // 0.010 deg/s per degC.
+    // Spec section 6's priors, as literals: the accelerometer bias keeps
+    // 0.3 m/s^2, b0 keeps 0.03 rad/s, b1 is 0.010 deg/s per degC (the
+    // documented noise model's item 1017).
+    QCOMPARE(Tuning{}.accBiasSigma, .3);
     QCOMPARE(Tuning{}.gyroBiasSigma, .03);
     QCOMPARE(Tuning{}.gyroBiasSlopeSigma, .010*kPi/180);
 

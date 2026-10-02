@@ -44,8 +44,6 @@ struct Samples {
 /// initializer's prefix fits cap maxIterations and maxPasses at their own
 /// budget (initializer.cpp): the smaller of the tuning's limit and 50
 /// iterations, and of the tuning's limit and 1 pass; they keep the noise.
-constexpr double kPi = 3.14159265358979323846;
-
 struct Tuning {
     /// The IMU's noise: derived from the recording's configuration by
     /// planFit(), as maxGap is; NaN until then (preintegrateImu() refuses it).

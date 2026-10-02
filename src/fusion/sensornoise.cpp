@@ -11,11 +11,9 @@ namespace FlySight::Fusion::Detail {
 
 namespace {
 
-// The g of the datasheet's units and of the conversion layer, m/s^2.
-constexpr double kStandardGravity = 9.80665;
 // The conversion of the adapter (inputadapter.cpp), spelled the same way so
 // that a step in rad/s is the same bits as a reading converted there.
-constexpr double kRadiansPerDegree = 3.14159265358979323846 / 180;
+constexpr double kRadiansPerDegree = kPi / 180;
 // The output words are 16-bit two's complement: a range spans 32768 counts on
 // either side of zero.
 constexpr double kCountsPerRange = 32768;
@@ -62,6 +60,19 @@ constexpr double kGyroUnitDegS = 1e-3;
 {
     throw std::invalid_argument((QStringLiteral("No datasheet entry for %1 = %2; sensor fusion unavailable")
                                      .arg(QLatin1String(key), QString::number(value))).toStdString());
+}
+
+/// The step of a range's lattice, in the units of Channels (m/s^2, deg/s):
+/// the quantization step of the noise model, which converts it to kernel
+/// units, and the step the lattice check tries.
+double latticeStep(const AccelerometerRange &range)
+{
+    return range.rangeG/kCountsPerRange*kStandardGravity;
+}
+
+double latticeStep(const GyroRange &range)
+{
+    return range.sensitivityDegS;
 }
 
 const Rate *rateEntry(double hz)
@@ -129,21 +140,17 @@ ImuNoise imuNoise(const ImuConfiguration &configuration)
     noise.configuration = configuration;
 
     SensorNoise &a = noise.accelerometer;
-    a.range = accelerometer->rangeG;
     a.rate = accelerometerRate->hz;
     a.datasheetDensity = accelerometer->densityGPerRootHz*kStandardGravity;
     a.bandwidth = accelerometerRate->hz/2;
-    a.step = accelerometer->rangeG/kCountsPerRange*kStandardGravity;
-    a.latticeStep = a.step;
+    a.step = latticeStep(*accelerometer);
     deriveSigmas(a);
 
     SensorNoise &g = noise.gyroscope;
-    g.range = gyro->rangeDegS;
     g.rate = gyroRate->hz;
     g.datasheetDensity = kGyroDensityDegSPerRootHz*kRadiansPerDegree;
     g.bandwidth = gyroRate->gyroBandwidthHz;
-    g.step = gyro->sensitivityDegS*kRadiansPerDegree;
-    g.latticeStep = gyro->sensitivityDegS;
+    g.step = latticeStep(*gyro)*kRadiansPerDegree;
     deriveSigmas(g);
     return noise;
 }
@@ -155,7 +162,7 @@ double rangeShownByReadings(ImuSensor sensor, const QVector<double> &x, const QV
         // The conversion layer multiplies g by standard gravity.
         const double tolerance = kAccelerometerUnitG*kStandardGravity;
         for (const AccelerometerRange &range : kAccelerometerRanges) {
-            if (allOnLattice(x, y, z, range.rangeG/kCountsPerRange*kStandardGravity, tolerance))
+            if (allOnLattice(x, y, z, latticeStep(range), tolerance))
                 return range.rangeG;
         }
     } else {
@@ -166,7 +173,7 @@ double rangeShownByReadings(ImuSensor sensor, const QVector<double> &x, const QV
         const GyroRange &any = kGyroRanges[0];
         const double tolerance = kGyroUnitDegS*(any.sensitivityDegS/(any.rangeDegS/kCountsPerRange));
         for (const GyroRange &range : kGyroRanges) {
-            if (allOnLattice(x, y, z, range.sensitivityDegS, tolerance))
+            if (allOnLattice(x, y, z, latticeStep(range), tolerance))
                 return range.rangeDegS;
         }
     }

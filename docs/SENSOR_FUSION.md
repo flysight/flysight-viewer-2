@@ -861,17 +861,12 @@ Then, after every check above, the configuration (section 3), in this order:
   accelerometer readings lie on the +/-8 g lattice; sensor fusion
   unavailable`, or `... lie on no range's lattice; ...` when none fits
   (`GYRO_FS_DEG_S states +/-2000 deg/s but the gyro readings ...` for the
-  gyro);
+  gyro), which is also how a legacy file given `$VAR,SCHEMA_VER,2` by hand
+  is rejected ([DATA_SCHEMA.md](DATA_SCHEMA.md), section 7);
 - a median logged IMU interval more than 10 % from a stated rate's,
   `ACCEL_ODR_HZ` before `GYRO_ODR_HZ`: `ACCEL_ODR_HZ states 12.5 Hz but the IMU
   is logged at 100.0 Hz; sensor fusion unavailable`, the realistic case of a
   file without keys from a firmware that logs faster than the default.
-
-A consequence for the escape hatch of [DATA_SCHEMA.md](DATA_SCHEMA.md),
-section 7: a legacy file given `$VAR,SCHEMA_VER,2` by hand is read without the
-legacy correction, so its gyro readings are multiples of the range over 32768
-rather than of the sensitivity, show no range's lattice (or a finer range's),
-and the fit rejects the recording.
 
 A solver that does not converge is reported the same way, with the stopping
 rule that ended it in the reason (`Batch fusion did not converge (iteration
