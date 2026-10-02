@@ -1318,7 +1318,7 @@ expect_count("the GNSS acceleration accuracy states its measurement"
 # hole.
 # =============================================================================
 
-# ─────────────────────────────── sample-continuity (items 1201, 1202, 1204, 1205, 1208, 1211, 1213)
+# ─────────────────────────────── sample-continuity (items 1201, 1202, 1204, 1208, 1210, 1211, 1213)
 audit_group(sample-continuity)
 # Allow: none expected. The factor is the unit's one constant; a reader asks
 # holeThreshold() instead of multiplying. A "1.5" in an unrelated sense (a
@@ -1367,6 +1367,9 @@ expect_none("the kernel's former gap rule is gone" "kImuGapMedians|samplestatist
 # The documents. Allow: these count LINES; rewrap so that each phrase stays on
 # one line.
 expect_count("the plots document says what a hole is" "^## [0-9]+\\. Holes in the data$" 1
+  docs/COMPUTED_PLOTS.md)
+expect_count("the plots document names the crossing times as the exception"
+  "placed by linear interpolation between the two samples around the hole" 1
   docs/COMPUTED_PLOTS.md)
 expect_count("the calculations document says a stencil never spans a hole"
   "a stencil never spans a hole" 1 docs/CALCULATIONS.md)

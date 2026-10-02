@@ -114,18 +114,19 @@ void SampleContinuityTest::nominalIntervalIsTheMedian()
     QCOMPARE(holeThreshold(even), 3.75);
     QCOMPARE(nominalInterval(gnssTime), 1.0);
     QCOMPARE(holeThreshold(gnssTime), 1.5);
-    const double raw[] = {10.0, 10.25, 10.5, 11.0};                   // .25, .25, .5
-    QCOMPARE(nominalInterval(TimeAxis(raw, 4)), .25);
+    const std::vector<double> uneven = {10.0, 10.25, 10.5, 11.0};     // .25, .25, .5
+    QCOMPARE(nominalInterval(uneven), .25);
 }
 
 // An interval of exactly 1.5 nominal intervals is not a hole; the next double
 // above it is
 void SampleContinuityTest::holeIsStrictlyAboveOneAndAHalf()
 {
+    // Against a given threshold, the interval alone decides
     const double above = std::nextafter(1.5, 2.0);
-    QVERIFY(!isHole(1.5, 1.5));
-    QVERIFY(isHole(above, 1.5));
-    QVERIFY(!isHole(1.0, 1.5));
+    QVERIFY(!isHoleBefore(std::vector<double>{0.0, 1.5}, 1, 1.5));
+    QVERIFY(isHoleBefore(std::vector<double>{0.0, above}, 1, 1.5));
+    QVERIFY(!isHoleBefore(std::vector<double>{0.0, 1.0}, 1, 1.5));
 
     const std::vector<double> boundary = {0.0, 1.0, 2.0, 3.0, 4.5, 5.5, 6.5};
     QCOMPARE(holeThreshold(boundary), 1.5);
@@ -143,7 +144,7 @@ void SampleContinuityTest::holeIsStrictlyAboveOneAndAHalf()
         QVERIFY(!isHoleBefore(justAbove, i, holeThreshold(justAbove)));
 
     // Never a hole against no threshold
-    QVERIFY(!isHole(1e9, std::numeric_limits<double>::quiet_NaN()));
+    QVERIFY(!isHoleBefore(std::vector<double>{0.0, 1e9}, 1, std::numeric_limits<double>::quiet_NaN()));
 }
 
 // Fewer than three samples: no nominal interval, no holes, one run (none

@@ -268,12 +268,19 @@ void Calculations::registerAttributeCalculations(CalculationRegistry &registry)
                 const double acc = sAcc[i - 1] + a * (sAcc[i] - sAcc[i - 1]);
                 if (acc > maxAccuracy) continue;
 
-                // Check acceleration
-                const double az = accD[i - 1] + a * (accD[i] - accD[i - 1]);
+                // Check acceleration. The derivative has no value beside a
+                // hole in the samples (its stencil never spans one), but a
+                // crossing there is still placed, as every crossing time is:
+                // the slope of the crossing interval's own linear interpolant
+                // is then the estimate the recording allows.
+                double az = accD[i - 1] + a * (accD[i] - accD[i - 1]);
+                if (!std::isfinite(az))
+                    az = (velD[i] - velD[i - 1]) / (time[i] - time[i - 1]);
                 if (az < minAcceleration) continue;
 
-                // Determine exit
+                // Determine exit; an exit without a value is no exit
                 const double tExit = time[i - 1] + a * (time[i] - time[i - 1]) - vThreshold / az;
+                if (!std::isfinite(tExit)) continue;
                 return CalculationResult().setAttribute(SessionKeys::ExitTime, tExit);
             }
 

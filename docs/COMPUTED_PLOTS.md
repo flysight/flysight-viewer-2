@@ -295,11 +295,14 @@ Nothing is drawn, read, interpolated or differenced across a hole:
   cursor is inside one.
 - **Logbook measurements at a marker** have no value when the marker falls
   inside a hole of the sensor they read.
-- **Derived values.** The GNSS accelerations and their accuracy are worked out
-  from the samples on either side of each sample; at the samples next to a
-  hole they have no value ([CALCULATIONS.md](CALCULATIONS.md) section 18). A
-  value worked out from one sample alone, such as the glide ratio, is
-  unaffected.
+- **Derived values.** A rate of change is worked out from the samples on
+  either side of each sample, so at the samples next to a hole it has no
+  value ([CALCULATIONS.md](CALCULATIONS.md) section 18): the GNSS
+  accelerations and their accuracy, the course rate, the dive angle rate and
+  the specific energy rate, and with the accelerations everything worked out
+  from them, the horizontal, along-track and cross-track accelerations and
+  the lift and drag coefficients. A value worked out from one sample alone,
+  such as the glide ratio, is unaffected.
 
 The Sensor fusion plots follow the IMU's samples, so a hole in the GNSS
 samples is not a hole in them; a hole in the IMU's samples breaks them like
@@ -307,6 +310,12 @@ any other plot.
 
 **The exception: crossing times.** The exit, the altitude markers and the
 analysis windows of the WS-P and SP methods find the moment a value crosses a
-threshold. When that crossing falls inside a hole, it is placed by linear
-interpolation between the two samples around the hole: the crossing happened
-somewhere in it, and that is the estimate the recording allows.
+threshold. When that crossing falls inside a hole, it is
+placed by linear interpolation between the two samples around the hole:
+the crossing happened somewhere in it, and that is the estimate the recording
+allows. The exit also reads the vertical acceleration at its crossing, which
+has no value inside a hole or in the interval beside one; there it takes the
+slope of the same straight line instead, the change in vertical speed over
+the interval divided by its length, and a crossing whose slope is under the
+exit's minimum vertical acceleration (2.5 m/s^2) is passed over, as any
+other would be.

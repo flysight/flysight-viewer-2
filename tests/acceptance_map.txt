@@ -3351,6 +3351,8 @@
 1209 tst_builtins_golden sessionDataMatchesGolden
 
 # 1210 - (4, crossing times) the exit, the altitude markers and the analysis windows of WS-P and SP keep their linear interpolation between the samples around a crossing, also across a hole, and the documentation names them as the exception
+1210 tst_builtins_engine altitudeCrossingAcrossHole
+1210 tst_builtins_engine exitCrossingBesideHole
 1210 tst_builtins_golden sessionDataMatchesGolden
 1210 tst_builtins_engine wspPartial
 1210 audit sample-continuity

@@ -53,16 +53,11 @@ double holeThreshold(TimeAxis axis)
     return kHoleFactor * nominalInterval(axis);
 }
 
-bool isHole(double interval, double threshold)
-{
-    return interval > threshold;
-}
-
 bool isHoleBefore(TimeAxis axis, std::size_t i, double threshold)
 {
     if (i == 0 || i >= axis.count)
         return false;
-    return isHole(axis.times[i] - axis.times[i - 1], threshold);
+    return axis.times[i] - axis.times[i - 1] > threshold;
 }
 
 std::vector<Run> runs(TimeAxis axis)

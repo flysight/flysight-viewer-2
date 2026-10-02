@@ -1594,6 +1594,33 @@ void FusionKernelTest::validationRejectsEachDefect()
     bad.gyro.erase(bad.gyro.begin()+40, bad.gyro.begin()+50);
     QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(bad, tuning));
 
+    // The whole recording needs three IMU samples, not two: the IMU gap rule
+    // reads the nominal interval of the whole IMU axis, which two samples do
+    // not have
+    const auto recordingDefect = [](const Samples &recording) {
+        try {
+            requireUsableRecording(recording, 0., 0.);
+        } catch (const std::invalid_argument &e) {
+            return QString::fromUtf8(e.what());
+        }
+        return QString();
+    };
+    Samples few;
+    few.imuTime = {0., .01, .02};
+    few.force = Vectors(3, Vector3(-kTestGravity));
+    few.gyro = Vectors(3, Vector3::Zero());
+    few.gnssTime = {0., .01, .02};
+    few.position = Vectors(3, Vector3::Zero());
+    few.velocity = few.position;
+    few.positionSigma = Vectors(3, Vector3::Ones());
+    few.velocitySigma = few.positionSigma;
+    QCOMPARE(recordingDefect(few), QString());
+    few.imuTime.pop_back();
+    few.force.pop_back();
+    few.gyro.pop_back();
+    QCOMPARE(recordingDefect(few),
+             QStringLiteral("Sensor fusion needs at least three GNSS fixes and three IMU samples"));
+
     // The tuning: the stopping thresholds must be finite and the window at
     // least one iteration; a negative tolerance or bound is legal (a test's
     // "never" forcing).

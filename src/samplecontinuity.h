@@ -24,14 +24,14 @@
 // An axis with fewer than three samples has no nominal interval and no holes.
 // So has an axis that is not finite and strictly increasing throughout, which
 // a session does not exclude: on it every reader behaves as if the recording
-// were continuous, as it did before the rule. Nothing here throws or logs; the
-// kernel validates its axes before it asks.
+// were continuous. Nothing here throws or logs; the kernel validates its axes
+// before it asks.
 //
 // The nominal interval is a selection over the whole axis. A caller that
 // judges many intervals of one axis (a graph build, a derivative, a cursor
 // event that reads several series of one sensor) asks for the threshold once
-// and passes it to isHole() / isHoleBefore(). Nothing is stored: holes are
-// recomputed from the samples when they are needed.
+// and passes it to isHoleBefore(). Nothing is stored: holes are recomputed
+// from the samples when they are needed.
 //
 // Pure: the standard library only, no state. Safe to use from any thread.
 
@@ -44,7 +44,6 @@ struct TimeAxis {
     const double *times = nullptr;
     std::size_t count = 0;
 
-    TimeAxis(const double *times, std::size_t count) : times(times), count(count) {}
     template <class Container>
     TimeAxis(const Container &container)
         : times(container.data()), count(std::size_t(container.size())) {}
@@ -66,12 +65,9 @@ double nominalInterval(TimeAxis axis);
 /// its nominal interval; NaN when it has none.
 double holeThreshold(TimeAxis axis);
 
-/// True when `interval` is a hole against `threshold` (holeThreshold() of its
-/// axis): strictly greater. Never true against a NaN threshold.
-bool isHole(double interval, double threshold);
-
 /// True when the interval between samples `i - 1` and `i` of `axis` is a hole
-/// against `threshold`. False for i == 0 and for i past the end.
+/// against `threshold` (holeThreshold() of the axis): strictly greater. Never
+/// true against a NaN threshold; false for i == 0 and for i past the end.
 bool isHoleBefore(TimeAxis axis, std::size_t i, double threshold);
 
 /// The runs of connected samples of `axis`, in order; one run of every sample

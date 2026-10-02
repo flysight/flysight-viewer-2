@@ -6,8 +6,6 @@
 #include <QCustomPlot/qcustomplot.h>
 
 #include <QMouseEvent>
-#include <QDateTime>
-#include <QDebug>
 
 #include <cmath>
 
@@ -18,13 +16,6 @@ SetGroundTool::SetGroundTool(const PlotWidget::PlotContext &ctx)
     , m_plot(ctx.plot)
     , m_model(ctx.model)
 {
-}
-
-double SetGroundTool::computeGroundElevation(SessionData &session, double xCoord) const
-{
-    // A point read like the measure tool's (plotutils.h): no value outside
-    // the samples or strictly inside a hole of the GNSS samples
-    return groundElevationAt(session, m_widget->xVariable(), m_widget->referenceMarkerKey(), xCoord);
 }
 
 bool SetGroundTool::mousePressEvent(QMouseEvent *event)
@@ -46,9 +37,11 @@ bool SetGroundTool::mousePressEvent(QMouseEvent *event)
         int row = m_model->getSessionRow(sessionId);
         if (row >= 0) {
             SessionData &session = m_model->sessionRef(row);
-            double newElev = computeGroundElevation(session, xCoord);
-            // No value at the clicked time (outside the samples, inside a
-            // hole): the click sets nothing
+            // A point read like the measure tool's (plotutils.h): no value
+            // at the clicked time outside the samples or strictly inside a
+            // hole of the GNSS samples, and then the click sets nothing
+            const double newElev = groundElevationAt(session, m_widget->xVariable(),
+                                                     m_widget->referenceMarkerKey(), xCoord);
             if (!std::isnan(newElev))
                 m_model->updateAttribute(sessionId, SessionKeys::GroundElev, newElev);
         }

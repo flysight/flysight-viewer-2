@@ -26,8 +26,6 @@ private:
     PlotWidget* m_widget;
     QCustomPlot* m_plot;
     SessionModel* m_model;
-
-    double computeGroundElevation(SessionData &session, double xFromExit) const;
 };
 
 } // namespace FlySight

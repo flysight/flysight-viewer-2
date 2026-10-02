@@ -4,6 +4,7 @@
 // preference input, the interpolation family, and the altitude descriptor.
 
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -100,6 +101,8 @@ private slots:
     void interpolationUnavailableIsCached();
     void interpolationInsideHole();
     void groundElevationInsideHole();
+    void exitCrossingBesideHole();
+    void altitudeCrossingAcrossHole();
     void altitudeDescriptor();
 
     // Logbook column cache: static closures and the column environment digest
@@ -725,8 +728,8 @@ void BuiltinsEngineTest::interpolationInsideHole()
 
 // The automatic ground elevation is hMSL read at the analysis end: nothing
 // strictly inside a hole of GNSS/_time, the sample's value at the two samples
-// around it, and today's answers between connected samples and outside the
-// samples (the first or the last elevation).
+// around it, and between connected samples and outside the samples the
+// answers without a hole (the interpolated, the first or the last elevation).
 void BuiltinsEngineTest::groundElevationInsideHole()
 {
     const QVector<double> t = {T0, T0 + 1.0, T0 + 2.0, T0 + 3.0, T0 + 8.0, T0 + 9.0, T0 + 10.0};
@@ -747,6 +750,89 @@ void BuiltinsEngineTest::groundElevationInsideHole()
     QCOMPARE(ground(T0 + 1.5).toDouble(), 985.0);
     QCOMPARE(ground(T0 - 5.0).toDouble(), 1000.0);
     QCOMPARE(ground(T0 + 20.0).toDouble(), 900.0);
+}
+
+// The exit is a crossing time, the exception to the continuity rule: a
+// crossing of 10 m/s in a hole of GNSS/_time, or in the interval beside one,
+// is placed by linear interpolation between the samples around it, and as the
+// acceleration there has no value (its stencil would span the hole) the gate
+// and the exit read the slope of that interval, (velD[i] - velD[i - 1]) /
+// (t[i] - t[i - 1]). Never NaN: a candidate whose slope is under the 2.5 m/s^2
+// gate is passed over, and without another the exit is unavailable. GNSS/_time
+// steps a second with a 5 s hole between T0 + 3 and T0 + 8; every value is
+// exact, so the exits are compared bit for bit with the hand-worked ones.
+void BuiltinsEngineTest::exitCrossingBesideHole()
+{
+    const QVector<double> t = {T0, T0 + 1.0, T0 + 2.0, T0 + 3.0, T0 + 8.0, T0 + 9.0, T0 + 10.0};
+    const QVector<double> sAcc(t.size(), 0.5);
+    constexpr double none = std::numeric_limits<double>::quiet_NaN();
+    struct Case {
+        const char *name;
+        QVector<double> velD;
+        double exit;
+    };
+    const Case cases[] = {
+        // 5 -> 25 across the hole: a quarter of the way, T0 + 4.25; slope 4,
+        // so 10 / 4 = 2.5 s before it
+        {"in the hole", {0, 1, 2, 5, 25, 30, 35}, T0 + 1.75},
+        // 6 -> 14 just before it: T0 + 2.5, slope 8, 1.25 s before
+        {"before the hole", {0, 2, 6, 14, 20, 25, 30}, T0 + 1.25},
+        // 6 -> 14 just after it: T0 + 8.5, slope 8, 1.25 s before
+        {"after the hole", {0, 0, 0, 0, 6, 14, 20}, T0 + 7.25},
+        // 5 -> 15 across the hole has a slope of 2, under the gate; 15 -> 5
+        // after it falls; 5 -> 15 at the end, away from the hole, reads the
+        // derivative (0 and 10, so 5 at the crossing): T0 + 9.5 - 2
+        {"under the gate", {0, 0, 0, 5, 15, 5, 15}, T0 + 7.5},
+        // 5 -> 15 across the hole under the gate, and no other crossing
+        {"no exit", {0, 0, 0, 5, 15, 20, 25}, none},
+    };
+
+    for (const Case &c : cases) {
+        World world;
+        world.state.setMeasurement("GNSS", "time", t);
+        world.state.setMeasurement("GNSS", "velD", c.velD);
+        world.state.setMeasurement("GNSS", "sAcc", sAcc);
+        world.state.setAttribute(SessionKeys::AnalysisStartTime, T0);
+        world.state.setAttribute(SessionKeys::AnalysisEndTime, T0 + 10.0);
+
+        const QVariant exit = world.engine->attribute(SessionKeys::ExitTime);
+        if (std::isnan(c.exit)) {
+            QVERIFY2(!exit.isValid(), c.name);
+        } else {
+            QVERIFY2(exit.isValid() && std::isfinite(exit.toDouble()), c.name);
+            QVERIFY2(exit.toDouble() == c.exit,
+                     qPrintable(QStringLiteral("%1: %2, expected %3").arg(c.name)
+                                    .arg(exit.toDouble() - T0, 0, 'g', 17).arg(c.exit - T0, 0, 'g', 17)));
+        }
+        QCOMPARE(world.engine->undeclaredReadCount(), 0);
+    }
+}
+
+// An altitude marker is a crossing time too: a crossing in a hole of
+// GNSS/_time, or beside one, is placed by linear interpolation between the
+// two samples around it. Ground at 0 m, so z is hMSL; the times as above,
+// and the crossings exact, so compared bit for bit.
+void BuiltinsEngineTest::altitudeCrossingAcrossHole()
+{
+    World world;
+    world.state.setMeasurement("GNSS", "time",
+                               {T0, T0 + 1.0, T0 + 2.0, T0 + 3.0, T0 + 8.0, T0 + 9.0, T0 + 10.0});
+    world.state.setMeasurement("GNSS", "hMSL", {1000.0, 990.0, 980.0, 970.0, 920.0, 910.0, 900.0});
+    world.state.setAttribute(SessionKeys::GroundElev, 0.0);
+    world.state.setAttribute(SessionKeys::AnalysisStartTime, T0);
+    world.state.setAttribute(SessionKeys::AnalysisEndTime, T0 + 10.0);
+    for (const auto &[key, metres] : {std::pair<const char *, double>("_ALTITUDE_945_M", 945.0),
+                                      std::pair<const char *, double>("_ALTITUDE_975_M", 975.0),
+                                      std::pair<const char *, double>("_ALTITUDE_915_M", 915.0)})
+        QVERIFY(world.registry.registerCalculation(AltitudeMarkerManager::makeDescriptor(key, metres)));
+    CalculationEngine &engine = *world.engine;
+
+    // 970 -> 920 across the hole: halfway, T0 + 3 + 2.5
+    QVERIFY(engine.attribute("_ALTITUDE_945_M").toDouble() == T0 + 5.5);
+    // In the intervals just before and just after it
+    QVERIFY(engine.attribute("_ALTITUDE_975_M").toDouble() == T0 + 2.5);
+    QVERIFY(engine.attribute("_ALTITUDE_915_M").toDouble() == T0 + 8.5);
+    QCOMPARE(engine.undeclaredReadCount(), 0);
 }
 
 void BuiltinsEngineTest::altitudeDescriptor()
