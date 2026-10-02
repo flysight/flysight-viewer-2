@@ -12,6 +12,7 @@
 #include <QString>
 
 #include <gtsam/inference/Key.h>
+#include <gtsam/linear/GaussianFactorGraph.h>
 #include <gtsam/navigation/ImuBias.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
@@ -175,10 +176,12 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples, const BiasL
 /// and velocity normalized RMS are both below `slowTailMaxNrms`. Otherwise the
 /// result says which rule ended the fit and `converged` is false. A non-finite
 /// or increasing cost throws FitFailure, and so does an iteration that leaves
-/// the cost unchanged while the damping is at `lambdaUpperBound`: the
-/// optimizer is stuck there, and that is never a convergence. The reported
-/// objective, residuals, quality and `graph` are those of the graph rebuilt at
-/// the fitted bias and scale.
+/// the cost unchanged while the damping is at `lambdaUpperBound` with the
+/// linearization still predicting a decrease above the settling threshold
+/// (predictedDecrease()): the optimizer is stuck short of a minimum, and that
+/// is never a convergence. Stalled at the ceiling where it predicts none, the
+/// pass has settled. The reported objective, residuals, quality and `graph`
+/// are those of the graph rebuilt at the fitted bias and scale.
 ///
 /// Every iteration is reported through `checkpoint` as `passFormat` with its
 /// two remaining QString::arg placeholders filled: the lower-numbered one with
@@ -197,6 +200,13 @@ FitResult fitFactorGraph(const Samples &samples, const InitialState &initial, co
                          const QString &passFormat = QString::fromLatin1(kFullFitPassFormat),
                          const Checkpoint &checkpoint = Checkpoint(),
                          const GyroBiasModel &model = GyroBiasModel());
+
+/// What Levenberg-Marquardt would gain from `linear` with no damping: the
+/// linearized cost at zero minus at its Gauss-Newton step (QR). At a minimum
+/// it is the rounding of the cost's sum; infinity when the undamped system is
+/// indeterminate, which no damping resolves. fitFactorGraph() judges a pass
+/// stalled at the damping ceiling by it; a test reads it on a hand-built graph.
+double predictedDecrease(const gtsam::GaussianFactorGraph &linear);
 
 /// The cap of every attitude sigma the kernel reports, degrees: the heading
 /// check's below and the published heading and tilt accuracies

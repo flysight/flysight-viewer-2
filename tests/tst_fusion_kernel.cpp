@@ -905,6 +905,7 @@ private slots:
     void failureDiagnosticsShape();
     void dampingSaturationIsASolverFailure();
     void dampingCeilingChangesNothingBelowIt();
+    void saturationAtAMinimumIsSettled();
     void startsInMotionGrowsToTheManoeuvre();
     void atRestPrefixStopsGrowing();
     void smallestSaccFixIsTheAnchor();
@@ -2440,8 +2441,9 @@ void FusionKernelTest::dampingSaturationIsASolverFailure()
     // IMU blocks of the Hessian are about 1e9 under the datasheet's
     // densities): every iteration returns the same values, and a pass that
     // settled there would call that start converged. It is the solver failure
-    // `damping saturated` instead, with the failure diagnostics' shape of a
-    // failed pass (no quality: no pass completed). The forcing makes every
+    // `damping saturated` instead (the linearization still predicts a
+    // decrease, there the whole cost, 3.8e10), with the failure diagnostics'
+    // shape of a failed pass (no quality: no pass completed). The forcing makes every
     // prefix fit fail (allPrefixFitsFailFallsBack's), so the full fit starts
     // there; through the initializer's own starts the recording converges
     // even under 1e5 (41 iterations: a prefix start that saturated would be
@@ -2521,6 +2523,48 @@ void FusionKernelTest::dampingCeilingChangesNothingBelowIt()
         }
         QVERIFY2(diagnosticsA == diagnosticsB, name);
     }
+}
+
+void FusionKernelTest::saturationAtAMinimumIsSettled()
+{
+    // Decision 7, as amended: a pass that stalls at the damping ceiling has
+    // settled when the linearization predicts no decrease, and is the solver
+    // failure only while it still does. At a minimum the library judges each
+    // trial step by the sign of a rounding-level linearized change, and a run
+    // of negative signs raises the damping to the ceiling without the cost
+    // ever being evaluated (motion_start's full fit on Intel macOS,
+    // 2026-10-02). The exact constant-velocity recording from its exact start
+    // (the identity attitude, zero gyro bias) is at its minimum, and a ceiling
+    // at the library's initial damping, 1e-5, puts the first iteration at the
+    // ceiling whatever that sign: the pass settles with one iteration.
+    const Vector3 speed(12, -4, 2), offset(7, 8, 9);
+    const Samples linear = linearSamples(speed, offset);
+    Tuning atTheCeiling = tuningAt(104);
+    atTheCeiling.lambdaUpperBound = 1e-5;
+    InitialState exact;
+    exact.rotations.assign(linear.gnssTime.size(), Rot3());
+    const FitResult fitted = fitFactorGraph(linear, exact, atTheCeiling);
+    QVERIFY(fitted.converged);
+    QCOMPARE(fitted.stopping.rule, std::string(StopRule::kSettled));
+    QCOMPARE(fitted.stopping.passes, 1);
+    QCOMPARE(fitted.history.size(), size_t(1));
+    QVERIFY(fitted.history.front().after <= fitted.history.front().before);
+    QVERIFY(fitted.objective < 1e-12);
+    QCOMPARE(fitted.stopping.lambdaUpperBound, 1e-5);
+
+    // The measure the rule reads, on a hand-built graph: a prior off its mean
+    // predicts the whole cost (one Gauss-Newton step reaches the mean), a
+    // prior at its mean predicts nothing.
+    gtsam::NonlinearFactorGraph graph;
+    graph.emplace_shared<gtsam::PriorFactor<Vector3>>(V(0), Vector3(1, 2, 3),
+                                                      gtsam::noiseModel::Isotropic::Sigma(3, .5));
+    gtsam::Values off, at;
+    off.insert(V(0), Vector3(1.5, 2, 2));
+    at.insert(V(0), Vector3(1, 2, 3));
+    const double cost = graph.error(off);
+    QVERIFY(cost > 1);
+    QVERIFY(withinRelative(predictedDecrease(*graph.linearize(off)), cost, 1e-12));
+    QCOMPARE(predictedDecrease(*graph.linearize(at)), 0.);
 }
 
 void FusionKernelTest::startsInMotionGrowsToTheManoeuvre()

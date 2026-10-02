@@ -159,11 +159,16 @@ Stopping failedPass(const Tuning &c, const char *rule, int outer, const std::vec
 /// settled before the iteration limit. A pass may settle on a step that did
 /// not move (before == after) while the damping is below its ceiling: that is
 /// accepted, as it means LM found no better point at its current damping. The
-/// same step at the ceiling (`lambdaUpperBound`) is not: LM has given up
-/// there, every further iteration returns the same values, and the start it
-/// would call converged may be far from a minimum, so it throws FitFailure
-/// (`damping saturated`). A non-finite or increasing cost throws FitFailure
-/// (`cost increased`). Either carries the account of the pass it happened in.
+/// same step at the ceiling (`lambdaUpperBound`) is judged by what the
+/// linearization still predicts (predictedDecrease()): above the settling
+/// threshold, LM has given up short of a minimum, every further iteration
+/// returns the same values, and the pass throws FitFailure (`damping
+/// saturated`); at or below it the pass has settled, because at a minimum the
+/// library judges each trial step by the sign of a rounding-level linearized
+/// change, and a run of negative signs raises the damping to the ceiling
+/// without the cost ever being evaluated. A non-finite or increasing cost
+/// throws FitFailure (`cost increased`). Either carries the account of the
+/// pass it happened in.
 /// Each iteration's boundary text is `passFormat` with the pass and the
 /// iteration filled in (fitFactorGraph()'s contract).
 bool runOptimizerPass(const gtsam::NonlinearFactorGraph &graph, gtsam::Values &values,
@@ -180,16 +185,21 @@ bool runOptimizerPass(const gtsam::NonlinearFactorGraph &graph, gtsam::Values &v
     for (int i = 0; i < c.maxIterations; ++i) {
         checkpoint(passFormat.arg(outer+1).arg(i+1));
         const double before = optimizer.error();
-        optimizer.iterate();
+        const gtsam::GaussianFactorGraph::shared_ptr linear = optimizer.iterate();
         const double after = optimizer.error();
         history.push_back({outer, i, before, after});
         if (!std::isfinite(after) || after > before+kCostIncreaseTolerance)
             throw FitFailure("Nonfinite or increasing optimizer cost",
                              failedPass(c, StopRule::kCostIncreased, outer, history));
-        if (after == before && optimizer.lambda() >= c.lambdaUpperBound)
-            throw FitFailure("Optimizer damping saturated without progress",
-                             failedPass(c, StopRule::kDampingSaturated, outer, history));
-        if (before-after <= c.relativeTolerance*std::max(1., before)) {
+        const double threshold = c.relativeTolerance*std::max(1., before);
+        if (after == before && optimizer.lambda() >= c.lambdaUpperBound) {
+            if (predictedDecrease(*linear) > threshold)
+                throw FitFailure("Optimizer damping saturated without progress",
+                                 failedPass(c, StopRule::kDampingSaturated, outer, history));
+            settled = true;
+            break;
+        }
+        if (before-after <= threshold) {
             settled = true;
             break;
         }
@@ -239,6 +249,17 @@ void collectResiduals(const Samples &d, const gtsam::NonlinearFactorGraph &graph
 }
 
 } // namespace
+
+double predictedDecrease(const gtsam::GaussianFactorGraph &linear)
+{
+    gtsam::VectorValues step;
+    try {
+        step = linear.optimize(gtsam::EliminateQR);
+    } catch (const gtsam::IndeterminantLinearSystemException &) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return linear.error(gtsam::VectorValues::Zero(step))-linear.error(step);
+}
 
 GyroBiasModel gyroBiasModelFor(const Samples &window)
 {
