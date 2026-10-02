@@ -16,7 +16,6 @@
 
 #include "fusion/imuintegration.h"
 #include "fusion/scaledimufactor.h"
-#include "fusion/temperatureimufactor.h"
 
 namespace FlySight::Fusion::Detail {
 
@@ -50,29 +49,23 @@ void addImuFactor(gtsam::NonlinearFactorGraph &graph, const Samples &d, size_t k
                                                            gtsam::Vector6::Ones(), c.noise));
 }
 
-/// The IMU between fixes k-1 and k under the temperature model: the interval
-/// takes the temperature of its first fix, k-1 (ImuFactor's convention that
-/// the factor's bias is the bias at state i), and is preintegrated at that
-/// interval's bias and at the scale of the linearization point `at`. With the
-/// scale state the factor also depends on S(0), through the preintegration's
-/// scale Jacobian; without it the scale is one.
-void addTemperatureImuFactor(gtsam::NonlinearFactorGraph &graph, const Samples &d, size_t k,
-                             const BiasLinearization &at, const GyroBiasModel &model, const Tuning &c)
+/// The IMU between fixes k-1 and k under the temperature model, the scaled
+/// factor: the interval takes the temperature of its first fix, k-1
+/// (ImuFactor's convention that the factor's bias is the bias at state i), is
+/// preintegrated at that interval's bias and at the scale of the
+/// linearization point `at`, and depends on S(0) through the
+/// preintegration's scale Jacobian.
+void addScaledImuFactor(gtsam::NonlinearFactorGraph &graph, const Samples &d, size_t k,
+                        const BiasLinearization &at, const GyroBiasModel &model, const Tuning &c)
 {
     const double dT = temperatureAtFix(d, k-1)-model.tRef;
     const gtsam::imuBias::ConstantBias bias = intervalBias(d, k-1, at.bias, at.slope, model);
-    if (model.scaleState) {
-        gtsam::Matrix96 scaleJacobian;
-        const gtsam::PreintegratedImuMeasurements pim =
-            preintegrateImu(d, d.gnssTime[k-1], d.gnssTime[k], bias, at.scale, c.noise, ImuStepObserver(),
-                            &scaleJacobian);
-        graph.emplace_shared<ScaledImuFactor>(X(k-1), V(k-1), X(k), V(k), B(0), T(0), S(0), pim, dT,
-                                              scaleJacobian, at.scale);
-        return;
-    }
-    graph.emplace_shared<TemperatureImuFactor>(X(k-1), V(k-1), X(k), V(k), B(0), T(0),
-                                               preintegrateImu(d, d.gnssTime[k-1], d.gnssTime[k], bias,
-                                                               at.scale, c.noise), dT);
+    gtsam::Matrix96 scaleJacobian;
+    const gtsam::PreintegratedImuMeasurements pim =
+        preintegrateImu(d, d.gnssTime[k-1], d.gnssTime[k], bias, at.scale, c.noise, ImuStepObserver(),
+                        &scaleJacobian);
+    graph.emplace_shared<ScaledImuFactor>(X(k-1), V(k-1), X(k), V(k), B(0), T(0), S(0), pim, dT,
+                                          scaleJacobian, at.scale);
 }
 
 /// A weak zero-mean prior on the shared bias: sensor biases are small, and
@@ -106,22 +99,14 @@ void addScalePrior(gtsam::NonlinearFactorGraph &graph, const Tuning &c)
                                                              gtsam::noiseModel::Diagonal::Sigmas(sigmas));
 }
 
-/// A programming error, unreachable through planFit(): the scale state
-/// belongs to the full fit, which runs the temperature model.
-void requireTemperatureModelForScale(const GyroBiasModel &model)
-{
-    if (model.scaleState && !model.temperatureLinear)
-        throw std::invalid_argument("Scale state without the temperature model");
-}
-
-/// The linearization point of a graph: B(0), under the temperature model
-/// T(0), and with the scale state S(0). The constant model reads no T(0) and
-/// has a zero slope; without the scale state the scale is one.
+/// The linearization point of a graph: B(0) and, under the temperature model,
+/// T(0) and S(0). The constant model reads neither: its slope is zero and its
+/// scale one.
 BiasLinearization linearizationOf(const gtsam::Values &values, const GyroBiasModel &model)
 {
     return {values.at<gtsam::imuBias::ConstantBias>(B(0)),
             model.temperatureLinear ? values.at<gtsam::Vector3>(T(0)) : gtsam::Vector3::Zero(),
-            model.scaleState ? values.at<gtsam::Vector6>(S(0)) : gtsam::Vector6::Ones()};
+            model.temperatureLinear ? values.at<gtsam::Vector6>(S(0)) : gtsam::Vector6::Ones()};
 }
 
 /// The stopping account with only the thresholds filled, copied from the
@@ -238,10 +223,10 @@ void collectResiduals(const Samples &d, const gtsam::NonlinearFactorGraph &graph
         result.velocityRms += (values.at<gtsam::Vector3>(V(k))-d.velocity[k]).squaredNorm();
     }
     result.residuals.push_back({"bias_prior", 0, d.gnssTime[0], 2*graph.at(factor++)->error(values)});
-    if (result.biasModel.temperatureLinear)
+    if (result.biasModel.temperatureLinear) {
         result.residuals.push_back({"slope_prior", 0, d.gnssTime[0], 2*graph.at(factor++)->error(values)});
-    if (result.biasModel.scaleState)
         result.residuals.push_back({"scale_prior", 0, d.gnssTime[0], 2*graph.at(factor)->error(values)});
+    }
     result.positionRms = std::sqrt(result.positionRms/n);
     result.velocityRms = std::sqrt(result.velocityRms/n);
 
@@ -291,7 +276,6 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &d, const BiasLineari
                                              const GyroBiasModel &model, const Tuning &c,
                                              const Checkpoint &checkpoint)
 {
-    requireTemperatureModelForScale(model);
     gtsam::NonlinearFactorGraph graph;
     for (size_t k = 0; k < d.gnssTime.size(); ++k) {
         // Preintegration is the slow part of construction: a boundary per block.
@@ -300,16 +284,16 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &d, const BiasLineari
         addGnssFactors(graph, d, k);
         if (k) {
             if (model.temperatureLinear)
-                addTemperatureImuFactor(graph, d, k, at, model, c);
+                addScaledImuFactor(graph, d, k, at, model, c);
             else
                 addImuFactor(graph, d, k, at.bias, c);
         }
     }
     addBiasPrior(graph, c);
-    if (model.temperatureLinear)
+    if (model.temperatureLinear) {
         addSlopePrior(graph, c);
-    if (model.scaleState)
         addScalePrior(graph, c);
+    }
     return graph;
 }
 
@@ -323,20 +307,19 @@ FitResult fitFactorGraph(const Samples &d, const InitialState &initial, const Tu
     // contract is checkable.
     if (model.temperatureLinear && d.temperature.empty())
         throw std::invalid_argument("Temperature model without a temperature series");
-    requireTemperatureModelForScale(model);
 
     FitResult result;
     result.stopping = thresholdsOf(c);
     Stopping &stopping = result.stopping;
     gtsam::Values values = initialValues(d, initial);
-    // The full fit starts b1 at zero (b0 is the initializer's). Under the
-    // constant model T(0) is never inserted: no factor would touch it and the
-    // linear system would be indeterminate.
-    if (model.temperatureLinear)
+    // The full fit starts b1 at zero (b0 is the initializer's) and the scale
+    // factors at one, the datasheet's nominal sensitivity. Under the constant
+    // model neither T(0) nor S(0) is inserted: no factor would touch them and
+    // the linear system would be indeterminate.
+    if (model.temperatureLinear) {
         values.insert(T(0), gtsam::Vector3(gtsam::Vector3::Zero()));
-    // The scale factors start at one, the datasheet's nominal sensitivity.
-    if (model.scaleState)
         values.insert(S(0), gtsam::Vector6(gtsam::Vector6::Ones()));
+    }
 
     // The graph after a pass is rebuilt once, at the pass's fitted bias and
     // scale, and serves three purposes: the cost test, the next pass's graph,
@@ -380,7 +363,7 @@ FitResult fitFactorGraph(const Samples &d, const InitialState &initial, const Tu
     result.objective = costRebuilt;
     result.biasModel = model;
     result.gyroBiasSlope = model.temperatureLinear ? values.at<gtsam::Vector3>(T(0)) : gtsam::Vector3::Zero();
-    result.scale = model.scaleState ? values.at<gtsam::Vector6>(S(0)) : gtsam::Vector6::Ones();
+    result.scale = model.temperatureLinear ? values.at<gtsam::Vector6>(S(0)) : gtsam::Vector6::Ones();
     collectResiduals(d, rebuilt, result);
     result.graph = std::move(rebuilt);
     stopping.lastPassMeanRelativeDecrease = meanRelativeDecrease(result.history, lastOuter, c.slowTailWindow);

@@ -6,10 +6,12 @@
 #include <gtsam/navigation/ImuFactor.h>
 #include <gtsam/nonlinear/NonlinearFactor.h>
 
-// Internal to the fusion library: the IMU factor of the full fit, over
+// Internal to the fusion library: the one IMU factor of the full fit, over
 // X(k-1), V(k-1), X(k), V(k), the shared bias B(0), the temperature slope T(0)
 // and the scale factors S(0) (accelerometer x, y, z, then gyro x, y, z: the
-// factors themselves, by which the readings are divided).
+// factors themselves, by which the readings are divided). The temperature
+// model is inside it: the interval's gyro bias is B_g + T dT.
+// The initializer's constant-bias fits use the stock gtsam::ImuFactor.
 //
 // The contract. The factor is built from a preintegration taken at the
 // interval's bias and at the linearization scale s^, with H_s, the Jacobian
@@ -20,13 +22,14 @@
 //
 //   zeta = biasCorrectedDelta([B_a; B_g + T dT]) + H_s (S - s^),
 //
-// that is, TemperatureImuFactor's error with the scale's first-order
-// correction added to the delta. Its noise model is the preintegration's
-// covariance, as ImuFactor's. The products of the chain are associated as
-// predict() and computeError() associate them, so that at S = s^ the error and
-// the Jacobians of the first six variables are TemperatureImuFactor's on the
-// same preintegration bit for bit; the seventh, d error / d S, is the same
-// chain applied to H_s. The correction is first order: the fit re-preintegrates
+// that is, gtsam::ImuFactor's error at the interval bias [B_a; B_g + T dT]
+// with the scale's first-order correction added to the delta. Its noise model
+// is the preintegration's covariance, as ImuFactor's. The products of the
+// chain are associated as predict() and computeError() associate them, so
+// that at S = s^ the error and the Jacobians of the first five variables are
+// ImuFactor's on the same preintegration at the interval bias, bit for bit,
+// and the sixth is ImuFactor's gyro-bias columns times dT; the seventh,
+// d error / d S, is the same chain applied to H_s. The correction is first order: the fit re-preintegrates
 // at the fitted scale between passes, as at the fitted bias. The factor holds
 // no state beyond its construction, so GTSAM may linearize it in parallel.
 

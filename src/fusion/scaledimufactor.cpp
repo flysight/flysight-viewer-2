@@ -33,9 +33,11 @@ gtsam::Vector ScaledImuFactor::evaluateError(const gtsam::Pose3 &pose_i, const g
                                              gtsam::OptionalMatrixType H5, gtsam::OptionalMatrixType H6,
                                              gtsam::OptionalMatrixType H7) const
 {
-    // TemperatureImuFactor's interval bias. No branch on a zero slope, a zero
-    // dT or S = s^: x + 0.0 == x for every finite x, so at S = s^ the delta is
-    // biasCorrectedDelta() itself by arithmetic.
+    // The temperature model's interval bias: the accelerometer bias is
+    // constant, only the gyro part follows the temperature. No branch on a
+    // zero slope, a zero dT or S = s^: x + 0.0 == x for every finite x, so
+    // there the interval bias is B(0) and the delta is biasCorrectedDelta()
+    // itself, by arithmetic.
     const gtsam::imuBias::ConstantBias intervalBias(bias.accelerometer(), bias.gyroscope() + slope*m_temperatureDelta);
     const bool wantStateI = H1 || H2, wantBias = H5 || H6, wantDelta = wantBias || H7;
     gtsam::Matrix96 deltaByBias;
@@ -73,8 +75,10 @@ gtsam::Vector ScaledImuFactor::evaluateError(const gtsam::Pose3 &pose_i, const g
     if (H4)
         *H4 = errorByStateJ.rightCols<3>()*state_j.R().transpose();
     if (wantDelta) {
-        // Associated as predict() associates the bias Jacobian, so that H5 and
-        // H6 are TemperatureImuFactor's bit for bit at S = s^.
+        // Associated as predict() associates the bias Jacobian, so that at
+        // S = s^ H5 is ImuFactor's bias Jacobian bit for bit. ConstantBias is a
+        // vector space and the interval bias is [acc; gyro] + [0; T dT]: the
+        // chain rule is the identity for B(0) and [0_3x3; dT I_3] for T(0).
         const gtsam::Matrix9 predictedByDelta = predictedByXi*xiByDelta;
         if (wantBias) {
             const gtsam::Matrix96 errorByBias = errorByPredicted*gtsam::Matrix96(predictedByDelta*deltaByBias);

@@ -19,7 +19,10 @@
 #             full in tests/README.md, appendix C. It is amended by the
 #             specification of 701-754: item 228 is stated as amended. It is
 #             amended by the specification of 1001-1065: items 215, 216, 217,
-#             221, 227, 230, 235, 245, 246 and 247 are stated as amended.
+#             221, 227, 230, 235, 245, 246 and 247 are stated as amended. It is
+#             amended by the specification "The scaled IMU factor stands
+#             alone", which has no items of its own: items 219 and 246 are
+#             stated as amended.
 #   301-350   storing requested calculation results with the session (record
 #             files, restore on load, validity, logbook columns over them):
 #             item = 300 + clause number. Stated in full in
@@ -97,7 +100,9 @@
 #             217, 221, 227, 230, 235, 245, 246 and 247), 301-350 (item 337),
 #             501-563 (item 509), 801-863 (items 801, 802, 842, 847, 854,
 #             861, 862 and 863) and 901-940 (items 901, 910, 912, 914, 915,
-#             921, 925, 930 and 935): each is stated as amended.
+#             921, 925, 930 and 935): each is stated as amended. It is
+#             amended by the specification "The scaled IMU factor stands
+#             alone": item 1054 is stated as amended.
 #   1101      the GNSS acceleration accuracy (GNSS/accAcc, its plot and what
 #             the documentation says of it): one item. Stated in full in
 #             tests/README.md, appendix L.
@@ -540,9 +545,9 @@
 218 audit fusion-model
 218 tst_fusion_kernel samplingTermFollowsTheDerivation
 
-# 219 - b(t) = b0 + b1 (T(t) - T_ref), T_ref the mean IMU temperature over the fitted window, the accelerometer bias constant; each interval at its own bias in the fit and the reconstruction
+# 219 - (as amended) b(t) = b0 + b1 (T(t) - T_ref), T_ref the mean IMU temperature over the fitted window, the accelerometer bias constant; each interval at its own bias in the fit and the reconstruction; in the fit inside its one IMU factor, the scaled one, whose tests stand for the temperature factor's
 219 tst_fusion_kernel temperatureGraphShape
-219 tst_fusion_kernel temperatureFactorJacobians
+219 tst_fusion_kernel scaleFactorJacobians
 219 tst_fusion_kernel reconstructionUsesIntervalBias
 219 tst_fusion_kernel driftingBiasSegmentsConverge
 
@@ -672,7 +677,7 @@
 245 tst_fusion_kernel samplingTermFollowsTheDerivation
 245 tst_fusion_kernel rotationRemainderFollowsTheDerivation
 
-# 246 - (as amended) test 9: a recording without IMU/temperature is rejected by the kernel by name and blocked in a session; a constant temperature leaves b1 at its prior, and with the scale state of the specification of 1001-1065 off, reproduces the constant-bias fit
+# 246 - (as amended) test 9: a recording without IMU/temperature is rejected by the kernel by name and blocked in a session; a constant temperature leaves b1 at its prior, and with the scale factors of the specification of 1001-1065 held at one by a prior a thousand times tighter than the datasheet's, reproduces the constant-bias fit
 246 tst_fusion_kernel validationRejectsEachDefect
 246 tst_fusion_kernel constantTemperatureKeepsSlopeAtPrior
 246 tst_fusion_session missingInputsAreNotApplicable
@@ -3215,7 +3220,7 @@
 1053 tst_fusion_kernel samplingTermFollowsTheDerivation
 1053 tst_fusion_kernel rotationRemainderFollowsTheDerivation
 
-# 1054 - (11) test: a synthetic recording with the accelerometer 2 % high on one axis recovers the factor within the prior's tolerance, and its position misfit falls against a fit without the state; a recording at rest leaves the scale at one within its prior
+# 1054 - (11, as amended) test: a synthetic recording with the accelerometer 2 % high on one axis recovers the factor within the prior's tolerance, and its position misfit falls against a fit with the scale held at one by a prior a thousand times tighter than the datasheet's; a recording at rest leaves the scale at one within its prior
 1054 tst_fusion_kernel scaleRecordingRecoversTheFactor
 1054 tst_fusion_kernel restLeavesTheScaleAtItsPrior
 

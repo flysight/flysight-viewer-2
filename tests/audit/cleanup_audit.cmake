@@ -721,6 +721,13 @@ expect_none("the kernel never names the legacy gyro correction" "1\\.14688|kLega
 # tests/, which this rule does not search.
 expect_only("one builder of the scaled IMU factor" "ScaledImuFactor"
   "^src/fusion/(scaledimufactor\\.(h|cpp)|factorgraphfit\\.cpp)$" src)
+# Allow: none expected. The scaled factor replaced the temperature factor and
+# the switch that turned the scale state off: every full fit has the scale
+# factors, and a comparison at unit scale holds them there with a tight
+# prior. tests/README.md is excluded because its section 10 spells the names.
+expect_none("the temperature factor and the scale switch stay gone"
+  "TemperatureImuFactor|temperatureimufactor|scaleState"
+  src tests docs README.md ":!tests/README.md")
 # Allow: none expected. The scale factors are fitted (docs/SENSOR_FUSION.md
 # sections 4 and 5); say what is fitted and what is not instead.
 expect_none("the documents describe the fitted scale" "scale factor is not fitted" docs)
@@ -831,7 +838,7 @@ expect_none("the fusion tools are not installed"
 # tests/fusion/fusiontrace.h include fusion/fusionpipeline.h, the trace seam,
 # which is not in the pattern.
 expect_only("the tools see the public header or the trace seam only"
-  "#include \"fusion/(factorgraphfit|initializer|imuintegration|inputadapter|fusionsamples|fusionoutput|fusionprogress|trajectoryreconstruction|temperatureimufactor|scaledimufactor|samplestatistics|sensornoise|fitcovariance)\\.h\""
+  "#include \"fusion/(factorgraphfit|initializer|imuintegration|inputadapter|fusionsamples|fusionoutput|fusionprogress|trajectoryreconstruction|scaledimufactor|samplestatistics|sensornoise|fitcovariance)\\.h\""
   "^src/fusion/|^tests/tst_fusion_kernel\\.cpp$"
   src tests)
 

@@ -28,7 +28,7 @@ struct FitPlan {
     PreparedInput prepared;
     Tuning tuning;
     Samples window;             ///< what the graph covers
-    GyroBiasModel biasModel;    ///< the full fit's model: the gyro bias temperature-linear about the window's mean temperature, with the scale state
+    GyroBiasModel biasModel;    ///< the full fit's model: the gyro bias temperature-linear about the window's mean temperature, with the scale factors
 };
 
 /// Stage 1: is this a recording the model can use, and what does the fit
@@ -56,10 +56,9 @@ FitPlan planFit(const Channels &channels, const Tuning &baseTuning)
     requireStatedRates(imuInterval, channels.imuConfiguration);
     plan.tuning.noise = noise;
     // T_ref is a property of the fitted window (the mean of its IMU samples'
-    // temperature), decided before the fit starts. The scale factors are
-    // the full fit's alone: the initializer's fits keep the stock model.
+    // temperature), decided before the fit starts. The temperature model
+    // carries the scale factors: the initializer's fits keep the stock model.
     plan.biasModel = gyroBiasModelFor(plan.window);
-    plan.biasModel.scaleState = true;
     return plan;
 }
 

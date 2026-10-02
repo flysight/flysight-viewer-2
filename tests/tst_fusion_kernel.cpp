@@ -8,7 +8,7 @@
 // the tuning, the datasheet's noise by configuration, the lattice and rate
 // checks, the step model (the sampling term and the mid-step remainder against
 // their derivations), the temperature-dependent gyro
-// bias (the custom factor's Jacobians, the section 6 cases), the scale state
+// bias (the section 6 cases), the scale state
 // (the divided readings, the scale Jacobian against central differences, the
 // scaled factor's Jacobians, the graph, the re-preintegration, the
 // reconstruction, at rest and on the scale recording, its diagnostics), the
@@ -66,7 +66,6 @@
 #include "fusion/inputadapter.h"
 #include "fusion/scaledimufactor.h"
 #include "fusion/sensornoise.h"
-#include "fusion/temperatureimufactor.h"
 #include "fusion/trajectoryreconstruction.h"
 #include "fusionfixtures.h"
 #include "fusiongolden.h"
@@ -401,9 +400,9 @@ struct WindowFit {
 
 /// The full fit of `channels` through the internal seams, in the order of
 /// planFit() and fitAndAssemble(): the prepared recording, the derived IMU gap
-/// limit and noise, the fitted window validated, the temperature model with
-/// the scale state on (as planFit() turns it on), the initializer and the
-/// fit. The caller checks convergence.
+/// limit and noise, the fitted window validated, the temperature model (with
+/// its scale factors), the initializer and the fit. The caller checks
+/// convergence.
 WindowFit fitOfChannels(const Fusion::Channels &channels)
 {
     WindowFit f;
@@ -413,12 +412,22 @@ WindowFit fitOfChannels(const Fusion::Channels &channels)
     f.tuning.noise = imuNoise(channels.imuConfiguration);
     f.window = fittedWindow(full, prepared.usableStart, full.gnssTime.back());
     validateSamples(f.window, f.tuning);
-    GyroBiasModel model = gyroBiasModelFor(f.window);
-    model.scaleState = true;
+    const GyroBiasModel model = gyroBiasModelFor(f.window);
     const Initialization init = initialize(f.window, f.tuning);
     f.account = init.account;
     f.fit = fitFactorGraph(f.window, init.state, f.tuning, QString::fromLatin1(kFullFitPassFormat), Checkpoint(), model);
     return f;
+}
+
+/// `tuning` with the scale factors' prior a thousand times tighter than the
+/// datasheet's: the full fit with its scale held at one. The scale factors
+/// are part of every full fit, so a comparison with a fit at unit scale holds
+/// them there instead of switching them off.
+Tuning withScaleHeldAtOne(Tuning tuning)
+{
+    tuning.noise.accelerometer.sensitivityTolerance /= 1000;
+    tuning.noise.gyroscope.sensitivityTolerance /= 1000;
+    return tuning;
 }
 
 /// A fixture's full fit (fitOfChannels()). The fits dominate this
@@ -645,8 +654,8 @@ Mismatch largestMismatch(const WindowSeams &w)
 /// Each step's factor is preintegrated by preintegrateImu() over that step
 /// alone, which gives the loop's own midpoint reading and per-step covariance
 /// without restating either, at its interval's bias under the fit's model and
-/// at the fit's scale. The scale is held, so the temperature factor (the
-/// scaled factor with S at its linearization) serves.
+/// at the fit's scale. The scale is held too, so each step's factor is the
+/// fit's own scaled factor with S at its linearization.
 /// The fix states are held because, freed with GNSS factors, they move along
 /// the unobservable heading, which is not what the tests measure.
 NavStates heldEndsReference(const WindowFit &f, const WindowSeams &w, int &iterations)
@@ -673,15 +682,19 @@ NavStates heldEndsReference(const WindowFit &f, const WindowSeams &w, int &itera
     if (model.temperatureLinear) {
         values.insert(T(0), f.fit.gyroBiasSlope);
         graph.emplace_shared<gtsam::NonlinearEquality<Vector3>>(T(0), f.fit.gyroBiasSlope);
+        values.insert(S(0), f.fit.scale);
+        graph.emplace_shared<gtsam::NonlinearEquality<Vector6>>(S(0), f.fit.scale);
     }
     for (size_t j = 0; j+1 < w.edges.size(); ++j) {
         const size_t k = w.stepInterval[j];
+        gtsam::Matrix96 scaleJacobian;
         const auto pim = preintegrateImu(f.window, w.edges[j], w.edges[j+1],
                                          intervalBias(f.window, k, bias, f.fit.gyroBiasSlope, model), f.fit.scale,
-                                         f.tuning.noise);
+                                         f.tuning.noise, ImuStepObserver(), &scaleJacobian);
         if (model.temperatureLinear)
-            graph.emplace_shared<TemperatureImuFactor>(X(j), V(j), X(j+1), V(j+1), B(0), T(0), pim,
-                                                       temperatureAtFix(f.window, k)-model.tRef);
+            graph.emplace_shared<ScaledImuFactor>(X(j), V(j), X(j+1), V(j+1), B(0), T(0), S(0), pim,
+                                                  temperatureAtFix(f.window, k)-model.tRef, scaleJacobian,
+                                                  f.fit.scale);
         else
             graph.emplace_shared<gtsam::ImuFactor>(X(j), V(j), X(j+1), V(j+1), B(0), pim);
     }
@@ -775,8 +788,6 @@ gtsam::Matrix imuFactorCovariance(const gtsam::NonlinearFactorGraph &graph, size
             continue;
         if (const auto *scaled = dynamic_cast<const ScaledImuFactor *>(factor.get()))
             return scaled->preintegratedMeasurements().preintMeasCov();
-        if (const auto *temperature = dynamic_cast<const TemperatureImuFactor *>(factor.get()))
-            return temperature->preintegratedMeasurements().preintMeasCov();
         if (const auto *stock = dynamic_cast<const gtsam::ImuFactor *>(factor.get()))
             return stock->preintegratedMeasurements().preintMeasCov();
     }
@@ -902,7 +913,6 @@ private slots:
     void allPrefixFitsFailFallsBack();
     void prefixFitsFailAfterACompletedLength();
     void startsOnTheLimitAreStillUsed();
-    void temperatureFactorJacobians();
     void temperatureGraphShape();
     void reconstructionUsesIntervalBias();
     void constantTemperatureKeepsSlopeAtPrior();
@@ -2950,110 +2960,6 @@ void FusionKernelTest::startsOnTheLimitAreStillUsed()
     QCOMPARE(segment.value("prefix_on_limit").toBool(true), golden.value("prefix_on_limit").toBool(true));
 }
 
-void FusionKernelTest::temperatureFactorJacobians()
-{
-    // The overview's risk note: the custom factor's six Jacobians against
-    // finite differences before any fit uses it. Every value differs from the
-    // linearization point so no block is trivial; dT and the slope are
-    // non-zero so H6 is not.
-    using gtsam::imuBias::ConstantBias;
-    using gtsam::Pose3;
-    Samples d = boundarySamples(Vector3(1, -2, .5));
-    for (Vector3 &rate : d.gyro)
-        rate = Vector3(.1, -.05, .2);
-    validateSamples(d, Tuning{});
-    const ConstantBias linearizedAt(Vector3(.05, -.03, .08), Vector3(.003, -.002, .004));
-    const auto pim = preintegrateImu(d, .037, .863, linearizedAt, Vector6::Ones(), fixtureNoise(104));
-    const double dT = 4.5;
-    const TemperatureImuFactor factor(X(0), V(0), X(1), V(1), B(0), T(0), pim, dT);
-    QCOMPARE(factor.temperatureDelta(), dT);
-
-    const Pose3 pose_i(Rot3::RzRyRx(.3, -.2, .1), Vector3(1, 2, 3));
-    const Vector3 vel_i(2, -1, .5);
-    const Pose3 pose_j(Rot3::RzRyRx(.35, -.15, .12), Vector3(2.5, 1.2, 3.4));
-    const Vector3 vel_j(2.6, -2.4, .9);
-    const ConstantBias bias(Vector3(.04, -.02, .07), Vector3(.002, -.001, .005));
-    const Vector3 slope(2e-4, -1e-4, 3e-4);
-
-    gtsam::Matrix H1, H2, H3, H4, H5, H6;
-    const gtsam::Vector error = factor.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, slope,
-                                                     &H1, &H2, &H3, &H4, &H5, &H6);
-    QCOMPARE(error.size(), Eigen::Index(9));
-
-    // The perturbations are the manifolds' own retracts, the tangents the
-    // analytical Jacobians are taken in (GTSAM's testImuFactor checks
-    // ImuFactor the same way). Entries are of order 1 to 10.
-    const std::function<gtsam::Vector9(const Pose3 &, const Vector3 &, const Pose3 &, const Vector3 &,
-                                       const ConstantBias &, const Vector3 &)> h =
-        [&factor](const Pose3 &pi, const Vector3 &vi, const Pose3 &pj, const Vector3 &vj,
-                  const ConstantBias &b, const Vector3 &s) -> gtsam::Vector9 {
-            return factor.evaluateError(pi, vi, pj, vj, b, s);
-        };
-    const gtsam::Matrix N1 = gtsam::numericalDerivative61<gtsam::Vector9, Pose3, Vector3, Pose3, Vector3, ConstantBias, Vector3>(h, pose_i, vel_i, pose_j, vel_j, bias, slope);
-    const gtsam::Matrix N2 = gtsam::numericalDerivative62<gtsam::Vector9, Pose3, Vector3, Pose3, Vector3, ConstantBias, Vector3>(h, pose_i, vel_i, pose_j, vel_j, bias, slope);
-    const gtsam::Matrix N3 = gtsam::numericalDerivative63<gtsam::Vector9, Pose3, Vector3, Pose3, Vector3, ConstantBias, Vector3>(h, pose_i, vel_i, pose_j, vel_j, bias, slope);
-    const gtsam::Matrix N4 = gtsam::numericalDerivative64<gtsam::Vector9, Pose3, Vector3, Pose3, Vector3, ConstantBias, Vector3>(h, pose_i, vel_i, pose_j, vel_j, bias, slope);
-    const gtsam::Matrix N5 = gtsam::numericalDerivative65<gtsam::Vector9, Pose3, Vector3, Pose3, Vector3, ConstantBias, Vector3>(h, pose_i, vel_i, pose_j, vel_j, bias, slope);
-    const gtsam::Matrix N6 = gtsam::numericalDerivative66<gtsam::Vector9, Pose3, Vector3, Pose3, Vector3, ConstantBias, Vector3>(h, pose_i, vel_i, pose_j, vel_j, bias, slope);
-    const struct { const char *name; const gtsam::Matrix *analytic, *numeric; } blocks[] = {
-        {"H1", &H1, &N1}, {"H2", &H2, &N2}, {"H3", &H3, &N3}, {"H4", &H4, &N4}, {"H5", &H5, &N5}, {"H6", &H6, &N6}};
-    for (const auto &block : blocks) {
-        QCOMPARE(block.analytic->rows(), block.numeric->rows());
-        QCOMPARE(block.analytic->cols(), block.numeric->cols());
-        const double worst = (*block.analytic-*block.numeric).cwiseAbs().maxCoeff();
-        qInfo() << block.name << "max |analytic - numeric|" << worst;
-        QVERIFY2(worst < 1e-6, block.name);
-    }
-    QCOMPARE(H6.rows(), Eigen::Index(9));
-    QCOMPARE(H6.cols(), Eigen::Index(3));
-    QVERIFY(H6.cwiseAbs().maxCoeff() > 1e-3);   // not vacuous: dT and the rotation Jacobian are non-zero
-
-    // At zero slope the factor is ImuFactor on the same pim, bit for bit
-    // (Eigen's == is element-wise equality): the error and H1..H5. H6, the
-    // derivative with respect to the slope, does not depend on the slope: it
-    // is ImuFactor's gyro-bias columns times dT, the same arithmetic.
-    const gtsam::ImuFactor stock(X(0), V(0), X(1), V(1), B(0), pim);
-    gtsam::Matrix G1, G2, G3, G4, G5;
-    const gtsam::Vector stockError = stock.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, &G1, &G2, &G3, &G4, &G5);
-    gtsam::Matrix Z1, Z2, Z3, Z4, Z5, Z6;
-    const gtsam::Vector zeroSlopeError = factor.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, Vector3::Zero(),
-                                                              &Z1, &Z2, &Z3, &Z4, &Z5, &Z6);
-    QVERIFY(zeroSlopeError == stockError);
-    QVERIFY(Z1 == G1 && Z2 == G2 && Z3 == G3 && Z4 == G4 && Z5 == G5);
-    QVERIFY(Z6 == gtsam::Matrix(G5.rightCols<3>()*dT));
-    QVERIFY(!Z6.isZero(0));
-    QVERIFY(!(error == stockError));   // and with the slope and dT it is not
-
-    // The same at dT = 0 with the non-zero slope (a second factor); there
-    // the slope has no effect at all, so H6 is the zero matrix.
-    const TemperatureImuFactor atReference(X(0), V(0), X(1), V(1), B(0), T(0), pim, 0.);
-    gtsam::Matrix R1, R2, R3, R4, R5, R6;
-    const gtsam::Vector referenceError = atReference.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, slope,
-                                                                   &R1, &R2, &R3, &R4, &R5, &R6);
-    QVERIFY(referenceError == stockError);
-    QVERIFY(R1 == G1 && R2 == G2 && R3 == G3 && R4 == G4 && R5 == G5);
-    QVERIFY(R6.isZero(0));
-
-    // Through Values: the whitened errors agree (the same covariance), the
-    // clone evaluates like the original.
-    gtsam::Values values;
-    values.insert(X(0), pose_i);
-    values.insert(V(0), vel_i);
-    values.insert(X(1), pose_j);
-    values.insert(V(1), vel_j);
-    values.insert(B(0), bias);
-    values.insert(T(0), slope);
-    QVERIFY(atReference.whitenedError(values) == stock.whitenedError(values));
-    gtsam::Values zeroSlope = values;
-    zeroSlope.update(T(0), Vector3(Vector3::Zero()));
-    QVERIFY(factor.whitenedError(zeroSlope) == stock.whitenedError(zeroSlope));
-    const gtsam::NonlinearFactor::shared_ptr clone = factor.clone();
-    QVERIFY(clone != nullptr);
-    QVERIFY(clone.get() != &factor);
-    QVERIFY(clone->error(values) == factor.error(values));
-    QVERIFY(factor.error(values) > 0);
-}
-
 void FusionKernelTest::temperatureGraphShape()
 {
     using gtsam::imuBias::ConstantBias;
@@ -3072,17 +2978,18 @@ void FusionKernelTest::temperatureGraphShape()
     QVERIFY(std::abs(model.tRef-sum/101) < 1e-12);
 
     // The temperature graph: per state the position and velocity factors,
-    // the temperature factor between them, the bias prior, the slope prior last.
+    // the scaled IMU factor between them (the temperature model is inside
+    // it), the bias prior, the slope prior, and the scale prior last.
     const auto graph = buildFactorGraph(d, BiasLinearization{ConstantBias(), Vector3::Zero()}, model, tuningAt(104));
-    QCOMPARE(graph.size(), size_t(7));
+    QCOMPARE(graph.size(), size_t(8));
     QVERIFY(dynamic_cast<const gtsam::GPSFactor *>(graph.at(0).get()));
     QVERIFY(dynamic_cast<const gtsam::PriorFactor<Vector3> *>(graph.at(1).get()));
     QVERIFY(dynamic_cast<const gtsam::GPSFactor *>(graph.at(2).get()));
     QVERIFY(dynamic_cast<const gtsam::PriorFactor<Vector3> *>(graph.at(3).get()));
-    const auto *imu = dynamic_cast<const TemperatureImuFactor *>(graph.at(4).get());
+    const auto *imu = dynamic_cast<const ScaledImuFactor *>(graph.at(4).get());
     QVERIFY(imu);
     QVERIFY(imu->temperatureDelta() == temperatureAtFix(d, 0)-model.tRef);
-    QVERIFY(imu->keys() == gtsam::KeyVector({X(0), V(0), X(1), V(1), B(0), T(0)}));
+    QVERIFY(imu->keys() == gtsam::KeyVector({X(0), V(0), X(1), V(1), B(0), T(0), S(0)}));
     QVERIFY(dynamic_cast<const gtsam::PriorFactor<ConstantBias> *>(graph.at(5).get()));
     const auto *slopePrior = dynamic_cast<const gtsam::PriorFactor<Vector3> *>(graph.at(6).get());
     QVERIFY(slopePrior);
@@ -3091,6 +2998,7 @@ void FusionKernelTest::temperatureGraphShape()
     const auto sigmas = std::dynamic_pointer_cast<gtsam::noiseModel::Diagonal>(slopePrior->noiseModel());
     QVERIFY(sigmas != nullptr);
     QVERIFY(sigmas->sigmas() == gtsam::Vector(Vector3::Constant(Tuning{}.gyroBiasSlopeSigma)));
+    QVERIFY(dynamic_cast<const gtsam::PriorFactor<Vector6> *>(graph.at(7).get()));
     // Spec section 6's priors, as literals: the accelerometer bias keeps
     // 0.3 m/s^2, b0 keeps 0.03 rad/s, b1 is 0.010 deg/s per degC (the
     // documented noise model's item 1017).
@@ -3200,8 +3108,8 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     // The spec's "constant temperature" case (item 246 as amended): with
     // T_k - T_ref exactly zero at every fix the factor's H6 is zero, the
     // slope's normal equation is its prior's alone with a zero right-hand
-    // side, and every LM step leaves it at 0.0, the scale state on as the
-    // pipeline runs it. The bound is 1 % of the prior sigma, the margin
+    // side, and every LM step leaves it at 0.0, with the scale factors, as
+    // the pipeline runs it. The bound is 1 % of the prior sigma, the margin
     // against a solver that visits a rounding-size value and steps back.
     Tuning t;
     t.segmentLength = 60;
@@ -3234,12 +3142,12 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
 
     // The consistency check with the stock path through the internal seams:
     // the same window, the same initializer, the constant-bias fit (the
-    // default model) is the same model at b1 = 0, so it converges to the
-    // objective of the full fit with the scale state off under the settle
-    // tolerance (1e-6 relative is the margin for a different elimination
-    // ordering). With the state on the scale moves the objective by about
-    // 4.5 % on this recording (246.3 against 258.0 without it), so the
-    // constant-bias fit is reproduced only without it.
+    // default model) is the same model at b1 = 0 and unit scale, so it
+    // converges to the objective of the full fit with its scale held at one
+    // (withScaleHeldAtOne()) under the settle tolerance (1e-6 relative is the
+    // margin for a different elimination ordering). Free, the scale moves the
+    // objective by about 4.5 % on this recording (246.3 against 258.0 held),
+    // so the constant-bias fit is reproduced only with it held.
     const PreparedInput prepared = prepareInput(toChannels(f));
     Tuning derived = t;
     derived.maxGap = kImuGapMedians*medianInterval(prepared.recording.imuTime);
@@ -3252,16 +3160,17 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     QVERIFY(!stock.biasModel.temperatureLinear);
     QVERIFY(stock.gyroBiasSlope.isZero(0));
     QCOMPARE(stock.residuals.back().kind, std::string("bias_prior"));
-    const GyroBiasModel stateOff = gyroBiasModelFor(window);
-    QVERIFY(!stateOff.scaleState);
-    const FitResult temperature = fitFactorGraph(window, init.state, derived, QString::fromLatin1(kFullFitPassFormat),
-                                                 Checkpoint(), stateOff);
+    const Tuning held = withScaleHeldAtOne(derived);
+    const FitResult temperature = fitFactorGraph(window, init.state, held, QString::fromLatin1(kFullFitPassFormat),
+                                                 Checkpoint(), gyroBiasModelFor(window));
     QVERIFY(temperature.converged);
-    QVERIFY(temperature.scale == Vector6::Ones());
-    QCOMPARE(temperature.residuals.back().kind, std::string("slope_prior"));
+    const double departure = (temperature.scale-Vector6::Ones()).cwiseAbs().maxCoeff();
+    QCOMPARE(temperature.residuals.back().kind, std::string("scale_prior"));
     const double objective = diagnostics.value("objective").toDouble();
-    qInfo() << "constant temperature: objective" << objective << "with the scale state," << temperature.objective
-            << "without it, stock fit" << stock.objective << "; full fit" << trace.history.size() << "iterations";
+    qInfo() << "constant temperature: objective" << objective << "with the scale free," << temperature.objective
+            << "held at one (largest departure" << departure << "), stock fit" << stock.objective << "; full fit"
+            << trace.history.size() << "iterations";
+    QVERIFY(departure <= held.noise.accelerometer.sensitivityTolerance);
     QVERIFY(std::abs(stock.objective-temperature.objective) <= 1e-6*std::max(1., temperature.objective));
 }
 
@@ -3398,9 +3307,11 @@ void FusionKernelTest::scaleFactorJacobians()
     // against numerical derivatives (each block with the six other
     // variables bound: numericalDerivative.h stops at six arguments) at a
     // point where every variable differs from the linearization, the scale
-    // included; at S = s^ the error and H1..H6 are TemperatureImuFactor's on
-    // the same preintegration bit for bit, and H7 is not zero; the clone and
-    // the whitened error through Values.
+    // included; at S = s^ the error and H1..H5 are the stock gtsam::ImuFactor's
+    // on the same preintegration at the interval bias, bit for bit, H6 its
+    // gyro-bias columns times dT, and H7 is not zero; at zero slope and unit
+    // scale it is the stock factor at the bias itself, the library's own
+    // reference; the clone and the whitened error through Values.
     using gtsam::imuBias::ConstantBias;
     using gtsam::Pose3;
     using gtsam::Vector9;
@@ -3460,30 +3371,64 @@ void FusionKernelTest::scaleFactorJacobians()
     }
     QCOMPARE(H7.cols(), Eigen::Index(6));
 
-    // At S = s^ the temperature factor on the same preintegration, bit for
-    // bit (Eigen's == is element-wise equality); H7 is the scale's chain.
-    const TemperatureImuFactor temperature(X(0), V(0), X(1), V(1), B(0), T(0), pim, dT);
-    gtsam::Matrix G1, G2, G3, G4, G5, G6, Z1, Z2, Z3, Z4, Z5, Z6, Z7;
-    const gtsam::Vector temperatureError = temperature.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, slope,
-                                                                     &G1, &G2, &G3, &G4, &G5, &G6);
+    // At S = s^ the stock factor on the same preintegration, evaluated at the
+    // interval bias [B_a; B_g + T dT], bit for bit (Eigen's == is element-wise
+    // equality): the error and H1..H5; H6 is its gyro-bias columns times dT,
+    // the same arithmetic; H7 is the scale's chain.
+    const ConstantBias atInterval(bias.accelerometer(), bias.gyroscope() + slope*dT);
+    const gtsam::ImuFactor stock(X(0), V(0), X(1), V(1), B(0), pim);
+    gtsam::Matrix G1, G2, G3, G4, G5, Z1, Z2, Z3, Z4, Z5, Z6, Z7;
+    const gtsam::Vector stockError = stock.evaluateError(pose_i, vel_i, pose_j, vel_j, atInterval,
+                                                         &G1, &G2, &G3, &G4, &G5);
     const gtsam::Vector atLinearization = factor.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, slope, sHat,
                                                                &Z1, &Z2, &Z3, &Z4, &Z5, &Z6, &Z7);
-    QVERIFY(atLinearization == temperatureError);
-    QVERIFY(Z1 == G1 && Z2 == G2 && Z3 == G3 && Z4 == G4 && Z5 == G5 && Z6 == G6);
+    QVERIFY(atLinearization == stockError);
+    QVERIFY(Z1 == G1 && Z2 == G2 && Z3 == G3 && Z4 == G4 && Z5 == G5);
+    QVERIFY(Z6 == gtsam::Matrix(G5.rightCols<3>()*dT));
     QVERIFY(Z7.cwiseAbs().maxCoeff() > 1e-3);
-    QVERIFY(!(error == temperatureError));   // and away from s^ it is not
+    QVERIFY(!(error == stockError));   // and away from s^ it is not
 
-    // Through Values: at S = s^ the whitened errors agree (the same
-    // covariance); the clone evaluates like the original.
+    // At zero slope and unit scale (the factor preintegrated at s^ = ones):
+    // the stock factor on the same preintegration at the bias itself, bit for
+    // bit. H6 does not depend on the slope: it is the stock gyro-bias columns
+    // times dT. At dT = 0 the slope has no effect at all, and H6 is zero.
+    const Vector6 ones = Vector6::Ones();
+    gtsam::Matrix96 unitJacobian;
+    const auto unitPim = preintegrateImu(d, .037, .863, linearizedAt, ones, fixtureNoise(104), ImuStepObserver(),
+                                         &unitJacobian);
+    const ScaledImuFactor unit(X(0), V(0), X(1), V(1), B(0), T(0), S(0), unitPim, dT, unitJacobian, ones);
+    const gtsam::ImuFactor unitStock(X(0), V(0), X(1), V(1), B(0), unitPim);
+    gtsam::Matrix U1, U2, U3, U4, U5, W1, W2, W3, W4, W5, W6, W7;
+    const gtsam::Vector unitStockError = unitStock.evaluateError(pose_i, vel_i, pose_j, vel_j, bias,
+                                                                 &U1, &U2, &U3, &U4, &U5);
+    const gtsam::Vector zeroSlopeError = unit.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, Vector3::Zero(),
+                                                            ones, &W1, &W2, &W3, &W4, &W5, &W6, &W7);
+    QVERIFY(zeroSlopeError == unitStockError);
+    QVERIFY(W1 == U1 && W2 == U2 && W3 == U3 && W4 == U4 && W5 == U5);
+    QVERIFY(W6 == gtsam::Matrix(U5.rightCols<3>()*dT));
+    QVERIFY(!W6.isZero(0));
+    const ScaledImuFactor atReference(X(0), V(0), X(1), V(1), B(0), T(0), S(0), unitPim, 0., unitJacobian, ones);
+    gtsam::Matrix R1, R2, R3, R4, R5, R6, R7;
+    const gtsam::Vector referenceError = atReference.evaluateError(pose_i, vel_i, pose_j, vel_j, bias, slope, ones,
+                                                                   &R1, &R2, &R3, &R4, &R5, &R6, &R7);
+    QVERIFY(referenceError == unitStockError);
+    QVERIFY(R1 == U1 && R2 == U2 && R3 == U3 && R4 == U4 && R5 == U5);
+    QVERIFY(R6.isZero(0));
+
+    // Through Values: at zero slope and unit scale the whitened errors agree
+    // (the same covariance), and at dT = 0 with the slope; the clone
+    // evaluates like the original away from s^.
     gtsam::Values values;
     values.insert(X(0), pose_i);
     values.insert(V(0), vel_i);
     values.insert(X(1), pose_j);
     values.insert(V(1), vel_j);
     values.insert(B(0), bias);
-    values.insert(T(0), slope);
-    values.insert(S(0), sHat);
-    QVERIFY(factor.whitenedError(values) == temperature.whitenedError(values));
+    values.insert(T(0), Vector3(Vector3::Zero()));
+    values.insert(S(0), ones);
+    QVERIFY(unit.whitenedError(values) == unitStock.whitenedError(values));
+    values.update(T(0), slope);
+    QVERIFY(atReference.whitenedError(values) == unitStock.whitenedError(values));
     values.update(S(0), scale);
     const gtsam::NonlinearFactor::shared_ptr clone = factor.clone();
     QVERIFY(clone != nullptr);
@@ -3500,9 +3445,8 @@ void FusionKernelTest::scaleGraphShape()
     // the interval's bias and the linearization's scale with its Jacobian;
     // then the bias prior, the slope prior and last the scale prior: mean
     // ones, sigmas the noise unit's sensitivity tolerances (G_So%, 1 %, for
-    // both sensors). A full fit's values hold S(0). With the state off there
-    // is no S(0) and the IMU factors are the temperature factor; the state
-    // without the temperature model is a programming error.
+    // both sensors). A full fit's values hold S(0). The constant model's
+    // graph has neither S(0) nor T(0): its IMU factors are stock.
     using gtsam::imuBias::ConstantBias;
     Samples d = boundarySamples(Vector3(1, -2, .5));
     for (Vector3 &rate : d.gyro)
@@ -3511,9 +3455,7 @@ void FusionKernelTest::scaleGraphShape()
         d.temperature.push_back(40+.01*double(i));
     validateSamples(d, Tuning{});
     const Tuning tuning = tuningAt(104);
-    GyroBiasModel model = gyroBiasModelFor(d);
-    QVERIFY(!model.scaleState);   // the temperature model alone; planFit() turns the state on
-    model.scaleState = true;
+    const GyroBiasModel model = gyroBiasModelFor(d);
     const ConstantBias bias(Vector3(.05, -.03, .08), Vector3(.003, -.002, .004));
     const Vector3 slope(1e-3, 0, 0);
     const Vector6 at = offNominalScale();
@@ -3551,31 +3493,20 @@ void FusionKernelTest::scaleGraphShape()
     QCOMPARE(accelerometer, .01);
     QCOMPARE(gyroscope, .01);
 
-    // The same graph with the state off: seven factors, the temperature
-    // factor at 4, no factor on S(0).
-    GyroBiasModel off = model;
-    off.scaleState = false;
-    const auto graphOff = buildFactorGraph(d, BiasLinearization{bias, slope}, off, tuning);
-    QCOMPARE(graphOff.size(), size_t(7));
-    QVERIFY(dynamic_cast<const TemperatureImuFactor *>(graphOff.at(4).get()));
-    for (const auto &factor : graphOff)
-        QVERIFY(std::find(factor->keys().begin(), factor->keys().end(), S(0)) == factor->keys().end());
+    // The constant model's graph: six factors, the stock factor at 4, no
+    // factor on T(0) or S(0).
+    const auto stock = buildFactorGraph(d, BiasLinearization{bias}, GyroBiasModel{}, tuning);
+    QCOMPARE(stock.size(), size_t(6));
+    QVERIFY(dynamic_cast<const gtsam::ImuFactor *>(stock.at(4).get()));
+    for (const auto &factor : stock) {
+        for (const gtsam::Key key : {T(0), S(0)})
+            QVERIFY(std::find(factor->keys().begin(), factor->keys().end(), key) == factor->keys().end());
+    }
 
-    // The state under the constant model: refused by the build and the fit.
-    GyroBiasModel constantWithScale;
-    constantWithScale.scaleState = true;
-    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, buildFactorGraph(d, BiasLinearization{}, constantWithScale, tuning));
-    const Samples linear = linearSamples(Vector3(12, -4, 2), Vector3(7, 8, 9));
-    const Initialization init = initialize(linear, tuning);
-    QVERIFY_THROWS_EXCEPTION(std::invalid_argument,
-                             fitFactorGraph(linear, init.state, tuning, QString::fromLatin1(kFullFitPassFormat),
-                                            Checkpoint(), constantWithScale));
-
-    // A full fit with the state (coarse_linear's, as the pipeline runs it)
-    // and the same fit with it off.
+    // A full fit (coarse_linear's, as the pipeline runs it).
     const WindowFit &f = fixtureFit(QStringLiteral("coarse_linear"));
     QVERIFY(f.fit.converged);
-    QVERIFY(f.fit.biasModel.scaleState);
+    QVERIFY(f.fit.biasModel.temperatureLinear);
     QVERIFY(f.fit.values.exists(S(0)));
     QVERIFY(f.fit.scale == f.fit.values.at<Vector6>(S(0)));
     const size_t n = f.window.gnssTime.size();
@@ -3586,15 +3517,6 @@ void FusionKernelTest::scaleGraphShape()
         QVERIFY(scaled->keys() == gtsam::KeyVector({X(k-1), V(k-1), X(k), V(k), B(0), T(0), S(0)}));
     }
     QVERIFY(dynamic_cast<const gtsam::PriorFactor<Vector6> *>(f.fit.graph.at(f.fit.graph.size()-1).get()));
-    const FitResult stateOff = fitFactorGraph(f.window, initialize(f.window, f.tuning).state, f.tuning,
-                                              QString::fromLatin1(kFullFitPassFormat), Checkpoint(),
-                                              gyroBiasModelFor(f.window));
-    QVERIFY(stateOff.converged);
-    QVERIFY(!stateOff.values.exists(S(0)));
-    QVERIFY(stateOff.scale == Vector6::Ones());
-    QCOMPARE(stateOff.graph.size(), 3*n-1+2);
-    for (size_t k = 1; k < n; ++k)
-        QVERIFY2(dynamic_cast<const TemperatureImuFactor *>(stateOff.graph.at(3*k+1).get()), qPrintable(QString::number(k)));
 }
 
 void FusionKernelTest::fitRepreintegratesAtTheFittedScale()
@@ -3604,9 +3526,10 @@ void FusionKernelTest::fitRepreintegratesAtTheFittedScale()
     // linearization scale is fit.scale bit for bit, which is S(0) of the
     // values), its preintegration and scale Jacobian are preintegrateImu()'s
     // at the interval's bias and that scale, so at the fit's values its
-    // S - s^ is zero and it evaluates as the temperature factor on the same
-    // preintegration; the scale prior is the graph's last factor, and the
-    // fit settled under the same cost test.
+    // S - s^ is zero and it evaluates as the stock gtsam::ImuFactor on the
+    // same preintegration at the interval bias, bit for bit; the scale prior
+    // is the graph's last factor, and the fit settled under the same cost
+    // test.
     using gtsam::imuBias::ConstantBias;
     for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin"}) {
         const WindowFit &f = fixtureFit(QLatin1String(name));
@@ -3615,7 +3538,7 @@ void FusionKernelTest::fitRepreintegratesAtTheFittedScale()
         QVERIFY(f.fit.scale == f.fit.values.at<Vector6>(S(0)));
         const ConstantBias bias = f.fit.values.at<ConstantBias>(B(0));
         size_t factors = 0;
-        bool sameScale = true, samePreintegration = true, sameJacobian = true, temperatureError = true;
+        bool sameScale = true, samePreintegration = true, sameJacobian = true, stockError = true;
         for (const auto &factor : f.fit.graph) {
             const auto *scaled = dynamic_cast<const ScaledImuFactor *>(factor.get());
             if (!scaled)
@@ -3631,9 +3554,16 @@ void FusionKernelTest::fitRepreintegratesAtTheFittedScale()
                 && scaled->preintegratedMeasurements().preintegrated() == pim.preintegrated()
                 && scaled->preintegratedMeasurements().preintMeasCov() == pim.preintMeasCov();
             sameJacobian = sameJacobian && scaled->scaleJacobian() == Hs;
-            const TemperatureImuFactor held(X(k-1), V(k-1), X(k), V(k), B(0), T(0), scaled->preintegratedMeasurements(),
-                                            scaled->temperatureDelta());
-            temperatureError = temperatureError && scaled->error(f.fit.values) == held.error(f.fit.values);
+            const gtsam::Values &v = f.fit.values;
+            const gtsam::Pose3 pose_i = v.at<gtsam::Pose3>(X(k-1)), pose_j = v.at<gtsam::Pose3>(X(k));
+            const Vector3 vel_i = v.at<Vector3>(V(k-1)), vel_j = v.at<Vector3>(V(k));
+            const gtsam::ImuFactor stock(X(k-1), V(k-1), X(k), V(k), B(0), scaled->preintegratedMeasurements());
+            gtsam::Matrix G1, G2, G3, G4, G5;
+            stockError = stockError
+                && scaled->evaluateError(pose_i, vel_i, pose_j, vel_j, bias, f.fit.gyroBiasSlope, f.fit.scale)
+                       == stock.evaluateError(pose_i, vel_i, pose_j, vel_j,
+                                              intervalBias(f.window, k-1, bias, f.fit.gyroBiasSlope, f.fit.biasModel),
+                                              &G1, &G2, &G3, &G4, &G5);
         }
         qInfo() << name << ": fitted scale acc" << f.fit.scale(0) << f.fit.scale(1) << f.fit.scale(2) << "gyro"
                 << f.fit.scale(3) << f.fit.scale(4) << f.fit.scale(5) << "after" << f.fit.stopping.passes << "passes";
@@ -3641,7 +3571,7 @@ void FusionKernelTest::fitRepreintegratesAtTheFittedScale()
         QVERIFY2(sameScale, name);
         QVERIFY2(samePreintegration, name);
         QVERIFY2(sameJacobian, name);
-        QVERIFY2(temperatureError, name);
+        QVERIFY2(stockError, name);
         const auto *last = dynamic_cast<const gtsam::PriorFactor<Vector6> *>(f.fit.graph.at(f.fit.graph.size()-1).get());
         QVERIFY2(last && last->keys() == gtsam::KeyVector({S(0)}), name);
         QCOMPARE(f.fit.residuals.back().kind, std::string("scale_prior"));
@@ -3745,22 +3675,21 @@ void FusionKernelTest::scaleRecordingRecoversTheFactor()
     // the other axes stay at one (y and the gyro within a tenth of their
     // tolerance; z, which shares the z bias under gravity, within its
     // tolerance); and the position misfit (FitResult::positionRms) is at most
-    // 0.9 of that of the full fit with the state off, on the same window from
-    // the same initialization.
+    // 0.9 of that of the full fit with its scale held at one
+    // (withScaleHeldAtOne()), on the same window from the same initialization.
     const QString name = QStringLiteral("scale_recording");
     const Tuning tuning = pipelineTuning(name, Tuning{});
     const Samples window = windowOf(name, Tuning{});
     const Initialization init = initialize(window, tuning);
     QCOMPARE(init.account.segments.size(), size_t(1));
     QVERIFY(!init.account.segments.front().fallback);
-    GyroBiasModel on = gyroBiasModelFor(window);
-    on.scaleState = true;
+    const GyroBiasModel model = gyroBiasModelFor(window);
     const FitResult with = fitFactorGraph(window, init.state, tuning, QString::fromLatin1(kFullFitPassFormat),
-                                          Checkpoint(), on);
-    const FitResult without = fitFactorGraph(window, init.state, tuning, QString::fromLatin1(kFullFitPassFormat),
-                                             Checkpoint(), gyroBiasModelFor(window));
-    for (const auto &[label, fit] : {std::pair<const char *, const FitResult *>{"with the state", &with},
-                                     std::pair<const char *, const FitResult *>{"without it", &without}}) {
+                                          Checkpoint(), model);
+    const FitResult held = fitFactorGraph(window, init.state, withScaleHeldAtOne(tuning),
+                                          QString::fromLatin1(kFullFitPassFormat), Checkpoint(), model);
+    for (const auto &[label, fit] : {std::pair<const char *, const FitResult *>{"with the scale free", &with},
+                                     std::pair<const char *, const FitResult *>{"held at one", &held}}) {
         const auto bias = fit->values.at<gtsam::imuBias::ConstantBias>(B(0));
         qInfo() << "scale_recording" << label << ": rule" << fit->stopping.rule.c_str() << ", passes"
                 << fit->stopping.passes << ", iterations" << fit->history.size() << ", objective" << fit->objective
@@ -3770,9 +3699,9 @@ void FusionKernelTest::scaleRecordingRecoversTheFactor()
                 << "m, velocity RMS" << fit->velocityRms << "m/s";
     }
     qInfo() << "scale_recording: s_ax" << with.scale(0) << "against 1.02 (" << (with.scale(0)-1.02)/.01
-            << "of the tolerance); position RMS ratio" << with.positionRms/without.positionRms;
+            << "of the tolerance); position RMS ratio" << with.positionRms/held.positionRms;
     QVERIFY(with.converged);
-    QVERIFY(without.converged);
+    QVERIFY(held.converged);
     const double accelerometer = tuning.noise.accelerometer.sensitivityTolerance;
     const double gyroscope = tuning.noise.gyroscope.sensitivityTolerance;
     QVERIFY(std::abs(with.scale(0)-1.02) <= accelerometer);
@@ -3780,7 +3709,7 @@ void FusionKernelTest::scaleRecordingRecoversTheFactor()
     QVERIFY(std::abs(with.scale(2)-1) <= accelerometer);
     for (int i = 3; i < 6; ++i)
         QVERIFY2(std::abs(with.scale(i)-1) <= .1*gyroscope, qPrintable(QString::number(i)));
-    QVERIFY(with.positionRms <= .9*without.positionRms);
+    QVERIFY(with.positionRms <= .9*held.positionRms);
 }
 
 void FusionKernelTest::diagnosticsReportTheScale()
