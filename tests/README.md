@@ -3021,7 +3021,7 @@ python -c "import json,sys,csv,statistics as s; d=json.load(open(sys.argv[1])); 
 
 ```bash
 cat > TEMP/m52.py <<'EOF'
-import json,sys,csv,bisect,statistics as s
+import json,sys,os,csv,bisect,statistics as s
 d=json.load(open(sys.argv[2])); d=d.get('diagnostics',d); a=d.get('accuracy') or {}; t={}; g={}; m={}; F=[]
 for x in d.get('residuals') or []:
     k,n,e=x['kind'],x['node'],x['squared_whitened_error']
@@ -3031,7 +3031,7 @@ T=[t[k] for k in sorted(t)]; N=len(T); h=a.get('widening_half_width_s')
 for k in range(N):
     c=min(k,N-2); lo=min(bisect.bisect_left(T,T[k]-h),c); hi=max(bisect.bisect_right(T,T[k]+h)-1,c+1)
     F.append((sum(g[i] for i in range(lo,hi+1))+sum(m.get(i,0) for i in range(lo+1,hi+1)))/(6*(hi-lo+1)-9))
-r=list(csv.reader(open(sys.argv[3]))) if len(sys.argv)>3 else [[]]
+r=list(csv.reader(open(sys.argv[3]))) if sys.argv[1]=='0' and len(sys.argv)>3 and os.path.exists(sys.argv[3]) else [[]]
 print('exit', sys.argv[1], 'failure', d.get('failure'), 'rule', d.get('stopping',{}).get('rule'), 'passes', d.get('stopping',{}).get('passes'), 'iterations', d.get('seeds',[{}])[0].get('iterations'), 'objective', d.get('objective'))
 print('fixes', d.get('gnss_states'), 'imu_outputs', d.get('imu_outputs'), 'quality', {q: d.get('quality',{}).get(q) for q in ('position_nrms','velocity_nrms','imu_nrms')})
 print('scale', d.get('model',{}).get('scale'))
@@ -3041,10 +3041,10 @@ print('window factor', (s.median(F), s.quantiles(F,n=20,method='inclusive')[18],
 EOF
 ```
 
-Then, for each of M11-M14's recordings (`<name>` `11-17-12`, `08-35-23`, `10-15-24`, `08-35-41`, `<recording>` its folder as there), one run on this build and the script on its outputs, with the run's exit code:
+Then, for each of M11-M14's recordings (`<name>` `11-17-12`, `08-35-23`, `10-15-24`, `08-35-41`, `<recording>` its folder as there), one run on this build and the script on its outputs, with the run's exit code. The runner writes the CSV only for a fit that succeeds, so the command deletes the CSV first and the script reads it only after exit code 0; no CSV of an earlier run is read:
 
 ```bash
-"$R" --csv TEMP/runs/<name>.v6.csv "<recording>" > TEMP/runs/<name>.v6.json 2> TEMP/runs/<name>.v6.log; python TEMP/m52.py $? TEMP/runs/<name>.v6.json TEMP/runs/<name>.v6.csv
+rm -f TEMP/runs/<name>.v6.csv; "$R" --csv TEMP/runs/<name>.v6.csv "<recording>" > TEMP/runs/<name>.v6.json 2> TEMP/runs/<name>.v6.log; python TEMP/m52.py $? TEMP/runs/<name>.v6.json TEMP/runs/<name>.v6.csv
 ```
 
 and the script on each golden fixture that fits, with `-` for the exit code and no CSV: `python TEMP/m52.py - tests/data/fusion/<fit>.json` for `coarse_linear`, `coarse_maneuver` and `stationary_spin`. It prints the exit code, `failure`, `stopping.rule`, the passes, the iterations and `objective`; the fixes and IMU samples and the three normalized RMS of `quality`; `model.scale` with its sigmas; `accuracy.max_widening`, `widened_samples` as a share of `imu_outputs` and `undetermined_heading_samples`; the medians of the CSV's four accuracy columns; and the widening's window factor at the fixes, from the diagnostics' `residuals` by the kernel's rule (`docs/SENSOR_FUSION.md` section 4, Widening: the fixes within `widening_half_width_s` of the fix, at least the two around it; the position and velocity terms of those fixes and the `imu` terms of the intervals between them, the priors excluded, over `6N - 9`): its median, 95th percentile, maximum and the share of fixes above one. A fit that does not converge prints its exit code, rule and failure and no residuals, since a failed fit's diagnostics carry none. Record the printout, unadjusted, in the phase report, and write it, rounded to two or three significant figures, into the tables of `docs/SENSOR_FUSION.md` section 8 ("Validating the model."). The step passes when every command ran and the document's numbers are the printout's, whatever the numbers are: no constant of the noise model is changed to move them.
