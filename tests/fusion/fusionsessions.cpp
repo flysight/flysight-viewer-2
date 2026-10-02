@@ -286,6 +286,10 @@ QVector<PlotValue> fusionPlots()
         {"Heading",                  "deg",   "bodyHeading",   "angle"},
         {"Pitch",                    "deg",   "bodyPitch",     "angle"},
         {"Roll",                     "deg",   "bodyRoll",      "angle"},
+        {"Heading accuracy",                 "deg",   "headingAcc", "angle"},
+        {"Tilt accuracy",                    "deg",   "tiltAcc",    "angle"},
+        {"Horizontal acceleration accuracy", "m/s^2", "accHAcc",    "acceleration_accuracy"},
+        {"Vertical acceleration accuracy",   "m/s^2", "accDAcc",    "acceleration_accuracy"},
     };
 
     QVector<PlotValue> plots;

@@ -1,4 +1,4 @@
-// The plot-row script with the REAL fusion plots, the eight rows of the
+// The plot-row script with the REAL fusion plots, the twelve rows of the
 // application's "Sensor fusion" category (fusionPlots()): PlotModel +
 // CalculationDemand + the executor + SessionModel +
 // Fusion::registerFusionCalculations, with real fits on the executor's 64 MiB
@@ -63,6 +63,8 @@ using namespace FlySightTest;
 
 using Kind = JobQueue::OfferResult::Kind;
 
+using BlockerState = BlockerReport::State;
+
 Q_DECLARE_METATYPE(FlySight::DependencyKey)
 
 namespace {
@@ -96,7 +98,8 @@ private slots:
     void init();
     void cleanup();
 
-    void allEightFusionPlotsAreExplicitBacked();
+    void allFusionPlotsAreExplicitBacked();
+    void accuracyPlotsAreAbsentWithoutAFit();
     void realRowScript();
     void headingPitchRollShareOneJob();
     void accHRowIsBlockedByFusion();
@@ -259,12 +262,12 @@ QString FusionRowsTest::offenceInRows(const QString &absent)
     return QString();
 }
 
-// Every one of the eight fusion plots is requested: its value waits on the
-// fit, which is its only requested calculation. Checking all eight with one
+// Every one of the twelve fusion plots is requested: its value waits on the
+// fit, which is its only requested calculation. Checking all twelve with one
 // visible session (with a ground elevation, which Elevation needs) starts ONE
 // fit, which every value waits on; the computations count that one session.
 // After it every row has a value on the fit's time axis.
-void FusionRowsTest::allEightFusionPlotsAreExplicitBacked()
+void FusionRowsTest::allFusionPlotsAreExplicitBacked()
 {
     // The mirror of the application's rows, literally
     struct Row { const char *name; const char *units; const char *measurement; const char *type; };
@@ -277,9 +280,13 @@ void FusionRowsTest::allEightFusionPlotsAreExplicitBacked()
         {"Heading",                  "deg",   "bodyHeading",   "angle"},
         {"Pitch",                    "deg",   "bodyPitch",     "angle"},
         {"Roll",                     "deg",   "bodyRoll",      "angle"},
+        {"Heading accuracy",                 "deg",   "headingAcc", "angle"},
+        {"Tilt accuracy",                    "deg",   "tiltAcc",    "angle"},
+        {"Horizontal acceleration accuracy", "m/s^2", "accHAcc",    "acceleration_accuracy"},
+        {"Vertical acceleration accuracy",   "m/s^2", "accDAcc",    "acceleration_accuracy"},
     };
     const QVector<PlotValue> plots = fusionPlots();
-    QCOMPARE(plots.size(), 8);
+    QCOMPARE(plots.size(), 12);
     for (int i = 0; i < plots.size(); ++i) {
         const PlotValue &plot = plots.at(i);
         QCOMPARE(plot.category, QStringLiteral("Sensor fusion"));
@@ -344,6 +351,83 @@ void FusionRowsTest::allEightFusionPlotsAreExplicitBacked()
     }
     QCOMPARE(m_queue->model()->rowCount(), 1);
     QCOMPARE(engine("s2").runCount(kFit), 1);
+}
+
+// The four accuracy plots are absent, like any unavailable value, where the
+// fit did not compute them. Before the fit they merely wait on it; for a
+// recording the model rejects they are not produced, and the recording is
+// listed once, with the fit's reason, however many of the four are checked;
+// for a session without IMU data none of the twelve applies, silently.
+void FusionRowsTest::accuracyPlotsAreAbsentWithoutAFit()
+{
+    QVector<PlotValue> accuracies;
+    for (const PlotValue &plot : fusionPlots()) {
+        if (plot.plotName.endsWith(QStringLiteral(" accuracy")))
+            accuracies.append(plot);
+    }
+    QCOMPARE(accuracies.size(), 4);
+
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s2")),
+                          fixtureSession(QStringLiteral("reject_origin"), QStringLiteral("r1")),
+                          sessionWithoutImu(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("n1"))}),
+             QString());
+    show({"s2", "r1", "n1"});
+    for (const PlotValue &plot : accuracies)
+        check(plot.measurementID);
+
+    // Before the fits: the two fusable recordings' accuracies wait on them;
+    // the session without IMU data is never counted
+    QCOMPARE(progressNow().count, 2);
+    QVERIFY(m_demand->failures().isEmpty());
+    for (const PlotValue &plot : accuracies) {
+        for (const QString &id : {QStringLiteral("s2"), QStringLiteral("r1")}) {
+            QVERIFY2(merelyUncomputed(id, plot), qPrintable(id + QLatin1Char('/') + plot.measurementID));
+            QVERIFY2(CalculationDemand::isNotYetComputed(session(id), plot.sensorID, plot.measurementID),
+                     qPrintable(id + QLatin1Char('/') + plot.measurementID));
+            QVERIFY2(fusion(id, plot.measurementID).isEmpty(), qPrintable(id + QLatin1Char('/') + plot.measurementID));
+        }
+    }
+    for (const PlotValue &plot : fusionPlots()) {
+        const BlockerReport report = engine("n1").blockers(fusionKey(plot.measurementID));
+        QVERIFY2(report.state == BlockerState::NotApplicable, qPrintable(plot.measurementID));
+        QVERIFY(report.blockers.isEmpty());
+        QVERIFY(!merelyUncomputed(QStringLiteral("n1"), plot));
+    }
+
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(fitJobOf("s2").state, JobState::Succeeded);
+    QCOMPARE(fitJobOf("r1").state, JobState::Succeeded);        // a rejection is a result
+    QCOMPARE(fitJobOf("n1").id, JobId(0));
+
+    // The success has them; the rejection does not, and is listed once
+    const qsizetype samples = fusion("s2", QStringLiteral("_time")).size();
+    QVERIFY(samples > 0);
+    for (const PlotValue &plot : accuracies) {
+        QCOMPARE(fusion("s2", plot.measurementID).size(), samples);
+        QVERIFY2(fusion("r1", plot.measurementID).isEmpty(), qPrintable(plot.measurementID));
+        // a failure, not a value on its way
+        QVERIFY2(!CalculationDemand::isNotYetComputed(session("r1"), plot.sensorID, plot.measurementID),
+                 qPrintable(plot.measurementID));
+        const BlockerReport report = engine("r1").blockers(fusionKey(plot.measurementID));
+        QVERIFY2(report.state == BlockerState::NotProduced, qPrintable(plot.measurementID));
+    }
+    m_demand->flush();
+    const QList<SessionFailures> failures = m_demand->failures();
+    QCOMPARE(failures.size(), 1);
+    QCOMPARE(failures.at(0).sessionId, QStringLiteral("r1"));
+    const FailedCalculation expected{kFit, kTitle, QStringLiteral("Local origin index outside GNSS samples"), false};
+    QVERIFY(failures.at(0).calculations == QList<FailedCalculation>({expected}));
+    QCOMPARE(progressNow().count, 0);
+
+    // The session without IMU data: still nothing, and no fit
+    for (const PlotValue &plot : fusionPlots())
+        QVERIFY2(engine("n1").blockers(fusionKey(plot.measurementID)).state == BlockerState::NotApplicable,
+                 qPrintable(plot.measurementID));
+    const QString offence = offenceInRows(QStringLiteral("n1"));
+    QVERIFY2(offence.isEmpty(), qPrintable(offence));
+    QCOMPARE(engine("n1").runCount(kFit), 0);
+    QCOMPARE(engine("s2").runCount(kFit), 1);
+    QCOMPARE(engine("r1").runCount(kFit), 1);
 }
 
 // Acceptance 15, on the real names with real fits: checking the plot computes
@@ -562,7 +646,7 @@ void FusionRowsTest::accHRowIsBlockedByFusion()
     QCOMPARE(engine("s2").runCount(kFit), 1);
 }
 
-// Acceptance 11 on all eight real rows: a session without IMU data is
+// Acceptance 11 on all twelve real rows: a session without IMU data is
 // never counted in progress nor listed among failures, and cannot have a job.
 void FusionRowsTest::noImuSessionIsNeverCounted()
 {

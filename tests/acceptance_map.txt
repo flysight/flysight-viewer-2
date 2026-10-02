@@ -11,7 +11,8 @@
 #             in tests/README.md, appendix B. It is amended by the
 #             specification of 701-754: items 111 and 115 are stated as
 #             amended. It is amended by the specification of 801-863: item
-#             115 is stated as amended.
+#             115 is stated as amended. It is amended by the specification of
+#             1001-1065: item 115 is stated as amended.
 #   201-247   sensor fusion improvements (segmented initializer, stopping rule,
 #             per-step IMU noise, temperature-dependent gyro bias, the
 #             command-line runner): item = 200 + requirement number. Stated in
@@ -45,7 +46,9 @@
 #             as amended. It is amended by the specification of 701-754:
 #             items 517, 525, 526, 530, 535-537, 539, 542, 554, 555, 557, 559
 #             and 563 are stated as amended. It is amended by the
-#             specification of 801-863: item 509 is stated as amended.
+#             specification of 801-863: item 509 is stated as amended. It is
+#             amended by the specification of 1001-1065: item 509 is stated as
+#             amended.
 #   601-662   calculation refinements (the scheduler's completion of a
 #             task whose work is gone, announced record outcomes, the
 #             session model as the source of column knowledge and display
@@ -64,14 +67,14 @@
 #             appendix H. It amends the specifications of 101-120, 201-247,
 #             301-350, 501-563 and 601-662.
 #   801-863   sensor fusion plots, attitude and the orientation attribute (the
-#             eight fusion plots, the derived kinematics, heading, pitch and
+#             fusion plots, the derived kinematics, heading, pitch and
 #             roll on the body frame, the orientation attribute, the choice
 #             attribute type, constant defaults): item = 800 + clause number.
 #             Stated in full in tests/README.md, appendix I. It amends the
 #             specifications of 1-19, 101-120 and 501-563. It is amended by
 #             the specification of 901-940: items 847 and 861 are stated as
 #             amended. It is amended by the specification of 1001-1065: items
-#             847 and 861 are stated as amended.
+#             801, 802, 842, 847, 854, 861, 862 and 863 are stated as amended.
 #   901-940   the fused state at every IMU sample (the reconstruction between
 #             fixes, the published channels at the IMU rate with the model's
 #             acceleration, the diagnostics' account of the reconstruction,
@@ -81,14 +84,20 @@
 #             amended by the specification of 1001-1065: items 901, 910, 912,
 #             914, 915, 921, 925, 930 and 935 are stated as amended.
 #   1001-1065 the documented noise model and the accuracy, part 1 (the sensor
-#             configuration attributes, the noise model by configuration,
-#             the scale-factor state, the accuracy and its four channels and
-#             plots): item = 1000 + clause number. Stated in full in
-#             tests/README.md, appendix K. It amends the specifications of
-#             201-247, 801-863 and 901-940. It is implemented in phases: the
-#             items with lines below are those whose evidence exists so far,
-#             and the audit's completeness check covers exactly them (an
-#             explicit list in cleanup_audit.cmake).
+#             configuration attributes and their default, the noise model of
+#             the IMU's datasheet by configuration with the derived sampling
+#             term and remainder, the lattice and rate checks, the
+#             scale-factor state, the accuracy from one factorization of the
+#             converged graph with its propagation and widening, its four
+#             channels and plots, the validation of the model on the
+#             reference recordings and the fixtures, the algorithm string and
+#             the goldens captured again): item = 1000 + clause number.
+#             Stated in full in tests/README.md, appendix K. It amends the
+#             specifications of 101-120 (item 115), 201-247 (items 215, 216,
+#             217, 221, 227, 230, 235, 245, 246 and 247), 301-350 (item 337),
+#             501-563 (item 509), 801-863 (items 801, 802, 842, 847, 854,
+#             861, 862 and 863) and 901-940 (items 901, 910, 912, 914, 915,
+#             921, 925, 930 and 935): each is stated as amended.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -100,9 +109,8 @@
 #
 # Every item must lie in one of the eleven ranges; every item 1-19 needs a
 # line; every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662,
-# 701-754, 801-863 or 901-940, and every item of 1001-1065 the audit's
-# explicit list names, needs at least one test or audit line (manual and ci
-# lines never stand alone). The human-readable matrices are tests/README.md
+# 701-754, 801-863, 901-940 or 1001-1065 needs at least one test or audit
+# line (manual and ci lines never stand alone). The human-readable matrices are tests/README.md
 # sections 9.1 to 9.11; keep them in sync with this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
@@ -385,13 +393,13 @@
 114 tst_jobqueue duplicateOffersCreateNoDuplicates
 114 tst_jobqueue holdsAtMostRunningAndChosenNext
 
-# 115 - (as amended) row behaviour without widgets, then with the real fusion plots: checking computes the visible tracks one after another, the sessions still to compute falling; unchecking mid-way drops the waiting ones and lets the running one finish; checking again resumes; a fourth track shown afterwards is computed with no other action; what the user sees; the real fusion plots are the eight of the "Sensor fusion" category, and heading, pitch and roll share one job
+# 115 - (as amended) row behaviour without widgets, then with the real fusion plots: checking computes the visible tracks one after another, the sessions still to compute falling; unchecking mid-way drops the waiting ones and lets the running one finish; checking again resumes; a fourth track shown afterwards is computed with no other action; what the user sees; the real fusion plots are the twelve of the "Sensor fusion" category (the four accuracies since the specification of 1001-1065), and heading, pitch and roll share one job
 115 tst_calculation_demand rowScript
 115 tst_fusion_rows realRowScript
 115 tst_fusion_rows headingPitchRollShareOneJob
 115 tst_fusion_rows accHRowIsBlockedByFusion
 115 tst_fusion_rows rejectedTrackShowsBadge
-115 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+115 tst_fusion_rows allFusionPlotsAreExplicitBacked
 115 manual M3
 115 manual M4
 115 manual M6
@@ -1334,12 +1342,12 @@
 508 tst_calculation_demand fillTaskIsLowestAndNotCancellable
 508 audit demand
 
-# 509 - (5, as amended) plot demand: for every checked plot whose value is a requested output, every visible session needs the requested calculations that block that output; the eight plots of the "Sensor fusion" category are such plots: one is an output of the fit, and the seven derived from its outputs are blocked by it
+# 509 - (5, as amended) plot demand: for every checked plot whose value is a requested output, every visible session needs the requested calculations that block that output; the twelve plots of the "Sensor fusion" category are such plots: five are outputs of the fit (vertical acceleration and, since the specification of 1001-1065, the four accuracies), and the seven derived from its outputs are blocked by it
 509 tst_calculation_demand rowScript
 509 tst_calculation_demand ordinaryPlotsAreNeverInspected
 509 tst_calculation_demand hiddenAndStubRowsAreNotTracks
 509 tst_calculation_demand failedLoadPlaceholderIsNotATrack
-509 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+509 tst_fusion_rows allFusionPlotsAreExplicitBacked
 509 tst_calculation_demand plotIdMatchesPlotModelRole
 509 tst_calculation_demand uncheckedPlotsAreNeverInspected
 
@@ -2438,17 +2446,19 @@
 
 # ---- Sensor fusion plots, attitude and the orientation attribute: item = 800 + clause number ----
 
-# 801 - (5) the "Sensor fusion" category holds exactly eight plots, in this order: Elevation, Horizontal acceleration, Vertical acceleration, Along-track acceleration, Cross-track acceleration, Heading, Pitch, Roll
-801 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+# 801 - (5, as amended) the "Sensor fusion" category holds exactly twelve plots, in this order: Elevation, Horizontal acceleration, Vertical acceleration, Along-track acceleration, Cross-track acceleration, Heading, Pitch, Roll, Heading accuracy, Tilt accuracy, Horizontal acceleration accuracy, Vertical acceleration accuracy (the last four since the specification of 1001-1065)
+801 tst_fusion_rows allFusionPlotsAreExplicitBacked
 801 audit naming
 801 manual M39
+801 manual M51
 
-# 802 - (5, as settled) each is named, united and typed as its GNSS counterpart (Elevation, the four accelerations, Heading as Course), Pitch and Roll as angles, so that the two overlay; a fused plot's colour differs from its counterpart's
-802 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+# 802 - (5, as settled, as amended) each of the first eight is named, united and typed as its GNSS counterpart (Elevation, the four accelerations, Heading as Course), Pitch and Roll as angles, so that the two overlay; a fused plot's colour differs from its counterpart's; the four accuracy plots have no GNSS counterpart and are named as the GNSS accuracy plots are
+802 tst_fusion_rows allFusionPlotsAreExplicitBacked
 802 manual M39
+802 manual M51
 
 # 803 - (5) the fused north, east and down position and velocity, north and east acceleration, roll, pitch, yaw and quaternion plots are removed, and the local-frame category with them
-803 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+803 tst_fusion_rows allFusionPlotsAreExplicitBacked
 803 audit naming
 803 manual M39
 
@@ -2466,13 +2476,13 @@
 806 tst_fusion_derived derivedValuesWaitOnTheFit
 806 tst_fusion_derived attitudeWaitsOnTheFit
 806 tst_fusion_rows accHRowIsBlockedByFusion
-806 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+806 tst_fusion_rows allFusionPlotsAreExplicitBacked
 
 # 807 - (6, as settled) elevation is the local origin's height above mean sea level minus the fused down position, above the ground elevation as the GNSS elevation is, so the two overlay; it is unavailable when either attribute is not a number
 807 tst_fusion_derived elevationIsOriginHeightMinusDownAboveGround
 
 # 808 - (6, as settled) vertical acceleration is the fit's own fused down acceleration, positive down like the GNSS one; no second calculation publishes it
-808 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+808 tst_fusion_rows allFusionPlotsAreExplicitBacked
 808 tst_fusion_derived derivedRegistrationShape
 808 tst_fusion_session explicitOutputsHaveOneCandidate
 
@@ -2639,11 +2649,12 @@
 841 tst_choice_attribute choiceEditRefusesATokenOutsideTheList
 841 tst_choice_attribute bulkEditRefusesATokenOutsideTheList
 
-# 842 - (11) the plot list shows "Sensor fusion" with eight plots named as the GNSS plots and no local-frame category; checking a fusion plot starts the fit as before, the status bar shows it, and a stored fit draws at once
-842 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+# 842 - (11, as amended) the plot list shows "Sensor fusion" with twelve plots, the eight named as the GNSS plots and the four accuracies (since the specification of 1001-1065) named as the GNSS accuracy plots, and no local-frame category; checking a fusion plot starts the fit as before, the status bar shows it, and a stored fit draws at once
+842 tst_fusion_rows allFusionPlotsAreExplicitBacked
 842 tst_fusion_rows realRowScript
 842 tst_fusion_store restoredAfterRestartIsBitIdentical
 842 manual M39
+842 manual M51
 
 # 843 - (11) the attitude plots are in the aircraft convention for the mount the orientation describes, heading continuous through turns
 843 tst_fusion_derived sideMountPermutesTheAngles
@@ -2697,11 +2708,11 @@
 # 853 - (12) the demand layer is untouched: a derived plot's blockers lead to the fit through the chain it already follows, and heading, pitch and roll are filled by one job
 853 tst_fusion_rows accHRowIsBlockedByFusion
 853 tst_fusion_rows headingPitchRollShareOneJob
-853 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+853 tst_fusion_rows allFusionPlotsAreExplicitBacked
 853 audit demand
 
-# 854 - (13) test: the plot list has the eight fusion plots and no local-frame plots; every fusion plot is explicit-backed (waits on the fit) as the seventeen were; an existing column over a removed plot's measurement still computes, and the export of the fit, its stored record, still holds the measurement
-854 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+# 854 - (13, as amended) test: the plot list has the twelve fusion plots (the four accuracies since the specification of 1001-1065) and no local-frame plots; every fusion plot is explicit-backed (waits on the fit) as the seventeen were; an existing column over a removed plot's measurement still computes, and the export of the fit, its stored record, still holds the measurement
+854 tst_fusion_rows allFusionPlotsAreExplicitBacked
 854 tst_fusion_rows removedPlotMeasurementsStayAvailable
 854 tst_fusion_rows noImuSessionIsNeverCounted
 854 tst_fusion_session missingInputsAreNotApplicable
@@ -2716,7 +2727,7 @@
 856 tst_fusion_derived trackAccelerationsKnownAnswers
 856 tst_fusion_derived trackAccelerationsAreTheGnssDefinitions
 856 tst_fusion_derived derivedRegistrationShape
-856 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+856 tst_fusion_rows allFusionPlotsAreExplicitBacked
 
 # 857 - (13) test: attitude, on synthetic quaternions with known answers: for the default orientation, heading, pitch and roll of a level, north-facing body are zero; a known heading, pitch and roll come back; heading unwraps through a full turn and is measured from north, unchanged by a GNSS track or a stored course reference of any kind and available without GNSS data; a different orientation (a side mount) changes the angles as the axis permutation predicts; the rotation is proper for all 24 pairs
 857 tst_fusion_derived levelNorthFacingBodyReadsZero
@@ -2756,10 +2767,10 @@
 861 tst_fusion_store codeStampChangeDropsRecordOnLoad
 861 tst_fusion_session registrationShape
 
-# 862 - (13) test: the audit keeps the removed plot names out of the registry, and the documents describe the eight plots, the attitude convention, the orientation attribute and the rule for defaults
+# 862 - (13, as amended) test: the audit keeps the removed plot names out of the registry, and the documents describe the twelve plots (the four accuracies since the specification of 1001-1065), the attitude convention, the orientation attribute and the rule for defaults
 862 audit naming
 
-# 863 - (14) `docs/` describes the eight fusion plots and the derived quantities, the attitude convention with the orientation attribute, its default and its limits (it describes the mount, not the wearer's posture; a forward axis pointing straight up or down makes heading and roll meaningless), the choice type and the orientation in the session file, the rule for defaults and its helper, and that wind is no longer written at import; no document describes a removed plot or the local-frame category
+# 863 - (14, as amended) `docs/` describes the twelve fusion plots (the four accuracies since the specification of 1001-1065) and the derived quantities, the attitude convention with the orientation attribute, its default and its limits (it describes the mount, not the wearer's posture; a forward axis pointing straight up or down makes heading and roll meaningless), the choice type and the orientation in the session file, the rule for defaults and its helper, and that wind is no longer written at import; no document describes a removed plot or the local-frame category
 863 audit naming
 
 # ---- The fused state at every IMU sample: item = 900 + clause number ----
@@ -2912,10 +2923,10 @@
 929 tst_fusion_golden cancelAtEachKindOfBoundary
 929 tst_fusion_golden progressMatchesGoldenBoundaries
 
-# 930 - (9, as amended) the fit calculation publishes the same channels and its result version follows the algorithm string; the registration, the plot registry and everything above them are unchanged by the reconstruction; since the specification of 1001-1065 the registration also declares the four configuration inputs and registers their constant defaults
+# 930 - (9, as amended) the fit calculation publishes the same channels and its result version follows the algorithm string; the registration, the plot registry and everything above them are unchanged by the reconstruction; since the specification of 1001-1065 the registration also declares the four configuration inputs and registers their constant defaults, and the plot registry gains the four accuracy plots
 930 tst_fusion_session registrationShape
 930 audit stored-results
-930 tst_fusion_rows allEightFusionPlotsAreExplicitBacked
+930 tst_fusion_rows allFusionPlotsAreExplicitBacked
 
 # 931 - (10, as settled) test: equivalence: against a graph with a state at every edge, one-step IMU factors with the same per-step covariance and interval bias, and the fix states and biases held at the fit's values, the reconstruction agrees within a tolerance stated against the mismatch, on `coarse_maneuver` and on a rotating recording; a reference with free fix states and biases drifts along the unobservable heading, so that no such tolerance exists for it
 931 tst_fusion_kernel imuRateMatchesHeldEndsGraph
@@ -3069,6 +3080,11 @@
 1023 tst_fusion_runner legacySchemaScalesTheGyro
 1023 audit scale-state
 
+# 1024 - (6, as settled) validation, not tuning: the normalized residuals (position, velocity, IMU) of the reference recordings of `tests/README.md` section 12.2 and of the committed fixtures that fit (the three golden successes; the rejections have no residuals) are reported in the documentation as measured under this model, with the sentence that a value far from one measures what the model does not yet describe; no constant of section 6 is changed to move them
+1024 audit model-validation
+1024 tst_fusion_golden successFixturesMatchGolden
+1024 manual M52
+
 # 1025 - (7, as settled) after convergence, from the converged graph and one factorization: the marginal covariance of every fix state, the joint covariance of each pair of adjacent fix states, and their cross-covariance with the biases and the scale factors, by the clique marginals of one factorization (one multifrontal QR elimination in time order with the globals last, each clique's marginal from its parent's), not by the library's joint marginals; a heading prior of 1000 rad on the first fix, in the factorization only, keeps an undetermined heading finite and moves a determined one by less than 5e-6 of itself
 1025 tst_fusion_kernel covarianceMatchesJointMarginals
 1025 audit accuracy-channels
@@ -3113,6 +3129,23 @@
 
 # 1036 - (2, 7) the documentation says in one sentence that the accuracy is one standard deviation from the covariance of the converged solution under the documented model, widened where the residuals exceed what the model allows
 1036 audit accuracy-channels
+
+# 1037 - (8, as settled) the "Sensor fusion" category gains four plots after Roll: Heading accuracy and Tilt accuracy in degrees, Horizontal acceleration accuracy and Vertical acceleration accuracy in the acceleration unit, drawn in the deep scheme of the GNSS accuracy plots (their saturation and lightness, each hue at least 40 degrees from theirs and from the others'); the acceleration accuracies in g at four decimals, a type of their own
+1037 tst_fusion_rows allFusionPlotsAreExplicitBacked
+1037 tst_plot_format accelerationAccuracyKeepsItsDigits
+1037 audit naming
+1037 audit accuracy-channels
+1037 manual M51
+
+# 1038 - (8) the four plots are absent, like any unavailable value, where the fit did not compute them
+1038 tst_fusion_rows accuracyPlotsAreAbsentWithoutAFit
+1038 tst_fusion_rows noImuSessionIsNeverCounted
+1038 tst_fusion_store restoredFitWithoutAccuracyDrawsTheRest
+1038 manual M51
+
+# 1039 - (8) a logbook column over any of the four works as over any fusion value
+1039 tst_fusion_store accuracyColumnFillsUnloadedSessions
+1039 manual M51
 
 # 1040 - (8) the diagnostics show the configuration the fit ran under
 1040 tst_fusion_kernel diagnosticsReportTheNoiseModel
@@ -3183,6 +3216,11 @@
 1054 tst_fusion_kernel scaleRecordingRecoversTheFactor
 1054 tst_fusion_kernel restLeavesTheScaleAtItsPrior
 
+# 1055 - (11, as settled) test: the normalized residuals of the committed fixtures that fit are in the goldens; the reference recordings' are recorded in the documentation
+1055 tst_fusion_golden successFixturesMatchGolden
+1055 audit model-validation
+1055 manual M52
+
 # 1056 - (11) test: on the committed fixtures a successful fit publishes finite, positive accuracies for every sample, and scaling every GNSS accuracy up never lowers them
 1056 tst_fusion_kernel accuraciesFiniteAndPositive
 1056 tst_fusion_kernel gnssAccuracyScalingNeverLowersThem
@@ -3211,3 +3249,24 @@
 
 # 1062 - (11) test: a stored fit from before the change is stale
 1062 tst_fusion_store codeStampChangeDropsRecordOnLoad
+
+# 1063 - (11) test: the four plots are explicit-backed like the other fusion plots, and a column over one works
+1063 tst_fusion_rows allFusionPlotsAreExplicitBacked
+1063 tst_fusion_store accuracyColumnFillsUnloadedSessions
+1063 tst_fusion_jobs noImuSessionCannotHaveAJob
+
+# 1064 - (11) test: the audit's confinement rules hold, and the documents carry the table, the derivations and the validation
+1064 audit solver-confinement
+1064 audit fusion-tooling
+1064 audit noise-model
+1064 audit scale-state
+1064 audit accuracy-channels
+1064 audit model-validation
+
+# 1065 - (12) `docs/` describe the change: `DATA_SCHEMA.md` (section 2, the keys; section 11, the algorithm string; section 12, the record), `SENSOR_FUSION.md` (section 3, the configuration inputs and the lattice check; section 4, the noise model with its table and derivations, the scale state, the covariance and its propagation, the widening, the outputs and diagnostics; section 8, the validation results and what is and is not validated), `CALCULATIONS.md` section 17, `COMPUTED_PLOTS.md` (the four plots); `tests/README.md` section 11 records the goldens captured again and why; the map gives the specification its range, with the amended items restated
+1065 audit sensor-configuration
+1065 audit noise-model
+1065 audit scale-state
+1065 audit accuracy-channels
+1065 audit model-validation
+1065 audit naming

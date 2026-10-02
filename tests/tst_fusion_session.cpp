@@ -87,8 +87,9 @@ QList<DependencyKey> valueNames()
     return names;
 }
 
-/// The measurement behind each of the eight "Sensor fusion" plots
-/// (fusionPlots()): the fit's own accD, and the derivations that wait on it.
+/// The measurement behind each of the twelve "Sensor fusion" plots
+/// (fusionPlots()): the fit's own accD and four accuracies, and the
+/// derivations that wait on it.
 QList<DependencyKey> plotNames()
 {
     QList<DependencyKey> names;

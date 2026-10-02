@@ -28,6 +28,7 @@ private slots:
 
     void typedValueIsTheConverterFormat();
     void alongTrackIsAnAcceleration();
+    void accelerationAccuracyKeepsItsDigits();
     void untypedValueHasOneDecimal();
     void xAxisSecondsHaveThreeDecimals();
     void nanIsDashes();
@@ -38,7 +39,7 @@ private slots:
 void PlotFormatTest::typedValueIsTheConverterFormat()
 {
     const UnitConverter &units = UnitConverter::instance();
-    for (const char *type : {"acceleration", "speed", "distance", "angle", "time"}) {
+    for (const char *type : {"acceleration", "acceleration_accuracy", "speed", "distance", "angle", "time"}) {
         const QString t = QString::fromLatin1(type);
         const double value = 4.654622;
         const QString expected = QString::number(units.convert(value, t), 'f', units.getPrecision(t));
@@ -58,6 +59,26 @@ void PlotFormatTest::alongTrackIsAnAcceleration()
     QCOMPARE(formatValue(value, type), expected);
     // and the same text a logbook column would show
     QCOMPARE(formatValue(value, type), units.formatValue(value, type));
+}
+
+// The fused accelerations' accuracies are a few thousandths of a g: their
+// type keeps four decimals of the acceleration's unit, where the acceleration
+// type's two would read 0.00, in both unit systems
+void PlotFormatTest::accelerationAccuracyKeepsItsDigits()
+{
+    UnitConverter &units = UnitConverter::instance();
+    const QString type = QStringLiteral("acceleration_accuracy");
+    const QString acceleration = QStringLiteral("acceleration");
+    const QString previous = units.currentSystem();
+    for (const QString &system : units.availableSystems()) {
+        units.setSystem(system);
+        QCOMPARE(formatValue(0.0046, type), QStringLiteral("0.0005"));
+        QCOMPARE(formatValue(0.0046, acceleration), QStringLiteral("0.00"));
+        QCOMPARE(units.getUnitLabel(type), units.getUnitLabel(acceleration));
+        QCOMPARE(units.convert(0.0046, type), units.convert(0.0046, acceleration));
+        QCOMPARE(units.getPrecision(type), 4);
+    }
+    units.setSystem(previous);
 }
 
 // Without a type there is nothing to convert by: one decimal

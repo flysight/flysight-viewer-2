@@ -14,10 +14,14 @@
 
 Most plots and logbook columns are instant: check a plot and it is drawn for
 every visible track, add a column and it fills in. A few take from seconds to
-several minutes per recording to work out. Today these are the eight plots of
+several minutes per recording to work out. Today these are the twelve plots of
 the "Sensor fusion" category (Elevation, Horizontal, Vertical, Along-track and
-Cross-track acceleration, Heading, Pitch and Roll) and any logbook column over
-a Sensor fusion value ([what they are](SENSOR_FUSION.md)).
+Cross-track acceleration, Heading, Pitch and Roll, Heading accuracy, Tilt
+accuracy, Horizontal acceleration accuracy and Vertical acceleration accuracy)
+and any logbook column over a Sensor fusion value
+([what they are](SENSOR_FUSION.md)). An accuracy plot is absent for a
+recording whose computation did not produce the accuracy, while that
+computation's other plots are drawn.
 
 Between two GNSS fixes the Sensor fusion plots follow the IMU at its own rate,
 pulled onto the fitted fixes, so a line no longer runs straight from one fix
@@ -58,8 +62,9 @@ exactly as any other row. A track whose result is still to come is absent
 from the plot until it arrives, and appears by itself when it does.
 
 One computation per recording can serve several plots. Heading, pitch and
-roll, for example, come from one and the same computation, so one computation
-fills them all in, and the recording is counted once.
+roll and the four accuracies, for example, come from one and the same
+computation, so one computation fills them all in, and the recording is
+counted once.
 
 A track whose recording lacks the needed sensor data is never listed among
 the recordings that could not be computed. A plot never counts it; a logbook

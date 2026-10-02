@@ -8,7 +8,9 @@
 //  - a fit survives unload and restart bit for bit (the twenty-one channels,
 //    the derived values, the diagnostics and the detail equal the fresh
 //    publish, and the goldens), with no job, no run and nothing to compute;
-//  - a rejection and a solver failure come back listed with their reason;
+//  - a rejection and a solver failure come back listed with their reason; a
+//    success whose accuracy was not computed comes back without the four
+//    accuracies and with the rest, and fails nothing;
 //  - validity follows the inputs (an unrelated edit keeps the record, a
 //    dependency edit or an IMU merge drops it), what the fit looked up and the
 //    code stamps; nothing unrelated to what it reached (altitude markers,
@@ -22,14 +24,16 @@
 //  - the logbook's cache/ folder deleted while the application is closed: the
 //    fit reads not requested at the next start, and nothing runs until the
 //    demand layer offers it;
-//  - a logbook column over a fusion output ("roll @ exit") is filled for
-//    sessions that are not loaded, stored, and not fitted again at the next
-//    start.
+//  - a logbook column over a fusion output ("roll @ exit", and each of the
+//    four accuracies) is filled for sessions that are not loaded, stored, and
+//    not fitted again at the next start.
 //
 // The oracle (verifyAgainstFresh / evaluateFresh) is never used on a session
 // with the fit installed: it would run the fit again. Expected values are
 // literals and the committed goldens of the kernel.
 
+#include <algorithm>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -70,6 +74,7 @@
 #include "testenvironment.h"
 #include "testmain.h"
 #include "testutil.h"
+#include "units/unitconverter.h"
 
 using namespace FlySight;
 using namespace FlySightTest;
@@ -94,6 +99,14 @@ const QString kSolverFailureReason =
 const QString kSolverFailureDiagnostics = QStringLiteral(
     "{\"algorithm\":\"batch-temperature-bias-v6\","
     "\"failure\":\"Batch fusion did not converge (iteration limit); sensor fusion unavailable\"}");
+
+// The four accuracy channels, which a success whose covariance could not be
+// computed leaves unset, and the failure its diagnostics' accuracy object
+// then carries (src/fusion/fitcovariance.cpp).
+const QStringList kAccuracies = {QStringLiteral("headingAcc"), QStringLiteral("tiltAcc"),
+                                 QStringLiteral("accHAcc"), QStringLiteral("accDAcc")};
+const QString kCovarianceFailure =
+    QStringLiteral("covariance unavailable: the factorization of the converged graph failed");
 
 /// What a fresh publish showed, for the bit-for-bit comparison with a restore.
 struct FitValues {
@@ -184,6 +197,7 @@ private slots:
     void restoredAfterRestartIsBitIdentical();
     void restoredRejectionShowsBadge();
     void restoredSolverFailureShowsBadge();
+    void restoredFitWithoutAccuracyDrawsTheRest();
     void unrelatedEditKeepsRecord();
     void dependencyEditDropsRecord_data();
     void dependencyEditDropsRecord();
@@ -202,6 +216,8 @@ private slots:
     void deletedCacheFolderReadsNotRequested();
     void columnOverFusionFillsUnloadedSessions();
     void fusionColumnWithStoredFitsRunsNothing();
+    void accuracyColumnFillsUnloadedSessions_data();
+    void accuracyColumnFillsUnloadedSessions();
 
 private:
     [[nodiscard]] QString addSessions(const QList<SessionData> &sessions)
@@ -326,6 +342,12 @@ void FusionStoreTest::initTestCase()
     // model exist (a live model reacts to registry changes).
     TestEnvironment::instance().registerBuiltIns();
     registerFusionOnce();
+
+    // The application's fusion rows, so that a column over one of them is
+    // labelled as there (nothing else in this executable reads the plot
+    // registry)
+    for (const PlotValue &plot : fusionPlots())
+        PlotRegistry::instance().registerPlot(plot);
 
     // One logbook column that reads stored data only
     PreferencesManager::instance().registerPreference(PreferenceKeys::LogbookColumnsVersion, 0);
@@ -852,6 +874,106 @@ void FusionStoreTest::restoredSolverFailureShowsBadge()
     listed = listedFailure(kSolverFailureReason);
     QVERIFY2(listed.isEmpty(), qPrintable(listed));
     QCOMPARE(engine("r1").runCount(kFit), 0);
+    QVERIFY(quiet.holds());
+}
+
+// A success whose covariance could not be computed: the fit publishes the
+// seventeen channels of the state and leaves the four accuracies unset, with
+// no reason (a reason on a successful record would read as a failure of every
+// value of the fit), and the diagnostics' accuracy object says why. The
+// registered fit cannot be driven there from a session fixture, so a real
+// record is rewritten to that shape, with the leaves and fingerprint of a real
+// publish. Restored, the four are absent, the rest is the golden's, the Roll
+// row is done with nothing failed, and nothing is fitted again. (What an
+// accuracy plot checked over such a record lists is the demand layer's
+// generic entry, and is not asserted here.)
+void FusionStoreTest::restoredFitWithoutAccuracyDrawsTheRest()
+{
+    const auto restoreCapacity = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    });
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a"))}), QString());
+    show({"a"});
+    check(QStringLiteral("bodyRoll"));      // the demand layer starts the fit
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(QFileInfo(recordPath("a")).isFile());
+    for (const QString &name : kAccuracies)
+        QVERIFY2(!fusion("a", name).isEmpty(), qPrintable(name));
+
+    QString rewriteProblem;
+    QCOMPARE(rewriteRecord("a", [&rewriteProblem](CalculationRecord &record) {
+                 const CalculationResult &stored = record.result.bundle;
+                 if (!stored.reason().isEmpty())
+                     rewriteProblem = QStringLiteral("the stored success has a reason");
+                 CalculationResult bundle;
+                 for (const DependencyKey &output : stored.setOutputs()) {
+                     if (output.type == DependencyKey::Type::Attribute) {
+                         QVariant value = stored.attributeValue(output.attributeKey);
+                         if (output.attributeKey == kDiagnostics) {
+                             QJsonObject diagnostics = QJsonDocument::fromJson(value.toString().toUtf8()).object();
+                             QJsonObject accuracy = diagnostics.value(QStringLiteral("accuracy")).toObject();
+                             if (!accuracy.value(QStringLiteral("computed")).toBool())
+                                 rewriteProblem = QStringLiteral("the stored success has no accuracy");
+                             accuracy.insert(QStringLiteral("computed"), false);
+                             accuracy.insert(QStringLiteral("failure"), kCovarianceFailure);
+                             for (const char *summary : {"max_widening", "widened_samples",
+                                                         "undetermined_heading_samples"})
+                                 accuracy.insert(QString::fromLatin1(summary), QJsonValue::Null);
+                             diagnostics.insert(QStringLiteral("accuracy"), accuracy);
+                             value = QString::fromUtf8(QJsonDocument(diagnostics).toJson(QJsonDocument::Compact));
+                         }
+                         bundle.setAttribute(output.attributeKey, value);
+                     } else if (!kAccuracies.contains(output.measurementKey.second)) {
+                         const QString sensor = output.measurementKey.first;
+                         const QString name = output.measurementKey.second;
+                         bundle.setMeasurement(sensor, name, stored.measurementValues(sensor, name),
+                                               stored.measurementUnit(sensor, name));
+                     }
+                 }
+                 record.result.bundle = bundle;
+             }), QString());
+    QVERIFY2(rewriteProblem.isEmpty(), qPrintable(rewriteProblem));
+
+    const Quiet quiet(*m_queue);
+    QCOMPARE(unloadAndReload("a"), QString());
+
+    // The four are absent; the seventeen are the golden's, bit for bit
+    for (const QString &name : kAccuracies) {
+        QVERIFY2(fusion("a", name).isEmpty(), qPrintable(name));
+        QVERIFY2(!isAvailable("a", fusionKey(name)), qPrintable(name));
+    }
+    const FusionGolden golden = loadFusionGolden(QStringLiteral("coarse_maneuver"));
+    int compared = 0;
+    for (const QString &name : fusionMeasurementNames()) {
+        if (kAccuracies.contains(name))
+            continue;
+        const QString difference = compareSamples(name, fusion("a", name), golden.channels.value(name));
+        QVERIFY2(difference.isEmpty(), qPrintable(difference));
+        ++compared;
+    }
+    QCOMPARE(compared, 17);
+    const QJsonObject accuracy = QJsonDocument::fromJson(session("a").getAttribute(kDiagnostics).toString().toUtf8())
+                                     .object().value(QStringLiteral("accuracy")).toObject();
+    QCOMPARE(accuracy.value(QStringLiteral("computed")).toBool(true), false);
+    QCOMPARE(accuracy.value(QStringLiteral("failure")).toString(), kCovarianceFailure);
+
+    // The Roll row is done: its value is drawn, nothing is to compute and
+    // nothing failed
+    QCOMPARE(engine("a").readiness(kFit).state, CalculationReadiness::State::Done);
+    QCOMPARE(engine("a").blockers(fusionKey(QStringLiteral("bodyRoll"))).state, BlockerReport::State::Available);
+    QCOMPARE(fusion("a", QStringLiteral("bodyRoll")).size(), fusion("a", QStringLiteral("_time")).size());
+    QVERIFY(nothingToShow());
+
+    // No rerun: a stored success is a result
+    for (int i = 0; i < 3; ++i)
+        PlotFixture::spin(m_demand.get());
+    QVERIFY(nothingToShow());
+    QCOMPARE(engine("a").runCount(kFit), 0);
+    QCOMPARE(m_queue->offer("a", kFit).kind, Kind::NothingToDo);
+    QCOMPARE(m_queue->model()->rowCount(), 1);      // only the first job
     QVERIFY(quiet.holds());
 }
 
@@ -1631,6 +1753,104 @@ void FusionStoreTest::fusionColumnWithStoredFitsRunsNothing()
     QVERIFY(section >= 0);
     QCOMPARE(std::as_const(*m_model).rowAt(m_model->getSessionRow("a")).cachedValues.value(section).toDouble(),
              indexed.toDouble());
+}
+
+// A column over each of the four accuracy rows, at the exit marker and typed
+// as its row, works as over any fusion value: enabled with the session not
+// loaded, it is filled by the demand layer (one fit, the record written, the
+// value cached and indexed with the fit's stamp, the session left unloaded);
+// the cached value is the loaded session's interpolated value bit for bit; its
+// text is the unit converter's for the row's type, loaded or not; and its
+// label is the row's name.
+void FusionStoreTest::accuracyColumnFillsUnloadedSessions_data()
+{
+    QTest::addColumn<QString>("measurement");
+    QTest::addColumn<QString>("type");
+    QTest::addColumn<QString>("name");
+    QTest::newRow("headingAcc") << QStringLiteral("headingAcc") << QStringLiteral("angle")
+                                << QStringLiteral("Heading accuracy");
+    QTest::newRow("tiltAcc") << QStringLiteral("tiltAcc") << QStringLiteral("angle")
+                             << QStringLiteral("Tilt accuracy");
+    QTest::newRow("accHAcc") << QStringLiteral("accHAcc") << QStringLiteral("acceleration_accuracy")
+                             << QStringLiteral("Horizontal acceleration accuracy");
+    QTest::newRow("accDAcc") << QStringLiteral("accDAcc") << QStringLiteral("acceleration_accuracy")
+                             << QStringLiteral("Vertical acceleration accuracy");
+}
+
+void FusionStoreTest::accuracyColumnFillsUnloadedSessions()
+{
+    QFETCH(QString, measurement);
+    QFETCH(QString, type);
+    QFETCH(QString, name);
+    const auto restore = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+        LogbookColumnStore::instance().setColumns({descriptionColumn()});
+    });
+
+    // The column the Add Column dialog makes from the row
+    const QVector<PlotValue> plots = fusionPlots();
+    const auto row = std::find_if(plots.cbegin(), plots.cend(),
+                                  [&](const PlotValue &plot) { return plot.measurementID == measurement; });
+    QVERIFY(row != plots.cend());
+    QCOMPARE(row->plotName, name);
+    QCOMPARE(row->measurementType, type);
+    LogbookColumn accuracy;
+    accuracy.type = ColumnType::MeasurementAtMarker;
+    accuracy.sensorID = row->sensorID;
+    accuracy.measurementID = row->measurementID;
+    accuracy.measurementType = row->measurementType;
+    accuracy.markerAttributeKey = QString::fromLatin1(SessionKeys::ExitTime);
+    QCOMPARE(logbookColumnExplicitCalculations(accuracy, CalculationRegistry::instance()), QStringList({kFit}));
+    const QString label = logbookColumnLabel(accuracy);
+    QVERIFY2(label.startsWith(name + QStringLiteral(" @ ")), qPrintable(label));
+
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a"))}), QString());
+    QVERIFY(waitForIdle(*m_model));
+    session("a");                       // in the LRU list (a row never touched is not)
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
+    QVERIFY(!isLoaded("a"));
+
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), accuracy});
+    const QString column = CalculationDemand::columnId(accuracy);
+    m_demand->flush();
+    QCOMPARE(m_demand->progress().count, 1);
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QVERIFY(waitForIdle(*m_model));
+
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(m_queue->model()->record(0).sessionId, QStringLiteral("a"));
+    QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
+    QVERIFY(QFileInfo(recordPath("a")).isFile());
+    QVERIFY(nothingToShow());
+    QVERIFY(!isLoaded("a"));
+
+    int section = -1;
+    for (int c = 0; c < m_model->columnCount(); ++c) {
+        if (CalculationDemand::columnId(m_model->column(c)) == column)
+            section = c;
+    }
+    QVERIFY(section >= 0);
+    const int sessionRow = m_model->getSessionRow("a");
+    const QVariant cached = std::as_const(*m_model).rowAt(sessionRow).cachedValues.value(section);
+    QVERIFY(cached.isValid());
+    QVERIFY(std::isfinite(cached.toDouble()));
+    m_model->flushDirtySessions();
+    QVERIFY(sameBits(indexValue(QStringLiteral("a"), accuracy).toDouble(), cached.toDouble()));
+    QVERIFY(indexRecordStamp(QStringLiteral("a")).toObject().contains(kFit));
+    const QString expectedText = UnitConverter::instance().formatValue(cached.toDouble(), type);
+    QCOMPARE(m_model->data(m_model->index(sessionRow, section), Qt::DisplayRole).toString(), expectedText);
+    QCOMPARE(m_model->headerData(section, Qt::Horizontal, Qt::DisplayRole).toString().section(QLatin1Char('\n'), 0, 0),
+             label);
+
+    // The value of a fresh load, from the stored fit (compared only now: a
+    // load before the check would have been a load of its own)
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    const QVariant loaded = session("a").getAttribute(
+        SessionData::interpolationKey(SessionKeys::ExitTime, QStringLiteral("Fusion"), SessionKeys::Time, measurement));
+    QVERIFY(loaded.isValid());
+    QVERIFY(sameBits(loaded.toDouble(), cached.toDouble()));
+    QCOMPARE(m_model->data(m_model->index(sessionRow, section), Qt::DisplayRole).toString(), expectedText);
+    QCOMPARE(engine("a").runCount(kFit), 0);
 }
 
 FLYSIGHT_TEST_MAIN(FusionStoreTest)

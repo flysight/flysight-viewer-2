@@ -545,7 +545,7 @@ void FusionJobsTest::noImuSessionCannotHaveAJob()
     QVERIFY(!m_model->isSessionPinned("a"));
 
     const QVector<PlotValue> plots = fusionPlots();
-    QCOMPARE(plots.size(), 8);
+    QCOMPARE(plots.size(), 12);
     for (const PlotValue &plot : plots) {
         const BlockerReport report = engine("a").blockers(fusionKey(plot.measurementID));
         QVERIFY2(report.state == BlockerState::NotApplicable, qPrintable(plot.measurementID));

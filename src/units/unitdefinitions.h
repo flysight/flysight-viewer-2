@@ -56,6 +56,10 @@ namespace MeasurementTypes {
     inline const QString SpSpeed = QStringLiteral("sp_speed");
     inline const QString SpSpeedAcc = QStringLiteral("sp_speed_acc");
 
+    // Sensor fusion's acceleration accuracies: the acceleration's unit at a
+    // precision of its own (see the registry entry)
+    inline const QString AccelerationAccuracy = QStringLiteral("acceleration_accuracy");
+
     // Aerodynamics and energy types
     inline const QString Ratio = QStringLiteral("ratio");
     inline const QString SpecificEnergy = QStringLiteral("specific_energy");
@@ -262,6 +266,19 @@ inline const QMap<QString, MeasurementTypeInfo>& getMeasurementTypeRegistry() {
             {
                 {UnitSystems::Metric, {QStringLiteral("m/s"), 1.0, 0.0, 2}},
                 {UnitSystems::Imperial, {QStringLiteral("m/s"), 1.0, 0.0, 2}}
+            }
+        }},
+
+        // Acceleration accuracy: m/s^2 -> g (both systems), as Acceleration,
+        // at four decimals. The fused accelerations' accuracies are of the
+        // order of 0.005-0.05 m/s^2, which Acceleration's two decimals of g
+        // (0.098 m/s^2) would show as 0.00 on the axis ticks, the legend, the
+        // measure tool and a logbook column.
+        {MeasurementTypes::AccelerationAccuracy, {
+            QStringLiteral("m/s^2"),
+            {
+                {UnitSystems::Metric, {QStringLiteral("g"), 0.101972, 0.0, 4}},
+                {UnitSystems::Imperial, {QStringLiteral("g"), 0.101972, 0.0, 4}}
             }
         }},
 

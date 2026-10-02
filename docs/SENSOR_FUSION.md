@@ -35,9 +35,11 @@ document describes what is computed, from what, and how far to trust it.
 
 ## 2. Using it
 
-- The plot list has a "Sensor fusion" category with eight plots: Elevation,
+- The plot list has a "Sensor fusion" category with twelve plots: Elevation,
   Horizontal acceleration, Vertical acceleration, Along-track acceleration,
-  Cross-track acceleration, Heading, Pitch and Roll. Each is named, united and
+  Cross-track acceleration, Heading, Pitch and Roll, then Heading accuracy,
+  Tilt accuracy, Horizontal acceleration accuracy and Vertical acceleration
+  accuracy. Each of the first eight is named, united and
   typed as its GNSS counterpart (Heading as the GNSS Course), so that the two
   overlay on one axis, in a colour of its own. Elevation is the origin's
   height less the fused down position above the ground, as the GNSS elevation
@@ -51,6 +53,18 @@ document describes what is computed, from what, and how far to trust it.
   measurements: a logbook column kept from an earlier version still shows
   them, Python plugins read them, and the stored fit keeps them. A profile
   saved with a plot the list no longer has applies without it, silently.
+- The four accuracy plots show, at every sample, one standard deviation of
+  the fused heading, tilt, horizontal acceleration and vertical acceleration
+  ([Accuracy](#4-model-and-output-contract) in section 4). They have no GNSS
+  counterpart to overlay; they are named as the GNSS accuracy plots are and
+  drawn in the deep colours of those plots, each in a hue of its own. Heading
+  and tilt accuracy are in degrees, plotted and measured as they are, never
+  unwrapped; a heading accuracy of 180 means the heading is undetermined
+  there. The two acceleration accuracies are in g, at four decimals, since
+  they are a few thousandths of a g. They are absent, like any unavailable
+  value, for a recording whose fit did not compute them (a rejected or failed
+  fit, or a success whose covariance could not be computed), while the fit's
+  other plots are drawn.
 - Heading, pitch and roll of the body the FlySight is mounted on are derived
   from the fit's attitude (its quaternion) in the aircraft convention.
   Heading is the direction of the body's forward axis, clockwise from north;
@@ -80,7 +94,7 @@ document describes what is computed, from what, and how far to trust it.
   one after another; a logbook column over a fusion value (roll at the exit
   marker, say) fits every recording of the logbook in the background. A fit
   takes from seconds to several minutes, depending on the length of the
-  recording. All eight plots and every fusion column of one recording come
+  recording. All twelve plots and every fusion column of one recording come
   from the same fit, so it runs once.
 - Results are stored with the recording in the logbook (in a file in the
   logbook's `cache/` folder, never in the session file) and come back when the
@@ -988,8 +1002,8 @@ demonstrated by tests, all labelled `fusion`:
 | `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, the configuration reaches the kernel (a session stating it fits to the golden, the same session without the keys reads the 12.5 Hz default and is rejected by the rate check, and a recording without keys logged at 12.5 Hz fits under the default), a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
 | `tst_fusion_derived` | what is derived from the outputs, without the solver: the outputs stored as data, elevation and the track accelerations held to exact known answers, the track accelerations equal to the GNSS ones on the same samples, and each derived value waiting on the fit and never starting it; the orientation vocabulary (24 pairs, each a proper rotation, the attribute's choices), heading, pitch and roll held to hand-built known answers, finite with pitch at +90 or -90 where the forward axis is exactly vertical, side mounts, a GNSS track and a course reference that change nothing, and the fit's own angles for the device frame, an invalid or changed orientation without a fit, and the Orientation column's display, edit and bulk edit |
 | `tst_fusion_jobs` | the real fit through the executor: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result and kept, for an unloaded session, through an altitude marker added at run time or at the next start |
-| `tst_fusion_rows` | the demand layer with the real fusion plots, end to end: fits started and dropped by what is checked and visible, with no gesture; progress and failures as each fit ends |
-| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), a rejection and a solver failure listed among the recordings that could not be computed, with their reasons, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a logbook column over roll filled for recordings that are not loaded, and nothing fitted again after a restart |
+| `tst_fusion_rows` | the demand layer with the twelve real fusion plots, end to end: each explicit-backed by the fit alone, one fit for all twelve; fits started and dropped by what is checked and visible, with no gesture; progress and failures as each fit ends; the four accuracy plots merely uncomputed before the fit, not produced for a rejected recording (listed once, with its reason) and not applicable without IMU data |
+| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), a rejection and a solver failure listed among the recordings that could not be computed, with their reasons, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a logbook column over roll, and one over each of the four accuracies, filled for recordings that are not loaded (the value the loaded recording reads, bit for bit, shown by the unit converter for the row's type and labelled with the row's name), and nothing fitted again after a restart; a stored success without the accuracy restored with the other seventeen channels and failing nothing |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit on a recording written as `TRACK.CSV` / `SENSOR.CSV`, against a direct kernel run and against the application's own import path |
 
 The goldens live in `tests/data/fusion/`. In exact mode
@@ -1132,6 +1146,107 @@ cap. The published accuracies of the fixtures: `coarse_linear` tilt
 `coarse_maneuver` heading 14-17 degrees; `stationary_spin` heading 133-138
 degrees, the sigma of a direction the data barely determine; `motion_start`
 0.4-5.4 degrees and tilt 1.76 degrees.
+
+**Validating the model.** What follows is the normalized RMS of each factor
+kind, the root mean squared whitened residual per scalar component (section
+4, Solver and stopping), under the model of section 4, measured with
+`batch-temperature-bias-v6` on 2026-10-01 by M52 of
+[tests/README.md](../tests/README.md), section 12.9. No constant of the noise
+model was changed to move these numbers.
+A value far from one measures what the model does not yet describe.
+Below one, the stated sigmas exceed the scatter of the data: for GNSS the
+receiver's own accuracies (`hAcc`, `vAcc`, `sAcc`), for the IMU the
+datasheet's noise and the derived step terms. Above one, the data hold
+something the model does not describe.
+
+The reference recordings of [tests/README.md](../tests/README.md), section
+12.2, at the default configuration (none states one):
+
+| Recording (unit) | Fixes | IMU samples | Outcome (rule) | Iterations (passes) | Objective | Position | Velocity | IMU | Largest scale departure, accelerometer / gyro |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `24-09-05/11-17-12` (014667) | 8,860 | 23,449 | succeeded (`settled`) | 11 (3) | 3,044 | 0.15 | 0.39 | 0.13 | 1.2 % / 2.6 % |
+| `24-09-07/08-35-23` (01465) | 11,239 | 29,669 | succeeded (`settled`) | 10 (3) | 2,765 | 0.14 | 0.34 | 0.10 | 1.5 % / 1.2 % |
+| `24-09-07/10-15-24` (01086) | 13,606 | 36,090 | succeeded (`settled`) | 16 (3) | 4,483 | 0.21 | 0.35 | 0.13 | 0.39 % / 0.59 % |
+| `24-09-07/08-35-41` (01086) | 18,803 | 49,884 | succeeded (`settled`) | 80 (3) | 6,198 | 0.21 | 0.34 | 0.14 | 1.3 % / 1.1 % |
+
+What the widening and the accuracy showed on them (the window factor at each
+fix, from the fit's residuals by the widening's rule of section 4; the samples
+widened as a share of the published samples):
+
+| Recording | Window factor: median / 95th percentile / largest | Fixes above one | Samples widened | Largest widening | Undetermined headings | Median `headingAcc`, deg | Median `tiltAcc`, deg | Median `accHAcc`, m/s^2 | Median `accDAcc`, m/s^2 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `11-17-12` | 0.082 / 0.32 / 1.11 | 0.26 % | 0.26 % | 1.06 | 0 | 2.5 | 0.37 | 0.040 | 0.0046 |
+| `08-35-23` | 0.069 / 0.21 / 0.603 | 0 % | 0 % | 1.00 | 0 | 1.9 | 0.32 | 0.033 | 0.0041 |
+| `10-15-24` | 0.074 / 0.35 / 1.20 | 0.48 % | 0.48 % | 1.09 | 0 | 2.1 | 0.31 | 0.034 | 0.0039 |
+| `08-35-41` | 0.066 / 0.40 / 1.65 | 0.47 % | 0.47 % | 1.28 | 0 | 3.0 | 0.27 | 0.030 | 0.0034 |
+
+The committed fixtures that fit, the three golden successes (the rejections
+have no residuals), as their goldens' `quality` holds them
+(`tst_fusion_golden`):
+
+| Fixture | Position | Velocity | IMU | Median window factor |
+| --- | --- | --- | --- | --- |
+| `coarse_linear` | 4.6e-7 | 8.2e-9 | 2.2e-11 | 1.3e-13 |
+| `coarse_maneuver` | 0.098 | 0.19 | 1.9e-4 | 0.025 |
+| `stationary_spin` | 0.10 | 0.17 | 0.0046 | 0.020 |
+
+They measure the generator's noise against the accuracies the fixture states
+(`coarse_linear`'s readings are exact): that checks the arithmetic, not the
+model.
+
+*What the widening showed.* On the four reference recordings the
+median window factor at the fixes is 0.066-0.082 and its 95th percentile
+0.21-0.40; it exceeds one at 0-0.48 % of the fixes, and 0-0.48 % of the
+samples are widened, by at most 1.28. The position and velocity normalized
+RMS are 0.14-0.21 and 0.34-0.39. So the GNSS residuals there are far below
+the receiver's stated accuracies; the widening seldom acts; and where GNSS
+dominates, the published accuracy reflects the stated sigmas, not the
+scatter. The IMU's normalized RMS, 0.10-0.14, is below one too. The largest
+fitted scale departures, 1.1-2.6 % on three of the four recordings, are
+beyond the 1 % sigma of their prior. This is reported, not answered: the
+weighting of the GNSS factors is outside the scope of the noise model's
+specification.
+
+*The noise floor.* At the default configuration the accelerometer's
+per-sample sigma is 0.0030 m/s^2, and the quietest windows of 95 recordings of
+the reference corpus show 0.0029-0.0035 m/s^2 per sample: the datasheet's
+figure is the floor the corpus reaches. The gyro's per-sample sigma is 0.0217
+deg/s, against a corpus median of 0.030 deg/s: the model is below the corpus.
+
+**What is and is not validated.** Validated, each by the test or step named:
+
+- the arithmetic, against the goldens of the fourteen fixtures, bit for bit
+  on the capture compiler (`tst_fusion_golden`, `tst_fusion_kernel`);
+- the covariance, against the library's joint marginals
+  (`tst_fusion_kernel::covarianceMatchesJointMarginals`);
+- the composition at the samples, against a graph with a state at every edge
+  (`tst_fusion_kernel::sampleCovarianceMatchesTheEdgeGraph`);
+- the propagation, on known answers
+  (`tst_fusion_kernel::accelerationAccuracyFollowsItsPropagation`,
+  `attitudeAccuracyFollowsTheNavigationFrame`);
+- the widening, on a known understatement
+  (`tst_fusion_kernel::wideningGrowsWithAnUnderstatedSigma`);
+- the scale, recovered on a synthetic recording
+  (`tst_fusion_kernel::scaleRecordingRecoversTheFactor`);
+- the per-sample noise, against the table (`tst_fusion_kernel::noiseFollowsTheTable`);
+- the accelerometer's noise floor, against the quietest windows of the corpus
+  (the noise floor, above);
+- the configuration and the lattice, on the reference recordings (M47 of
+  [tests/README.md](../tests/README.md), section 12.9).
+
+Not validated:
+
+- the accuracy against an independent truth: no reference trajectory or
+  attitude was recorded;
+- each unit's own noise, the bias's instability over time and the
+  sensitivity's change with temperature (part 2 of the noise model);
+- the receiver's stated accuracies, which the residuals show to be
+  pessimistic on these recordings;
+- the time correlation of GNSS errors: the whitened residuals assume
+  independent fixes;
+- the widening's assumption that every sigma is off by one ratio;
+- any configuration but the default on real data: no recording on disk
+  states one (the fixtures do).
 
 **The runner.** `fusion_runner` is a test/tooling target, built with the
 fusion tests and never installed: the fit on one recording, imported exactly

@@ -46,7 +46,7 @@
 #   - a default that stands in for a value the user has not set is a
 #     calculation, and every constant one is registered by one helper;
 #     neither the importer nor the legacy backfill writes wind; one type owns
-#     the orientation vocabulary; the sensor fusion category is the eight
+#     the orientation vocabulary; the sensor fusion category is the twelve
 #     plots of the tests' mirror, and no removed fusion plot and no
 #     local-frame plot remains in code or documents (items 801-863);
 #   - the fused output is the state at every IMU sample: the step model has
@@ -56,14 +56,19 @@
 #     an attitude correction spread by elapsed time), its diagnostics key and
 #     any text calling the fused output interpolated stay gone (items
 #     901-940);
-#   - the sensor configuration attributes have one authority: the key names
-#     and the firmware version their default describes are spelled in one
-#     vocabulary, and the keys nothing uses stay unused; the datasheet's table
-#     exists in one unit; the scale state is the full fit's, built in one
-#     place, and the legacy gyro correction is not part of it; the accuracy's
-#     covariance comes from one factorization in one unit, never from the
-#     library's joint marginals, under one cap, and its four channels are
-#     named in the registration alone (items 1001-1065).
+#   - the noise model is documented and the accuracy is the model's: the
+#     sensor configuration keys have one vocabulary and one default (the key
+#     names and the firmware version the default describes are spelled there
+#     alone, and the keys nothing uses stay unused); the datasheet's table
+#     exists in one unit; the retired constants of the tuning (the densities,
+#     the per-step slopes) stay gone; the scale state is one factor of the
+#     full fit, built in one place, and the legacy gyro correction is not part
+#     of it; the accuracy's covariance comes from one factorization in one
+#     unit, never from the library's joint marginals, under one cap; the four
+#     channel names are spelled in the registration and the plot rows alone;
+#     the sensor fusion category has twelve plots, the accuracies in the deep
+#     scheme; and the fusion document carries the validation of the model
+#     (items 1001-1065).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -415,7 +420,7 @@ expect_none("no dialog or message box for a calculation outcome"
 # by the engine like any other; the registration never catches and stores one.
 expect_none("no hand-cached failure" "catch *\\(" src/fusion/fusionregistration.cpp)
 
-# ─────────────────────────────── naming (items 120, 801, 803, 852, 862, 863)
+# ─────────────────────────────── naming (items 120, 801, 803, 852, 862, 863, 1037, 1065)
 # The algorithm is a batch factor-graph fit and nothing is named after a
 # filter; the branch's sensor and output names are gone.
 # Allow: tests/README.md is excluded because its section 10 spells these
@@ -429,8 +434,8 @@ expect_none("nothing is named after a filter" "EKF|[Ee]kf" ${NAMING_PATHS})
 expect_none("branch output names are gone" "posN|posE|posD|_IMU_GNSS_EKF|ImuGnssEkf" ${NAMING_PATHS})
 # Allow: this count pins the application's plot list to the list the tests
 # use (tests/fusion/fusionsessions.cpp, fusionPlots()). Adding a plot means
-# changing both, and the number here (PLANS/fusion-accuracy.md will).
-expect_count("eight fusion plots" "^ *\\{\"Sensor fusion\", " 8 src/mainwindow.cpp)
+# changing both, and the number here.
+expect_count("twelve fusion plots" "^ *\\{\"Sensor fusion\", " 12 src/mainwindow.cpp)
 # The local frame is the input of sensor fusion and of the simplified track,
 # and a column's source; it has no plots of its own. Allow: none expected in
 # code or tests (tests/README.md is excluded as above).
@@ -442,9 +447,11 @@ expect_none("no local-frame plots" "GNSS \\(Local frame\\)|localFramePlots" src 
 expect_none("the removed fusion plots stay out of the registry"
   "\"Fusion\", *\"(north|east|down|velN|velE|velD|accN|accE|roll|pitch|yaw|q[xyzw])\", *\"" src)
 # Allow: describe the fit's outputs as outputs or measurements; name no removed
-# category or plot.
-expect_none("the documents describe the eight fusion plots"
-  "[Ss]eventeen( real)? plots|GNSS \\(Local frame\\)|Quaternion [WXYZ]|quaternion plots" docs README.md)
+# category or plot, and count the fusion plots as twelve ("the same eight"
+# inputs of docs/CALCULATIONS.md do not match).
+expect_none("the documents describe the twelve fusion plots"
+  "[Ss]eventeen( real)? plots|GNSS \\(Local frame\\)|Quaternion [WXYZ]|quaternion plots|[Ee]ight (real )?(fusion )?plots|[Aa]ll eight"
+  docs README.md)
 
 # ─────────────────────────────── solver-confinement
 # Text half of "only the code that needs GTSAM links it". The link half is
@@ -720,12 +727,13 @@ expect_none("the documents describe the fitted scale" "scale factor is not fitte
 expect_count("the fusion document names the scale prior" "scale_prior" 1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document names the scale diagnostics" "model\\.scale" 1 docs/SENSOR_FUSION.md)
 
-# ─────────────────────────────── accuracy-channels (items 1022, 1025, 1030, 1032, 1036, 1049)
+# ─────────────────────────────── accuracy-channels (items 1022, 1025, 1030, 1032, 1036, 1037, 1049, 1064, 1065)
 # The accuracy of a converged fit (docs/SENSOR_FUSION.md section 4): one
 # factorization of the converged graph, in its own unit
 # (src/fusion/fitcovariance.*), whose clique marginals give the covariance,
 # never the library's joint marginals; one cap for every attitude sigma; the
-# four channels named once, in the registration's output table; and the
+# four channels named in the registration's output table and the plot rows
+# alone, the plots drawn in the deep scheme of the GNSS accuracies; and the
 # fusion document states the propagation, what it leaves out, the widening
 # and the accuracy's one sentence.
 audit_group(accuracy-channels)
@@ -743,12 +751,20 @@ expect_count("one factorization of the converged graph" "eliminateMultifrontal\\
 # Allow: none expected. The heading check and the published heading and tilt
 # share one cap, defined in factorgraphfit.h.
 expect_count("one cap for every attitude sigma" "constexpr double kYawSigmaCapDeg" 1 src/fusion)
-# Allow: phase 5 adds the plot rows (src/mainwindow.cpp) to the allowed-file
-# regex. The four channel names are spelled once in src, in the registration's
-# output table; the kernel holds them as Result members.
-expect_only("the accuracy channels are named in the registration"
+# Allow: none expected. The four channel names are spelled in src in the
+# registration's output table and in the plot rows that draw them; the kernel
+# holds them as Result members, and a reader names the measurement through a
+# plot row or the registration.
+expect_only("the accuracy channels are named in the registration and the plot rows"
   "\"(headingAcc|tiltAcc|accHAcc|accDAcc)\""
-  "^src/fusion/fusionregistration\\.cpp$" src)
+  "^src/(fusion/fusionregistration\\.cpp|mainwindow\\.cpp)$" src)
+# The four accuracy plots are drawn in the deep scheme of the GNSS accuracy
+# plots: their saturation S_dk and the deep lightness of a hue family. Allow:
+# none expected; a fifth accuracy row raises the count with the row, and a row
+# in another scheme is the defect.
+expect_count("the accuracy plots are deep"
+  "^ *\\{\"Sensor fusion\", +\"[A-Za-z ]+ accuracy\", +\"[^\"]*\", +QColor::fromHsl\\( *[0-9]+, S_dk, L_d[wcb]\\)"
+  4 src/mainwindow.cpp)
 # Allow: none expected. The fit publishes its accuracy; say what it is and
 # what it leaves out instead.
 expect_none("nothing says that no uncertainty is published" "no uncertainty" src docs)
@@ -767,6 +783,21 @@ expect_count("the fusion document says the widening never tightens" "never tight
 expect_count("the fusion document states what the accuracy is"
   "The accuracy is one standard deviation from the covariance of the converged solution under the documented model, widened where the residuals exceed what the model allows\\."
   1 docs/SENSOR_FUSION.md)
+
+# ─────────────────────────────── model-validation (items 1024, 1055, 1064, 1065)
+# The fusion document reports the model's validation as measured
+# (docs/SENSOR_FUSION.md section 8): the normalized residuals of the reference
+# recordings and of the committed fixtures, the sentence that says what a
+# value far from one measures, and what is and is not validated. Allow: these
+# count LINES; the sentence and the two headings are written once, and a
+# second copy is the defect.
+audit_group(model-validation)
+expect_count("the fusion document says what a value far from one measures"
+  "measures what the model does not yet describe" 1 docs/SENSOR_FUSION.md)
+expect_count("the fusion document validates the model" "\\*\\*Validating the model\\.\\*\\*" 1
+  docs/SENSOR_FUSION.md)
+expect_count("the fusion document says what is and is not validated"
+  "\\*\\*What is and is not validated\\.\\*\\*" 1 docs/SENSOR_FUSION.md)
 
 # ─────────────────────────────── fusion-tooling (items 231, 233, 848, 928, 939, 1049)
 audit_group(fusion-tooling)
@@ -1384,15 +1415,7 @@ else()
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
     endif()
   endforeach()
-  # The documented noise model and the accuracy, part 1, is implemented in
-  # phases: the items whose evidence exists so far. Each phase appends its
-  # items to this list; the last replaces the list with RANGE 1001 1065.
-  foreach(item IN ITEMS 1001 1002 1003 1004 1005 1006 1007 1050 1061
-                        1008 1009 1010 1011 1012 1013 1014 1015 1016 1017 1040 1041 1043 1045 1046 1047
-                        1051 1052 1053 1062
-                        1018 1019 1020 1021 1023 1048 1054
-                        1022 1025 1026 1027 1028 1029 1030 1031 1032 1033 1034 1035 1036 1042 1044 1049
-                        1056 1057 1058 1059 1060)
+  foreach(item RANGE 1001 1065)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

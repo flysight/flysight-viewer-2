@@ -999,6 +999,19 @@ void MainWindow::registerBuiltInPlots()
         // counterpart is gray, so it is chromatic; Heading, Pitch and Roll are
         // group_a or more from each other). Every row is computed on request
         // and waits on the one fit.
+        //
+        // The four accuracy rows after Roll have no GNSS counterpart to
+        // overlay; they are named as the GNSS accuracy rows are and drawn in
+        // their deep scheme (S_dk, and the deep lightness of each hue's
+        // family), since the GNSS accuracies' own hues are taken. Each hue is
+        // at least group_a from the GNSS accuracies' 0, 120 and 240 and from
+        // the other three, which leaves the arcs 40-80, 160-200 and 280-320,
+        // and sits in the family of the value it qualifies: heading accuracy
+        // blue beside Heading, tilt accuracy cool beside Pitch, the horizontal
+        // acceleration's warm like the accelerations, the vertical's cool
+        // beside Vertical acceleration. The acceleration accuracies have a
+        // type of their own, since the acceleration type's two decimals of g
+        // would read 0.00 over most of a recording.
         {"Sensor fusion", "Elevation",                "m",     QColor::fromHsl(200, S,    L_b),  "Fusion", "z",             "altitude"},
         {"Sensor fusion", "Horizontal acceleration",  "m/s^2", QColor::fromHsl(340, S,    L_w),  "Fusion", "accH",          "acceleration"},
         {"Sensor fusion", "Vertical acceleration",    "m/s^2", QColor::fromHsl(170, S,    L_c),  "Fusion", "accD",          "acceleration"},
@@ -1007,6 +1020,10 @@ void MainWindow::registerBuiltInPlots()
         {"Sensor fusion", "Heading",                  "deg",   QColor::fromHsl(240, S,    L_b),  "Fusion", "bodyHeading",   "angle"},
         {"Sensor fusion", "Pitch",                    "deg",   QColor::fromHsl( 60, S,    L_c),  "Fusion", "bodyPitch",     "angle"},
         {"Sensor fusion", "Roll",                     "deg",   QColor::fromHsl(  0, S,    L_w),  "Fusion", "bodyRoll",      "angle"},
+        {"Sensor fusion", "Heading accuracy",                 "deg",   QColor::fromHsl(280, S_dk, L_db), "Fusion", "headingAcc", "angle"},
+        {"Sensor fusion", "Tilt accuracy",                    "deg",   QColor::fromHsl( 80, S_dk, L_dc), "Fusion", "tiltAcc",    "angle"},
+        {"Sensor fusion", "Horizontal acceleration accuracy", "m/s^2", QColor::fromHsl( 40, S_dk, L_dw), "Fusion", "accHAcc",    "acceleration_accuracy"},
+        {"Sensor fusion", "Vertical acceleration accuracy",   "m/s^2", QColor::fromHsl(160, S_dk, L_dc), "Fusion", "accDAcc",    "acceleration_accuracy"},
 
         // Category: Magnetometer (blue group, H ≈ 240°)
         {"Magnetometer", "Magnetic field X",     "gauss", QColor::fromHsl(240 - group_a, S, L_b), "MAG", "x",     "magnetic_field"},

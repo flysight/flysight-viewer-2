@@ -2105,7 +2105,7 @@ Twelve calculations are registered, in this order:
 | `builtin.default.GYRO_FS_DEG_S` | OnDemand | none | `GYRO_FS_DEG_S` (the default's text, a string) |
 | `builtin.default.ACCEL_ODR_HZ` | OnDemand | none | `ACCEL_ODR_HZ` (the default's text, a string) |
 | `builtin.default.GYRO_ODR_HZ` | OnDemand | none | `GYRO_ODR_HZ` (the default's text, a string) |
-| `builtin.fusion.fit` (title "Sensor fusion") | Explicit | the 26 below | the 18 below |
+| `builtin.fusion.fit` (title "Sensor fusion") | Explicit | the 26 below | the 22 below |
 | `builtin.fusion.accH` | OnDemand | `Fusion/accN`, `Fusion/accE` | `Fusion/accH` |
 | `builtin.fusion.systemTime` | OnDemand | `Fusion/_time`, `_TIME_FIT_A`, `_TIME_FIT_B` | `Fusion/_system_time` |
 | `builtin.fusion.z` | OnDemand | `Fusion/down`, `_LOCAL_ORIGIN_HMSL`, `_GROUND_ELEV` | `Fusion/z` |
@@ -2252,20 +2252,25 @@ it through ordinary invalidation, and never start one. Every one has the
 length of its inputs, so together with `Fusion/_time` (an output of the fit)
 they satisfy the time-axis rule of section 16.1.
 
-**Plots.** Eight plots in the category "Sensor fusion"
+**Plots.** Twelve plots in the category "Sensor fusion"
 (`MainWindow::registerBuiltInPlots`), in this order: Elevation (`Fusion/z`),
 Horizontal acceleration (`Fusion/accH`), Vertical acceleration
 (`Fusion/accD`), Along-track and Cross-track acceleration
 (`Fusion/accAlongTrack`, `Fusion/accCrossTrack`), Heading, Pitch and Roll
-(`Fusion/bodyHeading`, `bodyPitch`, `bodyRoll`). `accD` is an output of the
-fit; the others are the on-demand calculations above, blocked by the fit. All
-eight are requested (16.3): a checked fusion plot has the fit computed for the
-visible sessions, and nothing else about a plot starts one (section 16). The
-rest of the fit's outputs (`north`, `east`, `down`, `velN`, `velE`, `velD`,
-`accN`, `accE`, `roll`, `pitch`, `yaw`, `qx`, `qy`, `qz`, `qw`, and the four
-accuracies `headingAcc`, `tiltAcc`, `accHAcc`, `accDAcc`) have no plot;
-they remain measurements that a logbook column, a plugin input and the stored
-record read.
+(`Fusion/bodyHeading`, `bodyPitch`, `bodyRoll`), Heading accuracy and Tilt
+accuracy (`Fusion/headingAcc`, `tiltAcc`, type `angle`), Horizontal and
+Vertical acceleration accuracy (`Fusion/accHAcc`, `accDAcc`, type
+`acceleration_accuracy`: g, as `acceleration`, at four decimals). `accD` and
+the four accuracies are outputs of the fit; the other seven are the on-demand
+calculations above, blocked by the fit. All twelve are requested (16.3): a
+checked fusion plot has the fit computed for the visible sessions, and
+nothing else about a plot starts one (section 16). An accuracy the fit did
+not set (a rejection, a solver failure, a success whose covariance could not
+be computed) is unavailable like any unset output, and its plot draws
+nothing. The rest of the fit's outputs (`north`, `east`, `down`, `velN`,
+`velE`, `velD`, `accN`, `accE`, `roll`, `pitch`, `yaw`, `qx`, `qy`, `qz`,
+`qw`) have no plot; they remain measurements that a logbook column, a plugin
+input and the stored record read.
 
 **Stored results.** The fit's result version is `Fusion::Algorithm`
 (`src/fusion/fusion.h`), the same string as the diagnostics' `"algorithm"`. The
@@ -2368,16 +2373,18 @@ vocabulary, the attribute's definition and the Orientation column through
 `ChoiceFixture`),
 `tests/tst_fusion_jobs.cpp` (the executor's worker on a
 real `SessionModel`), `tests/tst_fusion_rows.cpp` (the demand layer of
-section 16 with the eight real plots and real fits: fits
-start and are dropped with no gesture),
+section 16 with the twelve real plots and real fits: fits
+start and are dropped with no gesture, and the accuracy plots are absent
+where the fit did not compute them),
 `tests/tst_fusion_runner.cpp` (the command-line runner against the
 application's import path) and `tests/tst_fusion_store.cpp` (the fit's stored
 result: unload, restart, rejections, invalidation, merges, the session file
 untouched; kept across altitude markers, unrelated registrations, the descent
 pause and another plugin set; dropped at once by a registration that provides
 a name it looked up; deleted when a lookup resolves differently at load; a
-logbook column over roll filled for sessions that are not loaded, and not
-fitted again after a restart); the column rule without GTSAM in
+logbook column over roll, and one over each accuracy, filled for sessions
+that are not loaded, and not fitted again after a restart; a stored success
+without the accuracy restored with the rest, failing nothing); the column rule without GTSAM in
 `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession` (column
 demand), `tst_result_columns::columnWorkerIsUnchangedByDemand`,
 `tst_column_cache::explicitBackedColumnFollowsItsResult` and
