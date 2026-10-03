@@ -1,7 +1,9 @@
 # GNSS holes bridged by the IMU
 
 Date: 2026-10-02; amended 2026-10-03 after the first implementation's
-escalation (the cap, the growth claim, the slow-tail rule).
+escalation (the cap, the growth claim, the slow-tail rule) and again after
+the second's review (the never-below clause struck, the cap per interval,
+the measurement's wording).
 Status: specification for planning. Not an implementation plan. Small enough
 to be implemented directly by one agent in one phase. It follows
 `PLANS/done/sample-continuity.md`, whose continuity rule the kernel reads
@@ -46,11 +48,15 @@ stretch is worth.
   enter an IMU factor to first order, and the settle test rebuilds the graph
   at the fitted values; over one factor spanning a long hole that correction
   is poor enough that the passes stop contracting. On the synthetic
-  long-hole recording every hole up to 40 s settles, 50 s is marginal and
-  60 s cycles, so a hole longer than 30 s, twice the longest in the corpus,
-  is not bridged: the recording is rejected with a reason that names the
-  limit. The limit is a property of the single factor, and a later
-  specification that places states inside a long hole removes it.
+  long-hole recording every hole up to 40 s settles in two or
+  three passes and 50 s on the fifth; 52, 54 and 58 s cycle and never
+  settle; 60 s settles only on the twelfth of thirty passes. So an interval
+  between successive fixes longer than 30 s, twice the longest hole in the
+  corpus, is not bridged, whether or not the continuity rule calls it a hole
+  (the limit is the factor's span, so a uniformly sparse window is bound by
+  it too): the recording is rejected with a reason that names the interval
+  and the limit. The limit is a property of the single factor, and a later
+  specification that places states inside a long interval removes it.
 - **Everything is published.** Every IMU sample inside a hole gets its
   reconstructed state and its accuracies. The growth through a hole is in
   the position and velocity of the sample covariance, which the fit carries
@@ -58,9 +64,10 @@ stretch is worth.
   tilt, two accelerations) are bounded by global terms, the heading's
   observability and the bias priors, and grow through a hole only where
   those terms allow, as they do on the reference recording and not on the
-  synthetic fixture. Inside a hole they are never below their values at the
-  fixes around it. Nothing is suppressed; the accuracy tells the user what
-  the stretch is worth.
+  synthetic fixture, where inside the hole they move from one neighbouring
+  fix's value towards the other's and the accelerations' follow the
+  manoeuvre. Nothing is suppressed; the accuracy tells the user what the
+  stretch is worth.
 - **The fixes around a hole are ordinary fixes.** They carry their stated
   sigmas, which on the corpus are 100 to 180 m after a hole, and the model
   weights them as it weights every fix.
@@ -77,12 +84,14 @@ stretch is worth.
 
 - **The outage rule goes; the cap replaces it.** `requireNoGnssOutage` and
   its two constants are deleted. In their place one kernel constant, the
-  longest GNSS hole the fit bridges, 30 s, and one check in `planFit` after
-  the window's validation: a hole of the fitted window's GNSS axis (the
-  continuity authority's) longer than it rejects the recording with a reason
-  that names the hole's length and the limit. Below the cap there is no rule
-  on fix spacing. The IMU gap rule, read from the continuity authority, is
-  the only disconnection.
+  longest interval between fixes the fit bridges, 30 s, and one check in
+  `planFit` after the window's validation: an interval between successive
+  fixes of the fitted window longer than it rejects the recording with a
+  reason that names the interval's length, to two decimals, and the limit.
+  The holes the continuity authority finds serve the diagnostics; the cap
+  walks every interval. Below the cap there is no rule on fix spacing. The
+  IMU gap rule, read from the continuity authority, is the only
+  disconnection.
 - **The segment cutter merges any sparse piece.** Today only the final piece
   of the initializer's cut is merged into its predecessor when it is shorter
   than the minimum or holds fewer than three fixes. With holes, a middle
@@ -121,19 +130,23 @@ stretch is worth.
   and ten rejections. In the kernel tests, the published attitude and
   accelerations at every IMU sample inside the hole lie within three of their
   own published accuracies of the fixture's generating trajectory; the four
-  published accuracies inside the hole are never below their values at the
-  published samples nearest the two fixes around it; and the position and
-  velocity parts of the sample covariance, read through the reconstruction's
-  per-interval seam, grow through the hole and collapse at the fix after it.
+  published accuracies inside the hole are logged against their values at
+  the published samples nearest the two fixes around it (bounded by global
+  terms, they need not grow, and on this fixture do not); and the position
+  and velocity parts of the sample covariance, read through the
+  reconstruction's per-interval seam, grow through the hole and collapse at
+  the fix after it.
 - **The long hole, at the cap and above it.** A second synthetic recording
   with `coarse_maneuver`'s kind of motion and a manoeuvre on both sides of a
   30 s hole, the IMU continuous, converges under the production tuning; the
   test logs its iterations per pass, the largest accuracy inside the hole
   and the residuals at the fix after it. The same recording with a hole
   above the cap is rejected with the reason naming the length and the
-  limit. The measurement behind the cap (every length to 40 s settles, 50 s
-  marginal, 60 s cycles) is recorded in the documentation, not re-run by a
-  test.
+  limit, and so is a window whose fixes are uniformly more than 30 s apart,
+  which the continuity rule calls no hole. The measurement behind the cap
+  (every length to 40 s settles, 50 s on the fifth pass, 52 to 58 s cycle,
+  60 s only on the twelfth of thirty passes) is recorded in the
+  documentation, not re-run by a test.
 - **The sparse piece.** A window whose cut yields a middle piece of two fixes
   is fitted, with the piece merged into its predecessor; a window whose first
   piece has two fixes merges it into its successor.
@@ -164,7 +177,8 @@ stretch is worth.
 `docs/SENSOR_FUSION.md`: section 6 drops the GNSS gap rejection and states
 that a hole in the fixes up to the cap is bridged by the IMU, with the
 measurement behind the cap and why a single factor imposes it, and that a
-longer hole is rejected naming the limit; the stopping-rule paragraph
+longer interval between fixes is rejected naming the limit; the
+stopping-rule paragraph
 states the slow tail's three bounds; section 2 says what the user sees over
 a hole and that the GNSS plots break there while the fusion plots draw
 through; section 7 adds
