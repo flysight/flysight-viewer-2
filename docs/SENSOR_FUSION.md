@@ -73,8 +73,11 @@ document describes what is computed, from what, and how far to trust it.
   through the hole and collapses at the next fix; the heading, tilt and
   acceleration accuracies are bounded by terms of the whole fit (how well the
   heading is determined, the bias priors) and grow through a hole only where
-  those allow, as they do on the reference recording of section 8, so a
-  short hole can leave them where they were. The GNSS plots break there, as
+  those allow, as they do on the reference recording of section 8. Over a
+  short hole they follow the manoeuvre and can fall below their values beside
+  it: on the synthetic fixture of section 8 heading and tilt move from their
+  value before the hole to their value after it, and the two acceleration
+  accuracies dip below both. The GNSS plots break there, as
   at any hole in their samples ([COMPUTED_PLOTS.md](COMPUTED_PLOTS.md),
   section 10). A hole longer than the fit bridges, 30 s, and a hole in the
   IMU's samples between two fixes are another matter: the recording is
