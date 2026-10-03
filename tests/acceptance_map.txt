@@ -3405,7 +3405,7 @@
 1303 tst_fusion_kernel gnssAccuracyScalingNeverLowersThem
 1303 tst_fusion_kernel longHoleConverges
 
-# 1304 - (3, 4) the segment cutter merges any piece with fewer than three fixes into the piece before it, the first into the piece after it; a piece that is the whole window is left alone; a stretch of whole segment lengths without a fix yields no piece; a window whose cut yields a sparse middle or first piece is fitted
+# 1304 - (3, 4) the segment cutter merges any piece with fewer than three fixes into the piece before it, the first into the piece after it; a piece that is the whole window is left alone; a stretch of whole segment lengths without a fix yields no piece; a window whose cut yields a middle piece of two fixes is fitted, the piece merged into its predecessor; a window whose first piece has two fixes merges it into its successor
 1304 tst_fusion_kernel sparsePiecesAreMerged
 1304 tst_fusion_kernel segmentsAreCutOnFixes
 

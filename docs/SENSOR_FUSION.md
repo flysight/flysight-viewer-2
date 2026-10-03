@@ -1337,7 +1337,8 @@ The second recording ends `iteration limit`, a solver failure: its fifth pass
 reaches its limit with a mean relative decrease of 1.0e-7 and position and
 velocity normalized RMS of 0.18 and 0.35, but an IMU normalized RMS of 1,707,
 above the slow tail's bound, so the tail is refused (section 4). A solver
-failure carries no input audit, so its holes and accuracies are not reported;
+failure carries no input audit, so its holes and accuracies are not reported,
+and its fixes and IMU samples in the table are those of the run of 2026-10-02;
 before the slow tail bounded the IMU misfit, the same fit was accepted, with
 28 holes (the longest 13.2 s), a fitted x accelerometer scale factor of
 -0.058, 26,609 of its 44,073 headings at the cap and a largest widening of

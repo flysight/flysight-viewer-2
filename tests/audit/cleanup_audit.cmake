@@ -1450,7 +1450,10 @@ expect_count("the fusion document states the cap"
   "The cap is the longest hole the fit bridges, 30 s" 1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document states the measurement behind the cap"
   "every hole up to 40 s settles" 1 docs/SENSOR_FUSION.md)
-expect_none("the fusion document claims no hole of any length" "however long|needs no cap" docs)
+# Allow: none expected. The fusion document once said that a hole in the
+# fixes of any length is bridged; a hole longer than the cap is rejected.
+expect_none("the fusion document claims no hole of any length" "however long|needs no cap"
+  docs/SENSOR_FUSION.md)
 expect_count("the fusion document states the slow tail's three bounds" "are all three below 2"
   1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document carries the first reference recording" "08-35-48" 1
