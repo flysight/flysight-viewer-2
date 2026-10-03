@@ -70,11 +70,11 @@ SensorTimeAxis sensorTimeAxis(const SessionData &session, const QString &sensorI
 
 const SensorTimeAxis &SensorTimeAxes::of(const SessionData &session, const QString &sensorId)
 {
-    const QPair<const SessionData *, QString> key(&session, sensorId);
+    const std::pair<const SessionData *, QString> key(&session, sensorId);
     auto it = m_axes.find(key);
     if (it == m_axes.end())
-        it = m_axes.insert(key, sensorTimeAxis(session, sensorId));
-    return it.value();
+        it = m_axes.emplace(key, sensorTimeAxis(session, sensorId)).first;
+    return it->second;
 }
 
 double interpolateAtX(const QVector<double> &xData,

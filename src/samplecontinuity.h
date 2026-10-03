@@ -39,7 +39,10 @@ namespace FlySight {
 namespace SampleContinuity {
 
 /// A time axis as contiguous seconds, read in place: a QVector<double> or a
-/// std::vector<double> converts to it without a copy.
+/// std::vector<double> converts to it without a copy. It is a view, not an
+/// owner: it is valid only while the container it was made from is, so a
+/// TimeAxis made from a temporary (`holeThreshold(session.getMeasurement(...))`
+/// is fine) must not outlive the full expression that made it.
 struct TimeAxis {
     const double *times = nullptr;
     std::size_t count = 0;

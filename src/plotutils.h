@@ -4,8 +4,6 @@
 #include "momentmodel.h"
 
 #include <QColor>
-#include <QHash>
-#include <QPair>
 #include <QString>
 #include <QVector>
 
@@ -13,6 +11,7 @@
 #include <cmath>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <optional>
 
 namespace FlySight {
@@ -60,15 +59,16 @@ SensorTimeAxis sensorTimeAxis(const SessionData &session, const QString &sensorI
 // event of the legend, an update of the measure tool), each built on first
 // use: one selection per sensor and batch, whatever the number of series read.
 // It lives as long as the batch and is not kept between batches, so nothing
-// about holes is stored. The sessions must outlive it and stay in place, and
-// a reference of() returns is used before the next of() asks for another
-// sensor (which may move the axes).
+// about holes is stored. The sessions must outlive it and stay in place. The
+// axes live in a std::map, whose elements never move, so a reference of()
+// returns stays valid for the life of the batch however many sensors are
+// asked for after it.
 class SensorTimeAxes {
 public:
     const SensorTimeAxis &of(const SessionData &session, const QString &sensorId);
 
 private:
-    QHash<QPair<const SessionData *, QString>, SensorTimeAxis> m_axes;
+    std::map<std::pair<const SessionData *, QString>, SensorTimeAxis> m_axes;
 };
 
 // The value of yData at x, linear between the two samples of xData that
