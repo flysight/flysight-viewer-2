@@ -118,7 +118,9 @@ stretch is worth.
 that a hole in the fixes is bridged by the IMU with its accuracy growing
 through it; section 2 says what the user sees over a hole and that the GNSS
 plots break there while the fusion plots draw through; section 7 adds
-`gnss_holes` to the input audit and `v8` to the algorithm string's history;
+`gnss_holes` to the input audit and `v8` to the algorithm string's history,
+naming both the bridged holes and the continuity rule's 1.5 threshold that
+the kernel adopted under the compatibility marker's bump to 3;
 section 8 gains the two recordings' numbers from the manual step. The
 golden count ("three fits, eleven rejections") becomes four and ten
 wherever it is stated. `docs/COMPUTED_PLOTS.md`'s section on holes gains the
