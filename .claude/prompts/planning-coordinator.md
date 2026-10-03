@@ -54,7 +54,8 @@ Write `PLANS/implementation-plan/00-overview.md` with:
 
 ## Delegation
 
-Spawn one documenter per phase with `.claude/prompts/phase-documenter.md`.
+Spawn one documenter per phase with `.claude/prompts/phase-documenter.md`;
+it inherits the session's model (the workflow reference, "Models").
 Independent phases in parallel; a phase that depends on another after that
 phase's document exists. Give each documenter, by path:
 

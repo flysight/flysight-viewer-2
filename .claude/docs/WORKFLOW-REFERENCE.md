@@ -88,7 +88,25 @@ Done so far: <phases committed, with tags>; resume from <phase>.
 
 ## Models
 
-The stages are run with Opus 5.5 at high effort; subagents inherit the
-session's model unless a spawn says otherwise. The prompts assume an agent
-that reads files reliably, keeps working until the task is done, and
-reports what it did without being handed a template.
+The most capable model goes where the judgement is and the tokens are few;
+the cheaper one where the tokens are many and the task is pinned down by a
+document. A stage's session is started by Michael on the model below;
+subagents inherit the session's model unless the spawn names one (the
+Agent tool's `model`).
+
+| Role | Model | Why |
+| --- | --- | --- |
+| Specification (Michael with an assistant) | Fable 5.1, high | the design is decided here |
+| Planning coordinator and phase documenters | Fable 5.1, high | the plan's decisions (a compatibility bump, which axis a reader judges holes on) are design |
+| Implementation orchestrator | Fable 5.1, high | the one decider of the run; reads little, passes paths |
+| Implementation and revision agents | Opus 5.5, high (`model: opus`) | most of the tokens; the phase document pins the task |
+| Phase reviewers, and the first two final reviewers | Opus 5.5, high (`model: opus`) | build, run and read at volume |
+| The final "whole change" reviewer | inherits the session's model | cross-cutting defects are a judgement call |
+
+The orchestrator settles questions with the specification, the plan, the
+code and the memory notes of the feature; a question none of them settles
+is a call, decided by the orchestrator but committed on its own so that it
+can be reverted alone (implementation-orchestrator.md, "Decisions and
+calls"). The prompts assume an agent that reads files reliably, keeps
+working until the task is done, and reports what it did without being
+handed a template.

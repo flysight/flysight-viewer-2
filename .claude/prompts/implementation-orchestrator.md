@@ -22,26 +22,51 @@ committed or escalated, the final reviews run, the report written.
 
 ## The loop, per phase
 
-1. **Implement.** Spawn an agent with `.claude/prompts/implementation-agent.md`,
-   giving by path: the prompt, the phase document, the overview, `CLAUDE.md`,
-   and the reference files the phase document names. State that it must not
-   run git commands that change repository state, and that its report must
-   end with the complete list of files created, modified and deleted.
-2. **Review.** Spawn an agent with `.claude/prompts/review-agent.md`, giving
-   by path the prompt, the phase document, the overview and `CLAUDE.md`,
-   plus the implementer's report. The reviewer builds and runs the tests
-   itself; a review without that evidence is incomplete, and you ask for it
-   again.
+1. **Implement.** Spawn an agent with `.claude/prompts/implementation-agent.md`
+   on model `opus`, giving by path: the prompt, the phase document, the
+   overview, `CLAUDE.md`, and the reference files the phase document names.
+   State that it must not run git commands that change repository state,
+   and that its report must end with the complete list of files created,
+   modified and deleted.
+2. **Review.** Spawn an agent with `.claude/prompts/review-agent.md` on
+   model `opus`, giving by path the prompt, the phase document, the overview
+   and `CLAUDE.md`, plus the implementer's report. The reviewer builds and
+   runs the tests itself; a review without that evidence is incomplete, and
+   you ask for it again.
 3. **On ACCEPT**, commit the phase (below), mark it complete, and start
    every phase it unblocks.
-4. **On REJECT**, spawn a revision agent with the same prompt and inputs
-   plus the reviewer's feedback in full, then review again. After the third
-   rejection, escalate: leave the phase uncommitted, record its paths, and
-   do not start phases that depend on it.
+4. **On REJECT**, spawn a revision agent with the same prompt, model and
+   inputs plus the reviewer's feedback in full, then review again. After the
+   third rejection, escalate: leave the phase uncommitted, record its paths,
+   and do not start phases that depend on it.
 
 A blocked implementer is escalated the same way once its blocker is
-genuinely outside the phase; if it is a question the specification answers
-or the code settles, answer it and continue.
+genuinely outside the phase.
+
+## Decisions and calls
+
+You are the one party that decides; the subagents ask. Every question an
+implementer or a reviewer raises is one of two things:
+
+- **A decision.** The specification, the plan, the code or a memory note
+  settles it. Answer it, continue, and record it for the report with the
+  sentence that settles it. Before you answer, read the memory notes the
+  memory index lists for this feature: they hold the decisions Michael made
+  while the specification was discussed and the reasons behind them, which
+  the specification states only as its conclusions.
+- **A call.** Nothing settles it: a behaviour the specification does not
+  state, a document the plan does not name changing meaning, a number no
+  document gives. Decide it with your best judgement so that the run
+  finishes, but keep its code apart so that Michael can revert it with one
+  command: a call's change goes in a fixup commit of its own, never mixed
+  with another call. A call that arises inside a phase is committed after
+  the phase when the phase is green without it; when it is not, the phase
+  commit carries it and the report names that commit and the paths the
+  call touched. Record the question, the options, the answer and the
+  reason.
+
+A settled question is never reported as a call, and a call is never buried
+in a phase commit.
 
 ## Version control
 
@@ -85,13 +110,19 @@ overview, `CLAUDE.md` and the list of phase commits:
   seams between phases and for anything that would fail on another platform
   or under load.
 
-Route findings that need code into reviewed fixup commits. Findings that
-are judgement calls go to Michael in the report.
+Spawn the first two on model `opus`; the third inherits the session's
+model. Route findings that need code into reviewed fixup commits. A
+finding that needs a call is handled as "Decisions and calls" says: its
+fixup commit holds that change alone.
 
 ## Report
 
 End with: one line per commit (hash, tag, subject); deviations from the
-plan and whether the documents were updated to match; what was not done,
-including manual verification steps not performed; follow-ups the reviews
-raised and left open; escalated phases with their uncommitted paths; and
-whether the branch is ready for Michael to review and push.
+plan and whether the documents were updated to match; **Decisions taken**,
+each with the sentence of the specification, plan, code or memory note that
+settled it, for information; **Calls**, each with the question, the
+options, the answer chosen, the reason and the hash of the commit that
+holds it alone; what was not done, including manual verification steps not
+performed; follow-ups the reviews raised and left open; escalated phases
+with their uncommitted paths; and whether the branch is ready for Michael
+to review and push.
