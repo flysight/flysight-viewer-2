@@ -1,0 +1,654 @@
+{
+    "channels_file": "bridged_hole.channels.txt",
+    "diagnostics": {
+        "accuracy": {
+            "computed": true,
+            "failure": null,
+            "heading_prior_sigma_rad": 1000,
+            "max_widening": 1,
+            "undetermined_heading_samples": 0,
+            "widened_samples": 0,
+            "widening_half_width_s": 2.5
+        },
+        "algorithm": "batch-temperature-bias-v8",
+        "anchor_time_s": null,
+        "configuration": {
+            "accel_fs_g": 16,
+            "accel_odr_hz": 104,
+            "gyro_fs_deg_s": 2000,
+            "gyro_odr_hz": 104
+        },
+        "dense_output": "IMU-rate reconstruction at original IMU times: between fixes the IMU integrated from the fitted state, the mismatch with the next fitted state shared over the steps by their noise, in one linearized pass",
+        "end_s": 6,
+        "gnss_states": 16,
+        "imu_outputs": 540,
+        "initialization": "segmented initialization; heading from segment fits",
+        "initializer": {
+            "fallback_segments": [
+            ],
+            "segment_length_s": 600,
+            "segments": [
+                {
+                    "anchor_s": 0.6000001430511475,
+                    "anchor_sacc_m_s": 0.3,
+                    "end_s": 6,
+                    "fallback": false,
+                    "growth_stop": "observable",
+                    "index": 0,
+                    "iterations": 10,
+                    "prefix_fits": 4,
+                    "prefix_iterations": 17,
+                    "prefix_length_s": 60,
+                    "prefix_on_limit": false,
+                    "prefix_passes": 1,
+                    "segment_on_limit": false,
+                    "start_s": 0.6000001430511475,
+                    "yaw_sigma_deg": 17.612520436078984
+                }
+            ]
+        },
+        "input": {
+            "epoch_utc_s": 1699999999.837,
+            "gnss_count": 21,
+            "gnss_holes": [
+                {
+                    "length_s": 2.6000001430511475,
+                    "start_s": 2.200000047683716
+                }
+            ],
+            "height_method": "CSV hMSL used as approximate ellipsoid height in GeographicLib local frame",
+            "imu_count": 601,
+            "origin": [
+                45,
+                -75,
+                100
+            ],
+            "origin_index": 3,
+            "time_method": "SessionData shared UTC conversion; common epoch subtraction only"
+        },
+        "limitations": "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass with the fitted fix states, biases and scale factors held. Accuracies are first-order, one standard deviation under the documented noise model, widened where the residuals exceed it.",
+        "max_endpoint_correction_deg": 1.402638065889856e-06,
+        "max_seed_vs_selected_acceleration_m_s2": null,
+        "max_seed_vs_selected_angle_deg": null,
+        "max_step_correction_m_s2": 2.2344491487061224e-06,
+        "max_step_correction_time_s": 5.008000016212463,
+        "max_velocity_mismatch_m_s": 2.691787181077168e-06,
+        "model": {
+            "gyro_bias": {
+                "b0_rad_s": [
+                    0.005177064510296569,
+                    -0.0022162037426276694,
+                    0.0038687420999529713
+                ],
+                "b1_rad_s_per_degc": [
+                    0,
+                    0,
+                    0
+                ],
+                "t_ref_degc": 25
+            },
+            "noise": {
+                "acc": {
+                    "bandwidth_hz": 52,
+                    "datasheet_density_m_s2_rthz": 0.0010787315,
+                    "density_m_s2_rthz": 0.0007747278654715448,
+                    "sample_sigma_m_s2": 0.007900705007526985,
+                    "step_m_s2": 0.0047884033203125
+                },
+                "gyro": {
+                    "bandwidth_hz": 33,
+                    "datasheet_density_rad_s_rthz": 6.632251157578452e-05,
+                    "density_rad_s_rthz": 5.090920833375716e-05,
+                    "sample_sigma_rad_s": 0.0005191740934307763,
+                    "step_rad_s": 0.0012217304763960308
+                }
+            },
+            "scale": {
+                "acc": [
+                    1.0000126181242521,
+                    1.000032825054663,
+                    0.9991227071752876
+                ],
+                "acc_sigma": [
+                    0.009999769221865728,
+                    0.009977754865080141,
+                    0.009554380490852941
+                ],
+                "gyro": [
+                    1.0000019348708609,
+                    1.0000007444307255,
+                    1.0000023007002536
+                ],
+                "gyro_sigma": [
+                    0.009999994832646781,
+                    0.009999998945167378,
+                    0.009999997865516185
+                ]
+            }
+        },
+        "objective": 1.1311415504595435,
+        "orientation": "body to fixed NED; quaternion xyzw; RPY degrees",
+        "quality": {
+            "imu_nrms": 0.00022480611569201034,
+            "objective_per_state": 0.07069634690372147,
+            "position_nrms": 0.09913105985357866,
+            "velocity_nrms": 0.1851301642585525
+        },
+        "residuals": [
+            {
+                "kind": "position",
+                "node": 0,
+                "squared_whitened_error": 0.017418687895149332,
+                "time_s": 0.6000001430511475
+            },
+            {
+                "kind": "velocity",
+                "node": 0,
+                "squared_whitened_error": 0.0578724697361101,
+                "time_s": 0.6000001430511475
+            },
+            {
+                "kind": "position",
+                "node": 1,
+                "squared_whitened_error": 0.04421613593199304,
+                "time_s": 0.8000001907348633
+            },
+            {
+                "kind": "velocity",
+                "node": 1,
+                "squared_whitened_error": 0.23257119245668614,
+                "time_s": 0.8000001907348633
+            },
+            {
+                "kind": "imu",
+                "node": 1,
+                "squared_whitened_error": 1.6155658924566628e-07,
+                "time_s": 0.8000001907348633
+            },
+            {
+                "kind": "position",
+                "node": 2,
+                "squared_whitened_error": 0.03469026528882576,
+                "time_s": 1
+            },
+            {
+                "kind": "velocity",
+                "node": 2,
+                "squared_whitened_error": 0.13175650352137244,
+                "time_s": 1
+            },
+            {
+                "kind": "imu",
+                "node": 2,
+                "squared_whitened_error": 2.32253495971554e-07,
+                "time_s": 1
+            },
+            {
+                "kind": "position",
+                "node": 3,
+                "squared_whitened_error": 0.024263792623905607,
+                "time_s": 1.2000000476837158
+            },
+            {
+                "kind": "velocity",
+                "node": 3,
+                "squared_whitened_error": 0.08869749479532985,
+                "time_s": 1.2000000476837158
+            },
+            {
+                "kind": "imu",
+                "node": 3,
+                "squared_whitened_error": 1.4404851680691166e-07,
+                "time_s": 1.2000000476837158
+            },
+            {
+                "kind": "position",
+                "node": 4,
+                "squared_whitened_error": 0.03642860977977487,
+                "time_s": 1.4000000953674316
+            },
+            {
+                "kind": "velocity",
+                "node": 4,
+                "squared_whitened_error": 0.13077912589301738,
+                "time_s": 1.4000000953674316
+            },
+            {
+                "kind": "imu",
+                "node": 4,
+                "squared_whitened_error": 4.1914839720436025e-07,
+                "time_s": 1.4000000953674316
+            },
+            {
+                "kind": "position",
+                "node": 5,
+                "squared_whitened_error": 0.035522201323798006,
+                "time_s": 1.6000001430511475
+            },
+            {
+                "kind": "velocity",
+                "node": 5,
+                "squared_whitened_error": 0.04163142074286949,
+                "time_s": 1.6000001430511475
+            },
+            {
+                "kind": "imu",
+                "node": 5,
+                "squared_whitened_error": 2.556559664685771e-07,
+                "time_s": 1.6000001430511475
+            },
+            {
+                "kind": "position",
+                "node": 6,
+                "squared_whitened_error": 0.06939505733287508,
+                "time_s": 1.8000001907348633
+            },
+            {
+                "kind": "velocity",
+                "node": 6,
+                "squared_whitened_error": 0.14956345378791258,
+                "time_s": 1.8000001907348633
+            },
+            {
+                "kind": "imu",
+                "node": 6,
+                "squared_whitened_error": 1.7884487815043206e-07,
+                "time_s": 1.8000001907348633
+            },
+            {
+                "kind": "position",
+                "node": 7,
+                "squared_whitened_error": 0.015625705081226342,
+                "time_s": 2
+            },
+            {
+                "kind": "velocity",
+                "node": 7,
+                "squared_whitened_error": 0.014251835971750736,
+                "time_s": 2
+            },
+            {
+                "kind": "imu",
+                "node": 7,
+                "squared_whitened_error": 2.1232823540139232e-07,
+                "time_s": 2
+            },
+            {
+                "kind": "position",
+                "node": 8,
+                "squared_whitened_error": 0.029252689626687985,
+                "time_s": 2.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 8,
+                "squared_whitened_error": 0.054174128919918324,
+                "time_s": 2.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 8,
+                "squared_whitened_error": 2.077537487134356e-07,
+                "time_s": 2.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 9,
+                "squared_whitened_error": 0.004246977989761326,
+                "time_s": 4.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 9,
+                "squared_whitened_error": 0.16408069368046574,
+                "time_s": 4.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 9,
+                "squared_whitened_error": 3.344765896821558e-06,
+                "time_s": 4.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 10,
+                "squared_whitened_error": 0.022266637097010353,
+                "time_s": 5
+            },
+            {
+                "kind": "velocity",
+                "node": 10,
+                "squared_whitened_error": 0.1803666427157949,
+                "time_s": 5
+            },
+            {
+                "kind": "imu",
+                "node": 10,
+                "squared_whitened_error": 1.879528165583958e-07,
+                "time_s": 5
+            },
+            {
+                "kind": "position",
+                "node": 11,
+                "squared_whitened_error": 0.0239733203901883,
+                "time_s": 5.200000047683716
+            },
+            {
+                "kind": "velocity",
+                "node": 11,
+                "squared_whitened_error": 0.07928146862708722,
+                "time_s": 5.200000047683716
+            },
+            {
+                "kind": "imu",
+                "node": 11,
+                "squared_whitened_error": 6.058628548066916e-07,
+                "time_s": 5.200000047683716
+            },
+            {
+                "kind": "position",
+                "node": 12,
+                "squared_whitened_error": 0.03760308761747906,
+                "time_s": 5.400000095367432
+            },
+            {
+                "kind": "velocity",
+                "node": 12,
+                "squared_whitened_error": 0.1355648597742395,
+                "time_s": 5.400000095367432
+            },
+            {
+                "kind": "imu",
+                "node": 12,
+                "squared_whitened_error": 2.503102248982891e-07,
+                "time_s": 5.400000095367432
+            },
+            {
+                "kind": "position",
+                "node": 13,
+                "squared_whitened_error": 0.019482167396404505,
+                "time_s": 5.6000001430511475
+            },
+            {
+                "kind": "velocity",
+                "node": 13,
+                "squared_whitened_error": 0.0373197280068058,
+                "time_s": 5.6000001430511475
+            },
+            {
+                "kind": "imu",
+                "node": 13,
+                "squared_whitened_error": 1.5933727353939384e-07,
+                "time_s": 5.6000001430511475
+            },
+            {
+                "kind": "position",
+                "node": 14,
+                "squared_whitened_error": 0.007910945050679873,
+                "time_s": 5.800000190734863
+            },
+            {
+                "kind": "velocity",
+                "node": 14,
+                "squared_whitened_error": 0.06336201224956776,
+                "time_s": 5.800000190734863
+            },
+            {
+                "kind": "imu",
+                "node": 14,
+                "squared_whitened_error": 3.1686356949324944e-07,
+                "time_s": 5.800000190734863
+            },
+            {
+                "kind": "position",
+                "node": 15,
+                "squared_whitened_error": 0.04939813690354271,
+                "time_s": 6
+            },
+            {
+                "kind": "velocity",
+                "node": 15,
+                "squared_whitened_error": 0.08383949960420616,
+                "time_s": 6
+            },
+            {
+                "kind": "imu",
+                "node": 15,
+                "squared_whitened_error": 1.4591913901157952e-07,
+                "time_s": 6
+            },
+            {
+                "kind": "bias_prior",
+                "node": 0,
+                "squared_whitened_error": 0.13776044057815587,
+                "time_s": 0.6000001430511475
+            },
+            {
+                "kind": "slope_prior",
+                "node": 0,
+                "squared_whitened_error": 0,
+                "time_s": 0.6000001430511475
+            },
+            {
+                "kind": "scale_prior",
+                "node": 0,
+                "squared_whitened_error": 0.007708889926891186,
+                "time_s": 0.6000001430511475
+            }
+        ],
+        "seed_comparison_performed": false,
+        "seeds": [
+            {
+                "acc_bias_m_s2": [
+                    -0.006816588607193223,
+                    -0.019457770492134964,
+                    0.08547102900055635
+                ],
+                "converged": true,
+                "gyro_bias_rad_s": [
+                    0.005177064510296569,
+                    -0.0022162037426276694,
+                    0.0038687420999529713
+                ],
+                "heading_deg": null,
+                "iterations": 9,
+                "objective": 1.1311415504595435,
+                "position_residual_rms_m": 0.3001748180099842,
+                "velocity_residual_rms_m_s": 0.09619645515281543
+            }
+        ],
+        "selected_heading_deg": null,
+        "start_s": 0.6000001430511475,
+        "stationary_interval_s": null,
+        "stopping": {
+            "bias_settled_tolerance": 1e-06,
+            "lambda_upper_bound": 1000000000000,
+            "last_pass_mean_relative_decrease": 4.0318682836598e-05,
+            "passes": 3,
+            "repreintegration_cost_difference": 1.5578845917039628e-07,
+            "rule": "settled",
+            "slow_tail": {
+                "max_mean_relative_decrease": 1e-04,
+                "max_nrms": 2,
+                "window": 20
+            }
+        }
+    },
+    "fixture": "bridged_hole",
+    "outcome": "succeeded",
+    "progress": [
+        "Starting fit",
+        "Integrating IMU factors",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 1",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 2",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 3",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 4",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 5",
+        "Integrating IMU factors",
+        "Integrating IMU factors",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 1",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 2",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 3",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 4",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 5",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 6",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 7",
+        "Integrating IMU factors",
+        "Integrating IMU factors",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 1",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 2",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 3",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 4",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 5",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 6",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 7",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 8",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 9",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 10",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 11",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 12",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 13",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 14",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 15",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 16",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 17",
+        "Integrating IMU factors",
+        "Integrating IMU factors",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 1",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 2",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 3",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 4",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 5",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 6",
+        "Segment 1 of 1: prefix 60 s, pass 1, iteration 7",
+        "Integrating IMU factors",
+        "Integrating IMU factors",
+        "Segment 1 of 1: pass 1, iteration 1",
+        "Segment 1 of 1: pass 1, iteration 2",
+        "Segment 1 of 1: pass 1, iteration 3",
+        "Segment 1 of 1: pass 1, iteration 4",
+        "Segment 1 of 1: pass 1, iteration 5",
+        "Integrating IMU factors",
+        "Segment 1 of 1: pass 2, iteration 1",
+        "Segment 1 of 1: pass 2, iteration 2",
+        "Segment 1 of 1: pass 2, iteration 3",
+        "Integrating IMU factors",
+        "Segment 1 of 1: pass 3, iteration 1",
+        "Segment 1 of 1: pass 3, iteration 2",
+        "Integrating IMU factors",
+        "Integrating IMU factors",
+        "Pass 1, iteration 1",
+        "Pass 1, iteration 2",
+        "Pass 1, iteration 3",
+        "Pass 1, iteration 4",
+        "Integrating IMU factors",
+        "Pass 2, iteration 1",
+        "Pass 2, iteration 2",
+        "Pass 2, iteration 3",
+        "Integrating IMU factors",
+        "Pass 3, iteration 1",
+        "Pass 3, iteration 2",
+        "Integrating IMU factors"
+    ],
+    "rows": 540,
+    "trace": {
+        "converged": true,
+        "history": [
+            [
+                0,
+                0,
+                571913467.3634286,
+                5.753114682260136
+            ],
+            [
+                0,
+                1,
+                5.753114682260136,
+                1.1311474401908905
+            ],
+            [
+                0,
+                2,
+                1.1311474401908905,
+                1.131141438329263
+            ],
+            [
+                0,
+                3,
+                1.131141438329263,
+                1.131141438326464
+            ],
+            [
+                1,
+                0,
+                1.131822072052949,
+                1.1311448770231347
+            ],
+            [
+                1,
+                1,
+                1.1311448770231347,
+                1.1311411931383397
+            ],
+            [
+                1,
+                2,
+                1.1311411931383397,
+                1.1311411931316915
+            ],
+            [
+                2,
+                0,
+                1.1312325938571008,
+                1.1311413742793044
+            ],
+            [
+                2,
+                1,
+                1.1311413742793044,
+                1.1311413742407717
+            ]
+        ],
+        "initializer": {
+            "segment_length_s": 600,
+            "segments": [
+                {
+                    "anchor_s": 0.6000001430511475,
+                    "anchor_sacc_m_s": 0.3,
+                    "converged": true,
+                    "end_s": 6,
+                    "fallback": false,
+                    "growth_stop": "observable",
+                    "gyro_bias_rad_s": [
+                        0.005178739723961641,
+                        -0.0022102446266998857,
+                        0.003869935578795527
+                    ],
+                    "index": 0,
+                    "iterations": 10,
+                    "prefix_end_s": 6,
+                    "prefix_fits": 4,
+                    "prefix_iterations": 17,
+                    "prefix_length_s": 60,
+                    "prefix_on_limit": false,
+                    "prefix_passes": 1,
+                    "prefix_start_s": 0.6000001430511475,
+                    "segment_on_limit": false,
+                    "start_gyro_bias_rad_s": [
+                        0.005072699197518796,
+                        -0.0019075082383737914,
+                        0.003934109895184157
+                    ],
+                    "start_quaternion_xyzw": [
+                        0.0032056427128316603,
+                        0.005272836236294512,
+                        -0.006374278085541703,
+                        0.9999606440414097
+                    ],
+                    "start_s": 0.6000001430511475,
+                    "yaw_sigma_deg": 17.612520436078984
+                }
+            ]
+        }
+    }
+}

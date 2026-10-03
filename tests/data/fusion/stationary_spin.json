@@ -10,7 +10,7 @@
             "widened_samples": 0,
             "widening_half_width_s": 2.5
         },
-        "algorithm": "batch-temperature-bias-v7",
+        "algorithm": "batch-temperature-bias-v8",
         "anchor_time_s": null,
         "configuration": {
             "accel_fs_g": 16,
@@ -50,6 +50,8 @@
         "input": {
             "epoch_utc_s": 1700000000.1,
             "gnss_count": 200,
+            "gnss_holes": [
+            ],
             "height_method": "CSV hMSL used as approximate ellipsoid height in GeographicLib local frame",
             "imu_count": 1001,
             "origin": [

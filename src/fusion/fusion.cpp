@@ -1,8 +1,10 @@
 #include "fusion/fusion.h"
 
-#include <algorithm>
 #include <exception>
 #include <new>
+#include <stdexcept>
+
+#include <QString>
 
 #include "fusion/factorgraphfit.h"
 #include "fusion/fitcovariance.h"
@@ -19,10 +21,15 @@ namespace Detail {
 
 namespace {
 
-// A GNSS interval above max(this many seconds, this many median intervals) is
-// an outage.
-constexpr double kGnssOutageSeconds = 2.;
-constexpr double kGnssOutageMedians = 5;
+// The longest hole in the fixes the fit bridges, s. A hole is spanned by one
+// preintegrated IMU factor, into which the bias and the scale enter to first
+// order within a pass, and the settle test rebuilds the graph at the fitted
+// values; over one factor spanning a long hole that correction is poor enough
+// that the passes stop contracting. Measured on the synthetic long-hole
+// recording (docs/SENSOR_FUSION.md section 6): every hole up to 40 s settles,
+// 50 s is marginal and 60 s cycles. The limit is twice the longest hole of the
+// reference corpus.
+constexpr double kLongestBridgedHoleSeconds = 30;
 
 /// Everything decided before the fit starts.
 struct FitPlan {
@@ -47,14 +54,25 @@ FitPlan planFit(const Channels &channels, const Tuning &baseTuning)
     // The IMU gap rule is the application's continuity rule on the whole
     // recording's IMU axis: an interval longer than its hole threshold is
     // missing data, for the window checks and the attitude propagation alike.
+    // It is the one disconnection. A hole in the fixes with the IMU running
+    // through it is bridged by the one IMU factor that spans the interval,
+    // whose covariance prices the hole, up to the longest the fit bridges.
     // prepareInput() guaranteed finite, strictly increasing axes and
     // requireUsableRecording() three samples of each, so both are finite.
     const double imuInterval = SampleContinuity::nominalInterval(full.imuTime);
     plan.tuning.maxGap = SampleContinuity::holeThreshold(full.imuTime);
     plan.window = fittedWindow(full, plan.prepared.usableStart, full.gnssTime.back());
     validateSamples(plan.window, plan.tuning);
-    requireNoGnssOutage(plan.window, std::max(kGnssOutageSeconds,
-                                              kGnssOutageMedians*SampleContinuity::nominalInterval(full.gnssTime)));
+    for (const GnssHole &hole : gnssHoles(plan.window)) {
+        if (hole.length > kLongestBridgedHoleSeconds) {
+            // QString::number, as the IMU gap's reason: not subject to the C
+            // locale Qt installs on Unix.
+            const QString message = QStringLiteral("GNSS hole of ") + QString::number(hole.length, 'f', 1)
+                + QStringLiteral(" s; fusion bridges at most ") + QString::number(kLongestBridgedHoleSeconds)
+                + QStringLiteral(" s");
+            throw std::invalid_argument(message.toStdString());
+        }
+    }
     // The configuration's checks come after every check of the recording
     // itself, so that a recording's own defect is the reason it reports: the
     // datasheet entry, then the lattice of every reading, then the rates.

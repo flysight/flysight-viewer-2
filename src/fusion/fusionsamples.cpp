@@ -230,14 +230,16 @@ void requireUsableRecording(const Samples &recording, double epoch, double usabl
     requirePositiveSigmas(recording);
 }
 
-void requireNoGnssOutage(const Samples &window, double limit)
+std::vector<GnssHole> gnssHoles(const Samples &window)
 {
-    // A large GNSS outage makes fusion unavailable even if the IMU happened to
-    // continue: segments are never joined.
-    for (size_t k = 1; k < window.gnssTime.size(); ++k) {
-        if (window.gnssTime[k] - window.gnssTime[k - 1] > limit)
-            throw std::invalid_argument("GNSS gap: fusion unavailable for a disconnected session");
+    const std::vector<double> &t = window.gnssTime;
+    const double threshold = SampleContinuity::holeThreshold(t);
+    std::vector<GnssHole> holes;
+    for (size_t k = 1; k < t.size(); ++k) {
+        if (SampleContinuity::isHoleBefore(t, k, threshold))
+            holes.push_back({t[k - 1], t[k] - t[k - 1]});
     }
+    return holes;
 }
 
 void requireReadingsOnLattice(const Channels &channels)

@@ -146,8 +146,8 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | Test | Covers |
 |------|--------|
 | `tst_solver_smoke` | GTSAM's exported CMake target compiles, links and runs in a test: the install is the shipped configuration (`4.3a0`, TBB on, bundled Eigen 3.4, built without Boost: `GTSAM_ENABLE_BOOST_SERIALIZATION` and `GTSAM_USE_BOOST_FEATURES` are `0`), a small pose graph optimizes to its analytic answer (Eigen, METIS, TBB, library loading), and the main thread really has the 64 MiB stack of `flysight_solver_stack()` (the test uses 48 MiB of it; with a default stack it crashes). Label `fusion`. Nothing from the fusion model is involved |
-| `tst_fusion_golden` | The fusion kernel (`flysight_fusion`) through its public API, `src/fusion/fusion.h`, only. What it reaches: `Fusion::run()` on the fourteen committed synthetic fixtures and nothing internal. In spec order: the initializer's prefix and segment fits are boundaries of the same kinds as the full fit's, so cancellation at each kind of boundary (`Starting fit`, graph construction, a prefix fit iteration, a segment fit iteration, a full fit iteration) leaves an empty result and no state behind, and preparation has no boundary of its own (the first is `Starting fit`); the progress texts at the kernel's boundaries, prefix and segment texts included, are the golden's; two runs are bit-identical with TBB on, a 64 MiB worker thread matches the main thread, and nothing depends on the caller's data. The golden comparison: for every fixture the fit reproduces the goldens captured from the kernel by `fusion_golden_capture` (three successes: twenty-one channels, the four accuracies among them, and the diagnostics with their `configuration`, `initializer`, `stopping`, `quality`, `model` and `accuracy` objects; eleven rejections: the exact reason, two of them the configuration's checks, `reject_lattice` and `reject_rate`), the channel writer of the capture tool is the inverse of the loader on the committed files (and the hex sample form round-trips signed zero, a NaN and a subnormal by bit pattern), and the comparator holds its bounds, among them the floors of the accuracies (`headingAcc` the heading's, `tiltAcc` the degrees', the accuracy account's constants and counts exact) and the rule for the time of the largest step correction, an argmax: not compared in portable mode, bit for bit in exact mode (sensor-fusion-jobs acceptance 4; section 11; fusion-reconstruction items 917-919, 923, 925, 929, 937; noise-model items 1008, 1010, 1022, 1027, 1034, 1040, 1044, 1045, 1051). Label `fusion` |
-| `tst_fusion_kernel` | The kernel's internals through the seams of `src/fusion/` (the only test that includes those headers), with the literal expectations of the reference's self-test: the shared unwrap rule, preintegration across exact boundaries, every validation defect, backward attitude propagation, the propagation refusing an IMU interval above the threshold its caller gives it (`propagationRefusesIntervalAboveItsThreshold`), the IMU gap limit as the continuity rule's threshold, an interval of 1.55 nominal intervals rejected and one of 1.45 not (`imuGapRuleIsTheContinuityThreshold`; sample-continuity item 1211), heading freedom, the reconstruction's timing and its yaw share between two states at rest, an exact constant-velocity fit published exactly by the reconstruction, TBB really on. In spec order: the segmented initializer (segment cutting on fixes and the merge of a short final piece, a window shorter than one segment, the smallest-sAcc anchor and the carried-back start, prefix growth on the marginal yaw sigma about the vertical, the growth stop when a doubling gains nothing, the prefix budget of one pass and 50 iterations and starts that end on the limit, the fallback when every prefix start fails, its progress texts and diagnostics keys, the four synthetic initializer recordings of the specification and `coarse_maneuver`); the stopping rule (the bias-settled cost test, the slow tail accepted and refused on each bound, non-convergence and a never-settling bias as solver failures with their failure shapes, damping saturated at a forced ceiling of 1e5 as the solver failure `damping saturated` where the linearization still predicts a decrease, a stall at the ceiling where it predicts none settled (the exact constant-velocity recording from its exact start under a ceiling at the library's initial damping) and the predicted decrease on a hand-built graph (`saturationAtAMinimumIsSettled`), and the three fits and their prefix fits bit for bit the same under a ceiling of 1e5 and of 1e12); the noise model by configuration (the datasheet's per-sample sigma and integration density against the formula for the fixtures' configurations, bit for bit in exact mode, an entry for every listed value of every key, the configurations without one rejected naming the key; the lattice check finding the coarsest range, a legacy-style truncated reading, the tolerance's edges and every fixture's range; the rate check's 10 % either side; the configuration's checks after every other check; `configuration` and `model.noise` in the diagnostics) and the step model (no sampling term on a constant signal, the sampling term against its derivation for whole and part steps of an unevenly sampled quadratic and against the integration's own departure from the exact integral, the rotation remainder against its derivation on a constant turn and against a thousand-fold subdivided integration on a ramp, the covariances read through the observer); the temperature-dependent gyro bias (the graph shape with `T_ref`, the scaled IMU factor and the slope and scale priors last, the reconstruction at each interval's own bias (the attitude part of the mismatch), a recording without the temperature channel rejected by name, a constant temperature leaving `b1` at its prior and, with the scale held at one by a prior a thousand times tighter than the datasheet's, agreeing with the constant-bias fit, the drifting-bias recording recovering `b1` within 20 % in at most 30 iterations); the scale state (preintegrating the readings at a scale against preintegrating the divided readings at unit scale, and at any scale the same bits with or without the scale Jacobian and the observer, whose transition is the library's update of the step (`preintegrationDividesByTheScale`); the scale Jacobian against central differences, which it would miss without the half-step turn's term (`scaleJacobianMatchesCentralDifferences`); the scaled IMU factor's seven Jacobians against numerical derivatives, and its equality, bit for bit, with the stock `ImuFactor` at the interval bias at its linearization scale and at the bias itself at zero slope and unit scale (`scaleFactorJacobians`); the graph with the state, the scale prior last, and the constant model's without it (`scaleGraphShape`); every factor of a converged fit's graph preintegrated at the fitted scale (`fitRepreintegratesAtTheFittedScale`); the reconstruction at the fitted scale (`reconstructionUsesTheFittedScale`); `rest_throughout` leaving every factor at one within its prior (`restLeavesTheScaleAtItsPrior`); `scale_recording` recovering a 2 % accelerometer factor, the position misfit falling against the fit with the scale held at one (`scaleRecordingRecoversTheFactor`); `model.scale` and the `scale_prior` residual in the diagnostics (`diagnosticsReportTheScale`)). The accuracy: the covariance step's joint covariance of every adjacent pair of fix states with the globals against the library's joint marginals (`covarianceMatchesJointMarginals`), its first node's heading against the heading check on every fit and recording (`firstNodeHeadingIsTheHeadingCheck`), the composition at every tenth sample of `coarse_maneuver` against a graph with a state at every integration edge (`sampleCovarianceMatchesTheEdgeGraph`) and, on a fix, the fix's own marginal (`sampleOnAFixHasTheFixMarginal`), the attitude and acceleration formulas on known answers (`attitudeAccuracyFollowsTheNavigationFrame`, `accelerationAccuracyFollowsItsPropagation`), the widening's window and factor on hand-built residuals, one at the model and grown where a sigma is understated three times, and the published accuracies widened by it bit for bit (`wideningWindowAndFactor`, `wideningIsOneAtTheModel`, `wideningGrowsWithAnUnderstatedSigma`), the published accuracies finite and positive and never lowered by doubling the GNSS accuracies (`accuraciesFiniteAndPositive`, `gnssAccuracyScalingNeverLowersThem`), the undetermined heading of `coarse_linear` at the cap with tilt and acceleration against a gauge-fixed reference (`undeterminedHeadingIsCapped`), a failed covariance step changing nothing else, through the success assembly's seam (`covarianceFailureLeavesTheFitAsItIs`), and the scale factors' sigmas against the library's marginal (`diagnosticsReportTheScaleSigma`). The IMU-rate reconstruction pass (`reconstructAtImuRate()` and its per-interval seam `reconstructInterval()`): equivalence with the held-ends dense graph on `coarse_maneuver` and on a rotating recording (whose published acceleration is also measured against the truth at 13, 25 and 100 Hz), exact ends and P_n equal to the factor covariance, the published time axis with a sample on a fix published once, the summaries equal to the seam's maxima, sharing by noise, zero mismatch (the step corrections zero without rotation, and minus the integration's rotation lag under it), and consistency of the published acceleration with the published velocity. The publication: the twenty-one channels the pipeline publishes are, bit for bit, the reconstruction on the test's own fit of each success fixture with its own covariance step composed and its own widening, and the four numbers of the diagnostics its summaries (`imuRateIsWhatTheFitPublishes`); the success diagnostics' key set with `accuracy`, `dense_output`, `max_step_correction_m_s2`, `max_step_correction_time_s` and `max_velocity_mismatch_m_s`, and limitations that no longer disclaim the reconstruction; the time axis is the IMU samples in `[first fix, last fix)` of the window, in the number `imu_outputs` says, on the three fits and on a recording whose GNSS (25 Hz) is faster than its IMU (12.5 Hz) (`imuRateAxisWhenGnssIsFasterThanImu`). The golden comparison: the fit trace (the segment account and the cost before and after every optimizer iteration) against the goldens, which localizes a golden failure to a stage, and the chosen prefix fit's iteration count against the golden's (acceptance 4; section 11; fusion-reconstruction items 901-919, 923-927, 931-937; noise-model items 1008-1011, 1013-1015, 1017-1023, 1025, 1026, 1028, 1029, 1031, 1033-1035, 1040, 1044, 1046-1048, 1051-1054, 1056-1060). Label `fusion` |
+| `tst_fusion_golden` | The fusion kernel (`flysight_fusion`) through its public API, `src/fusion/fusion.h`, only. What it reaches: `Fusion::run()` on the fourteen committed synthetic fixtures and nothing internal. In spec order: the initializer's prefix and segment fits are boundaries of the same kinds as the full fit's, so cancellation at each kind of boundary (`Starting fit`, graph construction, a prefix fit iteration, a segment fit iteration, a full fit iteration) leaves an empty result and no state behind, and preparation has no boundary of its own (the first is `Starting fit`); the progress texts at the kernel's boundaries, prefix and segment texts included, are the golden's; two runs are bit-identical with TBB on, a 64 MiB worker thread matches the main thread, and nothing depends on the caller's data. The golden comparison: for every fixture the fit reproduces the goldens captured from the kernel by `fusion_golden_capture` (four successes, `bridged_hole` among them with a 2.6 s hole in its fixes bridged by the IMU: twenty-one channels, the four accuracies among them, and the diagnostics with their `configuration`, `initializer`, `stopping`, `quality`, `model` and `accuracy` objects and the input audit's `gnss_holes`; ten rejections: the exact reason, two of them the configuration's checks, `reject_lattice` and `reject_rate`), the channel writer of the capture tool is the inverse of the loader on the committed files (and the hex sample form round-trips signed zero, a NaN and a subnormal by bit pattern), and the comparator holds its bounds, among them the floors of the accuracies (`headingAcc` the heading's, `tiltAcc` the degrees', the accuracy account's constants and counts exact) and the rule for the time of the largest step correction, an argmax: not compared in portable mode, bit for bit in exact mode (sensor-fusion-jobs acceptance 4; section 11; fusion-reconstruction items 917-919, 923, 925, 929, 937; noise-model items 1008, 1010, 1022, 1027, 1034, 1040, 1044, 1045, 1051; GNSS-holes items 1301, 1305, 1307, 1309, 1311). Label `fusion` |
+| `tst_fusion_kernel` | The kernel's internals through the seams of `src/fusion/` (the only test that includes those headers), with the literal expectations of the reference's self-test: the shared unwrap rule, preintegration across exact boundaries, every validation defect, backward attitude propagation, the propagation refusing an IMU interval above the threshold its caller gives it (`propagationRefusesIntervalAboveItsThreshold`), the IMU gap limit as the continuity rule's threshold, an interval of 1.55 nominal intervals rejected and one of 1.45 not (`imuGapRuleIsTheContinuityThreshold`; sample-continuity item 1211), heading freedom, the reconstruction's timing and its yaw share between two states at rest, an exact constant-velocity fit published exactly by the reconstruction, TBB really on. In spec order: the segmented initializer (segment cutting on fixes and the merges of a short final piece and of any piece with fewer than three fixes, a window shorter than one segment, the smallest-sAcc anchor and the carried-back start, prefix growth on the marginal yaw sigma about the vertical, the growth stop when a doubling gains nothing, the prefix budget of one pass and 50 iterations and starts that end on the limit, the fallback when every prefix start fails, its progress texts and diagnostics keys, the four synthetic initializer recordings of the specification and `coarse_maneuver`); the stopping rule (the bias-settled cost test, the slow tail accepted and refused on each bound, the IMU normalized RMS's alone included (a fit that satisfies its fixes while it ignores the IMU), non-convergence and a never-settling bias as solver failures with their failure shapes, damping saturated at a forced ceiling of 1e5 as the solver failure `damping saturated` where the linearization still predicts a decrease, a stall at the ceiling where it predicts none settled (the exact constant-velocity recording from its exact start under a ceiling at the library's initial damping) and the predicted decrease on a hand-built graph (`saturationAtAMinimumIsSettled`), and the four fits and their prefix fits bit for bit the same under a ceiling of 1e5 and of 1e12); the noise model by configuration (the datasheet's per-sample sigma and integration density against the formula for the fixtures' configurations, bit for bit in exact mode, an entry for every listed value of every key, the configurations without one rejected naming the key; the lattice check finding the coarsest range, a legacy-style truncated reading, the tolerance's edges and every fixture's range; the rate check's 10 % either side; the configuration's checks after every other check; `configuration` and `model.noise` in the diagnostics) and the step model (no sampling term on a constant signal, the sampling term against its derivation for whole and part steps of an unevenly sampled quadratic and against the integration's own departure from the exact integral, the rotation remainder against its derivation on a constant turn and against a thousand-fold subdivided integration on a ramp, the covariances read through the observer); the temperature-dependent gyro bias (the graph shape with `T_ref`, the scaled IMU factor and the slope and scale priors last, the reconstruction at each interval's own bias (the attitude part of the mismatch), a recording without the temperature channel rejected by name, a constant temperature leaving `b1` at its prior and, with the scale held at one by a prior a thousand times tighter than the datasheet's, agreeing with the constant-bias fit, the drifting-bias recording recovering `b1` within 20 % in at most 30 iterations); the scale state (preintegrating the readings at a scale against preintegrating the divided readings at unit scale, and at any scale the same bits with or without the scale Jacobian and the observer, whose transition is the library's update of the step (`preintegrationDividesByTheScale`); the scale Jacobian against central differences, which it would miss without the half-step turn's term (`scaleJacobianMatchesCentralDifferences`); the scaled IMU factor's seven Jacobians against numerical derivatives, and its equality, bit for bit, with the stock `ImuFactor` at the interval bias at its linearization scale and at the bias itself at zero slope and unit scale (`scaleFactorJacobians`); the graph with the state, the scale prior last, and the constant model's without it (`scaleGraphShape`); every factor of a converged fit's graph preintegrated at the fitted scale (`fitRepreintegratesAtTheFittedScale`); the reconstruction at the fitted scale (`reconstructionUsesTheFittedScale`); `rest_throughout` leaving every factor at one within its prior (`restLeavesTheScaleAtItsPrior`); `scale_recording` recovering a 2 % accelerometer factor, the position misfit falling against the fit with the scale held at one (`scaleRecordingRecoversTheFactor`); `model.scale` and the `scale_prior` residual in the diagnostics (`diagnosticsReportTheScale`)). The accuracy: the covariance step's joint covariance of every adjacent pair of fix states with the globals against the library's joint marginals (`covarianceMatchesJointMarginals`), its first node's heading against the heading check on every fit and recording (`firstNodeHeadingIsTheHeadingCheck`), the composition at every tenth sample of `coarse_maneuver` against a graph with a state at every integration edge (`sampleCovarianceMatchesTheEdgeGraph`) and, on a fix, the fix's own marginal (`sampleOnAFixHasTheFixMarginal`), the attitude and acceleration formulas on known answers (`attitudeAccuracyFollowsTheNavigationFrame`, `accelerationAccuracyFollowsItsPropagation`), the widening's window and factor on hand-built residuals, one at the model and grown where a sigma is understated three times, and the published accuracies widened by it bit for bit (`wideningWindowAndFactor`, `wideningIsOneAtTheModel`, `wideningGrowsWithAnUnderstatedSigma`), the published accuracies finite and positive and never lowered by doubling the GNSS accuracies (`accuraciesFiniteAndPositive`, `gnssAccuracyScalingNeverLowersThem`), the undetermined heading of `coarse_linear` at the cap with tilt and acceleration against a gauge-fixed reference (`undeterminedHeadingIsCapped`), a failed covariance step changing nothing else, through the success assembly's seam (`covarianceFailureLeavesTheFitAsItIs`), and the scale factors' sigmas against the library's marginal (`diagnosticsReportTheScaleSigma`). The IMU-rate reconstruction pass (`reconstructAtImuRate()` and its per-interval seam `reconstructInterval()`): equivalence with the held-ends dense graph on `coarse_maneuver` and on a rotating recording (whose published acceleration is also measured against the truth at 13, 25 and 100 Hz), exact ends and P_n equal to the factor covariance, the published time axis with a sample on a fix published once, the summaries equal to the seam's maxima, sharing by noise, zero mismatch (the step corrections zero without rotation, and minus the integration's rotation lag under it), and consistency of the published acceleration with the published velocity. The publication: the twenty-one channels the pipeline publishes are, bit for bit, the reconstruction on the test's own fit of each success fixture with its own covariance step composed and its own widening, and the four numbers of the diagnostics its summaries (`imuRateIsWhatTheFitPublishes`); the success diagnostics' key set with `accuracy`, `dense_output`, `max_step_correction_m_s2`, `max_step_correction_time_s` and `max_velocity_mismatch_m_s`, and limitations that no longer disclaim the reconstruction; the time axis is the IMU samples in `[first fix, last fix)` of the window, in the number `imu_outputs` says, on the four fits and on a recording whose GNSS (25 Hz) is faster than its IMU (12.5 Hz) (`imuRateAxisWhenGnssIsFasterThanImu`). The GNSS holes: on `bridged_hole`, every sample inside its 2.6 s hole published, its heading, tilt and accelerations within three of their own accuracies of the generating trajectory, the position and velocity of the sample covariance of the hole's interval, read through `reconstructInterval()`, growing through the hole and collapsing at the fix after it, and the four published accuracies inside the hole logged against the samples nearest the two fixes around it (`bridgedHoleFollowsTheTruth`); the 30 s hole of `long_hole`, the longest the fit bridges, fitted under the production tuning, its iterations per pass, the accuracies inside the hole and the residuals at the fix after it logged, one IMU factor per interval (`longHoleConverges`); the same recording with a 60 s and a 31 s hole rejected by the cap, the reason naming the length and the limit, and with a 30 s hole passing the plan (`holeAboveTheCapIsRejected`); the cutter merging any piece with fewer than three fixes, on hand-built axes and on `long_hole` under 29.57 s segments, whose two fixes after a cut end the first segment (`sparsePiecesAreMerged`); and `input.gnss_holes` on the four fits and `long_hole` against the continuity authority and the fixtures' construction, in time order on a recording with two holes, absent from a rejection (`gnssHolesInTheAudit`); `bridged_hole` is in every list of the success fixtures' properties. The golden comparison: the fit trace (the segment account and the cost before and after every optimizer iteration) against the goldens, which localizes a golden failure to a stage, and the chosen prefix fit's iteration count against the golden's (acceptance 4; section 11; fusion-reconstruction items 901-919, 923-927, 931-937; noise-model items 1008-1011, 1013-1015, 1017-1023, 1025, 1026, 1028, 1029, 1031, 1033-1035, 1040, 1044, 1046-1048, 1051-1054, 1056-1060; GNSS-holes items 1301-1309 and 1313). Label `fusion` |
 | `tst_fusion_session` | Sensor fusion as a registered calculation (`src/fusion/fusionregistration.cpp`) on real `SessionData` engines bound to the global registry, with the real fit on the test's main thread. What it reaches: the engine's request, prepare / compute / publish and blocker paths on fixture sessions whose effective inputs are bit-identical to the kernel's fixtures, and a natural session through the real input chain. The registration's shape: twelve registrations, the four configuration defaults first, the fit with 26 inputs (all required, `IMU/temperature` the last measurement, the four configuration attributes last) and 22 outputs (the seventeen measurements of the state, the four accuracies and the diagnostics, as a literal list; noise-model item 1033), explicit, title "Sensor fusion". The configuration: the four constant defaults (no inputs, one output each, the default's text), a stored value winning and its removal returning to the default (`configurationDefaults`); the configuration reaching the kernel as numbers for a stated and a defaulted session and as NaN for a stored value that is not a number, a fixture session (which stores its fixture's configuration) fitted to the golden, channels and diagnostics, and the same session without the keys, reading the 12.5 Hz default, rejected by the rate check (`configurationReachesTheKernel`); a recording without keys, logged at 12.5 Hz, fitted under the default (`naturalSessionEndToEnd`) (noise-model items 1004, 1006, 1007, 1010, 1043, 1045, 1050, 1061). In spec order: cancellation at each kind of boundary through the engine's facility publishes and caches nothing (sensor-fusion-jobs acceptance 10); a session with the temperature column carries it to the kernel bit for bit and matches the kernel's direct run, and a session without `IMU/temperature` is `MissingInput` / `NotApplicable` like one without IMU data, a local origin or a time fit (11). The lifecycle: reads of every fusion value, `accH`, the system-time axis, the diagnostics and an interpolated logbook value never run the fit, in any order, nor does the exporter (5); a request runs once, publishes all outputs together, and brings `accH` and `_system_time` with it (6); prepare / compute / publish equals `request()` bit for bit (7); an input change after publication drops everything while markers do not (8); a rejection is a cached result with its reason, `NotProduced` for inspection, and requestable again after an input change (9); blocker inspection reports the fit through on-demand intermediates and never starts it (12); two sessions are independent. The fit declares its kernel's algorithm string as its result version, no output of an explicit built-in has another candidate (`explicitOutputsHaveOneCandidate`), and a fit exported from one session and restored into another is indistinguishable from the fresh one: every channel bit for bit, the diagnostics byte for byte, status, detail, dependency edges (`SCHEMA_VER` among its leaves), blockers and invalidation, and the fit's snapshot lists what provided each name it looked up (`restoredFitIsIndistinguishable`) (fusion-reconstruction items 912, 921, 930). The golden comparison: every published result equals the kernel's goldens. Label `fusion` |
 | `tst_fusion_derived` | What is derived on demand from the fit's published outputs (`src/fusion/fusionregistration.cpp`), without the solver: the fit's outputs are stored as data on real `SessionData` engines bound to the global registry (`syntheticFitSession()`, section 11), and every expected value is an exactly representable literal or, for "one definition", the GNSS calculation on the same samples. The seam's premise: stored `Fusion/<name>` reads back bit for bit and the fit never runs. The registrations of `builtin.fusion.z`, `accAlongTrack` and `accCrossTrack`: on demand, no title or result version, their inputs in order (the track accelerations those of the GNSS ones), one candidate each, the fit their one explicit dependency, and `Fusion/accD` with no second producer (vertical acceleration). On a fixture session that has the fit's inputs and no fit, each waits on the fit alone: `Blocked` by it, merely uncomputed, unavailable, and nothing runs it. Elevation is `_LOCAL_ORIGIN_HMSL` less `down` less `_GROUND_ELEV`, recomputed from an attribute edit without the fit and unavailable when either attribute is not a number. The track accelerations' known answers: along north, reversed, a vertical descent, a wind that turns a skewed ground velocity north, no motion through the air, a wind that is not a number (zero), no stored wind (the constant zero default) and unequal lengths (unavailable). The fused and the GNSS track accelerations agree on the same samples and wind (bit-exact in exact mode, within 4 ulp otherwise). The orientation vocabulary (`src/fusion/orientation.h`): exactly 24 pairs in the enumeration order, the default first, distinct tokens and labels, each token parsing back and nothing else parsing, every body-to-device rotation exact and proper with the columns forward, forward x up and -up; the attribute's one definition, its choices the enumeration, also after the entry point registers on a private registry. The attitude (`builtin.fusion.attitude`, after the orientation's constant default `builtin.default._ORIENTATION`): its registration, waiting on the fit on a fixture session, and on the quaternion stored as data (expected values built by hand from Euler angles and a hand-written default mount, within 1e-9 degrees): a level north-facing body, known heading, pitch and roll, two turns of heading unwrapped and measured from north (unchanged by a GNSS track or a course reference of any kind, and available without GNSS data), roll and pitch in their ranges through a barrel roll and a loop, the forward axis exactly vertical (the body pitched straight up and down between ordinary samples under the default orientation, and a level device under the mounts forward +z and forward -z, the sample whose pitch argument rounds past 1): all three angles published and finite, pitch at +90 or -90, roll in range and the later samples still reading their own angles, side mounts, the fit's own yaw, pitch and roll from a success golden's quaternion under forward +x, up -z (within 1e-6 degrees), an invalid stored orientation (unavailable) and a stored one recomputed without a fit. The Orientation column's model and bulk edit through `ChoiceFixture` on fixture sessions, loaded and as stubs: the default's label with nothing written and its token cached, a token stored and written verbatim, a token outside the list, a label, an empty and an invalid value refused, and the bulk edit setting and refusing (fusion-plots items 806-827, 831, 835, 843, 844, 849, 850, 856-858). Nothing is held to a golden bit for bit (the one golden it reads, `coarse_maneuver`'s, is compared within 1e-6 degrees), so no `_exact` run. Label `fusion` |
 | `tst_fusion_jobs` | The real fit through the executor on a real `SessionModel`, on the executor's 64 MiB worker: one job publishes all twenty-two outputs together, the twenty-one measurements aligned, and announces them through the session model (acceptance 6; noise-model item 1042); the executor gives the bits a synchronous request gives (7); the solver's oneTBB helper threads run at the worker's below-normal priority while they help a fit (`solverThreadsRunAtWorkerPriority`); an input edit during the fit asks the fit to stop at once, ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job, and every one of the twelve fusion plots is `NotApplicable` for it (11; noise-model item 1063); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before the fit, from the published result after it (with the `"records"` stamp in `index.json`), shown by the unloaded row after a restart without a load, and dropped with the record by an input change (`columnOnFusionOutputIsCachedFromRecord`); an altitude marker added at run time and registered again after a restart keeps that column's and the description's cached values of an unloaded session - no load, nothing pending (`altitudeMarkerKeepsColumnsOfUnloadedSession`); once that value of an unloaded session is gone from `index.json` (cleared, or dropped by an exit-marker move made while the application was closed: `_EXIT_TIME` is not bulk-editable, so the test repeats the `LogbookManager` calls of the bulk edit's stub path - temporary load, column marked unsaved, save), the column worker refills it after a restart from the stored fit restored into its temporary copy: the roll at the marker's time, bit-identical to the loaded session's, with no load of the row, no job, no fit and the record's bytes unchanged (`workerRefillsColumnFromStoredFit`); while the loaded row's cell shows the golden's number the moment the job publishes (`dataChanged` for that row only, and the number already there when the view is told); shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the executor delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 11 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
@@ -914,7 +914,7 @@ tighter than the datasheet's (246).
 | 241 | 10 test 4 | longer than two segments with a 1 deg/s linear drift: every segment fit converges; with section 6 the full fit recovers `b1` within 20 % in at most 30 iterations | `tst_fusion_kernel::driftingBiasSegmentsConverge` |
 | 242 | 10 test 5 | a segment whose prefix fits all fail falls back, the diagnostics say so, the full fit still runs | `tst_fusion_kernel::allPrefixFitsFailFallsBack` |
 | 243 | 10 test 6 | bias-settled test: a fit whose cost stops changing converges within two passes | `tst_fusion_kernel::biasSettledByCostTest` |
-| 244 | 10 test 7 | slow tail: a forced final pass at the limit is accepted when both conditions hold and fails when either fails | `tst_fusion_kernel::slowTailAtTheIterationLimit` |
+| 244 | 10 test 7, as amended | slow tail: a forced final pass at the limit is accepted when every condition holds (the mean relative decrease, the position, velocity and IMU normalized RMS below their bounds) and fails when any fails, the IMU normalized RMS alone included (the specification of 1301-1313) | `tst_fusion_kernel::slowTailAtTheIterationLimit` (the row `imu nrms bound fails`) |
 | 245 | 10 test 8, as amended | per-step term: a step without signal change and without rotation has the density covariance exactly; a known second derivative gives the derived sampling term; a constant turn the derived remainder | `tst_fusion_kernel::constantSignalHasNoSamplingTerm`, `samplingTermFollowsTheDerivation`, `rotationRemainderFollowsTheDerivation` |
 | 246 | 10 test 9, as amended | section 6, as amended: a recording without `IMU/temperature` is rejected by the kernel (the reason names the channel) and blocked in a session like any missing input; constant temperature leaves `b1` at its prior and, with the scale factors of the specification of 1001-1065 held at one by a prior a thousand times tighter than the datasheet's, reproduces the constant-bias fit | `tst_fusion_kernel::validationRejectsEachDefect`, `constantTemperatureKeepsSlopeAtPrior`; `tst_fusion_session::missingInputsAreNotApplicable` |
 | 247 | 11, as amended | `docs/` describes the segmented initializer, the stopping rule with its slow tail, the noise model of the specification of 1001-1065 in place of the per-step term, and the temperature-dependent bias, in the place that documents the fusion model | `docs/SENSOR_FUSION.md` sections 4 and 5; `audit fusion-model` (the document describes no retired mechanism: no resting-window detector, candidate window, coarse-only initializer, frozen algorithm, bias-shift test, branch name, or input count from before the temperature channel); `audit noise-model` (no modelling weights, no calibrated slopes; the datasheet's tables and the derivation cited) |
@@ -1660,7 +1660,7 @@ with the scale held, whose agreement figures are unchanged.
 | 1021 | 6 | the fitted scale factors are reported in the diagnostics beside the biases | `tst_fusion_kernel::diagnosticsReportTheScale` (`model.scale`, the `scale_prior` residual last); `tst_fusion_golden::successFixturesMatchGolden`; `manual M49` |
 | 1022 | 6 | the sigma of each fitted scale factor is reported beside it, from the covariance of section 7 | `tst_fusion_kernel::diagnosticsReportTheScaleSigma` (`acc_sigma` and `gyro_sigma` against the library's marginal of S(0), within 1e-6); `tst_fusion_golden::successFixturesMatchGolden` |
 | 1023 | 6 | the 1.14688 schema correction of legacy recordings is not a scale factor and is untouched | `tst_conversion_engine::legacyGyroCorrected`; `tst_fusion_runner::legacySchemaScalesTheGyro`; `audit scale-state` (the kernel never names it) |
-| 1024 | 6, as settled | validation, not tuning: the normalized residuals (position, velocity, IMU) of the reference recordings of `tests/README.md` section 12.2 and of the committed fixtures that fit (the three golden successes; the rejections have no residuals) are reported in the documentation as measured under this model, with the sentence that a value far from one measures what the model does not yet describe; no constant of section 6 is changed to move them | `audit model-validation` (the sentence once and the two paragraphs in `docs/SENSOR_FUSION.md`); `tst_fusion_golden::successFixturesMatchGolden` (the three fits' `quality`); `manual M52` |
+| 1024 | 6, as settled | validation, not tuning: the normalized residuals (position, velocity, IMU) of the reference recordings of `tests/README.md` section 12.2 and of the committed fixtures that fit (the three golden successes; the rejections have no residuals) are reported in the documentation as measured under this model, with the sentence that a value far from one measures what the model does not yet describe; no constant of section 6 is changed to move them | `audit model-validation` (the sentence once and the two paragraphs in `docs/SENSOR_FUSION.md`); `tst_fusion_golden::successFixturesMatchGolden` (the fits' `quality`, four since the GNSS holes); `manual M52` |
 | 1025 | 7, as settled | after convergence, from the converged graph and one factorization: the marginal covariance of every fix state, the joint covariance of each pair of adjacent fix states, and their cross-covariance with the biases and the scale factors, by the clique marginals of one factorization (one multifrontal QR elimination in time order with the globals last, each clique's marginal from its parent's), not by the library's joint marginals; a heading prior of 1000 rad on the first fix, in the factorization only, keeps an undetermined heading finite and moves a determined one by less than 5e-6 of itself | `tst_fusion_kernel::covarianceMatchesJointMarginals` (`coarse_maneuver` at every pair, `drifting_bias` at three, within 1e-6); `audit accuracy-channels` (no `jointMarginalCovariance` in `src`; one elimination, in `fitcovariance.cpp`) |
 | 1026 | 7, as settled | through the reconstruction's pass, the conditional covariance of the state at every IMU sample given the two fixes around it, composed with the covariance of those fixes, the biases and the scales into the covariance of the state at the sample | `tst_fusion_kernel::sampleCovarianceMatchesTheEdgeGraph` (every tenth sample of `coarse_maneuver` against a graph with a state at every edge, within 1e-5), `sampleOnAFixHasTheFixMarginal` |
 | 1027 | 7 | the covariance step runs inside the same cancellable job and is not a cancellation boundary | `tst_fusion_golden::cancelAtEachKindOfBoundary`, `progressMatchesGoldenBoundaries` (the progress texts unchanged); `audit fusion-model` (three `checkpoint(` call sites) |
@@ -1679,7 +1679,7 @@ with the scale held, whose agreement figures are unchanged.
 | 1040 | 8 | the diagnostics show the configuration the fit ran under | `tst_fusion_kernel::diagnosticsReportTheNoiseModel`; `tst_fusion_golden::successFixturesMatchGolden`; `manual M47` |
 | 1041 | 8, 9 | the first start after the change finds every stored fit stale at its recording's load and recomputes it when something switched on needs it, counted in the status bar as any computation | `tst_fusion_store::codeStampChangeDropsRecordOnLoad` (a record stamped `batch-temperature-bias-v5`); `manual M48` |
 | 1042 | 9 | the fit's outputs gain the four channels, and the record stores and restores them with the rest, in the record format as it is | `tst_fusion_store::restoredAfterRestartIsBitIdentical`, `restoredAfterEvictionIsBitIdentical` (twenty-one channels); `tst_fusion_jobs::jobPublishesAllOutputsTogether` (twenty-two outputs) |
-| 1043 | 9 | the algorithm string changes once, for the whole specification | `tst_fusion_session::registrationShape` (`batch-temperature-bias-v7`: `v6` for the specification, `v7` for the lattice rule's fixup after it); `audit stored-results` |
+| 1043 | 9 | the algorithm string changes once, for the whole specification | `tst_fusion_session::registrationShape` (`batch-temperature-bias-v8` now: `v6` for the specification, `v7` for the lattice rule's fixup after it, `v8` for the GNSS holes bridged); `audit stored-results` |
 | 1044 | 9, as settled | the golden fixtures are captured again with the existing tool at the end of each phase that changes numerical results; their time axes are unchanged and checked byte for byte; the last capture's comparison covers the new channels, the scale factors and the configuration in the diagnostics | `tst_fusion_golden::successFixturesMatchGolden` (twenty-one columns), `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; section 11's history paragraphs (the `_time` columns byte-identical at each capture) |
 | 1045 | 9 | the fixtures state their configuration explicitly, so that the stated path (the kernel's and the sessions' fixtures) and the default path (a session without the keys) are both exercised | `tst_fusion_session::configurationReachesTheKernel`, `naturalSessionEndToEnd`, `inputsAreBitIdenticalToFixture`; `tst_fusion_golden::successFixturesMatchGolden` |
 | 1046 | 10 | the kernel derives its noise from the configuration in one unit, the only place the datasheet table exists in code | `tst_fusion_kernel::noiseFollowsTheTable`, `configurationWithoutEntryIsRejected`; `audit noise-model` |
@@ -1692,7 +1692,7 @@ with the scale held, whose agreement figures are unchanged.
 | 1053 | 11 | test: a step with a constant signal has no sampling term; the sampling term of a step follows the derivation on a synthetic signal with a known second derivative; the rotation remainder follows its derivation on a constant turn | `tst_fusion_kernel::constantSignalHasNoSamplingTerm`, `samplingTermFollowsTheDerivation`, `rotationRemainderFollowsTheDerivation` |
 | 1054 | 11, as amended | test: a synthetic recording with the accelerometer 2 % high on one axis recovers the factor within the prior's tolerance, and its position misfit falls against a fit with the scale held at one (amended: by a prior a thousand times tighter than the datasheet's, since every full fit has the state); a recording at rest leaves the scale at one within its prior | `tst_fusion_kernel::scaleRecordingRecoversTheFactor` (`scale_recording`: `s_ax` within 0.01 of 1.02, the position RMS at most 0.9 of the fit's with the scale held at one (`withScaleHeldAtOne`)), `restLeavesTheScaleAtItsPrior` |
 | 1055 | 11, as settled | test: the normalized residuals of the committed fixtures that fit are in the goldens; the reference recordings' are recorded in the documentation | `tst_fusion_golden::successFixturesMatchGolden`; `audit model-validation`; `manual M52` |
-| 1056 | 11 | test: on the committed fixtures a successful fit publishes finite, positive accuracies for every sample, and scaling every GNSS accuracy up never lowers them | `tst_fusion_kernel::accuraciesFiniteAndPositive` (the three fits and the four recordings of the initializer), `gnssAccuracyScalingNeverLowersThem` (every GNSS accuracy doubled: no published accuracy below 1 - 1e-6 of its value); `manual M50` |
+| 1056 | 11 | test: on the committed fixtures a successful fit publishes finite, positive accuracies for every sample, and scaling every GNSS accuracy up never lowers them | `tst_fusion_kernel::accuraciesFiniteAndPositive` (the fits, four since the GNSS holes, and the four recordings of the initializer), `gnssAccuracyScalingNeverLowersThem` (every GNSS accuracy doubled: no published accuracy below 1 - 1e-6 of its value); `manual M50` |
 | 1057 | 11 | test: the heading accuracy of the first node agrees with the heading check | `tst_fusion_kernel::firstNodeHeadingIsTheHeadingCheck` (within 1e-5, or both at the cap, on every fit and recording; the first sample within 1e-3) |
 | 1058 | 11 | test: the acceleration accuracy follows its propagation on synthetic inputs with known answers, and agrees with the library's joint marginals on a short fixture | `tst_fusion_kernel::accelerationAccuracyFollowsItsPropagation`, `sampleCovarianceMatchesTheEdgeGraph` |
 | 1059 | 11 | test: the widening is one where the residuals are at the model, and grows where a factor's sigma is understated by a known ratio | `tst_fusion_kernel::wideningIsOneAtTheModel` (exactly one on every committed fixture; `scale_recording` at its noise: median factor in [0.9, 1.1], every widening at most 1.25), `wideningGrowsWithAnUnderstatedSigma` (understated three times: 2.6 to 3.4 inside, at most 1.25 farther than 2.5 s) |
@@ -1738,6 +1738,33 @@ has no item. No existing item is restated: none states the IMU gap factor
 | 1211 | 5 | one authority in `flysight_model`; the kernel reads its IMU gap rule from it and its own constant, median and statistics unit are gone; the readers consult it; nothing is stored | `tst_fusion_kernel::propagationRefusesIntervalAboveItsThreshold`, `imuGapRuleIsTheContinuityThreshold`, `validationRejectsEachDefect` (a recording of two IMU samples rejected, as the whole IMU axis needs a nominal interval); `audit sample-continuity`; `audit fusion-tooling` (the internal headers) |
 | 1212 | 6 | the IMU gap fixture rejects with the same reason, and the goldens are unchanged bit for bit, the exact runs included | `tst_fusion_golden::rejectionFixturesMatchGolden`, `successFixturesMatchGolden` (and their `_exact` runs); `tst_fusion_kernel::segmentsAreCutOnFixes` |
 | 1213 | 7 | the documents: `COMPUTED_PLOTS.md` section 10, `CALCULATIONS.md` sections 17 and 18 and the derivative helper's contract, `SENSOR_FUSION.md` section 6, `LOCAL_COORDINATES.md` section 9; this file's appendix M, matrix 9.13 and M54 | `audit sample-continuity` (the documents' sentences) |
+
+### 9.14 GNSS holes bridged by the IMU (items 1301-1313)
+
+The specification "GNSS holes bridged by the IMU", stated in
+[appendix N](#appendix-n-the-acceptance-items-of-gnss-holes-bridged-by-the-imu-1301-1313),
+has thirteen acceptance items, 1301-1313; the same four line forms as 9.2.
+"Section" is the section of the specification; its section 1 (motivation)
+has no item. Item 244 (the slow tail) is restated as amended (section 9.3,
+appendix C); item 211's IMU gap rule and the continuity items 1211 and 1212
+stand as they are, and the rejection the specification removes was nobody's
+item.
+
+| Item | Section | Statement | Evidence |
+| --- | --- | --- | --- |
+| 1301 | 2, 3 | connectedness is the IMU's: the IMU gap rule of the continuity authority is the one disconnection; the rule on the spacing of the fixes and its two constants are deleted, and below the cap `planFit()` checks no spacing; the cap is measured, one kernel constant, the longest hole the fit bridges, 30 s, checked once on the fitted window's GNSS axis, a longer hole rejected with a reason naming its length and the limit | `tst_fusion_kernel::longHoleConverges` (a 30 s hole fitted under the production tuning), `holeAboveTheCapIsRejected` (60 s and 31 s rejected, `GNSS hole of 60.0 s; fusion bridges at most 30 s`; 30 s passes the plan), `validationRejectsEachDefect`, `imuGapRuleIsTheContinuityThreshold` (the IMU gap rule unchanged: 1.55 nominal intervals rejected, 1.45 not); `tst_fusion_golden::successFixturesMatchGolden` (`bridged_hole`, a 2.6 s hole, fitted), `rejectionFixturesMatchGolden` (`reject_imu_gap` with its reason); `audit gnss-holes` |
+| 1302 | 2, 3 | every IMU sample inside a hole is published with its state and its accuracies; the position and velocity of the sample covariance grow through the hole and collapse at the next fix, and the four published accuracies, bounded by global terms, are never below their values at the fixes around it (measured false on `bridged_hole` and not asserted; the numbers are in `docs/SENSOR_FUSION.md` section 8); the fit, the reconstruction, the covariance step and the widening are unchanged in kind | `tst_fusion_kernel::bridgedHoleFollowsTheTruth` (the sample covariance's growth and collapse through `reconstructInterval()`; the accuracies logged), `imuRateIsWhatTheFitPublishes`, `imuRateEndsAreTheFit` (the hole's interval one IMU factor whose end covariance is the factor's), `accuraciesFiniteAndPositive`, `wideningIsOneAtTheModel` (on `bridged_hole` too) |
+| 1303 | 2 | the fixes around a hole are ordinary fixes, with their stated sigmas, weighted as every fix | `tst_fusion_kernel::fitRepreintegratesAtTheFittedScale` (one scaled IMU factor per interval, the hole's included), `gnssAccuracyScalingNeverLowersThem` (on `bridged_hole` too), `longHoleConverges` (the residuals at the fix after the hole ordinary entries, logged) |
+| 1304 | 3, 4 | the cutter merges any piece with fewer than three fixes into the piece before it, the first into the one after it; a piece that is the whole window is left alone; a stretch without a fix yields no piece; a window with a sparse middle or first piece is fitted | `tst_fusion_kernel::sparsePiecesAreMerged` (hand-built axes; `long_hole` under 29.57 s segments, three segments, the first ending at the fix before the hole, converged), `segmentsAreCutOnFixes` (unchanged) |
+| 1305 | 3 | `input.gnss_holes`: one `{start_s, length_s}` per hole of the fitted window's GNSS axis, judged by the continuity authority on that axis, in seconds since the epoch, in time order, empty without one; a success key only | `tst_fusion_kernel::gnssHolesInTheAudit`; `tst_fusion_golden::rejectionFixturesMatchGolden` (a rejection's key set unchanged); `audit gnss-holes` (one writer, one walk); `audit sample-continuity` (the walk's file includes the authority) |
+| 1306 | 2, 3 | the algorithm string is `batch-temperature-bias-v8`, and every stored result is dropped once | `tst_fusion_session::registrationShape`, `restoredFitIsIndistinguishable`; `tst_fusion_store::codeStampChangeDropsRecordOnLoad`, `restoredSolverFailureShowsBadge`; `tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord`, `workerRefillsColumnFromStoredFit`; `tst_fusion_kernel::biasSettledByCostTest`, `failureDiagnosticsShape`; `audit stored-results`; `audit gnss-holes` |
+| 1307 | 4 | the bridged fixture: the former GNSS gap rejection's recording is the success fixture `bridged_hole`, its golden captured, the golden suite four fits and ten rejections; inside the hole the published attitude and accelerations within three of their accuracies of the generating trajectory, the four published accuracies never below their values at the samples nearest the two fixes around it (measured false on `bridged_hole` and not asserted; the numbers are in `docs/SENSOR_FUSION.md` section 8), the position and velocity of the sample covariance growing through the hole and collapsing at the fix after it | `tst_fusion_golden::fixturesAreDeterministic`, `successFixturesMatchGolden`, `channelsWriterIsTheInverseOfTheLoader`; `tst_fusion_kernel::fitTraceMatchesGolden`, `bridgedHoleFollowsTheTruth` (the truth within three accuracies and the sample covariance's growth); `audit gnss-holes` |
+| 1308 | 4 | the long hole at the cap and above it: a 30 s hole with the IMU continuous and a manoeuvre on both sides converges under the production tuning, its iterations per pass, the largest accuracy inside the hole and the residuals at the fix after it logged; the same recording with a 60 s hole is rejected naming the length and the limit; the measurement behind the cap is in the documentation, not re-run | `tst_fusion_kernel::longHoleConverges`, `holeAboveTheCapIsRejected`, `initializerFixturesAreDeterministic` (`long_hole` deterministic, stating 104 Hz) |
+| 1309 | 4 | `gnss_holes` in every fit's diagnostics, empty for the three unbroken fixtures and one entry of 2.6 s for `bridged_hole`; no outage constant or check in `src`, `tests` or `docs`; the cap one constant, named by the rejection's reason and the documentation | `tst_fusion_kernel::gnssHolesInTheAudit`; `tst_fusion_golden::successFixturesMatchGolden`; `audit gnss-holes` |
+| 1310 | 4 | the reference recordings `24-09-07/08-35-48` and `24-09-04/13-35-10` through the runner: outcome, rule, iterations per pass, objective, quality, `gnss_holes`, the largest heading and tilt accuracy inside the longest hole against the median, as measured | `audit gnss-holes` (the two recordings' rows in `docs/SENSOR_FUSION.md` section 8); `manual M55` |
+| 1311 | 4 | a new hundred in the acceptance map; `audit_cleanup` and the whole suite green, the exact tests included | `tst_fusion_golden::successFixturesMatchGolden` (and its `_exact` run); `audit gnss-holes` |
+| 1312 | 5 | the documents: `SENSOR_FUSION.md` sections 2, 4 to 8 (section 6 with the cap, the measurement behind it and the slow tail's three bounds); `COMPUTED_PLOTS.md` section 10; `DATA_SCHEMA.md` section 12; `CALCULATIONS.md` section 17; this file's fixture tables, M55, appendix N and matrix 9.14 | `audit gnss-holes` (the documents' sentences) |
+| 1313 | 2, 3 | the slow tail is accepted only when every factor kind fits: the mean relative decrease and the position, velocity and IMU normalized RMS all below their bounds (`slowTailMaxNrms`, name and value unchanged); otherwise `iteration limit`, a solver failure; under it `24-09-04/13-35-10` ends `iteration limit` | `tst_fusion_kernel::slowTailAtTheIterationLimit` (the row `imu nrms bound fails`: position and velocity normalized RMS 0.013 and 0.0005, the IMU's 2.5, refused); `audit gnss-holes` (three bounds compared in `factorgraphfit.cpp`); `manual M55` |
 
 ## 10. Cleanup audit
 
@@ -1856,7 +1883,7 @@ takes about a second. It fails, listing **all** violations, when
   `CMakeLists.txt`; the silent cancellation
   poll or the retired single-anchor initial-attitude type reappears in `src`
   or `tests`; a retired constant-bias algorithm string (the `v1` / `v2`
-  strings the goldens once carried; the goldens say `batch-temperature-bias-v7`,
+  strings the goldens once carried; the goldens say `batch-temperature-bias-v8`,
   and a hit under `tests/data/fusion` means a stale capture) appears in `src`,
   `tests`, `docs` or `README.md`; the name of the branch the kernel was ported
   from appears anywhere but in this file's historical notes and in the
@@ -1996,6 +2023,30 @@ takes about a second. It fails, listing **all** violations, when
   hole"; or `docs/SENSOR_FUSION.md` names a gap factor of 1.6 times the median
   IMU interval or stops stating once that a gap is longer than 1.5 times it.
   Each rule was planted once when it was written;
+- **group `gnss-holes`** (items 1301, 1305-1313): the kernel's former rule
+  on the spacing of the GNSS fixes (its check, its two constants), its
+  rejection reason, or the rejection fixture that tested it is named in
+  `src`, `tests` (this file and the goldens included), `docs`, `README.md` or
+  `CMakeLists.txt`; the cap on a hole's length is defined other than once in
+  `src`, in `fusion.cpp`, or its value is written elsewhere in `src` than in
+  that definition, or `docs/SENSOR_FUSION.md` stops stating it once with the
+  measurement behind it; the slow tail's bound on the normalized RMS is
+  compared in `factorgraphfit.cpp` on other than three lines (position,
+  velocity and IMU); the previous algorithm string appears in `src`, `tests`
+  (the goldens included) or `docs`, this file quoting it as history; the
+  goldens under `tests/data/fusion` hold other than fourteen `algorithm` lines
+  with the current string, four fits, ten rejections and four `gnss_holes`
+  keys; the key `gnss_holes` is written other than once in `src`, or outside
+  `fusionoutput.cpp`; the holes of a window are walked other than once in
+  `src`, outside `fusionsamples.cpp`; `docs/SENSOR_FUSION.md` states a rule on
+  the spacing of the fixes, stops saying once that a hole is "bridged by the
+  IMU", stops naming the slow tail's three bounds, stops naming each of the
+  two reference recordings of its section 8 once, or names the current string
+  other than twice; a document counts the golden fits and rejections as they
+  were before; `docs/COMPUTED_PLOTS.md` stops saying once that the fusion
+  plots "draw through a hole in the GNSS fixes"; or `docs/DATA_SCHEMA.md`
+  (twice) or `docs/CALCULATIONS.md` (once) stops naming the current string.
+  Each rule was planted once when it was written;
 - **group `stored-results`** (items 304, 305, 316, 317, 326, 327, 330, 333,
   334, 346, 348, 349, 921, 930): the record file extension is spelled as a literal in a
   `.cpp` other than `calculationrecord.cpp`; a record file name is built or
@@ -2123,10 +2174,10 @@ takes about a second. It fails, listing **all** violations, when
 - a line of `tests/acceptance_map.txt` is malformed, names a test function, a
   manual step (`**M<k> ` in this file), a CI token or an audit group that does
   not exist, or an item outside 1-19, 101-120, 201-247, 301-350, 401-442,
-  501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065 and 1101; an item
-  1-19 has no line; or an item 101-120, 201-247, 301-350, 401-442, 501-563,
-  601-662, 701-754, 801-863, 901-940, 1001-1065 or 1101 has no test or audit
-  line.
+  501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213 and
+  1301-1313; an item 1-19 has no line; or an item 101-120, 201-247, 301-350,
+  401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101,
+  1201-1213 or 1301-1313 has no test or audit line.
 
 Whether a target **links** GTSAM is not a text question (link items come from
 variables and from other targets' link interfaces). That half of the
@@ -2182,8 +2233,8 @@ wording of the progress texts, which is now the kernel's own; since that
 capture the branch is the source of nothing. Since then every phase that
 changed numerical results re-captured (the stopping rule, the per-step term,
 the segmented initializer, the temperature model, the reconstruction at the IMU
-samples, the mid-step rotation, the documented noise model); the goldens on
-disk are the capture of the last of them.
+samples, the mid-step rotation, the documented noise model, the GNSS holes
+bridged by the IMU); the goldens on disk are the capture of the last of them.
 
 The capture of 2026-09-30 (the reconstruction at the IMU samples): the
 published channels became the fitted state at every IMU sample
@@ -2290,6 +2341,32 @@ before the rule is tried again. What changed: `algorithm` in all fourteen
 `.json` files and nothing else; every channel file and the time axes are
 byte-identical to the previous capture.
 
+The capture of 2026-10-03 (GNSS holes bridged by the IMU), at `683050c`: the
+kernel no longer rejects a recording for the spacing of its GNSS fixes below
+a cap of 30 s; a hole in the fixes is bridged by the one IMU factor that
+spans it, the cutter of the initializer merges any piece with fewer than
+three fixes, the success diagnostics' input audit gains `gnss_holes`, the
+slow tail is bounded on the IMU normalized RMS too, and the algorithm string
+changed to `batch-temperature-bias-v8` (`docs/SENSOR_FUSION.md` sections 4 to
+7). No fixture has a hole longer than the cap or ends on a slow tail, so
+neither of those changes a golden. The
+recording of the former GNSS gap rejection became the fourth success fixture,
+`bridged_hole`: its `.json` and `.channels.txt` are new, the rejection's golden
+was deleted by hand (the tool never deletes one), and the goldens hold four
+fits and ten rejections. What changed besides: in `coarse_linear`,
+`coarse_maneuver` and `stationary_spin`, `algorithm` and an empty
+`input.gnss_holes` and nothing else, since none of them has a hole or a sparse
+piece of the cut; in the ten rejections, `algorithm` alone; and
+`capture.json`. What did not: the three channel files, byte-identical to the
+previous capture's (160, 540 and 995 lines), every other number and text of
+those three `.json` files (`trace`, `progress`, `rows`, `objective`,
+`residuals`, `stopping`, `quality`, `model`, `initializer`, `accuracy`), and
+every rejection's reason. A capture that had changed anything else would have
+been a kernel regression, not a golden update. `bridged_hole` settles in three
+passes (9 iterations, objective 1.131): 16 states, 540 output samples, 260 of
+them inside the hole, and one entry in `gnss_holes` (`start_s` 2.2, `length_s`
+2.6).
+
 ### Fixtures
 
 Generated in code by `tests/fusion/fusionfixtures.cpp`, which uses Qt Core and
@@ -2318,6 +2395,7 @@ what it was before it.
 | `coarse_linear` | The exact constant-velocity case. IMU `t = i*.01`, `i = 0..200`, force `(0, 0, -9.80665)`, rate 0. GNSS `t = .037 + i*.2`, `i = 0..8`, position `(7, 8, 9) + t*(12, -4, 2)`, velocity `(12, -4, 2)`, `hAcc = vAcc = 1`, `sAcc = .1`. Origin index 0. No noise. States 104 Hz; its readings (0 and -2048 counts) are on the lattice already | a window shorter than one segment (one segment, the 60 s prefix covers it), an exactly unobservable yaw (the four prefix starts tie and the first wins), near-zero objective, boundary timing; 9 states, 160 output samples; zero signal change and no rotation, so the sampling term and the remainder are identically zero and this golden's numbers are the densities' alone; a constant 25 degC IMU temperature (`model.gyro_bias`: `b1` at its prior, `t_ref_degc` 25) |
 | `coarse_maneuver` | 6 s. IMU `i = 0..600` at `.01`. GNSS `t = -.163 + j*.2`, `j = 0..32` (one fix before and two after IMU coverage). Origin index 3; `hAcc = 12` for `j < 3`, else `1.5`; `vAcc = 2.5`, `sAcc = .3`. NED acceleration `(1.5 - .4t, .8t, -.6 + .1t^2)`, `v(0) = (20, -5, 3)`, `p(0) = 0`, velocity and position its exact polynomial integrals; attitude identity, so force `= a - (0, 0, 9.80665) + (.05, -.03, .08)` and rate `= (.2, -.15, .3)` deg/s. Uniform noise: force `.02`, rate `.05` deg/s, position `.3`, velocity `.1`; seed `0x8F050002`. States 104 Hz; readings rounded onto the lattice | trimming of fixes outside IMU coverage, a fit that starts after the first fix, the full fit started from the segment fit's solution, non-zero biases and residuals; 28 states, 540 output samples; the sampling term on a noisy 100 Hz stream, where it reads the noise as curvature; a constant 25 degC IMU temperature (`model.gyro_bias`: `b1` at its prior, `t_ref_degc` 25) |
 | `stationary_spin` | 40 s. IMU `i = 0..1000` at `.04` (25 Hz keeps the golden small). GNSS `t = .1 + j*.2`, `j = 0..199`. Position and velocity zero. Force `(0, 0, -9.80665) + (.03, -.02, .05)`; rate `(.2, -.1, .15)` deg/s plus 90 deg/s on `wz` for `t >= 31`. `hAcc = 1`, `vAcc = 1.5`, `sAcc = .1`. Noise: force `.005`, rate `.02`, position `.2`, velocity `.03`; seed `0x8F050003`. States 26 Hz; readings rounded onto the lattice | one segment at rest whose prefix grows from 60 s to 120 s to cover it (yaw unobservable and arbitrary; the anchor is the first fix, every sAcc being equal), yaw through more than two turns (unwrap); 200 states, 995 output samples; the sampling term and the remainder at 25 Hz, including the 90 deg/s step at 31 s and the turn after it; a constant 25 degC IMU temperature (`model.gyro_bias`: `b1` at its prior, `t_ref_degc` 25) |
+| `bridged_hole` | `coarse_maneuver` with GNSS fixes `j = 12..23` removed: a hole of 2.6 s in the fixes, from the fix at 2.037 s to the one at 4.637 s (2.2 s and 4.8 s since the epoch), with the IMU continuous through it. Everything else is `coarse_maneuver`'s | a hole in the fixes bridged by the one IMU factor that spans it: 16 states (9 before the hole, 7 after), 540 output samples, 260 of them inside the hole, each with its state and its accuracies; `input.gnss_holes` one entry (`start_s` 2.2, `length_s` 2.6); against the generating trajectory inside the hole (`tst_fusion_kernel::bridgedHoleFollowsTheTruth`) |
 
 Rejections, each one mutation, with the reason the kernel gives:
 
@@ -2328,7 +2406,6 @@ Rejections, each one mutation, with the reason the kernel gives:
 | `reject_too_few_fixes` | `coarse_linear`, GNSS channels truncated to 2 | Sensor fusion needs GNSS, IMU and shared UTC time conversion |
 | `reject_coverage` | `coarse_linear`, IMU channels truncated to the first 36 samples | Fewer than three GNSS fixes in IMU coverage |
 | `reject_imu_gap` | `coarse_linear`, IMU samples 40..49 removed (.11 s > 1.5 x .01 s, the continuity rule) | IMU gap at 0.353000 s; fusion unavailable across missing data |
-| `reject_gnss_gap` | `coarse_maneuver`, GNSS fixes 12..23 removed (2.6 s > max(2 s, 5 x .2 s)) | GNSS gap: fusion unavailable for a disconnected session |
 | `reject_sigma` | `coarse_linear`, `sAcc[0] = 0` | GNSS measurement sigmas must be positive |
 | `reject_length` | `coarse_linear`, last `velE` sample removed | Missing or mismatched Local/velE |
 | `reject_origin` | `coarse_linear`, `originIndex = 9` | Local origin index outside GNSS samples |
@@ -2344,9 +2421,9 @@ and noise-free), and the missing or malformed temperature is asserted in
 without a golden, and on the engine side in
 `tst_fusion_session::missingInputsAreNotApplicable`.
 
-**Initializer recordings (not goldens).** Five more synthetic recordings: four
-for the initializer's tests of the specification's section 10, and
-`scale_recording` for the scale state's. `initializerFixture(name)`
+**Initializer recordings (not goldens).** Six more synthetic recordings: four
+for the initializer's tests of the specification's section 10,
+`scale_recording` for the scale state's and `long_hole` for the GNSS holes'. `initializerFixture(name)`
 returns them (beside `fusionFixtures()`, which never lists them, so
 `fusion_golden_capture` never sees them); their expected values live in
 `tst_fusion_kernel`, stated from their construction, not in goldens. Rotation
@@ -2362,8 +2439,9 @@ apply.
 | `sacc_anchor` | 300 s at 15 m/s north with a 3 m/s^2 east manoeuvre from `t = 190` to `200` s. GNSS 1 Hz, `t = j`, `j = 0..300`; IMU 12.5 Hz, `t = i / 12.5`, `i = 0..3750` (exact at the integer manoeuvre bounds). Attitude identity. Body force `(.05, aE - .03, -9.80665 + .08)`; gyro `(.2, -.15, .3)` deg/s. `hAcc = 1.5`, `vAcc = 2.5`; `sAcc = 2` for every fix except `j == 200`, where it is `.3`. Noise `.005, .02, .2, .03`; seed `0x8F050006`. 301 states. Temperature 25 degC. States 12.5 Hz; readings rounded onto the lattice | test 3, the sAcc anchor (`smallestSaccFixIsTheAnchor`): the fix at 200 s is the anchor, the first prefix is the unclipped window 170-230 s (61 fixes) and contains the manoeuvre (`prefix_fits` 4, observable at 60 s), and the segment's start attitude is the prefix fit's carried back by the gyro with the prefix fit's bias |
 | `drifting_bias` | 200 s at 15 m/s north with an east manoeuvre in every 30 s block (`aE = 2` for `10 <= s < 15`, `-2` for `15 <= s < 20`, `s` the time within the block) and a gyro z bias that drifts linearly by exactly 1 deg/s over the length while the attitude does not rotate. GNSS 1 Hz, `j = 0..200`; IMU 12.5 Hz, `t = i / 12.5`, `i = 0..2500` (the block of a sample `i / 375`). Attitude identity. Body force `(.05, aE - .03, -9.80665 + .08)`; gyro `(.2, -.15, .3 + t / 200)` deg/s. `hAcc = 1.5`, `vAcc = 2.5`, `sAcc = .3`. Noise `.005, .02, .2, .03`; seed `0x8F050007`. 201 states. The temperature ramps `25 + t / 10` degC (25 to 45 over 200 s), so the drift is `b1 = (0, 0, 0.05 deg/s per degC)` by construction, `T_ref = 35` (the mean of the ramp) and `b0 = (.2, -.15, .8)` deg/s, the bias at `T_ref`. States 12.5 Hz; readings rounded onto the lattice | test 4, the drifting bias (`driftingBiasSegmentsConverge`, under `segmentLength = 60`, `minFinalSegment = 12`: four segments of 60, 60, 60 and 21 fixes, each with its manoeuvre inside the anchor's 30 s half-window): every segment fit converges on a constant bias; the full fit with the temperature model recovers `b1` within 20 % in at most 30 iterations, `t_ref_degc` 35, `b0` at `T_ref`, the three priors last. The constant-temperature variant of test 9 (`constantTemperatureKeepsSlopeAtPrior`: 2501 values of 35.0) is made in the test, not in the generator; `tst_fusion_session::temperatureReachesTheKernel` runs the recording through a session |
 | `scale_recording` | 60 s level, heading north, not rotating, with the accelerometer's x axis 2 % high. GNSS 5 Hz, `t = .1 + j * .2`, `j = 0..299`; IMU 25 Hz, `t = i * .04`, `i = 0..1500`. North acceleration `a = A c x (1 - x)(1 - 2x)`, `A = 5` m/s^2, `c = 10`, `x = tau / P`, `P = 10` s, periodic with zero mean (peak 4.8 m/s^2); the period index and phase by integer arithmetic (`k = i / 250`, `tau = (i - 250 k) * .04`; for GNSS `k = (2 j + 1) / 100`, `tau = .1 + (j - 50 k) * .2`); `vN = 10 + A P c x^2 (1 - x)^2 / 2`, `pN = k (10 P + A P^2 c / 60) + 10 tau + A P^2 c (x^3/3 - x^4/2 + x^5/5) / 2`; east and down zero. Body force `(1.02 (a + .05), -.03, -9.80665 + .08)`; gyro `(.2, -.15, .3)` deg/s. `hAcc = 1`, `vAcc = 1.5`, `sAcc = .1`. Noise `.005, .02, .2, .03`; seed `0x8F050009`. 300 states. Temperature 25 degC. States 26 Hz; readings rounded onto the lattice | clause 54, the scale (`scaleRecordingRecoversTheFactor`): one segment, the full fit with the state recovers `s_ax` 1.0197 (within 0.01 of 1.02), the other factors at one, and its position RMS is 0.774 of the fit's with the scale held at one (`withScaleHeldAtOne`) (0.195 against 0.252 m) from the same initialization |
+| `long_hole` | `longHole(30)` of the generator, which takes the hole's length in whole seconds: 120 s with a 30 s hole in the fixes and the IMU continuous. GNSS 5 Hz, `t = .1 + j * .2`, `j = 0..599`, the fixes `j = 150 .. 148 + 5 L` removed for a hole of `L` seconds (their noise still drawn, so every kept sample is the same bits whatever the hole): at 30 s the fixes `j = 150..298`, the hole running from the fix at 29.9 s to the one at 59.9 s (29.8 s and 59.8 s since the epoch), 150 fixes before it and 301 after; IMU 100 Hz, `t = i * .01`, `i = 0..12000`. Attitude identity. North acceleration of `scale_recording`'s form with `A = 2` m/s^2, `c = 10`, `P = 10` s (peak 1.92 m/s^2), the period index and phase by integer arithmetic (`k = i / 1000`, `tau = (i - 1000 k) * .01`; for GNSS `k = (2 j + 1) / 100`, `tau = .1 + (j - 50 k) * .2`), `vN = 20 + A P c x^2 (1 - x)^2 / 2`, `pN = k (20 P + A P^2 c / 60) + 20 tau + A P^2 c (x^3/3 - x^4/2 + x^5/5) / 2`; east and down constant, `vE = -5`, `vD = 3` m/s. Body force `(a + .05, -.03, -9.80665 + .08)`; gyro `(.2, -.15, .3)` deg/s (`coarse_maneuver`'s biases). `hAcc = 1.5`, `vAcc = 2.5`, `sAcc = .3`. `coarse_maneuver`'s noise: force `.02`, gyro `.05` deg/s, position `.3`, velocity `.1`; seed `0x8F05000A`. `601 - 5 L` states, 451 at 30 s. Temperature 25 degC. States 104 Hz; readings rounded onto the lattice | the long hole at the cap (`longHoleConverges`): the 30 s hole, the longest the fit bridges, fitted under the production tuning, settled in three passes of 5, 4 and 3 iterations, one IMU factor across it, the accuracies inside the hole and the residuals at the fix after it logged; `input.gnss_holes` one entry of 30 s (`gnssHolesInTheAudit`); the same generator with a 60 s and a 31 s hole rejected by the cap, a 30 s one passing the plan (`holeAboveTheCapIsRejected`), those two not listed by `initializerFixture()`; under `segmentLength = 29.57`, `minFinalSegment = 12`, the cut's second piece holds the two fixes at 29.6 and 29.8 s, which end the first segment: three segments, the first ending at the fix before the hole and the second starting at the fix after it (`sparsePiecesAreMerged`). The periodic manoeuvre puts horizontal acceleration in every window, so yaw is observable on both sides of the hole |
 
-The other four recordings carry the constant 25 degC of every
+The other five recordings carry the constant 25 degC of every
 golden fixture: the temperature is a required input, so none is
 temperature-free. `sacc_anchor` and `drifting_bias` logged at 10 Hz until the
 documented noise model: no listed rate is within 10 % of it, so they were
@@ -2385,7 +2463,7 @@ resampled at 12.5 Hz; neither is a golden.
   `converged`, `fallback`, start quaternion and biases; `converged`;
   `history` as `[pass, iteration, cost before, cost after]` rows), `rows` and
   `channels_file`.
-- `<fixture>.channels.txt` (the three successes): line 1
+- `<fixture>.channels.txt` (the four successes): line 1
   `# flysight fusion golden channels v1`; line 2 `# columns: _time north east
   down velN velE velD accN accE accD roll pitch yaw qx qy qz qw headingAcc
   tiltAcc accHAcc accDAcc` (roll, pitch and yaw are the **unwrapped** values;
@@ -2404,7 +2482,7 @@ resampled at 12.5 Hz; neither is a golden.
   `gtsam_use_boost_features`, `gtsam_dir`, and `pinned_in`, the file that
   fixes the solver revision at the recorded repository revision);
   `determinism` (two runs in one process, byte-identical, and the method);
-  `sha256_lf`, the SHA-256 of each of the seventeen fixture files as written
+  `sha256_lf`, the SHA-256 of each of the eighteen fixture files as written
   (LF line endings; `sha256_note`); and `fixture_generator_sha256_lf`, the
   SHA-256 of `tests/fusion/fusionfixtures.cpp` and `.h` with CRLF normalized
   to LF (`fixture_generator_note`: the goldens are valid for those inputs
@@ -2416,7 +2494,7 @@ resampled at 12.5 Hz; neither is a golden.
   time. The commit that holds the goldens is
   `git log -1 -- tests/data/fusion/capture.json`.
 
-About 690 KB in total.
+About 1.0 MB in total.
 
 ### Tolerance policy
 
@@ -2665,20 +2743,21 @@ cmake --build <tree> --config Release
 #    metis-gtsam.dll, cephes-gtsam.dll, tbb12.dll, tbbmalloc.dll). No other solver on PATH.
 PATH="/c/Qt/6.9.3/msvc2022_64/bin:$PWD/third-party/GTSAM-install/bin:$PWD/third-party/oneTBB-install/bin:$PATH" \
   <tree>/FlySightViewer-build/Release/fusion_golden_capture.exe --revision "$(git rev-parse HEAD)"
-#    Check: fourteen lines, one per fixture, in fixture order; the three success fixtures
-#    "succeeded", the eleven reject_* "rejected (<reason>)"; no "** UNEXPECTED **";
-#    then "wrote 18 files to .../tests/data/fusion"; exit status 0. In the written
+#    Check: fourteen lines, one per fixture, in fixture order; the four success fixtures
+#    "succeeded", the ten reject_* "rejected (<reason>)"; no "** UNEXPECTED **";
+#    then "wrote 19 files to .../tests/data/fusion"; exit status 0. In the written
 #    stationary_spin.json, initializer.segments[0].prefix_length_s is 120; in
 #    capture.json, solver.gtsam_dir is under third-party/GTSAM-install.
 
 # 3. For a capture that must not move the time axis (every capture so far): the first
-#    field of every data line of each success fixture's channels file, against HEAD's.
-for f in coarse_linear coarse_maneuver stationary_spin; do
+#    field of every data line of each success fixture's channels file, against HEAD's
+#    (a capture that adds a success fixture checks the ones HEAD has).
+for f in coarse_linear coarse_maneuver stationary_spin bridged_hole; do
   cmp <(git show HEAD:tests/data/fusion/$f.channels.txt | tr -d '\r' | awk 'NR > 2 { print $1 }') \
       <(tr -d '\r' < tests/data/fusion/$f.channels.txt | awk 'NR > 2 { print $1 }') \
     && echo "$f: _time identical"
 done
-#    Check: three "identical" lines. A difference is a defect of the change, not a
+#    Check: four "identical" lines. A difference is a defect of the change, not a
 #    finding to record.
 
 # 4. Reconfigure the application build: the exact-test gate reads capture.json at
@@ -2707,10 +2786,10 @@ What changes, and what it means:
 - `capture.json` changes on every capture (date, revision, hashes).
 - A `<fixture>.json` / `.channels.txt` changes when the phase changed that
   fixture's numbers or texts. A phase that changes the `algorithm` string
-  changes all fourteen `.json` files; the eleven `reject_*.json` otherwise
+  changes all fourteen `.json` files; the ten `reject_*.json` otherwise
   change only when a rejection reason changes. The `algorithm` string is
-  `batch-temperature-bias-v7` since the lattice rule (`v6` was the documented
-  noise model); a capture
+  `batch-temperature-bias-v8` since the GNSS holes bridged by the IMU (`v7`
+  was the lattice rule, `v6` the documented noise model); a capture
   that prints another string is from a stale build.
 - Two captures of the same build are byte-identical; the tool verifies this
   in-process and refuses to write otherwise (exit 3).
@@ -2819,7 +2898,7 @@ objectives, are in section 12.2.
 
 ## 12. Manual verification
 
-Ten scripts. Each step opens with its bold id and, in parentheses, the items
+Twelve scripts. Each step opens with its bold id and, in parentheses, the items
 of `tests/acceptance_map.txt` it is evidence for; the map cites the ids
 (`manual M<k>`) and `audit_cleanup` checks that they exist here.
 
@@ -3188,6 +3267,60 @@ along the gap.
 
 Pass / fail per step goes in the phase report.
 
+### 12.12 GNSS holes bridged by the IMU
+
+What the automated tests cannot show: the two recordings of the reference
+corpus that the kernel rejected for a hole in their GNSS fixes, each with the
+hole in the aircraft during the climb and the IMU running through it. Use the
+preamble of 12.2.
+
+**M55 The reference recordings with a GNSS hole (1310, 1313).** For each of
+`08-35-48` (`TEMP/data/Data comp 3 - FS 2 - serie nr 2 - 00769 (pers.)/24-09-07/08-35-48`,
+unit 00769, 35 minutes) and `13-35-10`
+(`TEMP/data/Data comp 2 - FS 2 - serie nr 2 - 01086 (pers.)/24-09-04/13-35-10`,
+unit 01086, 56 minutes), `<name>` its name and `<recording>` its folder, one
+run on this build with the exit code; the runner writes the CSV only for a fit
+that succeeds, so the command deletes the CSV of an earlier run first:
+
+```bash
+rm -f TEMP/runs/m55-<name>.csv; "$R" --csv TEMP/runs/m55-<name>.csv "<recording>" > TEMP/runs/m55-<name>.json 2> TEMP/runs/m55-<name>.log; echo $?
+```
+
+Then the numbers, in one line per recording: the outcome (`failure`, `None`
+for a success), `stopping.rule`, `stopping.passes`, `seeds[0].iterations`,
+`objective`, `quality`, the fixes and IMU samples (`gnss_states`,
+`imu_outputs`), the number of `input.gnss_holes` and the longest, and from the
+CSV the largest `headingAcc` and `tiltAcc` among the rows whose `_time -
+input.epoch_utc_s` lies strictly inside the longest hole, each against its
+median over all rows:
+
+```bash
+python -c "import json,sys,os,csv,statistics as s; d=json.load(open(sys.argv[1])); H=d.get('input',{}).get('gnss_holes',[]); L=max(H,key=lambda h:h['length_s']) if H else None; e=d.get('input',{}).get('epoch_utc_s'); r=list(csv.reader(open(sys.argv[2]))) if L and os.path.exists(sys.argv[2]) else [[]]; h=r[0]; I=[x for x in r[1:] if L['start_s']<float(x[h.index('_time')])-e<L['start_s']+L['length_s']]; print(d.get('failure'), d.get('stopping',{}).get('rule'), d.get('stopping',{}).get('passes'), d.get('seeds',[{}])[0].get('iterations'), d.get('objective'), d.get('quality'), d.get('gnss_states'), d.get('imu_outputs'), len(H), L, len(I), [(c, max(float(x[h.index(c)]) for x in I), s.median(float(x[h.index(c)]) for x in r[1:])) for c in ('headingAcc','tiltAcc')] if I else None)" TEMP/runs/m55-<name>.json TEMP/runs/m55-<name>.csv
+```
+
+And the iterations of each pass of the full fit, from the progress texts on
+stderr (`Pass p, iteration k`):
+
+```bash
+python -c "import re,sys; n={}; [n.__setitem__(int(m[1]), int(m[2])) for m in (re.match(r'Pass (\d+), iteration (\d+)$', l.strip()) for l in open(sys.argv[1])) if m]; print(n)" TEMP/runs/m55-<name>.log
+```
+
+Expected from the specification: one hole of about 15.6 s on `08-35-48`, ten
+minutes before exit; seven on `13-35-10`, the longest about 13.2 s, in the
+five minutes before exit. `input.gnss_holes` counts every hole of the fitted
+window's fixes, whose threshold at 5 Hz is 0.3 s, so it also lists the short
+holes of 0.4 s and more beside those. Under the slow tail's three bounds
+`13-35-10` is expected to end `iteration limit`, a solver failure (its second
+initializer segment's fit reaches its limit and the full fit starts from that
+attitude): its JSON then holds `failure`, `stopping` and `quality` only, so the
+printout has `None` for the fixes, the holes and the accuracies, and no CSV is
+written. A recording that does not converge is reported with
+its rule and its numbers, not tuned. The printout goes in the phase report as
+it is and, rounded to two or three significant figures, into the table of
+`docs/SENSOR_FUSION.md` section 8 ("GNSS holes on the reference recordings").
+
+Pass / fail and the numbers per step go in the phase report.
+
 ## Appendix A. The acceptance items (1-19)
 
 The numbered acceptance list that section 9.1, `tests/acceptance_map.txt`, and
@@ -3496,8 +3629,11 @@ again by the specification "The scaled IMU factor stands alone" (section 9.3 say
     propagation, the diagnostics say so, and the full fit still runs.
 43. (10, test 6) Bias-settled test: a fit whose cost stops changing converges
     within two passes.
-44. (10, test 7) Slow tail: a forced final pass at the limit is accepted when
-    both conditions hold and is a failure when either fails.
+44. (10, test 7, as amended) Slow tail: a forced final pass at the limit is
+    accepted when every condition holds, the mean relative decrease and the
+    position, velocity and IMU normalized RMS below their bounds, and is a
+    failure when any fails, the IMU normalized RMS alone included (the
+    specification of 1301-1313).
 45. (10, test 8, as amended) Per-step term: a step without signal change and
     without rotation has the density covariance exactly, a signal with a known
     second derivative gives the derived sampling term, and a constant turn the
@@ -5299,3 +5435,114 @@ specification's section numbers in front: thirteen items, 1201-1213 of
     contract state that a stencil never spans a hole; `docs/SENSOR_FUSION.md`
     section 6 states the IMU gap rule as the application's continuity rule at
     1.5; this file has the appendix and the matrix.
+
+## Appendix N. The acceptance items of GNSS holes bridged by the IMU (1301-1313)
+
+The testable statements of the specification "GNSS holes bridged by the
+IMU", as amended after its first implementation (the cap, the growth claim,
+the slow-tail rule), with the specification's section numbers in front:
+thirteen items, 1301-1313 of `tests/acceptance_map.txt`, the rows of section
+9.14. Its section 1 (motivation) has no item. It restates item 244 of
+appendix C as amended.
+
+1. (2, 3) Connectedness is the IMU's. The one disconnection rule is the IMU
+   gap rule of the continuity authority; the kernel's rule on the spacing of
+   the GNSS fixes and its two constants are deleted, and below the cap the
+   plan of a fit runs no check on fix spacing: the preintegrated covariance
+   prices the hole, and the published accuracies report it. The cap is
+   measured, not guessed: one kernel constant, the longest GNSS hole the fit
+   bridges, 30 s, and one check in the plan after the window's validation on
+   the fitted window's GNSS axis (the continuity authority's); a longer hole
+   rejects the recording with a reason that names the hole's length and the
+   limit.
+2. (2, 3) Everything is published. Every IMU sample inside a hole gets its
+   reconstructed state and its accuracies; nothing is suppressed. The growth
+   through a hole is in the position and velocity of the sample covariance,
+   which the fit carries and the reconstruction composes; the four published
+   accuracies (heading, tilt, two accelerations) are bounded by global terms
+   and grow through a hole only where those terms allow; inside a hole they
+   are never below their values at the fixes around it (measured false on
+   `bridged_hole` and not asserted; the numbers are in
+   `docs/SENSOR_FUSION.md` section 8). The fit and the
+   reconstruction are unchanged in kind: the IMU factor spans the hole as it
+   spans any interval, the per-interval pass publishes every IMU sample of
+   the interval, and the covariance step and the widening, whose window
+   extends to the two fixes around a sample when none fall inside it, need
+   nothing.
+3. (2) The fixes around a hole are ordinary fixes: they carry their stated
+   sigmas, and the model weights them as it weights every fix.
+4. (3, 4) The segment cutter merges any sparse piece: a piece with fewer
+   than three fixes is merged into the piece before it, or into the piece
+   after it when it is the first; a piece that is the whole window is left
+   alone, and the fitted window's own rule of three fixes still rejects a
+   recording with fewer; a stretch of whole segment lengths without a fix
+   yields no piece. A window whose cut yields a middle piece of two fixes is
+   fitted, the piece merged into its predecessor; a window whose first piece
+   has two fixes merges it into its successor.
+5. (3) The input audit names the holes: `input` gains `gnss_holes`, one
+   object per hole of the fitted window, each `start_s` (seconds since the
+   epoch, like `start_s` of the fit) and `length_s`, in time order, empty
+   when there is none; a hole is the continuity authority's hole for the
+   GNSS axis of the window.
+6. (2, 3) A change that alters what a fit returns changes the algorithm
+   string: it becomes `batch-temperature-bias-v8`, and every stored result,
+   fits and rejections alike, is dropped at its recording's next load and
+   fitted again once when something needs it.
+7. (4) The bridged fixture: the recording of the former GNSS gap rejection
+   (`coarse_maneuver` with fixes 12 to 23 removed, a 2.6 s hole) becomes the
+   success fixture `bridged_hole`: it converges, its golden is captured, and
+   the golden suite holds four fits and ten rejections. The published
+   attitude and accelerations at every IMU sample inside the hole lie within
+   three of their own published accuracies of the generating trajectory; the
+   four published accuracies inside the hole are never below their values at
+   the published samples nearest the two fixes around it (measured false on
+   `bridged_hole` and not asserted; the numbers are in
+   `docs/SENSOR_FUSION.md` section 8); and the position
+   and velocity parts of the sample covariance, read through the
+   reconstruction's per-interval seam, grow through the hole and collapse at
+   the fix after it.
+8. (4) The long hole, at the cap and above it: a second synthetic recording
+   with `coarse_maneuver`'s kind of motion and a manoeuvre on both sides of
+   a 30 s hole, the IMU continuous, converges under the production tuning;
+   the test logs its iterations per pass, the largest accuracy inside the
+   hole and the residuals at the fix after it. The same recording with a
+   hole above the cap is rejected with the reason naming the length and the
+   limit. The measurement behind the cap (every length to 40 s settles, 50 s
+   marginal, 60 s cycles) is recorded in the documentation, not re-run by a
+   test.
+9. (4) The audit: `gnss_holes` is in the diagnostics of every fit, empty for
+   the three unbroken fixtures and one entry of 2.6 s for `bridged_hole`; no
+   outage constant and no outage check remain in `src`, `tests` or `docs`;
+   the cap is one constant, named by the rejection's reason and the
+   documentation.
+10. (4) The reference recordings: a manual step runs `24-09-07/08-35-48` and
+    `24-09-04/13-35-10` through the runner and records the outcome, the
+    stopping rule, the iterations per pass, the objective, the quality,
+    `gnss_holes`, and the largest heading and tilt accuracy inside the
+    longest hole against the median accuracy of the recording; the numbers
+    are reported as they are.
+11. (4) The acceptance map opens a new hundred for this specification's
+    items; `audit_cleanup` and the whole suite are green, the exact tests
+    included.
+12. (5) The documents: `docs/SENSOR_FUSION.md` section 6 drops the GNSS gap
+    rejection and states that a hole in the fixes up to the cap is bridged by
+    the IMU, with the measurement behind the cap and why a single factor
+    imposes it, and that a longer hole is rejected naming the limit; the
+    stopping-rule paragraph states the slow tail's three bounds; section 2
+    says what the user sees over a hole and that the GNSS plots break there
+    while the fusion plots draw through; the input audit gains `gnss_holes`
+    and the algorithm string's history `v8`, naming both the bridged holes
+    and the continuity rule's 1.5 threshold that the kernel adopted under the
+    compatibility marker's bump to 3; section 8 gains the two recordings'
+    numbers and counts four fits and ten rejections.
+    `docs/COMPUTED_PLOTS.md`'s section on holes gains the sentence about the
+    fusion plots; `docs/DATA_SCHEMA.md` section 12 names `v8`; this file has
+    the fixture table, the new manual step, the appendix and the matrix.
+13. (2, 3) A slow tail is accepted only when every factor kind fits: a final
+    pass at its iteration limit is accepted as a slow tail only when its mean
+    relative decrease over the window is below the bound and the position,
+    velocity and IMU normalized RMS are all below `slowTailMaxNrms`;
+    otherwise the rule is `iteration limit`, a solver failure. The tuning
+    field keeps its name and value. The slow-tail test gains the case where
+    the IMU normalized RMS alone is above the bound and the tail is refused;
+    under the rule `24-09-04/13-35-10` is expected to end `iteration limit`.

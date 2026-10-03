@@ -1,5 +1,5 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Thirteen specifications, thirteen item ranges:
+# (tests/audit/cleanup_audit.cmake). Fourteen specifications, fourteen item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
@@ -22,7 +22,8 @@
 #             221, 227, 230, 235, 245, 246 and 247 are stated as amended. It is
 #             amended by the specification "The scaled IMU factor stands
 #             alone", which has no items of its own: items 219 and 246 are
-#             stated as amended.
+#             stated as amended. It is amended by the specification of
+#             1301-1313: item 244 is stated as amended.
 #   301-350   storing requested calculation results with the session (record
 #             files, restore on load, validity, logbook columns over them):
 #             item = 300 + clause number. Stated in full in
@@ -115,6 +116,15 @@
 #             1202-1210 what the user sees, 1211 the architecture, 1212 the
 #             kernel and its goldens, 1213 the documents. Stated in full in
 #             tests/README.md, appendix M. No existing item is restated.
+#   1301-1313 GNSS holes bridged by the IMU (no rule on the spacing of the
+#             fixes below a cap of 30 s, a longer hole rejected; a hole is
+#             fitted across, every sample inside it published with its
+#             accuracies; the cutter merges any sparse piece; the input audit
+#             names the holes; the algorithm string v8; the slow tail bounds
+#             the IMU misfit too): 1301-1306 the principles and what changes,
+#             1307-1311 the tests, the reference recordings and the map, 1312
+#             the documents, 1313 the slow tail. Stated in full in
+#             tests/README.md, appendix N. Item 244 is restated as amended.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -124,11 +134,11 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the thirteen ranges; every item 1-19 needs a
+# Every item must lie in one of the fourteen ranges; every item 1-19 needs a
 # line; every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662,
-# 701-754, 801-863, 901-940, 1001-1065, 1101 or 1201-1213 needs at least one
-# test or audit line (manual and ci lines never stand alone). The
-# human-readable matrices are tests/README.md sections 9.1 to 9.13; keep them
+# 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213 or 1301-1313 needs at
+# least one test or audit line (manual and ci lines never stand alone). The
+# human-readable matrices are tests/README.md sections 9.1 to 9.14; keep them
 # in sync with this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
@@ -678,7 +688,7 @@
 # 243 - test 6: bias-settled test; a fit whose cost stops changing converges within two passes
 243 tst_fusion_kernel biasSettledByCostTest
 
-# 244 - test 7: slow tail; a forced final pass at the limit is accepted when both conditions hold and fails when either fails
+# 244 - (as amended) test 7: slow tail; a forced final pass at the limit is accepted when every condition holds (the mean relative decrease below its bound, the position, velocity and IMU normalized RMS below theirs) and fails when any fails, the IMU normalized RMS alone included
 244 tst_fusion_kernel slowTailAtTheIterationLimit
 
 # 245 - (as amended) test 8: per-step term; a step without signal change and without rotation has the density covariance exactly, a known second derivative the derived sampling term, a constant turn the derived remainder
@@ -3371,3 +3381,82 @@
 
 # 1213 - (7) COMPUTED_PLOTS.md section 10 "Holes in the data" (what a hole is, nothing drawn, read or differenced across one, the fusion plots on the IMU's axis, the crossing times as the exception); CALCULATIONS.md section 18 and the derivative helper's contract (a stencil never spans a hole) and section 17 (the marker is 3); SENSOR_FUSION.md section 6 (the IMU gap rule at 1.5, three IMU samples); LOCAL_COORDINATES.md section 9 (the track simplified per run); tests/README.md (appendix M, matrix 9.13, M54)
 1213 audit sample-continuity
+
+# ---- GNSS holes bridged by the IMU (PLANS/gnss-holes-bridged.md): thirteen items ----
+
+# 1301 - (2, 3) connectedness is the IMU's: the one disconnection is the IMU gap rule of the continuity authority; the outage rule and its two constants are deleted and, below the cap, planFit runs no check on the spacing of fixes; the cap is measured: one kernel constant, the longest hole the fit bridges, 30 s, checked once in planFit on the fitted window's GNSS axis, a longer hole rejected with a reason naming its length and the limit
+1301 tst_fusion_golden successFixturesMatchGolden
+1301 tst_fusion_golden rejectionFixturesMatchGolden
+1301 tst_fusion_kernel longHoleConverges
+1301 tst_fusion_kernel holeAboveTheCapIsRejected
+1301 tst_fusion_kernel validationRejectsEachDefect
+1301 tst_fusion_kernel imuGapRuleIsTheContinuityThreshold
+1301 audit gnss-holes
+
+# 1302 - (2, 3) everything is published: every IMU sample inside a hole gets its reconstructed state and its accuracies; the position and velocity of the sample covariance grow through the hole and collapse at the next fix, and the four published accuracies, bounded by global terms, are never below their values at the fixes around the hole (measured false on bridged_hole and not asserted; the numbers are in docs/SENSOR_FUSION.md section 8); the fit and the reconstruction are unchanged in kind (one IMU factor per interval, the per-interval pass, the covariance step and the widening need nothing)
+1302 tst_fusion_kernel bridgedHoleFollowsTheTruth
+1302 tst_fusion_kernel imuRateIsWhatTheFitPublishes
+1302 tst_fusion_kernel imuRateEndsAreTheFit
+1302 tst_fusion_kernel accuraciesFiniteAndPositive
+1302 tst_fusion_kernel wideningIsOneAtTheModel
+
+# 1303 - (2) the fixes around a hole are ordinary fixes: they carry their stated sigmas and the model weights them as it weights every fix
+1303 tst_fusion_kernel fitRepreintegratesAtTheFittedScale
+1303 tst_fusion_kernel gnssAccuracyScalingNeverLowersThem
+1303 tst_fusion_kernel longHoleConverges
+
+# 1304 - (3, 4) the segment cutter merges any piece with fewer than three fixes into the piece before it, the first into the piece after it; a piece that is the whole window is left alone; a stretch of whole segment lengths without a fix yields no piece; a window whose cut yields a sparse middle or first piece is fitted
+1304 tst_fusion_kernel sparsePiecesAreMerged
+1304 tst_fusion_kernel segmentsAreCutOnFixes
+
+# 1305 - (3) the input audit names the holes: input.gnss_holes, one {start_s, length_s} per hole of the fitted window's GNSS axis as the continuity authority judges it, start_s in seconds since the epoch, in time order, empty when there is none
+1305 tst_fusion_kernel gnssHolesInTheAudit
+1305 tst_fusion_golden rejectionFixturesMatchGolden
+1305 audit gnss-holes
+1305 audit sample-continuity
+
+# 1306 - (2, 3) a change that alters what a fit returns changes the algorithm string: batch-temperature-bias-v8, and every stored result, fits and rejections alike, is dropped at its recording's next load
+1306 tst_fusion_session registrationShape
+1306 tst_fusion_session restoredFitIsIndistinguishable
+1306 tst_fusion_store codeStampChangeDropsRecordOnLoad
+1306 tst_fusion_store restoredSolverFailureShowsBadge
+1306 tst_fusion_jobs columnOnFusionOutputIsCachedFromRecord
+1306 tst_fusion_jobs workerRefillsColumnFromStoredFit
+1306 tst_fusion_kernel biasSettledByCostTest
+1306 tst_fusion_kernel failureDiagnosticsShape
+1306 audit stored-results
+1306 audit gnss-holes
+
+# 1307 - (4) the bridged fixture: the former GNSS gap rejection's recording (coarse_maneuver with fixes 12 to 23 removed, a 2.6 s hole) becomes the success fixture bridged_hole, its golden captured, the golden suite four fits and ten rejections; the published attitude and accelerations inside the hole within three of their accuracies of the generating trajectory; the four published accuracies inside the hole never below their values at the published samples nearest the two fixes around it (measured false on bridged_hole and not asserted; the numbers are in docs/SENSOR_FUSION.md section 8); the position and velocity of the sample covariance, read through the reconstruction's per-interval seam, growing through the hole and collapsing at the fix after it
+1307 tst_fusion_golden fixturesAreDeterministic
+1307 tst_fusion_golden successFixturesMatchGolden
+1307 tst_fusion_golden channelsWriterIsTheInverseOfTheLoader
+1307 tst_fusion_kernel fitTraceMatchesGolden
+1307 tst_fusion_kernel bridgedHoleFollowsTheTruth
+1307 audit gnss-holes
+
+# 1308 - (4) the long hole at the cap and above it: a synthetic recording of coarse_maneuver's kind of motion with a manoeuvre on both sides of a 30 s hole, the IMU continuous, converges under the production tuning, the test logging its iterations per pass, the largest accuracy inside the hole and the residuals at the fix after it; the same recording with a 60 s hole is rejected with the reason naming the length and the limit; the measurement behind the cap is in the documentation, not re-run
+1308 tst_fusion_kernel longHoleConverges
+1308 tst_fusion_kernel holeAboveTheCapIsRejected
+1308 tst_fusion_kernel initializerFixturesAreDeterministic
+
+# 1309 - (4) the audit: gnss_holes in the diagnostics of every fit, empty for the three unbroken fixtures and one entry of 2.6 s for bridged_hole; no outage constant and no outage check in src, tests or docs; the cap is one constant, named by the rejection's reason and the documentation
+1309 tst_fusion_kernel gnssHolesInTheAudit
+1309 tst_fusion_golden successFixturesMatchGolden
+1309 audit gnss-holes
+
+# 1310 - (4) the reference recordings: a manual step runs 24-09-07/08-35-48 and 24-09-04/13-35-10 through the runner and records the outcome, the stopping rule, the iterations per pass, the objective, the quality, gnss_holes and the largest heading and tilt accuracy inside the longest hole against the recording's median; the numbers go in the documentation as they are
+1310 audit gnss-holes
+1310 manual M55
+
+# 1311 - (4) the acceptance map opens a new hundred for this specification's items; audit_cleanup and the whole suite green, the exact tests included
+1311 tst_fusion_golden successFixturesMatchGolden
+1311 audit gnss-holes
+
+# 1312 - (5) the documents: SENSOR_FUSION.md sections 2 (what the user sees over a hole), 4 and 7 (gnss_holes in the input audit, v8 in the string's history with the bridged holes and the continuity rule's 1.5 threshold), 5 (the sparse-piece merge), 6 (no GNSS gap rejection; a hole up to the cap bridged by the IMU, the cap with the measurement behind it and why a single factor imposes it, a longer hole rejected naming the limit; the stopping rule's slow tail with its three bounds), 8 (four fits and ten rejections, the two recordings' numbers); COMPUTED_PLOTS.md section 10 (the fusion plots draw through a GNSS hole); DATA_SCHEMA.md section 12 and CALCULATIONS.md section 17 (v8); tests/README.md (the fixture tables, M55 in section 12.12, appendix N, matrix 9.14)
+1312 audit gnss-holes
+
+# 1313 - (2, 3) a slow tail is accepted only when every factor kind fits: a final pass at its iteration limit is accepted when its mean relative decrease over the window is below the bound and the position, velocity and IMU normalized RMS are all below slowTailMaxNrms (name and value unchanged); otherwise the rule is iteration limit, a solver failure; under it 24-09-04/13-35-10 ends iteration limit
+1313 tst_fusion_kernel slowTailAtTheIterationLimit
+1313 audit gnss-holes
+1313 manual M55

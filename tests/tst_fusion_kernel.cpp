@@ -18,7 +18,9 @@
 // (the covariance step against the joint marginals and the heading check,
 // its composition at the samples against a graph with a state at every edge,
 // the accuracy formulas on known answers, the widening, the undetermined
-// heading, a failed covariance step, the scale sigmas)), with the literal expectations of the reference's own
+// heading, a failed covariance step, the scale sigmas), the GNSS holes (a
+// hole bridged, the longest one bridged and a longer one rejected, the
+// cutter's sparse pieces, the holes in the input audit)), with the literal expectations of the reference's own
 // self-test (sensor-fusion-clean-port, tests/fusion_regression.cpp), and the
 // fit trace that localizes a golden failure to a stage: the segment account
 // first, then each optimizer iteration.
@@ -33,6 +35,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 
 #include <QElapsedTimer>
 #include <QJsonArray>
@@ -956,6 +959,11 @@ private slots:
     void undeterminedHeadingIsCapped();
     void covarianceFailureLeavesTheFitAsItIs();
     void diagnosticsReportTheScaleSigma();
+    void bridgedHoleFollowsTheTruth();
+    void longHoleConverges();
+    void holeAboveTheCapIsRejected();
+    void sparsePiecesAreMerged();
+    void gnssHolesInTheAudit();
 };
 
 void FusionKernelTest::solverUsesTbb()
@@ -2183,7 +2191,8 @@ void FusionKernelTest::exactConstantVelocityFit()
 
 void FusionKernelTest::initializerFixturesAreDeterministic()
 {
-    for (const char *name : {"motion_start", "rest_throughout", "sacc_anchor", "drifting_bias", "scale_recording"}) {
+    for (const char *name : {"motion_start", "rest_throughout", "sacc_anchor", "drifting_bias", "scale_recording",
+                             "long_hole"}) {
         const FusionFixture a = initializerFixture(QLatin1String(name));
         const FusionFixture b = initializerFixture(QLatin1String(name));
         QCOMPARE(a.name, QLatin1String(name));
@@ -2192,13 +2201,15 @@ void FusionKernelTest::initializerFixturesAreDeterministic()
         QVERIFY(a.expectSuccess);
         // Every recording states its configuration: +/-16 g, +/-2000 deg/s and
         // a listed rate within 4 % of its sampling (12.5 Hz for the two that
-        // log at 12.5 Hz, 26 Hz for the three at 25 Hz).
+        // log at 12.5 Hz, 26 Hz for the three at 25 Hz, 104 Hz for long_hole
+        // at 100 Hz).
         QCOMPARE(a.accelFsG, 16.);
         QCOMPARE(a.gyroFsDegS, 2000.);
         QCOMPARE(a.accelOdrHz, b.accelOdrHz);
         QCOMPARE(a.gyroOdrHz, a.accelOdrHz);
         const bool slow = a.name == QStringLiteral("sacc_anchor") || a.name == QStringLiteral("drifting_bias");
-        QCOMPARE(a.accelOdrHz, slow ? 12.5 : 26.);
+        const bool fast = a.name == QStringLiteral("long_hole");
+        QCOMPARE(a.accelOdrHz, slow ? 12.5 : fast ? 104. : 26.);
         const QVector<double> *as[] = {&a.gnssTime, &a.north, &a.east, &a.down, &a.velN, &a.velE, &a.velD,
                                        &a.hAcc, &a.vAcc, &a.sAcc, &a.imuTime, &a.ax, &a.ay, &a.az,
                                        &a.wx, &a.wy, &a.wz, &a.imuTemperature};
@@ -2298,7 +2309,7 @@ void FusionKernelTest::biasSettledByCostTest()
     const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
     QCOMPARE(seed.value("converged").toBool(false), true);
     QCOMPARE(seed.value("iterations").toInt(), int(trace.history.size()));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v7"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v8"));
 
     // The quality metrics recomputed from the residuals array: 28 states, so
     // 28 position and velocity factors of dimension 3 and 27 IMU factors of
@@ -2327,11 +2338,35 @@ void FusionKernelTest::slowTailAtTheIterationLimit_data()
 {
     QTest::addColumn<double>("maxNrms");
     QTest::addColumn<double>("maxMeanRelativeDecrease");
+    QTest::addColumn<bool>("imuIgnored");
     QTest::addColumn<bool>("accepted");
-    QTest::newRow("accepted") << 2. << 1e-4 << true;
-    QTest::newRow("nrms bound fails") << 0. << 1e-4 << false;
-    QTest::newRow("decrease bound fails") << 2. << 0. << false;
+    QTest::newRow("accepted") << 2. << 1e-4 << false << true;
+    QTest::newRow("nrms bound fails") << 0. << 1e-4 << false << false;
+    QTest::newRow("decrease bound fails") << 2. << 0. << false << false;
+    QTest::newRow("imu nrms bound fails") << 2. << 1e-4 << true << false;
 }
+
+namespace {
+
+/// coarse_linear made into a fit that satisfies its fixes while it ignores
+/// the IMU: every GNSS sigma divided by 1e5, so that the exact fixes hold the
+/// states, and a square wave of +/-8 m/s^2 (on the lattice of the stated
+/// range) added to the forward specific force, its sign alternating every ten
+/// samples, which no state held by the fixes can follow.
+Fusion::Channels imuIgnoredChannels()
+{
+    Fusion::Channels channels = toChannels(fusionFixture(QStringLiteral("coarse_linear")));
+    const double step = 16./32768*9.80665;
+    for (qsizetype i = 0; i < channels.ax.size(); ++i)
+        channels.ax[i] += ((i/10)%2 ? -1 : 1)*std::round(8/step)*step;
+    for (QVector<double> *sigmas : {&channels.hAcc, &channels.vAcc, &channels.sAcc}) {
+        for (double &sigma : *sigmas)
+            sigma /= 1e5;
+    }
+    return channels;
+}
+
+} // namespace
 
 void FusionKernelTest::slowTailAtTheIterationLimit()
 {
@@ -2341,11 +2376,20 @@ void FusionKernelTest::slowTailAtTheIterationLimit()
     // first four do the work and the rest are steps of order 1e-15 or exact
     // no-ops (GTSAM's LM leaves the values untouched when it rejects a step).
     // The last 20 iterations of pass five therefore have a mean relative
-    // decrease of about 0, and the fit's position and velocity normalized RMS
-    // are about 0.098 and 0.19: accepted with the production bounds, refused
-    // with either bound at zero (the comparisons are strict).
+    // decrease of about 0, and the fit's position, velocity and IMU normalized
+    // RMS are about 0.098, 0.19 and 0.0002: accepted with the production
+    // bounds, refused with either bound at zero (the comparisons are strict).
+    // Item 1313 (and 244 as amended): the bound holds the IMU normalized RMS
+    // too. On imuIgnoredChannels() the same forced tail ends with the position
+    // and velocity normalized RMS about 0.013 and 0.0005, far below the bound,
+    // and the IMU's about 2.5, above it (the step model's sampling term grows
+    // with the wave, so the IMU's normalized misfit is about that whatever the
+    // wave's amplitude): refused on the IMU bound alone. Dividing the IMU's
+    // noise instead does not raise it: the stiffer factor is satisfied and the
+    // misfit moves to the fixes.
     QFETCH(double, maxNrms);
     QFETCH(double, maxMeanRelativeDecrease);
+    QFETCH(bool, imuIgnored);
     QFETCH(bool, accepted);
 
     Tuning tuning;
@@ -2355,7 +2399,8 @@ void FusionKernelTest::slowTailAtTheIterationLimit()
     tuning.slowTailMaxMeanRelativeDecrease = maxMeanRelativeDecrease;
     PipelineTrace trace;
     const Fusion::Result result = runPipeline(
-        toChannels(fusionFixture(QStringLiteral("coarse_maneuver"))), tuning, Checkpoint(), &trace);
+        imuIgnored ? imuIgnoredChannels() : toChannels(fusionFixture(QStringLiteral("coarse_maneuver"))), tuning,
+        Checkpoint(), &trace);
 
     QCOMPARE(trace.history.size(), size_t(125));
     for (const FitIteration &h : trace.history)
@@ -2366,6 +2411,9 @@ void FusionKernelTest::slowTailAtTheIterationLimit()
     const QJsonObject quality = diagnostics.value("quality").toObject();
     QCOMPARE(stopping.value("passes").toInt(), 5);
     const double meanDecrease = stopping.value("last_pass_mean_relative_decrease").toDouble(-1);
+    qInfo() << "slow tail: position nrms" << quality.value("position_nrms").toDouble() << ", velocity nrms"
+            << quality.value("velocity_nrms").toDouble() << ", imu nrms" << quality.value("imu_nrms").toDouble()
+            << "; mean relative decrease" << meanDecrease << "; rule" << stopping.value("rule").toString();
 
     if (accepted) {
         QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
@@ -2382,6 +2430,7 @@ void FusionKernelTest::slowTailAtTheIterationLimit()
         QVERIFY(meanDecrease >= 0 && meanDecrease < 1e-4);
         QVERIFY(quality.value("position_nrms").toDouble(9) < 2);
         QVERIFY(quality.value("velocity_nrms").toDouble(9) < 2);
+        QVERIFY(quality.value("imu_nrms").toDouble(9) < 2);
         const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
         QCOMPARE(seed.value("converged").toBool(false), true);
         QCOMPARE(seed.value("iterations").toInt(), 125);
@@ -2402,6 +2451,13 @@ void FusionKernelTest::slowTailAtTheIterationLimit()
         // cost, so the mean is never negative and a zero bound always refuses.
         QVERIFY(meanDecrease >= 0);
         QVERIFY(allChannelsEmpty(result));
+        if (imuIgnored) {
+            // Every other bound holds: the IMU's alone refuses the tail.
+            QVERIFY(meanDecrease < maxMeanRelativeDecrease);
+            QVERIFY(quality.value("position_nrms").toDouble(9) < maxNrms);
+            QVERIFY(quality.value("velocity_nrms").toDouble(9) < maxNrms);
+            QVERIFY(quality.value("imu_nrms").toDouble() > maxNrms);
+        }
     }
 }
 
@@ -2483,7 +2539,7 @@ void FusionKernelTest::failureDiagnosticsShape()
         const QJsonObject diagnostics = failureDiagnostics(QString::fromLatin1(failure.failure), &s);
         QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure"),
                                                   QStringLiteral("stopping")}));
-        QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v7"));
+        QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v8"));
         QCOMPARE(diagnostics.value("failure").toString(), QString::fromLatin1(failure.failure));
         const QJsonObject stopping = diagnostics.value("stopping").toObject();
         QCOMPARE(stopping.value("rule").toString(), QString::fromLatin1(failure.rule));
@@ -2572,7 +2628,7 @@ void FusionKernelTest::dampingSaturationIsASolverFailure()
 void FusionKernelTest::dampingCeilingChangesNothingBelowIt()
 {
     // Criterion 14: a fit whose damping never reaches the ceiling does not
-    // depend on it. The three success fixtures, through the whole pipeline
+    // depend on it. The four success fixtures, through the whole pipeline
     // (coarse_maneuver's four prefix fits, its segment fit and the full fit
     // among them), are the same bits under a 1e5 and the default 1e12
     // ceiling: every channel, every iteration of the trace and the
@@ -2580,7 +2636,7 @@ void FusionKernelTest::dampingCeilingChangesNothingBelowIt()
     // report and nowhere else.
     Tuning lowCeiling;
     lowCeiling.lambdaUpperBound = 1e5;
-    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin"}) {
+    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin", "bridged_hole"}) {
         const Fusion::Channels channels = toChannels(fusionFixture(QLatin1String(name)));
         PipelineTrace low, high;
         const Fusion::Result a = runPipeline(channels, lowCeiling, Checkpoint(), &low);
@@ -3251,7 +3307,7 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     const Fusion::Result result = runPipeline(toChannels(f), t, Checkpoint(), &trace);
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
     const QJsonObject diagnostics = diagnosticsOf(result);
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v7"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v8"));
     const QJsonObject gyroBias = diagnostics.value("model").toObject().value("gyro_bias").toObject();
     const QJsonArray b1 = gyroBias.value("b1_rad_s_per_degc").toArray();
     QCOMPARE(b1.size(), 3);
@@ -3660,7 +3716,7 @@ void FusionKernelTest::fitRepreintegratesAtTheFittedScale()
     // is the graph's last factor, and the fit settled under the same cost
     // test.
     using gtsam::imuBias::ConstantBias;
-    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin"}) {
+    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin", "bridged_hole"}) {
         const WindowFit &f = fixtureFit(QLatin1String(name));
         QVERIFY2(f.fit.converged, name);
         QCOMPARE(f.fit.stopping.rule, std::string(StopRule::kSettled));
@@ -4539,8 +4595,9 @@ namespace {
 
 /// The success fixtures and the initializer's recordings: every fit whose
 /// covariance the accuracy tests read.
-const char *const kAccuracyFixtures[] = {"coarse_linear", "coarse_maneuver", "stationary_spin", "motion_start",
-                                         "rest_throughout", "sacc_anchor", "drifting_bias", "scale_recording"};
+const char *const kAccuracyFixtures[] = {"coarse_linear", "coarse_maneuver", "stationary_spin", "bridged_hole",
+                                         "motion_start", "rest_throughout", "sacc_anchor", "drifting_bias",
+                                         "scale_recording"};
 
 /// The four accuracy channels, by golden column name.
 const QStringList kAccuracyChannels{QStringLiteral("headingAcc"), QStringLiteral("tiltAcc"),
@@ -5080,10 +5137,10 @@ void FusionKernelTest::wideningGrowsWithAnUnderstatedSigma()
 void FusionKernelTest::accuraciesFiniteAndPositive()
 {
     // Clause 56, criterion 6: every sample's four published accuracies are
-    // finite and positive on the three success fixtures and the four
+    // finite and positive on the four success fixtures and the four
     // initializer recordings of the specification; heading and tilt lie in
     // (0, 180].
-    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin", "motion_start",
+    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin", "bridged_hole", "motion_start",
                              "rest_throughout", "sacc_anchor", "drifting_bias"}) {
         const Fusion::Result &result = publishedRun(QLatin1String(name));
         QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, name);
@@ -5105,9 +5162,9 @@ void FusionKernelTest::accuraciesFiniteAndPositive()
 void FusionKernelTest::gnssAccuracyScalingNeverLowersThem()
 {
     // Clause 56, criterion 6: with every hAcc, vAcc and sAcc doubled and the
-    // fit run again, no published accuracy of the three successes falls below
+    // fit run again, no published accuracy of the four successes falls below
     // (1 - 1e-6) times its value.
-    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin"}) {
+    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin", "bridged_hole"}) {
         const Fusion::Result &before = publishedRun(QLatin1String(name));
         Fusion::Channels channels = toChannels(fusionFixture(QLatin1String(name)));
         for (QVector<double> *sigmas : {&channels.hAcc, &channels.vAcc, &channels.sAcc}) {
@@ -5294,6 +5351,476 @@ void FusionKernelTest::diagnosticsReportTheScaleSigma()
     QCOMPARE(accuracy.value("widened_samples").toInt(-1), 0);
     QCOMPARE(accuracy.value("undetermined_heading_samples").toInt(-1), 0);
     QVERIFY(!diagnostics.value("limitations").toString().contains(QStringLiteral("no uncertainty")));
+}
+
+// ---- GNSS holes bridged by the IMU (the specification of 1301-1313) ---------------
+
+namespace {
+
+/// The entries of a fit's `input.gnss_holes`, seconds since the epoch.
+std::vector<GnssHole> gnssHolesOf(const QJsonObject &diagnostics)
+{
+    std::vector<GnssHole> holes;
+    for (const QJsonValue &entry : diagnostics.value("input").toObject().value("gnss_holes").toArray()) {
+        const QJsonObject hole = entry.toObject();
+        holes.push_back({hole.value("start_s").toDouble(-1), hole.value("length_s").toDouble(-1)});
+    }
+    return holes;
+}
+
+/// `a` and `b` are the same holes, bit for bit.
+bool sameHoles(const std::vector<GnssHole> &a, const std::vector<GnssHole> &b)
+{
+    return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](const GnssHole &x, const GnssHole &y) {
+        return x.start == y.start && x.length == y.length;
+    });
+}
+
+/// A published time read back as seconds since the epoch is that time to
+/// rounding of the UTC addition: a sample on a fix is within this of it.
+constexpr double kOnAFixS = 1e-6;
+
+/// The published samples of `result` strictly inside `hole`: after the fix
+/// before it and before the fix after it.
+std::vector<qsizetype> samplesInside(const Fusion::Result &result, double epoch, const GnssHole &hole)
+{
+    std::vector<qsizetype> inside;
+    for (qsizetype i = 0; i < result.time.size(); ++i) {
+        const double t = result.time[i]-epoch;
+        if (t > hole.start+kOnAFixS && t < hole.start+hole.length-kOnAFixS)
+            inside.push_back(i);
+    }
+    return inside;
+}
+
+/// The published samples nearest the two fixes around `hole` from outside
+/// it: the last on or before the fix before it, the first on or after the
+/// fix after it.
+std::pair<qsizetype, qsizetype> samplesBeside(const Fusion::Result &result, double epoch, const GnssHole &hole)
+{
+    qsizetype before = -1, after = -1;
+    for (qsizetype i = 0; i < result.time.size(); ++i) {
+        const double t = result.time[i]-epoch;
+        if (t <= hole.start+kOnAFixS)
+            before = i;
+        if (after < 0 && t >= hole.start+hole.length-kOnAFixS)
+            after = i;
+    }
+    return {before, after};
+}
+
+/// The epoch of a fit's diagnostics, `input.epoch_utc_s`.
+double epochOf(const QJsonObject &diagnostics)
+{
+    return diagnostics.value("input").toObject().value("epoch_utc_s").toDouble();
+}
+
+/// The fixes `first`..`first + count - 1` of `f` removed from every per-fix
+/// channel: a hole in the fixes with the IMU untouched.
+void removeFixes(FusionFixture &f, qsizetype first, qsizetype count)
+{
+    for (QVector<double> *channel : {&f.gnssTime, &f.north, &f.east, &f.down, &f.velN, &f.velE, &f.velD,
+                                     &f.hAcc, &f.vAcc, &f.sAcc})
+        channel->remove(first, count);
+}
+
+/// The squared whitened residual of the `kind` factor at the first fix after
+/// `hole`, from a fit's `residuals`, with that fix's node; -1 when there is none.
+std::pair<double, int> residualAfter(const QJsonObject &diagnostics, const GnssHole &hole, const QString &kind)
+{
+    for (const QJsonValue &entry : diagnostics.value("residuals").toArray()) {
+        const QJsonObject residual = entry.toObject();
+        if (residual.value("kind").toString() == kind && residual.value("time_s").toDouble() > hole.start+kOnAFixS)
+            return {residual.value("squared_whitened_error").toDouble(), residual.value("node").toInt(-1)};
+    }
+    return {-1, -1};
+}
+
+/// The variances of the position and of the velocity in a 9x9 covariance of
+/// the IMU factor's order (attitude, position, velocity): the traces of the
+/// two blocks, m^2 and (m/s)^2.
+std::pair<double, double> positionVelocityTraces(const gtsam::Matrix9 &covariance)
+{
+    return {covariance.block<3, 3>(3, 3).trace(), covariance.block<3, 3>(6, 6).trace()};
+}
+
+/// The first edge of `r` that is an IMU sample of `window`, i.e. the first
+/// sample the reconstruction publishes in its interval: edge 0 when the fix
+/// that starts the interval is on a sample, edge 1 otherwise.
+size_t firstPublishedEdge(const Samples &window, const IntervalReconstruction &r)
+{
+    return std::binary_search(window.imuTime.begin(), window.imuTime.end(), r.edges.front()) ? 0 : 1;
+}
+
+} // namespace
+
+void FusionKernelTest::bridgedHoleFollowsTheTruth()
+{
+    // Items 1302 and 1307: bridged_hole is coarse_maneuver with a 2.6 s hole
+    // in its fixes and the IMU continuous. Every IMU sample inside the hole is
+    // published, and at each the published heading lies within three
+    // headingAcc of the truth's 0, the tilt within three tiltAcc of 0, the
+    // acceleration error's component along the published horizontal
+    // acceleration within three accHAcc and its down component within three
+    // accDAcc of the generating (1.5 - .4t, .8t, -.6 + .1t^2). Published
+    // through assembleSuccess(), the pipeline's seam.
+    //
+    // The four published accuracies are bounded by global terms, so they need
+    // not grow through a hole. The specification's "never below their values
+    // at the fixes around it" is measured false here (docs/SENSOR_FUSION.md
+    // section 8: heading and tilt move from the value before the hole to the
+    // value after it, the accelerations' dip below both), so it is logged,
+    // each channel's smallest and largest inside against the samples nearest
+    // the two fixes, not asserted.
+    //
+    // The growth through the hole is in the position and velocity of the
+    // sample covariance. Read through the reconstruction's per-interval seam
+    // (reconstructInterval()), P_j of the hole's interval, the step chain's
+    // covariance, is zero at the fix before the hole, never falls from one
+    // edge to the next, is largest among the interval's published samples at
+    // the last one inside the hole, ends at the IMU factor's own covariance,
+    // and collapses at the fix after the hole, where the next interval's chain
+    // starts again from the fitted state.
+    const QString name = QStringLiteral("bridged_hole");
+    const Fusion::Result &result = publishedRun(name);
+    QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
+    const QJsonObject diagnostics = diagnosticsOf(result);
+    const double epoch = epochOf(diagnostics);
+    const std::vector<GnssHole> holes = gnssHolesOf(diagnostics);
+    QCOMPARE(holes.size(), size_t(1));
+    const GnssHole &hole = holes.front();
+    const std::vector<qsizetype> inside = samplesInside(result, epoch, hole);
+    // 2.6 s of 100 Hz samples: 260, every one of them published.
+    QCOMPARE(inside.size(), size_t(260));
+
+    // Ratio of each error to its accuracy, and the smallest and largest
+    // accuracy, per channel: heading, tilt, along the horizontal
+    // acceleration, down.
+    const double infinity = std::numeric_limits<double>::infinity();
+    double ratio[4] = {0, 0, 0, 0}, largest[4] = {0, 0, 0, 0};
+    double smallest[4] = {infinity, infinity, infinity, infinity};
+    for (const qsizetype i : inside) {
+        const double t = result.time[i]-1700000000.;
+        const Vector3 truth(1.5-.4*t, .8*t, -.6+.1*t*t);
+        const Vector3 published(result.accN[i], result.accE[i], result.accD[i]);
+        const Vector3 error = published-truth;
+        const Eigen::Vector2d horizontal = published.head<2>().normalized();
+        const Rot3 attitude = Rot3::Quaternion(result.qw[i], result.qx[i], result.qy[i], result.qz[i]);
+        const double errors[4] = {std::abs(angleDifference(result.yaw[i], 0)),
+                                  std::acos(std::clamp(attitude.matrix()(2, 2), -1., 1.))*180/kPi,
+                                  std::abs(error.head<2>().dot(horizontal)), std::abs(error.z())};
+        const double accuracies[4] = {result.headingAcc[i], result.tiltAcc[i], result.accHAcc[i], result.accDAcc[i]};
+        for (int c = 0; c < 4; ++c) {
+            QVERIFY(std::isfinite(accuracies[c]) && accuracies[c] > 0);
+            ratio[c] = std::max(ratio[c], errors[c]/accuracies[c]);
+            largest[c] = std::max(largest[c], accuracies[c]);
+            smallest[c] = std::min(smallest[c], accuracies[c]);
+        }
+    }
+    const auto [before, after] = samplesBeside(result, epoch, hole);
+    QVERIFY(before >= 0 && after > before);
+    const QVector<double> *channels[4] = {&result.headingAcc, &result.tiltAcc, &result.accHAcc, &result.accDAcc};
+    for (int c = 0; c < 4; ++c) {
+        qInfo() << "bridged_hole:" << kAccuracyChannels[c] << "inside the hole: largest error / accuracy"
+                << ratio[c] << ", accuracy from" << smallest[c] << "to" << largest[c] << "against"
+                << (*channels[c])[before] << "before and" << (*channels[c])[after] << "after";
+    }
+
+    // The sample covariance of the hole's interval, k the fix before it, the
+    // interval before it for comparison and the one after it for the
+    // collapse. Measured before the assertions on the accuracies, so that
+    // the log holds both whatever fails.
+    const WindowFit &f = fixtureFit(name);
+    const auto fix = std::find(f.window.gnssTime.begin(), f.window.gnssTime.end(), hole.start);
+    QVERIFY(fix != f.window.gnssTime.end());
+    const size_t k = size_t(fix-f.window.gnssTime.begin());
+    QVERIFY(k >= 1 && k+2 < f.window.gnssTime.size());
+    QVERIFY(f.window.gnssTime[k+1]-f.window.gnssTime[k] == hole.length);
+    IntervalSensitivity sensitivity, nextSensitivity, ordinarySensitivity;
+    const IntervalReconstruction r = reconstructInterval(f.window, f.fit, f.tuning, k, &sensitivity);
+    const IntervalReconstruction next = reconstructInterval(f.window, f.fit, f.tuning, k+1, &nextSensitivity);
+    reconstructInterval(f.window, f.fit, f.tuning, k-1, &ordinarySensitivity);
+    const size_t n = r.edges.size()-1;
+    QCOMPARE(sensitivity.covariance.size(), n+1);
+    const auto [positionLast, velocityLast] = positionVelocityTraces(sensitivity.covariance[n-1]);
+    const auto [positionEnd, velocityEnd] = positionVelocityTraces(sensitivity.covariance[n]);
+    const auto [positionMiddle, velocityMiddle] = positionVelocityTraces(sensitivity.covariance[n/2]);
+    const size_t firstNext = firstPublishedEdge(f.window, next);
+    const auto [positionNext, velocityNext] = positionVelocityTraces(nextSensitivity.covariance[firstNext]);
+    const auto [positionOrdinary, velocityOrdinary] = positionVelocityTraces(ordinarySensitivity.covariance.back());
+    qInfo() << "bridged_hole: the hole's interval," << n << "steps, P_j as sigmas (the root of the trace): position"
+            << std::sqrt(positionMiddle) << "m mid-hole," << std::sqrt(positionLast)
+            << "m at the last sample inside," << std::sqrt(positionEnd) << "m at the fix after it (the factor's),"
+            << std::sqrt(positionNext) << "m at the first sample after that fix; velocity" << std::sqrt(velocityMiddle)
+            << "," << std::sqrt(velocityLast) << "," << std::sqrt(velocityEnd) << "," << std::sqrt(velocityNext)
+            << "m/s; the interval before the hole ends at" << std::sqrt(positionOrdinary) << "m and"
+            << std::sqrt(velocityOrdinary) << "m/s";
+    qInfo() << "bridged_hole:" << inside.size() << "samples inside the hole of" << hole.length << "s from"
+            << hole.start << "s";
+
+    for (int c = 0; c < 4; ++c)
+        QVERIFY2(ratio[c] <= 3, qPrintable(kAccuracyChannels[c]));
+    const auto [position0, velocity0] = positionVelocityTraces(sensitivity.covariance.front());
+    QCOMPARE(position0, 0.);
+    QCOMPARE(velocity0, 0.);
+    for (size_t j = 1; j <= n; ++j) {
+        const auto [positionBefore, velocityBefore] = positionVelocityTraces(sensitivity.covariance[j-1]);
+        const auto [position, velocity] = positionVelocityTraces(sensitivity.covariance[j]);
+        QVERIFY2(position >= positionBefore && velocity >= velocityBefore, qPrintable(QString::number(j)));
+    }
+    QVERIFY(sensitivity.covariance[n] == r.endCovariance);
+    // The interval publishes edges 0..n-1 (edge n is the fix after the hole,
+    // published as the next interval's): the last of them is inside the hole.
+    QVERIFY(r.edges[n-1] > hole.start && r.edges[n-1] < hole.start+hole.length);
+    QVERIFY(positionLast > positionOrdinary && velocityLast > velocityOrdinary);
+    QVERIFY(positionNext < positionLast/100 && velocityNext < velocityLast/100);
+}
+
+void FusionKernelTest::longHoleConverges()
+{
+    // Items 1301, 1303 and 1308: long_hole, a 30 s hole in the fixes (the
+    // longest the fit bridges) with the IMU continuous, converges under the
+    // production tuning. The hole's interval is one IMU factor like any
+    // other, and the fix after it is an ordinary entry of `residuals`.
+    // Logged: the iterations per pass, the largest of each accuracy inside the
+    // hole against its median over the fit, and the squared whitened position
+    // and velocity residuals at the fix after the hole.
+    const QString name = QStringLiteral("long_hole");
+    PipelineTrace trace;
+    QElapsedTimer timer;
+    timer.start();
+    const Fusion::Result result = runPipeline(toChannels(initializerFixture(name)), Tuning{}, Checkpoint(), &trace);
+    std::map<int, int> perPass;
+    for (const FitIteration &iteration : trace.history)
+        ++perPass[iteration.outer];
+    QStringList passes;
+    for (const auto &[pass, iterations] : perPass)
+        passes.append(QString::number(iterations));
+    qInfo() << "long_hole:" << trace.history.size() << "iterations, per pass" << passes.join(QStringLiteral(", "))
+            << "; rule" << trace.stopping.rule.c_str() << "; outcome" << int(result.outcome)
+            << qPrintable(result.reason) << "; took" << timer.elapsed() << "ms";
+    QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
+    QVERIFY(trace.converged);
+
+    const QJsonObject diagnostics = diagnosticsOf(result);
+    const double epoch = epochOf(diagnostics);
+    const std::vector<GnssHole> holes = gnssHolesOf(diagnostics);
+    QCOMPARE(holes.size(), size_t(1));
+    const GnssHole &hole = holes.front();
+    QCOMPARE(hole.length, 30.);
+    const std::vector<qsizetype> inside = samplesInside(result, epoch, hole);
+    QCOMPARE(inside.size(), size_t(2999));
+    const QVector<double> *channels[4] = {&result.headingAcc, &result.tiltAcc, &result.accHAcc, &result.accDAcc};
+    for (int c = 0; c < 4; ++c) {
+        double largest = 0;
+        for (const qsizetype i : inside) {
+            QVERIFY(std::isfinite((*channels[c])[i]) && (*channels[c])[i] > 0);
+            largest = std::max(largest, (*channels[c])[i]);
+        }
+        qInfo() << "long_hole:" << kAccuracyChannels[c] << "largest inside the hole" << largest
+                << ", median over the fit" << medianOf(std::vector<double>(channels[c]->begin(), channels[c]->end()));
+    }
+
+    // One IMU factor per interval, the hole's included, and the fix after the
+    // hole an ordinary fix of the residuals: node 150, after the 150 before it.
+    const QJsonArray residuals = diagnostics.value("residuals").toArray();
+    int imuResiduals = 0;
+    for (const QJsonValue &entry : residuals)
+        imuResiduals += entry.toObject().value("kind").toString() == QStringLiteral("imu");
+    QCOMPARE(diagnostics.value("gnss_states").toInt(), 451);
+    QCOMPARE(imuResiduals, 450);
+    const auto [position, positionNode] = residualAfter(diagnostics, hole, QStringLiteral("position"));
+    const auto [velocity, velocityNode] = residualAfter(diagnostics, hole, QStringLiteral("velocity"));
+    const auto [imu, imuNode] = residualAfter(diagnostics, hole, QStringLiteral("imu"));
+    const QJsonObject quality = diagnostics.value("quality").toObject();
+    qInfo() << "long_hole: at the fix after the hole, squared whitened residuals: position" << position
+            << ", velocity" << velocity << "; the hole's IMU factor" << imu << "; position nrms"
+            << quality.value("position_nrms").toDouble() << ", velocity nrms" << quality.value("velocity_nrms").toDouble()
+            << ", imu nrms" << quality.value("imu_nrms").toDouble();
+    QCOMPARE(positionNode, 150);
+    QCOMPARE(velocityNode, 150);
+    QCOMPARE(imuNode, 150);
+    QVERIFY(std::isfinite(position) && position >= 0);
+    QVERIFY(std::isfinite(velocity) && velocity >= 0);
+}
+
+void FusionKernelTest::holeAboveTheCapIsRejected()
+{
+    // Items 1301 and 1308: the long-hole recording with a hole longer than
+    // the longest the fit bridges is rejected before the fit, the reason
+    // naming the hole's length and the limit, with a rejection's diagnostics.
+    // The limit is "longer than": a hole of exactly 30 s passes the plan
+    // (here the fit is then forced to end on its first iteration, a solver
+    // failure, so that the plan alone is judged; longHoleConverges fits it
+    // under the production tuning), and one of 31 s does not.
+    const Fusion::Result sixty = rejectedBy(toChannels(longHole(60)));
+    QVERIFY2(rejectedWith(sixty, QStringLiteral("GNSS hole of 60.0 s; fusion bridges at most 30 s")),
+             qPrintable(sixty.reason));
+    QCOMPARE(diagnosticsOf(sixty).keys(), QStringList({"algorithm", "failure"}));
+    QVERIFY(allChannelsEmpty(sixty));
+    const Fusion::Result thirtyOne = rejectedBy(toChannels(longHole(31)));
+    QVERIFY2(rejectedWith(thirtyOne, QStringLiteral("GNSS hole of 31.0 s; fusion bridges at most 30 s")),
+             qPrintable(thirtyOne.reason));
+
+    Tuning oneIteration;
+    oneIteration.relativeTolerance = -1;
+    oneIteration.maxIterations = 1;
+    oneIteration.maxPasses = 1;
+    const Fusion::Result thirty = runPipeline(toChannels(longHole(30)), oneIteration, Checkpoint());
+    QVERIFY2(thirty.outcome == Fusion::Outcome::SolverFailed, qPrintable(thirty.reason));
+    qInfo() << "long-hole recording: 60 s" << sixty.reason << "; 31 s" << thirtyOne.reason << "; 30 s"
+            << thirty.reason;
+}
+
+void FusionKernelTest::sparsePiecesAreMerged()
+{
+    // Item 1304: the segment cutter merges any piece with fewer than three
+    // fixes, not only the final one: into the piece before it, or into the
+    // piece after it when it is the first; a middle piece of three fixes is a
+    // segment however short; then the final piece's time rule as before.
+    using Bounds = std::vector<std::pair<size_t, size_t>>;
+    const auto axis = [](std::initializer_list<std::pair<int, int>> stretches) {
+        std::vector<double> t;
+        for (const auto &[first, last] : stretches) {
+            for (int s = first; s <= last; ++s)
+                t.push_back(s);
+        }
+        return t;
+    };
+    // 1 Hz, 60 s segments, 12 s minimum final piece. A middle piece of one
+    // fix (70 s) ends the piece before it; so does one of two (70, 71 s).
+    QCOMPARE(segmentBounds(axis({{0, 59}, {70, 70}, {130, 200}}), 60, 12),
+             Bounds({{0, 60}, {61, 110}, {111, 131}}));
+    QCOMPARE(segmentBounds(axis({{0, 59}, {70, 71}, {130, 200}}), 60, 12),
+             Bounds({{0, 61}, {62, 111}, {112, 132}}));
+    // A first piece of two fixes (0, 1 s) starts the piece after it.
+    QCOMPARE(segmentBounds(axis({{0, 1}, {70, 200}}), 60, 12), Bounds({{0, 51}, {52, 111}, {112, 132}}));
+    // Two sparse middle pieces in a row (70 s, 130 s) both end their predecessor.
+    QCOMPARE(segmentBounds(axis({{0, 59}, {70, 70}, {130, 130}, {190, 260}}), 60, 12),
+             Bounds({{0, 61}, {62, 111}, {112, 132}}));
+    // A middle piece of exactly three fixes (70..72 s) stays, 2 s long.
+    QCOMPARE(segmentBounds(axis({{0, 59}, {70, 72}, {130, 200}}), 60, 12),
+             Bounds({{0, 59}, {60, 62}, {63, 112}, {113, 133}}));
+    // A sparse final piece (60, 61 s) merges as before.
+    QCOMPARE(segmentBounds(axis({{0, 61}}), 60, 12), Bounds({{0, 61}}));
+    // A stretch of whole segment lengths without a fix (60..180 s) yields no
+    // piece; the final piece 240..250 s is then short and merges.
+    QCOMPARE(segmentBounds(axis({{0, 59}, {190, 250}}), 60, 12), Bounds({{0, 59}, {60, 120}}));
+    // A first piece of two fixes followed only by sparse pieces: one piece.
+    QCOMPARE(segmentBounds(axis({{0, 1}, {70, 70}, {130, 130}}), 60, 12), Bounds({{0, 3}}));
+    // A window that is one piece is left alone, whatever its count.
+    QCOMPARE(segmentBounds(axis({{0, 1}}), 60, 12), Bounds({{0, 1}}));
+
+    // long_hole under 29.57 s segments: fixes at 0 .. 29.8 s and 59.8 ..
+    // 119.8 s since the epoch, so the cut's second piece [29.57, 59.14) holds
+    // the two fixes at 29.6 and 29.8 s before the hole, which end the first
+    // segment; the pieces from 59.14 s on hold the 301 fixes after it, the
+    // final one (118.4 .. 119.8 s) short and merged. Three segments, the
+    // first ending at the fix before the hole and the second starting at the
+    // fix after it, and the fit converges.
+    Tuning tuning;
+    tuning.segmentLength = 29.57;
+    tuning.minFinalSegment = 12;
+    const Samples window = windowOf(QStringLiteral("long_hole"), tuning);
+    const double t0 = window.gnssTime.front();
+    QCOMPARE(std::count_if(window.gnssTime.begin(), window.gnssTime.end(), [&](double t) {
+                 return t >= t0+tuning.segmentLength && t < t0+2*tuning.segmentLength;
+             }), std::ptrdiff_t(2));
+    QCOMPARE(segmentBounds(window.gnssTime, tuning.segmentLength, tuning.minFinalSegment),
+             Bounds({{0, 149}, {150, 294}, {295, 450}}));
+    const InitializerRun run = runInitializerFixture(QStringLiteral("long_hole"), tuning);
+    const std::vector<SegmentAccount> &segments = run.trace.initializer.segments;
+    QCOMPARE(segments.size(), size_t(3));
+    QCOMPARE(segments[0].firstFix, size_t(0));
+    QCOMPARE(segments[0].lastFix, size_t(149));
+    QCOMPARE(segments[1].firstFix, size_t(150));
+    QCOMPARE(segments[1].lastFix, size_t(294));
+    QCOMPARE(segments[2].firstFix, size_t(295));
+    QCOMPARE(segments[2].lastFix, size_t(450));
+    for (const SegmentAccount &s : segments) {
+        qInfo() << "long_hole under 29.57 s segments: segment" << s.index << "fixes" << s.firstFix << "to" << s.lastFix
+                << ", yaw sigma" << s.yawSigmaDeg << "deg, growth stop" << s.growthStop.c_str() << ", converged"
+                << s.converged;
+        QVERIFY(!s.fallback);
+        QVERIFY(s.converged);
+    }
+    QVERIFY2(run.result.outcome == Fusion::Outcome::Succeeded, qPrintable(run.result.reason));
+    QVERIFY(run.trace.converged);
+}
+
+void FusionKernelTest::gnssHolesInTheAudit()
+{
+    // Items 1305 and 1309: `input.gnss_holes` is in the diagnostics of every
+    // success, those published through assembleSuccess() included: one
+    // {start_s, length_s} per hole of the fitted window's GNSS axis, judged
+    // by the continuity authority against that axis's own threshold, the fix
+    // before the hole in seconds since the epoch, in time order; empty for a
+    // window without one. A rejection's diagnostics have no such key. Each
+    // step below stands on its own, so that one failing hides none of the
+    // others.
+
+    // The four golden fits: the array is the walk the plan's cap reads
+    // (gnssHoles() of the fitted window), bit for bit, with its two keys.
+    const std::pair<const char *, size_t> expected[] = {
+        {"coarse_linear", 0}, {"coarse_maneuver", 0}, {"stationary_spin", 0}, {"bridged_hole", 1}};
+    for (const auto &[name, count] : expected) {
+        const Fusion::Result &result = publishedRun(QLatin1String(name));
+        QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, name);
+        const QJsonObject input = diagnosticsOf(result).value("input").toObject();
+        QVERIFY2(input.value("gnss_holes").isArray(), name);
+        const std::vector<GnssHole> holes = gnssHolesOf(diagnosticsOf(result));
+        QCOMPARE(holes.size(), count);
+        QVERIFY2(sameHoles(holes, gnssHoles(fixtureFit(QLatin1String(name)).window)), name);
+        for (const QJsonValue &entry : input.value("gnss_holes").toArray())
+            QCOMPARE(entry.toObject().keys(), QStringList({"length_s", "start_s"}));
+    }
+
+    // Against the fixtures' construction, the independent evidence: the hole
+    // is the interval between the fixes the generator kept on either side of
+    // the ones it removed, in seconds since the epoch (the first fix).
+    // bridged_hole's is from the fix j = 11 to j = 24 of coarse_maneuver
+    // (2.2 s and 4.8 s since the epoch, the fix j = 0 at -.163 s), long_hole's
+    // from the fix at 29.9 s to the one at 59.9 s (29.8 s and 59.8 s since
+    // the epoch, the first at .1 s). long_hole has its own fit, so its check
+    // is a step of its own.
+    const auto construction = [](const char *name, int before, double start, double length) {
+        const FusionFixture f = fixtureNamed(QLatin1String(name));
+        const QJsonObject diagnostics = diagnosticsOf(publishedRun(QLatin1String(name)));
+        QVERIFY2(!diagnostics.isEmpty(), name);
+        const double epoch = epochOf(diagnostics);
+        QCOMPARE(epoch, f.gnssTime.front());
+        const std::vector<GnssHole> holes = gnssHolesOf(diagnostics);
+        QCOMPARE(holes.size(), size_t(1));
+        const GnssHole &hole = holes.front();
+        QVERIFY2(hole.start == f.gnssTime[before]-epoch, name);
+        QVERIFY2(hole.length == (f.gnssTime[before+1]-epoch)-(f.gnssTime[before]-epoch), name);
+        QVERIFY2(std::abs(hole.start-start) < 1e-6 && std::abs(hole.length-length) < 1e-6, name);
+        qInfo() << name << ": gnss_holes start" << hole.start << "s, length" << hole.length << "s";
+    };
+    construction("bridged_hole", 11, 2.2, 2.6);
+    construction("long_hole", 149, 29.8, 30);
+
+    // Two holes, in time order: coarse_maneuver without the fixes j = 6..8
+    // and j = 15..20, holes of .8 s from j = 5 and 1.4 s from j = 14.
+    FusionFixture twoHoles = fusionFixture(QStringLiteral("coarse_maneuver"));
+    removeFixes(twoHoles, 15, 6);
+    removeFixes(twoHoles, 6, 3);
+    const Fusion::Result result = runPipeline(toChannels(twoHoles), Tuning{}, Checkpoint());
+    QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
+    const std::vector<GnssHole> holes = gnssHolesOf(diagnosticsOf(result));
+    QCOMPARE(holes.size(), size_t(2));
+    const double epoch = twoHoles.gnssTime.front();
+    QVERIFY(holes[0].start == twoHoles.gnssTime[5]-epoch);
+    QVERIFY(holes[1].start == twoHoles.gnssTime[11]-epoch);
+    QVERIFY(std::abs(holes[0].length-.8) < 1e-6);
+    QVERIFY(std::abs(holes[1].length-1.4) < 1e-6);
+    QVERIFY(holes[0].start+holes[0].length < holes[1].start);
+
+    // A rejection: the algorithm and the reason, no input audit.
+    QCOMPARE(failureDiagnostics(QStringLiteral("reason")).keys(), QStringList({"algorithm", "failure"}));
+    const Fusion::Result rejected = rejectedBy(toChannels(fusionFixture(QStringLiteral("reject_imu_gap"))));
+    QVERIFY(rejected.outcome == Fusion::Outcome::Rejected);
+    QVERIFY(!diagnosticsOf(rejected).contains("input"));
 }
 
 FLYSIGHT_TEST_MAIN(FusionKernelTest)

@@ -172,10 +172,10 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples, const BiasL
 /// `biasSettledTolerance` (relative to max(1, cost)); a last pass that reaches
 /// its iteration limit is accepted as a slow tail when its last
 /// `slowTailWindow` iterations lowered the cost by less than
-/// `slowTailMaxMeanRelativeDecrease` per iteration on average and the position
-/// and velocity normalized RMS are both below `slowTailMaxNrms`. Otherwise the
-/// result says which rule ended the fit and `converged` is false. A non-finite
-/// or increasing cost throws FitFailure, and so does an iteration that leaves
+/// `slowTailMaxMeanRelativeDecrease` per iteration on average and the
+/// position, velocity and IMU normalized RMS are all below `slowTailMaxNrms`.
+/// Otherwise the result says which rule ended the fit and `converged` is
+/// false. A non-finite or increasing cost throws FitFailure, and so does an iteration that leaves
 /// the cost unchanged while the damping is at `lambdaUpperBound` with the
 /// linearization still predicting a decrease above the settling threshold
 /// (predictedDecrease()): the optimizer is stuck short of a minimum, and that

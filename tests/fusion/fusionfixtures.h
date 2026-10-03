@@ -42,7 +42,8 @@ struct FusionFixture {
 constexpr double kFixtureTemperatureDegC = 25;
 
 /// All fourteen fixtures: coarse_linear, coarse_maneuver, stationary_spin,
-/// then the eleven rejections, each a single mutation of one of the first two.
+/// bridged_hole (coarse_maneuver with a hole in its fixes), then the ten
+/// rejections, each a single mutation of one of the first two.
 QList<FusionFixture> fusionFixtures();
 
 /// The fixture called `name`; a default-constructed fixture (empty name) when
@@ -50,12 +51,20 @@ QList<FusionFixture> fusionFixtures();
 FusionFixture fusionFixture(const QString &name);
 
 /// The synthetic recordings of the kernel's model tests: the initializer's
-/// motion_start, rest_throughout, sacc_anchor and drifting_bias, and the scale
-/// state's scale_recording. Not golden fixtures: their expected values are
-/// stated in tst_fusion_kernel, and fusion_golden_capture does not see them.
-/// Same bit-reproducibility rules as the rest of this file. A
-/// default-constructed fixture (empty name) for any other name.
+/// motion_start, rest_throughout, sacc_anchor and drifting_bias, the scale
+/// state's scale_recording, and long_hole, longHole(30). Not golden fixtures:
+/// their expected values are stated in tst_fusion_kernel, and
+/// fusion_golden_capture does not see them. Same bit-reproducibility rules
+/// as the rest of this file. A default-constructed fixture (empty name) for
+/// any other name.
 FusionFixture initializerFixture(const QString &name);
+
+/// The long-hole recording, named long_hole: 120 s, the IMU continuous, a
+/// hole of `holeSeconds` (whole seconds, 1 to 90) in the fixes from 29.9 s of
+/// the generator, every other sample the same bits whatever the hole. At 30 s,
+/// the longest hole the fit bridges, it is long_hole of initializerFixture();
+/// at 60 s it is the rejection above that limit.
+FusionFixture longHole(int holeSeconds);
 
 } // namespace FlySightTest
 

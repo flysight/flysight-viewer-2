@@ -31,7 +31,8 @@ namespace FlySight::Fusion::Detail {
 void fillOutputChannels(const ImuRateTrajectory &trajectory, const std::vector<double> &widenings, double epoch,
                         Result &result);
 
-/// The diagnostics of a converged fit: input audit, the configuration the fit
+/// The diagnostics of a converged fit: input audit (with the holes of the
+/// fitted window's GNSS axis, `gnss_holes`), the configuration the fit
 /// ran under and the noise the datasheet gives for it (both from
 /// `tuning.noise`), the initializer's account, objective, biases, the scale
 /// factors and their sigmas from `covariance` (null when it was not

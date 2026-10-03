@@ -39,7 +39,7 @@ using namespace FlySightTest;
 namespace {
 
 const QStringList kSuccessFixtures{QStringLiteral("coarse_linear"), QStringLiteral("coarse_maneuver"),
-                                   QStringLiteral("stationary_spin")};
+                                   QStringLiteral("stationary_spin"), QStringLiteral("bridged_hole")};
 
 Fusion::Result runFixture(const QString &name)
 {

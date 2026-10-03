@@ -239,14 +239,15 @@ FusionFixture stationarySpin()
 
 // ---------------------------------------------------------------------------
 // The synthetic recordings of the kernel's model tests: the initializer's
-// (spec section 10) and the scale state's. Not golden fixtures: their
-// expectations are stated in tst_fusion_kernel. Rotation constants are exact
-// rationals (.6 / .8 and .96 / .28, Pythagorean), so no transcendental
-// function appears; the body force is R^T (a - g) + b_a with g = (0, 0,
-// 9.80665) in NED, and the gyro reads its bias only (the attitude is constant
-// in every recording). Each states its configuration and is rounded onto its
-// lattice like the golden fixtures; the two at 1 Hz GNSS log the IMU at
-// 12.5 Hz, the nearest listed rate's own.
+// (spec section 10), the scale state's and the long GNSS hole's. Not golden
+// fixtures: their expectations are stated in tst_fusion_kernel. Rotation
+// constants are exact rationals (.6 / .8 and .96 / .28, Pythagorean), so no
+// transcendental function appears; the body force is R^T (a - g) + b_a with
+// g = (0, 0, 9.80665) in NED, and the gyro reads its bias only (the attitude
+// is constant in every recording). Each states its configuration and is
+// rounded onto its lattice like the golden fixtures; the two at 1 Hz GNSS log
+// the IMU at 12.5 Hz, the nearest listed rate's own, and the long-hole
+// recording logs it at 100 Hz like coarse_maneuver.
 // ---------------------------------------------------------------------------
 
 /// 90 s that start in motion: constant 20 m/s north with a 2 m/s^2 east
@@ -516,8 +517,84 @@ FusionFixture scaleRecording()
     return f;
 }
 
+} // namespace
+
+/// 120 s with a hole of `holeSeconds` in the fixes and the IMU running through
+/// it: the long-hole recording of the GNSS-hole tests, long_hole with the hole
+/// at the longest the fit bridges, 30 s, and the rejection above that limit
+/// with 60 s. coarse_maneuver's kind of motion with bounded acceleration over
+/// the whole length, and scale_recording's periodic manoeuvre on the north
+/// axis, so that every window, the hole and each side of it included, holds
+/// the horizontal acceleration that makes yaw observable.
+///
+/// GNSS 5 Hz, t = .1 + j * .2, j = 0..599, with the fixes
+/// j = 150 .. 148 + 5 holeSeconds removed: a hole of `holeSeconds` (whole
+/// seconds, 1 to 90) from the fix at 29.9 s, 150 fixes before it and
+/// 451 - 5 holeSeconds after (301 at 30 s: j = 150..298, the next fix at
+/// 59.9 s; 151 at 60 s: j = 150..448, the next at 89.9 s); the noise of every
+/// j is drawn, removed or not, so the fixes kept are the same bits whatever
+/// the hole. IMU 100 Hz, t = i * .01, i = 0..12000, continuous.
+/// Attitude identity. North acceleration a = A c x (1 - x)(1 - 2 x) with
+/// A = 2 m/s^2, c = 10, x = tau / P, P = 10 s (zero mean per period, peak
+/// 1.92 m/s^2); the period index and phase by integer arithmetic, k = i / 1000
+/// and tau = (i - 1000 k) * .01 for the IMU, k = (2 j + 1) / 100 and
+/// tau = .1 + (j - 50 k) * .2 for GNSS; vN = 20 + A P c x^2 (1 - x)^2 / 2,
+/// pN = k (20 P + A P^2 c / 60) + 20 tau + A P^2 c (x^3 / 3 - x^4 / 2 + x^5 / 5) / 2.
+/// East and down constant, vE = -5 and vD = 3 m/s from p = 0. Body force
+/// (a + .05, -.03, -9.80665 + .08); gyro (.2, -.15, .3) deg/s: coarse_maneuver's
+/// biases. hAcc = 1.5, vAcc = 2.5, sAcc = .3 (every fix: the anchor is the
+/// first). coarse_maneuver's noise, force .02, gyro .05 deg/s, position .3,
+/// velocity .1; seed 0x8F05000A. 601 - 5 holeSeconds states (451 at 30 s).
+/// Temperature 25 degC. States 104 Hz; readings rounded onto the lattice.
+FusionFixture longHole(int holeSeconds)
+{
+    FusionFixture f;
+    f.name = QStringLiteral("long_hole");
+    const NoiseLevels noise{ .02, .05, .3, .1 };
+    NoiseSource source(0x8F05000Aull);
+    const double A = 2, c = 10, P = 10, vNominal = 20, vEast = -5, vDown = 3;
+
+    for (int j = 0; j <= 599; ++j) {
+        const double t = .1 + j * .2;
+        const int k = (2 * j + 1) / 100;
+        const double tau = .1 + (j - 50 * k) * .2;
+        const double x = tau / P;
+        const double velN = vNominal + A * P * c * x * x * (1 - x) * (1 - x) / 2;
+        const double north = k * (vNominal * P + A * P * P * c / 60) + vNominal * tau
+                             + A * P * P * c * (x * x * x / 3 - x * x * x * x / 2 + x * x * x * x * x / 5) / 2;
+        const double n0 = source.next(), n1 = source.next(), n2 = source.next();
+        const double n3 = source.next(), n4 = source.next(), n5 = source.next();
+        if (j >= 150 && j < 149 + 5 * holeSeconds)
+            continue;
+        appendGnss(f, t,
+                   north + noise.position * n0, vEast * t + noise.position * n1, vDown * t + noise.position * n2,
+                   velN + noise.velocity * n3, vEast + noise.velocity * n4, vDown + noise.velocity * n5,
+                   1.5, 2.5, .3);
+    }
+    for (int i = 0; i <= 12000; ++i) {
+        const double t = i * .01;
+        const int k = i / 1000;
+        const double tau = (i - 1000 * k) * .01;
+        const double x = tau / P;
+        const double aN = A * c * x * (1 - x) * (1 - 2 * x);
+        const double n0 = source.next(), n1 = source.next(), n2 = source.next();
+        const double n3 = source.next(), n4 = source.next(), n5 = source.next();
+        appendImu(f, t,
+                  (aN + .05) + noise.force * n0, -.03 + noise.force * n1,
+                  (-kStandardGravity + .08) + noise.force * n2,
+                  .2 + noise.gyro * n3, -.15 + noise.gyro * n4, .3 + noise.gyro * n5,
+                  kFixtureTemperatureDegC);
+    }
+    f.originIndex = 0;
+    stateConfiguration(f, 104);
+    roundOntoLattice(f);
+    return f;
+}
+
+namespace {
+
 // ---------------------------------------------------------------------------
-// Rejection fixtures: one mutation each
+// Fixtures made by one mutation: bridged_hole and the rejections
 // ---------------------------------------------------------------------------
 
 FusionFixture rejection(FusionFixture base, const char *name)
@@ -552,6 +629,19 @@ void truncateTo(const QList<QVector<double> *> &channels, qsizetype count)
         channel->resize(count);
 }
 
+/// coarse_maneuver with GNSS fixes 12..23 removed: a hole of 2.6 s in the
+/// fixes (from the fix at 2.037 s to the one at 4.637 s, seconds of the
+/// generator) with the IMU continuous through it, bridged by the one IMU
+/// factor that spans the interval. The fit starts at the origin, j = 3: 9
+/// fitted fixes before the hole, 7 after.
+FusionFixture bridgedHole()
+{
+    FusionFixture f = coarseManeuver();
+    f.name = QStringLiteral("bridged_hole");
+    removeSamples(gnssChannels(f), 12, 12);
+    return f;
+}
+
 QList<FusionFixture> rejectionFixtures()
 {
     QList<FusionFixture> fixtures;
@@ -579,11 +669,6 @@ QList<FusionFixture> rejectionFixtures()
     // IMU samples 40..49 missing: a .11 s gap inside the GNSS span
     f = rejection(coarseLinear(), "reject_imu_gap");
     removeSamples(imuChannels(f), 40, 10);
-    fixtures.append(f);
-
-    // GNSS fixes 12..23 missing: a 2.6 s outage, above max(2 s, 5 x .2 s)
-    f = rejection(coarseManeuver(), "reject_gnss_gap");
-    removeSamples(gnssChannels(f), 12, 12);
     fixtures.append(f);
 
     // A GNSS accuracy that is not positive
@@ -617,7 +702,7 @@ QList<FusionFixture> rejectionFixtures()
 
 QList<FusionFixture> fusionFixtures()
 {
-    QList<FusionFixture> fixtures{ coarseLinear(), coarseManeuver(), stationarySpin() };
+    QList<FusionFixture> fixtures{ coarseLinear(), coarseManeuver(), stationarySpin(), bridgedHole() };
     fixtures.append(rejectionFixtures());
     return fixtures;
 }
@@ -644,6 +729,8 @@ FusionFixture initializerFixture(const QString &name)
         return driftingBias();
     if (name == QStringLiteral("scale_recording"))
         return scaleRecording();
+    if (name == QStringLiteral("long_hole"))
+        return longHole(30);
     return FusionFixture();
 }
 

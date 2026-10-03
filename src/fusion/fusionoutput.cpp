@@ -216,6 +216,23 @@ QJsonObject modelSummary(const ImuNoise &noise, const FitResult &fit, const FitC
         {"scale", scaleObject(fit, covariance)}};
 }
 
+/// The input audit of a fit: the recording's audit from the input adapter,
+/// which runs before the window exists, with the holes of the fitted window's
+/// GNSS axis (gnssHoles(), the walk planFit()'s cap reads) added under
+/// `gnss_holes`, one {start_s, length_s} per hole in time order; `start_s` is
+/// the fix before it, in seconds since the epoch like the fit's `start_s`.
+/// Written here, where every success is assembled, so that a fit published
+/// through assembleSuccess() carries it whoever planned the window.
+QJsonObject inputObject(const QJsonObject &audit, const Samples &window)
+{
+    QJsonArray holes;
+    for (const GnssHole &hole : gnssHoles(window))
+        holes.append(QJsonObject{{"start_s", hole.start}, {"length_s", hole.length}});
+    QJsonObject input = audit;
+    input.insert("gnss_holes", holes);
+    return input;
+}
+
 QJsonArray residualArray(const FitResult &fit)
 {
     QJsonArray residuals;
@@ -285,7 +302,7 @@ QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerA
         {"configuration", configurationObject(tuning.noise.configuration)},
         {"model", modelSummary(tuning.noise, fit, covariance)},
         {"accuracy", accuracyObject(covariance, widenings, result)},
-        {"input", prepared.audit},
+        {"input", inputObject(prepared.audit, window)},
         {"seeds", seedSummary(fit)},
         {"initialization", kInitializationMethod},
         {"stationary_interval_s", QJsonValue::Null},

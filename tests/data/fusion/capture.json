@@ -1,5 +1,5 @@
 {
-    "capture_date": "2026-10-01",
+    "capture_date": "2026-10-03",
     "captured_by": "fusion_golden_capture",
     "compiler": {
         "cl_version": "19.44.35220.0",
@@ -18,33 +18,34 @@
     },
     "fixture_generator_note": "The fixture generator the goldens were captured with. The goldens are valid for these inputs only: if either file changes, re-capture (tests/README.md, section 11).",
     "fixture_generator_sha256_lf": {
-        "tests/fusion/fusionfixtures.cpp": "8ae3ac45cc83b02e3c3cdfcf3f82660745b2d82bd718365065c483f4bcda74c1",
-        "tests/fusion/fusionfixtures.h": "f96b4218366096a0af874daafa1437f58617bc90a533ddce8bd88b8590072478"
+        "tests/fusion/fusionfixtures.cpp": "aa9d61172602abc2653a69513794b3e71fbb1cd0a675635fc38c2b4137922180",
+        "tests/fusion/fusionfixtures.h": "c54d6a16d5a098461b3288cf8adeba3b79b059fe5acb32921cb13bb626622ff8"
     },
     "machine": {
         "cpu_architecture": "x86_64",
         "os": "Windows 11 Version 25H2"
     },
     "qt": "6.9.3",
-    "repository_revision": "e7387aac05a09ff41b107a36b90c4170bdd9ecf2",
+    "repository_revision": "683050c113b618af2d85d6e2f627be0f95735758",
     "sha256_lf": {
+        "bridged_hole.channels.txt": "aa5070f4a57ba68f6583a36fa4dbdc1d9280e95a4700cd817f83c7c7488f8c79",
+        "bridged_hole.json": "34d7bda6d95b369b7a923664babee896a598a71aadbc0bc5c4d6d74d9119ffae",
         "coarse_linear.channels.txt": "f9930466340c0f3d101a5efbba9a89df6e232fbe6739a54a0086739fff10a4df",
-        "coarse_linear.json": "c0b8429605b8292e95661d64d304f4d8a606184cece6b0277d97894c33317993",
+        "coarse_linear.json": "f6a736782db20bba22766ff061e3c7c50ecdf6b9ea556ce740a785561f5ebf7d",
         "coarse_maneuver.channels.txt": "c23057848b5cc77b2c57f45956f41920b5ef33927f3a36961f6295d8a1214a97",
-        "coarse_maneuver.json": "09d544b565a94ad7c5f5fae9386a470c0bb349ba56706e449fe89f110e3f8fba",
-        "reject_coverage.json": "8c7f607e1d4c46d2b871487cb9962a1e3fd4c3475254f57aeac02067ae55ecbe",
-        "reject_gnss_gap.json": "ba1ca95647d5f7e672131d30297b14aecd14236264ef4d2fdb9b1bcb3b3fa6e7",
-        "reject_imu_gap.json": "a08cbcf476cee2ec6b36637a3cfbdd30d0a014ff20e08adfa5c7e6ed3edf646e",
-        "reject_lattice.json": "17537c8c6e964d0dbdd8c47f884a5391a04f050ea29edb877b17bcd7a18bd05c",
-        "reject_length.json": "ed75d1c7a6d01bdefcc993f63e2081cb77d986db5fc88bd045d4a88a3c4c63a8",
-        "reject_nonfinite.json": "f0d6169bb8934e8e5b53039c4bd8b6e0c3d1904480304c5bd85a8567402e06e8",
-        "reject_origin.json": "3971dec683da54c779d3b675060b6d0a957a8c217d9ec7dc5c9261b922609baf",
-        "reject_rate.json": "844c9a4027915323b0670393441fbfc755810ecce2b02fa8ecd23ce5a5db77e7",
-        "reject_sigma.json": "7591eb95a7da63d8ac6c0555df94c50156b7b5199b05d44ad62ba5dfd7c3b159",
-        "reject_time_order.json": "62a6389fc09134f1dab80378ad0d896e3d0858454990eb03d2ac32ba1bce7aae",
-        "reject_too_few_fixes.json": "0af5d0efad7088ef0c783475be9dd71bfdd2019803ba6cb4214cf66b7652870f",
+        "coarse_maneuver.json": "f5afc5784f9d37a0f8378050200d7865b0ab36db80b3143d7022a126b6a8e717",
+        "reject_coverage.json": "c27aecf5e087503ce3daacf1cf9fdfb0ab6e32e9cc376cbc0b35adb23a9023d6",
+        "reject_imu_gap.json": "294b9a0a59a05f5c1a054d651128447ba484de653fd5b5a3727b82a46ffd33c8",
+        "reject_lattice.json": "b709de7730082ef25de7ddf99a506994a151bd58633fe930357af681d954701f",
+        "reject_length.json": "f3a7ad3090ccd14480a13a62a3f20799eb37de108deb72d43a87b362a6b8b571",
+        "reject_nonfinite.json": "75f5a437eab341c2c805a1dc6f9c192ff1920a71ceb104980142e7bda0d0938e",
+        "reject_origin.json": "7bdea104685fe40e93010f1cd4d991b55b2e48355f17bd6190d15410c29df30b",
+        "reject_rate.json": "69f224e1fdfcc0891e013ac4442efaec135cdaae46a98d32cb8ccb58b301972e",
+        "reject_sigma.json": "a9713c74cc729e0f699012e180dff16688cb80c280a9a55d150cd5434ee17cc5",
+        "reject_time_order.json": "5428cf963b36d784739573e7b6ef7f901690f8c9737287be6d7eae0dedcb6c2a",
+        "reject_too_few_fixes.json": "eb0201c23af82803a7cfbb642cc9ff4856c326b94e9c6fc999713afdb92d8213",
         "stationary_spin.channels.txt": "811bd545c398c262855ad478d37f0e669c370a554e8e58b1f2756d41c5545804",
-        "stationary_spin.json": "2283416dea0d13b888e6402ef495acc80a68bbdef9ab692e61f2a3cd59bc9393"
+        "stationary_spin.json": "f2379036ed810fc8d2d60f58708037b70bfb051adb2aa1a2ac78bc467bc5c2fa"
     },
     "sha256_note": "Hashes of the files as written (LF line endings). A checkout with core.autocrlf=true has CRLF in the working tree; the loader accepts both.",
     "solver": {

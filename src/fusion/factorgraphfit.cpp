@@ -395,10 +395,12 @@ FitResult fitFactorGraph(const Samples &d, const InitialState &initial, const Tu
             stopping.rule = StopRule::kBiasNotSettled;
         } else {
             // The slow tail: the last pass at its limit, judged on its last
-            // window of iterations and on the misfit to the GNSS measurements
-            // (which does not depend on the bias or the scale, so the
-            // rebuild's values are the pass's). Strict comparisons, so that a zero bound
-            // refuses deterministically.
+            // window of iterations and on the misfit of every factor kind in
+            // the rebuild: the GNSS measurements' (which do not depend on the
+            // bias or the scale, so they are the pass's) and the IMU
+            // factors', so that a pass that satisfies the fixes while it
+            // ignores the IMU is never accepted. Strict comparisons, so that
+            // a zero bound refuses deterministically.
             int n = 0;
             for (const FitIteration &h : result.history) {
                 if (h.outer == lastOuter)
@@ -407,7 +409,8 @@ FitResult fitFactorGraph(const Samples &d, const InitialState &initial, const Tu
             const bool accepted = n >= c.slowTailWindow
                 && stopping.lastPassMeanRelativeDecrease < c.slowTailMaxMeanRelativeDecrease
                 && result.quality.positionNrms < c.slowTailMaxNrms
-                && result.quality.velocityNrms < c.slowTailMaxNrms;
+                && result.quality.velocityNrms < c.slowTailMaxNrms
+                && result.quality.imuNrms < c.slowTailMaxNrms;
             stopping.rule = accepted ? StopRule::kSlowTailAccepted : StopRule::kIterationLimit;
             result.converged = accepted;
         }

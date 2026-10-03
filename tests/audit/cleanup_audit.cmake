@@ -77,7 +77,15 @@
 #     takes a median of a time axis for it, the readers include the unit, the
 #     plot builds and reads its graphs through the plot utilities, the fusion
 #     kernel's former gap constant and statistics unit stay gone, and the
-#     documents say what a hole is (items 1201-1213).
+#     documents say what a hole is (items 1201-1213);
+#   - a hole in the GNSS fixes is bridged by the IMU: the kernel's outage rule,
+#     its constants and its rejection reason stay gone, the previous algorithm
+#     string with them; the cap on a bridged hole is one constant, the slow
+#     tail bounds all three normalized RMS, the holes of a window are walked
+#     once and written to the diagnostics by one writer, the goldens hold four
+#     fits and ten rejections, and the documents say what the user sees over a
+#     hole, state the cap with its measurement and carry the reference
+#     recordings' numbers (items 1301-1313).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -615,7 +623,7 @@ expect_none("the stationary-window detector is gone"
 expect_none("the silent poll is gone" "pollCancel" src tests)
 expect_none("the anchor-attitude initializer is gone"
   "InitialAttitude|initialAttitude\\(|kInitialHeadingDeg|attitudeFromStationaryWindow" src tests)
-# Allow: none expected. The goldens say batch-temperature-bias-v7; a hit under
+# Allow: none expected. The goldens say batch-temperature-bias-v8; a hit under
 # tests/data/fusion means a stale capture (re-capture, tests/README.md section 11).
 expect_none("the retired algorithm strings are gone" "batch-shared-bias-v[12]"
   src tests docs README.md ":!tests/README.md")
@@ -920,8 +928,8 @@ expect_none("stored results are widget-free"
 # Fusion's result version is its kernel's algorithm string, spelled once.
 # Allow: none expected. A changed algorithm changes the one literal; a comment
 # or test in src that quotes it names Fusion::Algorithm instead.
-expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v7" 1 src)
-expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v7"
+expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v8" 1 src)
+expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v8"
   "^src/fusion/fusion\\.h$" src)
 # The compatibility rule names the result version, in the code and in the note.
 # Allow: reword the sentence, never duplicate it; the count is 1 in each file.
@@ -1378,6 +1386,88 @@ expect_none("the fusion document has no second gap factor" "1\\.6 times the medi
 expect_count("the fusion document states the continuity rule"
   "longer than 1\\.5 times the median IMU interval" 1 docs/SENSOR_FUSION.md)
 
+# =============================================================================
+# GNSS holes bridged by the IMU: the kernel's one disconnection is the IMU gap
+# rule of the continuity authority. A hole in the fixes with the IMU running
+# through it, up to a measured cap, is bridged by the IMU factor that spans
+# the interval, every sample inside it is published with its accuracies, and
+# the diagnostics name the holes of the fitted window. A slow tail is
+# accepted only when every factor kind fits.
+# =============================================================================
+
+# ─────────────────────────────── gnss-holes (items 1301, 1305-1313)
+audit_group(gnss-holes)
+# Allow: none expected. The outage rule, its two constants, its rejection
+# reason and the fixture that tested it were removed together; tests/README.md
+# is searched too and describes them in other words.
+expect_none("the GNSS outage rule is gone" "requireNoGnssOutage|kGnssOutage"
+  src tests docs README.md CMakeLists.txt)
+expect_none("the GNSS gap rejection is gone" "GNSS gap: fusion unavailable"
+  src tests docs README.md CMakeLists.txt)
+expect_none("the GNSS gap fixture is gone" "reject_gnss_gap" src tests docs README.md CMakeLists.txt)
+# Allow: tests/README.md quotes the previous string as history (its capture
+# paragraphs and matrix rows); nothing else does. A hit under tests/data/fusion
+# is a stale capture.
+expect_none("the previous algorithm string is gone" "batch-temperature-bias-v7"
+  src tests docs README.md ":!tests/README.md")
+# The goldens: fourteen captured under the current string, four fits and ten
+# rejections, and the input audit of every fit names its holes. Allow: none
+# expected; a new fixture changes these counts with tests/README.md section 11.
+expect_count("the goldens carry the current algorithm string"
+  "\"algorithm\": \"batch-temperature-bias-v8\"" 14 tests/data/fusion)
+expect_count("the goldens hold four fits" "\"outcome\": \"succeeded\"" 4 tests/data/fusion)
+expect_count("the goldens hold ten rejections" "\"outcome\": \"rejected\"" 10 tests/data/fusion)
+expect_count("the fits' goldens name their holes" "\"gnss_holes\"" 4 tests/data/fusion)
+# Allow: none expected. The holes are written once, where a success's
+# diagnostics are assembled; a second writer is a second authority.
+expect_count("the holes have one writer" "\"gnss_holes\"" 1 src)
+expect_only("the holes have one writer" "\"gnss_holes\"" "^src/fusion/fusionoutput\\.cpp$" src)
+# The holes of a window are walked once, gnssHoles() in fusionsamples.cpp,
+# which the plan's cap and the input audit both read. The kernel's other two
+# hole walks are the IMU gap rule's and the propagation's. Allow: none
+# expected; a fourth walk is a second authority for the holes of the fixes.
+expect_count("the holes of a window have one walk" "SampleContinuity::isHoleBefore\\([A-Za-z]" 3 src/fusion)
+expect_only("the holes of a window have one walk" "gnssHoles\\("
+  "^src/fusion/(fusionsamples\\.(h|cpp)|fusion\\.cpp|fusionoutput\\.cpp)$" src)
+# The cap on a bridged hole is one kernel constant, defined once in fusion.cpp
+# and read only there; the rejection's reason is formatted from it, so its
+# value is written in no reason text. Allow: none expected.
+expect_count("the cap is one constant" "constexpr double kLongestBridgedHoleSeconds = 30;" 1 src)
+expect_only("the cap is one constant" "kLongestBridgedHoleSeconds" "^src/fusion/fusion\\.cpp$" src)
+expect_none("the cap's value is not restated" "bridges at most [0-9]" src)
+# The slow tail bounds the position, velocity and IMU normalized RMS, each on
+# its own line of the acceptance. Allow: none expected.
+expect_count("the slow tail bounds three normalized RMS"
+  "(position|velocity|imu)Nrms < c\\.slowTailMaxNrms" 3 src/fusion/factorgraphfit.cpp)
+expect_count("the slow tail bounds the IMU normalized RMS"
+  "imuNrms < c\\.slowTailMaxNrms" 1 src/fusion/factorgraphfit.cpp)
+# The documents. Allow: these count LINES; rewrap so that each phrase stays on
+# one line.
+expect_none("the fusion document states no GNSS gap rule" "GNSS gap longer than|max\\(2 s"
+  docs/SENSOR_FUSION.md)
+expect_count("the fusion document says a hole is bridged" "bridged by the IMU" 1 docs/SENSOR_FUSION.md)
+expect_count("the fusion document states the cap"
+  "The cap is the longest hole the fit bridges, 30 s" 1 docs/SENSOR_FUSION.md)
+expect_count("the fusion document states the measurement behind the cap"
+  "every hole up to 40 s settles" 1 docs/SENSOR_FUSION.md)
+expect_none("the fusion document claims no hole of any length" "however long|needs no cap" docs)
+expect_count("the fusion document states the slow tail's three bounds" "are all three below 2"
+  1 docs/SENSOR_FUSION.md)
+expect_count("the fusion document carries the first reference recording" "08-35-48" 1
+  docs/SENSOR_FUSION.md)
+expect_count("the fusion document carries the second reference recording" "13-35-10" 1
+  docs/SENSOR_FUSION.md)
+expect_count("the fusion document names the algorithm string" "batch-temperature-bias-v8" 2
+  docs/SENSOR_FUSION.md)
+expect_none("the documents count four fits and ten rejections"
+  "three fits|eleven rejections|three golden successes" docs)
+expect_count("the plots document says the fusion plots draw through a GNSS hole"
+  "draw through a hole in the GNSS fixes" 1 docs/COMPUTED_PLOTS.md)
+expect_count("the schema document names the algorithm string" "batch-temperature-bias-v8" 2
+  docs/DATA_SCHEMA.md)
+expect_count("the calculations document names the algorithm string" "batch-temperature-bias-v8" 1
+  docs/CALCULATIONS.md)
+
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 
@@ -1395,9 +1485,12 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # clause number), 901-940 (the fused state at every IMU sample, item =
 # 900 + clause number), 1001-1065 (the documented noise model and the
 # accuracy, part 1, item = 1000 + clause number), 1101 (the GNSS
-# acceleration accuracy, one item) and 1201-1213 (sample continuity: the rule,
+# acceleration accuracy, one item), 1201-1213 (sample continuity: the rule,
 # the nine bullets of what the user sees, the architecture, the kernel and its
-# goldens, the documents). Four line forms; see the head of the map.
+# goldens, the documents) and 1301-1313 (GNSS holes bridged by the IMU: the
+# kernel and its cap, the input audit, the algorithm string, the fixtures and
+# the reference recordings, the documents, the slow tail). Four line forms;
+# see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -1472,8 +1565,9 @@ else()
             OR (item GREATER_EQUAL 601 AND item LESS_EQUAL 662) OR (item GREATER_EQUAL 701 AND item LESS_EQUAL 754)
             OR (item GREATER_EQUAL 801 AND item LESS_EQUAL 863) OR (item GREATER_EQUAL 901 AND item LESS_EQUAL 940)
             OR (item GREATER_EQUAL 1001 AND item LESS_EQUAL 1065) OR item EQUAL 1101
-            OR (item GREATER_EQUAL 1201 AND item LESS_EQUAL 1213)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101 and 1201-1213: ${line}")
+            OR (item GREATER_EQUAL 1201 AND item LESS_EQUAL 1213)
+            OR (item GREATER_EQUAL 1301 AND item LESS_EQUAL 1313)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213 and 1301-1313: ${line}")
     endif()
   endforeach()
 
@@ -1551,6 +1645,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 1201 1213)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 1301 1313)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

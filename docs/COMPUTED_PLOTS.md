@@ -306,7 +306,11 @@ Nothing is drawn, read, interpolated or differenced across a hole:
 
 The Sensor fusion plots follow the IMU's samples, so a hole in the GNSS
 samples is not a hole in them; a hole in the IMU's samples breaks them like
-any other plot.
+any other plot. They draw through a hole in the GNSS fixes, carried by the IMU
+from the fix before it to the fix after it, while the GNSS plots break there;
+a hole longer than the fit bridges, 30 s, is rejected instead, and what the
+accuracy plots say over a hole is in [SENSOR_FUSION.md](SENSOR_FUSION.md),
+sections 2 and 6.
 
 **The exception: crossing times.** The exit, the altitude markers and the
 analysis windows of the WS-P and SP methods find the moment a value crosses a

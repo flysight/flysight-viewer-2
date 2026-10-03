@@ -303,7 +303,7 @@ void FusionSessionTest::registrationShape()
     QVERIFY(systemTime->descriptor->outputs == QList<DependencyKey>({fusionKey("_system_time")}));
 
     // Only the fit declares a result version: its kernel's algorithm string
-    QCOMPARE(fit->descriptor->resultVersion, QStringLiteral("batch-temperature-bias-v7"));
+    QCOMPARE(fit->descriptor->resultVersion, QStringLiteral("batch-temperature-bias-v8"));
     QVERIFY(accH->descriptor->resultVersion.isEmpty());
     QVERIFY(systemTime->descriptor->resultVersion.isEmpty());
 
@@ -557,7 +557,7 @@ void FusionSessionTest::readsNeverRunTheFit()
 void FusionSessionTest::requestRunsOnceAndPublishesTogether_data()
 {
     QTest::addColumn<QString>("fixture");
-    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin"})
+    for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin", "bridged_hole"})
         QTest::newRow(name) << QString::fromLatin1(name);
 }
 
@@ -759,7 +759,7 @@ void FusionSessionTest::changeAfterPublicationDropsEverything()
 void FusionSessionTest::rejectionIsACachedResult_data()
 {
     QTest::addColumn<QString>("fixture");
-    for (const char *name : {"reject_nonfinite", "reject_imu_gap", "reject_gnss_gap", "reject_sigma", "reject_origin"})
+    for (const char *name : {"reject_nonfinite", "reject_imu_gap", "reject_sigma", "reject_origin"})
         QTest::newRow(name) << QString::fromLatin1(name);
 }
 
@@ -1154,7 +1154,7 @@ void FusionSessionTest::restoredFitIsIndistinguishable()
     const std::optional<StoredCalculationResult> snapshot = engineA.exportResult(kFit);
     QVERIFY(snapshot.has_value());
     QCOMPARE(snapshot->calculationId, kFit);
-    QCOMPARE(snapshot->resultVersion, QStringLiteral("batch-temperature-bias-v7"));
+    QCOMPARE(snapshot->resultVersion, QStringLiteral("batch-temperature-bias-v8"));
     const QJsonObject diagnostics = QJsonDocument::fromJson(
         snapshot->bundle.attributeValue(kDiagnostics).toString().toUtf8()).object();
     QCOMPARE(diagnostics.value(QStringLiteral("algorithm")).toString(), snapshot->resultVersion);

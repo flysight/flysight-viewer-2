@@ -125,8 +125,9 @@ std::optional<FitResult> growPrefix(const Samples &segment, size_t anchor, const
     for (double length = kPrefixLength;; length *= 2) {
         const auto [p, q] = prefixFixes(segment, anchorTime, length);
         const bool covers = p == 0 && q == last;
-        // Fewer than three fixes is not a fit; this only happens at a GNSS
-        // rate far below 1 Hz, and the window cannot then cover the segment.
+        // Fewer than three fixes is not a fit. It happens beside a GNSS hole
+        // or at a GNSS rate far below 1 Hz; the window cannot then cover the
+        // segment, which has three fixes at least, so it grows.
         if (q+1-p < 3)
             continue;
         const Samples prefix = fittedWindow(segment, segment.gnssTime[p], segment.gnssTime[q]);
@@ -297,16 +298,31 @@ std::vector<std::pair<size_t, size_t>> segmentBounds(const std::vector<double> &
         else
             pieces.back().second = i;
     }
-    // The final piece joins the one before it when it is too short to be a
-    // segment in time or in fixes (a segment must have three fixes).
-    if (pieces.size() > 1) {
-        const auto [first, last] = pieces.back();
-        if (gnssTime[last]-gnssTime[first] < minFinalSegment || last+1-first < 3) {
-            pieces.pop_back();
-            pieces.back().second = last;
+    // A segment must have three fixes. Beside a GNSS hole any piece can have
+    // fewer, not only the final one: such a piece ends the piece before it.
+    // Only the first piece has none before it; it starts the piece after it
+    // instead, after the walk, when the walk has left more than one piece.
+    std::vector<std::pair<size_t, size_t>> merged;
+    for (const auto &[first, last] : pieces) {
+        if (!merged.empty() && last+1-first < 3)
+            merged.back().second = last;
+        else
+            merged.push_back({first, last});
+    }
+    if (merged.size() > 1 && merged.front().second+1-merged.front().first < 3) {
+        merged[1].first = merged.front().first;
+        merged.erase(merged.begin());
+    }
+    // Then the final piece, whatever it is after those merges, joins the one
+    // before it when it is too short in time to be a segment.
+    if (merged.size() > 1) {
+        const auto [first, last] = merged.back();
+        if (gnssTime[last]-gnssTime[first] < minFinalSegment) {
+            merged.pop_back();
+            merged.back().second = last;
         }
     }
-    return pieces;
+    return merged;
 }
 
 gtsam::Rot3 coarseAttitude(const Samples &d, size_t k)

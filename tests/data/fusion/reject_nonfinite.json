@@ -1,6 +1,6 @@
 {
     "diagnostics": {
-        "algorithm": "batch-temperature-bias-v7",
+        "algorithm": "batch-temperature-bias-v8",
         "failure": "Nonfinite IMU/ax"
     },
     "fixture": "reject_nonfinite",

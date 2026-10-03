@@ -74,10 +74,15 @@ struct Initialization {
 gtsam::Rot3 rotationAligning(const gtsam::Vector3 &from, const gtsam::Vector3 &to);
 
 /// The segments of a window whose fixes are at `gnssTime`, as inclusive index
-/// pairs: consecutive pieces of `segmentLength` from the first fix, the final
-/// piece merged into the one before it when it is shorter than
-/// `minFinalSegment` or holds fewer than three fixes. Every fix is in exactly
-/// one piece; a window shorter than one segment is one piece.
+/// pairs: consecutive pieces of `segmentLength` from the first fix, a stretch
+/// of whole segment lengths without a fix yielding no piece. A piece with
+/// fewer than three fixes (a segment must have three; beside a GNSS hole any
+/// piece can have fewer) is merged into the piece before it, or into the piece
+/// after it when it is the first, until no piece has fewer than three unless
+/// it is the only piece; then the final piece is merged into the one before it
+/// when it is shorter than `minFinalSegment`. A middle piece of three fixes is
+/// a segment however short in time. Every fix is in exactly one piece; a
+/// window shorter than one segment is one piece.
 std::vector<std::pair<size_t, size_t>> segmentBounds(const std::vector<double> &gnssTime,
                                                      double segmentLength, double minFinalSegment);
 

@@ -66,11 +66,14 @@ struct Tuning {
     double biasSettledTolerance = 1e-6;             ///< a settled pass has converged when re-preintegrating at its bias changes the cost by at most this, relative to max(1, cost)
     int slowTailWindow = 20;                        ///< iterations at the end of a final pass at the limit over which the slow tail is judged
     double slowTailMaxMeanRelativeDecrease = 1e-4;  ///< slow tail: mean (before - after) / max(1, before) over the window must be below this
-    double slowTailMaxNrms = 2;                     ///< slow tail: position and velocity normalized RMS must both be below this
+    double slowTailMaxNrms = 2;                     ///< slow tail: position, velocity and IMU normalized RMS must all be below this
     // The segmented initializer (spec section 3.2, step 1): the fitted window
-    // is cut into segments of segmentLength, and a final piece shorter than
-    // minFinalSegment joins the segment before it. A test may shorten both to
-    // keep a multi-segment recording small.
+    // is cut into segments of segmentLength; a piece with fewer than three
+    // fixes (beside a GNSS hole, a middle piece can hold one or two) joins the
+    // piece before it, or the one after it when it is the first, and then a
+    // final piece shorter than minFinalSegment joins the segment before it
+    // (segmentBounds()). A test may shorten both to keep a multi-segment
+    // recording small.
     double segmentLength = 600;                     ///< the initializer cuts the fitted window into segments this long, s
     double minFinalSegment = 120;                   ///< a final piece shorter than this is merged into the segment before it, s
     int maxPasses = 5;                              ///< re-preintegration passes of one fit: the full fit's and a segment fit's five; a prefix fit's one
@@ -95,9 +98,20 @@ Samples fittedWindow(const Samples &recording, double start, double end);
 /// The checks made on a whole prepared recording before anything indexes it.
 void requireUsableRecording(const Samples &recording, double epoch, double usableStart);
 
-/// Throws when two successive fixes of `window` are more than `limit` seconds
-/// apart: a disconnected recording is not joined across the outage.
-void requireNoGnssOutage(const Samples &window, double limit);
+/// A hole in the fixes of a window: the time of the fix before it, s since the
+/// epoch, and the interval to the fix after it, s.
+struct GnssHole {
+    double start = 0;
+    double length = 0;
+};
+
+/// The holes of `window`'s GNSS axis, in time order, empty when there is none:
+/// every interval between successive fixes that the continuity authority
+/// calls a hole (SampleContinuity::isHoleBefore()) against the threshold of
+/// the window's own axis, asked once. The one walk: planFit()'s cap and the
+/// input audit's `gnss_holes` both read it. The window has three fixes at
+/// least (fittedWindow()).
+std::vector<GnssHole> gnssHoles(const Samples &window);
 
 /// Throws unless every reading of `channels` (all of them, inside the fitted
 /// window or not, as the kernel received them) shows the stated range of its

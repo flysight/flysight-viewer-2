@@ -437,7 +437,7 @@ a calculation is valid only together with this stamp. For a session with a
 stored sensor fusion result:
 
 ```json
-"records": {"builtin.fusion.fit": "batch-temperature-bias-v7"}
+"records": {"builtin.fusion.fit": "batch-temperature-bias-v8"}
 ```
 
 Each session entry may also have `"recordReasons"`: an object mapping the
@@ -582,7 +582,8 @@ start-up pass nor deleting its session removes it.
 - **Code.** `CalculationCompatibilityVersion` (section 11) and the
   calculation's result version equal the ones it was written with. For sensor
   fusion the result version is the kernel's algorithm string, the
-  `"algorithm"` of its diagnostics.
+  `"algorithm"` of its diagnostics: `batch-temperature-bias-v8` since a hole
+  in the GNSS fixes is fitted across instead of rejected.
 - **Inputs.** The names of the inputs the result reached are the same (source
   measurements with their unit text, attributes and declared preferences,
   directly or through other calculations, including inputs that were looked
