@@ -1,6 +1,7 @@
 # GNSS holes bridged by the IMU
 
-Date: 2026-10-02
+Date: 2026-10-02; amended 2026-10-03 after the first implementation's
+escalation (the cap, the growth claim, the slow-tail rule).
 Status: specification for planning. Not an implementation plan. Small enough
 to be implemented directly by one agent in one phase. It follows
 `PLANS/done/sample-continuity.md`, whose continuity rule the kernel reads
@@ -39,24 +40,49 @@ stretch is worth.
 
 - **Connectedness is the IMU's.** The one disconnection rule is the IMU gap
   rule of the continuity authority. There is no rule on the spacing of
-  fixes, and no cap on the length of a GNSS hole: the preintegrated
-  covariance prices the hole, and the published accuracies report it.
+  fixes short of the cap below: the preintegrated covariance prices the
+  hole, and the published accuracies report it.
+- **The cap is measured, not guessed.** Within a pass the bias and the scale
+  enter an IMU factor to first order, and the settle test rebuilds the graph
+  at the fitted values; over one factor spanning a long hole that correction
+  is poor enough that the passes stop contracting. On the synthetic
+  long-hole recording every hole up to 40 s settles, 50 s is marginal and
+  60 s cycles, so a hole longer than 30 s, twice the longest in the corpus,
+  is not bridged: the recording is rejected with a reason that names the
+  limit. The limit is a property of the single factor, and a later
+  specification that places states inside a long hole removes it.
 - **Everything is published.** Every IMU sample inside a hole gets its
-  reconstructed state and its accuracies, which grow through the hole and
-  collapse at the next fix. Nothing is suppressed; the accuracy tells the
-  user what the stretch is worth.
+  reconstructed state and its accuracies. The growth through a hole is in
+  the position and velocity of the sample covariance, which the fit carries
+  and the reconstruction composes; the four published accuracies (heading,
+  tilt, two accelerations) are bounded by global terms, the heading's
+  observability and the bias priors, and grow through a hole only where
+  those terms allow, as they do on the reference recording and not on the
+  synthetic fixture. Inside a hole they are never below their values at the
+  fixes around it. Nothing is suppressed; the accuracy tells the user what
+  the stretch is worth.
 - **The fixes around a hole are ordinary fixes.** They carry their stated
   sigmas, which on the corpus are 100 to 180 m after a hole, and the model
   weights them as it weights every fix.
 - **A change that alters what a fit returns changes the algorithm string.**
   Two recordings that were rejections become fits, so the string changes and
   every stored result is dropped once.
+- **A slow tail is accepted only when every factor kind fits.** The first
+  implementation showed a recording whose GNSS factors were satisfied while
+  its IMU factors were ignored (IMU normalized RMS 1707, an accelerometer
+  scale of -0.058) accepted as a slow tail, because the rule bounded the
+  position and velocity misfit alone. The rule bounds all three.
 
 ## 3. What changes
 
-- **The outage rule goes.** `requireNoGnssOutage` and its two constants are
-  deleted; `planFit` runs no check on fix spacing. The IMU gap rule, read
-  from the continuity authority, is the only disconnection.
+- **The outage rule goes; the cap replaces it.** `requireNoGnssOutage` and
+  its two constants are deleted. In their place one kernel constant, the
+  longest GNSS hole the fit bridges, 30 s, and one check in `planFit` after
+  the window's validation: a hole of the fitted window's GNSS axis (the
+  continuity authority's) longer than it rejects the recording with a reason
+  that names the hole's length and the limit. Below the cap there is no rule
+  on fix spacing. The IMU gap rule, read from the continuity authority, is
+  the only disconnection.
 - **The segment cutter merges any sparse piece.** Today only the final piece
   of the initializer's cut is merged into its predecessor when it is shorter
   than the minimum or holds fewer than three fixes. With holes, a middle
@@ -80,6 +106,12 @@ stretch is worth.
   result, fits and rejections alike, is dropped at its recording's next load
   and the recording is fitted again once when something needs it, as the
   documentation of stored results describes.
+- **The slow-tail rule bounds the IMU misfit too.** A final pass at its
+  iteration limit is accepted as a slow tail only when its mean relative
+  decrease over the window is below the bound and the position, velocity
+  and IMU normalized RMS are all below `slowTailMaxNrms`; otherwise the
+  rule is `iteration limit`, a solver failure, as today. The tuning field
+  keeps its name and value.
 
 ## 4. Tests
 
@@ -88,36 +120,54 @@ stretch is worth.
   it converges, its golden is captured, and the golden suite holds four fits
   and ten rejections. In the kernel tests, the published attitude and
   accelerations at every IMU sample inside the hole lie within three of their
-  own published accuracies of the fixture's generating trajectory, and the
-  accuracies inside the hole exceed those at the fixes on either side.
-- **The long hole.** A second synthetic case, `coarse_maneuver`'s motion
-  extended so that a 60 s hole lies inside it with the IMU continuous,
-  converges under the production tuning; the test logs its iterations, the
-  largest accuracy inside the hole and the largest residual at the fix after
-  it. It is the evidence that no cap is needed. If it does not converge, the
-  specification is amended with a cap at a measured value, not with a guess.
+  own published accuracies of the fixture's generating trajectory; the four
+  published accuracies inside the hole are never below their values at the
+  published samples nearest the two fixes around it; and the position and
+  velocity parts of the sample covariance, read through the reconstruction's
+  per-interval seam, grow through the hole and collapse at the fix after it.
+- **The long hole, at the cap and above it.** A second synthetic recording
+  with `coarse_maneuver`'s kind of motion and a manoeuvre on both sides of a
+  30 s hole, the IMU continuous, converges under the production tuning; the
+  test logs its iterations per pass, the largest accuracy inside the hole
+  and the residuals at the fix after it. The same recording with a hole
+  above the cap is rejected with the reason naming the length and the
+  limit. The measurement behind the cap (every length to 40 s settles, 50 s
+  marginal, 60 s cycles) is recorded in the documentation, not re-run by a
+  test.
 - **The sparse piece.** A window whose cut yields a middle piece of two fixes
   is fitted, with the piece merged into its predecessor; a window whose first
   piece has two fixes merges it into its successor.
 - **The audit.** `gnss_holes` is in the diagnostics of every fit, empty for
   the three unbroken fixtures and one entry of 2.6 s for `bridged_hole`;
   `git grep` finds no outage constant and no `requireNoGnssOutage` in `src`,
-  `tests` or `docs`.
+  `tests` or `docs`; the cap is one constant, named by the rejection's
+  reason and the documentation.
+- **The slow tail.** The slow-tail test gains the case where the IMU
+  normalized RMS alone is above the bound and the tail is refused; the
+  fusion-improvements item that states the rule is restated "(as
+  amended)".
 - **The reference recordings.** A manual step, in the form of M11 to M14,
   runs the two recordings of section 1 through the runner and records the
   outcome, the stopping rule, the iterations per pass, the objective, the
   quality, `gnss_holes`, and the largest heading and tilt accuracy inside
   the longest hole against the median accuracy of the recording. The numbers
-  go in the report as they are.
+  go in the report as they are. Under the amended slow-tail rule
+  `24-09-04/13-35-10` is expected to end `iteration limit`, a solver
+  failure: its second segment's fit reaches its limit and the full fit
+  starts from that attitude, which is the solver follow-up the lab notes
+  name, not this specification's.
 - The acceptance map opens a new hundred for this specification's items.
   `audit_cleanup` and the whole suite green, the exact tests included.
 
 ## 5. Documentation
 
 `docs/SENSOR_FUSION.md`: section 6 drops the GNSS gap rejection and states
-that a hole in the fixes is bridged by the IMU with its accuracy growing
-through it; section 2 says what the user sees over a hole and that the GNSS
-plots break there while the fusion plots draw through; section 7 adds
+that a hole in the fixes up to the cap is bridged by the IMU, with the
+measurement behind the cap and why a single factor imposes it, and that a
+longer hole is rejected naming the limit; the stopping-rule paragraph
+states the slow tail's three bounds; section 2 says what the user sees over
+a hole and that the GNSS plots break there while the fusion plots draw
+through; section 7 adds
 `gnss_holes` to the input audit and `v8` to the algorithm string's history,
 naming both the bridged holes and the continuity rule's 1.5 threshold that
 the kernel adopted under the compatibility marker's bump to 3;
