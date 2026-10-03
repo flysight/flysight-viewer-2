@@ -32,6 +32,12 @@ constexpr size_t kStatesPerCheckpoint = 256;
 // An iteration may raise the cost by this much (rounding) before it counts as
 // an increase, which is a failure.
 constexpr double kCostIncreaseTolerance = 1e-6;
+/// The floor, relative to max(1, cost), under which a predicted decrease at
+/// a stall is rounding: the sum of a thousand squared residuals carries about
+/// 1e-13 of itself, and the settling threshold (1e-8) is above this on every
+/// production tuning, so the floor decides only under a test's negative
+/// tolerance (runOptimizerPass()).
+constexpr double kStallFloor = 1e-12;
 
 /// The GNSS measurement of state k: position, then velocity.
 void addGnssFactors(gtsam::NonlinearFactorGraph &graph, const Samples &d, size_t k)
@@ -166,7 +172,10 @@ Stopping failedPass(const Tuning &c, const char *rule, int outer, const std::vec
 /// saturated`); at or below it the pass has settled, because at a minimum the
 /// library judges each trial step by the sign of a rounding-level linearized
 /// change, and a run of negative signs raises the damping to the ceiling
-/// without the cost ever being evaluated. A non-finite or increasing cost
+/// without the cost ever being evaluated. Under a negative `relativeTolerance`
+/// (a test forcing a pass that never settles) the same stall is the no-op
+/// iteration that pass expects, as the library's stop below the ceiling
+/// already gives, and the prediction is judged against the rounding floor. A non-finite or increasing cost
 /// throws FitFailure (`cost increased`). Either carries the account of the
 /// pass it happened in.
 /// Each iteration's boundary text is `passFormat` with the pass and the
@@ -193,9 +202,11 @@ bool runOptimizerPass(const gtsam::NonlinearFactorGraph &graph, gtsam::Values &v
                              failedPass(c, StopRule::kCostIncreased, outer, history));
         const double threshold = c.relativeTolerance*std::max(1., before);
         if (after == before && optimizer.lambda() >= c.lambdaUpperBound) {
-            if (predictedDecrease(*linear) > threshold)
+            if (predictedDecrease(*linear) > std::max(threshold, kStallFloor*std::max(1., before)))
                 throw FitFailure("Optimizer damping saturated without progress",
                                  failedPass(c, StopRule::kDampingSaturated, outer, history));
+            if (threshold < 0)
+                continue;
             settled = true;
             break;
         }

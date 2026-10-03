@@ -180,7 +180,9 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples, const BiasL
 /// linearization still predicting a decrease above the settling threshold
 /// (predictedDecrease()): the optimizer is stuck short of a minimum, and that
 /// is never a convergence. Stalled at the ceiling where it predicts none, the
-/// pass has settled. The reported objective, residuals, quality and `graph`
+/// pass has settled (under a test's negative `relativeTolerance`, which no
+/// pass can satisfy, the stall is instead a no-op iteration, and the
+/// prediction is judged against a rounding floor). The reported objective, residuals, quality and `graph`
 /// are those of the graph rebuilt at the fitted bias and scale.
 ///
 /// Every iteration is reported through `checkpoint` as `passFormat` with its

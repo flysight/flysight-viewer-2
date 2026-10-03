@@ -463,7 +463,7 @@ start it would have called converged is not one). The last two are the
 failures the fit cannot continue from, and are solver failures, never a
 convergence. An iteration that leaves the cost unchanged at the ceiling where
 the linearization predicts no decrease (its undamped Gauss-Newton step would
-lower the linearized cost by at most the settling threshold) is a settled
+lower the linearized cost by at most the settling threshold, or by rounding) is a settled
 pass: at a minimum the library judges each trial step by the sign of a
 rounding-level linearized change and can raise the damping to the ceiling
 without ever evaluating the cost, as it does on Intel macOS for one synthetic
