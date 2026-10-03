@@ -117,7 +117,7 @@
 #             kernel and its goldens, 1213 the documents. Stated in full in
 #             tests/README.md, appendix M. No existing item is restated.
 #   1301-1313 GNSS holes bridged by the IMU (no rule on the spacing of the
-#             fixes below a cap of 30 s, a longer hole rejected; a hole is
+#             fixes below a cap of 30 s on any interval, a longer one rejected; a hole is
 #             fitted across, every sample inside it published with its
 #             accuracies; the cutter merges any sparse piece; the input audit
 #             names the holes; the algorithm string v8; the slow tail bounds
@@ -3384,7 +3384,7 @@
 
 # ---- GNSS holes bridged by the IMU (PLANS/gnss-holes-bridged.md): thirteen items ----
 
-# 1301 - (2, 3) connectedness is the IMU's: the one disconnection is the IMU gap rule of the continuity authority; the outage rule and its two constants are deleted and, below the cap, planFit runs no check on the spacing of fixes; the cap is measured: one kernel constant, the longest hole the fit bridges, 30 s, checked once in planFit on the fitted window's GNSS axis, a longer hole rejected with a reason naming its length and the limit
+# 1301 - (2, 3) connectedness is the IMU's: the one disconnection is the IMU gap rule of the continuity authority; the outage rule and its two constants are deleted and, below the cap, planFit runs no check on the spacing of fixes; the cap is measured: one kernel constant, the longest interval between fixes the fit bridges, 30 s, hole or not, checked in planFit on every interval of the fitted window, a longer one rejected with a reason naming the interval, to two decimals, and the limit
 1301 tst_fusion_golden successFixturesMatchGolden
 1301 tst_fusion_golden rejectionFixturesMatchGolden
 1301 tst_fusion_kernel longHoleConverges

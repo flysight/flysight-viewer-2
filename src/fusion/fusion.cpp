@@ -21,15 +21,16 @@ namespace Detail {
 
 namespace {
 
-// The longest hole in the fixes the fit bridges, s. A hole is spanned by one
+// The longest interval between successive fixes the fit bridges, s, hole or
+// not: the limit is the factor's span. An interval is spanned by one
 // preintegrated IMU factor, into which the bias and the scale enter to first
 // order within a pass, and the settle test rebuilds the graph at the fitted
-// values; over one factor spanning a long hole that correction is poor enough
-// that the passes stop contracting. Measured on the synthetic long-hole
-// recording (docs/SENSOR_FUSION.md section 6): every hole up to 40 s settles,
-// 50 s is marginal and 60 s cycles. The limit is twice the longest hole of the
-// reference corpus.
-constexpr double kLongestBridgedHoleSeconds = 30;
+// values; over one long factor that correction is poor enough that the passes
+// stop contracting. Measured on the synthetic long-hole recording
+// (docs/SENSOR_FUSION.md section 6): every hole up to 40 s settles, 50 s on
+// the fifth pass, 52 to 58 s cycle, 60 s only on the twelfth of thirty. The
+// limit is twice the longest hole of the reference corpus.
+constexpr double kLongestBridgedIntervalSeconds = 30;
 
 /// Everything decided before the fit starts.
 struct FitPlan {
@@ -63,13 +64,18 @@ FitPlan planFit(const Channels &channels, const Tuning &baseTuning)
     plan.tuning.maxGap = SampleContinuity::holeThreshold(full.imuTime);
     plan.window = fittedWindow(full, plan.prepared.usableStart, full.gnssTime.back());
     validateSamples(plan.window, plan.tuning);
-    for (const GnssHole &hole : gnssHoles(plan.window)) {
-        if (hole.length > kLongestBridgedHoleSeconds) {
+    // Every interval of the fitted window, whether or not the continuity
+    // rule calls it a hole (the holes it finds serve the diagnostics).
+    const std::vector<double> &fixes = plan.window.gnssTime;
+    for (size_t k = 1; k < fixes.size(); ++k) {
+        const double interval = fixes[k]-fixes[k-1];
+        if (interval > kLongestBridgedIntervalSeconds) {
             // QString::number, as the IMU gap's reason: not subject to the C
-            // locale Qt installs on Unix.
-            const QString message = QStringLiteral("GNSS hole of ") + QString::number(hole.length, 'f', 1)
-                + QStringLiteral(" s; fusion bridges at most ") + QString::number(kLongestBridgedHoleSeconds)
-                + QStringLiteral(" s");
+            // locale Qt installs on Unix. Two decimals, so that an interval a
+            // hair over the limit does not read as the limit.
+            const QString message = QStringLiteral("GNSS fixes ") + QString::number(interval, 'f', 2)
+                + QStringLiteral(" s apart; fusion bridges at most ")
+                + QString::number(kLongestBridgedIntervalSeconds) + QStringLiteral(" s");
             throw std::invalid_argument(message.toStdString());
         }
     }

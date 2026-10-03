@@ -896,9 +896,9 @@ in the status bar's warning and on its logbook row
   rule ([COMPUTED_PLOTS.md](COMPUTED_PLOTS.md) section 10,
   `src/samplecontinuity.h`), which the attitude propagation of the
   initializer applies too;
-- a hole in the GNSS fixes of the fitted window longer than the longest hole
-  the fit bridges, 30 s (below): `GNSS hole of 60.0 s; fusion bridges at most
-  30 s`;
+- an interval between successive fixes of the fitted window longer than the
+  longest the fit bridges, 30 s (below), whether or not the continuity rule
+  calls it a hole: `GNSS fixes 60.00 s apart; fusion bridges at most 30 s`;
 - a local origin index outside the GNSS samples.
 
 Then, after every check above, the configuration (section 3), in this order:
@@ -936,8 +936,11 @@ do), and `input.gnss_holes` of the diagnostics (section 4) names each hole.
 Below the cap the spacing of the fixes is not checked: the IMU gap rule above
 is the one disconnection.
 
-The cap is the longest hole the fit bridges, 30 s, twice the longest hole of
-the reference corpus, and it is measured, not guessed. Within a pass the bias
+The cap is the longest interval between successive fixes the fit bridges,
+30 s, twice the longest hole of the reference corpus, and it is measured, not
+guessed. It applies to every interval, hole or not, because the limit is the
+factor's span: a window whose fixes are uniformly more than 30 s apart, which
+the continuity rule calls no hole, is bound by it too. Within a pass the bias
 and the scale factors enter an IMU factor to first order, and the settle test
 rebuilds the graph at the fitted values (section 4); over one factor spanning a
 long hole that correction is poor enough that the passes stop contracting. On
@@ -948,7 +951,7 @@ every hole up to 40 s settles in two or three passes; 50 s settles on the
 fifth and last pass; 52, 54 and 58 s cycle and never settle even with 30
 passes, while 56 s settles in three; and 60 s ends `bias not settled` after
 five passes of 10, 9, 8, 7 and 7 iterations, settling only on the twelfth
-pass of 30. A hole longer than the cap is therefore rejected with a reason
+pass of 30. An interval longer than the cap is therefore rejected with a reason
 that names its length and the limit. The limit is a property of the single
 factor: a later model that places states inside a long hole removes it.
 

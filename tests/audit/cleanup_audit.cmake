@@ -1432,8 +1432,8 @@ expect_only("the holes of a window have one walk" "gnssHoles\\("
 # The cap on a bridged hole is one kernel constant, defined once in fusion.cpp
 # and read only there; the rejection's reason is formatted from it, so its
 # value is written in no reason text. Allow: none expected.
-expect_count("the cap is one constant" "constexpr double kLongestBridgedHoleSeconds = 30;" 1 src)
-expect_only("the cap is one constant" "kLongestBridgedHoleSeconds" "^src/fusion/fusion\\.cpp$" src)
+expect_count("the cap is one constant" "constexpr double kLongestBridgedIntervalSeconds = 30;" 1 src)
+expect_only("the cap is one constant" "kLongestBridgedIntervalSeconds" "^src/fusion/fusion\\.cpp$" src)
 expect_none("the cap's value is not restated" "bridges at most [0-9]" src)
 # The slow tail bounds the position, velocity and IMU normalized RMS, each on
 # its own line of the acceptance. Allow: none expected.
@@ -1447,7 +1447,7 @@ expect_none("the fusion document states no GNSS gap rule" "GNSS gap longer than|
   docs/SENSOR_FUSION.md)
 expect_count("the fusion document says a hole is bridged" "bridged by the IMU" 1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document states the cap"
-  "The cap is the longest hole the fit bridges, 30 s" 1 docs/SENSOR_FUSION.md)
+  "The cap is the longest interval between successive fixes the fit bridges" 1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document states the measurement behind the cap"
   "every hole up to 40 s settles" 1 docs/SENSOR_FUSION.md)
 # Allow: none expected. The fusion document once said that a hole in the

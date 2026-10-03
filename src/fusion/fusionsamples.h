@@ -108,9 +108,9 @@ struct GnssHole {
 /// The holes of `window`'s GNSS axis, in time order, empty when there is none:
 /// every interval between successive fixes that the continuity authority
 /// calls a hole (SampleContinuity::isHoleBefore()) against the threshold of
-/// the window's own axis, asked once. The one walk: planFit()'s cap and the
-/// input audit's `gnss_holes` both read it. The window has three fixes at
-/// least (fittedWindow()).
+/// the window's own axis, asked once. The one walk for the input audit's
+/// `gnss_holes`; planFit()'s cap walks every interval of the window, hole or
+/// not. The window has three fixes at least (fittedWindow()).
 std::vector<GnssHole> gnssHoles(const Samples &window);
 
 /// Throws unless every reading of `channels` (all of them, inside the fitted

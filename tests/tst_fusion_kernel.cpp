@@ -5647,19 +5647,23 @@ void FusionKernelTest::longHoleConverges()
 void FusionKernelTest::holeAboveTheCapIsRejected()
 {
     // Items 1301 and 1308: the long-hole recording with a hole longer than
-    // the longest the fit bridges is rejected before the fit, the reason
-    // naming the hole's length and the limit, with a rejection's diagnostics.
-    // The limit is "longer than": a hole of exactly 30 s passes the plan
-    // (here the fit is then forced to end on its first iteration, a solver
-    // failure, so that the plan alone is judged; longHoleConverges fits it
-    // under the production tuning), and one of 31 s does not.
+    // the longest interval the fit bridges is rejected before the fit, the
+    // reason naming the interval, to two decimals, and the limit, with a
+    // rejection's diagnostics. The limit is "longer than": a hole of exactly
+    // 30 s passes the plan (here the fit is then forced to end on its first
+    // iteration, a solver failure, so that the plan alone is judged;
+    // longHoleConverges fits it under the production tuning), and one of
+    // 31 s does not. The cap is the factor's span, not the continuity rule's
+    // hole: the same recording without a hole and its fixes thinned to one
+    // every 31 s, which the rule calls no hole (every interval is the
+    // median), is rejected too, and thinned to one every 30 s it passes.
     const Fusion::Result sixty = rejectedBy(toChannels(longHole(60)));
-    QVERIFY2(rejectedWith(sixty, QStringLiteral("GNSS hole of 60.0 s; fusion bridges at most 30 s")),
+    QVERIFY2(rejectedWith(sixty, QStringLiteral("GNSS fixes 60.00 s apart; fusion bridges at most 30 s")),
              qPrintable(sixty.reason));
     QCOMPARE(diagnosticsOf(sixty).keys(), QStringList({"algorithm", "failure"}));
     QVERIFY(allChannelsEmpty(sixty));
     const Fusion::Result thirtyOne = rejectedBy(toChannels(longHole(31)));
-    QVERIFY2(rejectedWith(thirtyOne, QStringLiteral("GNSS hole of 31.0 s; fusion bridges at most 30 s")),
+    QVERIFY2(rejectedWith(thirtyOne, QStringLiteral("GNSS fixes 31.00 s apart; fusion bridges at most 30 s")),
              qPrintable(thirtyOne.reason));
 
     Tuning oneIteration;
@@ -5668,8 +5672,26 @@ void FusionKernelTest::holeAboveTheCapIsRejected()
     oneIteration.maxPasses = 1;
     const Fusion::Result thirty = runPipeline(toChannels(longHole(30)), oneIteration, Checkpoint());
     QVERIFY2(thirty.outcome == Fusion::Outcome::SolverFailed, qPrintable(thirty.reason));
+
+    // The fixes of the recording without a hole, one in every `step`.
+    const auto thinned = [](int step) {
+        Fusion::Channels c = toChannels(longHole(0));
+        for (QVector<double> *channel : {&c.gnssTime, &c.north, &c.east, &c.down, &c.velN, &c.velE, &c.velD,
+                                         &c.hAcc, &c.vAcc, &c.sAcc}) {
+            QVector<double> kept;
+            for (qsizetype i = 0; i < channel->size(); i += step)
+                kept.append((*channel)[i]);
+            *channel = kept;
+        }
+        return c;
+    };
+    const Fusion::Result sparse = rejectedBy(thinned(155));
+    QVERIFY2(rejectedWith(sparse, QStringLiteral("GNSS fixes 31.00 s apart; fusion bridges at most 30 s")),
+             qPrintable(sparse.reason));
+    const Fusion::Result sparseAtTheCap = runPipeline(thinned(150), oneIteration, Checkpoint());
+    QVERIFY2(sparseAtTheCap.outcome == Fusion::Outcome::SolverFailed, qPrintable(sparseAtTheCap.reason));
     qInfo() << "long-hole recording: 60 s" << sixty.reason << "; 31 s" << thirtyOne.reason << "; 30 s"
-            << thirty.reason;
+            << thirty.reason << "; fixes 31 s apart" << sparse.reason << "; 30 s apart" << sparseAtTheCap.reason;
 }
 
 void FusionKernelTest::sparsePiecesAreMerged()
