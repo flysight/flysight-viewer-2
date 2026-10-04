@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <limits>
+#include <new>
 #include <utility>
 
 #include <gtsam/geometry/Pose3.h>
@@ -518,9 +520,12 @@ FitResult fitFactorGraph(const Samples &d, const InitialState &initial, const Tu
     }
 
     // The released stage: a refinement from the held solution, judged like
-    // any sequence of passes. Its failures of every kind are the fallback, a
-    // failure thrown at its boundary or in a pass among them; a cancellation
-    // is not a failure and is not caught.
+    // any sequence of passes. Its failures of every kind are the fallback: a
+    // failure thrown at its boundary or in a pass, and any other exception
+    // from inside it (the library's, for one), since a refinement never turns
+    // a converged fit into a failure. A cancellation is not a failure and is
+    // not caught, and memory exhaustion is not a function of the inputs and
+    // is rethrown, as the pipeline rethrows it.
     std::optional<FitResult> released;
     try {
         checkpoint(QStringLiteral("Releasing the scale factors"));
@@ -535,6 +540,17 @@ FitResult fitFactorGraph(const Samples &d, const InitialState &initial, const Tu
                                             std::numeric_limits<double>::quiet_NaN()};
         }
         release.reason = e.stopping.rule;
+    } catch (const std::bad_alloc &) {
+        throw;
+    } catch (const std::exception &e) {
+        // No rule ended the stage: its text is the reason, and the account of
+        // a stage that ran at least one iteration carries it as its rule.
+        if (history.size() > heldIterations) {
+            release.released = StageAccount{e.what(), history.back().outer-held.stopping.passes+1,
+                                            int(history.size()-heldIterations),
+                                            std::numeric_limits<double>::quiet_NaN()};
+        }
+        release.reason = e.what();
     }
 
     release.kept = released && released->converged;

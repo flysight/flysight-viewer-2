@@ -817,7 +817,10 @@ its top-level keys are, grouped:
   ran an iteration, `null` otherwise (its `objective` `null` when it ended by
   a failure inside a pass, which has no rebuilt graph); `kept`, true when the
   released stage is the fit; and `reason`, the rule the released stage was
-  discarded under, `null` when it was kept. `seeds[0].iterations` counts the
+  discarded under, or the text of an exception thrown from inside it (a
+  refinement never turns a converged fit into a failure, so any exception
+  but a cancellation or memory exhaustion is the fallback), `null` when it
+  was kept. `seeds[0].iterations` counts the
   iterations of both stages;
 - `model`: `noise`, the datasheet's noise at the configuration (above), with
   `acc` (`datasheet_density_m_s2_rthz`, `bandwidth_hz`, `step_m_s2`,

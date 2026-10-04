@@ -3496,6 +3496,7 @@
 
 # 1403 - (2, 3) the fallback: a released stage that ends settled or slow tail accepted is the fit; one that ends under any other rule, diverges or throws is discarded: the held stage's values, graph, objective, residuals, quality and stopping are the fit, converged is true, the factors are at one with the held stage's sigmas, and the diagnostics record the outcome; a refinement never turns a converged fit into a failure; cancellation is not caught
 1403 tst_fusion_kernel releaseFailureFallsBackToTheHeldFit
+1403 tst_fusion_kernel releaseExceptionFallsBackToTheHeldFit
 1403 tst_fusion_kernel divergenceEndsTheReleasedStage
 1403 tst_fusion_golden cancelAtEachKindOfBoundary
 
@@ -3541,6 +3542,7 @@
 
 # 1410 - (4) the fallback forced: a checkpoint that throws at the release boundary leaves a converged fit with the held stage's values and factors at one, kept false with the thrown rule as the reason, released null, and the published channels those of the held fit
 1410 tst_fusion_kernel releaseFailureFallsBackToTheHeldFit
+1410 tst_fusion_kernel releaseExceptionFallsBackToTheHeldFit
 
 # 1411 - (4) divergence forced: the IMU bound at zero and an empty scale range each end the held stage diverged as a solver failure; the scale range narrowed to exclude the recovered factor ends scale_recording's released stage diverged, the fallback; the IMU bound is not forced in the released stage alone
 1411 tst_fusion_kernel divergenceEndsTheHeldStage

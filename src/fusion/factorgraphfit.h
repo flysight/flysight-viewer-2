@@ -242,8 +242,10 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples, const BiasL
 /// stage's values (every state, the bias, the slope and the factors) with the
 /// tolerances themselves and the tuning's release budget of passes. A
 /// released stage that converges is the fit. One that ends under any other rule, or throws
-/// FitFailure (from a pass or from the release boundary), is discarded: the
-/// held stage is the fit, converged. A held stage that does not converge is
+/// FitFailure (from a pass or from the release boundary), or throws any other
+/// exception from inside it (a cancellation and memory exhaustion excepted,
+/// which propagate), is discarded: the held stage is the fit, converged, and
+/// the exception's text is the release's reason. A held stage that does not converge is
 /// the fit, not converged, and a FitFailure in it propagates. Passes are
 /// numbered on across the stages in the texts and in `history`, which holds
 /// both stages' iterations; `stopping` is the reported stage's own;

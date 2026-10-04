@@ -925,6 +925,7 @@ private slots:
     void diagnosticsReportTheScale();
     void scaleReleaseIsAccountedFor();
     void releaseFailureFallsBackToTheHeldFit();
+    void releaseExceptionFallsBackToTheHeldFit();
     void divergenceEndsTheHeldStage_data();
     void divergenceEndsTheHeldStage();
     void divergenceEndsTheReleasedStage();
@@ -4155,6 +4156,30 @@ void verifyHeldFallback(const InitializerRun &run, const QString &reason, const 
 }
 
 } // namespace
+
+void FusionKernelTest::releaseExceptionFallsBackToTheHeldFit()
+{
+    // Items 1403 and 1410: an exception that is not a FitFailure thrown from
+    // inside the released stage (the library's, in production) is the
+    // fallback too, since a refinement never turns a converged fit into a
+    // failure: the same forcing as releaseFailureFallsBackToTheHeldFit's,
+    // throwing a std::runtime_error at the release boundary, leaves the held
+    // fit converged with the exception's text as the reason and no released
+    // account. A cancellation at the boundary is still a cancellation
+    // (cancelAtEachKindOfBoundary).
+    const QString boundary = QStringLiteral("Releasing the scale factors");
+    const Checkpoint throwingRelease(
+        [boundary](const QString &text) {
+            if (text == boundary)
+                throw std::runtime_error("probe: not a FitFailure");
+        },
+        [] { return false; });
+    const QString name = QStringLiteral("scale_recording");
+    const Fusion::Channels channels = toChannels(initializerFixture(name));
+    const InitializerRun run = runInitializerFixture(name, Tuning{}, throwingRelease);
+    verifyHeldFallback(run, QStringLiteral("probe: not a FitFailure"), imuNoise(channels.imuConfiguration));
+    QVERIFY(run.diagnostics.value("scale_release").toObject().value("released").isNull());
+}
 
 void FusionKernelTest::releaseFailureFallsBackToTheHeldFit()
 {
