@@ -1,6 +1,8 @@
 # The scale factors as a refinement: held until the fit is stable, then released
 
-Date: 2026-10-03
+Date: 2026-10-03; amended 2026-10-04 after the implementation's measurement
+(the release budget is three passes, not two) and review (any exception
+inside the released stage is the fallback).
 Status: specification for planning. Not an implementation plan. Small enough
 to be implemented directly by one agent in one phase.
 Baseline: branch `store-requested-calculations` at `fa00b4a`, whose code is
@@ -75,18 +77,24 @@ from it as a refinement.
   The initializer's prefix and segment fits, which have no scale state,
   are untouched. The held stage has the tuning's pass budget (`maxPasses`)
   and per-pass iteration budget, as the single fit has today; the released
-  stage has a budget of its own, `releasePasses`, two: it starts from a
-  solution, and what two passes cannot settle, five will not, so a release
-  that is not going to converge falls back in minutes, not an hour.
+  stage has a budget of its own, `releasePasses`, three: it starts from a
+  solution, and on the reference recordings the release's second pass
+  settles while its rebuild still moves the cost, so the third pass, of one
+  or two iterations, is what proves it settled; what three passes cannot
+  settle, five will not, so a release that is not going to converge falls
+  back in minutes, not an hour.
 - **The release trigger is convergence.** The released stage runs only when
   the held stage ended `settled` or `slow tail accepted`. A held stage that
   ends any other way ends the fit as it ends today, under the same rule and
   with the same reason.
 - **The fallback.** A released stage that ends `settled` or `slow tail
   accepted` is the fit. One that ends under any other rule, or diverges, is
-  discarded: the held stage's values, graph, objective, residuals and
+  discarded, and so is one that throws anything from inside it (a solver
+  failure of a pass, or any other exception but a cancellation or memory
+  exhaustion): the held stage's values, graph, objective, residuals and
   quality are the fit, `converged` is true, the stopping account is the
-  held stage's, and the diagnostics record the release's outcome.
+  held stage's, and the diagnostics record the release's outcome, the rule
+  it ended under or the text of what it threw.
 - **Divergence between passes.** After every pass's rebuild, in either
   stage, the IMU normalized RMS of the rebuilt graph and the six factors are
   checked against two new tuning bounds: `divergenceMaxImuNrms`, 10, and
@@ -155,8 +163,8 @@ from it as a refinement.
 `docs/SENSOR_FUSION.md`: section 4 describes the two stages, the trigger,
 the fallback, the divergence rule and its bounds, with the probe's numbers
 on `13-35-10` as the case; the stopping-rule paragraph gains `diverged`;
-section 7 adds `scale_release` to the key list and `v9` to the string's
-history; section 8 gains the manual step's numbers. `docs/DATA_SCHEMA.md`
+section 4's key list gains `scale_release` and section 7's history `v9`;
+section 8 gains the manual step's numbers. `docs/DATA_SCHEMA.md`
 section 12 and `docs/CALCULATIONS.md` section 17 name `v9`.
 `tests/README.md`: the kernel test rows, the manual step, the specification's
 appendix and matrix.
