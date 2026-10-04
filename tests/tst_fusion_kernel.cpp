@@ -2925,10 +2925,10 @@ void FusionKernelTest::driftingBiasSegmentsConverge()
     // model: b1 within 20 % of the truth in at most 30 iterations (item 241:
     // the full fit's, the sum over all its passes, both stages counted, since
     // the item bounds what the fit costs, not one stage of it; the split
-    // between the held and the released stage is logged). From the
-    // fixture's construction: the z
-    // bias .3 + t / 200 deg/s over the ramp 25 + t / 10 degC is 0.05 deg/s
-    // per degC (b1z), T_ref = 35, and b0z = .8 deg/s, the bias at T_ref.
+    // between the held and the released stage is logged). From the fixture's
+    // construction: the z bias .3 + t / 200 deg/s over the ramp 25 + t / 10
+    // degC is 0.05 deg/s per degC (b1z), T_ref = 35, and b0z = .8 deg/s, the
+    // bias at T_ref.
     QVERIFY(run.trace.converged);
     QCOMPARE(seed.value("iterations").toInt(999), int(run.trace.history.size()));
     QVERIFY(seed.value("iterations").toInt(999) <= 30);

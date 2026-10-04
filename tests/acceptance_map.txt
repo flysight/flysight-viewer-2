@@ -23,7 +23,8 @@
 #             amended by the specification "The scaled IMU factor stands
 #             alone", which has no items of its own: items 219 and 246 are
 #             stated as amended. It is amended by the specification of
-#             1301-1313: item 244 is stated as amended.
+#             1301-1313: item 244 is stated as amended. It is amended by the
+#             specification of 1401-1415: item 243 is stated as amended.
 #   301-350   storing requested calculation results with the session (record
 #             files, restore on load, validity, logbook columns over them):
 #             item = 300 + clause number. Stated in full in
@@ -126,6 +127,8 @@
 #             1307-1311 the tests, the reference recordings and the map, 1312
 #             the documents, 1313 the slow tail. Stated in full in
 #             tests/README.md, appendix N. Item 244 is restated as amended.
+#             It is amended by the specification of 1401-1415: item 1313 is
+#             stated as amended.
 #   1401-1415 the scale factors as a refinement (the full fit in two stages,
 #             the scale factors held until the fit has converged and then
 #             released from that solution, the fallback to the held fit, the
@@ -134,7 +137,8 @@
 #             principles and what changes, 1408-1414 the tests, the
 #             reference recordings, the goldens and the map, 1415 the
 #             documents. Stated in full in tests/README.md, appendix O. It
-#             amends the specification of 1001-1065: item 1054 is stated as
+#             amends the specifications of 201-247 (item 243), 1001-1065
+#             (item 1054) and 1301-1313 (item 1313): each is stated as
 #             amended.
 #
 # One line per piece of evidence, in one of four forms:
@@ -696,7 +700,7 @@
 # 242 - test 5: a segment whose prefix fits all fail falls back, the diagnostics say so, the full fit still runs
 242 tst_fusion_kernel allPrefixFitsFailFallsBack
 
-# 243 - test 6: bias-settled test; a fit whose cost stops changing converges within two passes
+# 243 - (as amended) test 6: bias-settled test; a fit whose cost stops changing converges within two passes in each stage of the full fit, the held and the released (amended by the specification of 1401-1415, under which the full fit runs its passes in two stages)
 243 tst_fusion_kernel biasSettledByCostTest
 
 # 244 - (as amended) test 7: slow tail; a forced final pass at the limit is accepted when every condition holds (the mean relative decrease below its bound, the position, velocity and IMU normalized RMS below theirs) and fails when any fails, the IMU normalized RMS alone included
@@ -3467,15 +3471,19 @@
 # 1312 - (5) the documents: SENSOR_FUSION.md sections 2 (what the user sees over a hole), 4 and 7 (gnss_holes in the input audit, v8 in the string's history with the bridged holes and the continuity rule's 1.5 threshold), 5 (the sparse-piece merge), 6 (no GNSS gap rejection; a hole up to the cap bridged by the IMU, the cap with the measurement behind it and why a single factor imposes it, a longer hole rejected naming the limit; the stopping rule's slow tail with its three bounds), 8 (four fits and ten rejections, the two recordings' numbers); COMPUTED_PLOTS.md section 10 (the fusion plots draw through a GNSS hole); DATA_SCHEMA.md section 12 and CALCULATIONS.md section 17 (v8); tests/README.md (the fixture tables, M55 in section 12.12, appendix N, matrix 9.14)
 1312 audit gnss-holes
 
-# 1313 - (2, 3) a slow tail is accepted only when every factor kind fits: a final pass at its iteration limit is accepted when its mean relative decrease over the window is below the bound and the position, velocity and IMU normalized RMS are all below slowTailMaxNrms (name and value unchanged); otherwise the rule is iteration limit, a solver failure; under it 24-09-04/13-35-10 ends iteration limit
+# 1313 - (2, 3, as amended) a slow tail is accepted only when every factor kind fits: a final pass at its iteration limit is accepted when its mean relative decrease over the window is below the bound and the position, velocity and IMU normalized RMS are all below slowTailMaxNrms (name and value unchanged); otherwise the rule is iteration limit, a solver failure; under it and v8 24-09-04/13-35-10 ended iteration limit; as amended by the specification of 1401-1415 the rule is unchanged and the recording converges, its scale factors held until the fit is stable and then released (M56)
 1313 tst_fusion_kernel slowTailAtTheIterationLimit
 1313 audit gnss-holes
 1313 manual M55
+1313 manual M56
 
 # ---- The scale factors as a refinement (PLANS/staged-scale.md): fifteen items ----
 
 # 1401 - (2, 3) the full fit runs in two stages under the temperature model: the held stage from the initializer's start with the scale prior's sigma divided by a thousand, then the released stage from the held stage's values with the datasheet's sigma; one graph, the prior's sigma the only difference; the held stage with the tuning's pass budget, the released stage with its own, releasePasses, three (two in the specification; set to three at implementation, since two discarded releases that had reached their minimum), each pass of the tuning's iteration budget; the initializer's fits untouched
 1401 tst_fusion_kernel scaleReleaseIsAccountedFor
+1401 tst_fusion_kernel slowTailAtTheIterationLimit
+1401 tst_fusion_kernel constantTemperatureKeepsSlopeAtPrior
+1401 tst_fusion_kernel releaseFailureFallsBackToTheHeldFit
 1401 tst_fusion_kernel fitTraceMatchesGolden
 1401 tst_fusion_golden successFixturesMatchGolden
 1401 audit staged-scale
@@ -3489,6 +3497,7 @@
 # 1403 - (2, 3) the fallback: a released stage that ends settled or slow tail accepted is the fit; one that ends under any other rule, diverges or throws is discarded: the held stage's values, graph, objective, residuals, quality and stopping are the fit, converged is true, the factors are at one with the held stage's sigmas, and the diagnostics record the outcome; a refinement never turns a converged fit into a failure; cancellation is not caught
 1403 tst_fusion_kernel releaseFailureFallsBackToTheHeldFit
 1403 tst_fusion_kernel divergenceEndsTheReleasedStage
+1403 tst_fusion_golden cancelAtEachKindOfBoundary
 
 # 1404 - (2, 3) divergence between passes: after every pass's rebuild of either stage, before the cost test, the IMU normalized RMS strictly below divergenceMaxImuNrms (10) and every factor strictly inside divergenceScaleRange (0.5 to 2), else the stage ends diverged: a solver failure with the completed-pass shape in the held stage, the fallback in the released; a zero bound or an empty interval refuses; the bounds are reported in stopping as divergence_max_imu_nrms and divergence_scale_range; the production bounds change nothing on any fixture
 1404 tst_fusion_kernel divergenceEndsTheHeldStage

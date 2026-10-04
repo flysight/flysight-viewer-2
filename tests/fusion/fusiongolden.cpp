@@ -118,6 +118,7 @@ bool isExactKey(const QString &key)
         QStringLiteral("rows"), QStringLiteral("passes"), QStringLiteral("window"),
         QStringLiteral("bias_settled_tolerance"), QStringLiteral("max_mean_relative_decrease"),
         QStringLiteral("max_nrms"), QStringLiteral("lambda_upper_bound"),
+        QStringLiteral("divergence_max_imu_nrms"), QStringLiteral("divergence_scale_range"),
         QStringLiteral("accel_fs_g"), QStringLiteral("gyro_fs_deg_s"), QStringLiteral("accel_odr_hz"),
         QStringLiteral("gyro_odr_hz"), QStringLiteral("bandwidth_hz"),
         QStringLiteral("index"), QStringLiteral("prefix_fits"), QStringLiteral("segment_length_s"),

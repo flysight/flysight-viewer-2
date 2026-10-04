@@ -91,12 +91,10 @@ struct Tuning {
     int maxPasses = 5;                              ///< re-preintegration passes of one fit: the held stage of the full fit's and a segment fit's five; a prefix fit's one
     // The released stage of the full fit starts from a converged solution, so
     // its budget is a bound on a release that will not converge: it falls back
-    // to the held solution in minutes, not an hour. Three, because on the
-    // reference recordings and on scale_recording the release's second pass
-    // settles and the rebuild after it still moves the cost; the third pass's
-    // rebuild proves it settled (with two, scale_recording and four of the
-    // five M56 recordings, all but 10-15-24, discarded a release that had
-    // reached its minimum).
+    // to the held solution in minutes, not an hour. Three, because the
+    // release's second pass typically settles while the graph rebuilt after
+    // it still moves the cost, and the third pass's rebuild proves it settled;
+    // the measurements are in docs/SENSOR_FUSION.md section 8.
     int releasePasses = 3;                          ///< re-preintegration passes of the full fit's released stage
 };
 

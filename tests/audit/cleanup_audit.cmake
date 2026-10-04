@@ -1413,10 +1413,10 @@ expect_none("the GNSS outage rule is gone" "requireNoGnssOutage|kGnssOutage"
 expect_none("the GNSS gap rejection is gone" "GNSS gap: fusion unavailable"
   src tests docs README.md CMakeLists.txt)
 expect_none("the GNSS gap fixture is gone" "reject_gnss_gap" src tests docs README.md CMakeLists.txt)
-# Allow: tests/README.md quotes the previous string as history (its capture
+# Allow: tests/README.md quotes the v7 string as history (its capture
 # paragraphs and matrix rows); nothing else does. A hit under tests/data/fusion
-# is a stale capture.
-expect_none("the previous algorithm string is gone" "batch-temperature-bias-v7"
+# is a stale capture. (The v8 string's rule is in group staged-scale.)
+expect_none("the v7 algorithm string is gone" "batch-temperature-bias-v7"
   src tests docs README.md ":!tests/README.md")
 # The goldens: fourteen captured under the current string, four fits and ten
 # rejections, and the input audit of every fit names its holes. Allow: none

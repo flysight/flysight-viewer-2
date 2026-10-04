@@ -463,7 +463,7 @@ its ceiling while the linearization still predicted a decrease above the
 settling threshold: the optimizer has given up short of a minimum, and the
 start it would have called converged is not one) or `diverged` (the graph
 rebuilt after a pass has left the model: its IMU normalized RMS is 10 or
-more, or a scale factor lies outside 0.5 to 2; below). `cost increased` and
+more, or a scale factor is at or beyond 0.5 or 2; below). `cost increased` and
 `damping saturated` are the failures the fit cannot continue from, and are
 solver failures, never a convergence. An iteration that leaves the cost unchanged at the ceiling where
 the linearization predicts no decrease (its undamped Gauss-Newton step would
@@ -488,9 +488,8 @@ from a solution, so that a release that is not going to converge falls back in
 minutes, not an hour. Three, because on the reference recordings the
 release's second pass settles and the graph rebuilt after it still moves the
 cost; the third pass's rebuild proves it settled (section 8). A released
-stage that converges
-is the fit. One that ends under any other rule, diverges or fails is
-discarded: the held stage's solution is the fit, converged, with its factors
+stage that converges is the fit. One that ends under any other rule,
+diverges or fails is discarded: the held stage's solution is the fit, converged, with its factors
 at one and the held stage's sigmas, and the diagnostics say that the factors
 were not released and why (the release's account, below); a refinement never turns
 a converged fit into a failure. A held stage that does not converge ends the
@@ -515,7 +514,9 @@ solution. The bounds are far outside anything a slow tail accepts (a
 normalized RMS of 2) and anything a 1 % tolerance admits; they catch a fit
 that has left the model, not one that is slow, so that hours are not spent
 on a trajectory that is already lost. The stopping account reports them with
-the other thresholds.
+the other thresholds. No test forces the IMU normalized RMS bound in the
+released stage alone, since there is no bound for one stage: the tests force
+it in the held stage, and force the scale range in each.
 
 **The state at every IMU sample.** The fit estimates the state at each GNSS
 fix; what it publishes is the state at every IMU sample between the first and
@@ -1060,7 +1061,8 @@ prefix and segment fits as in the full fit; before each optimizer
 iteration of any of those fits (the segment fits' texts name the segment and,
 for a prefix, its length; the full fit's `Pass p, iteration k` numbers its
 passes on across its two stages); and `Releasing the scale factors`, once per
-full fit, between its held stage and its released stage (section 4). A
+full fit whose held stage converged, between its held stage and its released
+stage (section 4). A
 cancellation there, or inside the released stage, cancels the fit like any
 other. A linear solve in progress finishes first. The
 covariance step and the reconstruction at the IMU samples, which composes the
