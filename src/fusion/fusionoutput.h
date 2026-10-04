@@ -37,7 +37,10 @@ void fillOutputChannels(const ImuRateTrajectory &trajectory, const std::vector<d
 /// `tuning.noise`), the initializer's account, objective, biases, the scale
 /// factors and their sigmas from `covariance` (null when it was not
 /// computed), per-factor residuals, the statements of what the outputs mean,
-/// the stopping account with its thresholds, the account of the
+/// the stopping account with its thresholds and the quality of the reported
+/// stage, the account of the scale factors' release (`scale_release`, from
+/// `fit.scaleRelease`: the held stage, the released stage, whether it was
+/// kept and why not), the account of the
 /// reconstruction from `trajectory` (its sample count and its four summaries:
 /// the largest attitude and velocity mismatch at a fix, the largest step
 /// correction and when it occurred), and the account of the accuracy
@@ -55,7 +58,8 @@ QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerA
 /// the reason, plus the stopping account when the fit ran a pass (`stopping`
 /// given: its rule says `cost increased` or `damping saturated` for a pass that
 /// failed) and the quality of the reported fit when it completed its passes
-/// (`quality` given). A rejection has neither.
+/// (`quality` given). A rejection has neither, and no failure carries the
+/// account of the scale factors' release.
 QJsonObject failureDiagnostics(const QString &reason, const Stopping *stopping = nullptr,
                                const Quality *quality = nullptr);
 

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -35,7 +36,9 @@
 
 namespace FlySight::Fusion::Detail {
 
-/// Cost before and after one optimizer iteration. Both indices are zero-based.
+/// Cost before and after one optimizer iteration. Both indices are zero-based;
+/// `outer`, the pass, counts on across the two stages of the full fit, so the
+/// released stage's first pass is one more than the held stage's last.
 struct FitIteration { int outer, iteration; double before, after; };
 
 /// One factor's share of the objective: twice its error, i.e. its squared
@@ -50,15 +53,16 @@ constexpr char kIterationLimit[] = "iteration limit";
 constexpr char kBiasNotSettled[] = "bias not settled";
 constexpr char kCostIncreased[] = "cost increased";
 constexpr char kDampingSaturated[] = "damping saturated";
+constexpr char kDiverged[] = "diverged";
 }
 
-/// How the fit ended: the rule, the measurements the rules were judged on,
-/// and the thresholds in force (copied from Tuning, so the account is
-/// complete on its own). A measurement that could not be taken is NaN; the
+/// How a stage of the fit ended: the rule, the measurements the rules were
+/// judged on, and the thresholds in force (copied from Tuning, so the account
+/// is complete on its own). A measurement that could not be taken is NaN; the
 /// diagnostics write it as null.
 struct Stopping {
     std::string rule;                            ///< one of StopRule; empty until a pass has run
-    int passes = 0;                              ///< bias passes run, 1..maxPasses; the pass a failure happened in counts
+    int passes = 0;                              ///< the stage's own bias passes, 1..its budget (maxPasses, or the release budget of Tuning for the released stage); the pass a failure happened in counts
     /// Mean of (before - after) / max(1, before) over the last
     /// min(slowTailWindow, n) iterations of the last pass, n its iteration count.
     double lastPassMeanRelativeDecrease = std::numeric_limits<double>::quiet_NaN();
@@ -71,6 +75,31 @@ struct Stopping {
     int slowTailWindow = 0;
     double slowTailMaxMeanRelativeDecrease = 0;
     double slowTailMaxNrms = 0;
+    double divergenceMaxImuNrms = 0;
+    Tuning::ScaleRange divergenceScaleRange{0, 0};
+};
+
+/// The account of one stage of the full fit: the rule it ended under, its own
+/// passes and iterations, and the objective of its last rebuilt graph (NaN
+/// when the stage ended by a FitFailure, which is thrown inside a pass before
+/// its rebuild).
+struct StageAccount {
+    std::string rule;
+    int passes = 0;
+    int iterations = 0;
+    double objective = std::numeric_limits<double>::quiet_NaN();
+};
+
+/// The account of the scale factors' release: the held stage's; the released
+/// stage's when it ran at least one iteration; whether the released stage is
+/// the fit; and, when it was discarded, the rule it ended under (empty
+/// otherwise, and when it was kept). Filled by the full fit; the
+/// initializer's fits leave it default.
+struct ScaleRelease {
+    StageAccount held;
+    std::optional<StageAccount> released;
+    bool kept = false;
+    std::string reason;
 };
 
 /// The quality of the reported fit. The normalized RMS of a factor kind is
@@ -109,12 +138,15 @@ struct BiasLinearization {
 gtsam::imuBias::ConstantBias intervalBias(const Samples &d, size_t k, const gtsam::imuBias::ConstantBias &bias,
                                           const gtsam::Vector3 &slope, const GyroBiasModel &model);
 
+/// What a fit returns. For the full fit every member but `history` and
+/// `scaleRelease` is the reported stage's: the released stage when it was
+/// kept, the held stage otherwise.
 struct FitResult {
     gtsam::Values values;
     bool converged = false;                      ///< true for `settled` and `slow tail accepted`
     double objective = 0;                        ///< graph error at `values`, preintegrated at the fitted bias and scale
     double positionRms = 0, velocityRms = 0;     ///< fitted state vs GNSS measurement, vector RMS
-    std::vector<FitIteration> history;
+    std::vector<FitIteration> history;           ///< every iteration of the fit, of both stages of the full fit, kept or discarded
     std::vector<FactorResidual> residuals;       ///< in factor order; the bias prior, then (temperature model) the slope prior and the scale prior, last
     Stopping stopping;
     Quality quality;
@@ -124,6 +156,7 @@ struct FitResult {
     gtsam::Vector3 gyroBiasSlope = gtsam::Vector3::Zero();   ///< the fitted b1, rad/s per degC; zero under the constant model
     gtsam::Vector6 scale = gtsam::Vector6::Ones();           ///< the fitted S(0), accelerometer x, y, z then gyro; ones under the constant model
     GyroBiasModel biasModel;                     ///< the model this fit used (tRef for the diagnostics and the reconstruction)
+    ScaleRelease scaleRelease;                   ///< the full fit's account of its two stages; default under the constant model
 };
 
 /// The full fit's iteration text; the initializer's fits pass the segment texts.
@@ -167,7 +200,8 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples, const BiasL
 
 /// Fits `samples` from `initial`. Preintegration is linearized at a fixed
 /// bias and scale, so the fit alternates: optimize, re-preintegrate at the
-/// new bias and scale, optimize again, for at most `maxPasses` passes. A
+/// new bias and scale, optimize again, for at most `maxPasses` passes (the
+/// tuning's release budget in the released stage of the full fit, below). A
 /// settled pass has converged when the graph rebuilt at its bias and scale changes the cost by at most
 /// `biasSettledTolerance` (relative to max(1, cost)); a last pass that reaches
 /// its iteration limit is accepted as a slow tail when its last
@@ -197,7 +231,32 @@ gtsam::NonlinearFactorGraph buildFactorGraph(const Samples &samples, const BiasL
 /// `gyroBiasSlope`; it also carries S(0), started at ones, every build
 /// preintegrates at the scale of the current values, and the fitted factors
 /// are returned in `scale`. The default is the constant model: the
-/// initializer's prefix and segment fits are stock.
+/// initializer's prefix and segment fits are stock, one sequence of passes.
+///
+/// The full fit (the temperature model) runs that sequence of passes twice,
+/// on the same graph with only the scale prior's sigma different. The held
+/// stage, from `initial`, has the sensitivity tolerances divided by a thousand
+/// (the factors held at one) and `maxPasses` passes. Only when it converged
+/// (`settled` or `slow tail accepted`) is `Releasing the scale factors`
+/// reported through `checkpoint`, and the released stage runs from the held
+/// stage's values (every state, the bias, the slope and the factors) with the
+/// tolerances themselves and the tuning's release budget of passes. A
+/// released stage that converges is the fit. One that ends under any other rule, or throws
+/// FitFailure (from a pass or from the release boundary), is discarded: the
+/// held stage is the fit, converged. A held stage that does not converge is
+/// the fit, not converged, and a FitFailure in it propagates. Passes are
+/// numbered on across the stages in the texts and in `history`, which holds
+/// both stages' iterations; `stopping` is the reported stage's own;
+/// `scaleRelease` accounts for both.
+///
+/// In either stage of the full fit, after every pass's rebuild and before its
+/// cost test, the pass has diverged unless the IMU normalized RMS of the
+/// rebuilt graph at the pass's values is strictly below
+/// `divergenceMaxImuNrms` and each of the six factors lies strictly inside
+/// `divergenceScaleRange`; a pass that diverged ends its stage at once under
+/// `diverged`, not converged, with the rebuild's objective, residuals and
+/// quality (strict comparisons: a zero bound or an empty interval refuses
+/// deterministically).
 FitResult fitFactorGraph(const Samples &samples, const InitialState &initial, const Tuning &tuning,
                          const QString &passFormat = QString::fromLatin1(kFullFitPassFormat),
                          const Checkpoint &checkpoint = Checkpoint(),

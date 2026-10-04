@@ -119,8 +119,8 @@ Result fitAndAssemble(const FitPlan &plan, const Checkpoint &checkpoint, Pipelin
         trace->initializer = init.account;
     // The fit still refreshes preintegration as the fitted biases and scale
     // factors change. The full fit alone runs the temperature model with the
-    // scale state; the initializer's fits above took the stock model by
-    // default.
+    // scale state, in its two stages (the factors held, then released); the
+    // initializer's fits above took the stock model by default.
     const FitResult fit = fitFactorGraph(plan.window, init.state, plan.tuning,
                                          QString::fromLatin1(kFullFitPassFormat), checkpoint, plan.biasModel);
     if (trace) {

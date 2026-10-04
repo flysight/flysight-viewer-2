@@ -68,7 +68,10 @@ struct Result {
     /// `b1`, the reference temperature; `model.scale`: the fitted scale
     /// factors, `acc` and `gyro`, each [x, y, z], and their sigmas
     /// `acc_sigma` and `gyro_sigma`, null when the covariance was not
-    /// computed), residuals, and the account of the accuracy (`accuracy`:
+    /// computed), residuals, the account of the scale factors' release
+    /// (`scale_release`: the held stage's and the released stage's rule,
+    /// passes, iterations and objective, whether the release was kept and,
+    /// if not, why), and the account of the accuracy (`accuracy`:
     /// whether the covariance was computed and why not, the heading prior and
     /// the widening window, and the widening's and the undetermined
     /// heading's counts). On Rejected / SolverFailed: the algorithm name and
@@ -117,9 +120,10 @@ using CancelFn = std::function<bool()>;
 /// deeply). The callbacks cannot influence the result except by abandoning it.
 /// Preparation is a few single passes over the recording and asks nothing.
 /// Cancellation is observed at every reported boundary: `Starting fit`;
-/// `Integrating IMU factors`, every 256 states of every graph build; and
-/// every iteration of every optimizer pass, in the initializer's prefix and
-/// segment fits (whose texts name the segment) as in the full fit. A linear
+/// `Integrating IMU factors`, every 256 states of every graph build; every
+/// iteration of every optimizer pass, in the initializer's prefix and segment
+/// fits (whose texts name the segment) as in the full fit; and `Releasing the
+/// scale factors`, once per full fit whose held stage converged. A linear
 /// solve in progress finishes first, and so does the work after the last
 /// iteration, which has no boundary: the covariance step (one factorization of
 /// the converged graph) and the reconstruction at the IMU samples, which
@@ -139,7 +143,7 @@ Result run(const Channels &channels, const ProgressFn &progress = {},
 /// registration (CalculationDescriptor::resultVersion), so changing it drops
 /// every stored fit. Change it whenever a change can alter what run() returns
 /// for the same channels.
-inline constexpr char Algorithm[] = "batch-temperature-bias-v8";
+inline constexpr char Algorithm[] = "batch-temperature-bias-v9";
 
 } // namespace FlySight::Fusion
 

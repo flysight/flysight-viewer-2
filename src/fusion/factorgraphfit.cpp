@@ -29,6 +29,11 @@ namespace {
 
 constexpr size_t kStatesPerCheckpoint = 256;
 
+// The held stage of the full fit divides the sensitivity tolerances, the scale
+// prior's sigmas, by this: a thousand times tighter than the datasheet's holds
+// every factor at one to well within anything the data could move it.
+constexpr double kHeldScalePriorDivisor = 1000;
+
 // An iteration may raise the cost by this much (rounding) before it counts as
 // an increase, which is a failure.
 constexpr double kCostIncreaseTolerance = 1e-6;
@@ -125,6 +130,8 @@ Stopping thresholdsOf(const Tuning &c)
     stopping.slowTailWindow = c.slowTailWindow;
     stopping.slowTailMaxMeanRelativeDecrease = c.slowTailMaxMeanRelativeDecrease;
     stopping.slowTailMaxNrms = c.slowTailMaxNrms;
+    stopping.divergenceMaxImuNrms = c.divergenceMaxImuNrms;
+    stopping.divergenceScaleRange = c.divergenceScaleRange;
     return stopping;
 }
 
@@ -147,15 +154,16 @@ double meanRelativeDecrease(const std::vector<FitIteration> &history, int outer,
     return sum/n;
 }
 
-/// The account of a pass that failed: the rule, the pass it happened in and
-/// the mean over that pass's iterations (the failing one is already in the
-/// history: its mean may be negative or NaN, which is the point of reporting
-/// it).
-Stopping failedPass(const Tuning &c, const char *rule, int outer, const std::vector<FitIteration> &history)
+/// The account of a pass that failed: the rule, the pass it happened in,
+/// counted within its stage (whose first pass is `firstOuter`), and the mean
+/// over that pass's iterations (the failing one is already in the history: its
+/// mean may be negative or NaN, which is the point of reporting it).
+Stopping failedPass(const Tuning &c, const char *rule, int outer, int firstOuter,
+                    const std::vector<FitIteration> &history)
 {
     Stopping stopping = thresholdsOf(c);
     stopping.rule = rule;
-    stopping.passes = outer+1;
+    stopping.passes = outer-firstOuter+1;
     stopping.lastPassMeanRelativeDecrease = meanRelativeDecrease(history, outer, c.slowTailWindow);
     return stopping;
 }
@@ -177,11 +185,12 @@ Stopping failedPass(const Tuning &c, const char *rule, int outer, const std::vec
 /// iteration that pass expects, as the library's stop below the ceiling
 /// already gives, and the prediction is judged against the rounding floor. A non-finite or increasing cost
 /// throws FitFailure (`cost increased`). Either carries the account of the
-/// pass it happened in.
+/// pass it happened in, counted within its stage (whose first pass is
+/// `firstOuter`).
 /// Each iteration's boundary text is `passFormat` with the pass and the
 /// iteration filled in (fitFactorGraph()'s contract).
 bool runOptimizerPass(const gtsam::NonlinearFactorGraph &graph, gtsam::Values &values,
-                      const Tuning &c, int outer, const QString &passFormat,
+                      const Tuning &c, int outer, int firstOuter, const QString &passFormat,
                       const Checkpoint &checkpoint, std::vector<FitIteration> &history)
 {
     gtsam::LevenbergMarquardtParams params;
@@ -199,12 +208,12 @@ bool runOptimizerPass(const gtsam::NonlinearFactorGraph &graph, gtsam::Values &v
         history.push_back({outer, i, before, after});
         if (!std::isfinite(after) || after > before+kCostIncreaseTolerance)
             throw FitFailure("Nonfinite or increasing optimizer cost",
-                             failedPass(c, StopRule::kCostIncreased, outer, history));
+                             failedPass(c, StopRule::kCostIncreased, outer, firstOuter, history));
         const double threshold = c.relativeTolerance*std::max(1., before);
         if (after == before && optimizer.lambda() >= c.lambdaUpperBound) {
             if (predictedDecrease(*linear) > std::max(threshold, kStallFloor*std::max(1., before)))
                 throw FitFailure("Optimizer damping saturated without progress",
-                                 failedPass(c, StopRule::kDampingSaturated, outer, history));
+                                 failedPass(c, StopRule::kDampingSaturated, outer, firstOuter, history));
             if (threshold < 0)
                 continue;
             settled = true;
@@ -257,6 +266,143 @@ void collectResiduals(const Samples &d, const gtsam::NonlinearFactorGraph &graph
     result.quality.velocityNrms = std::sqrt(sumVelocity/(3*n));
     result.quality.imuNrms = std::sqrt(sumImu/(9*(n-1)));
     result.quality.objectivePerState = result.objective/n;
+}
+
+/// `values` as reported on `graph`, whose cost at them is `objective`: the
+/// fitted slope and scale, the residuals and the quality.
+FitResult evaluatedAt(const Samples &d, const gtsam::NonlinearFactorGraph &graph, const gtsam::Values &values,
+                      double objective, const GyroBiasModel &model)
+{
+    FitResult result;
+    result.values = values;
+    result.objective = objective;
+    result.biasModel = model;
+    result.gyroBiasSlope = model.temperatureLinear ? values.at<gtsam::Vector3>(T(0)) : gtsam::Vector3::Zero();
+    result.scale = model.temperatureLinear ? values.at<gtsam::Vector6>(S(0)) : gtsam::Vector6::Ones();
+    collectResiduals(d, graph, result);
+    return result;
+}
+
+/// Whether the pass evaluated in `pass` has left the model: its IMU
+/// normalized RMS not strictly below the bound, or a factor not strictly
+/// inside the range. Strict comparisons, so that a zero bound or an empty
+/// interval refuses deterministically, and a NaN misfit is a divergence.
+bool hasDiverged(const FitResult &pass, const Tuning &c)
+{
+    bool inside = pass.quality.imuNrms < c.divergenceMaxImuNrms;
+    for (int i = 0; i < 6; ++i)
+        inside = inside && c.divergenceScaleRange.lower < pass.scale(i) && pass.scale(i) < c.divergenceScaleRange.upper;
+    return !inside;
+}
+
+/// One sequence of passes from `values`: the whole of a fit under the
+/// constant model, one stage of the full fit under the temperature model (the
+/// only one judged for divergence). At most `passBudget` passes, the first
+/// numbered `firstOuter` in the texts and in `history`, to which every
+/// iteration is appended. The result's `stopping` counts this stage's passes;
+/// its `history` is left empty for the caller.
+FitResult runPasses(const Samples &d, gtsam::Values values, const Tuning &c, const GyroBiasModel &model,
+                    int passBudget, int firstOuter, const QString &passFormat, const Checkpoint &checkpoint,
+                    std::vector<FitIteration> &history)
+{
+    Stopping stopping = thresholdsOf(c);
+
+    // The graph after a pass is rebuilt once, at the pass's fitted bias and
+    // scale, and serves three purposes: the cost test, the next pass's graph,
+    // and (after the last pass) the reported graph. So there are passes + 1
+    // builds, each reporting "Integrating IMU factors". Every build
+    // preintegrates each interval at that interval's bias and at the scale of
+    // the current linearization point; between builds the scale enters the
+    // IMU factors to first order, as the bias does.
+    gtsam::NonlinearFactorGraph graph = buildFactorGraph(d, linearizationOf(values, model), model, c, checkpoint);
+    gtsam::NonlinearFactorGraph rebuilt;
+    FitResult result;
+    bool lastSettled = false, settled = false, diverged = false;
+    int lastOuter = firstOuter;
+    for (int pass = 0; pass < passBudget; ++pass) {
+        const int outer = firstOuter+pass;
+        lastOuter = outer;
+        lastSettled = runOptimizerPass(graph, values, c, outer, firstOuter, passFormat, checkpoint, history);
+        stopping.passes = pass+1;
+
+        // The objective, the residuals and the quality are those of the graph
+        // preintegrated at the pass's fitted bias and scale, not at those the
+        // pass was linearized at: the rebuild. After the last pass it is also
+        // the reported graph.
+        rebuilt = buildFactorGraph(d, linearizationOf(values, model), model, c, checkpoint);
+        const double costRebuilt = rebuilt.error(values);
+        result = evaluatedAt(d, rebuilt, values, costRebuilt, model);
+        const double passFinal = history.back().after;
+        stopping.repreintegrationCostDifference = std::abs(costRebuilt-passFinal)/std::max(1., passFinal);
+
+        // Divergence first: a pass that has left the model ends its stage
+        // whatever the cost test would say.
+        if (model.temperatureLinear && hasDiverged(result, c)) {
+            diverged = true;
+            break;
+        }
+        // The cost test: re-preintegrated at the pass's fitted bias and
+        // scale, the cost at the pass's values must be what the pass ended at.
+        if (lastSettled && stopping.repreintegrationCostDifference <= c.biasSettledTolerance) {
+            settled = true;
+            break;
+        }
+        // A pass that hit the limit is followed by another while passes
+        // remain; the slow tail is judged only on the last one.
+        if (pass+1 < passBudget)
+            graph = std::move(rebuilt);
+    }
+
+    result.graph = std::move(rebuilt);
+    result.stopping = stopping;
+    result.stopping.lastPassMeanRelativeDecrease = meanRelativeDecrease(history, lastOuter, c.slowTailWindow);
+    if (diverged) {
+        result.stopping.rule = StopRule::kDiverged;
+    } else if (settled) {
+        result.stopping.rule = StopRule::kSettled;
+        result.converged = true;
+    } else if (lastSettled) {
+        // The last pass settled but re-preintegrating still moved the cost.
+        result.stopping.rule = StopRule::kBiasNotSettled;
+    } else {
+        // The slow tail: the last pass at its limit, judged on its last
+        // window of iterations and on the misfit of every factor kind in
+        // the rebuild: the GNSS measurements' (which do not depend on the
+        // bias or the scale, so they are the pass's) and the IMU
+        // factors', so that a pass that satisfies the fixes while it
+        // ignores the IMU is never accepted. Strict comparisons, so that
+        // a zero bound refuses deterministically.
+        int n = 0;
+        for (const FitIteration &h : history) {
+            if (h.outer == lastOuter)
+                ++n;
+        }
+        const bool accepted = n >= c.slowTailWindow
+            && result.stopping.lastPassMeanRelativeDecrease < c.slowTailMaxMeanRelativeDecrease
+            && result.quality.positionNrms < c.slowTailMaxNrms
+            && result.quality.velocityNrms < c.slowTailMaxNrms
+            && result.quality.imuNrms < c.slowTailMaxNrms;
+        result.stopping.rule = accepted ? StopRule::kSlowTailAccepted : StopRule::kIterationLimit;
+        result.converged = accepted;
+    }
+    return result;
+}
+
+/// `c` with the scale prior of the held stage: the sensitivity tolerances
+/// divided by kHeldScalePriorDivisor. Nothing else of the tuning is read
+/// differently, and the caller's tuning (whose noise the diagnostics report)
+/// is not touched.
+Tuning withHeldScalePrior(Tuning c)
+{
+    c.noise.accelerometer.sensitivityTolerance /= kHeldScalePriorDivisor;
+    c.noise.gyroscope.sensitivityTolerance /= kHeldScalePriorDivisor;
+    return c;
+}
+
+/// The account of a stage that returned, with `iterations` its own.
+StageAccount accountOf(const FitResult &stage, size_t iterations)
+{
+    return {stage.stopping.rule, stage.stopping.passes, int(iterations), stage.objective};
 }
 
 } // namespace
@@ -340,92 +486,63 @@ FitResult fitFactorGraph(const Samples &d, const InitialState &initial, const Tu
     if (model.temperatureLinear && d.temperature.empty())
         throw std::invalid_argument("Temperature model without a temperature series");
 
-    FitResult result;
-    result.stopping = thresholdsOf(c);
-    Stopping &stopping = result.stopping;
     gtsam::Values values = initialValues(d, initial);
+    std::vector<FitIteration> history;
+    if (!model.temperatureLinear) {
+        FitResult result = runPasses(d, std::move(values), c, model, c.maxPasses, 0, passFormat, checkpoint,
+                                     history);
+        result.history = std::move(history);
+        return result;
+    }
+
     // The full fit starts b1 at zero (b0 is the initializer's) and the scale
     // factors at one, the datasheet's nominal sensitivity. Under the constant
     // model neither T(0) nor S(0) is inserted: no factor would touch them and
     // the linear system would be indeterminate.
-    if (model.temperatureLinear) {
-        values.insert(T(0), gtsam::Vector3(gtsam::Vector3::Zero()));
-        values.insert(S(0), gtsam::Vector6(gtsam::Vector6::Ones()));
+    values.insert(T(0), gtsam::Vector3(gtsam::Vector3::Zero()));
+    values.insert(S(0), gtsam::Vector6(gtsam::Vector6::Ones()));
+
+    // The held stage: a global multiplicative parameter is not fitted from a
+    // trajectory that has not settled, so the factors are held at one until
+    // the fit has converged. One that does not converge is the fit, as it
+    // stands; a FitFailure propagates.
+    FitResult held = runPasses(d, std::move(values), withHeldScalePrior(c), model, c.maxPasses, 0, passFormat,
+                               checkpoint, history);
+    const size_t heldIterations = history.size();
+    ScaleRelease release;
+    release.held = accountOf(held, heldIterations);
+    if (!held.converged) {
+        held.scaleRelease = std::move(release);
+        held.history = std::move(history);
+        return held;
     }
 
-    // The graph after a pass is rebuilt once, at the pass's fitted bias and
-    // scale, and serves three purposes: the cost test, the next pass's graph,
-    // and (after the last pass) the reported graph. So there are passes + 1
-    // builds, each reporting "Integrating IMU factors". Every build
-    // preintegrates each interval at that interval's bias and at the scale of
-    // the current linearization point; between builds the scale enters the
-    // IMU factors to first order, as the bias does.
-    gtsam::NonlinearFactorGraph graph = buildFactorGraph(d, linearizationOf(values, model), model, c, checkpoint);
-    gtsam::NonlinearFactorGraph rebuilt;
-    double costRebuilt = 0;
-    bool lastSettled = false;
-    int lastOuter = 0;
-    for (int outer = 0; outer < c.maxPasses; ++outer) {
-        lastOuter = outer;
-        lastSettled = runOptimizerPass(graph, values, c, outer, passFormat, checkpoint, result.history);
-        stopping.passes = outer+1;
-
-        // The cost test: re-preintegrated at the pass's fitted bias and
-        // scale, the cost at the pass's values must be what the pass ended at.
-        rebuilt = buildFactorGraph(d, linearizationOf(values, model), model, c, checkpoint);
-        costRebuilt = rebuilt.error(values);
-        const double passFinal = result.history.back().after;
-        stopping.repreintegrationCostDifference = std::abs(costRebuilt-passFinal)/std::max(1., passFinal);
-        if (lastSettled && stopping.repreintegrationCostDifference <= c.biasSettledTolerance) {
-            stopping.rule = StopRule::kSettled;
-            result.converged = true;
-            break;
+    // The released stage: a refinement from the held solution, judged like
+    // any sequence of passes. Its failures of every kind are the fallback, a
+    // failure thrown at its boundary or in a pass among them; a cancellation
+    // is not a failure and is not caught.
+    std::optional<FitResult> released;
+    try {
+        checkpoint(QStringLiteral("Releasing the scale factors"));
+        released = runPasses(d, held.values, c, model, c.releasePasses, held.stopping.passes, passFormat, checkpoint,
+                             history);
+        release.released = accountOf(*released, history.size()-heldIterations);
+    } catch (const FitFailure &e) {
+        // Thrown inside a pass, before its rebuild: no objective. A failure at
+        // the boundary ran no iteration, and there is no released account.
+        if (history.size() > heldIterations) {
+            release.released = StageAccount{e.stopping.rule, e.stopping.passes, int(history.size()-heldIterations),
+                                            std::numeric_limits<double>::quiet_NaN()};
         }
-        // A pass that hit the limit is followed by another while passes
-        // remain; the slow tail is judged only on the last one.
-        if (outer+1 < c.maxPasses)
-            graph = std::move(rebuilt);
+        release.reason = e.stopping.rule;
     }
 
-    // The objective, the residuals and the quality are those of the graph
-    // preintegrated at the fitted bias and scale, not at those the last pass
-    // was linearized at: the rebuild, whose cost the test above evaluated. It
-    // is also the reported graph.
-    result.values = values;
-    result.objective = costRebuilt;
-    result.biasModel = model;
-    result.gyroBiasSlope = model.temperatureLinear ? values.at<gtsam::Vector3>(T(0)) : gtsam::Vector3::Zero();
-    result.scale = model.temperatureLinear ? values.at<gtsam::Vector6>(S(0)) : gtsam::Vector6::Ones();
-    collectResiduals(d, rebuilt, result);
-    result.graph = std::move(rebuilt);
-    stopping.lastPassMeanRelativeDecrease = meanRelativeDecrease(result.history, lastOuter, c.slowTailWindow);
-
-    if (!result.converged) {
-        if (lastSettled) {
-            // The last pass settled but re-preintegrating still moved the cost.
-            stopping.rule = StopRule::kBiasNotSettled;
-        } else {
-            // The slow tail: the last pass at its limit, judged on its last
-            // window of iterations and on the misfit of every factor kind in
-            // the rebuild: the GNSS measurements' (which do not depend on the
-            // bias or the scale, so they are the pass's) and the IMU
-            // factors', so that a pass that satisfies the fixes while it
-            // ignores the IMU is never accepted. Strict comparisons, so that
-            // a zero bound refuses deterministically.
-            int n = 0;
-            for (const FitIteration &h : result.history) {
-                if (h.outer == lastOuter)
-                    ++n;
-            }
-            const bool accepted = n >= c.slowTailWindow
-                && stopping.lastPassMeanRelativeDecrease < c.slowTailMaxMeanRelativeDecrease
-                && result.quality.positionNrms < c.slowTailMaxNrms
-                && result.quality.velocityNrms < c.slowTailMaxNrms
-                && result.quality.imuNrms < c.slowTailMaxNrms;
-            stopping.rule = accepted ? StopRule::kSlowTailAccepted : StopRule::kIterationLimit;
-            result.converged = accepted;
-        }
-    }
+    release.kept = released && released->converged;
+    if (released && !release.kept)
+        release.reason = released->stopping.rule;
+    FitResult result = release.kept ? std::move(*released) : std::move(held);
+    result.scaleRelease = std::move(release);
+    result.history = std::move(history);
     return result;
 }
 

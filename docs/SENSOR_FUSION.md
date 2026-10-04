@@ -256,7 +256,9 @@ departure from one whose sigma is the datasheet's sensitivity tolerance, 1 %
 for both sensors (G_So% of Table 2, applied to the accelerometer too: the
 table has no tolerance row for it). Like `b1` they belong to the full fit,
 which always has them; the initializer's fits take the readings at unit
-scale. The IMU factor depends on them to first order: the derivative of its
+scale. The full fit holds them at one, under a prior a thousand times
+tighter, until it has converged, and then releases them from that solution
+(the two stages, below). The IMU factor depends on them to first order: the derivative of its
 preintegration with respect to the six factors is accumulated step by step
 from the solver library's own per-step Jacobians (a step's input depends on
 the gyro's factors also through the half-step turn below), and the fit
@@ -452,16 +454,18 @@ purpose (four ground recordings of the reference corpus end this way with
 position RMS of 0.3-0.5 m); a fit that is still descending faster, that
 disagrees with GNSS, or that satisfies the fixes while it ignores the IMU
 remains a solver failure. The diagnostics name the rule that ended
-the fit: `settled`, `slow tail accepted`, `iteration limit` (the last pass
+the fit, one of seven: `settled`, `slow tail accepted`, `iteration limit` (the last pass
 reached its limit and the slow tail was refused), `bias not settled` (the
 last pass settled but re-preintegrating still moved the cost),
-`cost increased` (an iteration made the cost non-finite or larger) or
+`cost increased` (an iteration made the cost non-finite or larger),
 `damping saturated` (an iteration left the cost unchanged with the damping at
 its ceiling while the linearization still predicted a decrease above the
 settling threshold: the optimizer has given up short of a minimum, and the
-start it would have called converged is not one). The last two are the
-failures the fit cannot continue from, and are solver failures, never a
-convergence. An iteration that leaves the cost unchanged at the ceiling where
+start it would have called converged is not one) or `diverged` (the graph
+rebuilt after a pass has left the model: its IMU normalized RMS is 10 or
+more, or a scale factor lies outside 0.5 to 2; below). `cost increased` and
+`damping saturated` are the failures the fit cannot continue from, and are
+solver failures, never a convergence. An iteration that leaves the cost unchanged at the ceiling where
 the linearization predicts no decrease (its undamped Gauss-Newton step would
 lower the linearized cost by at most the settling threshold, or by rounding) is a settled
 pass: at a minimum the library judges each trial step by the sign of a
@@ -469,6 +473,49 @@ rounding-level linearized change and can raise the damping to the ceiling
 without ever evaluating the cost, as it does on Intel macOS for one synthetic
 recording.
 Reported factors are reintegrated at the final bias and scale factors.
+
+**The scale factors as a refinement.** A global multiplicative parameter is
+not fitted from a trajectory that has not settled, so the full fit runs its
+passes in two stages, on the same graph with the scale prior's sigma the only
+difference. The *held stage* starts from the initializer's start with the
+prior's sigma the sensitivity tolerance divided by a thousand, which holds
+every factor at one, and has the five passes above. Only when it has
+converged (`settled` or `slow tail accepted`) are the factors released: the
+*released stage* starts from the held stage's values (every state, the bias,
+its slope and the factors as the held stage left them) with the datasheet's
+sigma, and has a budget of its own, three passes of 100 iterations: it starts
+from a solution, so that a release that is not going to converge falls back in
+minutes, not an hour. Three, because on the reference recordings the
+release's second pass settles and the graph rebuilt after it still moves the
+cost; the third pass's rebuild proves it settled (section 8). A released
+stage that converges
+is the fit. One that ends under any other rule, diverges or fails is
+discarded: the held stage's solution is the fit, converged, with its factors
+at one and the held stage's sigmas, and the diagnostics say that the factors
+were not released and why (the release's account, below); a refinement never turns
+a converged fit into a failure. A held stage that does not converge ends the
+fit as before, under the same rule and with the same reason. Passes are
+numbered on across the stages, and the release is a boundary of its own
+(section 7). The case: on `24-09-04/13-35-10` the initializer hands the fit a
+poor attitude for one segment, and with the factors free from the first pass
+Levenberg-Marquardt found that collapsing the x accelerometer factor to
+-0.058 lowered the cost faster than straightening the attitude; with the
+readings divided by a factor near zero it could not climb back, and five
+passes of 100 iterations ended at the limit with an IMU normalized RMS of
+1,707. With the factors held at one the whole recording converges in two
+passes and 33 iterations, every factor within 0.04 % of one and the IMU
+normalized RMS 0.45 (section 8 has the staged fit's numbers).
+
+*Divergence.* After every pass of either stage, on the graph rebuilt at the
+pass's values and before the cost test, the IMU normalized RMS must be below
+10 and every one of the six factors strictly between 0.5 and 2; a pass beyond
+either bound has diverged, and its stage ends at once: in the held stage a
+solver failure (`diverged`), in the released stage the fallback to the held
+solution. The bounds are far outside anything a slow tail accepts (a
+normalized RMS of 2) and anything a 1 % tolerance admits; they catch a fit
+that has left the model, not one that is slow, so that hours are not spent
+on a trajectory that is already lost. The stopping account reports them with
+the other thresholds.
 
 **The state at every IMU sample.** The fit estimates the state at each GNSS
 fix; what it publishes is the state at every IMU sample between the first and
@@ -715,7 +762,7 @@ about d^2/2R at a distance d from the origin (R the Earth's radius), some
 The attribute `_FUSION_DIAGNOSTICS` is compact JSON. After a successful fit
 its top-level keys are, grouped:
 
-- *identity and audit*: `algorithm` (`batch-temperature-bias-v8`), `input`
+- *identity and audit*: `algorithm` (`batch-temperature-bias-v9`), `input`
   (the input audit: `epoch_utc_s`, `imu_count`, `gnss_count`, `origin_index`,
   `origin`, `height_method`, `time_method`, and `gnss_holes`, one object per
   hole in the fitted window's GNSS fixes, in time order, each with `start_s`,
@@ -753,13 +800,24 @@ its top-level keys are, grouped:
   the fix intervals, m/s; `max_step_correction_m_s2`, the largest step
   correction of the fit, m/s^2; `max_step_correction_time_s`, the middle of
   that step, seconds since the epoch like `start_s`;
-- `stopping`: `rule` (one of the six texts above), `passes`,
-  `last_pass_mean_relative_decrease`, `repreintegration_cost_difference`,
-  `bias_settled_tolerance`, `lambda_upper_bound` (the damping ceiling), and
-  `slow_tail` with `window`, `max_mean_relative_decrease` and `max_nrms` (the
-  thresholds in force);
+- `stopping`, the account of the reported stage (the released one when it
+  was kept, the held one otherwise): `rule` (one of the seven texts above),
+  `passes` (that stage's own), `last_pass_mean_relative_decrease`,
+  `repreintegration_cost_difference`, `bias_settled_tolerance`,
+  `lambda_upper_bound` (the damping ceiling), `slow_tail` with `window`,
+  `max_mean_relative_decrease` and `max_nrms`, and `divergence_max_imu_nrms`
+  (10) and `divergence_scale_range` (`[0.5, 2]`) (the thresholds in force);
 - `quality`: `imu_nrms`, `position_nrms`, `velocity_nrms` (the normalized RMS
-  of each factor kind's whitened residuals) and `objective_per_state`;
+  of each factor kind's whitened residuals) and `objective_per_state`, of the
+  reported stage;
+- `scale_release`, the account of the two stages: `held`, with the held
+  stage's `rule`, `passes`, `iterations` and `objective` (the cost of its last
+  rebuilt graph); `released`, the same four for the released stage when it
+  ran an iteration, `null` otherwise (its `objective` `null` when it ended by
+  a failure inside a pass, which has no rebuilt graph); `kept`, true when the
+  released stage is the fit; and `reason`, the rule the released stage was
+  discarded under, `null` when it was kept. `seeds[0].iterations` counts the
+  iterations of both stages;
 - `model`: `noise`, the datasheet's noise at the configuration (above), with
   `acc` (`datasheet_density_m_s2_rthz`, `bandwidth_hz`, `step_m_s2`,
   `sample_sigma_m_s2`, `density_m_s2_rthz`) and `gyro`
@@ -785,10 +843,13 @@ its top-level keys are, grouped:
 When the recording was rejected, or the fit stage raised anything but a
 stopping-rule failure, the diagnostics are `{"algorithm", "failure"}` with the
 reason. When the fit completed a pass and did not converge (`iteration limit`,
-`bias not settled`) they are `{"algorithm", "failure", "quality", "stopping"}`.
+`bias not settled`, `diverged`, each in the held stage) they are
+`{"algorithm", "failure", "quality", "stopping"}`.
 When a pass raised the cost (`cost increased`) or saturated the damping
 (`damping saturated`) they are `{"algorithm", "failure", "stopping"}`: there
-is no rebuilt graph, so no quality. A successful stop describes the optimizer's numerical behaviour, not
+is no rebuilt graph, so no quality. No failure carries the release's
+account: a failure is always the held stage's, since the released stage's
+failures are the fallback. A successful stop describes the optimizer's numerical behaviour, not
 an independent accuracy assessment.
 
 ## 5. Initialization and limitations
@@ -992,12 +1053,16 @@ cached, and the recording counts as waiting at once; a new fit starts by
 itself once the inputs have been still for about a second and the old one has
 stopped.
 
-**Cancellation** is observed at three kinds of boundary: before the fit starts
+**Cancellation** is observed at four kinds of boundary: before the fit starts
 (preparation neither reports nor asks; the progress texts begin with
 `Starting fit`); every 256 states of graph construction, in the initializer's
-prefix and segment fits as in the full fit; and before each optimizer
+prefix and segment fits as in the full fit; before each optimizer
 iteration of any of those fits (the segment fits' texts name the segment and,
-for a prefix, its length). A linear solve in progress finishes first. The
+for a prefix, its length; the full fit's `Pass p, iteration k` numbers its
+passes on across its two stages); and `Releasing the scale factors`, once per
+full fit, between its held stage and its released stage (section 4). A
+cancellation there, or inside the released stage, cancels the fit like any
+other. A linear solve in progress finishes first. The
 covariance step and the reconstruction at the IMU samples, which composes the
 accuracy in the same pass (section 4), after the last iteration of the full
 fit, are not boundaries: they run to their end, a few seconds on
@@ -1026,12 +1091,13 @@ success, a rejection or a solver failure. It is restored bit for bit when the
 recording is loaded, and the restored result is indistinguishable from a fresh
 one; the record holds the four accuracies with the state (none when the
 covariance could not be computed). Its code stamp is the algorithm string of the diagnostics
-(`batch-temperature-bias-v8` since a hole in the GNSS fixes is fitted across
-instead of rejected, which also carries the continuity rule's threshold of 1.5
-median IMU intervals that the kernel adopted under the compatibility marker's
-bump to 3; `v7` having been the lattice rule that let a few readings off the
-lattice pass, `v6` the documented noise model and `v5` the mid-step rotation
-of the accelerometer reading): a
+(`batch-temperature-bias-v9` since the scale factors are released from the
+held solution, section 4, which moves every fit's numbers; `v8` having been
+the hole in the GNSS fixes fitted across instead of rejected, which also
+carried the continuity rule's threshold of 1.5 median IMU intervals that the
+kernel adopted under the compatibility marker's bump to 3, `v7` the lattice
+rule that let a few readings off the lattice pass, `v6` the documented noise
+model and `v5` the mid-step rotation of the accelerometer reading): a
 change that can alter what the fit returns changes that string, and every
 stored fit is then dropped at its recording's next load. So the first start
 after such an update finds every stored fit stale when its recording is
@@ -1077,8 +1143,8 @@ demonstrated by tests, all labelled `fusion`:
 
 | Test | What it holds |
 | --- | --- |
-| `tst_fusion_golden` | the kernel through its public API reproduces its goldens for fourteen synthetic fixtures (four fits, one of them across a 2.6 s hole in the fixes, and ten rejections; every fixture states its configuration and lies on its lattice), the progress texts at its boundaries, cancellation at each kind of boundary (prefix, segment and full-fit iterations included), determinism and thread independence |
-| `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the stopping rules forced through the tuning (damping saturation short of a minimum a solver failure, a stall at the ceiling at a minimum settled, the damping ceiling changing nothing below it), the datasheet's noise by configuration bit for bit against its formula and the configurations without an entry, the step model (no sampling term on a constant signal, the sampling term against its derivation on a quadratic signal, the rotation remainder against its derivation on a constant turn and against a thousand-fold subdivided integration on a ramp), the lattice and rate checks and their order after every other check, the noise model in the diagnostics, the three temperature cases, the scale factors (the readings divided by the scale, the scale Jacobian against central differences, the scaled factor's seven Jacobians and its agreement with the library's own IMU factor at the interval's bias where the scale is the preintegration's, bit for bit, the graph with them, re-preintegration at the fitted scale, the reconstruction at the fitted scale, a resting recording left at its prior, a 2 % accelerometer factor recovered and the position misfit falling against the fit with them held at one, the factors in the diagnostics), the fit trace iteration by iteration against the goldens; the reconstruction at the IMU samples (the ends are the fitted states, sharing by noise, zero mismatch with and without rotation, consistency, equivalence with a graph with a state at every sample), the channels and diagnostics the fit publishes as that reconstruction bit for bit, and the time axis on the four fits and on a recording whose GNSS rate is above its IMU's; the GNSS holes (every sample inside a 2.6 s hole against the generating trajectory and the growth of the sample covariance's position and velocity through it, a 30 s hole, the longest bridged, under the production tuning, a 60 s hole rejected naming the limit, the cutter's merge of a piece with fewer than three fixes, the holes in the diagnostics); the slow tail refused on each of its bounds, the IMU normalized RMS's alone included; the accuracy (the covariance step against the library's joint marginals and its first node against the heading check, the composition at the samples against a graph with a state at every edge and, on a fix, the fix's own marginal, the accuracy formulas on known answers, the widening's window and factor, one at the model and grown where a sigma is understated, and applied to what is published, accuracies finite and positive that doubling the GNSS accuracies never lowers, the undetermined heading at the cap with tilt and acceleration against a gauge-fixed reference, a failed covariance step changing nothing else, the scale factors' sigmas) |
+| `tst_fusion_golden` | the kernel through its public API reproduces its goldens for fourteen synthetic fixtures (four fits, one of them across a 2.6 s hole in the fixes, and ten rejections; every fixture states its configuration and lies on its lattice), the progress texts at its boundaries, cancellation at each kind of boundary (prefix, segment and full-fit iterations and the release of the scale factors included), determinism and thread independence |
+| `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the stopping rules forced through the tuning (damping saturation short of a minimum a solver failure, a stall at the ceiling at a minimum settled, the damping ceiling changing nothing below it), the datasheet's noise by configuration bit for bit against its formula and the configurations without an entry, the step model (no sampling term on a constant signal, the sampling term against its derivation on a quadratic signal, the rotation remainder against its derivation on a constant turn and against a thousand-fold subdivided integration on a ramp), the lattice and rate checks and their order after every other check, the noise model in the diagnostics, the three temperature cases, the scale factors (the readings divided by the scale, the scale Jacobian against central differences, the scaled factor's seven Jacobians and its agreement with the library's own IMU factor at the interval's bias where the scale is the preintegration's, bit for bit, the graph with them, re-preintegration at the fitted scale, the reconstruction at the fitted scale, a resting recording left at its prior through both stages, a 2 % accelerometer factor recovered through the released stage and the objective falling below the held stage's, the factors in the diagnostics), the scale factors as a refinement (the two stages' account and the boundary between them, the release forced to fail falling back to the held fit with its channels, divergence forced in the held stage, a solver failure, and in the released stage, the fallback), the fit trace iteration by iteration against the goldens; the reconstruction at the IMU samples (the ends are the fitted states, sharing by noise, zero mismatch with and without rotation, consistency, equivalence with a graph with a state at every sample), the channels and diagnostics the fit publishes as that reconstruction bit for bit, and the time axis on the four fits and on a recording whose GNSS rate is above its IMU's; the GNSS holes (every sample inside a 2.6 s hole against the generating trajectory and the growth of the sample covariance's position and velocity through it, a 30 s hole, the longest bridged, under the production tuning, a 60 s hole rejected naming the limit, the cutter's merge of a piece with fewer than three fixes, the holes in the diagnostics); the slow tail refused on each of its bounds, the IMU normalized RMS's alone included; the accuracy (the covariance step against the library's joint marginals and its first node against the heading check, the composition at the samples against a graph with a state at every edge and, on a fix, the fix's own marginal, the accuracy formulas on known answers, the widening's window and factor, one at the model and grown where a sigma is understated, and applied to what is published, accuracies finite and positive that doubling the GNSS accuracies never lowers, the undetermined heading at the cap with tilt and acceleration against a gauge-fixed reference, a failed covariance step changing nothing else, the scale factors' sigmas) |
 | `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, the configuration reaches the kernel (a session stating it fits to the golden, the same session without the keys reads the 12.5 Hz default and is rejected by the rate check, and a recording without keys logged at 12.5 Hz fits under the default), a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
 | `tst_fusion_derived` | what is derived from the outputs, without the solver: the outputs stored as data, elevation and the track accelerations held to exact known answers, the track accelerations equal to the GNSS ones on the same samples, and each derived value waiting on the fit and never starting it; the orientation vocabulary (24 pairs, each a proper rotation, the attribute's choices), heading, pitch and roll held to hand-built known answers, finite with pitch at +90 or -90 where the forward axis is exactly vertical, side mounts, a GNSS track and a course reference that change nothing, and the fit's own angles for the device frame, an invalid or changed orientation without a fit, and the Orientation column's display, edit and bulk edit |
 | `tst_fusion_jobs` | the real fit through the executor: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result and kept, for an unloaded session, through an altitude marker added at run time or at the next start |
@@ -1313,11 +1379,43 @@ the reference corpus show 0.0029-0.0035 m/s^2 per sample: the datasheet's
 figure is the floor the corpus reaches. The gyro's per-sample sigma is 0.0217
 deg/s, against a corpus median of 0.030 deg/s: the model is below the corpus.
 
+**The staged scale on the reference recordings.** The two stages of the
+full fit (section 4) on the four recordings of the first table, measured on
+2026-10-03 by M56 of [tests/README.md](../tests/README.md), section 12.13,
+under the current algorithm string, `v9`, at the default configuration. Each stage's
+passes, iterations and objective are the release's account in the
+diagnostics; the reported fit is the released stage's when it was kept and the
+held stage's otherwise, and its largest scale departure is that fit's:
+
+| Recording (unit) | Outcome (rule) | Held: passes / iterations / objective | Released: rule, passes / iterations / objective | Kept | Reported objective | IMU | Largest scale departure, accelerometer / gyro |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `24-09-05/11-17-12` (014667) | succeeded (`settled`) | 2 / 10 / 3,650 | `settled`, 3 / 9 / 3,044 | yes | 3,044 | 0.13 | 1.2 % / 2.6 % |
+| `24-09-07/08-35-23` (01465) | succeeded (`settled`) | 2 / 8 / 2,879 | `settled`, 3 / 9 / 2,765 | yes | 2,765 | 0.10 | 1.5 % / 1.2 % |
+| `24-09-07/10-15-24` (01086) | succeeded (`settled`) | 2 / 14 / 4,835 | `settled`, 2 / 7 / 4,483 | yes | 4,483 | 0.13 | 0.39 % / 0.59 % |
+| `24-09-07/08-35-41` (01086) | succeeded (`settled`) | 2 / 73 / 28,662 | `settled`, 3 / 9 / 6,198 | yes | 6,198 | 0.14 | 1.3 % / 1.1 % |
+
+Every held stage converges in two passes, and every release is kept, at the
+objective of the single fit with the factors free from the first pass (the
+first table: 3,044, 2,765, 4,483 and 6,198) and its scale departures, the
+released stage adding 7 to 9 iterations: the specification's expectation.
+On the synthetic `scale_recording` ([tests/README.md](../tests/README.md),
+section 11) and four of the five recordings of the step, all but `10-15-24`
+(the three here and the second recording of the GNSS holes, below), the
+release's second pass settles and the graph rebuilt after it still moves the
+cost by more than the cost test allows; the
+third pass, of one or two iterations, settles with its rebuild agreeing. With
+a budget of two passes, the specification's before this measurement, those
+ended `bias not settled` and fell back to the held fit, whose objective here
+is 20 % and 4 % above the released one on the first two and 4.6 times it on
+`08-35-41` (IMU normalized RMS 0.48 against 0.14): the budget is three for
+that reason.
+
 **GNSS holes on the reference recordings.** The two recordings of the corpus
 that the kernel rejected for a hole in their fixes, each with the hole in the
-aircraft during the climb and the IMU running through it, measured on
-2026-10-03 by M55 of [tests/README.md](../tests/README.md), section 12.12,
-under the current algorithm string (section 7) at the default configuration.
+aircraft during the climb and the IMU running through it: the first measured
+on 2026-10-03 under `v8` by M55 of [tests/README.md](../tests/README.md),
+section 12.12, the second on 2026-10-03 under `v9` by the step of the staged
+scale (above), both at the default configuration.
 A hole is counted on the fitted window's own fixes, whose threshold at 5 Hz is
 0.3 s, so short holes of 0.4 s and more are counted beside the long one the
 specification expected (one on the first recording, seven on the second). The
@@ -1327,7 +1425,7 @@ the whole recording:
 | Recording (unit) | Fixes | IMU samples | Outcome (rule) | Iterations (passes) | Objective | Position | Velocity | IMU | Holes (longest) | `headingAcc` inside / median, deg | `tiltAcc` inside / median, deg |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `24-09-07/08-35-48` (00769) | 10,511 | 28,048 | succeeded (`settled`) | 13 (3: 8, 3, 2) | 3,709 | 0.20 | 0.38 | 0.13 | 5 (15.6 s) | 4.4 / 2.6 | 0.87 / 0.34 |
-| `24-09-04/13-35-10` (01086) | 16,387 | 44,073 | solver failure (`iteration limit`) | 500 (5: 100 each) | 1.3e7 per state | 0.18 | 0.35 | 1,707 | - | - | - |
+| `24-09-04/13-35-10` (01086) | 16,387 | 44,073 | succeeded (`settled`, released) | 61 (5: 29, 4 held; 23, 3, 2 released) | 8,044 | 0.29 | 0.41 | 0.16 | 28 (13.2 s) | 2.5 / 4.1 | 2.6 / 0.21 |
 
 On the first recording the four short holes are of 0.4 to 1.6 s; through the
 15.6 s hole the heading and tilt accuracy grow to 4.4 and 0.87 degrees and are
@@ -1336,22 +1434,26 @@ is 2.61 (230 samples widened); at the fix after the hole the squared whitened
 residuals are 0.098 (position) and 1.0 (velocity), and 5.5 for the hole's IMU
 factor.
 
-The second recording ends `iteration limit`, a solver failure: its fifth pass
-reaches its limit with a mean relative decrease of 1.0e-7 and position and
-velocity normalized RMS of 0.18 and 0.35, but an IMU normalized RMS of 1,707,
-above the slow tail's bound, so the tail is refused (section 4). A solver
-failure carries no input audit, so its holes and accuracies are not reported,
-and its fixes and IMU samples in the table are those of the run of 2026-10-02;
-before the slow tail bounded the IMU misfit, the same fit was accepted, with
-28 holes (the longest 13.2 s), a fitted x accelerometer scale factor of
--0.058, 26,609 of its 44,073 headings at the cap and a largest widening of
+The second recording converges with the scale factors held: two passes of
+29 and 4 iterations, objective 35,081, an IMU normalized RMS of 0.45, every
+factor within 0.034 % of one. Released from there, it settles in three passes
+of 23, 3 and 2 iterations and is kept: objective 8,044, IMU normalized RMS
+0.16, the largest factor departure 1.6 % (accelerometer y) and 0.64 % (gyro
+y). Of its 28 holes the longest is 13.2 s; inside it the heading accuracy is
+at most 2.5 degrees, below the recording's median of 4.1, and the tilt
+accuracy rises to 2.6 degrees against a median of 0.21; the largest widening
+is 3.71 (1,006 samples widened), and no heading is at the cap. Under `v8`, with the factors free from the first pass, the same
+recording was a solver failure: its fifth pass reached its limit with an IMU
+normalized RMS of 1,707 and the x accelerometer factor at -0.058 (section 4),
+and before the slow tail bounded the IMU misfit that fit had been accepted
+with 26,609 of its 44,073 headings at the cap and a largest widening of
 6,902: a fit that satisfied the fixes while it ignored the IMU. Its second
 initializer segment's fit reaches its limit and the full fit starts from that
-attitude; that is a solver matter, not the holes'. The IMU residuals that
-dominate the objective lie in its first 900 s and near 1940 s, before the
-first hole at 2500 s, and three cuts of the same recording (its `TRACK.CSV`
-trimmed, `SENSOR.CSV` whole), measured on 2026-10-02 and each settled, so the
-slow tail's bounds do not reach them, each fit:
+attitude; the held stage converges from it. The IMU residuals that dominated
+that objective lie in its first 900 s and near 1940 s, before the first hole
+at 2500 s, and three cuts of the same recording (its `TRACK.CSV` trimmed,
+`SENSOR.CSV` whole), measured on 2026-10-02 under `v8` and each settled,
+each fit:
 
 | Cut of the second recording | Fixes | Holes (longest) | Outcome (rule) | Iterations (passes) | Objective | Position | Velocity | IMU |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -1378,6 +1480,11 @@ whole recording.
   (`tst_fusion_kernel::wideningGrowsWithAnUnderstatedSigma`);
 - the scale, recovered on a synthetic recording
   (`tst_fusion_kernel::scaleRecordingRecoversTheFactor`);
+- the scale factors' release, its fallback and the divergence rule, forced
+  on the synthetic recordings (`tst_fusion_kernel::releaseFailureFallsBackToTheHeldFit`,
+  `divergenceEndsTheHeldStage`, `divergenceEndsTheReleasedStage`), and judged
+  on the reference recordings, where it was kept on all five (the staged
+  scale and the GNSS holes, above);
 - the per-sample noise, against the table (`tst_fusion_kernel::noiseFollowsTheTable`);
 - the accelerometer's noise floor, against the quietest windows of the corpus
   (the noise floor, above);

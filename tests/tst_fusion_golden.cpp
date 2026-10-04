@@ -24,6 +24,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QThread>
 #include <QtTest>
 
@@ -472,6 +473,15 @@ void FusionGoldenTest::cancelAtEachKindOfBoundary_data()
     rowAt("segment fit iteration", "Segment 1 of 1: pass 1, iteration 1");
     rowAt("full fit iteration", "Pass 1, iteration 1");
     rowAt("full fit second iteration", "Pass 1, iteration 2");
+    rowAt("release boundary", "Releasing the scale factors");
+    // The released stage's first iteration, whose pass number follows the
+    // held stage's last: the first iteration text after the boundary.
+    const int release = int(p.indexOf(QStringLiteral("Releasing the scale factors")));
+    QVERIFY(release >= 0);
+    const QRegularExpression firstIteration(QStringLiteral("^Pass [0-9]+, iteration 1$"));
+    const int released = int(p.indexOf(firstIteration, release));
+    QVERIFY(released > release);
+    QTest::newRow("released stage iteration") << released+1 << p.at(released);
 }
 
 void FusionGoldenTest::cancelAtEachKindOfBoundary()

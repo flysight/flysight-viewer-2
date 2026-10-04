@@ -1,5 +1,5 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Fourteen specifications, fourteen item ranges:
+# (tests/audit/cleanup_audit.cmake). Fifteen specifications, fifteen item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
@@ -103,7 +103,8 @@
 #             861, 862 and 863) and 901-940 (items 901, 910, 912, 914, 915,
 #             921, 925, 930 and 935): each is stated as amended. It is
 #             amended by the specification "The scaled IMU factor stands
-#             alone": item 1054 is stated as amended.
+#             alone": item 1054 is stated as amended. It is amended by the
+#             specification of 1401-1415: item 1054 is stated as amended.
 #   1101      the GNSS acceleration accuracy (GNSS/accAcc, its plot and what
 #             the documentation says of it): one item. Stated in full in
 #             tests/README.md, appendix L.
@@ -125,6 +126,16 @@
 #             1307-1311 the tests, the reference recordings and the map, 1312
 #             the documents, 1313 the slow tail. Stated in full in
 #             tests/README.md, appendix N. Item 244 is restated as amended.
+#   1401-1415 the scale factors as a refinement (the full fit in two stages,
+#             the scale factors held until the fit has converged and then
+#             released from that solution, the fallback to the held fit, the
+#             diverged rule and its two bounds, the release's account in the
+#             diagnostics, the algorithm string v9): 1401-1407 the
+#             principles and what changes, 1408-1414 the tests, the
+#             reference recordings, the goldens and the map, 1415 the
+#             documents. Stated in full in tests/README.md, appendix O. It
+#             amends the specification of 1001-1065: item 1054 is stated as
+#             amended.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -134,12 +145,12 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the fourteen ranges; every item 1-19 needs a
+# Every item must lie in one of the fifteen ranges; every item 1-19 needs a
 # line; every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662,
-# 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213 or 1301-1313 needs at
-# least one test or audit line (manual and ci lines never stand alone). The
-# human-readable matrices are tests/README.md sections 9.1 to 9.14; keep them
-# in sync with this file.
+# 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313 or
+# 1401-1415 needs at least one test or audit line (manual and ci lines never
+# stand alone). The human-readable matrices are tests/README.md sections 9.1
+# to 9.15; keep them in sync with this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -3239,7 +3250,7 @@
 1053 tst_fusion_kernel samplingTermFollowsTheDerivation
 1053 tst_fusion_kernel rotationRemainderFollowsTheDerivation
 
-# 1054 - (11, as amended) test: a synthetic recording with the accelerometer 2 % high on one axis recovers the factor within the prior's tolerance, and its position misfit falls against a fit with the scale held at one by a prior a thousand times tighter than the datasheet's; a recording at rest leaves the scale at one within its prior
+# 1054 - (11, as amended) test: a synthetic recording with the accelerometer 2 % high on one axis recovers the factor within the prior's tolerance through the full fit's released stage, and its objective falls below that of the full fit's held stage, whose prior a thousand times tighter than the datasheet's holds the scale at one, read from the fit's account (as amended by the specification of 1401-1415); a recording at rest leaves the scale at one within its prior
 1054 tst_fusion_kernel scaleRecordingRecoversTheFactor
 1054 tst_fusion_kernel restLeavesTheScaleAtItsPrior
 
@@ -3460,3 +3471,85 @@
 1313 tst_fusion_kernel slowTailAtTheIterationLimit
 1313 audit gnss-holes
 1313 manual M55
+
+# ---- The scale factors as a refinement (PLANS/staged-scale.md): fifteen items ----
+
+# 1401 - (2, 3) the full fit runs in two stages under the temperature model: the held stage from the initializer's start with the scale prior's sigma divided by a thousand, then the released stage from the held stage's values with the datasheet's sigma; one graph, the prior's sigma the only difference; the held stage with the tuning's pass budget, the released stage with its own, releasePasses, three (two in the specification; set to three at implementation, since two discarded releases that had reached their minimum), each pass of the tuning's iteration budget; the initializer's fits untouched
+1401 tst_fusion_kernel scaleReleaseIsAccountedFor
+1401 tst_fusion_kernel fitTraceMatchesGolden
+1401 tst_fusion_golden successFixturesMatchGolden
+1401 audit staged-scale
+
+# 1402 - (2, 3) the release trigger is convergence: the released stage runs only after a held stage that ended settled or slow tail accepted; any other end of the held stage ends the fit as today, under the same rule, reason and diagnostics shape, and no failure carries scale_release
+1402 tst_fusion_kernel nonConvergenceIsSolverFailure
+1402 tst_fusion_kernel biasNeverSettlesIsSolverFailure
+1402 tst_fusion_kernel dampingSaturationIsASolverFailure
+1402 tst_fusion_kernel divergenceEndsTheHeldStage
+
+# 1403 - (2, 3) the fallback: a released stage that ends settled or slow tail accepted is the fit; one that ends under any other rule, diverges or throws is discarded: the held stage's values, graph, objective, residuals, quality and stopping are the fit, converged is true, the factors are at one with the held stage's sigmas, and the diagnostics record the outcome; a refinement never turns a converged fit into a failure; cancellation is not caught
+1403 tst_fusion_kernel releaseFailureFallsBackToTheHeldFit
+1403 tst_fusion_kernel divergenceEndsTheReleasedStage
+
+# 1404 - (2, 3) divergence between passes: after every pass's rebuild of either stage, before the cost test, the IMU normalized RMS strictly below divergenceMaxImuNrms (10) and every factor strictly inside divergenceScaleRange (0.5 to 2), else the stage ends diverged: a solver failure with the completed-pass shape in the held stage, the fallback in the released; a zero bound or an empty interval refuses; the bounds are reported in stopping as divergence_max_imu_nrms and divergence_scale_range; the production bounds change nothing on any fixture
+1404 tst_fusion_kernel divergenceEndsTheHeldStage
+1404 tst_fusion_kernel divergenceEndsTheReleasedStage
+1404 tst_fusion_golden successFixturesMatchGolden
+1404 audit staged-scale
+
+# 1405 - (3) passes are numbered across both stages in the trace and the progress texts; the boundary "Releasing the scale factors" is reported once before the released stage's first graph build, a fourth kind of cancellation boundary; each stage's stopping.passes counts its own passes
+1405 tst_fusion_kernel scaleReleaseIsAccountedFor
+1405 tst_fusion_golden cancelAtEachKindOfBoundary
+1405 tst_fusion_golden progressMatchesGoldenBoundaries
+1405 audit staged-scale
+1405 audit fusion-model
+
+# 1406 - (3) the diagnostics: scale_release with held, released (or null), kept and reason, a success key written once; stopping and quality describe the reported fit; model.scale the reported fit's factors; seeds[0].iterations counts both stages; the fit's result carries the account and nothing recomputes it
+1406 tst_fusion_kernel scaleReleaseIsAccountedFor
+1406 tst_fusion_kernel initializerDiagnosticsShape
+1406 tst_fusion_kernel biasSettledByCostTest
+1406 tst_fusion_kernel slowTailAtTheIterationLimit
+1406 tst_fusion_golden successFixturesMatchGolden
+1406 audit staged-scale
+
+# 1407 - (2, 3) the algorithm string is batch-temperature-bias-v9, and every stored result is dropped once; v8 remains only as history
+1407 tst_fusion_session registrationShape
+1407 tst_fusion_session restoredFitIsIndistinguishable
+1407 tst_fusion_store codeStampChangeDropsRecordOnLoad
+1407 tst_fusion_store restoredSolverFailureShowsBadge
+1407 tst_fusion_jobs columnOnFusionOutputIsCachedFromRecord
+1407 tst_fusion_jobs workerRefillsColumnFromStoredFit
+1407 tst_fusion_kernel biasSettledByCostTest
+1407 tst_fusion_kernel failureDiagnosticsShape
+1407 audit stored-results
+1407 audit gnss-holes
+1407 audit staged-scale
+
+# 1408 - (4) the recovery holds: scale_recording recovers its 2 % factor through the released stage, which is kept, and its objective falls against the held stage's, read from the fit's account
+1408 tst_fusion_kernel scaleRecordingRecoversTheFactor
+
+# 1409 - (4) the resting recording leaves every factor at its prior through both stages, and its released stage settles
+1409 tst_fusion_kernel restLeavesTheScaleAtItsPrior
+
+# 1410 - (4) the fallback forced: a checkpoint that throws at the release boundary leaves a converged fit with the held stage's values and factors at one, kept false with the thrown rule as the reason, released null, and the published channels those of the held fit
+1410 tst_fusion_kernel releaseFailureFallsBackToTheHeldFit
+
+# 1411 - (4) divergence forced: the IMU bound at zero and an empty scale range each end the held stage diverged as a solver failure; the scale range narrowed to exclude the recovered factor ends scale_recording's released stage diverged, the fallback; the IMU bound is not forced in the released stage alone
+1411 tst_fusion_kernel divergenceEndsTheHeldStage
+1411 tst_fusion_kernel divergenceEndsTheReleasedStage
+
+# 1412 - (4) the reference recordings: M56 runs the four of M49 and 13-35-10, reading scale_release from each diagnostics; 13-35-10 converges, the four at or near their M49 numbers; the numbers go in the documentation as measured
+1412 audit staged-scale
+1412 manual M56
+
+# 1413 - (4) the goldens captured again under v9: four fits, ten rejections; the capture note records what moved and why
+1413 tst_fusion_golden fixturesAreDeterministic
+1413 tst_fusion_golden successFixturesMatchGolden
+1413 tst_fusion_kernel fitTraceMatchesGolden
+1413 audit gnss-holes
+
+# 1414 - (4) a new hundred in the acceptance map; audit_cleanup and the whole suite green, the exact tests included
+1414 tst_fusion_golden successFixturesMatchGolden
+1414 audit staged-scale
+
+# 1415 - (5) the documents: SENSOR_FUSION.md section 4 (the two stages, the trigger, the fallback, the divergence rule and its bounds, the case; the stopping rules with diverged; the diagnostics with scale_release), section 7 (the fourth boundary, v9 in the history), section 8 (M56's numbers); DATA_SCHEMA.md section 12 and CALCULATIONS.md section 17 (v9); tests/README.md (the kernel and golden rows, M56 in 12.13, appendix O, matrix 9.15)
+1415 audit staged-scale

@@ -2280,10 +2280,12 @@ input and the stored record read.
 (`src/fusion/fusion.h`), the same string as the diagnostics' `"algorithm"`. The
 literal exists once in `src/`, in that header. Change it whenever a change can
 alter what the fit returns for the same channels; that drops every stored fit.
-It is `batch-temperature-bias-v8` since a hole in the GNSS fixes is fitted
-across instead of rejected, which also carries the continuity rule's threshold
-that the kernel's IMU gap rule adopted under the compatibility marker's bump
-to 3 (section 9) (`v7` was the lattice check that let a few readings off the
+It is `batch-temperature-bias-v9` since the scale factors are held at one
+until the fit has converged and released from that solution, which moves
+every fit's numbers (`v8` was the hole in the GNSS fixes fitted across instead
+of rejected, which also carried the continuity rule's threshold that the
+kernel's IMU gap rule adopted under the compatibility marker's bump to 3,
+section 9; `v7` the lattice check that let a few readings off the
 lattice pass; `v6` the documented noise model, the IMU's noise from its
 datasheet at the recording's configuration, and the checks of the
 configuration against the readings; `v5` the mid-step rotation of the

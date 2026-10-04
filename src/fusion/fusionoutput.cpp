@@ -54,7 +54,33 @@ QJsonObject stoppingObject(const Stopping &s)
         {"slow_tail", QJsonObject{
             {"window", s.slowTailWindow},
             {"max_mean_relative_decrease", s.slowTailMaxMeanRelativeDecrease},
-            {"max_nrms", s.slowTailMaxNrms}}}};
+            {"max_nrms", s.slowTailMaxNrms}}},
+        {"divergence_max_imu_nrms", s.divergenceMaxImuNrms},
+        {"divergence_scale_range", QJsonArray{s.divergenceScaleRange.lower, s.divergenceScaleRange.upper}}};
+}
+
+/// One stage of the full fit: its rule, its own passes and iterations, and
+/// the objective of its last rebuilt graph, null for a stage that ended by a
+/// thrown failure.
+QJsonObject stageObject(const StageAccount &s)
+{
+    return QJsonObject{
+        {"rule", QString::fromStdString(s.rule)},
+        {"passes", s.passes},
+        {"iterations", s.iterations},
+        {"objective", numberOrNull(s.objective)}};
+}
+
+/// The account of the scale factors' release, as the fit carries it: the
+/// held stage, the released stage or null when it ran no iteration, whether
+/// it was kept, and the rule it was discarded under or null.
+QJsonObject scaleReleaseObject(const ScaleRelease &r)
+{
+    return QJsonObject{
+        {"held", stageObject(r.held)},
+        {"released", r.released ? QJsonValue(stageObject(*r.released)) : QJsonValue(QJsonValue::Null)},
+        {"kept", r.kept},
+        {"reason", r.reason.empty() ? QJsonValue(QJsonValue::Null) : QJsonValue(QString::fromStdString(r.reason))}};
 }
 
 QJsonObject qualityObject(const Quality &q)
@@ -326,7 +352,8 @@ QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerA
         {"limitations", kLimitations},
         {"residuals", residualArray(fit)},
         {"stopping", stoppingObject(fit.stopping)},
-        {"quality", qualityObject(fit.quality)}};
+        {"quality", qualityObject(fit.quality)},
+        {"scale_release", scaleReleaseObject(fit.scaleRelease)}};
 }
 
 QJsonObject failureDiagnostics(const QString &reason, const Stopping *stopping, const Quality *quality)

@@ -15,7 +15,9 @@ namespace FlySight::Fusion::Detail {
 /// catches are narrower and typed, so none can take it either: runPipeline()
 /// catches FitFailure ahead of std::exception, fitOrFail() (initializer.cpp)
 /// catches FitFailure to make a failed prefix or segment fit a start with
-/// infinite objective, and yawSigmaDeg() (factorgraphfit.cpp) catches
+/// infinite objective, fitFactorGraph() catches FitFailure from the full fit's
+/// released stage (and its boundary) to fall back to the held stage, and
+/// yawSigmaDeg() (factorgraphfit.cpp) catches
 /// gtsam::IndeterminantLinearSystemException and returns the 180-degree cap.
 class FusionCancelled {};
 

@@ -41,11 +41,16 @@ struct Samples {
 /// configuration), and only a test changes anything else.
 /// The four stopping fields and relativeTolerance may be set to a negative
 /// value by a test, which makes the corresponding test impossible to satisfy
-/// ("never settles", "never accepted"); production never does. The
-/// initializer's prefix fits cap maxIterations and maxPasses at their own
-/// budget (initializer.cpp): the smaller of the tuning's limit and 50
-/// iterations, and of the tuning's limit and 1 pass; they keep the noise.
+/// ("never settles", "never accepted"); production never does. Likewise the
+/// two divergence bounds may be set to zero or to an empty interval, which
+/// makes every pass of the full fit diverge. The initializer's prefix fits cap
+/// maxIterations and maxPasses at their own budget (initializer.cpp): the
+/// smaller of the tuning's limit and 50 iterations, and of the tuning's limit
+/// and 1 pass; they keep the noise.
 struct Tuning {
+    /// An open interval of scale factors, (lower, upper).
+    struct ScaleRange { double lower, upper; };
+
     /// The IMU's noise: derived from the recording's configuration by
     /// planFit(), as maxGap is; NaN until then (preintegrateImu() refuses it).
     ImuNoise noise;
@@ -67,6 +72,13 @@ struct Tuning {
     int slowTailWindow = 20;                        ///< iterations at the end of a final pass at the limit over which the slow tail is judged
     double slowTailMaxMeanRelativeDecrease = 1e-4;  ///< slow tail: mean (before - after) / max(1, before) over the window must be below this
     double slowTailMaxNrms = 2;                     ///< slow tail: position, velocity and IMU normalized RMS must all be below this
+    // Divergence, judged after every pass of the full fit on the graph rebuilt
+    // at the pass's values: far outside anything a slow tail accepts (an IMU
+    // normalized RMS of 2) and anything the datasheet's 1 % sensitivity
+    // tolerance admits, these catch a fit that has left the model, not one
+    // that is slow. A pass beyond either ends its stage under `diverged`.
+    double divergenceMaxImuNrms = 10;               ///< the IMU normalized RMS of the rebuilt graph must be below this
+    ScaleRange divergenceScaleRange{.5, 2};         ///< every one of the six scale factors must lie strictly inside this
     // The segmented initializer (spec section 3.2, step 1): the fitted window
     // is cut into segments of segmentLength; a piece with fewer than three
     // fixes (beside a GNSS hole, a middle piece can hold one or two) joins the
@@ -76,7 +88,16 @@ struct Tuning {
     // recording small.
     double segmentLength = 600;                     ///< the initializer cuts the fitted window into segments this long, s
     double minFinalSegment = 120;                   ///< a final piece shorter than this is merged into the segment before it, s
-    int maxPasses = 5;                              ///< re-preintegration passes of one fit: the full fit's and a segment fit's five; a prefix fit's one
+    int maxPasses = 5;                              ///< re-preintegration passes of one fit: the held stage of the full fit's and a segment fit's five; a prefix fit's one
+    // The released stage of the full fit starts from a converged solution, so
+    // its budget is a bound on a release that will not converge: it falls back
+    // to the held solution in minutes, not an hour. Three, because on the
+    // reference recordings and on scale_recording the release's second pass
+    // settles and the rebuild after it still moves the cost; the third pass's
+    // rebuild proves it settled (with two, scale_recording and four of the
+    // five M56 recordings, all but 10-15-24, discarded a release that had
+    // reached its minimum).
+    int releasePasses = 3;                          ///< re-preintegration passes of the full fit's released stage
 };
 
 /// Gravity in the NED frame, m/s^2.

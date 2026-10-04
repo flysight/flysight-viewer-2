@@ -10,7 +10,7 @@
             "widened_samples": 0,
             "widening_half_width_s": 2.5
         },
-        "algorithm": "batch-temperature-bias-v8",
+        "algorithm": "batch-temperature-bias-v9",
         "anchor_time_s": null,
         "configuration": {
             "accel_fs_g": 16,
@@ -63,18 +63,18 @@
             "time_method": "SessionData shared UTC conversion; common epoch subtraction only"
         },
         "limitations": "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass with the fitted fix states, biases and scale factors held. Accuracies are first-order, one standard deviation under the documented noise model, widened where the residuals exceed it.",
-        "max_endpoint_correction_deg": 1.0362004367921434e-14,
+        "max_endpoint_correction_deg": 1.0362001406769626e-14,
         "max_seed_vs_selected_acceleration_m_s2": null,
         "max_seed_vs_selected_angle_deg": null,
-        "max_step_correction_m_s2": 3.222535170759603e-13,
-        "max_step_correction_time_s": 1.3880001306533813,
-        "max_velocity_mismatch_m_s": 1.915255390092325e-14,
+        "max_step_correction_m_s2": 3.4432737074045793e-13,
+        "max_step_correction_time_s": 0.5880000591278076,
+        "max_velocity_mismatch_m_s": 1.9239879931407053e-14,
         "model": {
             "gyro_bias": {
                 "b0_rad_s": [
-                    -8.935875704093794e-12,
-                    -2.680749119761174e-11,
-                    1.927636807258231e-23
+                    -8.935826826812363e-12,
+                    -2.68074852858433e-11,
+                    -9.31748863472703e-24
                 ],
                 "b1_rad_s_per_degc": [
                     0,
@@ -103,7 +103,7 @@
                 "acc": [
                     1,
                     1,
-                    0.999999999998749
+                    0.9999999999987491
                 ],
                 "acc_sigma": [
                     0.01,
@@ -116,49 +116,49 @@
                     1
                 ],
                 "gyro_sigma": [
+                    0.010000000000000002,
                     0.01,
-                    0.010000000000000004,
-                    0.010000000000000002
+                    0.01
                 ]
             }
         },
-        "objective": 2.899363982584945e-12,
+        "objective": 2.899363983754553e-12,
         "orientation": "body to fixed NED; quaternion xyzw; RPY degrees",
         "quality": {
-            "imu_nrms": 2.23211130644973e-11,
-            "objective_per_state": 3.2215155362054943e-13,
-            "position_nrms": 4.6335752172356063e-07,
-            "velocity_nrms": 8.213968818594896e-09
+            "imu_nrms": 2.240620545031064e-11,
+            "objective_per_state": 3.221515537505059e-13,
+            "position_nrms": 4.63357521833772e-07,
+            "velocity_nrms": 8.213967284874966e-09
         },
         "residuals": [
             {
                 "kind": "position",
                 "node": 0,
-                "squared_whitened_error": 5.556667395954908e-13,
+                "squared_whitened_error": 5.556667387683e-13,
                 "time_s": 0
             },
             {
                 "kind": "velocity",
                 "node": 0,
-                "squared_whitened_error": 5.286090277797513e-17,
+                "squared_whitened_error": 5.286114501917309e-17,
                 "time_s": 0
             },
             {
                 "kind": "position",
                 "node": 1,
-                "squared_whitened_error": 1.8208640312733308e-14,
+                "squared_whitened_error": 1.8208640312741023e-14,
                 "time_s": 0.20000004768371582
             },
             {
                 "kind": "velocity",
                 "node": 1,
-                "squared_whitened_error": 7.363298877279436e-17,
+                "squared_whitened_error": 7.363301857374562e-17,
                 "time_s": 0.20000004768371582
             },
             {
                 "kind": "imu",
                 "node": 1,
-                "squared_whitened_error": 4.0402313924964083e-22,
+                "squared_whitened_error": 1.6491405401779902e-21,
                 "time_s": 0.20000004768371582
             },
             {
@@ -170,31 +170,31 @@
             {
                 "kind": "velocity",
                 "node": 2,
-                "squared_whitened_error": 1.0001897147603033e-16,
+                "squared_whitened_error": 1.0001863164607744e-16,
                 "time_s": 0.40000009536743164
             },
             {
                 "kind": "imu",
                 "node": 2,
-                "squared_whitened_error": 4.260033662860458e-21,
+                "squared_whitened_error": 5.935990705586657e-21,
                 "time_s": 0.40000009536743164
             },
             {
                 "kind": "position",
                 "node": 3,
-                "squared_whitened_error": 1.1793066518607012e-12,
+                "squared_whitened_error": 1.1793066476429608e-12,
                 "time_s": 0.6000001430511475
             },
             {
                 "kind": "velocity",
                 "node": 3,
-                "squared_whitened_error": 1.3294893642661246e-16,
+                "squared_whitened_error": 1.3294851267607848e-16,
                 "time_s": 0.6000001430511475
             },
             {
                 "kind": "imu",
                 "node": 3,
-                "squared_whitened_error": 2.6891238268381392e-21,
+                "squared_whitened_error": 2.216209523734136e-21,
                 "time_s": 0.6000001430511475
             },
             {
@@ -206,13 +206,13 @@
             {
                 "kind": "velocity",
                 "node": 4,
-                "squared_whitened_error": 1.7343106697653847e-16,
+                "squared_whitened_error": 1.734310304677994e-16,
                 "time_s": 0.7999999523162842
             },
             {
                 "kind": "imu",
                 "node": 4,
-                "squared_whitened_error": 1.4527393452381648e-21,
+                "squared_whitened_error": 7.274434925086958e-21,
                 "time_s": 0.7999999523162842
             },
             {
@@ -224,13 +224,13 @@
             {
                 "kind": "velocity",
                 "node": 5,
-                "squared_whitened_error": 2.225434191502101e-16,
+                "squared_whitened_error": 2.225433777819695e-16,
                 "time_s": 1
             },
             {
                 "kind": "imu",
                 "node": 5,
-                "squared_whitened_error": 4.441789771768135e-21,
+                "squared_whitened_error": 4.483693392491076e-21,
                 "time_s": 1
             },
             {
@@ -242,55 +242,55 @@
             {
                 "kind": "velocity",
                 "node": 6,
-                "squared_whitened_error": 2.8143060512074503e-16,
+                "squared_whitened_error": 2.8143117523108823e-16,
                 "time_s": 1.2000000476837158
             },
             {
                 "kind": "imu",
                 "node": 6,
-                "squared_whitened_error": 4.115087446247792e-21,
+                "squared_whitened_error": 4.207457606671614e-21,
                 "time_s": 1.2000000476837158
             },
             {
                 "kind": "position",
                 "node": 7,
-                "squared_whitened_error": 2.247803673183857e-13,
+                "squared_whitened_error": 2.2478036744991355e-13,
                 "time_s": 1.4000000953674316
             },
             {
                 "kind": "velocity",
                 "node": 7,
-                "squared_whitened_error": 3.513134066390622e-16,
+                "squared_whitened_error": 3.513134194115239e-16,
                 "time_s": 1.4000000953674316
             },
             {
                 "kind": "imu",
                 "node": 7,
-                "squared_whitened_error": 8.040570176964957e-21,
+                "squared_whitened_error": 8.140444188885692e-21,
                 "time_s": 1.4000000953674316
             },
             {
                 "kind": "position",
                 "node": 8,
-                "squared_whitened_error": 1.175845581327827e-12,
+                "squared_whitened_error": 1.1758455889988557e-12,
                 "time_s": 1.6000001430511475
             },
             {
                 "kind": "velocity",
                 "node": 8,
-                "squared_whitened_error": 4.334903639869612e-16,
+                "squared_whitened_error": 4.3348967023144225e-16,
                 "time_s": 1.6000001430511475
             },
             {
                 "kind": "imu",
                 "node": 8,
-                "squared_whitened_error": 1.0469342998373898e-20,
+                "squared_whitened_error": 2.2393681904360612e-21,
                 "time_s": 1.6000001430511475
             },
             {
                 "kind": "bias_prior",
                 "node": 0,
-                "squared_whitened_error": 1.033665261960644e-18,
+                "squared_whitened_error": 1.0336558809445443e-18,
                 "time_s": 0
             },
             {
@@ -302,29 +302,45 @@
             {
                 "kind": "scale_prior",
                 "node": 0,
-                "squared_whitened_error": 1.5649992589778454e-20,
+                "squared_whitened_error": 1.564721493657546e-20,
                 "time_s": 0
             }
         ],
+        "scale_release": {
+            "held": {
+                "iterations": 2,
+                "objective": 2.8993639913450054e-12,
+                "passes": 1,
+                "rule": "settled"
+            },
+            "kept": true,
+            "reason": null,
+            "released": {
+                "iterations": 1,
+                "objective": 2.899363983754553e-12,
+                "passes": 1,
+                "rule": "settled"
+            }
+        },
         "seed_comparison_performed": false,
         "seeds": [
             {
                 "acc_bias_m_s2": [
-                    -1.3409005636064825e-20,
-                    1.1023834261662107e-20,
-                    1.1480735031152614e-10
+                    1.6489205462517248e-20,
+                    -6.2315936749042975e-21,
+                    1.1480419174429352e-10
                 ],
                 "converged": true,
                 "gyro_bias_rad_s": [
-                    -8.935875704093794e-12,
-                    -2.680749119761174e-11,
-                    1.927636807258231e-23
+                    -8.935826826812363e-12,
+                    -2.68074852858433e-11,
+                    -9.31748863472703e-24
                 ],
                 "heading_deg": null,
-                "iterations": 2,
-                "objective": 2.899363982584945e-12,
-                "position_residual_rms_m": 8.025587696944068e-07,
-                "velocity_residual_rms_m_s": 1.4227011325592866e-09
+                "iterations": 3,
+                "objective": 2.899363983754553e-12,
+                "position_residual_rms_m": 8.025587698852985e-07,
+                "velocity_residual_rms_m_s": 1.4227008669112023e-09
             }
         ],
         "selected_heading_deg": null,
@@ -332,10 +348,15 @@
         "stationary_interval_s": null,
         "stopping": {
             "bias_settled_tolerance": 1e-06,
+            "divergence_max_imu_nrms": 10,
+            "divergence_scale_range": [
+                0.5,
+                2
+            ],
             "lambda_upper_bound": 1000000000000,
-            "last_pass_mean_relative_decrease": 0.0008936589579311809,
+            "last_pass_mean_relative_decrease": 7.565978321055677e-21,
             "passes": 1,
-            "repreintegration_cost_difference": 0,
+            "repreintegration_cost_difference": 2.4474125594556012e-23,
             "rule": "settled",
             "slow_tail": {
                 "max_mean_relative_decrease": 1e-04,
@@ -371,6 +392,10 @@
         "Integrating IMU factors",
         "Pass 1, iteration 1",
         "Pass 1, iteration 2",
+        "Integrating IMU factors",
+        "Releasing the scale factors",
+        "Integrating IMU factors",
+        "Pass 2, iteration 1",
         "Integrating IMU factors"
     ],
     "rows": 160,
@@ -381,13 +406,19 @@
                 0,
                 0,
                 0.0017873179187617256,
-                2.8993639851307804e-12
+                2.8993639939230455e-12
             ],
             [
                 0,
                 1,
-                2.8993639851307804e-12,
-                2.899363982584945e-12
+                2.8993639939230455e-12,
+                2.8993639907136938e-12
+            ],
+            [
+                1,
+                0,
+                2.8993639913450054e-12,
+                2.899363983779027e-12
             ]
         ],
         "initializer": {

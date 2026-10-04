@@ -12,6 +12,8 @@
 // (the divided readings, the scale Jacobian against central differences, the
 // scaled factor's Jacobians, the graph, the re-preintegration, the
 // reconstruction, at rest and on the scale recording, its diagnostics), the
+// scale factors' release (the held and released stages and their account, the
+// fallback to the held fit, divergence in either stage), the
 // solver-failure path and its diagnostics shapes, the IMU-rate reconstruction
 // pass against a dense reference graph and its per-interval seam, the
 // channels the fit publishes as that pass and their time axis, the accuracy
@@ -421,17 +423,6 @@ WindowFit fitOfChannels(const Fusion::Channels &channels)
     f.account = init.account;
     f.fit = fitFactorGraph(f.window, init.state, f.tuning, QString::fromLatin1(kFullFitPassFormat), Checkpoint(), model);
     return f;
-}
-
-/// `tuning` with the scale factors' prior a thousand times tighter than the
-/// datasheet's: the full fit with its scale held at one. The scale factors
-/// are part of every full fit, so a comparison with a fit at unit scale holds
-/// them there instead of switching them off.
-Tuning withScaleHeldAtOne(Tuning tuning)
-{
-    tuning.noise.accelerometer.sensitivityTolerance /= 1000;
-    tuning.noise.gyroscope.sensitivityTolerance /= 1000;
-    return tuning;
 }
 
 /// A fixture's full fit (fitOfChannels()). The fits dominate this
@@ -932,6 +923,11 @@ private slots:
     void restLeavesTheScaleAtItsPrior();
     void scaleRecordingRecoversTheFactor();
     void diagnosticsReportTheScale();
+    void scaleReleaseIsAccountedFor();
+    void releaseFailureFallsBackToTheHeldFit();
+    void divergenceEndsTheHeldStage_data();
+    void divergenceEndsTheHeldStage();
+    void divergenceEndsTheReleasedStage();
     void imuRateEndsAreTheFit_data();
     void imuRateEndsAreTheFit();
     void imuRateSampleOnAFixIsPublishedOnce();
@@ -2092,8 +2088,8 @@ void FusionKernelTest::initializerDiagnosticsShape()
         "initialization", "initializer", "input", "limitations", "max_endpoint_correction_deg",
         "max_seed_vs_selected_acceleration_m_s2", "max_seed_vs_selected_angle_deg", "max_step_correction_m_s2",
         "max_step_correction_time_s", "max_velocity_mismatch_m_s", "model", "objective",
-        "orientation", "quality", "residuals", "seed_comparison_performed", "seeds", "selected_heading_deg",
-        "start_s", "stationary_interval_s", "stopping"}));
+        "orientation", "quality", "residuals", "scale_release", "seed_comparison_performed", "seeds",
+        "selected_heading_deg", "start_s", "stationary_interval_s", "stopping"}));
     // The account of the reconstruction names it; the limitations no longer
     // disclaim it.
     QVERIFY(diagnostics.value("dense_output").toString().startsWith(QStringLiteral("IMU-rate reconstruction")));
@@ -2274,25 +2270,35 @@ void FusionKernelTest::biasSettledByCostTest()
     // lowered the cost by 8e-15 to prove the bias had stopped moving (under
     // that rule this fixture's history had passes of 4, 2, 1 iterations);
     // under the cost test the fit converges within two passes (in one, of four
-    // iterations, under the datasheet's noise).
+    // iterations, under the datasheet's noise). Each stage of the full fit
+    // does: the held stage, then the released stage, which is kept and whose
+    // account `stopping` is (item 1406).
     PipelineTrace trace;
     const Fusion::Result result = runPipeline(
         toChannels(fusionFixture(QStringLiteral("coarse_maneuver"))), Tuning{}, Checkpoint(), &trace);
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
     QVERIFY(trace.converged);
     QVERIFY(trace.stopping.rule == StopRule::kSettled);
-    qInfo() << "coarse_maneuver converged after" << trace.stopping.passes << "passes";
+    const QJsonObject diagnostics = diagnosticsOf(result);
+    const QJsonObject release = diagnostics.value("scale_release").toObject();
+    const QJsonObject held = release.value("held").toObject(), released = release.value("released").toObject();
+    qInfo() << "coarse_maneuver converged after" << held.value("passes").toInt() << "held and"
+            << trace.stopping.passes << "released passes";
+    QCOMPARE(release.value("kept").toBool(false), true);
+    QCOMPARE(held.value("rule").toString(), QStringLiteral("settled"));
+    QVERIFY(held.value("passes").toInt(99) <= 2);
     QVERIFY(trace.stopping.passes <= 2);
+    QCOMPARE(released.value("passes").toInt(), trace.stopping.passes);
 
+    // The pass index counts on across the stages.
     std::set<int> outers;
     for (const FitIteration &h : trace.history)
         outers.insert(h.outer);
-    QCOMPARE(int(outers.size()), trace.stopping.passes);
+    QCOMPARE(int(outers.size()), held.value("passes").toInt()+released.value("passes").toInt());
 
     // The cost test re-derived from the trace: the reported objective is the
     // cost of the graph rebuilt at the fitted bias, the last history row's
     // `after` is the pass's final cost.
-    const QJsonObject diagnostics = diagnosticsOf(result);
     const QJsonObject stopping = diagnostics.value("stopping").toObject();
     const double after = trace.history.back().after;
     const double objective = diagnostics.value("objective").toDouble();
@@ -2306,10 +2312,12 @@ void FusionKernelTest::biasSettledByCostTest()
     QCOMPARE(slowTail.value("window").toInt(), 20);
     QCOMPARE(slowTail.value("max_mean_relative_decrease").toDouble(), 1e-4);
     QCOMPARE(slowTail.value("max_nrms").toDouble(), 2.);
+    QCOMPARE(stopping.value("divergence_max_imu_nrms").toDouble(), 10.);
+    QCOMPARE(stopping.value("divergence_scale_range").toArray(), QJsonArray({.5, 2.}));
     const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
     QCOMPARE(seed.value("converged").toBool(false), true);
     QCOMPARE(seed.value("iterations").toInt(), int(trace.history.size()));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v8"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v9"));
 
     // The quality metrics recomputed from the residuals array: 28 states, so
     // 28 position and velocity factors of dimension 3 and 27 IMU factors of
@@ -2386,7 +2394,11 @@ void FusionKernelTest::slowTailAtTheIterationLimit()
     // with the wave, so the IMU's normalized misfit is about that whatever the
     // wave's amplitude): refused on the IMU bound alone. Dividing the IMU's
     // noise instead does not raise it: the stiffer factor is satisfied and the
-    // misfit moves to the fixes.
+    // misfit moves to the fixes. All of this is the held stage's (item 1406):
+    // accepted, it is followed by the released stage, its budget of three
+    // passes of 25 iterations under the same forcing, whose tail is accepted
+    // the same way, so the fit has 200 iterations and reports the released
+    // stage's three passes; refused, the held stage ends the fit at 125.
     QFETCH(double, maxNrms);
     QFETCH(double, maxMeanRelativeDecrease);
     QFETCH(bool, imuIgnored);
@@ -2402,14 +2414,14 @@ void FusionKernelTest::slowTailAtTheIterationLimit()
         imuIgnored ? imuIgnoredChannels() : toChannels(fusionFixture(QStringLiteral("coarse_maneuver"))), tuning,
         Checkpoint(), &trace);
 
-    QCOMPARE(trace.history.size(), size_t(125));
+    QCOMPARE(trace.history.size(), size_t(accepted ? 200 : 125));
     for (const FitIteration &h : trace.history)
         QVERIFY2(h.before >= h.after, qPrintable(QStringLiteral("pass %1, iteration %2").arg(h.outer).arg(h.iteration)));
-    QCOMPARE(trace.stopping.passes, 5);
+    QCOMPARE(trace.stopping.passes, accepted ? 3 : 5);
     const QJsonObject diagnostics = diagnosticsOf(result);
     const QJsonObject stopping = diagnostics.value("stopping").toObject();
     const QJsonObject quality = diagnostics.value("quality").toObject();
-    QCOMPARE(stopping.value("passes").toInt(), 5);
+    QCOMPARE(stopping.value("passes").toInt(), accepted ? 3 : 5);
     const double meanDecrease = stopping.value("last_pass_mean_relative_decrease").toDouble(-1);
     qInfo() << "slow tail: position nrms" << quality.value("position_nrms").toDouble() << ", velocity nrms"
             << quality.value("velocity_nrms").toDouble() << ", imu nrms" << quality.value("imu_nrms").toDouble()
@@ -2433,7 +2445,17 @@ void FusionKernelTest::slowTailAtTheIterationLimit()
         QVERIFY(quality.value("imu_nrms").toDouble(9) < 2);
         const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
         QCOMPARE(seed.value("converged").toBool(false), true);
-        QCOMPARE(seed.value("iterations").toInt(), 125);
+        QCOMPARE(seed.value("iterations").toInt(), 200);
+        const QJsonObject release = diagnostics.value("scale_release").toObject();
+        const QJsonObject held = release.value("held").toObject(), released = release.value("released").toObject();
+        QCOMPARE(held.value("rule").toString(), QStringLiteral("slow tail accepted"));
+        QCOMPARE(held.value("passes").toInt(), 5);
+        QCOMPARE(held.value("iterations").toInt(), 125);
+        QCOMPARE(released.value("rule").toString(), QStringLiteral("slow tail accepted"));
+        QCOMPARE(released.value("passes").toInt(), 3);
+        QCOMPARE(released.value("iterations").toInt(), 75);
+        QCOMPARE(release.value("kept").toBool(false), true);
+        QVERIFY(release.value("reason").isNull());
     } else {
         QVERIFY(result.outcome == Fusion::Outcome::SolverFailed);
         QCOMPARE(result.reason,
@@ -2534,12 +2556,14 @@ void FusionKernelTest::failureDiagnosticsShape()
         s.slowTailWindow = tuning.slowTailWindow;
         s.slowTailMaxMeanRelativeDecrease = tuning.slowTailMaxMeanRelativeDecrease;
         s.slowTailMaxNrms = tuning.slowTailMaxNrms;
+        s.divergenceMaxImuNrms = tuning.divergenceMaxImuNrms;
+        s.divergenceScaleRange = tuning.divergenceScaleRange;
         QVERIFY(std::isnan(s.lastPassMeanRelativeDecrease) && std::isnan(s.repreintegrationCostDifference));
 
         const QJsonObject diagnostics = failureDiagnostics(QString::fromLatin1(failure.failure), &s);
         QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure"),
                                                   QStringLiteral("stopping")}));
-        QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v8"));
+        QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v9"));
         QCOMPARE(diagnostics.value("failure").toString(), QString::fromLatin1(failure.failure));
         const QJsonObject stopping = diagnostics.value("stopping").toObject();
         QCOMPARE(stopping.value("rule").toString(), QString::fromLatin1(failure.rule));
@@ -2548,6 +2572,13 @@ void FusionKernelTest::failureDiagnosticsShape()
         QVERIFY(stopping.value("repreintegration_cost_difference").isNull());
         QCOMPARE(stopping.value("lambda_upper_bound").toDouble(), 1e12);
         QCOMPARE(stopping.value("slow_tail").toObject().value("window").toInt(), 20);
+        // The divergence bounds in force, beside the other thresholds.
+        QCOMPARE(stopping.value("divergence_max_imu_nrms").toDouble(), 10.);
+        QCOMPARE(stopping.value("divergence_scale_range").toArray(), QJsonArray({.5, 2.}));
+        QCOMPARE(stopping.keys(), QStringList({"bias_settled_tolerance", "divergence_max_imu_nrms",
+                                               "divergence_scale_range", "lambda_upper_bound",
+                                               "last_pass_mean_relative_decrease", "passes",
+                                               "repreintegration_cost_difference", "rule", "slow_tail"}));
     }
     QCOMPARE(QString::fromLatin1(StopRule::kDampingSaturated), QStringLiteral("damping saturated"));
     s.rule = StopRule::kCostIncreased;
@@ -2891,13 +2922,17 @@ void FusionKernelTest::driftingBiasSegmentsConverge()
         QVERIFY(std::isfinite(component.toDouble(std::numeric_limits<double>::quiet_NaN())));
 
     // Spec section 10, the drifting-bias recording under the temperature
-    // model: b1 within 20 % of the truth in at most 30 iterations (the sum
-    // over the full fit's passes). From the fixture's construction: the z
+    // model: b1 within 20 % of the truth in at most 30 iterations (item 241:
+    // the full fit's, the sum over all its passes, both stages counted, since
+    // the item bounds what the fit costs, not one stage of it; the split
+    // between the held and the released stage is logged). From the
+    // fixture's construction: the z
     // bias .3 + t / 200 deg/s over the ramp 25 + t / 10 degC is 0.05 deg/s
     // per degC (b1z), T_ref = 35, and b0z = .8 deg/s, the bias at T_ref.
     QVERIFY(run.trace.converged);
     QCOMPARE(seed.value("iterations").toInt(999), int(run.trace.history.size()));
     QVERIFY(seed.value("iterations").toInt(999) <= 30);
+    const QJsonObject release = run.diagnostics.value("scale_release").toObject();
     const QJsonObject gyroBias = run.diagnostics.value("model").toObject().value("gyro_bias").toObject();
     const QJsonArray b1 = gyroBias.value("b1_rad_s_per_degc").toArray();
     QCOMPARE(b1.size(), 3);
@@ -2906,7 +2941,10 @@ void FusionKernelTest::driftingBiasSegmentsConverge()
             << b1.at(2).toDouble()*180/kPi << "deg/s/degC (truth 0, 0, .05); b0"
             << bias.at(0).toDouble()*180/kPi << bias.at(1).toDouble()*180/kPi << bias.at(2).toDouble()*180/kPi
             << "deg/s (truth .2, -.15, .8); t_ref" << gyroBias.value("t_ref_degc").toDouble()
-            << "degC; full fit" << run.trace.history.size() << "iterations";
+            << "degC; full fit" << run.trace.history.size() << "iterations ("
+            << release.value("held").toObject().value("iterations").toInt() << "held,"
+            << release.value("released").toObject().value("iterations").toInt() << "released, kept"
+            << release.value("kept").toBool() << ")";
     QVERIFY(std::abs(b1.at(2).toDouble()-b1z) <= .2*b1z);
     QVERIFY(std::abs(b1.at(0).toDouble()) <= .2*b1z);
     QVERIFY(std::abs(b1.at(1).toDouble()) <= .2*b1z);
@@ -3307,7 +3345,7 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     const Fusion::Result result = runPipeline(toChannels(f), t, Checkpoint(), &trace);
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
     const QJsonObject diagnostics = diagnosticsOf(result);
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v8"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v9"));
     const QJsonObject gyroBias = diagnostics.value("model").toObject().value("gyro_bias").toObject();
     const QJsonArray b1 = gyroBias.value("b1_rad_s_per_degc").toArray();
     QCOMPARE(b1.size(), 3);
@@ -3328,11 +3366,12 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     // The consistency check with the stock path through the internal seams:
     // the same window, the same initializer, the constant-bias fit (the
     // default model) is the same model at b1 = 0 and unit scale, so it
-    // converges to the objective of the full fit with its scale held at one
-    // (withScaleHeldAtOne()) under the settle tolerance (1e-6 relative is the
-    // margin for a different elimination ordering). Free, the scale moves the
-    // objective by about 4.5 % on this recording (246.3 against 258.0 held),
-    // so the constant-bias fit is reproduced only with it held.
+    // converges to the objective of the full fit's held stage, whose scale
+    // prior holds every factor at one (its account, scale_release.held, of
+    // the pipeline run above), under the settle tolerance (1e-6 relative is
+    // the margin for a different elimination ordering). Released, the scale
+    // moves the objective by about 4.5 % on this recording (246.3 against
+    // 258.0 held), so the constant-bias fit is reproduced only with it held.
     const PreparedInput prepared = prepareInput(toChannels(f));
     Tuning derived = t;
     derived.maxGap = SampleContinuity::holeThreshold(prepared.recording.imuTime);
@@ -3345,18 +3384,13 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     QVERIFY(!stock.biasModel.temperatureLinear);
     QVERIFY(stock.gyroBiasSlope.isZero(0));
     QCOMPARE(stock.residuals.back().kind, std::string("bias_prior"));
-    const Tuning held = withScaleHeldAtOne(derived);
-    const FitResult temperature = fitFactorGraph(window, init.state, held, QString::fromLatin1(kFullFitPassFormat),
-                                                 Checkpoint(), gyroBiasModelFor(window));
-    QVERIFY(temperature.converged);
-    const double departure = (temperature.scale-Vector6::Ones()).cwiseAbs().maxCoeff();
-    QCOMPARE(temperature.residuals.back().kind, std::string("scale_prior"));
+    const QJsonObject held = diagnostics.value("scale_release").toObject().value("held").toObject();
+    QCOMPARE(held.value("rule").toString(), QStringLiteral("settled"));
+    const double heldObjective = held.value("objective").toDouble(-1);
     const double objective = diagnostics.value("objective").toDouble();
-    qInfo() << "constant temperature: objective" << objective << "with the scale free," << temperature.objective
-            << "held at one (largest departure" << departure << "), stock fit" << stock.objective << "; full fit"
-            << trace.history.size() << "iterations";
-    QVERIFY(departure <= held.noise.accelerometer.sensitivityTolerance);
-    QVERIFY(std::abs(stock.objective-temperature.objective) <= 1e-6*std::max(1., temperature.objective));
+    qInfo() << "constant temperature: objective" << objective << "as reported," << heldObjective
+            << "held at one, stock fit" << stock.objective << "; full fit" << trace.history.size() << "iterations";
+    QVERIFY(std::abs(stock.objective-heldObjective) <= 1e-6*std::max(1., heldObjective));
 }
 
 void FusionKernelTest::preintegrationDividesByTheScale()
@@ -3850,18 +3884,28 @@ void FusionKernelTest::restLeavesTheScaleAtItsPrior()
             << "of its tolerance, gyro" << gyroscope/noise.gyroscope.sensitivityTolerance;
     QVERIFY(accelerometer <= .1*noise.accelerometer.sensitivityTolerance);
     QVERIFY(gyroscope <= noise.gyroscope.sensitivityTolerance);
+
+    // Item 1409: through both stages. The factors held at one, then released
+    // from the held solution, and the released stage settles and is kept.
+    const QJsonObject release = run.diagnostics.value("scale_release").toObject();
+    qInfo() << "rest_throughout: held" << release.value("held").toObject().toVariantMap() << "; released"
+            << release.value("released").toObject().toVariantMap();
+    QCOMPARE(release.value("kept").toBool(false), true);
+    QVERIFY(release.value("reason").isNull());
+    QCOMPARE(release.value("released").toObject().value("rule").toString(), QStringLiteral("settled"));
 }
 
 void FusionKernelTest::scaleRecordingRecoversTheFactor()
 {
-    // Clause 54, criterion 8: on scale_recording, whose accelerometer x axis
-    // reads 2 % high under a zero-mean periodic north acceleration, the full
-    // fit converges and recovers the factor within the prior's tolerance;
-    // the other axes stay at one (y and the gyro within a tenth of their
-    // tolerance; z, which shares the z bias under gravity, within its
-    // tolerance); and the position misfit (FitResult::positionRms) is at most
-    // 0.9 of that of the full fit with its scale held at one
-    // (withScaleHeldAtOne()), on the same window from the same initialization.
+    // Clause 54, criterion 8, and item 1408: on scale_recording, whose
+    // accelerometer x axis reads 2 % high under a zero-mean periodic north
+    // acceleration, the full fit converges through its released stage, which
+    // settles and is kept, and recovers the factor within the prior's
+    // tolerance; the other axes stay at one (y and the gyro within a tenth of
+    // their tolerance; z, which shares the z bias under gravity, within its
+    // tolerance); and the objective falls below the held stage's, read from
+    // the fit's account: the held stage is the fit with the scale held at one,
+    // on the same window from the same initialization.
     const QString name = QStringLiteral("scale_recording");
     const Tuning tuning = pipelineTuning(name, Tuning{});
     const Samples window = windowOf(name, Tuning{});
@@ -3871,22 +3915,24 @@ void FusionKernelTest::scaleRecordingRecoversTheFactor()
     const GyroBiasModel model = gyroBiasModelFor(window);
     const FitResult with = fitFactorGraph(window, init.state, tuning, QString::fromLatin1(kFullFitPassFormat),
                                           Checkpoint(), model);
-    const FitResult held = fitFactorGraph(window, init.state, withScaleHeldAtOne(tuning),
-                                          QString::fromLatin1(kFullFitPassFormat), Checkpoint(), model);
-    for (const auto &[label, fit] : {std::pair<const char *, const FitResult *>{"with the scale free", &with},
-                                     std::pair<const char *, const FitResult *>{"held at one", &held}}) {
-        const auto bias = fit->values.at<gtsam::imuBias::ConstantBias>(B(0));
-        qInfo() << "scale_recording" << label << ": rule" << fit->stopping.rule.c_str() << ", passes"
-                << fit->stopping.passes << ", iterations" << fit->history.size() << ", objective" << fit->objective
-                << "; scale acc" << fit->scale(0) << fit->scale(1) << fit->scale(2) << "gyro" << fit->scale(3)
-                << fit->scale(4) << fit->scale(5) << "; acc bias" << bias.accelerometer().x()
-                << bias.accelerometer().y() << bias.accelerometer().z() << "; position RMS" << fit->positionRms
-                << "m, velocity RMS" << fit->velocityRms << "m/s";
+    const ScaleRelease &release = with.scaleRelease;
+    QVERIFY(release.released.has_value());
+    for (const auto &[label, stage] : {std::pair<const char *, const StageAccount *>{"held", &release.held},
+                                       std::pair<const char *, const StageAccount *>{"released", &*release.released}}) {
+        qInfo() << "scale_recording" << label << "stage: rule" << stage->rule.c_str() << ", passes" << stage->passes
+                << ", iterations" << stage->iterations << ", objective" << stage->objective;
     }
-    qInfo() << "scale_recording: s_ax" << with.scale(0) << "against 1.02 (" << (with.scale(0)-1.02)/.01
-            << "of the tolerance); position RMS ratio" << with.positionRms/held.positionRms;
+    const auto bias = with.values.at<gtsam::imuBias::ConstantBias>(B(0));
+    qInfo() << "scale_recording: scale acc" << with.scale(0) << with.scale(1) << with.scale(2) << "gyro"
+            << with.scale(3) << with.scale(4) << with.scale(5) << "; acc bias" << bias.accelerometer().x()
+            << bias.accelerometer().y() << bias.accelerometer().z() << "; position RMS" << with.positionRms
+            << "m, velocity RMS" << with.velocityRms << "m/s; s_ax against 1.02 (" << (with.scale(0)-1.02)/.01
+            << "of the tolerance); objective ratio released / held" << with.objective/release.held.objective;
     QVERIFY(with.converged);
-    QVERIFY(held.converged);
+    QVERIFY(release.kept);
+    QVERIFY(release.reason.empty());
+    QCOMPARE(release.released->rule, std::string(StopRule::kSettled));
+    QVERIFY(with.objective == release.released->objective);
     const double accelerometer = tuning.noise.accelerometer.sensitivityTolerance;
     const double gyroscope = tuning.noise.gyroscope.sensitivityTolerance;
     QVERIFY(std::abs(with.scale(0)-1.02) <= accelerometer);
@@ -3894,7 +3940,7 @@ void FusionKernelTest::scaleRecordingRecoversTheFactor()
     QVERIFY(std::abs(with.scale(2)-1) <= accelerometer);
     for (int i = 3; i < 6; ++i)
         QVERIFY2(std::abs(with.scale(i)-1) <= .1*gyroscope, qPrintable(QString::number(i)));
-    QVERIFY(with.positionRms <= .9*held.positionRms);
+    QVERIFY(with.objective < release.held.objective);
 }
 
 void FusionKernelTest::diagnosticsReportTheScale()
@@ -3951,6 +3997,289 @@ void FusionKernelTest::diagnosticsReportTheScale()
         "Local batch convergence; heading may be ambiguous. Between fixes one linearized pass with the fitted fix "
         "states, biases and scale factors held. Accuracies are first-order, one standard deviation under the "
         "documented noise model, widened where the residuals exceed it."));
+}
+
+void FusionKernelTest::scaleReleaseIsAccountedFor()
+{
+    // Items 1401, 1405 and 1406: the full fit of coarse_maneuver runs the
+    // held stage, reports "Releasing the scale factors" once, between the
+    // held stage's last iteration and the released stage's first graph build,
+    // and runs the released stage, whose passes are numbered on from the
+    // held stage's in the texts and in the trace. scale_release accounts for
+    // both, its counts adding up to the history and seeds[0].iterations; the
+    // reported stopping account is the released stage's own, since it is
+    // kept; and the fit's own account (FitResult::scaleRelease, through the
+    // seams) is what the diagnostics wrote, field by field.
+    const QString name = QStringLiteral("coarse_maneuver");
+    QStringList texts;
+    const Checkpoint collecting([&texts](const QString &text) { texts.append(text); }, {});
+    PipelineTrace trace;
+    const Fusion::Result result = runPipeline(toChannels(fusionFixture(name)), Tuning{}, collecting, &trace);
+    QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
+    const QJsonObject diagnostics = diagnosticsOf(result);
+
+    const QJsonObject release = diagnostics.value("scale_release").toObject();
+    QCOMPARE(release.keys(), QStringList({"held", "kept", "reason", "released"}));
+    const QJsonObject held = release.value("held").toObject(), released = release.value("released").toObject();
+    const QStringList accountKeys{"iterations", "objective", "passes", "rule"};
+    QCOMPARE(held.keys(), accountKeys);
+    QCOMPARE(released.keys(), accountKeys);
+    qInfo() << name << ": held" << held.toVariantMap() << "; released" << released.toVariantMap();
+    QCOMPARE(held.value("rule").toString(), QStringLiteral("settled"));
+    QCOMPARE(released.value("rule").toString(), QStringLiteral("settled"));
+    QCOMPARE(release.value("kept").toBool(false), true);
+    QVERIFY(release.value("reason").isNull());
+
+    // The reported stage is the released one.
+    const QJsonObject stopping = diagnostics.value("stopping").toObject();
+    QCOMPARE(stopping.value("rule").toString(), released.value("rule").toString());
+    QCOMPARE(stopping.value("passes").toInt(), released.value("passes").toInt());
+    QCOMPARE(trace.stopping.passes, released.value("passes").toInt());
+    QVERIFY(diagnostics.value("objective").toDouble() == released.value("objective").toDouble());
+    QVERIFY(held.value("objective").isDouble());
+
+    // The counts: both stages in the history, the passes numbered on.
+    const int heldPasses = held.value("passes").toInt(), releasedPasses = released.value("passes").toInt();
+    const int heldIterations = held.value("iterations").toInt();
+    const int releasedIterations = released.value("iterations").toInt();
+    QVERIFY(heldPasses >= 1 && releasedPasses >= 1 && heldIterations >= 1 && releasedIterations >= 1);
+    QCOMPARE(heldIterations+releasedIterations, int(trace.history.size()));
+    QCOMPARE(diagnostics.value("seeds").toArray().first().toObject().value("iterations").toInt(),
+             int(trace.history.size()));
+    std::set<int> outers;
+    for (const FitIteration &h : trace.history)
+        outers.insert(h.outer);
+    QCOMPARE(int(outers.size()), heldPasses+releasedPasses);
+    QCOMPARE(trace.history[size_t(heldIterations)-1].outer, heldPasses-1);
+    QCOMPARE(trace.history[size_t(heldIterations)].outer, heldPasses);
+    QCOMPARE(trace.history[size_t(heldIterations)].iteration, 0);
+
+    // The boundary, once, in its place among the texts.
+    const QString boundary = QStringLiteral("Releasing the scale factors");
+    QCOMPARE(texts.count(boundary), 1);
+    const qsizetype at = texts.indexOf(boundary);
+    const QRegularExpression passText(QStringLiteral("^Pass ([0-9]+), iteration ([0-9]+)$"));
+    QString lastBefore, firstAfter;
+    for (qsizetype i = 0; i < texts.size(); ++i) {
+        const QRegularExpressionMatch match = passText.match(texts.at(i));
+        if (!match.hasMatch())
+            continue;
+        const int pass = match.captured(1).toInt();
+        if (i < at) {
+            QVERIFY2(pass <= heldPasses, qPrintable(texts.at(i)));
+            lastBefore = texts.at(i);
+        } else {
+            QVERIFY2(pass > heldPasses && pass <= heldPasses+releasedPasses, qPrintable(texts.at(i)));
+            if (firstAfter.isEmpty())
+                firstAfter = texts.at(i);
+        }
+    }
+    const int lastHeldIteration = trace.history[size_t(heldIterations)-1].iteration+1;
+    QCOMPARE(lastBefore, QStringLiteral("Pass %1, iteration %2").arg(heldPasses).arg(lastHeldIteration));
+    QCOMPARE(texts.at(at+1), QStringLiteral("Integrating IMU factors"));
+    QCOMPARE(firstAfter, QStringLiteral("Pass %1, iteration 1").arg(heldPasses+1));
+
+    // The fit's account through the seams is the one the diagnostics wrote.
+    const ScaleRelease &account = fixtureFit(name).fit.scaleRelease;
+    QCOMPARE(account.held.rule, held.value("rule").toString().toStdString());
+    QCOMPARE(account.held.passes, heldPasses);
+    QCOMPARE(account.held.iterations, heldIterations);
+    QVERIFY(account.held.objective == held.value("objective").toDouble());
+    QVERIFY(account.released.has_value());
+    QCOMPARE(account.released->rule, released.value("rule").toString().toStdString());
+    QCOMPARE(account.released->passes, releasedPasses);
+    QCOMPARE(account.released->iterations, releasedIterations);
+    QVERIFY(account.released->objective == released.value("objective").toDouble());
+    QVERIFY(account.kept);
+    QVERIFY(account.reason.empty());
+}
+
+namespace {
+
+/// The fallback to the held fit, as `run` reports it (item 1403): a success,
+/// converged, its scale_release not kept for `reason`, the reported stopping
+/// account, objective and iterations the held stage's, and the factors at
+/// one, within a tenth of their tolerance, with the held stage's sigmas, each
+/// below a hundredth of it.
+void verifyHeldFallback(const InitializerRun &run, const QString &reason, const ImuNoise &noise)
+{
+    QVERIFY2(run.result.outcome == Fusion::Outcome::Succeeded, qPrintable(run.result.reason));
+    QVERIFY(run.trace.converged);
+    const QJsonObject release = run.diagnostics.value("scale_release").toObject();
+    const QJsonObject held = release.value("held").toObject();
+    qInfo() << "fallback: held" << held.toVariantMap() << "; released" << release.value("released").toVariant()
+            << "; reason" << release.value("reason").toString();
+    QCOMPARE(release.value("kept").toBool(true), false);
+    QCOMPARE(release.value("reason").toString(), reason);
+    QCOMPARE(held.value("rule").toString(), QStringLiteral("settled"));
+    const QJsonObject stopping = run.diagnostics.value("stopping").toObject();
+    QCOMPARE(stopping.value("rule").toString(), held.value("rule").toString());
+    QCOMPARE(stopping.value("passes").toInt(), held.value("passes").toInt());
+    QCOMPARE(run.trace.stopping.rule, held.value("rule").toString().toStdString());
+    QVERIFY(run.diagnostics.value("objective").toDouble() == held.value("objective").toDouble());
+    const QJsonObject seed = run.diagnostics.value("seeds").toArray().first().toObject();
+    QCOMPARE(seed.value("converged").toBool(false), true);
+    QCOMPARE(seed.value("iterations").toInt(), int(run.trace.history.size()));
+
+    const QJsonObject scale = run.diagnostics.value("model").toObject().value("scale").toObject();
+    for (const char *sensor : {"acc", "gyro"}) {
+        const double tolerance = QLatin1String(sensor) == QLatin1String("acc")
+            ? noise.accelerometer.sensitivityTolerance : noise.gyroscope.sensitivityTolerance;
+        const QJsonArray factors = scale.value(QLatin1String(sensor)).toArray();
+        const QJsonArray sigmas = scale.value(QLatin1String(sensor) + QLatin1String("_sigma")).toArray();
+        QCOMPARE(factors.size(), 3);
+        QCOMPARE(sigmas.size(), 3);
+        for (int i = 0; i < 3; ++i) {
+            QVERIFY2(std::abs(factors.at(i).toDouble()-1) <= .1*tolerance, sensor);
+            QVERIFY2(sigmas.at(i).toDouble(1) < .01*tolerance, sensor);
+        }
+    }
+}
+
+} // namespace
+
+void FusionKernelTest::releaseFailureFallsBackToTheHeldFit()
+{
+    // Items 1403 and 1410: the released stage forced to fail. The forcing is
+    // allPrefixFitsFailFallsBack's, at the release boundary: the progress
+    // function throws FitFailure there, with the account of a `cost
+    // increased` (a rule the released stage can end under in production).
+    // On scale_recording, whose release would move the x accelerometer factor
+    // to about 1.02, the fit falls back to the held stage: converged, the
+    // factors at one, scale_release not kept with the thrown rule as the
+    // reason and no released account (no iteration ran). The published
+    // channels are the held fit's, bit for bit: the pipeline's against the
+    // reconstruction of the seam's own fit under the same forcing
+    // (imuRateIsWhatTheFitPublishes' pattern).
+    const QString boundary = QStringLiteral("Releasing the scale factors");
+    const Checkpoint failingRelease(
+        [boundary](const QString &text) {
+            if (text == boundary) {
+                Stopping s;
+                s.rule = StopRule::kCostIncreased;
+                throw FitFailure(std::string("Nonfinite or increasing optimizer cost"), s);
+            }
+        },
+        [] { return false; });
+    const QString name = QStringLiteral("scale_recording");
+    const Fusion::Channels channels = toChannels(initializerFixture(name));
+    const InitializerRun run = runInitializerFixture(name, Tuning{}, failingRelease);
+    verifyHeldFallback(run, QStringLiteral("cost increased"), imuNoise(channels.imuConfiguration));
+    const QJsonObject release = run.diagnostics.value("scale_release").toObject();
+    QVERIFY(release.value("released").isNull());
+    QCOMPARE(release.value("held").toObject().value("iterations").toInt(), int(run.trace.history.size()));
+
+    // The seam: the same stages in the pipeline's order, under the same forcing.
+    const Tuning tuning = pipelineTuning(name, Tuning{});
+    const Samples window = windowOf(name, Tuning{});
+    const Initialization init = initialize(window, tuning, failingRelease);
+    const FitResult fit = fitFactorGraph(window, init.state, tuning, QString::fromLatin1(kFullFitPassFormat),
+                                         failingRelease, gyroBiasModelFor(window));
+    QVERIFY(fit.converged);
+    QVERIFY(!fit.scaleRelease.kept);
+    QCOMPARE(fit.scaleRelease.reason, std::string(StopRule::kCostIncreased));
+    QVERIFY(!fit.scaleRelease.released.has_value());
+    QVERIFY(fit.objective == fit.scaleRelease.held.objective);
+    QCOMPARE(fit.stopping.rule, fit.scaleRelease.held.rule);
+    const FitCovariance covariance = fitCovariance(fit, window.gnssTime.size());
+    QVERIFY(covariance.computed);
+    const ImuRateTrajectory out = reconstructAtImuRate(window, fit, tuning, &covariance);
+    std::vector<double> widenings;
+    for (const double factor : wideningFactors(window.gnssTime, fit.residuals, out.time))
+        widenings.push_back(widening(factor));
+    Fusion::Result expected;
+    fillOutputChannels(out, widenings, prepareInput(channels).epoch, expected);
+    QCOMPARE(fusionChannelNames().size(), 21);
+    for (const QString &channel : fusionChannelNames()) {
+        QVERIFY(!fusionChannel(run.result, channel).isEmpty());
+        QVERIFY2(sameBitsEverywhere(fusionChannel(run.result, channel), fusionChannel(expected, channel)),
+                 qPrintable(channel));
+    }
+}
+
+void FusionKernelTest::divergenceEndsTheHeldStage_data()
+{
+    QTest::addColumn<double>("maxImuNrms");
+    QTest::addColumn<double>("lower");
+    QTest::addColumn<double>("upper");
+    QTest::newRow("imu nrms bound zero") << 0. << .5 << 2.;
+    QTest::newRow("scale range empty") << 10. << 1. << 1.;
+}
+
+void FusionKernelTest::divergenceEndsTheHeldStage()
+{
+    // Items 1402, 1404 and 1411: with the IMU normalized RMS bound at zero, or
+    // the scale factors' range empty, no pass can be inside the bounds (the
+    // comparisons are strict), so the held stage's first pass diverges and
+    // ends the fit there: the solver failure of a fit that completed its
+    // passes, with the reason naming `diverged`, the failure diagnostics'
+    // completed-pass shape, the bounds in force in its stopping account, and
+    // no released stage.
+    QFETCH(double, maxImuNrms);
+    QFETCH(double, lower);
+    QFETCH(double, upper);
+    Tuning tuning;
+    tuning.divergenceMaxImuNrms = maxImuNrms;
+    tuning.divergenceScaleRange = {lower, upper};
+    QStringList texts;
+    const Checkpoint collecting([&texts](const QString &text) { texts.append(text); }, {});
+    PipelineTrace trace;
+    const Fusion::Result result = runPipeline(toChannels(fusionFixture(QStringLiteral("coarse_maneuver"))), tuning,
+                                              collecting, &trace);
+
+    QCOMPARE(QString::fromLatin1(StopRule::kDiverged), QStringLiteral("diverged"));
+    QVERIFY(result.outcome == Fusion::Outcome::SolverFailed);
+    QCOMPARE(result.reason, QStringLiteral("Batch fusion did not converge (diverged); sensor fusion unavailable"));
+    QVERIFY(!trace.converged);
+    QCOMPARE(trace.stopping.rule, std::string(StopRule::kDiverged));
+    QCOMPARE(trace.stopping.passes, 1);
+    QVERIFY(!trace.history.empty());
+    for (const FitIteration &h : trace.history)
+        QCOMPARE(h.outer, 0);
+    QVERIFY(!texts.contains(QStringLiteral("Releasing the scale factors")));
+
+    const QJsonObject diagnostics = diagnosticsOf(result);
+    QCOMPARE(diagnostics.keys(), kCompletedPassFailureKeys);
+    QCOMPARE(diagnostics.value("failure").toString(), result.reason);
+    const QJsonObject stopping = diagnostics.value("stopping").toObject();
+    QCOMPARE(stopping.value("rule").toString(), QStringLiteral("diverged"));
+    QCOMPARE(stopping.value("passes").toInt(), 1);
+    QCOMPARE(stopping.value("divergence_max_imu_nrms").toDouble(-1), maxImuNrms);
+    QCOMPARE(stopping.value("divergence_scale_range").toArray(), QJsonArray({lower, upper}));
+    QVERIFY(diagnostics.value("quality").toObject().value("imu_nrms").isDouble());
+    QVERIFY(allChannelsEmpty(result));
+}
+
+void FusionKernelTest::divergenceEndsTheReleasedStage()
+{
+    // Items 1403, 1404 and 1411: divergence in the released stage is the
+    // fallback. On scale_recording the held stage's factors stay within a
+    // few 1e-5 of one and the released stage moves the x accelerometer factor
+    // to about 1.02, so a range of (0.5, 1.005) passes every pass of the
+    // held stage and ends the released stage `diverged`, at its first pass or
+    // a later one: the held fit is reported, converged, with the released
+    // stage's account (its rule, its passes and the objective of the rebuilt
+    // graph it diverged on) and `diverged` as the reason. The IMU normalized
+    // RMS bound is not forced in the released stage alone: there is no
+    // stage-specific bound to set, and the released stage starts from the
+    // held stage's converged misfit, so no one bound passes every held pass
+    // and refuses a released one on purpose. Both bounds end a stage through
+    // the one rule, which divergenceEndsTheHeldStage shows for the IMU bound.
+    const QString name = QStringLiteral("scale_recording");
+    Tuning tuning;
+    tuning.divergenceScaleRange = {.5, 1.005};
+    const InitializerRun run = runInitializerFixture(name, tuning);
+    verifyHeldFallback(run, QStringLiteral("diverged"), imuNoise(toChannels(initializerFixture(name)).imuConfiguration));
+    const QJsonObject release = run.diagnostics.value("scale_release").toObject();
+    const QJsonObject held = release.value("held").toObject(), released = release.value("released").toObject();
+    QCOMPARE(released.value("rule").toString(), QStringLiteral("diverged"));
+    QVERIFY(released.value("passes").toInt() >= 1);
+    QVERIFY(released.value("iterations").toInt() >= 1);
+    QVERIFY(released.value("objective").isDouble());
+    QVERIFY(std::isfinite(released.value("objective").toDouble()));
+    QCOMPARE(held.value("iterations").toInt()+released.value("iterations").toInt(), int(run.trace.history.size()));
+    const QJsonObject stopping = run.diagnostics.value("stopping").toObject();
+    QCOMPARE(stopping.value("divergence_scale_range").toArray(), QJsonArray({.5, 1.005}));
 }
 
 void FusionKernelTest::imuRateEndsAreTheFit_data()

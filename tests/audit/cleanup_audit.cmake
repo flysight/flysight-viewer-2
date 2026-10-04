@@ -85,7 +85,14 @@
 #     once and written to the diagnostics by one writer, the goldens hold four
 #     fits and ten rejections, and the documents say what the user sees over a
 #     hole, state the cap with its measurement and carry the reference
-#     recordings' numbers (items 1301-1313).
+#     recordings' numbers (items 1301-1313);
+#   - the scale factors are a refinement: the previous algorithm string and
+#     the test helper that held the scale with a second fit stay gone; the
+#     release's account has one writer and is in every fit's golden; the
+#     diverged rule, the release boundary and the divergence and release
+#     budgets are spelled once, where they are defined and read; and the
+#     fusion document states the stages, the rule and the measured release
+#     (items 1401-1415).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -623,7 +630,7 @@ expect_none("the stationary-window detector is gone"
 expect_none("the silent poll is gone" "pollCancel" src tests)
 expect_none("the anchor-attitude initializer is gone"
   "InitialAttitude|initialAttitude\\(|kInitialHeadingDeg|attitudeFromStationaryWindow" src tests)
-# Allow: none expected. The goldens say batch-temperature-bias-v8; a hit under
+# Allow: none expected. The goldens say batch-temperature-bias-v9; a hit under
 # tests/data/fusion means a stale capture (re-capture, tests/README.md section 11).
 expect_none("the retired algorithm strings are gone" "batch-shared-bias-v[12]"
   src tests docs README.md ":!tests/README.md")
@@ -637,16 +644,17 @@ expect_only("the branch is history only" "sensor-fusion-clean-port"
   "^tests/README\\.md$|^tests/tst_fusion_kernel\\.cpp$"
   src tests docs cmake CMakeLists.txt README.md)
 expect_count("the branch is history only" "sensor-fusion-clean-port" 4 tests/README.md)
-# Allow: these count LINES, comments included. Exactly three checkpoint( call
-# sites: "Starting fit" (fusion.cpp), the pass iteration and "Integrating IMU
-# factors" (factorgraphfit.cpp), the three kinds of boundary. A new boundary
+# Allow: these count LINES, comments included. Exactly four checkpoint( call
+# sites: "Starting fit" (fusion.cpp), the pass iteration, "Integrating IMU
+# factors" and "Releasing the scale factors" (factorgraphfit.cpp), the four
+# kinds of boundary. A new boundary
 # kind is added to the run() comment of fusion.h, to docs/SENSOR_FUSION.md
 # section 7 and to this count together; a comment that spells `checkpoint(`
 # is reworded instead. The per-step covariance is written into the shared
 # preintegration parameters before the one `.integrateMeasurement(` call of
 # imuintegration.cpp (the member-call form, so the comment above the call
 # that names the function does not count).
-expect_count("three kinds of boundary" "checkpoint\\(" 3 src/fusion)
+expect_count("four kinds of boundary" "checkpoint\\(" 4 src/fusion)
 expect_count("one integrateMeasurement, per-step covariance" "[.>]integrateMeasurement\\(" 1
   src/fusion/imuintegration.cpp)
 # Allow: none expected; tests/README.md spells the call. The step model has
@@ -928,8 +936,8 @@ expect_none("stored results are widget-free"
 # Fusion's result version is its kernel's algorithm string, spelled once.
 # Allow: none expected. A changed algorithm changes the one literal; a comment
 # or test in src that quotes it names Fusion::Algorithm instead.
-expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v8" 1 src)
-expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v8"
+expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v9" 1 src)
+expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v9"
   "^src/fusion/fusion\\.h$" src)
 # The compatibility rule names the result version, in the code and in the note.
 # Allow: reword the sentence, never duplicate it; the count is 1 in each file.
@@ -1414,7 +1422,7 @@ expect_none("the previous algorithm string is gone" "batch-temperature-bias-v7"
 # rejections, and the input audit of every fit names its holes. Allow: none
 # expected; a new fixture changes these counts with tests/README.md section 11.
 expect_count("the goldens carry the current algorithm string"
-  "\"algorithm\": \"batch-temperature-bias-v8\"" 14 tests/data/fusion)
+  "\"algorithm\": \"batch-temperature-bias-v9\"" 14 tests/data/fusion)
 expect_count("the goldens hold four fits" "\"outcome\": \"succeeded\"" 4 tests/data/fusion)
 expect_count("the goldens hold ten rejections" "\"outcome\": \"rejected\"" 10 tests/data/fusion)
 expect_count("the fits' goldens name their holes" "\"gnss_holes\"" 4 tests/data/fusion)
@@ -1458,18 +1466,65 @@ expect_count("the fusion document states the slow tail's three bounds" "are all 
   1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document carries the first reference recording" "08-35-48" 1
   docs/SENSOR_FUSION.md)
-expect_count("the fusion document carries the second reference recording" "13-35-10" 1
+# The second recording is also section 4's case for the staged scale (items
+# 1401-1415): two lines, the case and the row of section 8.
+expect_count("the fusion document carries the second reference recording" "13-35-10" 2
   docs/SENSOR_FUSION.md)
-expect_count("the fusion document names the algorithm string" "batch-temperature-bias-v8" 2
+expect_count("the fusion document names the algorithm string" "batch-temperature-bias-v9" 2
   docs/SENSOR_FUSION.md)
 expect_none("the documents count four fits and ten rejections"
   "three fits|eleven rejections|three golden successes" docs)
 expect_count("the plots document says the fusion plots draw through a GNSS hole"
   "draw through a hole in the GNSS fixes" 1 docs/COMPUTED_PLOTS.md)
-expect_count("the schema document names the algorithm string" "batch-temperature-bias-v8" 2
+expect_count("the schema document names the algorithm string" "batch-temperature-bias-v9" 2
   docs/DATA_SCHEMA.md)
-expect_count("the calculations document names the algorithm string" "batch-temperature-bias-v8" 1
+expect_count("the calculations document names the algorithm string" "batch-temperature-bias-v9" 1
   docs/CALCULATIONS.md)
+
+# ─────────────────────────────── staged-scale (items 1401, 1404-1407, 1412, 1414, 1415)
+# The scale factors as a refinement (docs/SENSOR_FUSION.md section 4): the
+# full fit holds the factors at one until it has converged and releases them
+# from that solution; a released stage that does not converge falls back to
+# the held fit; a pass that has left the model ends its stage under
+# `diverged`.
+audit_group(staged-scale)
+# Allow: tests/README.md (its capture paragraphs and matrix rows) and the
+# acceptance map (item 1306's statement) quote the previous string as
+# history; nothing else does. A hit under tests/data/fusion is a stale capture.
+expect_none("the previous algorithm string is gone" "batch-temperature-bias-v8"
+  src tests docs README.md ":!tests/README.md" ":!tests/acceptance_map.txt")
+# Allow: tests/README.md is excluded because its section 10 spells the name.
+# The held stage of every full fit is the fit the helper made with a second
+# call; a test reads the held stage's account instead.
+expect_none("the scale is not held by a second fit" "withScaleHeldAtOne"
+  src tests docs ":!tests/README.md")
+# The release's account: one writer, the success diagnostics', and in each of
+# the four fits' goldens. Allow: none expected; a new success fixture changes
+# the golden count with tests/README.md section 11.
+expect_count("the release's account has one writer" "\"scale_release\"" 1 src)
+expect_only("the release's account has one writer" "\"scale_release\""
+  "^src/fusion/fusionoutput\\.cpp$" src)
+expect_count("every fit's golden carries the release's account" "\"scale_release\"" 4 tests/data/fusion)
+# The rule, the boundary and the bounds, each spelled once where it is
+# defined and read. Allow: none expected; a comment names the boundary in
+# other words (backquotes, not the string literal).
+expect_count("the diverged rule is defined once" "constexpr char kDiverged\\[\\] = \"diverged\"" 1 src)
+expect_count("the release boundary is reported once" "\"Releasing the scale factors\"" 1 src)
+expect_only("the divergence bounds are read by the fit and its account"
+  "divergenceMaxImuNrms|divergenceScaleRange"
+  "^src/fusion/(fusionsamples\\.h|factorgraphfit\\.(h|cpp)|fusionoutput\\.cpp)$" src)
+expect_only("the release budget is read by the fit" "releasePasses"
+  "^src/fusion/(fusionsamples\\.h|factorgraphfit\\.cpp)$" src)
+# The fusion document. Allow: these count LINES; rewrap so that each phrase
+# stays on one line.
+expect_count("the fusion document names the release's account" "scale_release" 1 docs/SENSOR_FUSION.md)
+expect_count("the fusion document names the release boundary" "Releasing the scale factors" 1
+  docs/SENSOR_FUSION.md)
+expect_count("the fusion document states the diverged rule" "rebuilt after a pass has left the model" 1
+  docs/SENSOR_FUSION.md)
+expect_none("the fusion document counts seven rules" "six texts|six rules" docs/SENSOR_FUSION.md)
+expect_count("the fusion document carries the release measured on the reference recordings" "M56" 1
+  docs/SENSOR_FUSION.md)
 
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
@@ -1490,10 +1545,13 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # accuracy, part 1, item = 1000 + clause number), 1101 (the GNSS
 # acceleration accuracy, one item), 1201-1213 (sample continuity: the rule,
 # the nine bullets of what the user sees, the architecture, the kernel and its
-# goldens, the documents) and 1301-1313 (GNSS holes bridged by the IMU: the
+# goldens, the documents), 1301-1313 (GNSS holes bridged by the IMU: the
 # kernel and its cap, the input audit, the algorithm string, the fixtures and
-# the reference recordings, the documents, the slow tail). Four line forms;
-# see the head of the map.
+# the reference recordings, the documents, the slow tail) and 1401-1415 (the
+# scale factors as a refinement: the two stages, the trigger, the fallback,
+# divergence, the boundary, the account, the algorithm string, the tests, the
+# reference recordings, the goldens, the documents). Four line forms; see the
+# head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -1569,8 +1627,9 @@ else()
             OR (item GREATER_EQUAL 801 AND item LESS_EQUAL 863) OR (item GREATER_EQUAL 901 AND item LESS_EQUAL 940)
             OR (item GREATER_EQUAL 1001 AND item LESS_EQUAL 1065) OR item EQUAL 1101
             OR (item GREATER_EQUAL 1201 AND item LESS_EQUAL 1213)
-            OR (item GREATER_EQUAL 1301 AND item LESS_EQUAL 1313)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213 and 1301-1313: ${line}")
+            OR (item GREATER_EQUAL 1301 AND item LESS_EQUAL 1313)
+            OR (item GREATER_EQUAL 1401 AND item LESS_EQUAL 1415)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313 and 1401-1415: ${line}")
     endif()
   endforeach()
 
@@ -1654,6 +1713,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 1301 1313)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 1401 1415)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
