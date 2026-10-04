@@ -287,7 +287,7 @@ second `ctest`, a build).
 | `FLYSIGHT_BUILD_PYTHON_TESTS` | `ON` | Only with the first: also build `tst_python_bridge`. `OFF` removes the target. If NumPy is missing from the build-time Python the test is still built but listed as **Disabled**, not omitted (section 5) |
 | `FLYSIGHT_BUILD_WIDGET_TESTS` | `ON` | Only with the first: also build `tst_logbook_indicators`, `tst_status_bar` and `tst_choice_attribute`, the three tests that link Qt Widgets (they run offscreen views). `OFF` removes the targets, and then no test target links Widgets. Forwarded by the root `CMakeLists.txt` like the others |
 | `FLYSIGHT_BUILD_FUSION_TESTS` | `ON` | Only with the first: also build the GTSAM-linked tests (`tst_solver_smoke`, `tst_fusion_golden`, `tst_fusion_kernel`, `tst_fusion_session`, `tst_fusion_derived`, `tst_fusion_jobs`, `tst_fusion_rows`, `tst_fusion_store`, `tst_fusion_runner`) and the executables `solver_deploy_probe`, `fusion_golden_capture` (the golden capture tool) and `fusion_runner` (the command-line fit), all defined in one block of `tests/CMakeLists.txt` (the tests through `flysight_add_fusion_test()`). `OFF` removes the targets, and then no test target references GTSAM. Forwarded by the root `CMakeLists.txt` like the other two |
-| `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | Only with the fusion tests: register the bit-exact runs `tst_fusion_*_exact` (label `exact`; no new executable). `AUTO` registers them when the compiler is 64-bit MSVC of the same major.minor as `cl_version` in `tests/data/fusion/capture.json` (19.44; the file is written by `fusion_golden_capture` at every capture), and otherwise prints "Fusion exact tests not registered: ..." at configure time; `ON` registers them whatever the compiler is; `OFF` never does. In every mode they exist for the Release configuration only. Forwarded by the root `CMakeLists.txt` like the others (section 11, "Tolerance policy") |
+| `FLYSIGHT_FUSION_EXACT_TESTS` | `AUTO` | Only with the fusion tests: register the bit-exact runs `tst_fusion_*_exact` (label `exact`; no new executable). `AUTO` registers them when the compiler is 64-bit MSVC at exactly the `cl_version` in `tests/data/fusion/capture.json` (19.44.35220.0; the file is written by `fusion_golden_capture` at every capture, and a Visual Studio patch de-registers the runs until the next one), and otherwise prints "Fusion exact tests not registered: ..." at configure time; `ON` registers them whatever the compiler is; `OFF` never does. In every mode they exist for the Release configuration only. Forwarded by the root `CMakeLists.txt` like the others (section 11, "Tolerance policy") |
 
 All four sub-options are forwarded by the root (superbuild) `CMakeLists.txt` to
 the application project, unconditionally, so switching one back reaches the
@@ -2609,10 +2609,12 @@ About 1.0 MB in total.
   run again with `FLYSIGHT_FUSION_EXACT=1`, so on the capture configuration an
   ordinary `ctest -C Release` fails on the first bit that differs. With
   `FLYSIGHT_FUSION_EXACT_TESTS=AUTO` (the default) `tests/CMakeLists.txt`
-  registers them only when the compiler is 64-bit MSVC with the major.minor
-  of `compiler.cl_version` in `capture.json` (19.44; the file is read at
-  configure time, so a re-capture moves the gate with it). The gate is the
-  compiler because code generation is what decides the last bit. It
+  registers them only when the compiler is 64-bit MSVC at exactly
+  `compiler.cl_version` in `capture.json` (19.44.35220.0; the file is read
+  at configure time, so a re-capture moves the gate with it). The gate is
+  the whole compiler version because code generation and the runtime's math
+  decide the last bit: a Visual Studio patch, 19.44.35229 on the CI image of
+  2026-10-04, moved one yaw sample of `stationary_spin` by one ulp. It
   deliberately does not register the tests for another compiler and let them
   fail: a Visual Studio update that changes a bit is not a defect of the kernel,
   and a red test that nobody can fix except by touching the goldens invites
@@ -2851,7 +2853,7 @@ done
 # 4. Reconfigure the application build: the exact-test gate reads capture.json at
 #    configure time (file(READ) is not a dependency, so this step is explicit).
 cmake <tree>/FlySightViewer-build
-#    Check: the log says "Fusion exact tests registered for Release (... MSVC 19.44...)".
+#    Check: the log says "Fusion exact tests registered for Release (... MSVC 19.44.35220.0)".
 
 # 5. Run the fusion tests in both modes.
 ctest --test-dir <tree>/FlySightViewer-build -C Release -L fusion --output-on-failure

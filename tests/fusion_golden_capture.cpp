@@ -161,7 +161,7 @@ QJsonObject provenance(const QJsonValue &revision, const QMap<QString, QString> 
                          {QStringLiteral("configuration"), QStringLiteral(FLYSIGHT_CAPTURE_CONFIGURATION)},
                          {QStringLiteral("cmake"), QStringLiteral(FLYSIGHT_CAPTURE_CMAKE_VERSION)}};
     // The configure-time gate of the exact tests (tests/CMakeLists.txt) reads
-    // "cl_version" and compares its major.minor with the configuring compiler.
+    // "cl_version" and compares the whole of it with the configuring compiler.
     if (QLatin1String(FLYSIGHT_CAPTURE_COMPILER_ID) == QLatin1String("MSVC"))
         compiler[QStringLiteral("cl_version")] = QStringLiteral(FLYSIGHT_CAPTURE_COMPILER_VERSION);
 

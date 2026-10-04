@@ -395,8 +395,9 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
   # capture. Bit identity is a fair demand only on the configuration the
   # goldens were captured with, which tests/data/fusion/capture.json records
   # (written by fusion_golden_capture): MSVC, x64, and the same compiler
-  # major.minor (code generation is what decides the last bit; a Visual Studio
-  # update may legitimately change it, and that is a reason to look and
+  # version to the last component (code generation and the runtime's math
+  # decide the last bit, and a Visual Studio patch moved one yaw sample by
+  # one ulp between 19.44.35220 and 19.44.35229: a reason to look and
   # re-capture, not a defect of the kernel) - and the Release configuration:
   # the goldens promise nothing about a Debug or RelWithDebInfo build, so the
   # exact tests exist for Release only (flysight_add_fusion_exact_test below).
@@ -416,13 +417,13 @@ if(FLYSIGHT_BUILD_FUSION_TESTS)
     message(FATAL_ERROR "FLYSIGHT_FUSION_EXACT_TESTS must be AUTO, ON or OFF, not '${FLYSIGHT_FUSION_EXACT_TESTS}'")
   endif()
   if(_fs_exact_mode STREQUAL "AUTO")
-    # The captured compiler: "cl_version": "19.44.35220" -> 19.44
+    # The captured compiler: "cl_version": "19.44.35220.0", compared whole
     file(READ "${CMAKE_CURRENT_LIST_DIR}/data/fusion/capture.json" _fs_capture)
     set(_fs_capture_cl "")
-    if(_fs_capture MATCHES "\"cl_version\" *: *\"([0-9]+\\.[0-9]+)[0-9.]*\"")
+    if(_fs_capture MATCHES "\"cl_version\" *: *\"([0-9.]+)\"")
       set(_fs_capture_cl "${CMAKE_MATCH_1}")
     endif()
-    string(REGEX MATCH "^[0-9]+\\.[0-9]+" _fs_this_cl "${CMAKE_CXX_COMPILER_VERSION}")
+    set(_fs_this_cl "${CMAKE_CXX_COMPILER_VERSION}")
     if(_fs_capture_cl STREQUAL "")
       message(WARNING "Fusion exact tests not registered: tests/data/fusion/capture.json names no cl_version")
     elseif(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)

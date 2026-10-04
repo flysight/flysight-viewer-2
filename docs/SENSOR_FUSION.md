@@ -1167,8 +1167,8 @@ the heading, `yaw`, the quaternion, the initializer's start attitude and
 determine the platforms stop at different points along that flat direction:
 the numbers are in the tolerance policy of `tests/README.md`). Exact mode is
 not opt-in on the capture configuration: where the compiler matches
-`tests/data/fusion/capture.json` (64-bit MSVC 19.44, as the capture tool
-recorded it) and the configuration is Release, CTest runs each of these
+`tests/data/fusion/capture.json` (64-bit MSVC at the exact version the
+capture tool recorded) and the configuration is Release, CTest runs each of these
 tests but `tst_fusion_derived`, which holds nothing to a golden bit for bit
 (the one golden it reads is compared within `1e-6`), a second time
 as `tst_fusion_*_exact` (label `exact`; CMake option
