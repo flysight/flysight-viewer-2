@@ -503,7 +503,8 @@ versions; writing or deleting a record drops it. A column's value is the same
 whether or not its session is loaded. For a session that is not loaded and has
 no cached value, the column is unavailable when the session has no stored
 result. While such a column is enabled, FlySight Viewer computes the
-requested calculation in the background for every session that has no stored
+requested calculation in the background for every session that is switched
+on (its Compute line does not read `off`, section 9) and has no stored
 result, loading sessions that are not loaded two at a time without showing
 them ([COMPUTED_PLOTS.md](COMPUTED_PLOTS.md), section 4); the cached value
 stays unavailable until the record is written, which drops it, and the value
@@ -567,7 +568,8 @@ name its first save will use.
 `cache/` may be deleted while FlySight Viewer is closed. At the next start
 every requested calculation reads as not computed, and is computed again for
 whatever is switched on (a checked plot for the visible sessions, an enabled
-column over it for every session); the logbook column values that came from a
+column over it for every session; in both, only the sessions whose Compute
+line does not read `off`, section 9); the logbook column values that came from a
 stored result are dropped (section 11) and show as pending while they are
 computed again.
 

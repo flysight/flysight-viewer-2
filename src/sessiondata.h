@@ -104,10 +104,13 @@ namespace SessionKeys {
     constexpr char Orientation[] = "_ORIENTATION";
 
     // Whether the recording takes part in background computation, a Choice
-    // of two tokens spelled here and nowhere else in src. The demand layer
-    // reads it, and nothing else does: any token but ComputeOff is on, so a
-    // recording without the line, or with a hand-edited token, is computed.
-    // Unset, it reads its constant default, ComputeOn.
+    // of two tokens spelled here and nowhere else in src. The demand layer is
+    // the one reader that decides anything with it: any token but ComputeOff
+    // is on, so a recording without the line, or with a hand-edited token, is
+    // computed. The logbook index caches the stored line at its two learn
+    // points (a save and a load of the file), and the importer writes it; no
+    // calculation declares it, so it is not an input of any result. Unset, it
+    // reads its constant default, ComputeOn.
     constexpr char Compute[] = "_COMPUTE";
     constexpr char ComputeOn[] = "on";
     constexpr char ComputeOff[] = "off";

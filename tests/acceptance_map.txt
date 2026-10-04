@@ -3600,6 +3600,7 @@
 # 1503 - (2, 3) not an input: setting the attribute while a job of the session runs leaves it not asked to stop, keeps the stored records, the cached values and every other session's results, starts no settle wait and runs one pass of its own; the compatibility marker and the algorithm string are unchanged
 1503 tst_calculation_demand settingComputeInvalidatesNothing
 1503 tst_fusion_golden successFixturesMatchGolden
+1503 tst_result_records stampsAreCurrent
 
 # 1504 - (3) the column: the header's tooltip "compute results for this recording in the background" (no other header has one); "Set Compute..." offers the definition's list and applies a bulk edit, on a stub without loading it
 1504 tst_calculation_demand computeColumnShowsTheDefaultWithoutAWrite
@@ -3641,6 +3642,7 @@
 1510 tst_calculation_demand switchingOnCreatesDemandForItsMissingResults
 
 # 1511 - (4) the plot widget's warning, priority, the settle wait, the fill's bound, the executor's limits and the status bar's form are unchanged; the counts and lists simply omit an excluded session, and the running job of one is described by nothing
+1511 tst_calculation_demand excludedSessionIsNotComputed
 1511 tst_calculation_demand switchingOffCancelsTheRunningJob
 1511 tst_calculation_demand progressCountsEachSessionOnce
 1511 tst_status_bar computationsAreOneItem
@@ -3663,13 +3665,14 @@
 # 1515 - (6, third bullet) switching on creates demand for the session's missing results and no other; a stopped computation runs again from its start
 1515 tst_calculation_demand switchingOnCreatesDemandForItsMissingResults
 
-# 1516 - (6, fourth bullet) a stored result of a session switched off is restored, fills the column and is not loaded again for it; its stored rejection is not a failure and shows no row warning, and is listed again when it is switched on
+# 1516 - (6, fourth bullet) a session switched off with a stored result restores and draws it, fills the column from it and is not loaded again for it; its stored rejection is not a failure and shows no row warning, and is listed again when it is switched on
 1516 tst_calculation_demand excludedSessionWithStoredResultServes
 1516 tst_logbook_indicators excludedSessionShowsNoRowWarning
 
 # 1517 - (6, fifth bullet) setting the attribute invalidates no stored result and no cached value, starts no settle wait and makes no running job stale; the marker and the algorithm string are unchanged
 1517 tst_calculation_demand settingComputeInvalidatesNothing
 1517 tst_fusion_golden successFixturesMatchGolden
+1517 tst_result_records stampsAreCurrent
 
 # 1518 - (6, sixth bullet) the column fill never loads a session switched off; with every unloaded session off, enabling the column creates no load and no job; the index records the attribute on the bulk edit's stub path and reports it without a load
 1518 tst_calculation_demand fillNeverLoadsAnExcludedSession

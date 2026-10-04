@@ -1545,10 +1545,11 @@ expect_count("the fusion document carries the release measured on the reference 
 
 # ─────────────────────────────── background-computation (items 1501, 1508, 1509, 1512, 1522-1524)
 # A recording switched off for background computation (docs/COMPUTED_PLOTS.md
-# "Switching a recording off"): the Compute attribute is read by the demand
-# layer alone, which excludes the recording's tracks and cancels its running
-# job; the index caches the file's switch so that no session is loaded to
-# learn it.
+# "Switching a recording off"): the demand layer is the one reader of the
+# Compute attribute that decides anything, and it excludes the recording's
+# tracks and cancels its running job; the logbook index caches the stored
+# line at its two learn points, so that no session is loaded to learn it; the
+# importer writes it; no calculation declares it.
 audit_group(background-computation)
 # The tokens are constants beside the key, and the labels are spelled in the
 # definition. Allow: none expected; code that needs a token names

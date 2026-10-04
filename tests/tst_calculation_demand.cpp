@@ -5565,6 +5565,12 @@ void CalculationDemandTest::excludedSessionIsNotComputed()
         for (const char *id : {"s1", "s3", "s4"})
             QVERIFY2(!isCellExcluded(QString::fromLatin1(id), "G_OUT"), id);
         QVERIFY(!isLoaded("s2"));
+    } else {
+        // Spec 4, the plot widget's "no data" warning: the engine still
+        // reports s2's missing value Blocked, so the plot keeps quiet about it
+        QVERIFY(values("s2", "g").isEmpty());
+        QVERIFY(CalculationDemand::isMerelyUncomputed(session(QStringLiteral("s2")), QStringLiteral("Syn"),
+                                                      QStringLiteral("g")));
     }
 }
 
@@ -5779,9 +5785,9 @@ void CalculationDemandTest::switchingOnCreatesDemandForItsMissingResults()
 }
 
 // Spec 6, fourth bullet: a session switched off with a stored result fills
-// its column from the record without a load and restores the result when it
-// is loaded; its stored rejection is not a failure until it is switched on
-// again, and nothing runs.
+// its column from the record without a load, and restores the result and
+// draws it when it is loaded; its stored rejection is not a failure until it
+// is switched on again, and nothing runs.
 void CalculationDemandTest::excludedSessionWithStoredResultServes()
 {
     QVERIFY(giveInput({"s2"}, "G_IN", 2));
@@ -5816,6 +5822,16 @@ void CalculationDemandTest::excludedSessionWithStoredResultServes()
 
     // Loaded, the stored result is restored and serves
     QCOMPARE(session(QStringLiteral("s2")).getAttribute(QStringLiteral("G_OUT")), QVariant(3));
+    spin();
+    QVERIFY(quiet.holds());
+
+    // ... and drawn: a checked plot over it reads the stored result, and
+    // nothing is offered for the session
+    check("g");
+    show({"s2"});
+    m_demand->flush();
+    QCOMPARE(values("s2", "g"), QVector<double>({3.0}));
+    QVERIFY(nothingToShow());
     spin();
     QVERIFY(quiet.holds());
 

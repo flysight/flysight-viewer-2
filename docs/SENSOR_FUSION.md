@@ -23,7 +23,8 @@ To the application it is one registered calculation, titled "Sensor fusion".
 It is expensive (seconds to minutes per recording), so it runs only for what
 you have switched on - a checked fusion plot for the visible recordings, a
 logbook column over a fusion value for every recording - in the background,
-while the application stays usable.
+for the recordings that are switched on (section 2), while the application
+stays usable.
 [Plots and logbook columns that are computed in the background](COMPUTED_PLOTS.md)
 explains what starts and stops a fit and what the rows and columns show.
 The fit always covers the whole recording; zoom and markers do not select a
@@ -116,11 +117,11 @@ document describes what is computed, from what, and how far to trust it.
   with a shared time base) and at least one GNSS fix with a horizontal accuracy
   under 10 m. A recording without them is simply absent from these plots, like
   any plot whose sensor a recording lacks.
-- Check a fusion plot and every visible recording without a result is fitted,
-  one after another; a logbook column over a fusion value (roll at the exit
-  marker, say) fits every recording of the logbook in the background. A fit
-  takes from seconds to several minutes, depending on the length of the
-  recording. All twelve plots and every fusion column of one recording come
+- Check a fusion plot and every visible recording that is switched on (the
+  bullet above) and has no result is fitted, one after another; a logbook
+  column over a fusion value (roll at the exit marker, say) fits every such
+  recording of the logbook in the background. A fit takes from seconds to
+  several minutes, depending on the length of the recording. All twelve plots and every fusion column of one recording come
   from the same fit, so it runs once.
 - Results are stored with the recording in the logbook (in a file in the
   logbook's `cache/` folder, never in the session file) and come back when the
@@ -1044,8 +1045,9 @@ columns, the map, exports and plugins all read "unavailable" and move on.
 **What is switched on is the request.** Checking a fusion plot in any way (a
 click, Space, a profile), showing a recording while one is checked, or
 enabling a logbook column over a fusion value creates one job per recording
-that lacks the result; unchecking, hiding or disabling drops the ones that
-have not started, and a running fit always finishes and is stored. At
+that is switched on (section 2) and lacks the result; unchecking, hiding or
+disabling drops the ones that have not started, and a running fit always
+finishes and is stored unless its recording is switched off. At
 start-up every recording is hidden, so checked plots start nothing until
 recordings are shown; an enabled fusion column continues its fill at once.
 Loading a recording whose stored result is still valid restores that result:
@@ -1116,8 +1118,9 @@ change that can alter what the fit returns changes that string, and every
 stored fit is then dropped at its recording's next load. So the first start
 after such an update finds every stored fit stale when its recording is
 loaded: the record is deleted, and the recording is fitted again once when
-something switched on needs it (after a start, every recording a fusion
-column covers and every visible one a checked fusion plot covers), counted in
+something switched on needs it (after a start, of the recordings that are
+switched on (section 2), every one a fusion column covers and every visible
+one a checked fusion plot covers), counted in
 the status bar like any fit. The record also states what provided each input the fit looked up,
 and a load repeats those lookups, so only a change of what the fit reads, or
 of the code that computes it, drops a stored fit. A cancelled fit, or one that
@@ -1141,9 +1144,12 @@ the reconstruction.
 
 **Logbook columns** over fusion values show the live value for a loaded
 recording, and for an unloaded one the value cached from its stored result.
-While such a column is enabled, every recording without a stored result is
-fitted in the background (recordings that are not loaded are loaded two at a
-time, as hidden recordings); its cell shows "···" until then. A recording
+While such a column is enabled, every recording that is switched on
+(section 2) and has no stored result is fitted in the background (recordings
+that are not loaded are loaded two at a time, as hidden recordings); its cell
+shows "···" until then. The cell of a recording switched off that has no stored
+result shows "excluded" ([COMPUTED_PLOTS.md](COMPUTED_PLOTS.md), section 11).
+A recording
 without IMU data shows none. One with a stored result whose
 value is not cached yet (after an update, say) stays empty until it is loaded.
 

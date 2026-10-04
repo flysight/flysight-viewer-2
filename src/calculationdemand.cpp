@@ -867,18 +867,9 @@ CalculationDemand::Walk CalculationDemand::walkRows(const JobRecord &running, co
         QList<FailedCalculation> rowFailures;   // each pair once: the first source that fails it
         if (!loaded)
             dropReports(sessionId);
-
-        // Excluded, before any other condition: the row files no candidate
-        // and gives nothing to progress, the failures, the pending cells or
-        // the fill; its column cells are excluded, and the running job of its
-        // session, if any, is described by nothing
-        if (isSwitchedOff(sr)) {
-            for (int s = 0; s < sources; ++s) {
-                if (m_sources.at(s).kind == Source::Kind::Column)
-                    walk.excludedCells[s].insert(sessionId);
-            }
-            continue;
-        }
+        // Read once per row, at every pass: every track of a session switched
+        // off is Excluded, before any other condition
+        const bool switchedOff = isSwitchedOff(sr);
 
         for (int s = 0; s < sources; ++s) {
             const Source &source = m_sources.at(s);
@@ -889,7 +880,10 @@ CalculationDemand::Walk CalculationDemand::walkRows(const JobRecord &running, co
 
             TrackCondition condition = TrackCondition::NotApplicable;
             QList<FailedCalculation> entries;       // the track's, when it is Failed
-            if (loaded) {
+            if (switchedOff) {
+                // No report is inspected and nothing is learned or filed
+                condition = TrackCondition::Excluded;
+            } else if (loaded) {
                 // Blocker inspection, memoized per session until its engine
                 // state may have changed. A copy, never a reference into the
                 // memos (see above); a report whose memos were dropped while
@@ -926,6 +920,13 @@ CalculationDemand::Walk CalculationDemand::walkRows(const JobRecord &running, co
                     waiting = true;
             }
 
+            // An Excluded track gives nothing but its column cell: no
+            // candidate, no progress, no failure, no pending cell and no load
+            if (condition == TrackCondition::Excluded) {
+                if (!isPlot)
+                    walk.excludedCells[s].insert(sessionId);
+                continue;
+            }
             if (isPending(condition)) {
                 inDemand = true;
                 if (!isPlot) {
@@ -948,7 +949,8 @@ CalculationDemand::Walk CalculationDemand::walkRows(const JobRecord &running, co
             ++walk.progress.count;
         if (!rowFailures.isEmpty())
             walk.failures.append(SessionFailures{sessionId, rowName(), rowFailures});
-        if (runningIsLive && sessionId == running.sessionId) {
+        // The running job of a session switched off is described by nothing
+        if (runningIsLive && sessionId == running.sessionId && !switchedOff) {
             walk.progress.sessionName = rowName();
             walk.progress.progressText = running.progressText;
             walk.progressJob = running.id;

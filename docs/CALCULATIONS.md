@@ -1275,8 +1275,11 @@ memory (16.7): for a loaded session its stored line
 that is not loaded, or a failed-load placeholder, the logbook index's cache
 of its file (`LogbookManager::isComputeOff()`, 16.8; DATA_SCHEMA section 11),
 so that no session is loaded to learn it is off. Any token but `off` is on,
-so a hand-edited token is computed. Nothing below the demand layer reads the
-attribute: no calculation declares it, so it is not an input of any result.
+so a hand-edited token is computed. The demand layer is the one reader that
+decides anything with the attribute. The logbook index caches the stored line
+at its two learn points, a save and a load of the file (16.8), and the
+importer writes it when the import preference is off (DATA_SCHEMA section 9);
+no calculation declares it, so it is not an input of any result.
 
 **Conditions** of a track of a loaded session (`CalculationDemand::TrackCondition`,
 private to the reconciler: the walk's own classification, which nothing else
@@ -1540,7 +1543,8 @@ it sees clicks. An id the model has no plot for (a plot the application no
 longer has, or one of a plugin that is not loaded) is ignored silently: no
 message, no failure, no row added, and nothing rewrites the profile. Applying a
 profile that carries a column over a requested output computes that
-calculation for every session of the logbook that lacks a result. That is
+calculation for every session of the logbook that is switched on (16.1) and
+lacks a result. That is
 intended, and it is why no default profile carries such a column; the cleanup
 audit (group `demand`) checks the profiles shipped in
 `src/resources/profiles/`.
@@ -2359,8 +2363,8 @@ Vertical acceleration accuracy (`Fusion/accHAcc`, `accDAcc`, type
 `acceleration_accuracy`: g, as `acceleration`, at four decimals). `accD` and
 the four accuracies are outputs of the fit; the other seven are the on-demand
 calculations above, blocked by the fit. All twelve are requested (16.3): a
-checked fusion plot has the fit computed for the visible sessions, and
-nothing else about a plot starts one (section 16). An accuracy the fit did
+checked fusion plot has the fit computed for the visible sessions that are
+switched on (16.1), and nothing else about a plot starts one (section 16). An accuracy the fit did
 not set (a rejection, a solver failure, a success whose covariance could not
 be computed) is unavailable like any unset output, and its plot draws
 nothing. The rest of the fit's outputs (`north`, `east`, `down`, `velN`,
@@ -2411,10 +2415,12 @@ for a loaded row, computed from the engine like any other column
 (`SessionModel::computeColumnValues`): the restored or published value, or
 unavailable when the calculation is not requested. While such a column is
 enabled, the demand layer has the calculation computed for every session of
-the logbook that has no result, loaded or not (section 16; sessions that are
-not loaded are loaded as hidden sessions, two at a time, 16.8); until the
-record is written the cached value stays unavailable and the view paints the
-cell as pending (16.10), and the record change then drops the value and the
+the logbook that is switched on (16.1) and has no result, loaded or not
+(section 16; sessions that are not loaded are loaded as hidden sessions, two
+at a time, 16.8); until the record is written the cached value stays
+unavailable and the view paints the cell as pending (16.10; the cell of a
+session switched off reads "excluded" instead), and the record change then
+drops the value and the
 loaded-row refresh computes it. (A column that reached a requested
 calculation only through one of several candidates of an on-demand name would
 cost one load per session without a record and per run; no registered column
