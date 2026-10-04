@@ -73,8 +73,11 @@ from it as a refinement.
   prior's sigma divided by a thousand, then, if that stage converged, the
   released stage from the held stage's values with the datasheet's sigma.
   The initializer's prefix and segment fits, which have no scale state,
-  are untouched. Each stage has the tuning's pass budget (`maxPasses`) and
-  per-pass iteration budget, as the single fit has today.
+  are untouched. The held stage has the tuning's pass budget (`maxPasses`)
+  and per-pass iteration budget, as the single fit has today; the released
+  stage has a budget of its own, `releasePasses`, two: it starts from a
+  solution, and what two passes cannot settle, five will not, so a release
+  that is not going to converge falls back in minutes, not an hour.
 - **The release trigger is convergence.** The released stage runs only when
   the held stage ended `settled` or `slow tail accepted`. A held stage that
   ends any other way ends the fit as it ends today, under the same rule and
@@ -94,7 +97,9 @@ from it as a refinement.
   fallback. The bounds are far outside anything a slow tail accepts (the
   normalized RMS bound is 2) and anything a datasheet tolerance of 1 %
   admits; they catch a fit that has left the model, not one that is slow.
-  A test may set them to impossible values, as it sets the other bounds.
+  A test may set them to impossible values, as it sets the other bounds,
+  and the stopping account reports them beside the other thresholds in
+  force, as its contract requires.
 - **The pass numbering and the boundaries.** Passes are numbered across
   both stages in the trace and the progress texts, so the released stage's
   first pass is one more than the held stage's last; the boundary before it
