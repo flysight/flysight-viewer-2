@@ -87,13 +87,21 @@ void requireValidTuning(const Tuning &tuning)
     // legal "never" forcing for a test (the settle test, the cost test and the
     // slow-tail bounds are then never satisfied), and it is the only way to
     // force a pass to run to maxIterations, since a rejected LM step is an
-    // exact no-op that a zero tolerance would count as settled.
+    // exact no-op that a zero tolerance would count as settled. The divergence
+    // bounds likewise: a zero bound or an empty range refuses every pass
+    // deterministically, which a test forces; a NaN bound would refuse every
+    // pass silently and an infinite one turn the rule off.
     for (double value : { tuning.relativeTolerance, tuning.biasSettledTolerance,
-                          tuning.slowTailMaxMeanRelativeDecrease, tuning.slowTailMaxNrms }) {
+                          tuning.slowTailMaxMeanRelativeDecrease, tuning.slowTailMaxNrms,
+                          tuning.divergenceMaxImuNrms, tuning.divergenceScaleRange.lower,
+                          tuning.divergenceScaleRange.upper }) {
         if (!std::isfinite(value))
             throw std::invalid_argument("Invalid fusion configuration");
     }
-    if (tuning.maxIterations < 1 || tuning.maxPasses < 1 || tuning.slowTailWindow < 1)
+    // The released stage's budget too: with none, no pass would run and the
+    // release's account would describe a stage that never ran.
+    if (tuning.maxIterations < 1 || tuning.maxPasses < 1 || tuning.releasePasses < 1
+        || tuning.slowTailWindow < 1)
         throw std::invalid_argument("Invalid iteration limit");
 }
 

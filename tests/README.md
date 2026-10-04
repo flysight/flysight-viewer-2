@@ -2096,9 +2096,10 @@ takes about a second. It fails, listing **all** violations, when
   in `src`, or outside `fusionoutput.cpp`, or the goldens hold it other than
   four times; the rule `diverged` is defined other than once, or the text
   `Releasing the scale factors` is reported other than once, in `src`; the
-  divergence bounds are read in `src` outside the tuning, the fit and the
-  writer of the stopping account, or the release budget outside the tuning
-  and the fit; or `docs/SENSOR_FUSION.md` names `scale_release` or the
+  divergence bounds are read in `src` outside the tuning (`fusionsamples.h`,
+  and its validation in `fusionsamples.cpp`), the fit and the writer of the
+  stopping account, or the release budget outside the tuning (the same two
+  files) and the fit; or `docs/SENSOR_FUSION.md` names `scale_release` or the
   release boundary other than once, stops stating the rule `diverged`
   ("rebuilt after a pass has left the model", once), counts six rules, or
   stops attributing the measured release to M56 (once). This file is

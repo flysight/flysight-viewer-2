@@ -1643,6 +1643,21 @@ void FusionKernelTest::validationRejectsEachDefect()
     t = Tuning{};
     t.biasSettledTolerance = -1;
     validateSamples(d, t);
+    // The divergence bounds likewise: finite, and a zero bound or an empty
+    // range is legal (a test's "always diverges" forcing).
+    t = Tuning{};
+    t.divergenceMaxImuNrms = std::numeric_limits<double>::quiet_NaN();
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+    t = Tuning{};
+    t.divergenceScaleRange.lower = -std::numeric_limits<double>::infinity();
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+    t = Tuning{};
+    t.divergenceScaleRange.upper = std::numeric_limits<double>::infinity();
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+    t = Tuning{};
+    t.divergenceMaxImuNrms = 0;
+    t.divergenceScaleRange = {1, 1};
+    validateSamples(d, t);
 
     // The damping ceiling must be finite and positive.
     t = Tuning{};
@@ -1680,6 +1695,9 @@ void FusionKernelTest::validationRejectsEachDefect()
     QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
     t = Tuning{};
     t.maxPasses = 0;
+    QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
+    t = Tuning{};
+    t.releasePasses = 0;
     QVERIFY_THROWS_EXCEPTION(std::invalid_argument, validateSamples(d, t));
 
     // The initial state: one attitude per fix and a finite bias.

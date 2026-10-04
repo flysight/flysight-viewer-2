@@ -1507,14 +1507,17 @@ expect_only("the release's account has one writer" "\"scale_release\""
 expect_count("every fit's golden carries the release's account" "\"scale_release\"" 4 tests/data/fusion)
 # The rule, the boundary and the bounds, each spelled once where it is
 # defined and read. Allow: none expected; a comment names the boundary in
-# other words (backquotes, not the string literal).
+# other words (backquotes, not the string literal). The bounds and the budget
+# are also checked where every tuning field is, requireValidTuning() in
+# fusionsamples.cpp (finite bounds, a budget of at least one pass); nothing
+# else reads them.
 expect_count("the diverged rule is defined once" "constexpr char kDiverged\\[\\] = \"diverged\"" 1 src)
 expect_count("the release boundary is reported once" "\"Releasing the scale factors\"" 1 src)
 expect_only("the divergence bounds are read by the fit and its account"
   "divergenceMaxImuNrms|divergenceScaleRange"
-  "^src/fusion/(fusionsamples\\.h|factorgraphfit\\.(h|cpp)|fusionoutput\\.cpp)$" src)
+  "^src/fusion/(fusionsamples\\.(h|cpp)|factorgraphfit\\.(h|cpp)|fusionoutput\\.cpp)$" src)
 expect_only("the release budget is read by the fit" "releasePasses"
-  "^src/fusion/(fusionsamples\\.h|factorgraphfit\\.cpp)$" src)
+  "^src/fusion/(fusionsamples\\.(h|cpp)|factorgraphfit\\.cpp)$" src)
 # The fusion document. Allow: these count LINES; rewrap so that each phrase
 # stays on one line.
 expect_count("the fusion document names the release's account" "scale_release" 1 docs/SENSOR_FUSION.md)
