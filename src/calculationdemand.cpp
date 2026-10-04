@@ -164,6 +164,23 @@ bool CalculationDemand::isCellPending(int row, int column) const
     return isCellPending(model.rowAt(row).sessionId, columnId(model.column(column)));
 }
 
+bool CalculationDemand::isCellExcluded(const QString &sessionId, const QString &columnId) const
+{
+    const auto cells = m_excludedCells.constFind(columnId);
+    return cells != m_excludedCells.constEnd() && cells->contains(sessionId);
+}
+
+// Painted for every cell, as isCellPending(): nothing is computed while no
+// cell is excluded.
+bool CalculationDemand::isCellExcluded(int row, int column) const
+{
+    if (!m_hasExcludedCells || !m_sessionModel || row < 0 || row >= m_sessionModel->rowCount()
+        || column < 0 || column >= m_sessionModel->columnCount())
+        return false;
+    const SessionModel &model = *m_sessionModel;
+    return isCellExcluded(model.rowAt(row).sessionId, columnId(model.column(column)));
+}
+
 DemandProgress CalculationDemand::progress() const
 {
     return m_progress;
@@ -446,6 +463,19 @@ QString CalculationDemand::noteDetail(const UnproducedNote &note)
 QString CalculationDemand::loadFailureReason()
 {
     return tr("The session file could not be loaded");
+}
+
+// The engine is not asked for a loaded session: the stored line is the fact,
+// and the constant default reads on. A failed-load placeholder holds nothing
+// of its file, so it is read from the index like a stub. Called under the
+// walk's guard (rowAt() in place) and by the pass for the running job's row.
+bool CalculationDemand::isSwitchedOff(const SessionRow &sr)
+{
+    if (sr.isLoaded() && !sr.loadFailed) {
+        return sr.session->storedAttribute(QString::fromLatin1(SessionKeys::Compute)).toString()
+            == QLatin1String(SessionKeys::ComputeOff);
+    }
+    return LogbookManager::instance().isComputeOff(sr.sessionId);
 }
 
 // The memory keeps the why alone, so that an entry shows it beside the title
@@ -807,6 +837,7 @@ CalculationDemand::Walk CalculationDemand::walkRows(const JobRecord &running, co
     Walk walk;
     const int sources = int(m_sources.size());
     walk.pendingCells.resize(sources);
+    walk.excludedCells.resize(sources);
 
     // A job asked to stop is winding down: it is described by nothing
     const bool runningIsLive = running.id != 0 && !running.cancelRequested;
@@ -836,6 +867,18 @@ CalculationDemand::Walk CalculationDemand::walkRows(const JobRecord &running, co
         QList<FailedCalculation> rowFailures;   // each pair once: the first source that fails it
         if (!loaded)
             dropReports(sessionId);
+
+        // Excluded, before any other condition: the row files no candidate
+        // and gives nothing to progress, the failures, the pending cells or
+        // the fill; its column cells are excluded, and the running job of its
+        // session, if any, is described by nothing
+        if (isSwitchedOff(sr)) {
+            for (int s = 0; s < sources; ++s) {
+                if (m_sources.at(s).kind == Source::Kind::Column)
+                    walk.excludedCells[s].insert(sessionId);
+            }
+            continue;
+        }
 
         for (int s = 0; s < sources; ++s) {
             const Source &source = m_sources.at(s);
@@ -994,21 +1037,25 @@ bool CalculationDemand::hasPendingUpdate() const
 
 // Each value is compared with the last pass's and announced only when it
 // differs. A column that is no longer requested is found among the old keys
-// of the pending cells, and changes what a painted cell shows only when it had
-// a pending cell.
+// of the pending and excluded cells, and changes what a painted cell shows
+// only when it had a pending or an excluded cell. One announcement per
+// column covers both sets: a view repaints the column either way.
 void CalculationDemand::applyValues(const QStringList &columnOrder, const QHash<QString, QSet<QString>> &pendingCells,
+                                    const QHash<QString, QSet<QString>> &excludedCells,
                                     const DemandProgress &progress, JobId progressJob,
                                     const QList<SessionFailures> &failures)
 {
     QStringList changedCells;
     for (const QString &id : columnOrder) {
-        if (m_pendingCells.value(id) != pendingCells.value(id))
+        if (m_pendingCells.value(id) != pendingCells.value(id) || m_excludedCells.value(id) != excludedCells.value(id))
             changedCells.append(id);
     }
     QStringList droppedCells;
-    for (auto it = m_pendingCells.constBegin(); it != m_pendingCells.constEnd(); ++it) {
-        if (!pendingCells.contains(it.key()) && !it.value().isEmpty())
-            droppedCells.append(it.key());
+    for (const QHash<QString, QSet<QString>> *old : {&m_pendingCells, &m_excludedCells}) {
+        for (auto it = old->constBegin(); it != old->constEnd(); ++it) {
+            if (!pendingCells.contains(it.key()) && !it.value().isEmpty() && !droppedCells.contains(it.key()))
+                droppedCells.append(it.key());
+        }
     }
     std::sort(droppedCells.begin(), droppedCells.end());
     changedCells.append(droppedCells);
@@ -1017,10 +1064,15 @@ void CalculationDemand::applyValues(const QStringList &columnOrder, const QHash<
     const bool failuresChangedNow = m_failures != failures;
 
     // Stored before anything is emitted: a slot of any signal reads
-    // isCellPending(), progress(), failures() and sessionFailures()
+    // isCellPending(), isCellExcluded(), progress(), failures() and
+    // sessionFailures()
+    const auto anyCell = [](const QHash<QString, QSet<QString>> &cells) {
+        return std::any_of(cells.cbegin(), cells.cend(), [](const QSet<QString> &set) { return !set.isEmpty(); });
+    };
     m_pendingCells = pendingCells;
-    m_hasPendingCells = std::any_of(pendingCells.cbegin(), pendingCells.cend(),
-                                    [](const QSet<QString> &cells) { return !cells.isEmpty(); });
+    m_hasPendingCells = anyCell(pendingCells);
+    m_excludedCells = excludedCells;
+    m_hasExcludedCells = anyCell(excludedCells);
     m_progress = progress;
     m_progressJob = progressJob;
     if (failuresChangedNow) {
@@ -1053,6 +1105,7 @@ void CalculationDemand::recompute()
 
     QStringList columnOrder;
     QHash<QString, QSet<QString>> pendingCells;
+    QHash<QString, QSet<QString>> excludedCells;
     DemandProgress progress;            // the default when inert
     JobId progressJob = 0;
     QList<SessionFailures> failures;    // none when inert
@@ -1096,6 +1149,17 @@ void CalculationDemand::recompute()
             const bool shutDown = m_queue->isShutDown();
             m_fill->update(walk.pendingSessions, shutDown ? QStringList() : walk.loadCandidates);
 
+            // A recording switched off stops its running job, whether or not
+            // the walk ran (it does not with no source): the one stop of a
+            // running job here (see THE CHOICE). The walk described the job
+            // by nothing; the executor's jobCancelRequested schedules the
+            // next pass, and its jobFinished starts the next candidate.
+            if (running.id != 0 && !running.cancelRequested) {
+                const int runningRow = m_sessionModel->getSessionRow(running.sessionId);
+                if (runningRow >= 0 && isSwitchedOff(std::as_const(*m_sessionModel).rowAt(runningRow)))
+                    m_queue->cancel(running.id, tr("Switched off for this recording"));
+            }
+
             if (!shutDown) {
                 // The tiers in order. A pair is listed in its first tier only.
                 QList<Candidate> candidates;
@@ -1119,6 +1183,7 @@ void CalculationDemand::recompute()
                     continue;
                 columnOrder.append(source.id);
                 pendingCells.insert(source.id, walk.pendingCells.value(s));
+                excludedCells.insert(source.id, walk.excludedCells.value(s));
             }
 
             // The high-water mark is the pass's: a new burst of work after the
@@ -1130,7 +1195,7 @@ void CalculationDemand::recompute()
         }
     }
 
-    applyValues(columnOrder, pendingCells, progress, progressJob, failures);
+    applyValues(columnOrder, pendingCells, excludedCells, progress, progressJob, failures);
 }
 
 // ---- The input-settle wait ------------------------------------------------------------
@@ -1188,6 +1253,18 @@ void CalculationDemand::onDependencyChanged(const QString &sessionId, const Depe
 {
     // The session's engine state changed: its reports are inspected again
     dropReports(sessionId);
+
+    // The Compute switch is a change of demand, as showing or hiding is, not
+    // an input change: nothing is forgotten and no settle wait starts. A
+    // chosen next job of the session is withdrawn and its running job asked
+    // to stop before control returns to the event loop.
+    if (key == DependencyKey::attribute(QString::fromLatin1(SessionKeys::Compute))) {
+        if (!m_reconciling && m_queue && (m_queue->chosenNextJob() != 0 || m_queue->runningJob() != 0))
+            recompute();
+        else
+            scheduleUpdate();
+        return;
+    }
 
     // Only the static closure of the checked requested plots and of the
     // requested columns matters: any other edit neither delays nor retries

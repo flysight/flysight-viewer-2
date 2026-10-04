@@ -63,8 +63,10 @@ public:
     /// (the synthesized match id, when none was recorded), DEVICE_ID (from
     /// FLYSIGHT.TXT above file.filePath, else SessionKeys::DeviceIdUnknown;
     /// skipped entirely when file.filePath is empty), _DESCRIPTION,
-    /// _IMPORT_TIME, _JUMPER_MASS / _PLANFORM_AREA, and
-    /// _GROUND_ELEV when the ground reference mode is "Fixed".
+    /// _IMPORT_TIME, _JUMPER_MASS / _PLANFORM_AREA,
+    /// _GROUND_ELEV when the ground reference mode is "Fixed", the
+    /// orientation of the Import preferences when one is set, and the Compute
+    /// attribute switched off while its Import preference reads off.
     static void applyCreationDefaults(const ParsedFile& file, SessionData& session);
 
     /// Convenience for tests and tools: parse + create. The application never

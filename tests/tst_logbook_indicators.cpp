@@ -15,7 +15,10 @@
 // is the tree's own and nothing animates; cells read pending (distinct from
 // unavailable and from the row's unreadable-record pending state) without a
 // trace in the model, its cached values or index.json; each announcement
-// repaints one column. Progress and failures, and what is computed, are
+// repaints one column. A recording switched off for background computation
+// reads "excluded" in the cells it has no value for, distinct from pending
+// and from unavailable, with its own tooltip, no trace in the model and no
+// row warning. Progress and failures, and what is computed, are
 // CalculationDemand's (tst_calculation_demand); background work and the list
 // of failures are shown in the status bar (tst_status_bar).
 //
@@ -159,6 +162,12 @@ private slots:
     void pendingCellsChangeRepaintsOnlyThatColumn();
     void survivesDemandDestroyedFirst();
 
+    void excludedCellIsDistinctFromPendingAndUnavailable();
+    void excludedCellShowsItsValue();
+    void sortingTreatsExcludedAsUnavailable();
+    void excludedSessionShowsNoRowWarning();
+    void excludedCellsChangeRepaintsOnlyThatColumn();
+
 private:
     Gate &gate() { return m_world->gate(); }
 
@@ -278,6 +287,22 @@ private:
         spin();
         const QList<SessionFailures> failures = m_demand->failures();
         return failures.size() == 1 && failures.at(0).sessionId == QStringLiteral("s1");
+    }
+
+    /// Stores the session's Compute token through the application's edit
+    /// path and waits until it is saved. False when the model refused.
+    [[nodiscard]] bool setCompute(const char *id, const char *token)
+    {
+        if (!m_model->updateAttribute(QString::fromLatin1(id), QString::fromLatin1(SessionKeys::Compute),
+                                      QString::fromLatin1(token)))
+            return false;
+        return waitForIdle(*m_model);
+    }
+    /// The demand layer's excluded cell of (session, G_OUT): a pending pass runs first.
+    bool excluded(const char *id)
+    {
+        m_demand->flush();
+        return m_demand->isCellExcluded(QString::fromLatin1(id), colId("G_OUT"));
     }
 
     /// The visible part of a column of the tree's viewport.
@@ -1323,6 +1348,204 @@ void LogbookIndicatorsTest::survivesDemandDestroyedFirst()
     tree()->sortByColumn(g, Qt::AscendingOrder);
     spin();
     QCOMPARE(header()->sortIndicatorSection(), g);
+}
+
+// ---- The excluded cell -------------------------------------------------------------------
+
+// Spec 4 third bullet: a cell of a recording switched off that has no value
+// reads excludedText(), muted, distinct from the base delegate's cell and from
+// a pending one, with its own tooltip; nothing of it reaches the model, the
+// cached values, pendingColumns or index.json.
+void LogbookIndicatorsTest::excludedCellIsDistinctFromPendingAndUnavailable()
+{
+    QVERIFY(setCompute("s2", "off"));
+    enableColumns({QStringLiteral("G_OUT")});
+    QVERIFY(gate().waitEntered());          // s1; s4 waits; s2 is excluded
+    QTRY_VERIFY(cells()->showsPending(cell("s4", "G_OUT")));
+    spin();
+    const int g = section("G_OUT");
+
+    QVERIFY(excluded("s2"));
+    QVERIFY(cells()->showsExcluded(cell("s2", "G_OUT")));
+    QVERIFY(!cells()->showsPending(cell("s2", "G_OUT")));
+    for (const char *id : {"s1", "s3", "s4"})
+        QVERIFY2(!cells()->showsExcluded(cell(id, "G_OUT")), id);
+    QVERIFY(!cells()->showsPending(cell("s3", "G_OUT")));
+    for (int r = 0; r < m_model->rowCount(); ++r)
+        QVERIFY(!cells()->showsExcluded(m_model->index(r, descriptionSection())));
+    QCOMPARE(progressNow().count, 2);
+
+    const QImage with = grabCells();
+    const QImage base = grabCellsWithBaseDelegate();
+    const QImage excludedCell = cut(with, cellRect(cell("s2", "G_OUT")));
+    QVERIFY(excludedCell != cut(base, cellRect(cell("s2", "G_OUT"))));
+    QVERIFY(excludedCell != cut(with, cellRect(cell("s4", "G_OUT"))));     // the pending mark
+    QCOMPARE(cut(with, cellRect(cell("s3", "G_OUT"))), cut(base, cellRect(cell("s3", "G_OUT"))));
+
+    // Muted: the cell's darkest pixel is the placeholder colour's, never the text's
+    const QColor text = tree()->palette().color(QPalette::Active, QPalette::Text);
+    int darkest = 255;
+    for (int y = 0; y < excludedCell.height(); ++y) {
+        for (int x = 0; x < excludedCell.width(); ++x)
+            darkest = qMin(darkest, qGray(excludedCell.pixel(x, y)));
+    }
+    QVERIFY(darkest < 255);                 // something is painted
+    QVERIFY(darkest > qGray(text.rgb()));
+
+    // Nothing of it in the model, its cached values or the index
+    const QModelIndex index = cell("s2", "G_OUT");
+    QVERIFY(!index.data(Qt::DisplayRole).isValid());
+    QVERIFY(!index.data(Qt::ToolTipRole).isValid());
+    const SessionRow &row = m_model->rowAt(index.row());
+    QVERIFY(!row.cachedValues.value(g).isValid());
+    QVERIFY(!row.pendingColumns.contains(g));
+    const QJsonValue value = flushedIndexValue("s2");
+    QVERIFY(value.isNull() || value.isUndefined());
+    QVERIFY(!indexBytes().contains(LogbookCellDelegate::excludedText().toUtf8()));
+
+    // Its own tooltip; an unavailable cell has none
+    QVERIFY(hideToolTip());
+    QVERIFY(cellHelp(cell("s2", "G_OUT")));
+    QCOMPARE(QToolTip::text(), LogbookCellDelegate::excludedToolTip());
+    QVERIFY(hideToolTip());
+    QVERIFY(cellHelp(cell("s4", "G_OUT")));
+    QCOMPARE(QToolTip::text(), LogbookCellDelegate::pendingToolTip());
+    QVERIFY(hideToolTip());
+    QVERIFY(!cellHelp(cell("s3", "G_OUT")));
+}
+
+// Spec 4 second and third bullets: a recording switched off with a stored
+// result shows the value; a value always wins over the excluded mark.
+void LogbookIndicatorsTest::excludedCellShowsItsValue()
+{
+    enableColumns({QStringLiteral("G_OUT")});
+    gate().open(16);
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+    QTRY_COMPARE(cell("s2", "G_OUT").data().toString(), QStringLiteral("3"));
+
+    QVERIFY(setCompute("s2", "off"));
+    QVERIFY(setCompute("s3", "off"));
+    spin();
+    QVERIFY(excluded("s2"));
+    QVERIFY(excluded("s3"));
+    QCOMPARE(cell("s2", "G_OUT").data().toString(), QStringLiteral("3"));
+    QVERIFY(!cells()->showsExcluded(cell("s2", "G_OUT")));
+    QVERIFY(cells()->showsExcluded(cell("s3", "G_OUT")));
+    const QImage with = grabCells();
+    const QImage base = grabCellsWithBaseDelegate();
+    QCOMPARE(cut(with, cellRect(cell("s2", "G_OUT"))), cut(base, cellRect(cell("s2", "G_OUT"))));
+    QVERIFY(cut(with, cellRect(cell("s3", "G_OUT"))) != cut(base, cellRect(cell("s3", "G_OUT"))));
+    QVERIFY(hideToolTip());
+    QVERIFY(!cellHelp(cell("s2", "G_OUT")));
+}
+
+// Sorting treats an excluded cell as unavailable: missing values go to the
+// bottom both ways, and the index does not change.
+void LogbookIndicatorsTest::sortingTreatsExcludedAsUnavailable()
+{
+    QVERIFY(setCompute("s2", "off"));
+    enableColumns({QStringLiteral("G_OUT")});
+    gate().open(16);
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+    QTRY_COMPARE(cell("s4", "G_OUT").data().toString(), QStringLiteral("5"));
+    spin();
+    const int g = section("G_OUT");
+    const auto indexValues = [] {
+        QStringList values;
+        for (const char *id : {"s1", "s2", "s3", "s4"})
+            values.append(QString::fromUtf8(QJsonDocument(QJsonObject{{"v", flushedIndexValue(id)}}).toJson()));
+        return values;
+    };
+    const QStringList before = indexValues();
+
+    const auto verifyOrder = [this] {
+        QStringList valued;
+        QStringList missing;
+        for (int r = 0; r < m_model->rowCount(); ++r) {
+            const QString id = m_model->rowAt(r).sessionId;
+            QVERIFY2(cells()->showsExcluded(m_model->index(r, section("G_OUT"))) == (id == QStringLiteral("s2")),
+                     qPrintable(id));
+            (m_model->index(r, section("G_OUT")).data().toString().isEmpty() ? missing : valued).append(id);
+        }
+        // Every missing value after every value
+        QCOMPARE(valued.size(), 2);
+        for (int r = 0; r < 2; ++r)
+            QVERIFY(!m_model->index(r, section("G_OUT")).data().toString().isEmpty());
+        missing.sort();
+        QCOMPARE(missing, QStringList({QStringLiteral("s2"), QStringLiteral("s3")}));
+    };
+
+    tree()->sortByColumn(g, Qt::AscendingOrder);
+    spin();
+    verifyOrder();
+    if (QTest::currentTestFailed())
+        return;
+    tree()->sortByColumn(g, Qt::DescendingOrder);
+    spin();
+    verifyOrder();
+    if (QTest::currentTestFailed())
+        return;
+    QCOMPARE(indexValues(), before);
+}
+
+// Spec 4 second bullet: the row warning is about what is wanted, and nothing
+// is wanted of a recording switched off: its stored rejection shows no glyph
+// until it is switched on again.
+void LogbookIndicatorsTest::excludedSessionShowsNoRowWarning()
+{
+    QVERIFY(makeFailedRow());
+    spin();
+    QVERIFY(!cells()->warningRect(firstCell("s1")).isNull());
+
+    QVERIFY(setCompute("s1", "off"));
+    spin();
+    QVERIFY(!failed("s1"));
+    QCOMPARE(cells()->warningRect(firstCell("s1")), QRect());
+    const QRect rect = cellRect(firstCell("s1"));
+    QCOMPARE(cut(grabCells(), rect), cut(grabCellsWithBaseDelegate(), rect));
+
+    QVERIFY(setCompute("s1", "on"));
+    spin();
+    QVERIFY(failed("s1"));
+    QVERIFY(!cells()->warningRect(firstCell("s1")).isNull());
+}
+
+// The excluded cells have the pending cells' announcement: a change of them
+// announces that column alone, and the announcement repaints only that column.
+void LogbookIndicatorsTest::excludedCellsChangeRepaintsOnlyThatColumn()
+{
+    enableColumns({QStringLiteral("G_OUT"), QStringLiteral("G_IN")});
+    gate().open(16);
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+    spin();
+    const int g = section("G_OUT");
+
+    // s3 has no value of G_OUT: switching it off changes the excluded cells only
+    QSignalSpy pendingSpy(m_demand.get(), &CalculationDemand::pendingCellsChanged);
+    QVERIFY(setCompute("s3", "off"));
+    m_demand->flush();
+    QVERIFY(excluded("s3"));
+    QCOMPARE(pendingSpy.count(), 1);
+    QCOMPARE(pendingSpy.at(0).at(0).toString(), colId("G_OUT"));
+    spin();
+
+    auto *treeRegion = new RegionRecorder(tree()->viewport());
+    QSignalSpy dataSpy(m_model.get(), &QAbstractItemModel::dataChanged);
+    emit m_demand->pendingCellsChanged(colId("G_OUT"));
+    QTRY_VERIFY(!treeRegion->region.isEmpty());
+    QVERIFY((treeRegion->region - QRegion(columnRect(g))).isEmpty());
+    QCOMPARE(dataSpy.count(), 0);
+
+    // Switched on again: announced once more
+    pendingSpy.clear();
+    QVERIFY(setCompute("s3", "on"));
+    m_demand->flush();
+    QVERIFY(!excluded("s3"));
+    QCOMPARE(pendingSpy.count(), 1);
+    QCOMPARE(pendingSpy.at(0).at(0).toString(), colId("G_OUT"));
 }
 
 // A Widgets test writes its own main() (tests/README.md section 8): the same

@@ -63,7 +63,11 @@ struct CalculationRecordRead {
 /// always written, {} when there is none; and "recordReasons", calculation id
 /// -> the reason a record's stored result did not produce its outputs, for
 /// the records whose reason is not empty, omitted when there is none: see
-/// calculationRecordReason(). An entry without it has no reason learned yet).
+/// calculationRecordReason(). An entry without it has no reason learned yet;
+/// and "computeOff": true when the session file was last seen to switch the
+/// recording off (its Compute line reads the off token), omitted otherwise:
+/// see isComputeOff(). Absent means on, which is what every entry of an
+/// earlier build reads).
 ///
 /// CACHE VALIDITY is decided here and nowhere else. initialize() keeps a
 /// cached value only when the marker recorded in the index equals the current
@@ -220,6 +224,18 @@ public:
     /// nothing. The write and removal paths announce their change once, the
     /// reason included.
     void setCalculationRecordReason(const QString &sessionId, const QString &calculationId, const QString &reason);
+    /// True when the session file was last seen to switch the recording off:
+    /// its Compute line reads the off token. A cache of the file, so that the
+    /// demand layer can leave a recording that is not loaded out of
+    /// background computation without loading it. Learned in two places and
+    /// no other, wherever the file is written or read: saveSession() (the
+    /// import, a loaded row's save and the bulk edit's stub path) under the
+    /// file's SESSION_ID, and loadSessionRaw() (every load and the column
+    /// worker's temporary copy) under the id asked for. A learned value that
+    /// differs marks the index for a flush; nothing is announced. False for
+    /// an unknown session and for an index without the entry. A map lookup.
+    bool isComputeOff(const QString &sessionId) const;
+
     // Ids whose record may disagree with the loaded session's engine. Values
     // that depend on them are never written to index.json.
     QSet<QString> unconfirmedCalculationRecords(const QString &sessionId) const;
@@ -459,6 +475,9 @@ private:
     // then needs a flush). The write and removal paths use it, and announce
     // their own record change once.
     bool storeRecordReason(const QString &sessionId, const QString &calculationId, const QString &reason);
+    // The one writer of m_computeOff (see isComputeOff()): the session's
+    // stored Compute line, compared with the off token.
+    void learnComputeOff(const QString &sessionId, const SessionData &session);
     // removeCalculationRecord() for a resolved stem.
     bool removeCalculationRecordOfStem(const QString &sessionId, const QString &stem,
                                        const QString &calculationId, bool *removedFile);
@@ -505,6 +524,7 @@ private:
     QMap<QString, QMap<QString, QString>> m_recordReasons;  // SESSION_ID -> calculation id -> the record's
                                                             //   reason (non-empty reasons only); see
                                                             //   calculationRecordReason()
+    QSet<QString> m_computeOff;                         // SESSION_IDs whose file was last seen switched off
     QMap<QString, QSet<QString>> m_unconfirmedRecords;  // SESSION_ID -> ids whose record may disagree with the loaded engine
     QMap<QString, QSet<QString>> m_recordBackedOnDisk;  // SESSION_ID -> ids index.json on disk lists as present
                                                         //   AND on which some value it holds for the session depends

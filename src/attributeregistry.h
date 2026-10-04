@@ -36,6 +36,7 @@ struct AttributeDefinition {
     bool editable = false;     // Whether the user can edit this value in the logbook
     QString measurementType;   // UnitConverter key (empty = no unit conversion)
     QVector<AttributeChoice> choices; // Choice only: the allowed values, in presentation order
+    QString tooltip;           // The column header's tooltip (empty = none)
 
     /// The choice whose token is `token`; nullptr for a token outside the
     /// list, and so for every token of a definition that is not a Choice.

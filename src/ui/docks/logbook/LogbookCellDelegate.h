@@ -16,11 +16,11 @@ struct AttributeDefinition;
 class CalculationDemand;
 class SessionModel;
 
-/// The logbook's cell delegate. It presents two things of the demand layer
-/// and decides nothing: the pending cell and the row warning. It also gives a
-/// Choice cell its list editor (CHOICE EDITOR).
+/// The logbook's cell delegate. It presents three things of the demand layer
+/// and decides nothing: the pending cell, the excluded cell and the row
+/// warning. It also gives a Choice cell its list editor (CHOICE EDITOR).
 ///
-/// PENDING CELL. A logbook cell has three looks:
+/// PENDING CELL. A logbook cell has four looks:
 ///  - a value;
 ///  - empty: "unavailable" (the cached value is invalid), and the row's own
 ///    pending state for a record that could not be read
@@ -30,15 +30,23 @@ class SessionModel;
 ///    the cell's pair is in demand (CalculationDemand::isCellPending()), so
 ///    the value is being computed - "not yet", where empty means "never". A
 ///    cell of the row's own pending state is never in demand: its record is
-///    known.
-/// Pending is a presentation of demand: the model, its cached values,
-/// pendingColumns, index.json and SessionModel::sort() never see it; the
-/// cached value underneath stays unavailable until the record is written, so
-/// sorting treats a pending cell as unavailable. A value always wins: a cell
-/// the model has a value for is painted with it, whatever the demand layer
-/// said in its last pass. Pending cells do not animate, and their tooltip
-/// says only that the value is being computed; the status bar carries the
-/// progress.
+///    known;
+///  - a muted word, excluded (excludedText(), in the pending mark's colours):
+///    the cell's recording is switched off for background computation
+///    (CalculationDemand::isCellExcluded()), so nothing computes the value -
+///    "not here", where the pending mark means "not yet". Its tooltip,
+///    excludedToolTip(), says why. A cell is never both pending and
+///    excluded: the demand layer files an excluded recording's cells as
+///    excluded and never as pending.
+/// Pending and excluded are presentations of demand: the model, its cached
+/// values, pendingColumns, index.json and SessionModel::sort() never see
+/// them; the cached value underneath stays unavailable until a record is
+/// written, so sorting treats a pending or an excluded cell as unavailable.
+/// A value always wins: a cell the model has a value for is painted with it,
+/// whatever the demand layer said in its last pass (an excluded recording's
+/// stored result shows its value). Neither look animates, and the pending
+/// tooltip says only that the value is being computed; the status bar
+/// carries the progress.
 ///
 /// ROW WARNING. A row whose session has a current failure
 /// (CalculationDemand::sessionFailures() lists a calculation) shows the
@@ -59,12 +67,13 @@ class SessionModel;
 ///
 /// HOVER. Over the glyph, the session's failures, SessionFailures::text(),
 /// exactly. Elsewhere in the cell, the cell's own tooltip: the pending one,
-/// else the base class's (the model's).
+/// the excluded one, else the base class's (the model's).
 ///
 /// NO GESTURE. No event of its own: a click on the glyph is a click on the
 /// cell (selection, the check box) and starts or cancels nothing.
 ///
-/// REPAINT. pendingCellsChanged(id) repaints the visible part of that column
+/// REPAINT. pendingCellsChanged(id), which announces a change of the pending
+/// or the excluded cells of a column, repaints the visible part of that column
 /// of the tree's viewport, failuresChanged() the visible part of the first
 /// visual column: one viewport update each, no model signal, no reset. The
 /// value itself arrives through the model's own signals.
@@ -105,6 +114,10 @@ public:
     /// True when the cell is painted as pending: its pair is in demand
     /// (isCellPending) and the model has no value for it.
     bool showsPending(const QModelIndex &index) const;
+    /// True when the cell is painted as excluded: its recording is switched
+    /// off for background computation (isCellExcluded) and the model has no
+    /// value for it.
+    bool showsExcluded(const QModelIndex &index) const;
     /// Where the row warning is painted, in viewport coordinates, with the
     /// option the tree paints `index` with: a rect inside the cell when
     /// `index` is its row's first visual cell and the row's session has a
@@ -112,6 +125,8 @@ public:
     QRect warningRect(const QModelIndex &index) const;
     static QString pendingText();       ///< pendingMark(): three middle dots, U+00B7
     static QString pendingToolTip();    ///< tr("Pending: this value is being computed")
+    static QString excludedText();      ///< the excluded cell's word, tr()
+    static QString excludedToolTip();   ///< why nothing computes an excluded cell, tr()
 
 private slots:
     void onPendingCellsChanged(const QString &columnId);
@@ -127,11 +142,20 @@ private:
     /// The logical index of the first section in visual order that is not
     /// hidden; -1 when there is none.
     int firstVisualColumn() const;
+    /// What a cell without a value shows of demand in place of its text.
+    enum class Placeholder {
+        None,       ///< the base class's text
+        Pending,    ///< pendingText()
+        Excluded    ///< excludedText()
+    };
+    /// The cell's placeholder: Pending when showsPending(), else Excluded
+    /// when showsExcluded(), else None.
+    Placeholder placeholder(const QModelIndex &index) const;
     /// The option the cell is painted with: the base class's for `index`,
-    /// with the pending mark and its muted colour when `pending`
-    /// (showsPending(index), which the caller has asked already).
+    /// with the placeholder's text in the muted colour unless `placeholder`
+    /// (placeholder(index), which the caller has asked already) is None.
     QStyleOptionViewItem cellOption(const QStyleOptionViewItem &option, const QModelIndex &index,
-                                    bool pending) const;
+                                    Placeholder placeholder) const;
     /// Where a warning cell's text and glyph go, for an option cellOption() built.
     struct WarningLayout {
         QRect textArea;     ///< the text's rect: the text rectangle less the glyph's room at its trailing end

@@ -1087,6 +1087,9 @@ void MainWindow::initializePreferences()
     // The orientation stored into new imports: the same helmet default as the
     // constant calculated attribute, spelled by the one orientation type
     prefs.registerPreference(PreferenceKeys::ImportOrientation, Fusion::Orientation::defaultOrientation().token());
+    // New imports take part in background computation unless the user asks
+    // for positive control: the token, as the Compute attribute spells it
+    prefs.registerPreference(PreferenceKeys::ImportCompute, QString::fromLatin1(SessionKeys::ComputeOn));
 
     // ========================================================================
     // Global Plot Preferences

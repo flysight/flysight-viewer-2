@@ -23,6 +23,13 @@ inline const QString ImportHideOthersOnImport = QStringLiteral("import/hideOther
 /// (SessionKeys::Orientation): a fact of the import, chosen on the Import
 /// preferences page from the 24 orientations of Fusion::Orientation.
 inline const QString ImportOrientation = QStringLiteral("import/orientation");
+/// Whether newly imported recordings take part in background computation, as
+/// a token of the Compute attribute (on or off) held as text, the mechanism
+/// of the orientation preference: a recording imported while it reads
+/// exactly the off token is stored switched off, a fact of the import; any
+/// other value stores nothing, and the recording reads the attribute's
+/// default.
+inline const QString ImportCompute = QStringLiteral("import/compute");
 
 // ============================================================================
 // Plots Preferences (global)

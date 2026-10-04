@@ -95,6 +95,8 @@ private slots:
     void recordReasonsRoundTrip();
     void recordReasonChangeIsAnnounced();
 
+    void computeOffRoundTrip();
+
 private:
     // One saved session "s1" with D = "x" and G = 1.5 cached and flushed,
     // lastAccessed 1234.
@@ -899,6 +901,96 @@ void LogbookIndexTest::recordReasonChangeIsAnnounced()
     QCOMPARE(logbook.calculationRecordReason(g1, x), QString());
     QCOMPARE(spy.count(), 1);
     QVERIFY(isPair(0));
+}
+
+// ---- The Compute switch ("computeOff") ------------------------------------------------
+
+// Whether a session file switches its recording off is cached in the index:
+// learned where the file is written (saveSession()) or read
+// (loadSessionRaw()), written only for an off entry, read back at a restart,
+// moved with the id and dropped with the session or a reset; an entry without
+// it reads on.
+void LogbookIndexTest::computeOffRoundTrip()
+{
+    LogbookManager &logbook = LogbookManager::instance();
+    const QString c1 = QStringLiteral("c1");
+    const QString c2 = QStringLiteral("c2");
+    SessionData off = makeSession(c1);
+    off.setAttribute(QStringLiteral("_COMPUTE"), QStringLiteral("off"));
+    SessionData on = makeSession(c2);
+    on.setAttribute(QStringLiteral("_COMPUTE"), QStringLiteral("on"));
+    QVERIFY(!logbook.isComputeOff(c1));
+
+    // Learned by the save; flushed for the off entry only
+    QVERIFY(logbook.saveSession(off));
+    QVERIFY(logbook.saveSession(on));
+    QVERIFY(logbook.isComputeOff(c1));
+    QVERIFY(!logbook.isComputeOff(c2));
+    QVERIFY(logbook.flushIndex());
+    QJsonObject sessions = readIndex()[QStringLiteral("sessions")].toObject();
+    QCOMPARE(sessions[c1].toObject()[QStringLiteral("computeOff")], QJsonValue(true));
+    QVERIFY(!sessions[c2].toObject().contains(QStringLiteral("computeOff")));
+
+    // A restart reads it back
+    logbook.reset();
+    logbook.initialize();
+    QVERIFY(logbook.isComputeOff(c1));
+    QVERIFY(!logbook.isComputeOff(c2));
+    QVERIFY(!logbook.indexNeedsFlush());
+
+    // A file edited on disk to carry the line: learned by the load, which
+    // marks a flush; a load that finds what is held marks nothing
+    const QString c2Path = sessionFilePath(c2);
+    QByteArray bytes = readFileBytes(c2Path);
+    QVERIFY(bytes.contains("$VAR,_COMPUTE,on"));
+    bytes.replace("$VAR,_COMPUTE,on", "$VAR,_COMPUTE,off");
+    QFile c2File(c2Path);
+    QVERIFY(c2File.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(c2File.write(bytes), qint64(bytes.size()));
+    c2File.close();
+    QVERIFY(logbook.loadSessionRaw(c2).has_value());
+    QVERIFY(logbook.isComputeOff(c2));
+    QVERIFY(logbook.indexNeedsFlush());
+    QVERIFY(logbook.flushIndex());
+    QVERIFY(logbook.loadSessionRaw(c2).has_value());
+    QVERIFY(!logbook.indexNeedsFlush());
+
+    // A save without the line clears it and marks a flush
+    QVERIFY(logbook.saveSession(makeSession(c2)));
+    QVERIFY(!logbook.isComputeOff(c2));
+    QVERIFY(logbook.indexNeedsFlush());
+    QVERIFY(logbook.flushIndex());
+    QVERIFY(!readIndex()[QStringLiteral("sessions")].toObject()[c2].toObject().contains(QStringLiteral("computeOff")));
+
+    // Moved with the id, dropped with the session
+    QVERIFY(logbook.remapSessionId(c1, QStringLiteral("renamed")));
+    QVERIFY(!logbook.isComputeOff(c1));
+    QVERIFY(logbook.isComputeOff(QStringLiteral("renamed")));
+    QVERIFY(logbook.flushIndex());
+    sessions = readIndex()[QStringLiteral("sessions")].toObject();
+    QCOMPARE(sessions[QStringLiteral("renamed")].toObject()[QStringLiteral("computeOff")], QJsonValue(true));
+    QVERIFY(logbook.removeSession(QStringLiteral("renamed")));
+    QVERIFY(!logbook.isComputeOff(QStringLiteral("renamed")));
+
+    // A reset drops it
+    QVERIFY(logbook.saveSession(off));
+    QVERIFY(logbook.isComputeOff(c1));
+    TestEnvironment::instance().reopenLogbook();
+    QVERIFY(!logbook.isComputeOff(c1));
+
+    // An index without the entry (a legacy flat index) reads on
+    logbook.initialize();
+    QVERIFY(logbook.flushIndex());
+    const QString uuid = QFileInfo(sessionFilePath(c1)).completeBaseName();
+    QJsonObject entry;
+    entry[QStringLiteral("uuid")] = uuid;
+    QJsonObject flat;
+    flat[c1] = entry;
+    QVERIFY(writeIndex(flat));
+    TestEnvironment::instance().reopenLogbook();
+    logbook.initialize();
+    QVERIFY(!logbook.hasIndexData());
+    QVERIFY(!logbook.isComputeOff(c1));
 }
 
 FLYSIGHT_TEST_MAIN(LogbookIndexTest)

@@ -192,6 +192,9 @@ void TestEnvironment::registerCorePreferences()
         // test writes no orientation unless the test sets the preference, so
         // fixture files and attribute lists stay as they were
         {PreferenceKeys::ImportOrientation,         QString()},
+        // The application's default: an import while it reads on writes
+        // nothing, so fixture files and attribute lists stand
+        {PreferenceKeys::ImportCompute,             QStringLiteral("on")},
         {PreferenceKeys::AeroMass,                  1.0},
         {PreferenceKeys::AeroArea,                  1.0},
     };

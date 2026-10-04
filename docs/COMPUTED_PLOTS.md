@@ -10,6 +10,7 @@
 8. [While computing](#8-while-computing)
 9. [Known limitations](#9-known-limitations)
 10. [Holes in the data](#10-holes-in-the-data)
+11. [Switching a recording off](#11-switching-a-recording-off)
 
 ## 1. Why some values need computing
 
@@ -39,10 +40,10 @@ once each, as they are needed, shown in the status bar like any computation.
 
 FlySight Viewer computes them in the background for what you have switched
 on: a checked plot for the tracks that are visible, and a logbook column for
-every recording in the logbook. There is nothing to press. Switching a plot or
-a column on is the request; switching it off drops what has not started yet.
-A result, once computed, is kept with the recording (section 6), so it is
-computed only once.
+every recording in the logbook that is switched on (section 11). There is
+nothing to press. Switching a plot or a column on is the request; switching
+it off drops what has not started yet. A result, once computed, is kept with
+the recording (section 6), so it is computed only once.
 
 ## 2. What the status bar shows
 
@@ -55,7 +56,7 @@ jump when work starts or ends.
 
 | You see | It means |
 | --- | --- |
-| "Computing results: k / n" and a bar | Computing. n recordings have been waiting to be computed since the status bar last had none, and k of them are done. Each recording counts once, however many plots and logbook columns want it |
+| "Computing results: k / n" and a bar | Computing. n recordings have been waiting to be computed since the status bar last had none, and k of them are done. Each recording counts once, however many plots and logbook columns want it; a recording that is switched off (section 11) is never counted |
 | "Saving sessions", "Loading sessions", "Updating sessions" or "Computing columns", with its count and bar | Other background work of the logbook (section 8) |
 | A warning triangle and, for example, "2 sessions could not be computed" | Some recordings could not be computed (section 7). It is shown beside "Computing results" while computing continues, and alone once it ends |
 | Nothing | Nothing is running and nothing has failed |
@@ -77,17 +78,20 @@ counted once.
 A track whose recording lacks the needed sensor data is never listed among
 the recordings that could not be computed. A plot never counts it; a logbook
 column counts it only until the recording has been loaded to find that out
-(section 4).
+(section 4). A recording that is switched off (section 11) is neither counted
+nor listed.
 
 ## 3. What starts a computation
 
-Anything that switches such a value on:
+Anything that switches such a value on, for a recording that is switched on
+(section 11):
 
 - checking the plot - by clicking its check box, pressing Space on the
   selected row, through the Plots menu, or by applying a profile;
 - showing a track while the plot is checked;
 - adding or enabling a logbook column over such a value (in the column editor,
-  or by applying a profile).
+  or by applying a profile);
+- switching a recording back on.
 
 Tracks whose result was kept from earlier (section 6) are drawn at once and
 are not computed again. As each other track finishes, its graph appears by
@@ -107,7 +111,8 @@ computation.
 ## 4. Logbook columns over computed values
 
 A logbook column over a computed value (roll at the exit marker, say) is
-filled for every recording in the logbook, whether or not it is shown.
+filled for every recording in the logbook that is switched on (section 11),
+whether or not it is shown.
 Recordings that are not loaded are loaded in the background, at most two at a
 time, as hidden recordings. The status bar shows the fill as "Computing
 results: k / n", with no cancel button, counted together with what the plots
@@ -126,7 +131,10 @@ until the fill has loaded it, such a recording shows "···" and is counted in
 "Computing results" in the status bar, and then turns blank and leaves the
 count.
 Only computed results are kept, so it is loaded again, once, at every start.
-Sorting by the column puts "···" and blank cells together at the bottom.
+A cell of a recording that is switched off reads a grey "excluded" instead
+(section 11), unless the recording has a kept value, which it shows.
+Sorting by the column puts "···", "excluded" and blank cells together at the
+bottom.
 
 Visible tracks go first: a track you show while a column fills is computed
 next, after the computation that is running. Removing or disabling the column
@@ -142,7 +150,8 @@ Unchecking a plot, hiding a track, or removing a column drops the
 computations that have not started, at once. The one that is running is left
 to finish and its result is kept: hiding a track for a moment does not throw
 away minutes of work. There is no refresh and no cancel; quitting stops the
-running computation.
+running computation, and so does switching its recording off (section 11),
+which is a decision about that recording rather than a momentary change.
 
 ## 6. When results go away
 
@@ -173,6 +182,8 @@ running computation.
   body, [SENSOR_FUSION.md](SENSOR_FUSION.md) section 2) never discards a kept
   sensor fusion result: heading, pitch and roll, and any column over them,
   are recomputed from it at once, and nothing is counted in the status bar.
+- **Switching a recording off or on** (section 11) never discards a kept
+  result or a logbook value.
 - Moving markers, zooming, panning and changing display settings never discard
   a result.
 
@@ -259,8 +270,9 @@ Hover over the status bar to see both.
   progress and the warning are shown, and the logbook rows where each
   recording's failures are shown.
 - The logbook cannot be sorted or filtered by the row warning.
-- There is no switch that pauses background work. To stop it, remove the
-  column or uncheck the plot.
+- There is a switch per recording (section 11) and none for all: nothing
+  pauses all background work at once. To stop it for every recording, remove
+  the column or uncheck the plot.
 - On Linux the background computation does not run at a lower
   operating-system priority. The application stays responsive all the same.
 
@@ -323,3 +335,47 @@ slope of the same straight line instead, the change in vertical speed over
 the interval divided by its length, and a crossing whose slope is under the
 exit's minimum vertical acceleration (2.5 m/s^2) is passed over, as any
 other would be.
+
+## 11. Switching a recording off
+
+Each recording has a switch for background computation, the logbook's
+"Compute" column (Add Column, under "Session"; it is not shown unless you add
+it). Its header's tooltip says what it does: compute results for this
+recording in the background. A recording reads "On" unless it has been
+switched off, and every recording reads "On" today: the column shows the
+default without writing anything to the recording's file.
+
+- **Switched off**, nothing is computed for the recording in the background:
+  no checked plot and no logbook column computes it, it is never counted in
+  the status bar, and a logbook column never loads it to fill a cell. If it
+  is being computed when you switch it off, that computation stops at its
+  next opportunity, keeps nothing, and the next recording is computed.
+- **What was computed earlier is kept and shown.** A kept result of a
+  recording that is switched off still draws its plots and fills its logbook
+  cells, and the values worked out from it are shown at once. A kept failure
+  of such a recording is not shown: the status bar does not list it and its
+  row has no warning triangle, since nothing is wanted of the recording. It
+  shows again when the recording is switched on.
+- **The cell.** A logbook cell over a computed value of a recording that is
+  switched off and has no value reads a grey "excluded", where it would
+  otherwise read "···" or be blank. Hovering over it says why: "Not computed:
+  background computation is switched off for this recording". A cell with a
+  value shows the value.
+- **Switching it on** computes what is missing, as for any other recording;
+  a computation that was stopped starts again from its beginning. A
+  recording that failed for a reason that is not about its data (section 7)
+  is not tried again before the next start, as any other.
+- **Changing it.** Edit the cell in place ("On" or "Off"), or select
+  recordings and choose "Set Compute..." from the logbook's context menu to
+  set them all; recordings that are not loaded are changed without loading
+  them. The choice is saved with the recording, like its Orientation.
+- **For new recordings.** Preferences > Import > Background computation has
+  "Compute newly imported recordings in the background", checked by default.
+  Uncheck it for positive control: each recording imported while it is
+  unchecked is saved switched off, and computes nothing until you switch it
+  on. Changing the preference changes no recording already imported.
+
+Switching a recording off is not a way to discard its results: nothing is
+discarded (section 6). Values that need no computing, such as an instant plot
+or a column over a kept result, are shown for a recording that is switched
+off as for any other.

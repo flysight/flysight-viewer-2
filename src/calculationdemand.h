@@ -68,7 +68,8 @@ struct SessionRow;
 /// (any NotApplicable, else any NotProduced, else any Blocked, else
 /// Available); a plot's single name combines to itself. For a session that is
 /// not loaded (and a failed-load placeholder, whose engine holds no stored
-/// result), a track of columns only, in this order:
+/// result), a track of columns only, in this order, after the exclusion
+/// (TRACK CONDITIONS), which is decided first:
 ///  1. no storable calculation - not applicable (a column over explicit
 ///     family instances alone);
 ///  2. a storable calculation remembered failed (see MEMORY: a job-level
@@ -90,10 +91,21 @@ struct SessionRow;
 /// A known record counts until the column worker's restore finds it stale and
 /// deletes it; that record change moves the cell into demand.
 ///
-/// TRACK CONDITIONS. Each track of a loaded session is classified from its
-/// combined BlockerReport, the executor's running job and the memory:
+/// TRACK CONDITIONS. Every track of a session whose Compute attribute reads
+/// the off token is EXCLUDED, decided before any
+/// other condition, for a loaded session and one that is not loaded alike,
+/// for plot and column tracks alike: the recording is switched off for
+/// background computation. The one reader of the attribute is the
+/// reconciler's isSwitchedOff(): a loaded session's stored line (the engine
+/// is not asked), else the logbook index's cache of the file
+/// (LogbookManager::isComputeOff()), so that no session is loaded to learn
+/// it is off. Any token but the off one is on. It is read at every pass and
+/// memoized nowhere; it is not a memory. Each other track of a loaded
+/// session is classified from its combined BlockerReport, the executor's
+/// running job and the memory:
 ///
 ///   BlockerReport               executor / memory                         condition
+///   (any)                       the session reads off                      Excluded
 ///   Available                   no storable calculation remembered failed  Done
 ///   Available                   a storable calculation remembered failed   Failed (a result that could not be stored)
 ///   NotApplicable                                                          NotApplicable
@@ -114,7 +126,13 @@ struct SessionRow;
 /// session in progress() and make a column's cell pending; Running also names
 /// the recording being computed; Failed gives the entries of failures(); Done
 /// and NotApplicable give none. A cell is PENDING while it is Waiting or
-/// Running.
+/// Running. An Excluded track gives nothing but its column cell, which is
+/// EXCLUDED: it is never a candidate, never counted, never a failure (a
+/// stored rejection of the session is not listed, and is listed again once
+/// the session is switched on) and never pending, and it contributes no
+/// pending session and no load candidate, so the fill neither loads nor
+/// holds the session. The running job of an excluded session is described
+/// by nothing.
 ///
 /// WHAT A PASS COSTS. CalculationEngine::blockers() is called only for the
 /// tracks of the sources - a plot's tracks are visible loaded sessions, names
@@ -160,8 +178,14 @@ struct SessionRow;
 /// classified in the walk, before the offers), and the next is tried. Blocked
 /// is not expected: the candidates list upstream first. With no candidate
 /// accepted, the chosen next job is withdrawn: this component is the only
-/// offerer, so it is always its own. The running job is never stopped here: it
-/// finishes, and its result is published and stored.
+/// offerer, so it is always its own. The running job is never stopped here,
+/// except when its recording is switched off: otherwise it finishes, and its
+/// result is published and stored. When the pass finds the running job not
+/// asked to stop and its session excluded, after the walk and whether or not
+/// the walk ran, it asks the executor to cancel it, with a reason that says
+/// the recording was switched off; the job publishes and stores nothing, the
+/// executor's jobCancelRequested schedules the next pass, and its
+/// jobFinished starts the next candidate. The pair memory is not touched.
 ///
 /// HIDDEN LOADS. The column fill (demandfill.h) loads sessions that are not
 /// loaded for column demand. The pass gives it the sessions with a pending
@@ -230,8 +254,14 @@ struct SessionRow;
 /// record written or removed, or a changed reason the index learned); the
 /// executor's jobStarted and jobCancelRequested; a registry change; the end of
 /// a settle wait; the column fill's load; an offer the executor refused as not
-/// applicable. At once: when a plot is unchecked or a session hidden while a
-/// chosen next job exists (so that it is dropped before it can start), in
+/// applicable; a change of a session's Compute attribute (dependencyChanged
+/// under its name, from an edit or a bulk edit: a change of demand, not an
+/// input change, so it forgets nothing and starts no settle wait). At once:
+/// when a plot is unchecked or a session hidden while a chosen next job
+/// exists (so that it is dropped before it can start), when the Compute
+/// attribute changes while a chosen next job or a running job exists (so
+/// that the session's chosen next job is withdrawn before it can start and
+/// its running job is asked to stop), in
 /// jobFinished, which the executor emits before it schedules the next start -
 /// so a chain of requested calculations continues without an idle period
 /// between its links - and before the fill's load when a pass is pending.
@@ -240,8 +270,8 @@ struct SessionRow;
 /// PRESENTATION. The views read three values, each a direct projection of
 /// what the one walk classifies and the pair memory holds, with an
 /// announcement of its own: the status bar reads progress() and failures(),
-/// and the logbook's cells and rows read isCellPending() and
-/// sessionFailures(). Nothing else is presented: no state per plot or per
+/// and the logbook's cells and rows read isCellPending(), isCellExcluded()
+/// and sessionFailures(). Nothing else is presented: no state per plot or per
 /// column is kept.
 ///  - progress() (DemandProgress): the sessions with a Waiting or Running
 ///    track in any source, plot and column tracks alike, each session once;
@@ -259,20 +289,24 @@ struct SessionRow;
 ///    leaves the list, and returns with it, the memory unchanged.
 ///    sessionFailures() answers for one session from an index, without a
 ///    scan. failuresChanged() when the list differs, order included.
-///  - the pending cells (isCellPending()): pendingCellsChanged(columnId) for
-///    each requested column whose set differs after a pass, and for each
-///    column no longer requested that had pending cells.
+///  - the pending cells (isCellPending()) and the excluded cells
+///    (isCellExcluded(): the column cells of the sessions switched off):
+///    pendingCellsChanged(columnId) for each requested column whose pending
+///    or excluded set differs after a pass, and for each column no longer
+///    requested that had pending or excluded cells.
 /// Every value is stored before anything is announced: a slot of any signal
 /// reads every query. When the component is inert, progress is the default
 /// value and there are no failures. The views never run a pass (flush() is
-/// a test seam), never offer, and never write. "Pending" exists only here and
-/// in the view that paints it: never in SessionModel, the cached column values
-/// or the logbook index. The values and the one text form of a recording's
+/// a test seam), never offer, and never write. Pending and excluded exist
+/// only here and in the view that paints them: never in SessionModel, the
+/// cached column values or the logbook index. The values and the one text
+/// form of a recording's
 /// failures and of the capped list (SessionFailures::text(),
 /// SessionFailures::listText()) are in demandstate.h.
 ///
-/// THE ONLY CALLER. This is the only product caller of JobQueue::offer() and
-/// JobQueue::withdrawChosenNext(). Nothing calls back into it: it observes
+/// THE ONLY CALLER. This is the only product caller of JobQueue::offer(),
+/// JobQueue::withdrawChosenNext() and JobQueue::cancel() (for a recording
+/// switched off). Nothing calls back into it: it observes
 /// PlotModel, SessionModel (its column set, column knowledge and display names
 /// included), the logbook manager's record changes, the registry and the
 /// executor's signals.
@@ -323,6 +357,13 @@ public:
     bool isCellPending(const QString &sessionId, const QString &columnId) const;
     /// The same by SessionModel row and column index; false out of range.
     bool isCellPending(int row, int column) const;
+    /// True when the cell's session is switched off for background
+    /// computation (its track is Excluded), as the last pass found it. Never
+    /// true for a column that is not requested, and never together with
+    /// isCellPending().
+    bool isCellExcluded(const QString &sessionId, const QString &columnId) const;
+    /// The same by SessionModel row and column index; false out of range.
+    bool isCellExcluded(int row, int column) const;
 
     /// The computations' progress as the last pass (or the running job's
     /// latest progress text) left it; the default value when inert.
@@ -383,9 +424,10 @@ signals:
     /// failures() differs from what it was (order included), after a pass.
     /// Every value is stored before it is emitted.
     void failuresChanged();
-    /// The set of pending cells of the column differs after a pass: a
-    /// requested column whose set changed, or a column no longer requested
-    /// that had pending cells. Every value is stored before it is emitted.
+    /// The set of pending cells or the set of excluded cells of the column
+    /// differs after a pass: a requested column whose sets changed, or a
+    /// column no longer requested that had pending or excluded cells. Every
+    /// value is stored before it is emitted.
     void pendingCellsChanged(const QString &columnId);
 
 private:
@@ -400,7 +442,8 @@ private:
         Waiting,        ///< in demand, not running (inside the input-settle wait, chosen next, or behind other work)
         Running,        ///< the executor's running job, not asked to stop, is one of its calculations
         Failed,         ///< an input-determined failure (NotProduced), or a failure remembered this run: a job that failed, a session that could not be loaded, a result that could not be stored
-        NotApplicable   ///< unavailable for ordinary reasons, or refused as not applicable: silently absent
+        NotApplicable,  ///< unavailable for ordinary reasons, or refused as not applicable: silently absent
+        Excluded        ///< the session is switched off for background computation: decided first, feeds nothing but its excluded cell
     };
     /// Waiting or Running: the session is counted in progress, and a column's
     /// cell is pending.
@@ -483,6 +526,7 @@ private:
         enum Tier { FocusedPlots, OtherPlots, VisibleColumns, HiddenColumns, TierCount };
         std::array<QList<Candidate>, TierCount> tiers;  ///< each in row order; deduplicated by the pass
         QVector<QSet<QString>> pendingCells;            ///< parallel to m_sources; empty for plots
+        QVector<QSet<QString>> excludedCells;           ///< parallel to m_sources; empty for plots
         QSet<QString> pendingSessions;                  ///< sessions with a pending column cell
         QStringList loadCandidates;                     ///< at most DemandFill::kMaxHeldSessions, row order
         QList<LearnedFact> learned;                     ///< applied by the pass after the walk
@@ -522,6 +566,11 @@ private:
     /// pair to `failures`.
     TrackCondition classifyUnloaded(const SessionRow &sr, const Source &source, QList<LearnedFact> *learned,
                                     QList<FailedCalculation> *failures);
+    /// The one reader of the Compute attribute (see TRACK CONDITIONS): true
+    /// when the row's session is switched off. A loaded session's stored
+    /// line; for a row that is not loaded or a failed-load placeholder, the
+    /// index's cache of the file. Never memoized.
+    static bool isSwitchedOff(const SessionRow &sr);
     /// A Failed track from remembered failures: `calculationIds`, `titles` and
     /// `facts` are parallel. Appends one entry per fact to `failures`, with
     /// the remembered why as its reason, each tried again at the next start
@@ -576,7 +625,8 @@ private:
     /// Stores the pass's values, then announces the differences.
     /// `columnOrder` lists the requested columns in column order.
     void applyValues(const QStringList &columnOrder, const QHash<QString, QSet<QString>> &pendingCells,
-                     const DemandProgress &progress, JobId progressJob, const QList<SessionFailures> &failures);
+                     const QHash<QString, QSet<QString>> &excludedCells, const DemandProgress &progress,
+                     JobId progressJob, const QList<SessionFailures> &failures);
 
     // Slots
     void onPlotDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles);
@@ -618,6 +668,8 @@ private:
 
     QHash<QString, QSet<QString>> m_pendingCells;           // requested column id -> sessions whose cell is pending
     bool m_hasPendingCells = false;                         // some set of m_pendingCells is not empty
+    QHash<QString, QSet<QString>> m_excludedCells;          // requested column id -> sessions whose cell is excluded
+    bool m_hasExcludedCells = false;                        // some set of m_excludedCells is not empty
     DemandProgress m_progress;
     JobId m_progressJob = 0;                                // the running job m_progress describes; 0 when none
     QList<SessionFailures> m_failures;                      // row order

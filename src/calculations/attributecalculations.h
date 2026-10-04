@@ -11,7 +11,8 @@ namespace Calculations {
 
 /// Register the session-wide attribute calculations with the calculation
 /// engine (ids builtin.attr.*, and the constant defaults
-/// builtin.default._WIND_N and builtin.default._WIND_E).
+/// builtin.default._WIND_N and builtin.default._WIND_E, and that of the
+/// Compute attribute).
 void registerAttributeCalculations(CalculationRegistry &registry);
 
 /// Registers the constant default of an attribute: the calculation

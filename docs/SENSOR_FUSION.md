@@ -103,6 +103,15 @@ document describes what is computed, from what, and how far to trust it.
   or a posture, that points the forward axis straight up or down makes heading
   and roll meaningless there. Changing the orientation recomputes heading,
   pitch and roll at once, without a new fit.
+- The fit is computed in the background for every recording that a checked
+  plot or an enabled column wants, unless the recording is switched off: its
+  **Compute** attribute, the logbook's Compute column ("On" or "Off"; Add
+  Column, "Session"), set per recording by editing its cell or for the
+  selected recordings from the logbook's context menu, and for new recordings
+  by Preferences > Import. A recording switched off is never fitted in the
+  background, a fit running for it stops, and a fit kept from earlier still
+  draws its plots ([COMPUTED_PLOTS.md](COMPUTED_PLOTS.md), section 11). Use it
+  for a recording whose fit is known not to converge, or to take too long.
 - A recording needs matching `TRACK.CSV` and `SENSOR.CSV` data (GNSS and IMU
   with a shared time base) and at least one GNSS fix with a horizontal accuracy
   under 10 m. A recording without them is simply absent from these plots, like

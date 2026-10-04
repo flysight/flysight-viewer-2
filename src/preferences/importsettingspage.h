@@ -29,11 +29,13 @@ private:
     QDoubleSpinBox *descentPauseSpinBox;
     QCheckBox *hideOthersCheckBox;
     QComboBox *orientationComboBox;
+    QCheckBox *computeCheckBox;
 
     QGroupBox* createGroundReferenceGroup();
     QGroupBox* createDescentPauseGroup();
     QGroupBox* createTrackVisibilityGroup();
     QGroupBox* createOrientationGroup();
+    QGroupBox* createComputeGroup();
 };
 
 } // namespace FlySight

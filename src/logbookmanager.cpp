@@ -254,6 +254,11 @@ void LogbookManager::initialize()
                             reasonsOnDisk[sessionId].insert(rit.key(), reason);
                     }
 
+                    // Whether the session file switches the recording off;
+                    // an entry without it (an older build, or on) reads on
+                    if (entry[QStringLiteral("computeOff")].toBool())
+                        m_computeOff.insert(sessionId);
+
                     // lastAccessed
                     if (entry.contains(QStringLiteral("lastAccessed"))) {
                         m_lastAccessed[sessionId] = entry[QStringLiteral("lastAccessed")].toDouble();
@@ -361,6 +366,7 @@ void LogbookManager::reset()
     m_lastSaveError.clear();
     m_knownRecords.clear();
     m_recordReasons.clear();
+    m_computeOff.clear();
     m_unconfirmedRecords.clear();
     m_recordBackedOnDisk.clear();
 }
@@ -646,6 +652,8 @@ std::optional<SessionData> LogbookManager::loadSessionRaw(const QString &session
         return std::nullopt;
     }
 
+    // The file was read: what it says of the Compute switch is what the index caches
+    learnComputeOff(sessionId, sessionData);
     return sessionData;
 }
 
@@ -785,6 +793,8 @@ bool LogbookManager::saveSession(const SessionData& session)
     m_unsavedColumns.remove(sessionId);
     m_unsavedAll.remove(sessionId);
     m_indexNeedsFlush = true;
+    // The file was written: what it says of the Compute switch is what the index caches
+    learnComputeOff(sessionId, session);
 
     // Set lastAccessed for newly imported sessions
     if (!m_lastAccessed.contains(sessionId)) {
@@ -863,6 +873,8 @@ bool LogbookManager::remapSessionId(const QString &oldId, const QString &newId)
     }
     if (m_recordReasons.contains(oldId))
         m_recordReasons[newId] = m_recordReasons.take(oldId);
+    if (m_computeOff.remove(oldId))
+        m_computeOff.insert(newId);
     m_indexNeedsFlush = true;
 
     return true;
@@ -894,6 +906,7 @@ bool LogbookManager::removeSession(const QString& sessionId)
         m_needsFlushBeforeSave.remove(sessionId);
         m_knownRecords.remove(sessionId);
         m_recordReasons.remove(sessionId);
+        m_computeOff.remove(sessionId);
         m_unconfirmedRecords.remove(sessionId);
         m_recordBackedOnDisk.remove(sessionId);
         return true;
@@ -926,6 +939,7 @@ bool LogbookManager::removeSession(const QString& sessionId)
     m_needsFlushBeforeSave.remove(sessionId);
     m_knownRecords.remove(sessionId);
     m_recordReasons.remove(sessionId);
+    m_computeOff.remove(sessionId);
     m_unconfirmedRecords.remove(sessionId);
     m_recordBackedOnDisk.remove(sessionId);
     m_indexNeedsFlush = true;
@@ -1294,6 +1308,32 @@ QString LogbookManager::calculationRecordReason(const QString &sessionId, const 
     return session->value(calculationId);
 }
 
+// ============================================================================
+// The Compute switch of a session file
+// ============================================================================
+
+bool LogbookManager::isComputeOff(const QString &sessionId) const
+{
+    return m_computeOff.contains(sessionId);
+}
+
+// A cache of the file, not a fact of its own: the stored line alone (never
+// the engine: a save and a load create none), and any token but the off one
+// is on. Nothing listens for it: a session that is loaded answers for itself,
+// and the demand layer reads the index at its next pass.
+void LogbookManager::learnComputeOff(const QString &sessionId, const SessionData &session)
+{
+    const bool off = session.storedAttribute(QString::fromLatin1(SessionKeys::Compute)).toString()
+        == QLatin1String(SessionKeys::ComputeOff);
+    if (off == m_computeOff.contains(sessionId))
+        return;
+    if (off)
+        m_computeOff.insert(sessionId);
+    else
+        m_computeOff.remove(sessionId);
+    m_indexNeedsFlush = true;
+}
+
 // A changed reason is a record change: a listener drops what it knew of the
 // session's records and reports. The values over the record are then computed
 // again once, with identical values; only the first restore that learns the
@@ -1571,6 +1611,11 @@ bool LogbookManager::flushIndex()
                 reasonsObj[rit.key()] = rit.value();
             entry[QStringLiteral("recordReasons")] = reasonsObj;
         }
+
+        // The session file switches the recording off; omitted when it does
+        // not, so that an on entry looks like one of an earlier build
+        if (m_computeOff.contains(sessionId))
+            entry[QStringLiteral("computeOff")] = true;
 
         if (!backed.isEmpty())
             backedOnDisk.insert(sessionId, backed);

@@ -265,6 +265,8 @@ public:
     /// invalid QVariant included, is refused (false) before a stub is loaded.
     bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
 
+    /// Qt::ToolTipRole of an attribute column is its definition's tooltip,
+    /// an invalid QVariant when that is empty.
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
 
     Qt::ItemFlags flags(const QModelIndex &index) const override;

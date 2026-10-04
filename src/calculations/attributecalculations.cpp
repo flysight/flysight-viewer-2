@@ -317,6 +317,12 @@ void Calculations::registerAttributeCalculations(CalculationRegistry &registry)
     addConstantDefault(registry, QString::fromLatin1(SessionKeys::WindN), 0.0);
     addConstantDefault(registry, QString::fromLatin1(SessionKeys::WindE), 0.0);
 
+    // A recording takes part in background computation unless it is switched
+    // off: the column shows the On label for every recording never set, without a
+    // write. The demand layer reads the stored line, not this default.
+    addConstantDefault(registry, QString::fromLatin1(SessionKeys::Compute),
+                       QString::fromLatin1(SessionKeys::ComputeOn));
+
     // Manoeuvre start time: walk backward from the last 10 m/s crossing
     // to the local minimum in vertical speed
     {

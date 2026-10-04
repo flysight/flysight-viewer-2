@@ -107,6 +107,8 @@ private slots:
     void creationDefaultsDeviceId();
     void fixedGroundElevationOnlyInFixedMode();
     void orientationFromThePreference();
+    void computeFromThePreference_data();
+    void computeFromThePreference();
     void peekHeaderAttributeReadsNoData();
 };
 
@@ -1080,6 +1082,49 @@ void ImporterTest::orientationFromThePreference()
         SessionData session;
         QVERIFY(importer.importFile(path, session));
         QVERIFY(!session.hasStoredAttribute("_ORIENTATION"));
+    }
+}
+
+void ImporterTest::computeFromThePreference_data()
+{
+    QTest::addColumn<QString>("preference");
+    QTest::addColumn<bool>("writesOff");
+    QTest::newRow("off") << QStringLiteral("off") << true;
+    QTest::newRow("on") << QStringLiteral("on") << false;
+    QTest::newRow("empty") << QString() << false;
+    QTest::newRow("not a token") << QStringLiteral("Off") << false;
+    QTest::newRow("a boolean's text") << QStringLiteral("false") << false;
+}
+
+// Whether a recording takes part in background computation is a fact of the
+// import, in the orientation's shape: while the Import preference reads
+// exactly the off token a new recording is stored switched off; a file that
+// carries its own line keeps it; any other value writes nothing, and the
+// recording reads the constant default (on).
+void ImporterTest::computeFromThePreference()
+{
+    QFETCH(QString, preference);
+    QFETCH(bool, writesOff);
+    PreferencesManager &prefs = PreferencesManager::instance();
+    QCOMPARE(prefs.getValue(PreferenceKeys::ImportCompute).toString(), QStringLiteral("on"));
+    const QString path = writeTemp(Fixtures::trackFile().toBytes());
+
+    prefs.setValue(PreferenceKeys::ImportCompute, preference);
+    {
+        DataImporter importer;
+        SessionData session;
+        QVERIFY(importer.importFile(path, session));
+        if (writesOff)
+            QCOMPARE(session.storedAttribute("_COMPUTE").toString(), QStringLiteral("off"));
+        else
+            QVERIFY(!session.hasStoredAttribute("_COMPUTE"));
+    }
+    {
+        const QString own = writeTemp(Fixtures::trackFile().var("_COMPUTE", "on").toBytes());
+        DataImporter importer;
+        SessionData session;
+        QVERIFY(importer.importFile(own, session));
+        QCOMPARE(session.storedAttribute("_COMPUTE").toString(), QStringLiteral("on"));
     }
 }
 

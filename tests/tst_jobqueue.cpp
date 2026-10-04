@@ -47,6 +47,8 @@ namespace {
 
 const char kRemoved[] = "Session removed or unloaded";
 const char kReplaced[] = "Session data replaced";
+// The reason a test gives JobQueue::cancel(): the end carries it verbatim
+const QString kCancelReason = QStringLiteral("Cancelled by the test");
 
 // Written by the probe's compute function on the worker, read after the job ended
 std::atomic<quintptr> g_probeThread{0};
@@ -636,7 +638,7 @@ void JobQueueTest::holdsAtMostRunningAndChosenNext()
     QVERIFY(m_queue->withdrawChosenNext());
     QCOMPARE(stateOf(withdrawn), JobState::Cancelled);
     const JobId cancelled = m_queue->offer("s2", QStringLiteral("expA")).job;
-    QVERIFY(m_queue->cancel(cancelled));
+    QVERIFY(m_queue->cancel(cancelled, kCancelReason));
     QCOMPARE(stateOf(cancelled), JobState::Cancelled);
 
     // An input change stops the running job; the chosen next job runs after it
@@ -912,7 +914,7 @@ void JobQueueTest::neverLoadsASession()
     QCOMPARE(m_queue->offer("s3", QStringLiteral("expA")).kind, Kind::SessionNotLoaded);
     QCOMPARE(m_queue->activeJob("s3", "expA"), JobId(0));
     QVERIFY(m_queue->withdrawChosenNext());
-    QVERIFY(m_queue->cancel(held.job));
+    QVERIFY(m_queue->cancel(held.job, kCancelReason));
     QVERIFY(waitIdle(*m_queue));
     QCOMPARE(m_queue->offer("s3", QStringLiteral("expA")).kind, Kind::SessionNotLoaded);
     m_queue->shutdown();
@@ -1249,13 +1251,13 @@ void JobQueueTest::userCancelThenStaleEndsCancelled()
     const JobId id = m_queue->offer("s1", QStringLiteral("gated")).job;
     QVERIFY(gate().waitEntered());
 
-    QVERIFY(m_queue->cancel(id));
+    QVERIFY(m_queue->cancel(id, kCancelReason));
     QVERIFY(setInput("s1", "G_IN", 7));
     QCOMPARE(cancelSpy.count(), 1);
 
     QVERIFY(waitIdle(*m_queue));
     QCOMPARE(stateOf(id), JobState::Cancelled);
-    QCOMPARE(m_queue->job(id).reason, QStringLiteral("Cancelled"));
+    QCOMPARE(m_queue->job(id).reason, kCancelReason);
     QVERIFY(!session("s1").getAttribute("G_OUT").isValid());
 }
 
@@ -1267,8 +1269,8 @@ void JobQueueTest::staleThenUserCancelEndsSuperseded()
     QVERIFY(gate().waitEntered());
 
     QVERIFY(setInput("s1", "G_IN", 7));
-    QVERIFY(m_queue->cancel(id));           // accepted: the job is still active
-    QVERIFY(m_queue->cancel(id));           // and again, but it had been asked to stop before
+    QVERIFY(m_queue->cancel(id, kCancelReason));           // accepted: the job is still active
+    QVERIFY(m_queue->cancel(id, kCancelReason));           // and again, but it had been asked to stop before
     QCOMPARE(cancelSpy.count(), 1);
 
     QVERIFY(waitIdle(*m_queue));
@@ -1382,7 +1384,7 @@ void JobQueueTest::cancelRunningThenNextStarts()
     const JobId second = m_queue->offer("s2", QStringLiteral("gated")).job;
 
     // Asked to stop, not stopped yet; the next job has not started
-    QVERIFY(m_queue->cancel(first));
+    QVERIFY(m_queue->cancel(first, kCancelReason));
     QCOMPARE(stateOf(first), JobState::Running);
     QVERIFY(m_queue->job(first).cancelRequested);
     QCOMPARE(cancelSpy.count(), 1);
@@ -1391,13 +1393,13 @@ void JobQueueTest::cancelRunningThenNextStarts()
 
     // It stops at its next cancellation check: the gate was never opened
     QTRY_COMPARE(stateOf(first), JobState::Cancelled);
-    QCOMPARE(m_queue->job(first).reason, QStringLiteral("Cancelled"));
+    QCOMPARE(m_queue->job(first).reason, kCancelReason);
     QVERIFY(!m_queue->job(first).cancelRequested);
     QVERIFY(!m_queue->job(first).resultStatus.has_value());
     QCOMPARE(publishedTrace(dependencySpy, "s1", "gated", "G_OUT"), QString());
     QCOMPARE(engine("s1").readiness("gated").state, CalculationReadiness::State::Ready);
-    QVERIFY(!m_queue->cancel(first));           // already finished
-    QVERIFY(!m_queue->cancel(JobId(999)));      // unknown
+    QVERIFY(!m_queue->cancel(first, kCancelReason));           // already finished
+    QVERIFY(!m_queue->cancel(JobId(999), kCancelReason));      // unknown
 
     // Then the chosen next job starts, and succeeds
     QVERIFY(gate().waitEntered());
@@ -1421,11 +1423,11 @@ void JobQueueTest::cancelIgnoredForOneStepStillCancelled()
 
     const JobId id = m_queue->offer("s1", QStringLiteral("stubborn")).job;
     QVERIFY(gate().waitEntered());
-    QVERIFY(m_queue->cancel(id));
+    QVERIFY(m_queue->cancel(id, kCancelReason));
     QVERIFY(waitIdle(*m_queue));
 
     QCOMPARE(stateOf(id), JobState::Cancelled);
-    QCOMPARE(m_queue->job(id).reason, QStringLiteral("Cancelled"));
+    QCOMPARE(m_queue->job(id).reason, kCancelReason);
     QCOMPARE(publishedTrace(dependencySpy, "s1", "stubborn", "S_OUT"), QString());
     QCOMPARE(engine("s1").runCount("stubborn"), 0);
     QCOMPARE(engine("s1").readiness("stubborn").state, CalculationReadiness::State::Ready);
@@ -1437,7 +1439,7 @@ void JobQueueTest::offerWhileCancellingCreatesNewJob()
     QVERIFY(setInput("s1", "G_IN", 4));
     const JobId first = m_queue->offer("s1", QStringLiteral("gated")).job;
     QVERIFY(gate().waitEntered());
-    QVERIFY(m_queue->cancel(first));
+    QVERIFY(m_queue->cancel(first, kCancelReason));
     QCOMPARE(stateOf(first), JobState::Running);        // still winding down
     QCOMPARE(m_queue->activeJob("s1", "gated"), JobId(0));
 
@@ -1471,16 +1473,16 @@ void JobQueueTest::cancelQueued()
     const JobId queued = m_queue->offer("s2", QStringLiteral("expA")).job;
 
     // At once, and the record stays as a finished entry
-    QVERIFY(m_queue->cancel(queued));
+    QVERIFY(m_queue->cancel(queued, kCancelReason));
     QCOMPARE(stateOf(queued), JobState::Cancelled);
-    QCOMPARE(m_queue->job(queued).reason, QStringLiteral("Cancelled"));
+    QCOMPARE(m_queue->job(queued).reason, kCancelReason);
     QVERIFY(!m_queue->job(queued).startedAt.isValid());
     QVERIFY(m_queue->job(queued).finishedAt.isValid());
     QCOMPARE(m_queue->model()->rowCount(), 2);
     QCOMPARE(finishedSpy.count(), 1);
     QVERIFY(!m_model->isSessionPinned("s2"));
     QVERIFY(m_model->isSessionPinned("s1"));
-    QVERIFY(!m_queue->cancel(queued));
+    QVERIFY(!m_queue->cancel(queued, kCancelReason));
 
     gate().open(1);
     QVERIFY(waitIdle(*m_queue));
@@ -1507,7 +1509,7 @@ void JobQueueTest::cancelFromRowsInsertedLeavesNoPin()
     const QMetaObject::Connection connection = connect(
         jobs, &QAbstractItemModel::rowsInserted, &scope, [&](const QModelIndex &, int first, int) {
             pinnedWhenAnnounced = m_model->isSessionPinned("s1");
-            cancelled = m_queue->cancel(jobs->record(first).id);
+            cancelled = m_queue->cancel(jobs->record(first).id, kCancelReason);
         });
 
     const JobQueue::OfferResult result = m_queue->offer("s1", QStringLiteral("expA"));

@@ -52,6 +52,16 @@ QString LogbookCellDelegate::pendingToolTip()
     return tr("Pending: this value is being computed");
 }
 
+QString LogbookCellDelegate::excludedText()
+{
+    return tr("excluded");
+}
+
+QString LogbookCellDelegate::excludedToolTip()
+{
+    return tr("Not computed: background computation is switched off for this recording");
+}
+
 // A value always wins: a loaded row reads a just-written record live before
 // the demand layer's next pass drops the cell from pending. The value is
 // checked first: most cells have one, and then the demand layer is not asked.
@@ -60,6 +70,24 @@ bool LogbookCellDelegate::showsPending(const QModelIndex &index) const
     return m_demand && m_model && index.isValid() && index.model() == m_model.data()
         && index.data(Qt::DisplayRole).toString().isEmpty()
         && m_demand->isCellPending(index.row(), index.column());
+}
+
+// As for pending, a value always wins and is checked first
+bool LogbookCellDelegate::showsExcluded(const QModelIndex &index) const
+{
+    return m_demand && m_model && index.isValid() && index.model() == m_model.data()
+        && index.data(Qt::DisplayRole).toString().isEmpty()
+        && m_demand->isCellExcluded(index.row(), index.column());
+}
+
+// The demand layer never files a cell as both, so the order only saves a question
+LogbookCellDelegate::Placeholder LogbookCellDelegate::placeholder(const QModelIndex &index) const
+{
+    if (showsPending(index))
+        return Placeholder::Pending;
+    if (showsExcluded(index))
+        return Placeholder::Excluded;
+    return Placeholder::None;
 }
 
 // The column is checked first: only one cell of a row can carry the glyph,
@@ -86,15 +114,15 @@ int LogbookCellDelegate::firstVisualColumn() const
     return -1;
 }
 
-// The option the cell is painted with: the base class's, and for a pending
-// cell the pending mark in the muted colour
+// The option the cell is painted with: the base class's, and for a pending or
+// an excluded cell its placeholder text in the muted colour
 QStyleOptionViewItem LogbookCellDelegate::cellOption(const QStyleOptionViewItem &option,
-                                                     const QModelIndex &index, bool pending) const
+                                                     const QModelIndex &index, Placeholder placeholder) const
 {
     QStyleOptionViewItem opt = option;
     initStyleOption(&opt, index);
-    if (pending) {
-        opt.text = pendingText();
+    if (placeholder != Placeholder::None) {
+        opt.text = placeholder == Placeholder::Pending ? pendingText() : excludedText();
         opt.features |= QStyleOptionViewItem::HasDisplay;
 
         // Muted in every colour group: the placeholder colour, and the
@@ -150,7 +178,7 @@ LogbookCellDelegate::WarningLayout LogbookCellDelegate::layoutWarning(const QSty
 
 QRect LogbookCellDelegate::glyphRect(const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
-    return layoutWarning(cellOption(option, index, showsPending(index))).glyph & option.rect;
+    return layoutWarning(cellOption(option, index, placeholder(index))).glyph & option.rect;
 }
 
 // The option QAbstractItemView::initViewItemOption() gives the cell, as far
@@ -180,15 +208,15 @@ QRect LogbookCellDelegate::warningRect(const QModelIndex &index) const
 
 void LogbookCellDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
-    const bool pending = showsPending(index);
+    const Placeholder mark = placeholder(index);
     const bool warning = showsWarning(index);
-    if (!pending && !warning) {
+    if (mark == Placeholder::None && !warning) {
         // Exactly today's cell
         QStyledItemDelegate::paint(painter, option, index);
         return;
     }
 
-    const QStyleOptionViewItem opt = cellOption(option, index, pending);
+    const QStyleOptionViewItem opt = cellOption(option, index, mark);
     const QWidget *widget = opt.widget;
     QStyle *style = widget ? widget->style() : QApplication::style();
     if (!warning) {
@@ -224,8 +252,8 @@ void LogbookCellDelegate::paint(QPainter *painter, const QStyleOptionViewItem &o
     painter->restore();
 }
 
-// The glyph's rect shows the failures, so that the rest of a pending first
-// cell keeps the pending tooltip
+// The glyph's rect shows the failures, so that the rest of a pending or an
+// excluded first cell keeps its own tooltip
 bool LogbookCellDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view, const QStyleOptionViewItem &option,
                                     const QModelIndex &index)
 {
@@ -240,6 +268,10 @@ bool LogbookCellDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view, 
         }
         if (showsPending(index)) {
             QToolTip::showText(event->globalPos(), pendingToolTip(), view->viewport(), option.rect);
+            return true;
+        }
+        if (showsExcluded(index)) {
+            QToolTip::showText(event->globalPos(), excludedToolTip(), view->viewport(), option.rect);
             return true;
         }
     }

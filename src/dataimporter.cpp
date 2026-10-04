@@ -253,6 +253,16 @@ void DataImporter::applyCreationDefaults(const ParsedFile& file, SessionData& se
         if (!orientation.isEmpty())
             session.setAttribute(SessionKeys::Orientation, orientation);
     }
+
+    // 8. Whether the recording takes part in background computation, from
+    //    the Import preferences: a recording imported while the preference
+    //    reads exactly the off token is stored switched off, a fact of the
+    //    import the user can change afterwards. Any other value, on, empty
+    //    or invalid, writes nothing, and the recording reads the default.
+    if (!session.hasStoredAttribute(SessionKeys::Compute)
+        && prefs.getValue(PreferenceKeys::ImportCompute).toString() == QLatin1String(SessionKeys::ComputeOff)) {
+        session.setAttribute(SessionKeys::Compute, QString::fromLatin1(SessionKeys::ComputeOff));
+    }
 }
 
 std::optional<QString> DataImporter::peekHeaderAttribute(const QString& fileName, const QString& key) {

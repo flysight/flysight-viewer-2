@@ -176,11 +176,15 @@ public:
     /// The chosen next job ends Cancelled at once. The running job is asked to
     /// stop and ends Cancelled when its compute function returns - even if that
     /// returned a complete result: once cancellation was requested nothing is
-    /// published. The next job does not start before then. False: unknown or
-    /// already finished. No product code calls it today: it is kept for the
-    /// jobs dock, a later view of the job history (the audit rule 'no product
-    /// code cancels a job' says the same).
-    bool cancel(JobId id);
+    /// published. The next job does not start before then. Either end carries
+    /// `reason`, which the caller gives and which is never empty (a pending
+    /// end decided before keeps its own: the first writer wins). False:
+    /// unknown or already finished. The demand layer is the one product
+    /// caller, for a recording switched off, with a reason that says so; the
+    /// jobs dock, a later view of the job history, may call it too (the audit
+    /// rule 'the demand layer is the one product caller of cancel' says the
+    /// same).
+    bool cancel(JobId id, const QString &reason);
     /// Cancels everything ("Application closing") and waits - without a
     /// timeout - until the worker has returned; afterwards no worker and no
     /// ticket exists and offer() returns ShuttingDown. The wait is bounded by

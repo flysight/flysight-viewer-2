@@ -13,6 +13,11 @@
 // and the pending cells; the ordering against saves and bulk edits.
 // What a plot or a column is doing is asserted through what the demand layer
 // presents (progress, failures, pending cells) and the executor's jobs.
+// The Compute attribute: a recording switched off is excluded from both kinds
+// of demand, loaded or not, its running job is cancelled with a reason, what
+// it stored still serves, and switching it on wants what is missing; the
+// Compute column itself through ChoiceFixture, as the Orientation's is in
+// tst_fusion_derived.
 //
 // Synchronization: Gate::waitEntered() proves the worker is inside a compute
 // function; QTRY_*, waitIdle() and waitDemandIdle() spin the event loop for
@@ -30,9 +35,11 @@
 #include <QSignalSpy>
 #include <QtTest>
 
+#include "attributeregistry.h"
 #include "builtinfixture.h"
 #include "calculationdemand.h"
 #include "calculationrecord.h"
+#include "choicefixture.h"
 #include "demandfill.h"
 #include "demandsettleclock.h"
 #include "engine/calculationdescriptor.h"
@@ -48,6 +55,7 @@
 #include "logbookcolumn.h"
 #include "logbookmanager.h"
 #include "logbookprobe.h"
+#include "parsedfile.h"
 #include "plotfixture.h"
 #include "plotmodel.h"
 #include "preferences/preferencekeys.h"
@@ -66,6 +74,8 @@ using Kind = JobQueue::OfferResult::Kind;
 namespace {
 
 const char kNoLongerNeeded[] = "No longer needed";
+const char kSwitchedOff[] = "Switched off for this recording";
+const char kComputeToolTip[] = "compute results for this recording in the background";
 
 /// A (remaining, total) progress report.
 QPair<int, int> progressOf(int remaining, int total)
@@ -218,6 +228,27 @@ private slots:
     void failuresFollowWhatIsSwitchedOn();
     void pendingCellsChangedPerColumn();
     void failureTextAndItsLimit();
+
+    // Background computation per recording: the Compute attribute
+    void excludedSessionIsNotComputed_data();
+    void excludedSessionIsNotComputed();
+    void switchingOffCancelsTheRunningJob();
+    void switchingOffWithdrawsTheChosenNextJob();
+    void switchingOffStopsAJobKeptAfterUnchecking();
+    void switchingOffWhileSettlingLeavesNothingWaiting();
+    void switchingOnCreatesDemandForItsMissingResults();
+    void excludedSessionWithStoredResultServes();
+    void settingComputeInvalidatesNothing();
+    void fillNeverLoadsAnExcludedSession();
+    void offOnDiskButAbsentFromIndexIsLoadedOnce();
+    void computeColumnShowsTheDefaultWithoutAWrite_data();
+    void computeColumnShowsTheDefaultWithoutAWrite();
+    void computeEditStoresATokenAndRefusesOthers_data();
+    void computeEditStoresATokenAndRefusesOthers();
+    void computeBulkEdit_data();
+    void computeBulkEdit();
+    void handEditedTokenIsShownAsWrittenAndReadAsOn();
+    void importedWhilePreferenceOffIsExcludedAtOnce();
 
 private:
     SessionData &session(const QString &id) { return m_model->sessionRef(m_model->getSessionRow(id)); }
@@ -522,6 +553,116 @@ private:
     }
 
     // ---- Progress and failures ----------------------------------------------
+    // ---- The Compute attribute ----------------------------------------------
+    static QString computeKey() { return QString::fromLatin1(SessionKeys::Compute); }
+    /// Stores the Compute token of a session through the application's edit
+    /// path (updateAttribute(), which loads a stub), then waits until it is
+    /// saved, so that the index has learned it. False when the model refused
+    /// (the effective value is the token already) or never became idle.
+    [[nodiscard]] bool setCompute(const QString &id, const char *token)
+    {
+        if (!m_model->updateAttribute(id, computeKey(), QString::fromLatin1(token)))
+            return false;
+        return waitForIdle(*m_model);
+    }
+    /// SessionModel::setData() of the session's Compute cell: the Compute
+    /// column must be enabled.
+    bool setComputeCell(const QString &id, const char *token)
+    {
+        return m_model->setData(m_model->index(rowOf(id), section(SessionKeys::Compute)),
+                                QString::fromLatin1(token), Qt::EditRole);
+    }
+    /// A bulk edit of the Compute column for `ids`, as "Set Compute..."
+    /// applies it, then waits until the model is idle.
+    [[nodiscard]] bool bulkCompute(const QStringList &ids, const char *token)
+    {
+        QList<int> rows;
+        for (const QString &id : ids)
+            rows.append(rowOf(id));
+        m_model->startBulkEdit(rows, section(SessionKeys::Compute), QString::fromLatin1(token));
+        return waitForIdle(*m_model);
+    }
+    static bool isComputeOff(const char *id)
+    {
+        return LogbookManager::instance().isComputeOff(QString::fromLatin1(id));
+    }
+    /// Whether the cell of (session, column over `key`) is excluded: a pending pass runs first.
+    bool isCellExcluded(const QString &id, const char *key)
+    {
+        m_demand->flush();
+        return m_demand->isCellExcluded(rowOf(id), section(key));
+    }
+    /// The jobs of a session, in offer order.
+    int jobsOf(const char *sessionId) const
+    {
+        int count = 0;
+        const JobModel *jobs = m_queue->model();
+        for (int r = 0; r < jobs->rowCount(); ++r) {
+            if (jobs->record(r).sessionId == QLatin1String(sessionId))
+                ++count;
+        }
+        return count;
+    }
+    /// The Compute column's world: the harness's demand layer, executor and
+    /// model go first, then a ChoiceFixture over the Compute attribute on a
+    /// fresh logbook with sessions "c1" (storing `c1Token` when given) and
+    /// "c2" (storing nothing). Empty on success.
+    QString startComputeWorld(bool stubs, const std::optional<QString> &c1Token = std::nullopt)
+    {
+        if (m_queue)
+            m_queue->shutdown();
+        m_demand.reset();
+        m_queue.reset();
+        m_model.reset();
+        TestEnvironment::instance().useFreshLogbook();
+        LogbookManager::instance().initialize();
+        QList<SessionData> sessions = JobWorld::sessions({"c1", "c2"});
+        if (c1Token)
+            sessions.first().setAttribute(computeKey(), *c1Token);
+        m_choice = std::make_unique<ChoiceFixture>(computeKey());
+        return m_choice->start(sessions, stubs ? ChoiceFixture::Rows::Stubs : ChoiceFixture::Rows::Loaded);
+    }
+    static void addRowKinds()
+    {
+        QTest::addColumn<bool>("stubs");
+        QTest::newRow("loaded") << false;
+        QTest::newRow("stubs") << true;
+    }
+    /// The bytes of a session's file on disk.
+    static QByteArray fileBytes(const QString &id) { return readFileBytes(sessionFilePath(id)); }
+    /// A restart from an index whose entry for `id` has no "computeOff" (an
+    /// index discarded and rebuilt, or written by an earlier build): the
+    /// index is flushed and edited, then new logbook state, a new model of
+    /// stubs, a new executor and a new demand layer. The column worker is not
+    /// started. Check QTest::currentTestFailed().
+    void restartWithoutComputeOff(const QString &id)
+    {
+        QVERIFY(waitForIdle(*m_model));
+        m_model->flushDirtySessions();
+        QVERIFY(LogbookManager::instance().flushIndex());
+        m_demand.reset();
+        m_queue->shutdown();
+        m_queue.reset();
+        m_model.reset();
+        QJsonObject root = readIndex();
+        QJsonObject sessions = root[QStringLiteral("sessions")].toObject();
+        QJsonObject entry = sessions[id].toObject();
+        QCOMPARE(entry[QStringLiteral("computeOff")], QJsonValue(true));
+        entry.remove(QStringLiteral("computeOff"));
+        sessions[id] = entry;
+        root[QStringLiteral("sessions")] = sessions;
+        QVERIFY(writeIndex(root));
+        TestEnvironment::instance().reopenLogbook();
+        LogbookManager &logbook = LogbookManager::instance();
+        logbook.initialize();
+        QVERIFY(!logbook.isComputeOff(id));
+        m_model = std::make_unique<SessionModel>();
+        m_model->populateFromIndex(logbook.cachedColumnValues(LogbookColumnStore::instance().enabledColumns()),
+                                   logbook.lastAccessedMap());
+        m_queue = std::make_unique<JobQueue>(m_model.get());
+        m_demand = std::make_unique<CalculationDemand>(m_model.get(), m_plots.get(), m_queue.get());
+    }
+
     /// The current progress: a pending pass runs first.
     DemandProgress progressNow()
     {
@@ -597,6 +738,7 @@ private:
     std::unique_ptr<JobQueue> m_queue;
     std::unique_ptr<PlotModel> m_plots;
     std::unique_ptr<CalculationDemand> m_demand;
+    std::unique_ptr<ChoiceFixture> m_choice;        // the Compute column's tests only
     QStringList m_registryBefore;
 };
 
@@ -650,6 +792,7 @@ void CalculationDemandTest::cleanup()
     if (m_queue)
         m_queue->shutdown();        // let nothing linger inside a compute function
     m_demand.reset();
+    m_choice.reset();               // its model goes before the registrations
     QStringList stillPinned;
     if (m_model) {
         for (const char *id : {"s1", "s2", "s3", "s4", "s5"}) {
@@ -1069,7 +1212,7 @@ void CalculationDemandTest::chainCompletesAfterFirstJobDoesNotSucceed()
     if (action == QLatin1String("executorCancel")) {
         // Still in demand: offered again at once, as a new job behind the one
         // that winds down
-        QVERIFY(m_queue->cancel(first));
+        QVERIFY(m_queue->cancel(first, QStringLiteral("Cancelled by the test")));
         // Waiting again: counted, and the job winding down is described by nothing
         QCOMPARE(progressNow().count, 1);
         QVERIFY(progressNow().sessionName.isEmpty());
@@ -5350,6 +5493,673 @@ void CalculationDemandTest::failureTextAndItsLimit()
     gate().open(1);
     QVERIFY(waitDemandIdle());
     QVERIFY(progressNow() == DemandProgress());
+}
+
+// ---- Background computation per recording: the Compute attribute ------------------------
+
+void CalculationDemandTest::excludedSessionIsNotComputed_data()
+{
+    QTest::addColumn<QString>("how");
+    QTest::newRow("plot checked while visible") << "checked";
+    QTest::newRow("shown while checked") << "shown";
+    QTest::newRow("column enabled") << "column";
+}
+
+// Spec 6, first bullet: a session switched off gets no job, no load and no
+// hold, is never counted and never a failure, and its cell is excluded and
+// not pending; the other sessions compute.
+void CalculationDemandTest::excludedSessionIsNotComputed()
+{
+    QFETCH(QString, how);
+    for (int i = 1; i <= 3; ++i)
+        QVERIFY(giveInput({QStringLiteral("s%1").arg(i)}, "G_IN", i));
+    QVERIFY(setCompute(QStringLiteral("s2"), "off"));
+    QVERIFY(isComputeOff("s2"));
+    const bool column = how == QLatin1String("column");
+    if (column)
+        QVERIFY(makeStubs());
+    QVERIFY(waitForIdle(*m_model));
+
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+    QObject scope;
+    bool everHeld = false;
+    const auto noteHolds = [this, &everHeld] {
+        everHeld = everHeld || m_demand->heldSessionIds().contains(QStringLiteral("s2"));
+    };
+    connect(m_queue.get(), &JobQueue::jobsChanged, &scope, noteHolds);
+    connect(m_model.get(), &SessionModel::sessionLoaded, &scope, noteHolds);
+
+    if (how == QLatin1String("checked")) {
+        show({"s1", "s2", "s3"});
+        check("g");
+    } else if (how == QLatin1String("shown")) {
+        check("g");
+        show({"s1", "s2", "s3"});
+    } else {
+        enableColumns({"G_OUT"});
+        // s1, s3 and s4 (not loaded: it has no input, which its load finds)
+        QCOMPARE(progressNow().count, 3);
+        QVERIFY(isCellExcluded(QStringLiteral("s2"), "G_OUT"));
+        QVERIFY(!isCellPending(QStringLiteral("s2"), "G_OUT"));
+    }
+    QVERIFY(gate().waitEntered());
+    if (!column)
+        QCOMPARE(progressNow().count, 2);
+    gate().open(4);
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+    spin();
+
+    QCOMPARE(gate().startOrder(), QList<int>({1, 3}));
+    QCOMPARE(jobsOf("s2"), 0);
+    QCOMPARE(loadsOf(loadedSpy, "s2"), 0);
+    QVERIFY(!everHeld);
+    QVERIFY(m_demand->failures().isEmpty());
+    QVERIFY(nothingToShow());
+    for (const char *id : {"s1", "s3"})
+        QVERIFY2(stored(QString::fromLatin1(id), "gated"), id);
+    QVERIFY(!stored("s2", "gated"));
+    if (column) {
+        QVERIFY(isCellExcluded(QStringLiteral("s2"), "G_OUT"));
+        QVERIFY(!isCellPending(QStringLiteral("s2"), "G_OUT"));
+        for (const char *id : {"s1", "s3", "s4"})
+            QVERIFY2(!isCellExcluded(QString::fromLatin1(id), "G_OUT"), id);
+        QVERIFY(!isLoaded("s2"));
+    }
+}
+
+// Spec 6, second bullet: switching a session off while its job runs ends the
+// job Cancelled with the reason, publishes and stores nothing, releases its
+// hold, and the next candidate runs.
+void CalculationDemandTest::switchingOffCancelsTheRunningJob()
+{
+    QVERIFY(giveInput({"s1"}, "G_IN", 1));
+    QVERIFY(giveInput({"s2"}, "G_IN", 2));
+    QVERIFY(makeStubs());
+    QVERIFY(waitForIdle(*m_model));
+    enableColumns({"G_OUT", SessionKeys::Compute});
+    QVERIFY(gate().waitEntered());
+    m_demand->flush();
+    const JobId job1 = jobOf(QStringLiteral("s1"), "gated").id;
+    QCOMPARE(running().id, job1);
+    QVERIFY(m_demand->heldSessionIds().contains(QStringLiteral("s1")));
+    QCOMPARE(progressNow().sessionName, QStringLiteral("Jump 1"));
+
+    QSignalSpy cancelSpy(m_queue.get(), &JobQueue::jobCancelRequested);
+    QSignalSpy dependencySpy(m_model.get(), &SessionModel::dependencyChanged);
+    QVERIFY(setComputeCell(QStringLiteral("s1"), "off"));
+    // The pass that cancels ran before control returned: no event loop yet
+    QCOMPARE(cancelSpy.count(), 1);
+    QVERIFY(m_queue->job(job1).cancelRequested);
+    QVERIFY(m_demand->progress().sessionName.isEmpty());
+    QVERIFY(!m_demand->isSettling(QStringLiteral("s1")));
+
+    // The gate is never opened: the job stops at its next boundary
+    QTRY_COMPARE(stateOf(job1), JobState::Cancelled);
+    QCOMPARE(m_queue->job(job1).reason, QString::fromLatin1(kSwitchedOff));
+    QVERIFY(!m_queue->job(job1).resultStatus.has_value());
+    QVERIFY(!stored("s1", "gated"));
+    QVERIFY(!spyHasAttribute(dependencySpy, QStringLiteral("s1"), QStringLiteral("G_OUT")));
+
+    // The next candidate is entered, and s1 is held no more
+    QVERIFY(gate().waitEntered());
+    m_demand->flush();
+    QCOMPARE(running().sessionId, QStringLiteral("s2"));
+    QVERIFY(!m_demand->heldSessionIds().contains(QStringLiteral("s1")));
+    QVERIFY(isCellExcluded(QStringLiteral("s1"), "G_OUT"));
+    QVERIFY(!isCellPending(QStringLiteral("s1"), "G_OUT"));
+
+    gate().open(4);
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(gate().startOrder(), QList<int>({1, 2}));
+    QCOMPARE(jobsOf("s1"), 1);
+    QVERIFY(stored("s2", "gated"));
+    QVERIFY(nothingToShow());
+}
+
+// Spec 6, second bullet: while the session's pair is the chosen next job,
+// switching it off withdraws that job before control returns to the event
+// loop.
+void CalculationDemandTest::switchingOffWithdrawsTheChosenNextJob()
+{
+    QVERIFY(giveInput({"s1"}, "G_IN", 1));
+    QVERIFY(giveInput({"s2"}, "G_IN", 2));
+    show({"s1", "s2"});
+    check("g");
+    QVERIFY(gate().waitEntered());
+    m_demand->flush();
+    const JobId runningJob = jobOf(QStringLiteral("s1"), "gated").id;
+    const JobId waitingJob = m_queue->chosenNextJob();
+    QCOMPARE(m_queue->job(waitingJob).sessionId, QStringLiteral("s2"));
+
+    QVERIFY(m_model->updateAttribute(QStringLiteral("s2"), computeKey(), QStringLiteral("off")));
+    QCOMPARE(stateOf(waitingJob), JobState::Cancelled);
+    QCOMPARE(m_queue->job(waitingJob).reason, QString::fromLatin1(kNoLongerNeeded));
+    QVERIFY(!m_queue->job(waitingJob).startedAt.isValid());
+    QCOMPARE(stateOf(runningJob), JobState::Running);
+    QVERIFY(!m_queue->job(runningJob).cancelRequested);
+    QCOMPARE(m_queue->chosenNextJob(), JobId(0));
+
+    gate().open(4);
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(gate().startOrder(), QList<int>({1}));
+
+    // Nothing was remembered of s2: switched on, it is offered and runs
+    QVERIFY(setCompute(QStringLiteral("s2"), "on"));
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(gate().startOrder(), QList<int>({1, 2}));
+    QVERIFY(nothingToShow());
+}
+
+// Spec 6, second bullet, and the cancel's place outside the walk: a job kept
+// running after its plot was unchecked (uncheckingDropsWaitingPairsKeepsRunning)
+// still stops when its recording is switched off. With no plot checked and no
+// requested column the pass walks no row, so only a cancel made outside the
+// walk can stop it.
+void CalculationDemandTest::switchingOffStopsAJobKeptAfterUnchecking()
+{
+    QVERIFY(giveInput({"s1"}, "G_IN", 1));
+    QVERIFY(giveInput({"s2"}, "G_IN", 2));
+    show({"s1", "s2"});
+    check("g");
+    QVERIFY(gate().waitEntered());
+    m_demand->flush();
+    const JobId runningJob = jobOf(QStringLiteral("s1"), "gated").id;
+    QCOMPARE(running().id, runningJob);
+    const JobId waitingJob = m_queue->chosenNextJob();
+    QCOMPARE(m_queue->job(waitingJob).sessionId, QStringLiteral("s2"));
+
+    // Unchecked: the waiting pair leaves demand, the running job is kept, and
+    // no source is left
+    QVERIFY(!m_plots->togglePlot("Syn", "g"));
+    QCOMPARE(stateOf(waitingJob), JobState::Cancelled);
+    QCOMPARE(stateOf(runningJob), JobState::Running);
+    QVERIFY(!m_queue->job(runningJob).cancelRequested);
+    QVERIFY(nothingToShow());
+
+    QSignalSpy cancelSpy(m_queue.get(), &JobQueue::jobCancelRequested);
+    QVERIFY(m_model->updateAttribute(QStringLiteral("s1"), computeKey(), QStringLiteral("off")));
+    // The pass that cancels ran before control returned: no event loop yet
+    QCOMPARE(cancelSpy.count(), 1);
+    QCOMPARE(cancelSpy.at(0).at(0).toULongLong(), runningJob);
+    QVERIFY(m_queue->job(runningJob).cancelRequested);
+
+    // The gate is never opened: the job stops at its next boundary, and
+    // nothing is in demand after it
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(stateOf(runningJob), JobState::Cancelled);
+    QCOMPARE(m_queue->job(runningJob).reason, QString::fromLatin1(kSwitchedOff));
+    QVERIFY(!m_queue->job(runningJob).resultStatus.has_value());
+    QVERIFY(!stored("s1", "gated"));
+    QVERIFY(values("s1", "g").isEmpty());
+    QCOMPARE(gate().startOrder(), QList<int>({1}));
+    QCOMPARE(m_queue->model()->rowCount(), 2);
+    QVERIFY(nothingToShow());
+}
+
+// Spec 6, second bullet: switching off while the session settles after an
+// edit leaves nothing waiting, when the wait ends as before it.
+void CalculationDemandTest::switchingOffWhileSettlingLeavesNothingWaiting()
+{
+    QVERIFY(giveInput({"s1"}, "G_IN", 1));
+    QVERIFY(giveInput({"s2"}, "G_IN", 2));
+    show({"s1", "s2"});
+    check("g");
+    gate().open(16);
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(gate().startOrder(), QList<int>({1, 2}));
+
+    m_demand->setInputSettleDelay(60000);
+    QVERIFY(giveInput({"s2"}, "G_IN", 7));
+    QVERIFY(m_demand->isSettling(QStringLiteral("s2")));
+    QCOMPARE(progressNow().count, 1);
+
+    QVERIFY(m_model->updateAttribute(QStringLiteral("s2"), computeKey(), QStringLiteral("off")));
+    QCOMPARE(progressNow().count, 0);
+    const Quiet quiet(*m_queue);
+    settle();
+    spin();
+    QCOMPARE(progressNow().count, 0);
+    QCOMPARE(m_queue->chosenNextJob(), JobId(0));
+    QVERIFY(quiet.holds());
+    QVERIFY(nothingToShow());
+}
+
+// Spec 6, third bullet: switching a session on creates demand for its missing
+// results and no other; a stopped computation runs again from its start. A
+// failure remembered for the pair still keeps it from being offered.
+void CalculationDemandTest::switchingOnCreatesDemandForItsMissingResults()
+{
+    for (int i = 1; i <= 3; ++i)
+        QVERIFY(giveInput({QStringLiteral("s%1").arg(i)}, "G_IN", i));
+    show({"s1", "s2", "s3"});
+    check("g");
+    QVERIFY(gate().waitEntered());                      // s1
+    gate().open(1);
+    QVERIFY(gate().waitEntered());                      // s2
+    m_demand->flush();
+    QCOMPARE(running().sessionId, QStringLiteral("s2"));
+    QVERIFY(m_model->updateAttribute(QStringLiteral("s2"), computeKey(), QStringLiteral("off")));
+    QVERIFY(gate().waitEntered());                      // s3: s2 stopped without a permit
+    QCOMPARE(jobOf(QStringLiteral("s2"), "gated").state, JobState::Cancelled);
+    gate().open(1);
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(gate().startOrder(), QList<int>({1, 2, 3}));
+    QVERIFY(!stored("s2", "gated"));
+
+    // On again: s2 alone, entered from its start
+    QVERIFY(setCompute(QStringLiteral("s2"), "on"));
+    QVERIFY(gate().waitEntered());
+    gate().open(1);
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(gate().startOrder(), QList<int>({1, 2, 3, 2}));
+    QCOMPARE(jobsOf("s1"), 1);
+    QCOMPARE(jobsOf("s3"), 1);
+    QCOMPARE(jobsOf("s2"), 2);
+    QCOMPARE(values("s2", "g"), QVector<double>({3.0}));
+    QVERIFY(nothingToShow());
+
+    // A job-level failure remembered for s4: not listed while it is off, and
+    // switching it on lists it again and offers nothing
+    const QStringList failed{"s4 (Jump 4) gated [Gated] The worker thread could not be started +retry"};
+    QVERIFY(giveInput({"s4"}, "G_IN", 4));
+    m_queue->failNextWorkerStarts(1);
+    show({"s4"});
+    settle();                                           // the input arrived while the plot was checked
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(jobOf(QStringLiteral("s4"), "gated").state, JobState::Failed);
+    QCOMPARE(failureLines(), failed);
+    QVERIFY(setCompute(QStringLiteral("s4"), "off"));
+    QCOMPARE(failureLines(), QStringList());
+    const Quiet quiet(*m_queue);
+    QVERIFY(setCompute(QStringLiteral("s4"), "on"));
+    QCOMPARE(failureLines(), failed);
+    spin();
+    QVERIFY(quiet.holds());
+}
+
+// Spec 6, fourth bullet: a session switched off with a stored result fills
+// its column from the record without a load and restores the result when it
+// is loaded; its stored rejection is not a failure until it is switched on
+// again, and nothing runs.
+void CalculationDemandTest::excludedSessionWithStoredResultServes()
+{
+    QVERIFY(giveInput({"s2"}, "G_IN", 2));
+    QVERIFY(giveInput({"s3"}, "EA_IN", -1));
+    gate().open(1);
+    QCOMPARE(engine(QStringLiteral("s2")).request(QStringLiteral("gated")).status, ResultStatus::Ok);
+    QCOMPARE(engine(QStringLiteral("s3")).request(QStringLiteral("expA")).status, ResultStatus::Ok);
+    QVERIFY(stored("s2", "gated"));
+    QVERIFY(stored("s3", "expA"));
+    QVERIFY(setCompute(QStringLiteral("s2"), "off"));
+    QVERIFY(setCompute(QStringLiteral("s3"), "off"));
+    QVERIFY(makeStubs());
+    QVERIFY(waitForIdle(*m_model));
+
+    const Quiet quiet(*m_queue);
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+    enableColumns({"G_OUT", "EA1", SessionKeys::Compute});
+    QVERIFY(waitDemandIdle());
+    m_model->startColumnWorker();
+    QVERIFY(waitForIdle(*m_model));
+    spin();
+
+    // The column fills from the record; neither session is loaded for it
+    QTRY_COMPARE(cachedValue(QStringLiteral("s2"), "G_OUT").toDouble(), 3.0);
+    QCOMPARE(loadsOf(loadedSpy, "s2"), 0);
+    QCOMPARE(loadsOf(loadedSpy, "s3"), 0);
+    QVERIFY(isCellExcluded(QStringLiteral("s3"), "EA1"));
+    QVERIFY(isCellExcluded(QStringLiteral("s2"), "G_OUT"));
+    // The stored rejection is not listed: nothing is wanted of s3
+    QCOMPARE(failureLines(), QStringList());
+    QVERIFY(nothingToShow());
+
+    // Loaded, the stored result is restored and serves
+    QCOMPARE(session(QStringLiteral("s2")).getAttribute(QStringLiteral("G_OUT")), QVariant(3));
+    spin();
+    QVERIFY(quiet.holds());
+
+    // Switched on by "Set Compute...", on a stub: listed again, nothing runs
+    // (The fill then loads it once for G_OUT, which it has no input for.)
+    QVERIFY(!isLoaded("s3"));
+    QVERIFY(bulkCompute({QStringLiteral("s3")}, "on"));
+    QVERIFY(!isComputeOff("s3"));
+    QCOMPARE(failureLines(), QStringList({"s3 (Jump 3) expA [Explicit A] negative input"}));
+    QVERIFY(!isCellExcluded(QStringLiteral("s3"), "EA1"));
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(failureLines(), QStringList({"s3 (Jump 3) expA [Explicit A] negative input"}));
+    QVERIFY(quiet.holds());
+}
+
+// Spec 6, fifth bullet: setting the attribute invalidates no stored result
+// and no cached value, starts no settle wait, makes no running job stale and
+// runs one pass of its own.
+void CalculationDemandTest::settingComputeInvalidatesNothing()
+{
+    QVERIFY(giveInput({"s1"}, "G_IN", 1));
+    QVERIFY(giveInput({"s2"}, "G_IN", 2));
+    gate().open(1);
+    QCOMPARE(engine(QStringLiteral("s2")).request(QStringLiteral("gated")).status, ResultStatus::Ok);
+    QVERIFY(stored("s2", "gated"));
+    drainEntered();                                     // s2's run went through the gate
+    QVERIFY(waitForIdle(*m_model));
+    enableColumns({"G_OUT", SessionKeys::Compute});
+    QVERIFY(gate().waitEntered());                      // s1
+    // The fill waits on the job, so the scheduler is never idle meanwhile
+    QTRY_COMPARE(cachedValue(QStringLiteral("s2"), "G_OUT").toDouble(), 3.0);
+    m_demand->flush();
+    const JobId job1 = running().id;
+    QCOMPARE(m_queue->job(job1).sessionId, QStringLiteral("s1"));
+
+    // Set explicitly to the token it reads already, on the running job's session
+    const int passes = m_demand->passCount();
+    QVERIFY(setComputeCell(QStringLiteral("s1"), "on"));
+    QCOMPARE(m_demand->passCount(), passes + 1);
+    QVERIFY(!m_queue->job(job1).cancelRequested);
+    QVERIFY(!m_demand->isSettling(QStringLiteral("s1")));
+    QVERIFY(!m_demand->hasSettlingSessions());
+
+    // ... and on the session with a stored result
+    QVERIFY(setComputeCell(QStringLiteral("s2"), "on"));
+    QTRY_VERIFY(fileHas(QStringLiteral("s2"), QByteArray("$VAR,_COMPUTE,on")));
+    QTRY_VERIFY(rowState(QStringLiteral("s2")).cachedValues.contains(section("G_OUT")));
+    QVERIFY(stored("s2", "gated"));
+    QCOMPARE(cachedValue(QStringLiteral("s2"), "G_OUT").toDouble(), 3.0);
+    QCOMPARE(values("s2", "g"), QVector<double>({3.0}));
+    QVERIFY(!m_demand->hasSettlingSessions());
+    QVERIFY(!m_queue->job(job1).cancelRequested);
+    QTRY_VERIFY(fileHas(QStringLiteral("s1"), QByteArray("$VAR,_COMPUTE,on")));
+
+    gate().open(1);
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(stateOf(job1), JobState::Succeeded);
+    QCOMPARE(jobsOf("s2"), 0);
+    QVERIFY(nothingToShow());
+}
+
+// Spec 6, sixth bullet: the column fill never loads a session switched off:
+// every stub switched off by a bulk edit (the stub path records it in the
+// index), the column enabled, nothing is loaded and nothing runs.
+void CalculationDemandTest::fillNeverLoadsAnExcludedSession()
+{
+    for (int i = 1; i <= 4; ++i)
+        QVERIFY(giveInput({QStringLiteral("s%1").arg(i)}, "G_IN", i));
+    enableColumns({SessionKeys::Compute});
+    QVERIFY(makeStubs());
+    QVERIFY(waitForIdle(*m_model));
+
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+    QVERIFY(bulkCompute({QStringLiteral("s1"), QStringLiteral("s2"), QStringLiteral("s3"), QStringLiteral("s4")},
+                        "off"));
+    for (const char *id : {"s1", "s2", "s3", "s4"}) {
+        QVERIFY2(isComputeOff(id), id);
+        QVERIFY2(!isLoaded(QString::fromLatin1(id)), id);
+        QVERIFY2(fileHas(QString::fromLatin1(id), QByteArray("$VAR,_COMPUTE,off")), id);
+    }
+
+    const Quiet quiet(*m_queue);
+    enableColumns({SessionKeys::Compute, "G_OUT"});
+    QCOMPARE(progressNow().count, 0);
+    QVERIFY(!m_demand->hasFillWork());
+    for (const char *id : {"s1", "s2", "s3", "s4"}) {
+        QVERIFY2(isCellExcluded(QString::fromLatin1(id), "G_OUT"), id);
+        QVERIFY2(!isCellPending(QString::fromLatin1(id), "G_OUT"), id);
+    }
+    spin();
+    QVERIFY(waitForIdle(*m_model));
+    spin();
+    QCOMPARE(loadedSpy.count(), 0);
+    QVERIFY(quiet.holds());
+    QVERIFY(!m_demand->hasFillWork());
+    QCOMPARE(m_demand->heldSessionIds(), QStringList());
+    QVERIFY(nothingToShow());
+}
+
+// Spec 6, ninth bullet: a session whose file reads off but whose index entry
+// says nothing of it is loaded at most once by the fill and never computed;
+// the load teaches the index, so after its eviction the stub is excluded
+// without another load.
+void CalculationDemandTest::offOnDiskButAbsentFromIndexIsLoadedOnce()
+{
+    QVERIFY(giveInput({"s2"}, "G_IN", 2));
+    QVERIFY(setCompute(QStringLiteral("s2"), "off"));
+    enableColumns({"G_OUT"});
+    QVERIFY(waitDemandIdle());
+    QVERIFY(makeStubs());
+    restartWithoutComputeOff(QStringLiteral("s2"));
+    if (QTest::currentTestFailed())
+        return;
+
+    const Quiet quiet(*m_queue);
+    QSignalSpy loadedSpy(m_model.get(), &SessionModel::sessionLoaded);
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+    spin();
+    QCOMPARE(loadsOf(loadedSpy, "s2"), 1);
+    QVERIFY(quiet.holds());
+    QCOMPARE(m_demand->heldSessionIds(), QStringList());
+    QVERIFY(!m_model->isSessionPinned(QStringLiteral("s2")));
+    QVERIFY(isComputeOff("s2"));        // learned by the load
+    QVERIFY(isCellExcluded(QStringLiteral("s2"), "G_OUT"));
+
+    // Evicted: excluded from the learned entry, never loaded again
+    QVERIFY(makeStubs());
+    spin();
+    QVERIFY(waitDemandIdle());
+    QVERIFY(isCellExcluded(QStringLiteral("s2"), "G_OUT"));
+    QCOMPARE(loadsOf(loadedSpy, "s2"), 1);
+    QVERIFY(quiet.holds());
+}
+
+void CalculationDemandTest::computeColumnShowsTheDefaultWithoutAWrite_data() { addRowKinds(); }
+
+// Spec 6, seventh bullet, and spec 3: the definition, its header tooltip, and
+// every recording without a stored value showing the default's label with no
+// line in its file and the token cached in index.json.
+void CalculationDemandTest::computeColumnShowsTheDefaultWithoutAWrite()
+{
+    QFETCH(bool, stubs);
+    QCOMPARE(startComputeWorld(stubs), QString());
+
+    const AttributeDefinition *definition = m_choice->definition();
+    QVERIFY(definition);
+    QCOMPARE(definition->category, QStringLiteral("Session"));
+    QCOMPARE(definition->displayName, QStringLiteral("Compute"));
+    QCOMPARE(definition->formatType, AttributeFormatType::Choice);
+    QVERIFY(definition->editable);
+    QCOMPARE(definition->choices.size(), 2);
+    QCOMPARE(definition->choices.at(0).token, QStringLiteral("on"));
+    QCOMPARE(definition->choices.at(0).label, QStringLiteral("On"));
+    QCOMPARE(definition->choices.at(1).token, QStringLiteral("off"));
+    QCOMPARE(definition->choices.at(1).label, QStringLiteral("Off"));
+    QCOMPARE(logbookColumnLabel(m_choice->choiceColumn()), QStringLiteral("Compute"));
+
+    // The header's tooltip is the definition's; the description has none
+    SessionModel &model = m_choice->model();
+    QCOMPARE(model.headerData(m_choice->column(), Qt::Horizontal, Qt::ToolTipRole).toString(),
+             QString::fromLatin1(kComputeToolTip));
+    for (int c = 0; c < model.columnCount(); ++c) {
+        if (c != m_choice->column())
+            QVERIFY(!model.headerData(c, Qt::Horizontal, Qt::ToolTipRole).isValid());
+    }
+
+    for (const QString &id : {QStringLiteral("c1"), QStringLiteral("c2")}) {
+        QCOMPARE(m_choice->displayText(id), QStringLiteral("On"));
+        QCOMPARE(m_choice->fileToken(id), std::optional<QString>());
+        QVERIFY2(!fileBytes(id).isEmpty(), qPrintable(id));
+        QVERIFY2(!fileBytes(id).contains("$VAR,_COMPUTE"), qPrintable(id));
+        QCOMPARE(m_choice->indexValue(id), QJsonValue(QStringLiteral("on")));
+        QVERIFY(!LogbookManager::instance().isComputeOff(id));
+    }
+    for (int r = 0; r < model.rowCount(); ++r)
+        QCOMPARE(std::as_const(model).rowAt(r).isLoaded(), !stubs);
+}
+
+void CalculationDemandTest::computeEditStoresATokenAndRefusesOthers_data() { addRowKinds(); }
+
+// Spec 6, seventh bullet: setData() stores a token of the list verbatim and
+// refuses any other value; no edit removes the line; the index learns the
+// token at the save.
+void CalculationDemandTest::computeEditStoresATokenAndRefusesOthers()
+{
+    QFETCH(bool, stubs);
+    QCOMPARE(startComputeWorld(stubs), QString());
+    SessionModel &model = m_choice->model();
+    const QString c1 = QStringLiteral("c1");
+    const QString c2 = QStringLiteral("c2");
+
+    QVERIFY(m_choice->setData(c1, QStringLiteral("off")));
+    QCOMPARE(m_choice->displayText(c1), QStringLiteral("Off"));
+    QVERIFY(waitForIdle(model));
+    QVERIFY(fileBytes(c1).contains("\n$VAR,_COMPUTE,off\n"));
+    QCOMPARE(m_choice->fileToken(c1), std::optional<QString>(QStringLiteral("off")));
+    QCOMPARE(m_choice->indexValue(c1), QJsonValue(QStringLiteral("off")));
+    QVERIFY(LogbookManager::instance().isComputeOff(c1));
+    QVERIFY(!LogbookManager::instance().isComputeOff(c2));
+
+    // Refused: nothing changes, nothing is written
+    const QByteArray c1Bytes = fileBytes(c1);
+    const QByteArray c2Bytes = fileBytes(c2);
+    QSignalSpy dataSpy(&model, &QAbstractItemModel::dataChanged);
+    for (const QVariant &value : {QVariant(QStringLiteral("Off")), QVariant(QStringLiteral("OFF")),
+                                  QVariant(QStringLiteral("On")), QVariant(QStringLiteral("off ")),
+                                  QVariant(QStringLiteral("maybe")), QVariant(QString()), QVariant()}) {
+        for (const QString &id : {c1, c2})
+            QVERIFY2(!m_choice->setData(id, value), qPrintable(id + QLatin1Char(' ') + value.toString()));
+    }
+    QVERIFY(!m_choice->setData(c1, QStringLiteral("off")));    // stored already
+    QCOMPARE(dataSpy.count(), 0);
+    QVERIFY(waitForIdle(model));
+    QCOMPARE(fileBytes(c1), c1Bytes);
+    QCOMPARE(fileBytes(c2), c2Bytes);
+
+    // On again: the line stays, with the token
+    QVERIFY(m_choice->setData(c1, QStringLiteral("on")));
+    QVERIFY(waitForIdle(model));
+    QCOMPARE(m_choice->displayText(c1), QStringLiteral("On"));
+    QCOMPARE(m_choice->fileToken(c1), std::optional<QString>(QStringLiteral("on")));
+    QVERIFY(!LogbookManager::instance().isComputeOff(c1));
+
+    // After a restart every row is a stub, showing the stored label
+    QVERIFY(m_choice->setData(c2, QStringLiteral("off")));
+    QCOMPARE(m_choice->restartAsStubs(), QString());
+    QCOMPARE(m_choice->displayText(c1), QStringLiteral("On"));
+    QCOMPARE(m_choice->displayText(c2), QStringLiteral("Off"));
+    QVERIFY(LogbookManager::instance().isComputeOff(c2));
+}
+
+void CalculationDemandTest::computeBulkEdit_data() { addRowKinds(); }
+
+// Spec 6, seventh bullet: "Set Compute..." is a bulk edit of the selected
+// sessions; a stub stays a stub, and the index learns the token on the stub
+// path; a value outside the list queues nothing.
+void CalculationDemandTest::computeBulkEdit()
+{
+    QFETCH(bool, stubs);
+    QCOMPARE(startComputeWorld(stubs), QString());
+    SessionModel &model = m_choice->model();
+    const QStringList both{QStringLiteral("c1"), QStringLiteral("c2")};
+
+    QVERIFY(m_choice->bulkEdit(both, QStringLiteral("off")));
+    for (const QString &id : both) {
+        QCOMPARE(m_choice->fileToken(id), std::optional<QString>(QStringLiteral("off")));
+        QCOMPARE(m_choice->indexValue(id), QJsonValue(QStringLiteral("off")));
+        QCOMPARE(m_choice->displayText(id), QStringLiteral("Off"));
+        QVERIFY(LogbookManager::instance().isComputeOff(id));
+    }
+    for (int r = 0; r < model.rowCount(); ++r)
+        QCOMPARE(std::as_const(model).rowAt(r).isLoaded(), !stubs);
+
+    // Outside the list: refused before anything is queued
+    const QByteArray c1Bytes = fileBytes(both.at(0));
+    const QList<int> rows{m_choice->row(both.at(0)), m_choice->row(both.at(1))};
+    QSignalSpy dataSpy(&model, &QAbstractItemModel::dataChanged);
+    for (const QVariant &value : {QVariant(QStringLiteral("Off")), QVariant(QStringLiteral("no")),
+                                  QVariant(QString()), QVariant()})
+        model.startBulkEdit(rows, m_choice->column(), value);
+    QVERIFY(waitForIdle(model));
+    QCOMPARE(dataSpy.count(), 0);
+    QCOMPARE(fileBytes(both.at(0)), c1Bytes);
+
+    // On again for one
+    QVERIFY(m_choice->bulkEdit({both.at(0)}, QStringLiteral("on")));
+    QCOMPARE(m_choice->fileToken(both.at(0)), std::optional<QString>(QStringLiteral("on")));
+    QVERIFY(!LogbookManager::instance().isComputeOff(both.at(0)));
+    QVERIFY(LogbookManager::instance().isComputeOff(both.at(1)));
+    for (int r = 0; r < model.rowCount(); ++r)
+        QCOMPARE(std::as_const(model).rowAt(r).isLoaded(), !stubs);
+}
+
+// Spec 3 and 6, seventh bullet: a token outside the list is kept and shown as
+// written, and for the demand layer it is on.
+void CalculationDemandTest::handEditedTokenIsShownAsWrittenAndReadAsOn()
+{
+    QVERIFY(giveInput({"s1"}, "G_IN", 1));
+    QVERIFY(giveInput({"s2"}, "G_IN", 2));
+    QVERIFY(setCompute(QStringLiteral("s2"), "OFF"));
+    QVERIFY(fileHas(QStringLiteral("s2"), QByteArray("$VAR,_COMPUTE,OFF")));
+    QVERIFY(!isComputeOff("s2"));
+    show({"s1", "s2"});
+    check("g");
+    gate().open(2);
+    QVERIFY(waitDemandIdle());
+    QCOMPARE(gate().startOrder(), QList<int>({1, 2}));
+    QVERIFY(stored("s2", "gated"));
+
+    // The column shows it as written, loaded and as a stub
+    QCOMPARE(startComputeWorld(false, QStringLiteral("OFF")), QString());
+    QCOMPARE(m_choice->displayText(QStringLiteral("c1")), QStringLiteral("OFF"));
+    QCOMPARE(m_choice->displayText(QStringLiteral("c2")), QStringLiteral("On"));
+    QCOMPARE(m_choice->restartAsStubs(), QString());
+    QCOMPARE(m_choice->displayText(QStringLiteral("c1")), QStringLiteral("OFF"));
+    QCOMPARE(m_choice->fileToken(QStringLiteral("c1")), std::optional<QString>(QStringLiteral("OFF")));
+    QVERIFY(!LogbookManager::instance().isComputeOff(QStringLiteral("c1")));
+}
+
+// Spec 6, eighth bullet: a recording imported while the preference is off
+// carries the off line and is excluded at once, for an enabled column and a
+// checked plot alike; one imported while it is on carries no line.
+void CalculationDemandTest::importedWhilePreferenceOffIsExcludedAtOnce()
+{
+    PreferencesManager &prefs = PreferencesManager::instance();
+    QCOMPARE(prefs.getValue(PreferenceKeys::ImportCompute).toString(), QStringLiteral("on"));
+    enableColumns({"G_OUT"});
+    check("g");
+    m_demand->flush();
+
+    // As the importer creates a session: with the creation defaults
+    const auto import = [this](const char *id) {
+        ParsedFile file = ParsedFile::fromSession(newSessionWithInput(id).first());
+        file.applyCreationDefaults = true;
+        return m_model->mergeSessions(QList<ParsedFile>{file});
+    };
+
+    prefs.setValue(PreferenceKeys::ImportCompute, QStringLiteral("off"));
+    const QList<MergeResult> created = import("s5");
+    QCOMPARE(created.at(0).outcome, MergeResult::Outcome::Created);
+    show({"s5"});
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(fileHas(QStringLiteral("s5"), QByteArray("$VAR,_COMPUTE,off")));
+    QVERIFY(isComputeOff("s5"));
+    QVERIFY(isCellExcluded(QStringLiteral("s5"), "G_OUT"));
+    QVERIFY(!isCellPending(QStringLiteral("s5"), "G_OUT"));
+    QCOMPARE(progressNow().count, 0);
+    spin();
+    QCOMPARE(jobsOf("s5"), 0);
+
+    // On: nothing is written, and the recording is computed
+    prefs.setValue(PreferenceKeys::ImportCompute, QStringLiteral("on"));
+    QCOMPARE(import("s6").at(0).outcome, MergeResult::Outcome::Created);
+    gate().open(2);
+    show({"s6"});
+    QVERIFY(waitDemandIdle());
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(fileHas(QStringLiteral("s6"), QByteArray("$VAR,SESSION_ID")));
+    QVERIFY(!fileHas(QStringLiteral("s6"), QByteArray("$VAR,_COMPUTE")));
+    QVERIFY(!isComputeOff("s6"));
+    QCOMPARE(jobOf(QStringLiteral("s6"), "gated").state, JobState::Succeeded);
+    QCOMPARE(jobsOf("s5"), 0);
+    QVERIFY(isCellExcluded(QStringLiteral("s5"), "G_OUT"));
 }
 
 FLYSIGHT_TEST_MAIN(CalculationDemandTest)

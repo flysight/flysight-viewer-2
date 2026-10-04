@@ -7,6 +7,7 @@
 #include "preferencepagestyle.h"
 #include "preferencesmanager.h"
 #include "../fusion/orientation.h"
+#include "../sessiondata.h"
 
 namespace FlySight {
 
@@ -16,6 +17,7 @@ ImportSettingsPage::ImportSettingsPage(QWidget *parent)
 
     layout->addWidget(createGroundReferenceGroup());
     layout->addWidget(createOrientationGroup());
+    layout->addWidget(createComputeGroup());
     layout->addWidget(createDescentPauseGroup());
     layout->addWidget(createTrackVisibilityGroup());
     layout->addStretch();
@@ -26,6 +28,24 @@ ImportSettingsPage::ImportSettingsPage(QWidget *parent)
     connect(descentPauseSpinBox, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &ImportSettingsPage::saveSettings);
     connect(hideOthersCheckBox, &QCheckBox::toggled, this, &ImportSettingsPage::saveSettings);
     connect(orientationComboBox, &QComboBox::currentIndexChanged, this, &ImportSettingsPage::saveSettings);
+    connect(computeCheckBox, &QCheckBox::toggled, this, &ImportSettingsPage::saveSettings);
+}
+
+// Whether each newly imported recording takes part in background
+// computation. The preference holds the Compute attribute's token: the box is
+// checked unless the stored text is exactly the off token, as the importer
+// writes the line only then.
+QGroupBox* ImportSettingsPage::createComputeGroup() {
+    QGroupBox *group = new QGroupBox(tr("Background computation"), this);
+    QFormLayout *form = new QFormLayout(group);
+
+    computeCheckBox = new QCheckBox(tr("Compute newly imported recordings in the background"), this);
+    form->addRow(computeCheckBox);
+
+    const QString stored = PreferencesManager::instance().getValue(PreferenceKeys::ImportCompute).toString();
+    computeCheckBox->setChecked(stored != QLatin1String(SessionKeys::ComputeOff));
+
+    return group;
 }
 
 // The orientation stored into each newly imported recording: which of the
@@ -134,6 +154,8 @@ void ImportSettingsPage::saveSettings() {
     prefs.setValue(PreferenceKeys::ImportDescentPauseSeconds, descentPauseSpinBox->value());
     prefs.setValue(PreferenceKeys::ImportHideOthersOnImport, hideOthersCheckBox->isChecked());
     prefs.setValue(PreferenceKeys::ImportOrientation, orientationComboBox->currentData().toString());
+    prefs.setValue(PreferenceKeys::ImportCompute,
+                   QString::fromLatin1(computeCheckBox->isChecked() ? SessionKeys::ComputeOn : SessionKeys::ComputeOff));
 }
 
 } // namespace FlySight

@@ -92,7 +92,15 @@
 #     diverged rule, the release boundary and the divergence and release
 #     budgets are spelled once, where they are defined and read; and the
 #     fusion document states the stages, the rule and the measured release
-#     (items 1401-1415).
+#     (items 1401-1415);
+#   - a recording can be switched off for background computation: the
+#     Compute attribute's tokens and labels are spelled once, its readers are
+#     the demand layer, the registrations, the importer, the preference and
+#     the index's two learn points; the demand layer is the one product caller
+#     of the executor's cancel; the cell's word, its tooltip, the cancel's
+#     reason, the index entry and the page's text are spelled once; and the
+#     documents name the context menu's action and the reason (items
+#     1501-1524).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -525,7 +533,7 @@ expect_none("no locks"
   "QMutex|QReadWriteLock|QWaitCondition|QSemaphore|std::mutex|std::shared_mutex|std::condition_variable" src)
 expect_only("one atomic: the cancel flag" "std::atomic|QAtomic" "^src/jobqueue\\.cpp$" src)
 
-# ─────────────────────────────── gestures (items 116, 306, 501, 519, 527, 534, 543, 544, 562, 605, 608, 625, 628, 629, 651, 659, 661, 737, 740)
+# ─────────────────────────────── gestures (items 116, 306, 501, 519, 527, 534, 543, 544, 562, 605, 608, 625, 628, 629, 651, 659, 661, 737, 740, 1509, 1523)
 # Only the demand layer starts requested calculations, and it derives what to
 # start from what is switched on; nothing is a gesture. MainWindow cannot be
 # constructed in the test harness, so that nothing in it (start-up restore,
@@ -548,9 +556,10 @@ expect_only("no reader requests" "[.>]request\\(" "^src/engine/" src)
 # engine.request(, m_engine->request( ...); together with "no reader requests"
 # it closes the door on an alias (`auto &e = session.calculationEngine();
 # e.request(`). The offer is made on exactly one line of product code, and
-# only the demand layer withdraws the chosen next job; no product code cancels
-# a job (JobQueue::cancel() is kept for the jobs dock, a later view of the job
-# history, and its doc comment says so).
+# only the demand layer withdraws the chosen next job; the demand layer is
+# also the one product caller of JobQueue::cancel(), on exactly one line, for
+# the running job of a recording switched off (the jobs dock, a later view of
+# the job history, may call it too, and its doc comment says so).
 # Allow: none expected. The count changes only when a second legitimate caller
 # of JobQueue::offer() appears, which is itself a design change
 # (calculationdemand.h: "the only caller"). The choice stays in the reconciler,
@@ -563,11 +572,14 @@ expect_only("one call of offer( in product code: the demand layer" "[.>]offer\\(
   "^src/calculationdemand\\.cpp$" src)
 expect_only("the chosen next job is withdrawn by the demand layer only" "[.>]withdrawChosenNext\\("
   "^src/calculationdemand\\.cpp$" src)
-expect_none("no product code cancels a job" "([Jj]ob[Qq]ueue|m_queue|executor)(->|\\.)cancel\\(" src)
-# The cancel operation stays for the jobs dock, a later view of the job
-# history; the rule above keeps it without a product caller. Allow: none
-# expected; removing it is a decision about the jobs dock, not this rule.
-expect_count("cancel is kept for the jobs dock" "bool cancel\\(JobId" 1 src/jobqueue.h)
+expect_count("the demand layer is the one product caller of cancel"
+  "([Jj]ob[Qq]ueue|m_queue|executor)(->|\\.)cancel\\(" 1 src)
+expect_only("the demand layer is the one product caller of cancel"
+  "([Jj]ob[Qq]ueue|m_queue|executor)(->|\\.)cancel\\(" "^src/calculationdemand\\.cpp$" src)
+# The cancel operation is declared once, with the caller's reason: the demand
+# layer's for a recording switched off, and a later jobs dock's. Allow: none
+# expected; removing it is a decision about the switch and the jobs dock.
+expect_count("cancel is declared once, with its reason" "bool cancel\\(JobId" 1 src/jobqueue.h)
 # The executor lost what no product code used: the idle and queued signals,
 # the query of both active jobs, and the busy-period bookkeeping behind the
 # idle signal. The job model's rowsInserted, isIdle(), runningJob(),
@@ -1067,8 +1079,10 @@ expect_none("the demand views handle no event of their own"
   "src/ui/docks/logbook/LogbookCellDelegate.*" "src/ui/statusbar/StatusBarFeature.*")
 # Pending is a presentation of demand: the demand layer answers it and the cell
 # delegate paints it; the model, its cached values and index.json never see it.
+# So is the excluded cell of a recording switched off (items 1508, 1524).
 # Allow: none expected.
-expect_only("pending is the view's presentation of demand" "isCellPending|showsPending|pendingText\\(|pendingToolTip\\("
+expect_only("pending is the view's presentation of demand"
+  "isCellPending|showsPending|pendingText\\(|pendingToolTip\\(|isCellExcluded|showsExcluded|excludedText\\(|excludedToolTip\\("
   "^src/${DEMAND_FILES}\\.(cpp|h)$|^src/ui/docks/logbook/LogbookCellDelegate\\.(cpp|h)$" src)
 # Allow: none expected. The model knows pinned ids only; the logbook, the
 # column store, the plot model and the scheduler know nothing about jobs.
@@ -1529,6 +1543,52 @@ expect_none("the fusion document counts seven rules" "six texts|six rules" docs/
 expect_count("the fusion document carries the release measured on the reference recordings" "M56" 1
   docs/SENSOR_FUSION.md)
 
+# ─────────────────────────────── background-computation (items 1501, 1508, 1509, 1512, 1522-1524)
+# A recording switched off for background computation (docs/COMPUTED_PLOTS.md
+# "Switching a recording off"): the Compute attribute is read by the demand
+# layer alone, which excludes the recording's tracks and cancels its running
+# job; the index caches the file's switch so that no session is loaded to
+# learn it.
+audit_group(background-computation)
+# The tokens are constants beside the key, and the labels are spelled in the
+# definition. Allow: none expected; code that needs a token names
+# SessionKeys::ComputeOn or ComputeOff, and a comment names a token without
+# quotes. Tests and documents spell them legitimately, so only src is searched.
+expect_only("one authority: the Compute tokens" "\"(on|off)\"" "^src/sessiondata\\.h$" src)
+expect_only("one authority: the Compute labels" "\"(On|Off)\"" "^src/calculations/attributeregistration\\.cpp$" src)
+# The attribute's readers and writers: the key's home, the demand layer (the
+# one reader that decides anything), the importer (the import preference's
+# line), the index's two learn points, the definition, the constant default,
+# and the preference's registration and page (the token they hold). The
+# engine, the stores, the column worker, the fusion library and the kernel
+# never name it. Allow: none expected; a new reader is a design change of the
+# specification, not of this rule (a comment says "the Compute attribute").
+expect_only("the Compute attribute's readers"
+  "_COMPUTE|SessionKeys::Compute(On|Off)?${WB_END}"
+  "^src/(sessiondata\\.h|calculationdemand\\.cpp|dataimporter\\.cpp|logbookmanager\\.cpp|calculations/attributeregistration\\.cpp|calculations/attributecalculations\\.cpp|mainwindow\\.cpp|preferences/importsettingspage\\.cpp)$"
+  src)
+# The index's cache of the switch is read by the demand layer alone.
+# Allow: none expected.
+expect_only("the index's switch is read by the demand layer" "isComputeOff\\("
+  "^src/(logbookmanager|calculationdemand)\\.(cpp|h)$" src)
+# The texts, each spelled once. Allow: these count LINES, comments included;
+# a comment names them without quotes.
+expect_count("the cancel's reason is spelled once" "Switched off for this recording" 1 src)
+expect_count("the excluded cell's word is spelled once" "\"excluded\"" 1 src)
+expect_count("the excluded cell's tooltip is spelled once"
+  "Not computed: background computation is switched off for this recording" 1 src)
+expect_count("the index entry is read and written once each" "\"computeOff\"" 2 src/logbookmanager.cpp)
+expect_only("the index entry is the manager's" "\"computeOff\"" "^src/logbookmanager\\.(cpp|h)$" src)
+expect_count("the import page's text is spelled once" "Compute newly imported recordings in the background" 1
+  src/preferences/importsettingspage.cpp)
+# The documents. Allow: these count LINES; rewrap so that each phrase stays
+# on one line.
+expect_count("the computed plots document names the context menu's action" "Set Compute\\.\\.\\." 1
+  docs/COMPUTED_PLOTS.md)
+expect_count("the calculations document names the cancel's reason" "Switched off for this recording" 1
+  docs/CALCULATIONS.md)
+expect_count("the manual step of the switch is written" "\\*\\*M57 " 1 tests/README.md)
+
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 
@@ -1553,8 +1613,10 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # the reference recordings, the documents, the slow tail) and 1401-1415 (the
 # scale factors as a refinement: the two stages, the trigger, the fallback,
 # divergence, the boundary, the account, the algorithm string, the tests, the
-# reference recordings, the goldens, the documents). Four line forms; see the
-# head of the map.
+# reference recordings, the goldens, the documents) and 1501-1524 (background
+# computation per recording: the attribute, the column, the preference, the
+# exclusion, the cancel, the index entry, the cell, the eleven bullets of the
+# tests, the documents). Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -1631,8 +1693,9 @@ else()
             OR (item GREATER_EQUAL 1001 AND item LESS_EQUAL 1065) OR item EQUAL 1101
             OR (item GREATER_EQUAL 1201 AND item LESS_EQUAL 1213)
             OR (item GREATER_EQUAL 1301 AND item LESS_EQUAL 1313)
-            OR (item GREATER_EQUAL 1401 AND item LESS_EQUAL 1415)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313 and 1401-1415: ${line}")
+            OR (item GREATER_EQUAL 1401 AND item LESS_EQUAL 1415)
+            OR (item GREATER_EQUAL 1501 AND item LESS_EQUAL 1524)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313, 1401-1415 and 1501-1524: ${line}")
     endif()
   endforeach()
 
@@ -1722,6 +1785,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 1401 1415)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 1501 1524)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

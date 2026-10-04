@@ -1,5 +1,5 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Fifteen specifications, fifteen item ranges:
+# (tests/audit/cleanup_audit.cmake). Sixteen specifications, sixteen item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
@@ -53,7 +53,8 @@
 #             and 563 are stated as amended. It is amended by the
 #             specification of 801-863: item 509 is stated as amended. It is
 #             amended by the specification of 1001-1065: item 509 is stated as
-#             amended.
+#             amended. It is amended by the specification of 1501-1524: item
+#             519 is stated as amended.
 #   601-662   calculation refinements (the scheduler's completion of a
 #             task whose work is gone, announced record outcomes, the
 #             session model as the source of column knowledge and display
@@ -63,7 +64,9 @@
 #             tests/README.md, appendix G. It amends the specification of
 #             501-563. It is amended by the specification of 701-754: items
 #             604, 612, 618, 624, 627, 631, 642, 644-651, 653, 654, 656, 657,
-#             660 and 662 are stated as amended.
+#             660 and 662 are stated as amended. It is amended by the
+#             specification of 1501-1524: items 629, 633 and 662 are stated
+#             as amended.
 #   701-754   one status bar for background work (the activity area and its
 #             one rule, the warning and what persists across restarts, the
 #             logbook row warning, the per-source presentation removed, the
@@ -140,6 +143,19 @@
 #             amends the specifications of 201-247 (item 243), 1001-1065
 #             (item 1054) and 1301-1313 (item 1313): each is stated as
 #             amended.
+#   1501-1524 background computation per recording, the Compute attribute
+#             (a Choice of on and off read by the demand layer alone, which
+#             excludes a recording switched off from plot and column demand
+#             before any other condition, loaded or not; its column, header
+#             tooltip, "Set Compute..." and import preference; the running
+#             job cancelled with a reason; the index entry that keeps a
+#             session from being loaded to learn it is off; the excluded
+#             cell): 1501-1512 the attribute, the column, the preference,
+#             the exclusion, the cancel, the index and the cell, 1513-1523 the
+#             eleven bullets of the tests, 1524 the documents. Stated in full
+#             in tests/README.md, appendix P. It amends the specifications of
+#             501-563 (item 519) and 601-662 (items 629, 633 and 662): each
+#             is stated as amended.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -149,12 +165,12 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the fifteen ranges; every item 1-19 needs a
+# Every item must lie in one of the sixteen ranges; every item 1-19 needs a
 # line; every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662,
-# 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313 or
-# 1401-1415 needs at least one test or audit line (manual and ci lines never
-# stand alone). The human-readable matrices are tests/README.md sections 9.1
-# to 9.15; keep them in sync with this file.
+# 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313,
+# 1401-1415 or 1501-1524 needs at least one test or audit line (manual and ci
+# lines never stand alone). The human-readable matrices are tests/README.md
+# sections 9.1 to 9.16; keep them in sync with this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -1475,7 +1491,8 @@
 518 manual M6
 518 manual M26
 
-# 519 - (6) the running job is never stopped because its pair left demand: it finishes and its result is published and stored; it is stopped only when its inputs change, its session goes away, or the application closes
+# 519 - (6, as amended) the running job is never stopped because its pair left demand: it finishes and its result is published and stored; it is stopped only when its inputs change, its session goes away, its recording is switched off for background computation (amended by the specification of 1501-1524), or the application closes
+519 tst_calculation_demand switchingOffCancelsTheRunningJob
 519 tst_calculation_demand uncheckingDropsWaitingPairsKeepsRunning
 519 tst_calculation_demand hidingASessionDropsItsWaitingPair
 519 tst_calculation_demand disablingColumnReleasesHeldSessions
@@ -1994,7 +2011,8 @@
 628 tst_jobmodel historyFromSignalsAlone
 628 audit gestures
 
-# 629 - (9) the executor keeps its cancel operation for the jobs dock; no product code calls it, and its comment and the audit say so
+# 629 - (9, as amended) the executor keeps its cancel operation, with the caller's reason; the demand layer is its one product caller, for the running job of a recording switched off, and the jobs dock may call it too; its comment and the audit say so (amended by the specification of 1501-1524)
+629 tst_calculation_demand switchingOffCancelsTheRunningJob
 629 tst_jobqueue cancelRunningThenNextStarts
 629 tst_jobqueue cancelQueued
 629 audit gestures
@@ -2019,7 +2037,8 @@
 632 tst_calculation_demand chainedBlockersContinue
 632 tst_calculation_demand registryChangeReclassifies
 
-# 633 - (10.1) a session that is not loaded is a track of columns only, classified in this order: no storable calculation, not applicable; a storable calculation remembered failed (a job, a load or a write that failed), failed with the remembered reason; every storable calculation remembered not applicable for that column, not applicable; every storable calculation with a record, done, or failed with the first recorded reason; a failed-load placeholder, failed ("The session file could not be loaded"); otherwise waiting
+# 633 - (10.1, as amended) a session that is not loaded is a track of columns only, classified in this order, after the exclusion of a session switched off for background computation, which is decided first from the index (amended by the specification of 1501-1524): no storable calculation, not applicable; a storable calculation remembered failed (a job, a load or a write that failed), failed with the remembered reason; every storable calculation remembered not applicable for that column, not applicable; every storable calculation with a record, done, or failed with the first recorded reason; a failed-load placeholder, failed ("The session file could not be loaded"); otherwise waiting
+633 tst_calculation_demand fillNeverLoadsAnExcludedSession
 633 tst_calculation_demand storedRejectionIsBadgedAfterRestartWithoutLoad
 633 tst_calculation_demand unloadableSessionIsSettledAsFailed
 633 tst_calculation_demand failedRecordWriteIsShownAndNotRetried
@@ -2210,7 +2229,7 @@
 661 audit demand
 661 audit gestures
 
-# 662 - (15, as amended) docs/ and tests/README.md describe the executor's signals and queries (cancel kept for the jobs dock), the one walk, the one memory, the parts of the demand layer, the fill's completion, the failed write, the session model as the source of column knowledge and display names, and the status bar and the row warning; not the indicator, the clock or the fill's progress text
+# 662 - (15, as amended) docs/ and tests/README.md describe the executor's signals and queries (cancel with the caller's reason, the demand layer its one product caller, for the running job of a recording switched off, and the jobs dock may call it too), the one walk, the one memory, the parts of the demand layer, the fill's completion, the failed write, the session model as the source of column knowledge and display names, and the status bar and the row warning; not the indicator, the clock or the fill's progress text (amended by the specification of 1501-1524)
 662 audit demand
 
 # ---- One status bar for background work: item = 700 + clause number ----
@@ -3564,3 +3583,120 @@
 
 # 1415 - (5) the documents: SENSOR_FUSION.md section 4 (the two stages, the trigger, the fallback, the divergence rule and its bounds, the case; the stopping rules with diverged; the diagnostics with scale_release), section 7 (the fourth boundary, v9 in the history), section 8 (M56's numbers); DATA_SCHEMA.md section 12 and CALCULATIONS.md section 17 (v9); tests/README.md (the kernel and golden rows, M56 in 12.13, appendix O, matrix 9.15)
 1415 audit staged-scale
+
+# ---- Background computation per recording, the Compute attribute (PLANS/background-computation.md): twenty-four items ----
+
+# 1501 - (2, 3) the Compute attribute: a session attribute _COMPUTE, a Choice of on ("On") and off ("Off") in that order, category "Session", display name "Compute", editable, a built-in of the core registered beside the other built-in definitions; its tokens are spelled beside the key and its labels in the definition; read by the demand layer alone, and named in src only by the key's home, the demand layer, the importer, the index, the definition, the constant default and the preference's registration and page
+1501 tst_calculation_demand computeColumnShowsTheDefaultWithoutAWrite
+1501 tst_builtins_engine constantDefaults
+1501 audit background-computation
+
+# 1502 - (3) a session without the line reads the constant default on: the column shows "On", the file is not touched and index.json caches on for its stub; setData() writes on or off verbatim and refuses any other value; no edit removes the line; a token outside the list is shown as written and the session is computed
+1502 tst_calculation_demand computeColumnShowsTheDefaultWithoutAWrite
+1502 tst_calculation_demand computeEditStoresATokenAndRefusesOthers
+1502 tst_calculation_demand handEditedTokenIsShownAsWrittenAndReadAsOn
+1502 tst_builtins_engine constantDefaults
+
+# 1503 - (2, 3) not an input: setting the attribute while a job of the session runs leaves it not asked to stop, keeps the stored records, the cached values and every other session's results, starts no settle wait and runs one pass of its own; the compatibility marker and the algorithm string are unchanged
+1503 tst_calculation_demand settingComputeInvalidatesNothing
+1503 tst_fusion_golden successFixturesMatchGolden
+
+# 1504 - (3) the column: the header's tooltip "compute results for this recording in the background" (no other header has one); "Set Compute..." offers the definition's list and applies a bulk edit, on a stub without loading it
+1504 tst_calculation_demand computeColumnShowsTheDefaultWithoutAWrite
+1504 tst_calculation_demand computeBulkEdit
+1504 tst_choice_attribute setDialogOffersTheList
+
+# 1505 - (3) the import preference "Compute newly imported recordings in the background", on by default and holding the token: a recording imported while it reads exactly off is stored with the off line, one with its own line keeps it, and any other value stores nothing; the page round-trips the setting
+1505 tst_importer computeFromThePreference
+1505 tst_calculation_demand importedWhilePreferenceOffIsExcludedAtOnce
+1505 manual M57
+
+# 1506 - (4) a track of a session that reads off is excluded, decided first, for loaded and unloaded sessions, plot and column tracks: no job, no load, no hold, not counted in progress, not a failure, its cell excluded and not pending; the other sessions compute
+1506 tst_calculation_demand excludedSessionIsNotComputed
+1506 tst_calculation_demand fillNeverLoadsAnExcludedSession
+
+# 1507 - (2, 4) what exists is shown: a stored result of a session switched off is restored when it is loaded and fills its column from the record without a load; its stored rejection is not a failure and shows no row warning, and is listed again, without computing, when the session is switched on
+1507 tst_calculation_demand excludedSessionWithStoredResultServes
+1507 tst_logbook_indicators excludedSessionShowsNoRowWarning
+1507 tst_logbook_indicators excludedCellShowsItsValue
+
+# 1508 - (4) the excluded cell: a requested column's cell of a session switched off that has no value reads "excluded", muted like the pending mark, with the tooltip "Not computed: background computation is switched off for this recording"; a value always wins; it is a presentation of demand, never in the model, the cached values or the index, sorting treats it as unavailable, and pendingCellsChanged(id) announces and repaints its column
+1508 tst_logbook_indicators excludedCellIsDistinctFromPendingAndUnavailable
+1508 tst_logbook_indicators excludedCellShowsItsValue
+1508 tst_logbook_indicators sortingTreatsExcludedAsUnavailable
+1508 tst_logbook_indicators excludedCellsChangeRepaintsOnlyThatColumn
+1508 audit demand
+1508 audit background-computation
+
+# 1509 - (4) switching off: a pass runs at once; the session's chosen next job is withdrawn ("No longer needed"); its running job ends Cancelled with the reason "Switched off for this recording", publishing and storing nothing, and the next job starts after it; the executor's cancel takes the caller's reason; the pair memory is not touched
+1509 tst_calculation_demand switchingOffCancelsTheRunningJob
+1509 tst_calculation_demand switchingOffWithdrawsTheChosenNextJob
+1509 tst_calculation_demand switchingOffStopsAJobKeptAfterUnchecking
+1509 tst_jobqueue cancelRunningThenNextStarts
+1509 tst_jobqueue cancelQueued
+1509 audit gestures
+1509 audit background-computation
+
+# 1510 - (4) switching on: the session's missing results enter demand under the ordinary priority, a stopped computation runs again from its start, and a failure remembered for the pair still keeps it from being offered
+1510 tst_calculation_demand switchingOnCreatesDemandForItsMissingResults
+
+# 1511 - (4) the plot widget's warning, priority, the settle wait, the fill's bound, the executor's limits and the status bar's form are unchanged; the counts and lists simply omit an excluded session, and the running job of one is described by nothing
+1511 tst_calculation_demand switchingOffCancelsTheRunningJob
+1511 tst_calculation_demand progressCountsEachSessionOnce
+1511 tst_status_bar computationsAreOneItem
+
+# 1512 - (5) sessions that are not loaded: the index records, per session, "computeOff": true when the file was last seen switched off, learned at a save and a load (the import, a loaded row's save, the bulk edit's stub path, the column worker's copy), carried by a remap, dropped by a removal and a reset; an index without it reads on; an off file the index does not know is loaded at most once and never computed
+1512 tst_logbook_index computeOffRoundTrip
+1512 tst_calculation_demand fillNeverLoadsAnExcludedSession
+1512 tst_calculation_demand offOnDiskButAbsentFromIndexIsLoadedOnce
+1512 audit background-computation
+
+# 1513 - (6, first bullet) a session switched off is not computed for a plot checked while it is visible, when shown while a plot is checked, or for an enabled column; the others are; progress never counts it; its cell reads excluded and is not pending
+1513 tst_calculation_demand excludedSessionIsNotComputed
+
+# 1514 - (6, second bullet) switching off while the job runs ends it Cancelled with the reason, publishes and stores nothing, releases the hold and runs the next candidate; while it is the chosen next job, it is withdrawn; while the session settles, nothing is left waiting
+1514 tst_calculation_demand switchingOffCancelsTheRunningJob
+1514 tst_calculation_demand switchingOffWithdrawsTheChosenNextJob
+1514 tst_calculation_demand switchingOffStopsAJobKeptAfterUnchecking
+1514 tst_calculation_demand switchingOffWhileSettlingLeavesNothingWaiting
+
+# 1515 - (6, third bullet) switching on creates demand for the session's missing results and no other; a stopped computation runs again from its start
+1515 tst_calculation_demand switchingOnCreatesDemandForItsMissingResults
+
+# 1516 - (6, fourth bullet) a stored result of a session switched off is restored, fills the column and is not loaded again for it; its stored rejection is not a failure and shows no row warning, and is listed again when it is switched on
+1516 tst_calculation_demand excludedSessionWithStoredResultServes
+1516 tst_logbook_indicators excludedSessionShowsNoRowWarning
+
+# 1517 - (6, fifth bullet) setting the attribute invalidates no stored result and no cached value, starts no settle wait and makes no running job stale; the marker and the algorithm string are unchanged
+1517 tst_calculation_demand settingComputeInvalidatesNothing
+1517 tst_fusion_golden successFixturesMatchGolden
+
+# 1518 - (6, sixth bullet) the column fill never loads a session switched off; with every unloaded session off, enabling the column creates no load and no job; the index records the attribute on the bulk edit's stub path and reports it without a load
+1518 tst_calculation_demand fillNeverLoadsAnExcludedSession
+1518 tst_logbook_index computeOffRoundTrip
+
+# 1519 - (6, seventh bullet) the column: the default shows "On" without a write; an edit stores a token and refuses others; "Set Compute..." bulk-edits the selected sessions; a hand-edited token is shown as written and read as on
+1519 tst_calculation_demand computeColumnShowsTheDefaultWithoutAWrite
+1519 tst_calculation_demand computeEditStoresATokenAndRefusesOthers
+1519 tst_calculation_demand computeBulkEdit
+1519 tst_calculation_demand handEditedTokenIsShownAsWrittenAndReadAsOn
+1519 tst_choice_attribute setDialogOffersTheList
+
+# 1520 - (6, eighth bullet) a recording imported while the preference is off carries the off line and is excluded at once for an enabled column and a checked plot; one imported while it is on carries no line; the page round-trips the setting
+1520 tst_calculation_demand importedWhilePreferenceOffIsExcludedAtOnce
+1520 tst_importer computeFromThePreference
+1520 manual M57
+
+# 1521 - (6, ninth bullet) a session whose attribute is off on disk but absent from the index is loaded at most once by the fill and never computed
+1521 tst_calculation_demand offOnDiskButAbsentFromIndexIsLoadedOnce
+
+# 1522 - (6, tenth bullet) the manual step M57: a long-running recording switched off while it is computed (the status bar's count, the cell, the row, the plot), switched on again, the whole-logbook column fill with half the recordings off, the import preference
+1522 audit background-computation
+1522 manual M57
+
+# 1523 - (6, eleventh bullet) the audit's gestures rule reads that the demand layer is the one product caller of cancel; a new hundred in the acceptance map; audit_cleanup and the whole suite green
+1523 audit gestures
+1523 audit background-computation
+
+# 1524 - (7) the documents: COMPUTED_PLOTS.md (switching a recording off; the status bar, logbook and limitation sections), CALCULATIONS.md sections 15 and 16 (the condition, the reading, the stop of the running job, the fill, the cell's third text), DATA_SCHEMA.md sections 9 and 11, SENSOR_FUSION.md section 2, tests/README.md (the rows, M57, appendix P, matrix 9.16)
+1524 audit background-computation

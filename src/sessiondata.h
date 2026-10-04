@@ -102,6 +102,15 @@ namespace SessionKeys {
     // Fusion::Orientation (src/fusion/orientation.h), the one owner of that
     // vocabulary. Unset, it reads the orientation's constant default.
     constexpr char Orientation[] = "_ORIENTATION";
+
+    // Whether the recording takes part in background computation, a Choice
+    // of two tokens spelled here and nowhere else in src. The demand layer
+    // reads it, and nothing else does: any token but ComputeOff is on, so a
+    // recording without the line, or with a hand-edited token, is computed.
+    // Unset, it reads its constant default, ComputeOn.
+    constexpr char Compute[] = "_COMPUTE";
+    constexpr char ComputeOn[] = "on";
+    constexpr char ComputeOff[] = "off";
 }
 
 /// One column of the source layer: samples and unit text exactly as recorded.

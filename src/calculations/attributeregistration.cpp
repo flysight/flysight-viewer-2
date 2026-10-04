@@ -56,6 +56,21 @@ void FlySight::registerBuiltInAttributes() {
         false
     });
 
+    // The switch of background computation: the demand layer's, not the
+    // fit's, so it is a built-in of the core. Its tokens are the constants
+    // beside the key; its labels are spelled here alone.
+    reg.registerAttribute({
+        QStringLiteral("Session"),
+        QStringLiteral("Compute"),
+        SessionKeys::Compute,
+        AttributeFormatType::Choice,
+        true,
+        QString(),
+        {{QString::fromLatin1(SessionKeys::ComputeOn), QStringLiteral("On")},
+         {QString::fromLatin1(SessionKeys::ComputeOff), QStringLiteral("Off")}},
+        QStringLiteral("compute results for this recording in the background")
+    });
+
     reg.registerAttribute({
         QStringLiteral("Location"),
         QStringLiteral("Ground Elevation"),

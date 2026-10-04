@@ -150,6 +150,7 @@ void BuiltinsEngineTest::inventory()
         "builtin.attr.courseRef",
         "builtin.default._WIND_N",
         "builtin.default._WIND_E",
+        "builtin.default._COMPUTE",
         "builtin.attr.manoeuvreStart",
         "builtin.attr.flare",
         "builtin.attr.landingTime",
@@ -230,7 +231,7 @@ void BuiltinsEngineTest::inventory()
 
     const QStringList ids = m_world->registry.registeredIds();
     QCOMPARE(ids, expected);
-    QCOMPARE(ids.size(), 76);   // 2 conversion families + 73 calculations + 1 family
+    QCOMPARE(ids.size(), 77);   // 2 conversion families + 74 calculations + 1 family
 
     const QStringList families = {"builtin.conversion.schema", "builtin.conversion.default",
                                   "builtin.interpolation"};
@@ -297,7 +298,7 @@ void BuiltinsEngineTest::noUndeclaredReads()
         QVERIFY2(status.has_value(), qPrintable(id));
         QVERIFY2(*status == ResultStatus::Ok || *status == ResultStatus::MissingInput, qPrintable(id));
     }
-    QCOMPARE(plain, 73);
+    QCOMPARE(plain, 74);
 
     QCOMPARE(engine.undeclaredReadCount(), 0);
     QCOMPARE(engine.cycleCount(), 0);
@@ -320,6 +321,7 @@ void BuiltinsEngineTest::constantDefaults()
     const QHash<QString, QVariant> expected = {
         {QStringLiteral("_WIND_N"), QVariant(0.0)},
         {QStringLiteral("_WIND_E"), QVariant(0.0)},
+        {QStringLiteral("_COMPUTE"), QVariant(QStringLiteral("on"))},
         {QStringLiteral("_WSP_VERSION"), QVariant(QStringLiteral("1.0"))},
         {QStringLiteral("_WSP_TOP_ALT"), QVariant(2500.0)},
         {QStringLiteral("_WSP_BOTTOM_ALT"), QVariant(1500.0)},
@@ -329,7 +331,7 @@ void BuiltinsEngineTest::constantDefaults()
         {QStringLiteral("_SP_BREAKOFF_ALT"), QVariant(5600.0 / 3.28084)},
     };
 
-    // The shape of every registration under the prefix, and exactly these nine.
+    // The shape of every registration under the prefix, and exactly these ten.
     QSet<QString> found;
     for (const QString &id : m_world->registry.registeredIds()) {
         if (!id.startsWith(prefix))

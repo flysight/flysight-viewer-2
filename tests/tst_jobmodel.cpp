@@ -39,6 +39,9 @@ using namespace FlySightTest;
 
 namespace {
 
+// The reason a test gives JobQueue::cancel(), as a jobs view would show it
+const QString kCancelReason = QStringLiteral("Cancelled");
+
 const QList<int> kJobRoles = {
     JobModel::JobIdRole, JobModel::SessionIdRole, JobModel::SessionNameRole,
     JobModel::CalculationIdRole, JobModel::InstanceIdRole, JobModel::CalculationTitleRole,
@@ -234,7 +237,7 @@ private:
     JobId cancelledJob(const QString &sessionId, const char *calculationId)
     {
         const JobId id = offer(sessionId, calculationId);
-        m_queue->cancel(id);
+        m_queue->cancel(id, kCancelReason);
         return id;
     }
     Gate &gate() { return m_world->gate(); }
@@ -445,14 +448,14 @@ void JobModelTest::historyFromSignalsAlone()
     // 4. cancel while running
     const JobId cancelRunning = offer("s2", "gated");
     QVERIFY(gate().waitEntered());
-    QVERIFY(m_queue->cancel(cancelRunning));
+    QVERIFY(m_queue->cancel(cancelRunning, kCancelReason));
     QVERIFY(waitIdle(*m_queue));
 
     // 5. cancel while queued   6. superseded by an input change while running
     const JobId supersededRunning = offer("s3", "gated");
     QVERIFY(gate().waitEntered());
     const JobId cancelQueued = offer("s3", "expA");
-    QVERIFY(m_queue->cancel(cancelQueued));
+    QVERIFY(m_queue->cancel(cancelQueued, kCancelReason));
     QVERIFY(setInput("s3", "G_IN", 5));
     gate().open(1);
     QVERIFY(waitIdle(*m_queue));
@@ -632,7 +635,7 @@ void JobModelTest::cancelRequestedIsVisible()
     QVERIFY(gate().waitEntered());
 
     QSignalSpy dataSpy(model(), &QAbstractItemModel::dataChanged);
-    QVERIFY(m_queue->cancel(id));
+    QVERIFY(m_queue->cancel(id, kCancelReason));
     QVERIFY(dataSpy.count() >= 1);
     const QList<QVariant> asked = dataSpy.at(0);
     QCOMPARE(asked.at(0).toModelIndex(), model()->index(0, 0));
@@ -644,7 +647,7 @@ void JobModelTest::cancelRequestedIsVisible()
 
     // Asking again is not another transition
     const qsizetype signalsSoFar = dataSpy.count();
-    QVERIFY(m_queue->cancel(id));
+    QVERIFY(m_queue->cancel(id, kCancelReason));
     QCOMPARE(dataSpy.count(), signalsSoFar);
 
     QVERIFY(waitIdle(*m_queue));
@@ -829,7 +832,7 @@ void JobModelTest::nothingIsPersisted()
     QCOMPARE(m_queue->job(failure).state, JobState::Failed);
     const JobId cancelled = offer("s3", "gated");
     QVERIFY(gate().waitEntered());
-    QVERIFY(m_queue->cancel(cancelled));
+    QVERIFY(m_queue->cancel(cancelled, kCancelReason));
     QVERIFY(waitIdle(*m_queue));
     QCOMPARE(m_queue->job(success).state, JobState::Succeeded);
     QCOMPARE(m_queue->job(rejection).state, JobState::Succeeded);

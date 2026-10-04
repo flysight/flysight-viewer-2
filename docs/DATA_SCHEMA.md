@@ -359,6 +359,17 @@ hand-edited token outside the list is kept and shown as written, and for the
 Orientation heading, pitch and roll are then unavailable
 ([SENSOR_FUSION.md](SENSOR_FUSION.md), section 2).
 
+The Compute attribute (`_COMPUTE`, whether the recording takes part in
+background computation, `docs/COMPUTED_PLOTS.md` section 11) is a choice
+attribute of the same form, `$VAR,_COMPUTE,<token>` with the token `on` or
+`off`: written when the user sets it (the cell, or "Set ..." on the logbook's
+context menu) and at import while the Import preference "Compute newly
+imported recordings in the background" is unchecked, which writes `off`
+(otherwise nothing is written). No edit removes the line. A recording without
+it reads the constant default `on`, and every recording on disk before the
+attribute existed reads on. A hand-edited token outside the list is kept and
+shown as written; for background computation any token but `off` is on.
+
 A save **fails and leaves the previous file intact** when a sensor has columns
 of unequal length, when a sensor name, column label, or unit contains a comma
 or a line break, when the session holds a `SCHEMA_VER` the importer would
@@ -460,6 +471,21 @@ a solver failure:
 ```json
 "recordReasons": {"builtin.fusion.fit": "Batch fusion did not converge (iteration limit); sensor fusion unavailable"}
 ```
+
+Each session entry may also have `"computeOff": true`, beside `"records"` and
+`"recordReasons"`: the session file was last seen to switch the recording off
+for background computation (its `$VAR,_COMPUTE` line reads `off`, section 9),
+so that the recording is left out of background computation without being
+loaded. It is derived from the session file, which is the authority, and is
+learned wherever the application writes or reads that file: at a save (the
+import, a loaded recording's save, a bulk edit of a recording that is not
+loaded) and at a load (a load of the recording, and the background worker's
+temporary copy). It is additive and optional: it is written only for a
+recording switched off, and absent means on, so an index written by an earlier
+build, or rebuilt after it was discarded, reads every recording as on until
+the file is next read (at most one hidden load per recording switched off,
+never a computation). A remap of the session id carries it, and removing the
+session removes it. Nothing else in the entry changes.
 
 An edit or a merge refreshes only the columns that can depend on the change,
 and an interrupted save cannot leave cached values that disagree with the

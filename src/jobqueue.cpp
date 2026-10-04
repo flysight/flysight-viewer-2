@@ -549,20 +549,21 @@ void JobQueue::requestStop(const PendingEnd &end)
     }
 }
 
-bool JobQueue::cancel(JobId id)
+bool JobQueue::cancel(JobId id, const QString &reason)
 {
+    Q_ASSERT(!reason.isEmpty());
     const JobRecord record = m_model->record(id);
     if (record.id == 0 || record.isFinished())
         return false;
 
     if (record.state == JobState::Queued) {
         // No longer the chosen next job; the record stays as a finished entry
-        endJob(id, JobState::Cancelled, tr("Cancelled"));
+        endJob(id, JobState::Cancelled, reason);
         return true;
     }
 
     if (m_run && m_run->jobId == id)
-        requestStop({JobState::Cancelled, tr("Cancelled")});
+        requestStop({JobState::Cancelled, reason});
     return true;
 }
 

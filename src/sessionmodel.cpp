@@ -473,6 +473,12 @@ QVariant SessionModel::headerData(int section, Qt::Orientation orientation, int 
     }
     if (role == Qt::TextAlignmentRole)
         return QVariant::fromValue(Qt::AlignCenter);
+    if (role == Qt::ToolTipRole && m_columns[section].type == ColumnType::SessionAttribute) {
+        // The header view shows the model's tooltip without code of its own
+        const auto *def = AttributeRegistry::instance().findByKey(m_columns[section].attributeKey);
+        if (def && !def->tooltip.isEmpty())
+            return def->tooltip;
+    }
     return QVariant();
 }
 

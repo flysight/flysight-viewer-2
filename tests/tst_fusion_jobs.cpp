@@ -491,7 +491,7 @@ void FusionJobsTest::cancelDuringFitThenNextJobStarts()
         if (next.created() && m_queue->chosenNextJob() == next.job)
             job2 = next.job;
         sinceCancel.start();
-        cancelled = m_queue->cancel(job1);
+        cancelled = m_queue->cancel(job1, QStringLiteral("Cancelled by the test"));
     });
     connect(m_queue.get(), &JobQueue::jobFinished, &scope, [&](JobId id, JobState) {
         if (id == job1 && sinceCancel.isValid())
@@ -503,7 +503,7 @@ void FusionJobsTest::cancelDuringFitThenNextJobStarts()
 
     const JobRecord first = m_queue->job(job1);
     QCOMPARE(first.state, JobState::Cancelled);
-    QCOMPARE(first.reason, QStringLiteral("Cancelled"));
+    QCOMPARE(first.reason, QStringLiteral("Cancelled by the test"));
     QVERIFY(!first.resultStatus.has_value());
     // Evidence of a stop at a boundary, not asserted: if the worker had
     // already returned when the cancel was processed, the job still ends

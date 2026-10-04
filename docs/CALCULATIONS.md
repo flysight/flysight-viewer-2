@@ -112,14 +112,16 @@ The application then registers sensor fusion from its own library
 **Defaults are calculations.** The importer stores only what is a fact of the
 import: identity, provenance, and a choice the user made at import (jumper
 mass, planform area, the fixed ground elevation, the orientation the device
-was mounted in). Anything that stands in for
+was mounted in, a recording switched off for background computation).
+Anything that stands in for
 a value the user has not set is a calculation. It is derived from the data
 where possible (the ground elevation, the video sync time, the course
 reference). Otherwise it is constant: a calculation with no inputs whose one
 output is the attribute, registered with `Calculations::addConstantDefault`
 (`src/calculations/attributecalculations.h`) under the id
 `builtin.default.<key>`. Every constant default is found by searching for that
-name; wind north and east (zero) and the SP and WS-P parameters are constant
+name; wind north and east (zero), the Compute attribute (`_COMPUTE`, `on`,
+16.1) and the SP and WS-P parameters are constant
 defaults, and so are the orientation (`_ORIENTATION`, forward +y, up +z) and
 the four IMU configuration attributes (`ACCEL_FS_G`, `GYRO_FS_DEG_S`,
 `ACCEL_ODR_HZ`, `GYRO_ODR_HZ`, the configuration of the firmware of the
@@ -715,9 +717,10 @@ function of the inputs, which it remembers for the rest of the run (16.7).
 queries; it has no idle signal, no queued signal and no query of both active
 jobs, because no product code used them. A new job is a new row of the job
 model (`rowsInserted`); `isIdle()` is "nothing runs and no chosen next job";
-`runningJob()` and `chosenNextJob()` are the two active jobs. `cancel(JobId)`
-is kept for the jobs dock, a later view of the job history; no product code
-calls it today (15.3).
+`runningJob()` and `chosenNextJob()` are the two active jobs.
+`cancel(JobId, reason)` takes the caller's reason; the demand layer is its one
+product caller, for the running job of a recording switched off, and a jobs
+dock, a later view of the job history, may call it too (15.3).
 
 ### 15.1 What a job is
 
@@ -843,17 +846,21 @@ between links (16.4). Slots connected to the executor's signals may call
 
 ### 15.3 Cancellation, abandonment, shutdown
 
-- `cancel(id)` on the chosen next job ends it Cancelled ("Cancelled") at
-  once; its record stays as a finished entry. On the running job it requests
-  cancellation; the job stays Running (`cancelRequested`) until the compute
-  function returns, and the next job does not start before then.
-  `cancel(JobId)` is kept for the jobs dock, a later view of the job history;
-  no product code calls it today, and its doc comment and the cleanup audit
-  (group `gestures`: "no product code cancels a job", "cancel is kept for the
-  jobs dock") say so. A job cancelled from outside while its pair is still in
-  demand is offered again at once by the demand layer; a jobs dock that
-  cancels will need its own policy (for example remembering a user cancel
-  like a job-level failure).
+- `cancel(id, reason)` on the chosen next job ends it Cancelled at once, with
+  the caller's reason; its record stays as a finished entry. On the running
+  job it requests cancellation, and the job ends Cancelled with that reason
+  (unless a pending end was decided first: the first writer wins); the job
+  stays Running (`cancelRequested`) until the compute function returns, and
+  the next job does not start before then. The reason is required and never
+  empty. The demand layer is the one product caller: it cancels the running
+  job of a recording switched off for background computation, with a reason
+  that says so (16.4); a jobs dock, a later view of the job history, may call
+  it too. Its doc comment and the cleanup audit (group
+  `gestures`: "the demand layer is the one product caller of cancel") say so.
+  A job cancelled from outside while its pair is still in demand is offered
+  again at once by the demand layer; a jobs dock that cancels will need its
+  own policy (for example remembering a user cancel like a job-level
+  failure).
 - **Cancel wins over a late result.** Once cancellation was requested the job
   ends Cancelled and publishes nothing, even if the compute function returned a
   complete result. The outcome does not depend on a race the user cannot see.
@@ -1036,7 +1043,7 @@ publish to engines).
 | `publishingJob()` | the job whose publication is being delivered (15.2, step 2), 0 at every other moment |
 | `activeJob(sessionId, instanceId)` | the chosen next or running job an offer would be equal to, 0 if none; never a running job that was asked to stop |
 | `runningJob()`, `job(id)`, `isIdle()`, `isShutDown()` | queries; `isIdle()` is "nothing runs and no chosen next job"; `job()` returns a default record (id 0) for an unknown or removed job; the running job and the chosen next job are the only active jobs |
-| `cancel(id)` | false: unknown or already finished. Kept for the jobs dock; no product caller today (15.3) |
+| `cancel(id, reason)` | false: unknown or already finished. The reason is the end's reason and never empty; the demand layer is the one product caller, for the running job of a recording switched off, and a jobs dock may call it too (15.3) |
 | `shutdown()` | 15.3 |
 | `failNextWorkerStarts(n)` | test seam: thread-creation failure cannot be provoked portably |
 | signals `jobStarted(id)`, `jobProgress(id, text)`, `jobCancelRequested(id)`, `jobFinished(id, state)`, `jobsChanged()` (after each of the others except `jobProgress`) | A created job is announced by the job model's `rowsInserted` (then `jobsChanged`); a job that a `rowsInserted` slot ended (cancel, shutdown) has `jobFinished` as its only executor signal, and `offer()` still returns `Created`. There is no idle or queued signal: `isIdle()`, `runningJob()`, `chosenNextJob()` and the records answer those questions |
@@ -1194,7 +1201,9 @@ widget-free and lives in `flysight_core` (Qt Core and Gui only) next to
 **demand** - the pairs (session, requested calculation) that something
 switched on needs and that have no result - and keeps the executor's chosen
 next job equal to its first choice. It is the **only product caller of
-`JobQueue::offer()` and `withdrawChosenNext()`**. Nothing calls into it but the
+`JobQueue::offer()`, `withdrawChosenNext()` and `cancel()`** (the last for a
+recording switched off, 16.4), and the one reader of the Compute attribute
+(16.1). Nothing calls into it but the
 views' read-only queries; it observes the models, the logbook's record
 changes (which also announce a reason the index learned, 16.7), the session
 model's relay of a record that could not be written, the registry and the
@@ -1255,12 +1264,27 @@ only difference.
   no staleness check of its own. Explicit family instances are never stored,
   so they create no column demand for a session that is not loaded.
 
+**A recording switched off.** Every track of a session whose Compute
+attribute (`_COMPUTE`, `SessionKeys::Compute`, a Choice of `on` and `off`,
+constant default `on`) reads `off` is `Excluded`, decided before any other
+condition, for a loaded session and one that is not loaded alike, for plot
+and column tracks alike. The attribute is read by one reader of the
+reconciler, at every pass, memoized nowhere and never a fact of the pair
+memory (16.7): for a loaded session its stored line
+(`SessionData::storedAttribute()`; the engine is not asked); for a session
+that is not loaded, or a failed-load placeholder, the logbook index's cache
+of its file (`LogbookManager::isComputeOff()`, 16.8; DATA_SCHEMA section 11),
+so that no session is loaded to learn it is off. Any token but `off` is on,
+so a hand-edited token is computed. Nothing below the demand layer reads the
+attribute: no calculation declares it, so it is not an input of any result.
+
 **Conditions** of a track of a loaded session (`CalculationDemand::TrackCondition`,
 private to the reconciler: the walk's own classification, which nothing else
 keeps):
 
 | Report | Condition |
 |---|---|
+| any, the session reads `off` | `Excluded`, decided first |
 | `Available`, no storable calculation of the source remembered failed | `Done` |
 | `Available`, a storable calculation remembered failed (a record that could not be written, 16.7) | `Failed` |
 | `NotApplicable` | `NotApplicable`: silently absent |
@@ -1275,7 +1299,9 @@ the engine is the authority there. `Blocked` wins over `NotProduced`, as in
 section 13. There is no "stale" condition: a result invalidated by an input
 change reports `Blocked` again.
 
-A column track of a session that is not loaded is decided in this order:
+A column track of a session that is not loaded is decided in this order,
+after the exclusion, which comes first (the index says the session is off ->
+`Excluded`):
 
 1. the source has no storable calculation (explicit family instances alone)
    -> `NotApplicable`;
@@ -1295,7 +1321,13 @@ The index is asked only in step 4, once per session between record changes
 **What each condition feeds** (16.2): `Waiting` and `Running` count the
 track's session in progress and make a column's cell pending; `Running` also
 names the recording being computed; `Failed` gives the track's entries of the
-failures; `Done` and `NotApplicable` give none.
+failures; `Done` and `NotApplicable` give none. `Excluded` gives nothing but
+the column cell's excluded mark: it is never a candidate, never counted, never
+an entry of the failures (a stored rejection of a session switched off is not
+listed, and is listed again, without computing, when it is switched on) and
+never pending; it gives the fill no pending session and no load candidate, so
+the fill neither loads nor holds the session, and the running job of an
+excluded session is described by nothing.
 
 - A session without the calculation's inputs is `NotApplicable`: it is never
   waiting, running or failed, never counted, and never offered.
@@ -1372,6 +1404,9 @@ warning shows `listText()` of `failures()` and the logbook row's glyph
 **Pending cells:** `isCellPending(sessionId, columnId)` and
 `isCellPending(row, column)` are true exactly for a `Waiting` or `Running`
 cell of a requested column; the row is mapped to its session on every call.
+**Excluded cells:** `isCellExcluded(sessionId, columnId)` and
+`isCellExcluded(row, column)` are true exactly for an `Excluded` cell of a
+requested column (16.1), never together with pending.
 `plotId` is `"<sensorID>/<measurementID>"`, equal to
 `PlotModel::PlotValueIdRole`; `columnId` is `logbookColumnDefinitionKey(column)`.
 
@@ -1385,8 +1420,9 @@ records use the same name (`tst_result_columns::sessionDisplayNameOfEveryRowKind
 after a pass or on a progress text of the job it describes;
 `failuresChanged()` when `failures()` differs, order included, after a pass;
 `pendingCellsChanged(columnId)` for each requested column whose set of
-pending cells differs after a pass, and for each column no longer requested
-that had pending cells. Each is emitted only when its value differs, and all
+pending cells or set of excluded cells differs after a pass, and for each
+column no longer requested that had pending or excluded cells. Each is
+emitted only when its value differs, and all
 values are stored before any is announced: a slot of any signal reads every
 query. The running job's progress text changes `progressText` without a pass
 and without inspection. A value may be one event-loop pass behind the models:
@@ -1455,7 +1491,7 @@ Otherwise a pass is scheduled by:
 | Source | Signal |
 |---|---|
 | `PlotModel` | a check-state `dataChanged`, `modelReset` |
-| `SessionModel` | `visibilityChanged`, `sessionLoaded`, `modelChanged`, `focusedSessionChanged`, `modelReset` (which a column change causes), `dependencyChanged` of a relevant name (16.5; a bulk edit publishes one on both of its paths, so a bulk edit of a session that is not loaded arrives here too) and `calculationRecordWriteFailed` (16.7). The demand layer observes no `dataChanged` of the model: the column worker's display change of every stub it processes reaches nothing (16.7) |
+| `SessionModel` | `visibilityChanged`, `sessionLoaded`, `modelChanged`, `focusedSessionChanged`, `modelReset` (which a column change causes), `dependencyChanged` of a relevant name (16.5; a bulk edit publishes one on both of its paths, so a bulk edit of a session that is not loaded arrives here too) or of the Compute attribute (below) and `calculationRecordWriteFailed` (16.7). The demand layer observes no `dataChanged` of the model: the column worker's display change of every stub it processes reaches nothing (16.7) |
 | `LogbookManager` | `calculationRecordsChanged` (a record written or removed, or a reason the index learned) |
 | the executor | `jobStarted`, `jobCancelRequested`; `jobFinished` runs the pass at once; `jobProgress` updates the progress text only (16.2) |
 | the registry | its observer call |
@@ -1465,6 +1501,16 @@ A session-model reset reaches the executor first, which may end a chosen next
 job whose session is gone; its `jobFinished` runs a pass at once. So the
 demand layer drops its memos on `modelAboutToBeReset`, before any of that,
 and the pass reads the new rows and the model's columns.
+
+**The Compute attribute** arrives as a `dependencyChanged` under its own
+name, from an edit of the cell and from a bulk edit ("Set Compute...") on
+both paths, a stub's included, which the stub path saves (so the index
+learns it, 16.8) before it publishes. It is a change of demand, not an input
+change: it forgets nothing (16.7), starts no settle wait (16.5) and makes no
+running job stale (nothing declares the attribute). It runs a pass without a
+wait: at once when the executor has a chosen next job or a running job (so
+that the session's chosen next job is withdrawn before it can start and its
+running job is asked to stop, 16.4), scheduled otherwise.
 
 ### 16.4 Work follows demand
 
@@ -1500,15 +1546,28 @@ audit (group `demand`) checks the profiles shipped in
 `src/resources/profiles/`.
 
 **What drops demand:** unchecking the plot, hiding the session, disabling the
-column, or the result appearing by other means. A waiting pair that leaves
-demand is withdrawn before it starts (the executor ends it Cancelled "No
-longer needed"). There is no queue of accepted requests to prune: demand is
-the only list of waiting work.
+column, switching the session off (16.1), or the result appearing by other
+means. A waiting pair that leaves demand is withdrawn before it starts (the
+executor ends it Cancelled "No longer needed"). There is no queue of accepted
+requests to prune: demand is the only list of waiting work. Switching the
+session on again creates demand for its missing results under the ordinary
+priority, from their start; a failure remembered for a pair in this run still
+keeps it from being offered.
 
-**The running job is never stopped by the demand layer.** It finishes, and its
-result is published and stored, even when its pair left demand. It is stopped
-only as 15.3 says: its inputs changed, its session went away, or the
-application closes.
+**The running job is stopped by the demand layer for one reason only: its
+recording was switched off.** Otherwise it finishes, and its result is
+published and stored, even when its pair left demand, and it is stopped only
+as 15.3 says: its inputs changed, its session went away, or the application
+closes. Switching a recording off is a decision about that recording, not a
+momentary change of what is shown: when a pass finds the executor's running
+job not asked to stop and its session excluded, it calls
+`JobQueue::cancel(id, reason)` after the walk (the walk calls nothing on the
+executor), whether or not the walk ran, with the reason
+"Switched off for this recording".
+The job publishes and stores nothing (cancel wins over a late result, 15.3);
+the executor's `jobCancelRequested` schedules the next pass, and its
+`jobFinished` runs the pass that starts the next candidate. The pair memory
+is not touched.
 
 **Offering.** Each pass offers the candidates in priority order (16.6) and
 acts on the executor's answer; it does not compare a candidate with the
@@ -1640,7 +1699,9 @@ running job.
   cell: a track's verdict is always derived - for a loaded session from the
   engine and the memory, for one that is not loaded from the memory and the
   record set. Facts the walk learns (a column verdict, an exception result, a
-  placeholder's failed load) are applied after the walk.
+  placeholder's failed load) are applied after the walk. An exclusion (16.1)
+  is not a memory: it is read from the attribute at every pass, and switching
+  a session off or on neither adds nor clears a fact.
 - **Clearing.** For a session: a relevant input change (16.5; a bulk edit is
   one, on both of its paths: the session model publishes it as a dependency
   change, for a stub with the attribute's own name); a successful load
@@ -1717,6 +1778,20 @@ column worker, has the sessions of column demand loaded.
   for background work to end (`FlySightTest::waitForIdle()` waits until
   `!hasWork() && !isTicking()`): without the fill's progress reports, the
   signals alone do not tell a resting fill from an idle scheduler.
+- **A session switched off is never loaded by the fill.** Its tracks are
+  excluded before any other condition (16.1), for a session that is not
+  loaded from the index's cache of its file: `LogbookManager::isComputeOff()`,
+  the entry `"computeOff": true` (DATA_SCHEMA section 11), learned wherever the
+  manager writes or reads the session's file (`saveSession()`: the import, a
+  loaded row's save, the bulk edit's stub path; `loadSessionRaw()`: a load and
+  the column worker's temporary copy), absent meaning on. A held session whose
+  last pending cell is excluded releases its hold. **Recovery:** an index that
+  is missing, discarded or written by an earlier build has no entry, so a
+  session switched off on disk reads on until the manager reads its file; the
+  fill may then load it once as a hidden session, which reads `off` from its
+  own stored line, starts no job, releases its hold, and teaches the index,
+  so that after its eviction the stub is excluded without another load. The
+  recovery costs at most one hidden load per such recording, never a fit.
 - **A load step** takes the first session in row order that is not loaded,
   not visible (a visible stub belongs to the visible loader), not settling,
   not held and has a waiting cell, runs a pending pass first so that it
@@ -1813,6 +1888,9 @@ nothing offered or loaded, no session held, every test seam safe.
 | `plotId(sensorId, measurementId)`, `plotId(PlotValue)`, `columnId(column)` | the ids of 16.2 |
 | `progress()`, `failures()`, `sessionFailures(sessionId)` | 16.2; what the last pass (or the running job's latest progress text) left, at most one event-loop pass behind the models |
 | `isCellPending(sessionId, columnId)`, `isCellPending(row, column)` | 16.2 |
+| `isCellExcluded(sessionId, columnId)`, `isCellExcluded(row, column)` | 16.2 |
+| `JobQueue::cancel(id, reason)` | 15.3; the demand layer calls it for the running job of a recording switched off (16.4) |
+| `LogbookManager::isComputeOff(sessionId)` | 16.8; the index's cache of the session file's Compute line, a map lookup |
 | `isMerelyUncomputed(session, sensorId, measurementId)` | 16.10; static |
 | signals `progressChanged()`, `failuresChanged()`, `pendingCellsChanged(columnId)` | 16.2; each only when its value differs, every value stored first |
 | `flush()`, `hasPendingUpdate()`, `passCount()`, `setInputSettleDelay(ms)`, `inputSettleDelay()`, `endInputSettleWaits()`, `isSettling(id)`, `hasSettlingSessions()`, `heldSessionIds()`, `hasFillWork()`, `canLoad()`, `runLoadStep()`, `recordSetLookups()` | test seams; the views never call them (the fill and settle seams forward to the parts, 16.12) |
@@ -1840,8 +1918,8 @@ write announced).
 ### 16.10 The views and application wiring
 
 Two views present the demand layer, and both only read it: the status bar
-(progress and failures) and the logbook's cell delegate (pending cells and the
-row warning). The plot list and the logbook's column headers present nothing
+(progress and failures) and the logbook's cell delegate (pending and excluded
+cells and the row warning). The plot list and the logbook's column headers present nothing
 of the demand layer: a plot row or a column header over a requested
 calculation looks exactly as any other, with the tree's own delegate and
 header. Two more views ask the demand layer one question about a value they
@@ -1929,12 +2007,18 @@ visible part of the first visual column, with no model signal and no reset.
 **Pending cells.** The same delegate paints a cell whose pair is in demand
 (`isCellPending`) and whose model value is empty as a muted "···" (`pendingMark()`: three middle dots, U+00B7, in
 the palette's placeholder colour), with the tooltip "Pending: this value is
-being computed". A value always wins. The three looks of a cell: a value;
-empty (unavailable, or a value over a record that could not be read, which is
-not cached); "···" (in demand). Pending is a presentation of demand: the model,
+being computed". A value always wins. A cell whose session is switched off
+(`isCellExcluded`, 16.1) and whose model value is empty reads a muted
+"excluded" (`LogbookCellDelegate::excludedText()`), the cell's third text,
+in the pending mark's colours, with the tooltip "Not computed: background
+computation is switched off for this recording"
+(`LogbookCellDelegate::excludedToolTip()`); a cell is never both. The four
+looks of a cell: a value; empty (unavailable, or a value over a record that
+could not be read, which is not cached); "···" (in demand); "excluded"
+(switched off). Pending and excluded are presentations of demand: the model,
 its cached values, `pendingColumns`, `index.json` and `SessionModel::sort()`
-never see it; the cached value underneath stays unavailable until the record
-is written, so sorting treats a pending cell as unavailable. A
+never see them; the cached value underneath stays unavailable until a record
+is written, so sorting treats a pending or an excluded cell as unavailable. A
 `pendingCellsChanged(id)` repaints the visible part of that column only.
 Cells are not animated. The delegate holds the demand layer weakly and
 connects its `destroyed` itself, to repaint the viewport: without the demand
@@ -2011,8 +2095,9 @@ One sentence of contract per component, none naming another's workings:
 - **The executor:** runs one requested calculation for one loaded session with
   the engine's prepare / compute / publish steps, holding at most the running
   job and one chosen next job; it never loads a session and knows no caller;
-  it announces its jobs through its job model and keeps `cancel()` for the
-  jobs dock.
+  it announces its jobs through its job model; its `cancel()` takes the
+  caller's reason, and its one product caller is the demand layer, for a
+  recording switched off (a jobs dock may call it too).
 - **The column worker:** keeps cached column values a function of what is on
   disk; it never requests, prepares or runs a requested calculation and never
   knows a job exists.
@@ -2101,6 +2186,13 @@ The entry point also registers the definition of the orientation attribute
 (`AttributeRegistry`, in `flysight_model` so that the fusion library can reach
 it), once per process: the tests call the entry point for more than one
 registry, so it skips the definition when `findByKey()` already finds it.
+The Compute attribute (16.1) is not the fit's: its definition is the core's
+(`registerBuiltInAttributes()`, category "Session", display name "Compute",
+editable, a Choice of `on` "On" and `off` "Off", with the header tooltip
+"compute results for this recording in the background", the definition's
+optional `tooltip` member) and so is its constant default
+(`registerAttributeCalculations()`), so it covers this calculation and every
+requested calculation added later.
 Twelve calculations are registered, in this order:
 
 | Id | Policy | Inputs | Outputs |
