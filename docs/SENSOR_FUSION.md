@@ -58,7 +58,7 @@ document describes what is computed, from what, and how far to trust it.
   the fused heading, tilt, horizontal acceleration and vertical acceleration
   ([Accuracy](#4-model-and-output-contract) in section 4). They have no GNSS
   counterpart to overlay; they are named as the GNSS accuracy plots are and
-  drawn in the deep colours of those plots, each in a hue of its own. Heading
+  each drawn as the quiet member of the value it qualifies. Heading
   and tilt accuracy are in degrees, plotted and measured as they are, never
   unwrapped; a heading accuracy of 180 means the heading is undetermined
   there. The two acceleration accuracies are in g, at four decimals, since

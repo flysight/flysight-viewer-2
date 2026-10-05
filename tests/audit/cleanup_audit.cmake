@@ -468,6 +468,14 @@ expect_none("branch output names are gone" "posN|posE|posD|_IMU_GNSS_EKF|ImuGnss
 # use (tests/fusion/fusionsessions.cpp, fusionPlots()). Adding a plot means
 # changing both, and the number here.
 expect_count("twelve fusion plots" "^ *\\{\"Sensor fusion\", " 12 src/mainwindow.cpp)
+# A plot row states its default colour as a literal, chosen to reach 3:1 on
+# both plot backgrounds (the comment of the plot table states the rule and
+# what a new plot is coloured by; PLANS/done/plot-colours.md). Allow: none
+# expected; a colour computed from a scheme or named by Qt was never held to
+# either background.
+expect_none("a plot row's default colour is a literal"
+  "(QColor::fromHsl\\([^)]*\\)|Qt::[A-Za-z]+), +\"[A-Za-z]+\", +\"[A-Za-z_]+\", +\"[a-z_]+\""
+  src/mainwindow.cpp)
 # The local frame is the input of sensor fusion and of the simplified track,
 # and a column's source; it has no plots of its own. Allow: none expected in
 # code or tests (tests/README.md is excluded as above).
@@ -802,12 +810,11 @@ expect_count("one cap for every attitude sigma" "constexpr double kYawSigmaCapDe
 expect_only("the accuracy channels are named in the registration and the plot rows"
   "\"(headingAcc|tiltAcc|accHAcc|accDAcc)\""
   "^src/(fusion/fusionregistration\\.cpp|mainwindow\\.cpp)$" src)
-# The four accuracy plots are drawn in the deep scheme of the GNSS accuracy
-# plots: their saturation S_dk and the deep lightness of a hue family. Allow:
-# none expected; a fifth accuracy row raises the count with the row, and a row
-# in another scheme is the defect.
-expect_count("the accuracy plots are deep"
-  "^ *\\{\"Sensor fusion\", +\"[A-Za-z ]+ accuracy\", +\"[^\"]*\", +QColor::fromHsl\\( *[0-9]+, S_dk, L_d[wcb]\\)"
+# The four accuracy plots are rows of the plot table, each a literal colour:
+# the quiet member of the value it qualifies (the table's comment). Allow:
+# none expected; a fifth accuracy row raises the count with the row.
+expect_count("the four fusion accuracy rows"
+  "^ *\\{\"Sensor fusion\", +\"[A-Za-z ]+ accuracy\", +\"[^\"]*\", +QColor\\(0x[0-9a-f]+\\)"
   4 src/mainwindow.cpp)
 # Allow: none expected. The fit publishes its accuracy; say what it is and
 # what it leaves out instead.
@@ -1323,13 +1330,12 @@ expect_count("one stencil for the derivative and its accuracy"
 # row; a reader names it through the row.
 expect_only("accAcc is named by its calculation and its plot row" "\"accAcc\""
   "^src/(calculations/gnsscalculations\\.cpp|mainwindow\\.cpp)$" src)
-# The row: GNSS (Advanced), the acceleration type and unit, the deep scheme of
-# the GNSS accuracy rows (S_dk with the deep lightness of its hue's family).
-# Allow: none expected; a change of hue keeps it at least group_a from every
-# row of the category (the spec asks it of the accelerations; hue 200 was
-# Wind-corrected horizontal speed's) and changes this pattern with the row.
+# The row: GNSS (Advanced), the acceleration type and unit, a literal colour:
+# the quiet member of the category's accelerations (the plot table's
+# comment). Allow: none expected; a change of the row changes this pattern
+# with it.
 expect_count("the GNSS acceleration accuracy row"
-  "^ *\\{\"GNSS \\(Advanced\\)\", +\"Acceleration accuracy\", +\"m/s\\^2\", +QColor::fromHsl\\(330, S_dk, L_dw\\), +\"GNSS\", +\"accAcc\", +\"acceleration\"\\}"
+  "^ *\\{\"GNSS \\(Advanced\\)\", +\"Acceleration accuracy\", +\"m/s\\^2\", +QColor\\(0x[0-9a-f]+\\), +\"GNSS\", +\"accAcc\", +\"acceleration\"\\}"
   1 src/mainwindow.cpp)
 # The calculations document states the assumption, that it is conservative,
 # and the measurement on the reference recording, each once. Allow: these

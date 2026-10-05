@@ -931,129 +931,124 @@ void MainWindow::registerBuiltInMarkers()
 
 void MainWindow::registerBuiltInPlots()
 {
-    // Angular spread for grouped colours
-    const int group_a = 40;
-
-    // ── Muted palette: comfortable on both light and dark backgrounds ──
-    const int S    = 170;      // Standard saturation  (was 255)
-    const int S_dk = 150;      // Deep / accuracy-plot saturation
-
-    // Per-hue-family lightness (equalises perceived brightness)
-    const int L_w  = 128;      // Warm hues:  red, orange, pink     (H ~ 320-50)
-    const int L_c  = 115;      // Cool hues:  green, teal           (H ~ 60-180)
-    const int L_b  = 145;      // Blue hues:  blue, violet, magenta (H ~ 200-300)
-
-    // Deep variant lightness (was ~64 — invisible on dark backgrounds)
-    const int L_dw = 100;      // Deep warm
-    const int L_dc =  90;      // Deep cool
-    const int L_db = 130;      // Deep blue
-
-    // Neutral grays
-    const int L_g  = 120;      // Primary gray  (was 64)
-    const int L_gl = 145;      // Lighter gray  (was 128)
+    // The default colour of every built-in plot. One colour serves both
+    // themes, so each reaches a contrast of 3:1 (the WCAG ratio) on the white
+    // and on the dark plot background, #ffffff and the Fusion style's
+    // #242424. That confines every colour to a narrow range of lightness, so
+    // hue and saturation tell the plots apart, and only about a dozen
+    // clearly different colours exist: a colour may repeat across
+    // categories, never inside a group of plots that are read together.
+    //
+    // A new plot is coloured by what it is read with:
+    //  - a variation of a quantity that has a plot (a component of a triad,
+    //    the fused form of a GNSS plot, a corrected form of it) is kin: a
+    //    neighbouring hue, or the same hue quieter, close enough to belong
+    //    and far enough to separate where the lines cross;
+    //  - a different quantity read on the same canvas is a contrast: a hue
+    //    well away from the others it is read with;
+    //  - an accuracy is the quiet member of the value it qualifies, and a
+    //    triad's total the neutral member of its family.
+    // The plots of the Plots menu keep the hues they have always had.
 
     QVector<PlotValue> defaults = {
-        // Category: GNSS (Basic)  (hues preserved from original Qt named colours)
-        {"GNSS (Basic)", "Elevation",             "m",     QColor::fromHsl(  0, 0,    135),  "GNSS", "z",             "altitude"},
-        {"GNSS (Basic)", "Horizontal speed",      "m/s",   QColor::fromHsl(  0, S,    L_w),  "GNSS", "velH",          "speed"},
-        {"GNSS (Basic)", "Vertical speed",        "m/s",   QColor::fromHsl(120, S,    L_c),  "GNSS", "velD",          "vertical_speed"},
-        {"GNSS (Basic)", "Total speed",           "m/s",   QColor::fromHsl(240, S,    L_b),  "GNSS", "vel",           "speed"},
-        {"GNSS (Basic)", "Course",                "deg",   Qt::cyan,                          "GNSS", "course",        "angle"},
-        {"GNSS (Basic)", "Course rate",           "deg/s", Qt::darkCyan,                      "GNSS", "courseRate",     "rotation"},
-        {"GNSS (Basic)", "Glide ratio",           "",      Qt::darkCyan,                      "GNSS", "glideRatio",    "ratio"},
-        {"GNSS (Basic)", "Dive angle",            "deg",   Qt::magenta,                       "GNSS", "diveAngle",     "angle"},
-        {"GNSS (Basic)", "Dive angle rate",       "deg/s", Qt::darkYellow,                    "GNSS", "diveAngleRate", "rotation"},
-        {"GNSS (Basic)", "Horizontal accuracy",   "m",     QColor::fromHsl(  0, S_dk, L_dw), "GNSS", "hAcc",          "distance"},
-        {"GNSS (Basic)", "Vertical accuracy",     "m",     QColor::fromHsl(120, S_dk, L_dc), "GNSS", "vAcc",          "distance"},
-        {"GNSS (Basic)", "Speed accuracy",        "m/s",   QColor::fromHsl(240, S_dk, L_db), "GNSS", "sAcc",          "speed"},
-        {"GNSS (Basic)", "Number of satellites",  "",      QColor::fromHsl(300, S_dk, L_db), "GNSS", "numSV",         "count"},
+        // Category: GNSS (Basic). Horizontal, vertical and total speed are the
+        // model contrast, red, green and blue; each accuracy is the quiet
+        // member of its speed's hue. Course and Course rate share cyan a
+        // little apart, one bluer and one greener, with Glide ratio between.
+        {"GNSS (Basic)", "Elevation",             "m",     QColor(0x878787), "GNSS", "z",             "altitude"},
+        {"GNSS (Basic)", "Horizontal speed",      "m/s",   QColor(0xf93534), "GNSS", "velH",          "speed"},
+        {"GNSS (Basic)", "Vertical speed",        "m/s",   QColor(0x03a612), "GNSS", "velD",          "vertical_speed"},
+        {"GNSS (Basic)", "Total speed",           "m/s",   QColor(0x5556fd), "GNSS", "vel",           "speed"},
+        {"GNSS (Basic)", "Course",                "deg",   QColor(0x15a0ce), "GNSS", "course",        "angle"},
+        {"GNSS (Basic)", "Course rate",           "deg/s", QColor(0x018076), "GNSS", "courseRate",     "rotation"},
+        {"GNSS (Basic)", "Glide ratio",           "",      QColor(0x008080), "GNSS", "glideRatio",    "ratio"},
+        {"GNSS (Basic)", "Dive angle",            "deg",   QColor(0xff00ff), "GNSS", "diveAngle",     "angle"},
+        {"GNSS (Basic)", "Dive angle rate",       "deg/s", QColor(0x808000), "GNSS", "diveAngleRate", "rotation"},
+        {"GNSS (Basic)", "Horizontal accuracy",   "m",     QColor(0xad524a), "GNSS", "hAcc",          "distance"},
+        {"GNSS (Basic)", "Vertical accuracy",     "m",     QColor(0x4e7c4b), "GNSS", "vAcc",          "distance"},
+        {"GNSS (Basic)", "Speed accuracy",        "m/s",   QColor(0x808dcf), "GNSS", "sAcc",          "speed"},
+        {"GNSS (Basic)", "Number of satellites",  "",      QColor(0xcc38cc), "GNSS", "numSV",         "count"},
 
-        // Category: GNSS (Advanced). Acceleration accuracy is drawn in the
-        // deep scheme of the GNSS accuracy rows, warm like the fused
-        // acceleration accuracy. Its hue, 330, is the middle of the widest
-        // gap in the category (270 to 30), so it is at least group_a from
-        // every row here, the accelerations included; it is told apart from
-        // the nearest hues elsewhere (the deep 0 and 300 of GNSS (Basic), 30
-        // away; the fused Horizontal acceleration's 340) by the deep scheme.
-        {"GNSS (Advanced)", "Horizontal acceleration",         "m/s^2", QColor::fromHsl( 30, S,    L_w),  "GNSS", "accH",              "acceleration"},
-        {"GNSS (Advanced)", "Vertical acceleration",           "m/s^2", QColor::fromHsl(120, S,    L_c),  "GNSS", "accD",              "acceleration"},
-        {"GNSS (Advanced)", "Wind-corrected horizontal speed", "m/s",   QColor::fromHsl(200, S,    L_b),  "GNSS", "wcVelH",            "speed"},
-        {"GNSS (Advanced)", "Along-track acceleration",        "m/s^2", QColor::fromHsl( 60, S,    L_c),  "GNSS", "accAlongTrack",     "acceleration"},
-        {"GNSS (Advanced)", "Cross-track acceleration",        "m/s^2", QColor::fromHsl(270, S,    L_b),  "GNSS", "accCrossTrack",     "acceleration"},
-        {"GNSS (Advanced)", "Acceleration accuracy",           "m/s^2", QColor::fromHsl(330, S_dk, L_dw), "GNSS", "accAcc",            "acceleration"},
-        {"GNSS (Advanced)", "Lift coefficient",                "",      Qt::darkGreen,                     "GNSS", "lift",              "coefficient"},
-        {"GNSS (Advanced)", "Drag coefficient",                "",      Qt::darkBlue,                      "GNSS", "drag",              "coefficient"},
-        {"GNSS (Advanced)", "Specific energy",                 "kJ/kg", Qt::darkGreen,                     "GNSS", "specificEnergy",    "specific_energy"},
-        {"GNSS (Advanced)", "Specific energy rate",            "W/kg",  Qt::darkBlue,                      "GNSS", "specificEnergyRate","specific_power"},
+        // Category: GNSS (Advanced). The four accelerations are contrasts,
+        // on four arcs of the hue circle; Acceleration accuracy is their quiet
+        // member. Wind-corrected horizontal speed is kin of Horizontal speed.
+        // Lift and Drag stay green against blue, each a step off the speed
+        // that shares its hue; Specific energy and its rate have their own.
+        {"GNSS (Advanced)", "Horizontal acceleration",         "m/s^2", QColor(0xb25b00), "GNSS", "accH",              "acceleration"},
+        {"GNSS (Advanced)", "Vertical acceleration",           "m/s^2", QColor(0x3aa85b), "GNSS", "accD",              "acceleration"},
+        {"GNSS (Advanced)", "Wind-corrected horizontal speed", "m/s",   QColor(0xce810a), "GNSS", "wcVelH",            "speed"},
+        {"GNSS (Advanced)", "Along-track acceleration",        "m/s^2", QColor(0xab3cbd), "GNSS", "accAlongTrack",     "acceleration"},
+        {"GNSS (Advanced)", "Cross-track acceleration",        "m/s^2", QColor(0x0278c7), "GNSS", "accCrossTrack",     "acceleration"},
+        {"GNSS (Advanced)", "Acceleration accuracy",           "m/s^2", QColor(0x987a9c), "GNSS", "accAcc",            "acceleration"},
+        {"GNSS (Advanced)", "Lift coefficient",                "",      QColor(0x049c59), "GNSS", "lift",              "coefficient"},
+        {"GNSS (Advanced)", "Drag coefficient",                "",      QColor(0x007cdf), "GNSS", "drag",              "coefficient"},
+        {"GNSS (Advanced)", "Specific energy",                 "kJ/kg", QColor(0xb48f05), "GNSS", "specificEnergy",    "specific_energy"},
+        {"GNSS (Advanced)", "Specific energy rate",            "W/kg",  QColor(0x8a4ada), "GNSS", "specificEnergyRate","specific_power"},
 
-        // Category: IMU · Acceleration (red group, H ≈ 0°)
-        {"IMU", "Acceleration X",     "g", QColor::fromHsl(360 - group_a, S, L_w), "IMU", "ax",     "acceleration"},
-        {"IMU", "Acceleration Y",     "g", QColor::fromHsl(  0,           S, L_w), "IMU", "ay",     "acceleration"},
-        {"IMU", "Acceleration Z",     "g", QColor::fromHsl(group_a,       S, L_w), "IMU", "az",     "acceleration"},
-        {"IMU", "Total acceleration", "g", QColor::fromHsl(  0,           S, L_w), "IMU", "aTotal", "acceleration"},
+        // Category: IMU · Acceleration: one warm family, the total its neutral member
+        {"IMU", "Acceleration X",     "g", QColor(0xcd2a66), "IMU", "ax",     "acceleration"},
+        {"IMU", "Acceleration Y",     "g", QColor(0xde7515), "IMU", "ay",     "acceleration"},
+        {"IMU", "Acceleration Z",     "g", QColor(0x797a15), "IMU", "az",     "acceleration"},
+        {"IMU", "Total acceleration", "g", QColor(0x838383), "IMU", "aTotal", "acceleration"},
 
-        // Category: IMU · Rotation (green group, H ≈ 120°)
-        {"IMU", "Rotation X",     "deg/s", QColor::fromHsl(120 - group_a, S, L_c), "IMU", "wx",     "rotation"},
-        {"IMU", "Rotation Y",     "deg/s", QColor::fromHsl(120,           S, L_c), "IMU", "wy",     "rotation"},
-        {"IMU", "Rotation Z",     "deg/s", QColor::fromHsl(120 + group_a, S, L_c), "IMU", "wz",     "rotation"},
-        {"IMU", "Total rotation", "deg/s", QColor::fromHsl(120,           S, L_c), "IMU", "wTotal", "rotation"},
+        // Category: IMU · Rotation: one violet family, clear of Course rate and
+        // Dive angle rate, which share the unit; the total its quiet member
+        {"IMU", "Rotation X",     "deg/s", QColor(0x575eec), "IMU", "wx",     "rotation"},
+        {"IMU", "Rotation Y",     "deg/s", QColor(0xc665e3), "IMU", "wy",     "rotation"},
+        {"IMU", "Rotation Z",     "deg/s", QColor(0xc93573), "IMU", "wz",     "rotation"},
+        {"IMU", "Total rotation", "deg/s", QColor(0x816b88), "IMU", "wTotal", "rotation"},
 
-        {"IMU", "Temperature", QString::fromUtf8("\302\260C"), QColor::fromHsl(45, S, L_w), "IMU", "temperature", "temperature"},
+        {"IMU", "Temperature", QString::fromUtf8("\302\260C"), QColor(0xc58501), "IMU", "temperature", "temperature"},
 
-        // Category: Sensor fusion. Each row is named, united and typed as its
-        // GNSS counterpart, so the two overlay on one axis, in a hue at least
-        // group_a from the counterpart's so they can be told apart (Elevation's
-        // counterpart is gray, so it is chromatic; Heading, Pitch and Roll are
-        // group_a or more from each other). Every row is computed on request
-        // and waits on the one fit.
+        // Category: Sensor fusion. Each of the first eight rows is named,
+        // united and typed as its GNSS counterpart and is its kin: the
+        // neighbouring hue at the other edge of the lightness range, so the
+        // two can be told apart where they overlay (Elevation, whose
+        // counterpart is gray, is a quiet blue). Heading is kin of Course;
+        // Pitch and Roll contrast with it and with each other. Every row is
+        // computed on request and waits on the one fit.
         //
-        // The four accuracy rows after Roll have no GNSS counterpart to
-        // overlay; they are named as the GNSS accuracy rows are and drawn in
-        // their deep scheme (S_dk, and the deep lightness of each hue's
-        // family), since the GNSS accuracies' own hues are taken. Each hue is
-        // at least group_a from the GNSS accuracies' 0, 120 and 240 and from
-        // the other three, which leaves the arcs 40-80, 160-200 and 280-320,
-        // and sits in the family of the value it qualifies: heading accuracy
-        // blue beside Heading, tilt accuracy cool beside Pitch, the horizontal
-        // acceleration's warm like the accelerations, the vertical's cool
-        // beside Vertical acceleration. The acceleration accuracies have a
-        // type of their own, since the acceleration type's two decimals of g
-        // would read 0.00 over most of a recording.
-        {"Sensor fusion", "Elevation",                "m",     QColor::fromHsl(200, S,    L_b),  "Fusion", "z",             "altitude"},
-        {"Sensor fusion", "Horizontal acceleration",  "m/s^2", QColor::fromHsl(340, S,    L_w),  "Fusion", "accH",          "acceleration"},
-        {"Sensor fusion", "Vertical acceleration",    "m/s^2", QColor::fromHsl(170, S,    L_c),  "Fusion", "accD",          "acceleration"},
-        {"Sensor fusion", "Along-track acceleration", "m/s^2", QColor::fromHsl(110, S,    L_c),  "Fusion", "accAlongTrack", "acceleration"},
-        {"Sensor fusion", "Cross-track acceleration", "m/s^2", QColor::fromHsl(220, S,    L_b),  "Fusion", "accCrossTrack", "acceleration"},
-        {"Sensor fusion", "Heading",                  "deg",   QColor::fromHsl(240, S,    L_b),  "Fusion", "bodyHeading",   "angle"},
-        {"Sensor fusion", "Pitch",                    "deg",   QColor::fromHsl( 60, S,    L_c),  "Fusion", "bodyPitch",     "angle"},
-        {"Sensor fusion", "Roll",                     "deg",   QColor::fromHsl(  0, S,    L_w),  "Fusion", "bodyRoll",      "angle"},
-        {"Sensor fusion", "Heading accuracy",                 "deg",   QColor::fromHsl(280, S_dk, L_db), "Fusion", "headingAcc", "angle"},
-        {"Sensor fusion", "Tilt accuracy",                    "deg",   QColor::fromHsl( 80, S_dk, L_dc), "Fusion", "tiltAcc",    "angle"},
-        {"Sensor fusion", "Horizontal acceleration accuracy", "m/s^2", QColor::fromHsl( 40, S_dk, L_dw), "Fusion", "accHAcc",    "acceleration_accuracy"},
-        {"Sensor fusion", "Vertical acceleration accuracy",   "m/s^2", QColor::fromHsl(160, S_dk, L_dc), "Fusion", "accDAcc",    "acceleration_accuracy"},
+        // The four accuracy rows after Roll have no GNSS counterpart; each is
+        // the quiet member of the value it qualifies: heading accuracy beside
+        // Heading, tilt accuracy between Pitch and Roll, the two acceleration
+        // accuracies beside the fused accelerations. The acceleration
+        // accuracies have a type of their own, since the acceleration type's
+        // two decimals of g would read 0.00 over most of a recording.
+        {"Sensor fusion", "Elevation",                "m",             QColor(0x037ac0), "Fusion", "z",             "altitude"},
+        {"Sensor fusion", "Horizontal acceleration",  "m/s^2",         QColor(0xab930b), "Fusion", "accH",          "acceleration"},
+        {"Sensor fusion", "Vertical acceleration",    "m/s^2",         QColor(0x028481), "Fusion", "accD",          "acceleration"},
+        {"Sensor fusion", "Along-track acceleration", "m/s^2",         QColor(0xe76187), "Fusion", "accAlongTrack", "acceleration"},
+        {"Sensor fusion", "Cross-track acceleration", "m/s^2",         QColor(0x9584e5), "Fusion", "accCrossTrack", "acceleration"},
+        {"Sensor fusion", "Heading",                  "deg",           QColor(0x2669ed), "Fusion", "bodyHeading",   "angle"},
+        {"Sensor fusion", "Pitch",                    "deg",           QColor(0x879f07), "Fusion", "bodyPitch",     "angle"},
+        {"Sensor fusion", "Roll",                     "deg",           QColor(0xdd5c00), "Fusion", "bodyRoll",      "angle"},
+        {"Sensor fusion", "Heading accuracy",                 "deg",   QColor(0x8887b0), "Fusion", "headingAcc", "angle"},
+        {"Sensor fusion", "Tilt accuracy",                    "deg",   QColor(0x846e40), "Fusion", "tiltAcc",    "angle"},
+        {"Sensor fusion", "Horizontal acceleration accuracy", "m/s^2", QColor(0x776f4d), "Fusion", "accHAcc",    "acceleration_accuracy"},
+        {"Sensor fusion", "Vertical acceleration accuracy",   "m/s^2", QColor(0x5ba09d), "Fusion", "accDAcc",    "acceleration_accuracy"},
 
-        // Category: Magnetometer (blue group, H ≈ 240°)
-        {"Magnetometer", "Magnetic field X",     "gauss", QColor::fromHsl(240 - group_a, S, L_b), "MAG", "x",     "magnetic_field"},
-        {"Magnetometer", "Magnetic field Y",     "gauss", QColor::fromHsl(240,           S, L_b), "MAG", "y",     "magnetic_field"},
-        {"Magnetometer", "Magnetic field Z",     "gauss", QColor::fromHsl(240 + group_a, S, L_b), "MAG", "z",     "magnetic_field"},
-        {"Magnetometer", "Total magnetic field", "gauss", QColor::fromHsl(240,           S, L_b), "MAG", "total", "magnetic_field"},
+        // Category: Magnetometer: one blue family, the total its quiet member
+        {"Magnetometer", "Magnetic field X",     "gauss", QColor(0x0aa0d2), "MAG", "x",     "magnetic_field"},
+        {"Magnetometer", "Magnetic field Y",     "gauss", QColor(0x3665e4), "MAG", "y",     "magnetic_field"},
+        {"Magnetometer", "Magnetic field Z",     "gauss", QColor(0xa473ee), "MAG", "z",     "magnetic_field"},
+        {"Magnetometer", "Total magnetic field", "gauss", QColor(0x66728a), "MAG", "total", "magnetic_field"},
 
-        {"Magnetometer", "Temperature", QString::fromUtf8("\302\260C"), QColor::fromHsl(135, S, L_c), "MAG", "temperature", "temperature"},
+        {"Magnetometer", "Temperature", QString::fromUtf8("\302\260C"), QColor(0x048f67), "MAG", "temperature", "temperature"},
 
         // Category: Barometer
-        {"Barometer", "Air pressure", "Pa",                              QColor::fromHsl(  0, 0, L_g), "BARO", "pressure",    "pressure"},
-        {"Barometer", "Temperature",  QString::fromUtf8("\302\260C"),    QColor::fromHsl(225, S, L_b), "BARO", "temperature", "temperature"},
+        {"Barometer", "Air pressure", "Pa",                           QColor(0x787878), "BARO", "pressure",    "pressure"},
+        {"Barometer", "Temperature",  QString::fromUtf8("\302\260C"), QColor(0x2f6eeb), "BARO", "temperature", "temperature"},
 
         // Category: Humidity
-        {"Humidity", "Humidity",    "%",                                 QColor::fromHsl(  0, 0,  L_gl), "HUM", "humidity",    "percentage"},
-        {"Humidity", "Temperature", QString::fromUtf8("\302\260C"),      QColor::fromHsl(315, S,  L_b),  "HUM", "temperature", "temperature"},
+        {"Humidity", "Humidity",    "%",                            QColor(0x919191), "HUM", "humidity",    "percentage"},
+        {"Humidity", "Temperature", QString::fromUtf8("\302\260C"), QColor(0xd53daf), "HUM", "temperature", "temperature"},
 
         // Category: Battery
-        {"Battery", "Battery voltage", "V", QColor::fromHsl(30, S, L_w), "VBAT", "voltage", "voltage"},
+        {"Battery", "Battery voltage", "V", QColor(0xd5802b), "VBAT", "voltage", "voltage"},
 
         // Category: GNSS time
-        {"GNSS time", "Time of week", "s", QColor::fromHsl(0, 0, L_g),  "TIME", "tow",  "time"},
-        {"GNSS time", "Week number",  "",  QColor::fromHsl(0, 0, L_gl), "TIME", "week", "count"},
+        {"GNSS time", "Time of week", "s", QColor(0x787878), "TIME", "tow",  "time"},
+        {"GNSS time", "Week number",  "",  QColor(0x919191), "TIME", "week", "count"},
 
         // Independent variables (x-axis)
         {"Time", "UTC time",    "s", QColor(128, 128, 128), "GNSS", "_time",        "time", PlotRole::Independent},

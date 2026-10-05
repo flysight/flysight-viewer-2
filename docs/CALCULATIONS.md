@@ -2535,9 +2535,9 @@ accuracy are NaN, and every other sample is the formula above. Because `sAcc` is
 it is the standard deviation of each of `accN`, `accE` and `accD`, and, to the
 usual approximation for a magnitude well above its sigma, of `accH`,
 `accAlongTrack` and `accCrossTrack` too. Its plot is "Acceleration accuracy"
-in "GNSS (Advanced)", of type `acceleration`, in the deep scheme of the GNSS
-accuracy plots (hue 330, at least 40 degrees from every row of its category,
-the accelerations included).
+in "GNSS (Advanced)", of type `acceleration`, drawn as the quiet member of
+the category's accelerations: a muted colour that, like every default plot
+colour, reads on both the light and the dark plot background.
 
 What the figure means:
 

@@ -1572,11 +1572,13 @@ excluded, over 6N - 9 degrees of freedom (31); the heading's variance enters the
 acceleration's propagation at most at the cap's, which bounds the
 principal-value fallback where the horizontal acceleration is small, and
 changes nothing where the heading is below the cap (35); "the deep colours of
-the GNSS accuracy plots" are their scheme, their saturation and the deep
-lightness of each hue's family, not their four colours, which are taken
-(Heading accuracy at 240 would be Speed accuracy's colour exactly): each hue
-is at least 40 degrees from theirs and from the other three, in the family of
-the value it qualifies, and the acceleration accuracies are in the
+the GNSS accuracy plots" were read as their scheme, a hue of its own for each
+in the family of the value it qualifies, until the specification "Plot
+colours: one colour per plot, readable on both backgrounds"
+(`PLANS/done/plot-colours.md`), which has no items of its own, replaced the
+deep scheme: each accuracy is now the quiet member of the value it qualifies,
+in a colour that reaches 3:1 on both plot backgrounds, so item 1037 is stated
+as amended (and item 1101 with it); the acceleration accuracies are in the
 acceleration unit, g, at four decimals, a type of their own, since the
 acceleration type's two decimals would read 0.00 over most of a recording
 (37); the goldens are captured again at the
@@ -1681,7 +1683,7 @@ objective from the fit's account instead of making a second fit.
 | 1034 | 7 | they are absent for a rejected or failed fit and for a successful fit whose factorization failed, which the diagnostics say; nothing else about that fit changes | `tst_fusion_kernel::covarianceFailureLeavesTheFitAsItIs` (and the failure-shape tests: the four arrays empty); `tst_fusion_golden::rejectionFixturesMatchGolden` |
 | 1035 | 7, as settled | an undetermined heading does not fail the computation: the cap applies, the heading's variance enters the acceleration's propagation at most at the cap's, and the acceleration accuracies use the horizontal magnitude's direction, which a heading error does not move | `tst_fusion_kernel::undeterminedHeadingIsCapped`, `accelerationAccuracyFollowsItsPropagation` (the heading under a horizontal force, the cap inside the propagation) |
 | 1036 | 2, 7 | the documentation says in one sentence that the accuracy is one standard deviation from the covariance of the converged solution under the documented model, widened where the residuals exceed what the model allows | `audit accuracy-channels` |
-| 1037 | 8, as settled | the "Sensor fusion" category gains four plots after Roll: Heading accuracy and Tilt accuracy in degrees, Horizontal acceleration accuracy and Vertical acceleration accuracy in the acceleration unit, drawn in the deep scheme of the GNSS accuracy plots (their saturation and lightness, each hue at least 40 degrees from theirs and from the others'); the acceleration accuracies in g at four decimals, a type of their own | `tst_fusion_rows::allFusionPlotsAreExplicitBacked` (the twelve rows as a literal: names, units, measurements, types); `tst_plot_format::accelerationAccuracyKeepsItsDigits`; `audit naming` (twelve rows); `audit accuracy-channels` (four accuracy rows in the deep scheme); `manual M51` (the colours, the axes, the menu) |
+| 1037 | 8, as settled, as amended | the "Sensor fusion" category gains four plots after Roll: Heading accuracy and Tilt accuracy in degrees, Horizontal acceleration accuracy and Vertical acceleration accuracy in the acceleration unit, each drawn as the quiet member of the value it qualifies, in a colour that reaches 3:1 on both plot backgrounds; the acceleration accuracies in g at four decimals, a type of their own | `tst_fusion_rows::allFusionPlotsAreExplicitBacked` (the twelve rows as a literal: names, units, measurements, types); `tst_plot_format::accelerationAccuracyKeepsItsDigits`; `audit naming` (twelve rows); `audit accuracy-channels` (four accuracy rows); `manual M51` (the colours, the axes, the menu) |
 | 1038 | 8 | the four plots are absent, like any unavailable value, where the fit did not compute them | `tst_fusion_rows::accuracyPlotsAreAbsentWithoutAFit` (before the fit, a rejection listed once, no IMU data), `noImuSessionIsNeverCounted`; `tst_fusion_store::restoredFitWithoutAccuracyDrawsTheRest` (a stored success without the accuracy); `manual M51` |
 | 1039 | 8 | a logbook column over any of the four works as over any fusion value | `tst_fusion_store::accuracyColumnFillsUnloadedSessions`; `manual M51` |
 | 1040 | 8 | the diagnostics show the configuration the fit ran under | `tst_fusion_kernel::diagnosticsReportTheNoiseModel`; `tst_fusion_golden::successFixturesMatchGolden`; `manual M47` |
@@ -1720,7 +1722,7 @@ the section of the specification; its section 1 (motivation) has no item.
 
 | Item | Section | Statement | Evidence |
 | --- | --- | --- | --- |
-| 1101 | 2, 3, 4 | one on-demand calculation, `GNSS/accAcc` in m/s^2 on `GNSS/_time`, from `GNSS/sAcc` and `GNSS/_time` only: `sqrt(sAcc[i+1]^2 + sAcc[i-1]^2) / (t[i+1] - t[i-1])` inside and the one-interval forms of `computeDerivative` at the ends, no correction factor and nothing from the fusion, unavailable where the derivative is; one plot, "Acceleration accuracy" in "GNSS (Advanced)", type `acceleration`, in the deep scheme of the GNSS accuracy rows at a hue at least 40 degrees from the category's accelerations; the documentation states the assumption, that it is conservative, and the measurement on the reference recording, without applying it | `tst_builtins_engine::accelerationAccuracyKnownAnswers` (bit for bit, the ends included), `accelerationAccuracyUnavailable` (no `sAcc`, no time, one sample, two lengths), `inventory`; `tst_builtins_golden::sessionDataMatchesGolden` (`GNSS/accAcc` on the descent fixture); `tst_plot_format::gnssAccelerationAccuracyIsAnAcceleration`; `audit gnss-acceleration-accuracy` (one stencil, the name in the registration and the row, the row's type and scheme, the document's sentences); `manual M53` (the plot in the window) |
+| 1101 | 2, 3, 4, as amended | one on-demand calculation, `GNSS/accAcc` in m/s^2 on `GNSS/_time`, from `GNSS/sAcc` and `GNSS/_time` only: `sqrt(sAcc[i+1]^2 + sAcc[i-1]^2) / (t[i+1] - t[i-1])` inside and the one-interval forms of `computeDerivative` at the ends, no correction factor and nothing from the fusion, unavailable where the derivative is; one plot, "Acceleration accuracy" in "GNSS (Advanced)", type `acceleration`, the quiet member of the category's accelerations, in a colour that reaches 3:1 on both plot backgrounds; the documentation states the assumption, that it is conservative, and the measurement on the reference recording, without applying it | `tst_builtins_engine::accelerationAccuracyKnownAnswers` (bit for bit, the ends included), `accelerationAccuracyUnavailable` (no `sAcc`, no time, one sample, two lengths), `inventory`; `tst_builtins_golden::sessionDataMatchesGolden` (`GNSS/accAcc` on the descent fixture); `tst_plot_format::gnssAccelerationAccuracyIsAnAcceleration`; `audit gnss-acceleration-accuracy` (one stencil, the name in the registration and the row, the row's type and literal colour, the document's sentences); `manual M53` (the plot in the window) |
 
 ### 9.13 Sample continuity (items 1201-1213)
 
@@ -1905,7 +1907,9 @@ takes about a second. It fails, listing **all** violations, when
   after a filter (the case-sensitive pattern `EKF|[Ee]kf`), a branch output
   name (`posN` ...) or the branch's sensor key reappears; `MainWindow` does not
   register exactly twelve "Sensor fusion" plots (the count pins the
-  application's list to `fusionPlots()`, the tests' mirror); the "GNSS (Local
+  application's list to `fusionPlots()`, the tests' mirror); a plot row of
+  `MainWindow` computes its default colour from a scheme (`QColor::fromHsl`)
+  or names a Qt colour instead of stating a literal; the "GNSS (Local
   frame)" category or the tests' old helper for it appears in `src` or
   `tests`; a plot row names a removed fusion measurement (the position, the
   velocity, the north and east acceleration, the device-frame roll, pitch and
@@ -2030,8 +2034,7 @@ takes about a second. It fails, listing **all** violations, when
   `"accDAcc"`, quoted) appears in `src` outside the registration's output
   table (`fusionregistration.cpp`) and the plot rows (`mainwindow.cpp`);
   `src/mainwindow.cpp` has other than four "Sensor fusion" rows whose name
-  ends in " accuracy" drawn in the deep scheme of the GNSS accuracy plots
-  (`QColor::fromHsl(<hue>, S_dk, L_dw|L_dc|L_db)`); `no
+  ends in " accuracy", each with a literal colour (`QColor(0x...)`); `no
   uncertainty` appears in `src` or `docs`; or `docs/SENSOR_FUSION.md` stops
   writing, on one line each, the propagation `a = R (f / s - b) + g`,
   "gravity's own uncertainty", "a-posteriori variance factor", "never
@@ -2076,7 +2079,7 @@ takes about a second. It fails, listing **all** violations, when
   `src` outside its registration (`gnsscalculations.cpp`) and its plot row
   (`mainwindow.cpp`); `src/mainwindow.cpp` has other than one "GNSS
   (Advanced)" row "Acceleration accuracy" in m/s^2 of the `acceleration` type
-  in the deep scheme at hue 330 (`QColor::fromHsl(330, S_dk, L_dw)`); or
+  with a literal colour (`QColor(0x...)`); or
   `docs/CALCULATIONS.md` stops writing, on one line each, the assumption
   ("the two fixes' velocity errors are independent") and the measurement
   ("0.09 g RMS"). Each rule was planted once when it was written;
@@ -5523,10 +5526,11 @@ row of section 9 and the map.
 37. (8, as settled) The "Sensor fusion" category gains four plots after Roll:
     Heading accuracy and Tilt accuracy in degrees, Horizontal acceleration
     accuracy and Vertical acceleration accuracy in the acceleration unit,
-    drawn in the deep scheme of the GNSS accuracy plots (their saturation and
-    lightness, each hue at least 40 degrees from theirs and from the
-    others'); the acceleration accuracies in g at four decimals, a type of
-    their own.
+    each drawn as the quiet member of the value it qualifies, in a colour
+    that reaches 3:1 on both plot backgrounds (as amended by the
+    specification "Plot colours: one colour per plot, readable on both
+    backgrounds"); the acceleration accuracies in g at four decimals, a type
+    of their own.
 38. (8) The four plots are absent, like any unavailable value, where the fit
     did not compute them.
 39. (8) A logbook column over any of the four works as over any fusion
@@ -5623,9 +5627,10 @@ with the specification's section numbers in front: one item, 1101 of
    sample times, with no correction factor, nothing from the fusion and
    nothing measured on a corpus; unavailable when `sAcc` or `_time` is
    missing or shorter than two samples, as the derivative is. One plot,
-   "Acceleration accuracy" in "GNSS (Advanced)", type `acceleration`, in the
-   deep palette of the GNSS accuracy rows, a hue at least 40 degrees from
-   every other acceleration row of its category. The documentation says, in
+   "Acceleration accuracy" in "GNSS (Advanced)", type `acceleration`, the
+   quiet member of the category's accelerations, in a colour that reaches 3:1
+   on both plot backgrounds (as amended by the specification "Plot colours:
+   one colour per plot, readable on both backgrounds"). The documentation says, in
    one sentence each, that the figure is the receiver's stated speed accuracy
    propagated through the central difference assuming the two fixes' errors
    are independent; that the assumption is conservative; and the measurement

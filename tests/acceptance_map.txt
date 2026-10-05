@@ -109,9 +109,14 @@
 #             amended by the specification "The scaled IMU factor stands
 #             alone": item 1054 is stated as amended. It is amended by the
 #             specification of 1401-1415: item 1054 is stated as amended.
+#             It is amended by the specification "Plot colours: one colour
+#             per plot, readable on both backgrounds", which has no items of
+#             its own: item 1037 is stated as amended.
 #   1101      the GNSS acceleration accuracy (GNSS/accAcc, its plot and what
 #             the documentation says of it): one item. Stated in full in
-#             tests/README.md, appendix L.
+#             tests/README.md, appendix L. It is amended by the specification
+#             "Plot colours: one colour per plot, readable on both
+#             backgrounds": the item is stated as amended.
 #   1201-1213 sample continuity (one rule for a hole in a sensor's samples,
 #             in the model library, and every reader of the samples
 #             honouring it: the plots, the legend and crosshair, the measure
@@ -3191,7 +3196,7 @@
 # 1036 - (2, 7) the documentation says in one sentence that the accuracy is one standard deviation from the covariance of the converged solution under the documented model, widened where the residuals exceed what the model allows
 1036 audit accuracy-channels
 
-# 1037 - (8, as settled) the "Sensor fusion" category gains four plots after Roll: Heading accuracy and Tilt accuracy in degrees, Horizontal acceleration accuracy and Vertical acceleration accuracy in the acceleration unit, drawn in the deep scheme of the GNSS accuracy plots (their saturation and lightness, each hue at least 40 degrees from theirs and from the others'); the acceleration accuracies in g at four decimals, a type of their own
+# 1037 - (8, as settled, as amended) the "Sensor fusion" category gains four plots after Roll: Heading accuracy and Tilt accuracy in degrees, Horizontal acceleration accuracy and Vertical acceleration accuracy in the acceleration unit, each drawn as the quiet member of the value it qualifies, in a colour that reaches 3:1 on both plot backgrounds; the acceleration accuracies in g at four decimals, a type of their own
 1037 tst_fusion_rows allFusionPlotsAreExplicitBacked
 1037 tst_plot_format accelerationAccuracyKeepsItsDigits
 1037 audit naming
@@ -3334,7 +3339,7 @@
 
 # ---- GNSS acceleration accuracy (PLANS/gnss-acceleration-accuracy.md): one item ----
 
-# 1101 - (2, 3, 4) GNSS/accAcc, m/s^2 on GNSS/_time, from sAcc and _time only: sqrt(sAcc[i+1]^2 + sAcc[i-1]^2) / (t[i+1] - t[i-1]) inside and computeDerivative's one-interval forms at the ends, no correction factor, nothing from the fusion, unavailable where the derivative is; the "Acceleration accuracy" plot of "GNSS (Advanced)", type acceleration, deep scheme, a hue at least 40 degrees from the category's accelerations; the documentation states the assumption, that it is conservative, and the measurement on the reference recording, without applying it
+# 1101 - (2, 3, 4, as amended) GNSS/accAcc, m/s^2 on GNSS/_time, from sAcc and _time only: sqrt(sAcc[i+1]^2 + sAcc[i-1]^2) / (t[i+1] - t[i-1]) inside and computeDerivative's one-interval forms at the ends, no correction factor, nothing from the fusion, unavailable where the derivative is; the "Acceleration accuracy" plot of "GNSS (Advanced)", type acceleration, the quiet member of the category's accelerations, in a colour that reaches 3:1 on both plot backgrounds; the documentation states the assumption, that it is conservative, and the measurement on the reference recording, without applying it
 1101 tst_builtins_engine accelerationAccuracyKnownAnswers
 1101 tst_builtins_engine accelerationAccuracyUnavailable
 1101 tst_builtins_engine inventory
