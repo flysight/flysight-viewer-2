@@ -948,7 +948,9 @@ void MainWindow::registerBuiltInPlots()
     //    well away from the others it is read with;
     //  - an accuracy is the quiet member of the value it qualifies, and a
     //    triad's total the neutral member of its family.
-    // The plots of the Plots menu keep the hues they have always had.
+    // The plots of the Plots menu keep the hues they have always had. The
+    // decisions behind the set, and how to colour and check a new plot, are
+    // docs/PLOT_COLOURS.md.
 
     QVector<PlotValue> defaults = {
         // Category: GNSS (Basic). Horizontal, vertical and total speed are the

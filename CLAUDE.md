@@ -34,8 +34,9 @@ which is not tracked.
 - `docs/`: `CALCULATIONS.md` (engine, executor in section 15, demand layer in
   section 16), `COMPUTED_PLOTS.md` (what the user sees), `DATA_SCHEMA.md`,
   `SENSOR_FUSION.md`, `LOCAL_COORDINATES.md`, `PREFERENCE_PAGES.md` (how a
-  Preferences page is laid out). A change in behaviour updates the document
-  that describes it, in the same change.
+  Preferences page is laid out), `PLOT_COLOURS.md` (how a plot's default
+  colour is chosen). A change in behaviour updates the document that
+  describes it, in the same change.
 
 ## Conventions the audit enforces
 

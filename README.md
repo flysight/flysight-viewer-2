@@ -426,6 +426,7 @@ flysight-viewer-2/
 ## Developer Documentation
 
 - [docs/CALCULATIONS.md](docs/CALCULATIONS.md): how to write a registered calculation (declared inputs, multi-output, candidates, cache versioning), and how explicit calculations run in the background: the asynchronous request, blocker inspection, the threading rule, the executor, stored results of requested calculations, the demand layer, and sensor fusion as a registered calculation
+- [docs/PLOT_COLOURS.md](docs/PLOT_COLOURS.md): how a plot's default colour is chosen - one colour for both themes, readable on both backgrounds, kin and contrast, the Plots menu's hues kept, how to colour a new plot and how to check it
 - [python_plugins/README.md](python_plugins/README.md): writing Python plugins
 - [tests/README.md](tests/README.md): building, running, and writing tests; the acceptance traceability matrices, the cleanup audit, fusion golden regression, and the manual verification script
 
