@@ -180,9 +180,10 @@ const QList<Block> kPositionBlocks{{9, 0, 0, 4, 0, 6.25},       {4, 0, 0, 9, 0, 
                                    {8, 2, 0, 5, 0, 6.25},       {5, 4, 0, 5, 0, 0},
                                    {5, -4, 0, 5, 0, 6.25},      {0, 0, 0, 0, 0, 0},
                                    {9, 0, 1.5, 4, -1, 6.25},    {8, 2, -0.5, 5, 0.75, 0},
-                                   {5, 4, 0.25, 5, 0.5, 6.25},  {4, 0, 0.5, 9, 0.25, 6.25}};
-const QVector<double> kHAccAnswers{3, 3, 3, 3, 3, 0, 3, 3, 3, 3};
-const QVector<double> kVAccAnswers{2.5, 0, 2.5, 0, 2.5, 0, 2.5, 0, 2.5, 2.5};
+                                   {5, 4, 0.25, 5, 0.5, 6.25},  {4, 0, 0.5, 9, 0.25, 6.25},
+                                   {9, 0, 0, 4, 0, 6.25}};
+const QVector<double> kHAccAnswers{3, 3, 3, 3, 3, 0, 3, 3, 3, 3, 3};
+const QVector<double> kVAccAnswers{2.5, 0, 2.5, 0, 2.5, 0, 2.5, 0, 2.5, 2.5, 2.5};
 
 /// Velocity blocks and velocities with exact answers. Under diag(4, 9, 16):
 /// along north at 10 m/s, its sigma 2 (not the largest, 4); along east at
@@ -193,20 +194,24 @@ const QVector<double> kVAccAnswers{2.5, 0, 2.5, 0, 2.5, 0, 2.5, 0, 2.5, 2.5};
 /// at 1 m/s, below its sigma sqrt 5, the largest by the 3x3 form, 3 (q = 5,
 /// p = 2, det(B) = 2, r = 1). Under (5, 4, 0, 5, 0, 2), eigenvalues 9, 2 and
 /// 1, at rest: 3 within 1e-12 (q = 4, p = sqrt(19/3), not dyadic). The zero
-/// block at rest and in motion: 0.
+/// block at rest and in motion: 0. Last, a block whose ND and ED differ
+/// (2, 0, 2, 9, 0.5, 2) under a velocity (3, 0, 3) with two components: the
+/// quadratic form (18 + 18 + 2 x 3 x 3 x 2) / 18 = 4, so 2; with ND and ED
+/// swapped it would be 2.5, so the sample tells the two entries apart, which
+/// every other block, having ND = ED, cannot.
 const QList<Block> kVelocityBlocks{{4, 0, 0, 9, 0, 16}, {4, 0, 0, 9, 0, 16}, {4, 0, 0, 9, 0, 16},
                                    {4, 0, 0, 9, 0, 16}, {4, 0, 0, 9, 0, 16}, {5, 2, 2, 5, 2, 5},
                                    {5, 2, 2, 5, 2, 5},  {5, 4, 0, 5, 0, 2},  {0, 0, 0, 0, 0, 0},
-                                   {0, 0, 0, 0, 0, 0}};
-const QVector<double> kAccuracyVelN{10, 0, 0, 1, 0, 3, 1, 0, 0, 10};
-const QVector<double> kAccuracyVelE{0, 3, 0, 0, 0, 3, 0, 0, 0, 0};
-const QVector<double> kAccuracyVelD{0, 0, -10, 0, 0, 3, 0, 0, 0, 0};
-const QVector<double> kSAccAnswers{2, 3, 4, 4, 4, 3, 3, 3, 0, 0};
+                                   {0, 0, 0, 0, 0, 0},  {2, 0, 2, 9, 0.5, 2}};
+const QVector<double> kAccuracyVelN{10, 0, 0, 1, 0, 3, 1, 0, 0, 10, 3};
+const QVector<double> kAccuracyVelE{0, 3, 0, 0, 0, 3, 0, 0, 0, 0, 0};
+const QVector<double> kAccuracyVelD{0, 0, -10, 0, 0, 3, 0, 0, 0, 0, 3};
+const QVector<double> kSAccAnswers{2, 3, 4, 4, 4, 3, 3, 3, 0, 0, 2};
 /// The sample of kSAccAnswers that is exact only within 1e-12.
 constexpr qsizetype kSAccInexact = 7;
 
 /// The fit's outputs every fused accuracy reads: the two blocks and the
-/// velocity, ten samples each.
+/// velocity, eleven samples each.
 QHash<QString, QVector<double>> accuracyChannels()
 {
     QHash<QString, QVector<double>> channels = blockChannels("posCov", kPositionBlocks);

@@ -2217,7 +2217,7 @@ Seventeen calculations are registered, in this order:
 | `builtin.fusion.accAlongTrack` | OnDemand | `Fusion/accN`, `accE`, `accD`, `velN`, `velE`, `velD`, `_WIND_N`, `_WIND_E` | `Fusion/accAlongTrack` |
 | `builtin.fusion.accCrossTrack` | OnDemand | the same eight | `Fusion/accCrossTrack` |
 | `builtin.default._ORIENTATION` | OnDemand | none | `_ORIENTATION` (the default's token, a string) |
-| `builtin.fusion.attitude` | OnDemand | `Fusion/qx`, `qy`, `qz`, `qw`, `_ORIENTATION`, `GNSS/velN`, `GNSS/velE`, `GNSS/_time`, `_COURSE_REF` | `Fusion/bodyHeading`, `bodyPitch`, `bodyRoll` |
+| `builtin.fusion.attitude` | OnDemand | `Fusion/qx`, `qy`, `qz`, `qw`, `_ORIENTATION` | `Fusion/bodyHeading`, `bodyPitch`, `bodyRoll` |
 
 **Inputs of the fit** (all required; exactly the vector members of
 `Fusion::Channels`, in member order, then the four origin attributes, then the

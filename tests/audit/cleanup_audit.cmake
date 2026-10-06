@@ -66,12 +66,12 @@
 #     of it; the accuracy's covariance comes from one factorization in one
 #     unit, never from the library's joint marginals, under one cap; the four
 #     channel names are spelled in the registration and the plot rows alone;
-#     the sensor fusion category has eighteen plots, the accuracies in the deep
-#     scheme; and the fusion document carries the validation of the model
-#     (items 1001-1065);
+#     the sensor fusion category has eighteen plots, each accuracy row a
+#     literal colour, the quiet member of the value it qualifies; and the
+#     fusion document carries the validation of the model (items 1001-1065);
 #   - the GNSS acceleration accuracy is the receiver's speed accuracy through
 #     the derivative's one stencil, named by its calculation and its row, and
-#     drawn in the deep scheme as an acceleration (item 1101);
+#     drawn as an acceleration in a literal colour of its own (item 1101);
 #   - a hole in a sensor's samples is defined once: the factor and the phrase
 #     that define it are spelled in the continuity unit alone, nothing else
 #     takes a median of a time axis for it, the readers include the unit, the
@@ -809,7 +809,8 @@ expect_count("the fusion document names the scale diagnostics" "model\\.scale" 1
 # (src/fusion/fitcovariance.*), whose clique marginals give the covariance,
 # never the library's joint marginals; one cap for every attitude sigma; the
 # four channels named in the registration's output table and the plot rows
-# alone, the plots drawn in the deep scheme of the GNSS accuracies; the twelve
+# alone, each plot a literal colour, the quiet member of the value it
+# qualifies; the twelve
 # entries of the position and velocity covariance blocks (posCovNN, posCovNE,
 # posCovND, posCovEE, posCovED, posCovDD, velCovNN, velCovNE, velCovND,
 # velCovEE, velCovED, velCovDD) named in the registration alone (its output
@@ -1376,7 +1377,8 @@ expect_none("no text says the fused output is interpolated"
 # =============================================================================
 # GNSS acceleration accuracy: GNSS/accAcc is the receiver's speed accuracy
 # carried through the derivative's own stencil, plotted in GNSS (Advanced) as
-# an acceleration in the deep scheme of the GNSS accuracies, and documented
+# an acceleration in a literal colour, the quiet member of the accelerations
+# it qualifies, and documented
 # with the assumption it makes and how conservative that was measured to be.
 # =============================================================================
 

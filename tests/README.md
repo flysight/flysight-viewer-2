@@ -20,6 +20,14 @@
     - 12.6 [One status bar for background work](#126-one-status-bar-for-background-work)
     - 12.7 [Sensor fusion plots, attitude and the orientation attribute](#127-sensor-fusion-plots-attitude-and-the-orientation-attribute)
     - 12.8 [The fused state at every IMU sample](#128-the-fused-state-at-every-imu-sample)
+    - 12.9 [The documented noise model and the accuracy, part 1](#129-the-documented-noise-model-and-the-accuracy-part-1)
+    - 12.10 [GNSS acceleration accuracy](#1210-gnss-acceleration-accuracy)
+    - 12.11 [Sample continuity](#1211-sample-continuity)
+    - 12.12 [GNSS holes bridged by the IMU](#1212-gnss-holes-bridged-by-the-imu)
+    - 12.13 [The scale factors as a refinement](#1213-the-scale-factors-as-a-refinement)
+    - 12.14 [Background computation per recording](#1214-background-computation-per-recording)
+    - 12.15 [Fused speed plots](#1215-fused-speed-plots)
+    - 12.16 [Fused position and speed accuracy](#1216-fused-position-and-speed-accuracy)
 
 [Appendix A. The acceptance items (1-19)](#appendix-a-the-acceptance-items-1-19)
 [Appendix B. The acceptance items of sensor fusion and plot-driven jobs (101-120)](#appendix-b-the-acceptance-items-of-sensor-fusion-and-plot-driven-jobs-101-120)
@@ -31,6 +39,14 @@
 [Appendix H. The acceptance items of one status bar for background work (701-754)](#appendix-h-the-acceptance-items-of-one-status-bar-for-background-work-701-754)
 [Appendix I. The acceptance items of sensor fusion plots, attitude and the orientation attribute (801-863)](#appendix-i-the-acceptance-items-of-sensor-fusion-plots-attitude-and-the-orientation-attribute-801-863)
 [Appendix J. The acceptance items of the fused state at every IMU sample (901-940)](#appendix-j-the-acceptance-items-of-the-fused-state-at-every-imu-sample-901-940)
+[Appendix K. The acceptance items of the documented noise model and the accuracy, part 1 (1001-1065)](#appendix-k-the-acceptance-items-of-the-documented-noise-model-and-the-accuracy-part-1-1001-1065)
+[Appendix L. The acceptance item of the GNSS acceleration accuracy (1101)](#appendix-l-the-acceptance-item-of-the-gnss-acceleration-accuracy-1101)
+[Appendix M. The acceptance items of sample continuity (1201-1213)](#appendix-m-the-acceptance-items-of-sample-continuity-1201-1213)
+[Appendix N. The acceptance items of GNSS holes bridged by the IMU (1301-1313)](#appendix-n-the-acceptance-items-of-gnss-holes-bridged-by-the-imu-1301-1313)
+[Appendix O. The acceptance items of the scale factors as a refinement (1401-1415)](#appendix-o-the-acceptance-items-of-the-scale-factors-as-a-refinement-1401-1415)
+[Appendix P. The acceptance items of background computation per recording (1501-1524)](#appendix-p-the-acceptance-items-of-background-computation-per-recording-1501-1524)
+[Appendix Q. The acceptance items of the fused speed plots (1601-1612)](#appendix-q-the-acceptance-items-of-the-fused-speed-plots-1601-1612)
+[Appendix R. The acceptance items of the fused position and speed accuracy (1701-1717)](#appendix-r-the-acceptance-items-of-the-fused-position-and-speed-accuracy-1701-1717)
 
 ## 1. What this is
 
