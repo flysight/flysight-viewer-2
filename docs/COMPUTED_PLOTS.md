@@ -41,10 +41,10 @@ with few satellites in the fix, a weak signal or a hole in the fixes, the
 IMU carries more of the weight and the lines separate, as the fused
 elevation does from the GNSS elevation. The separation is the fit's
 compromise between the receiver and the IMU, not an independent measurement
-of speed by the IMU. The receiver's accuracy plots (Horizontal accuracy,
-Vertical accuracy and Speed accuracy) say which line to believe: where they
-show the receiver in doubt, the fused speed, with the IMU's dead reckoning in
-it, is the better figure.
+of speed by the IMU. The receiver's Speed accuracy plot says how far to
+trust its side of the compromise: where it shows the receiver in doubt, the
+fused speed carries the IMU's dead reckoning, and that is what to read the
+separation by.
 
 Between two GNSS fixes the Sensor fusion plots follow the IMU at its own rate,
 pulled onto the fitted fixes, so a line no longer runs straight from one fix
