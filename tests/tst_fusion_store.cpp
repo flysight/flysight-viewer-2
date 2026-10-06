@@ -110,7 +110,7 @@ const QString kCovarianceFailure =
 
 /// What a fresh publish showed, for the bit-for-bit comparison with a restore.
 struct FitValues {
-    QHash<QString, QVector<double>> channels;   ///< fusionMeasurementNames(), accH, _system_time
+    QHash<QString, QVector<double>> channels;   ///< fusionMeasurementNames(), velH, vel, accH, _system_time
     QString diagnostics;
     QString detail;
 };

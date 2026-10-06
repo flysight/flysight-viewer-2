@@ -876,8 +876,9 @@ void FusionRowsTest::editsAndVisibilityDuringFit()
 // local frame): a logbook column kept from before computes, labelled with the
 // measurement's name since no plot names it, while a column over the Roll row
 // takes the row's name; and the fit's stored record, the one place a fit
-// channel leaves the process, carries every fit channel the fit publishes and
-// no derived calculation produces, plotted (velD) or not.
+// channel leaves the process, carries every channel whose plot the
+// fusion-plots specification removed, velD among them though it is drawn again
+// as Vertical speed.
 void FusionRowsTest::removedPlotMeasurementsStayAvailable()
 {
     const auto restore = qScopeGuard([] { LogbookColumnStore::instance().setColumns({descriptionColumn()}); });
@@ -925,9 +926,9 @@ void FusionRowsTest::removedPlotMeasurementsStayAvailable()
     QVERIFY(rollAtExit.isValid());
     QVERIFY(sameBits(rollCell.toDouble(), rollAtExit.toDouble()));
 
-    // The fit's stored record carries every fit channel the fit publishes and
-    // no derived calculation produces, plotted (velD) or not, with the samples
-    // the session reads
+    // The fit's stored record carries every channel whose plot the
+    // fusion-plots specification removed, velD among them though it is drawn
+    // again as Vertical speed, with the samples the session reads
     const CalculationRecordRead read = LogbookManager::instance().readCalculationRecord(QStringLiteral("s2"), kFit);
     QCOMPARE(read.status, CalculationRecordStatus::Ok);
     QVERIFY(read.record.has_value());

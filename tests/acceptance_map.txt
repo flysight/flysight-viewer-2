@@ -2537,6 +2537,7 @@
 802 tst_fusion_rows allFusionPlotsAreExplicitBacked
 802 manual M39
 802 manual M51
+802 manual M58
 
 # 803 - (5, as amended) the fused north, east and down position, north and east velocity, north and east acceleration, roll, pitch, yaw and quaternion plots are removed, and the local-frame category with them; the fused down velocity is drawn as Vertical speed since the specification of 1601-1612
 803 tst_fusion_rows allFusionPlotsAreExplicitBacked
@@ -3759,6 +3760,8 @@
 1607 tst_fusion_derived fusedSpeedsKnownAnswers
 1607 tst_fusion_derived fusedSpeedsAreTheGnssDefinitions
 1607 tst_fusion_derived derivedValuesWaitOnTheFit
+1607 tst_fusion_session requestRunsOnceAndPublishesTogether
+1607 tst_fusion_session readsNeverRunTheFit
 
 # 1608 - (5, second bullet) test: the category holds the fifteen in the order of 1602; the three new rows are named, united and typed as their GNSS counterparts and backed by the explicit calculation; a legend value over each formats as its GNSS counterpart's does
 1608 tst_fusion_rows allFusionPlotsAreExplicitBacked
