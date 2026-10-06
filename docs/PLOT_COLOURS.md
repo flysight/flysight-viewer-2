@@ -81,8 +81,11 @@ There are three.
   to avoid being identical by accident.
 
 Within a family of kin, two roles recur. An **accuracy** is the quiet
-member of its value: the same hue, less saturated, at the darker edge of
-the band. A **triad's total** is the neutral member of its family: nearly
+member of its value: the same hue, less saturated, its lightness wherever
+the band leaves room beside the value and the plots it is read with (the
+first accuracies took the darker edge; the fused position and speed
+accuracies the lighter, or the middle, where a dark-edge quiet colour read
+dim). A **triad's total** is the neutral member of its family: nearly
 grey, with a trace of the family's hue. Both roles were once expressed by
 lightness (a "deep" tier), which is what failed on the dark background; in
 the band of section 3 they are expressed by saturation instead.

@@ -1052,21 +1052,25 @@ void MainWindow::registerBuiltInPlots()
         // Vertical accuracy is the quiet cyan-teal at the upper edge: the
         // quiet member of the fused Vertical speed (11), kin of the GNSS
         // Vertical accuracy (15), and 13 from the fused Elevation, whose
-        // vertical it also qualifies. Speed accuracy is the quiet violet at
-        // the lower edge: the quiet member of the fused Total speed (20), kin
-        // of the GNSS Speed accuracy (12). OKLCH (L, C, H): 0.68, 0.10, 346;
-        // 0.65, 0.11, 205; 0.56, 0.10, 317. Contrast on #ffffff / #242424:
-        // 3.02 / 5.15, 3.09 / 5.02, 4.89 / 3.18. Separation (OKLab x 100,
-        // PLOT_COLOURS.md section 8) from the GNSS quality rows 12 to 25, the
-        // closest Horizontal accuracy and Speed accuracy against the GNSS
-        // Speed accuracy at 12; between the three 13, 20 and 20; from the
-        // fused values other than their own 13 to 33, the closest Speed
-        // accuracy against the fused Horizontal speed at 11. Colour-blind: 3
-        // to 16, the lowest where the inherited hues already collapse
+        // vertical it also qualifies. Speed accuracy is the violet in the
+        // middle of the band: the quiet member of the fused Total speed (14),
+        // kin of the GNSS Speed accuracy (11), and still the least saturated
+        // violet on the m/s canvas. It was the quiet violet at the lower edge
+        // (0x8c619b, 3.18 on #242424) until the look of M59 found it dim on
+        // the dark background; lifted, it keeps every neighbour at the floor
+        // of 11. OKLCH (L, C, H): 0.68, 0.10, 346; 0.65, 0.11, 205; 0.59,
+        // 0.16, 305. Contrast on #ffffff / #242424: 3.02 / 5.15, 3.09 / 5.02,
+        // 4.41 / 3.52. Separation (OKLab x 100, PLOT_COLOURS.md section 8)
+        // from the GNSS quality rows 11 to 32, the closest Speed accuracy
+        // against the GNSS Speed accuracy at 11; between the three 14, 20 and
+        // 22; from the fused values other than their own 13 to 33, the
+        // closest Speed accuracy against the fused Horizontal speed and
+        // Vertical accuracy against the fused Elevation at 13. Colour-blind:
+        // 4 to 19, the lowest where the inherited hues already collapse
         // (Horizontal accuracy against Vertical accuracy 4, Speed accuracy
-        // against the fused Horizontal speed 3). A colour moved after a look
-        // on both backgrounds stays within the rule, and its new figures
-        // replace these.
+        // against Number of satellites 4). A colour moved after a look on
+        // both backgrounds stays within the rule, and its new figures replace
+        // these.
         {"Sensor fusion", "Elevation",                "m",             QColor(0x037ac0), "Fusion", "z",             "altitude"},
         {"Sensor fusion", "Horizontal speed",         "m/s",           QColor(0xbc378e), "Fusion", "velH",          "speed"},
         {"Sensor fusion", "Vertical speed",           "m/s",           QColor(0x1b8278), "Fusion", "velD",          "vertical_speed"},
@@ -1084,7 +1088,7 @@ void MainWindow::registerBuiltInPlots()
         {"Sensor fusion", "Vertical acceleration accuracy",   "m/s^2", QColor(0x5ba09d), "Fusion", "accDAcc",    "acceleration_accuracy"},
         {"Sensor fusion", "Horizontal accuracy",              "m",     QColor(0xc57fa6), "Fusion", "hAcc",       "distance"},
         {"Sensor fusion", "Vertical accuracy",                "m",     QColor(0x08a2af), "Fusion", "vAcc",       "distance"},
-        {"Sensor fusion", "Speed accuracy",                   "m/s",   QColor(0x8c619b), "Fusion", "sAcc",       "speed"},
+        {"Sensor fusion", "Speed accuracy",                   "m/s",   QColor(0x9460c8), "Fusion", "sAcc",       "speed"},
 
         // Category: Magnetometer: one blue family, the total its quiet member
         {"Magnetometer", "Magnetic field X",     "gauss", QColor(0x0aa0d2), "MAG", "x",     "magnetic_field"},
