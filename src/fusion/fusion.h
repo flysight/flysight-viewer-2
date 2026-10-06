@@ -153,7 +153,7 @@ Result run(const Channels &channels, const ProgressFn &progress = {},
 /// registration (CalculationDescriptor::resultVersion), so changing it drops
 /// every stored fit. Change it whenever a change can alter what run() returns
 /// for the same channels.
-inline constexpr char Algorithm[] = "batch-temperature-bias-v10";
+inline constexpr char Algorithm[] = "batch-temperature-bias-v11";
 
 } // namespace FlySight::Fusion
 

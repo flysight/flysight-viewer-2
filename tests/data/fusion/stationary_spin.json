@@ -10,7 +10,7 @@
             "widened_samples": 0,
             "widening_half_width_s": 2.5
         },
-        "algorithm": "batch-temperature-bias-v10",
+        "algorithm": "batch-temperature-bias-v11",
         "anchor_time_s": null,
         "configuration": {
             "accel_fs_g": 16,

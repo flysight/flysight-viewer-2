@@ -1,6 +1,6 @@
 {
     "diagnostics": {
-        "algorithm": "batch-temperature-bias-v10",
+        "algorithm": "batch-temperature-bias-v11",
         "failure": "ACCEL_FS_G states +/-16 g but the accelerometer readings lie on the +/-8 g lattice; sensor fusion unavailable"
     },
     "fixture": "reject_lattice",

@@ -101,7 +101,7 @@ constexpr int kFitTimeoutMs = 120000;
 const QString kSolverFailureReason =
     QStringLiteral("Batch fusion did not converge (iteration limit); sensor fusion unavailable");
 const QString kSolverFailureDiagnostics = QStringLiteral(
-    "{\"algorithm\":\"batch-temperature-bias-v10\","
+    "{\"algorithm\":\"batch-temperature-bias-v11\","
     "\"failure\":\"Batch fusion did not converge (iteration limit); sensor fusion unavailable\"}");
 
 // The sixteen accuracy channels, the four accuracies and the twelve entries of
@@ -1294,7 +1294,7 @@ void FusionStoreTest::codeStampChangeDropsRecordOnLoad()
     QCOMPARE(offeredFitIsDroppedByUncheck("a", queued, jobs), QString());
 }
 
-// Item 1702: a record written under the previous algorithm string,
+// Item 1702: a record written under an earlier algorithm string, here
 // batch-temperature-bias-v9, which a logbook holds for every fit made before
 // the fit published its position and velocity covariance blocks, is stale at
 // load: deleted, and the fit, still wanted by the checked Roll row, is

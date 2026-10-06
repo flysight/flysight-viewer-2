@@ -3828,7 +3828,7 @@
 1701 tst_fusion_kernel imuRateIsWhatTheFitPublishes
 1701 tst_fusion_session registrationShape
 
-# 1702 - (3) v10 and what is unchanged: Fusion::Algorithm is batch-temperature-bias-v10; a record written under v9 is stale at load and computed again once, as a result is needed, shown like any computation; nothing else of the record's format changes; the fit's inputs, its solution, the seventeen state channels, the four accuracies and the diagnostics are unchanged and the goldens' existing channels remain bit for bit; neither Cov(x_j, g) nor the position-velocity cross block is published
+# 1702 - (3, as amended) the algorithm string and what is unchanged: Fusion::Algorithm became batch-temperature-bias-v10 when the fit published the covariance blocks and is batch-temperature-bias-v11 since the attitude covariance block is symmetrized from a separate sum, which moves the four accuracies by rounding and nothing else; a record written under an earlier string is stale at load and computed again once, as a result is needed, shown like any computation; nothing else of the record's format changes; the fit's inputs, its solution, the seventeen state channels and the diagnostics are unchanged and the goldens' channels for them remain bit for bit (the four accuracies re-captured at v11); neither Cov(x_j, g) nor the position-velocity cross block is published
 1702 tst_fusion_session registrationShape
 1702 tst_fusion_session restoredFitIsIndistinguishable
 1702 tst_fusion_store recordUnderPreviousAlgorithmIsComputedAgainOnce

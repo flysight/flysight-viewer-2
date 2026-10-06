@@ -111,7 +111,7 @@
 #     alone (its output table and the derived accuracies' input lists), no
 #     plot row names them, the three derived names, sensor-qualified, are
 #     spelled in src in the registration and the plot rows alone, the
-#     algorithm string is batch-temperature-bias-v10, no
+#     algorithm string is batch-temperature-bias-v11, no
 #     document counts the fit's channels or outputs as they were before the
 #     blocks, the sensor fusion category is the eighteen plots of the tests'
 #     mirror with seven accuracy rows, each a literal colour, and no document
@@ -672,7 +672,7 @@ expect_none("the stationary-window detector is gone"
 expect_none("the silent poll is gone" "pollCancel" src tests)
 expect_none("the anchor-attitude initializer is gone"
   "InitialAttitude|initialAttitude\\(|kInitialHeadingDeg|attitudeFromStationaryWindow" src tests)
-# Allow: none expected. The goldens say batch-temperature-bias-v10; a hit under
+# Allow: none expected. The goldens say batch-temperature-bias-v11; a hit under
 # tests/data/fusion means a stale capture (re-capture, tests/README.md section 11).
 expect_none("the retired algorithm strings are gone" "batch-shared-bias-v[12]"
   src tests docs README.md ":!tests/README.md")
@@ -1018,8 +1018,8 @@ expect_none("stored results are widget-free"
 # Fusion's result version is its kernel's algorithm string, spelled once.
 # Allow: none expected. A changed algorithm changes the one literal; a comment
 # or test in src that quotes it names Fusion::Algorithm instead.
-expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v10" 1 src)
-expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v10"
+expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v11" 1 src)
+expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v11"
   "^src/fusion/fusion\\.h$" src)
 # The compatibility rule names the result version, in the code and in the note.
 # Allow: reword the sentence, never duplicate it; the count is 1 in each file.
@@ -1506,7 +1506,7 @@ expect_none("the v7 algorithm string is gone" "batch-temperature-bias-v7"
 # rejections, and the input audit of every fit names its holes. Allow: none
 # expected; a new fixture changes these counts with tests/README.md section 11.
 expect_count("the goldens carry the current algorithm string"
-  "\"algorithm\": \"batch-temperature-bias-v10\"" 14 tests/data/fusion)
+  "\"algorithm\": \"batch-temperature-bias-v11\"" 14 tests/data/fusion)
 expect_count("the goldens hold four fits" "\"outcome\": \"succeeded\"" 4 tests/data/fusion)
 expect_count("the goldens hold ten rejections" "\"outcome\": \"rejected\"" 10 tests/data/fusion)
 expect_count("the fits' goldens name their holes" "\"gnss_holes\"" 4 tests/data/fusion)
@@ -1554,15 +1554,15 @@ expect_count("the fusion document carries the first reference recording" "08-35-
 # 1401-1415): two lines, the case and the row of section 8.
 expect_count("the fusion document carries the second reference recording" "13-35-10" 2
   docs/SENSOR_FUSION.md)
-expect_count("the fusion document names the algorithm string" "batch-temperature-bias-v10" 2
+expect_count("the fusion document names the algorithm string" "batch-temperature-bias-v11" 2
   docs/SENSOR_FUSION.md)
 expect_none("the documents count four fits and ten rejections"
   "three fits|eleven rejections|three golden successes" docs)
 expect_count("the plots document says the fusion plots draw through a GNSS hole"
   "draw through a hole in the GNSS fixes" 1 docs/COMPUTED_PLOTS.md)
-expect_count("the schema document names the algorithm string" "batch-temperature-bias-v10" 2
+expect_count("the schema document names the algorithm string" "batch-temperature-bias-v11" 2
   docs/DATA_SCHEMA.md)
-expect_count("the calculations document names the algorithm string" "batch-temperature-bias-v10" 1
+expect_count("the calculations document names the algorithm string" "batch-temperature-bias-v11" 1
   docs/CALCULATIONS.md)
 
 # ─────────────────────────────── staged-scale (items 1401, 1404-1407, 1412, 1414, 1415)

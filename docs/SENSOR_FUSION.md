@@ -835,7 +835,7 @@ frame is that of [LOCAL_COORDINATES.md](LOCAL_COORDINATES.md), section 7).
 The attribute `_FUSION_DIAGNOSTICS` is compact JSON. After a successful fit
 its top-level keys are, grouped:
 
-- *identity and audit*: `algorithm` (`batch-temperature-bias-v10`), `input`
+- *identity and audit*: `algorithm` (`batch-temperature-bias-v11`), `input`
   (the input audit: `epoch_utc_s`, `imu_count`, `gnss_count`, `origin_index`,
   `origin`, `height_method`, `time_method`, and `gnss_holes`, one object per
   hole in the fitted window's GNSS fixes, in time order, each with `start_s`,
@@ -1173,10 +1173,12 @@ success, a rejection or a solver failure. It is restored bit for bit when the
 recording is loaded, and the restored result is indistinguishable from a fresh
 one; the record holds the sixteen accuracy channels with the state (none when the
 covariance could not be computed). Its code stamp is the algorithm string of the diagnostics
-(`batch-temperature-bias-v10` since the fit publishes the position and
-velocity covariance blocks, which changes the record's shape and no number of
-the fit; `v9` having been the scale factors released from the held solution,
-section 4, which moved every fit's numbers, `v8`
+(`batch-temperature-bias-v11` since the attitude covariance block is
+symmetrized from a separate sum, as the position and velocity blocks are,
+which moves the four accuracies by rounding and nothing else; `v10` having
+been the position and velocity covariance blocks published, which changed the
+record's shape and no number of the fit, `v9` the scale factors released from
+the held solution, section 4, which moved every fit's numbers, `v8`
 the hole in the GNSS fixes fitted across instead of rejected, which also
 carried the continuity rule's threshold of 1.5 median IMU intervals that the
 kernel adopted under the compatibility marker's bump to 3, `v7` the lattice
@@ -1499,7 +1501,7 @@ deg/s, against a corpus median of 0.030 deg/s: the model is below the corpus.
 **The staged scale on the reference recordings.** The two stages of the
 full fit (section 4) on the four recordings of the first table, measured on
 2026-10-03 by M56 of [tests/README.md](../tests/README.md), section 12.13,
-under `v9` (whose numbers `v10` keeps: it changed only what is published), at the default configuration. Each stage's
+under `v9` (whose numbers `v10` and `v11` keep: the one changed only what is published, the other the last bits of the four accuracies), at the default configuration. Each stage's
 passes, iterations and objective are the release's account in the
 diagnostics; the reported fit is the released stage's when it was kept and the
 held stage's otherwise, and its largest scale departure is that fit's:

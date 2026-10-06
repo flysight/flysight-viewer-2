@@ -2338,7 +2338,7 @@ void FusionKernelTest::biasSettledByCostTest()
     const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
     QCOMPARE(seed.value("converged").toBool(false), true);
     QCOMPARE(seed.value("iterations").toInt(), int(trace.history.size()));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v10"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v11"));
 
     // The quality metrics recomputed from the residuals array: 28 states, so
     // 28 position and velocity factors of dimension 3 and 27 IMU factors of
@@ -2584,7 +2584,7 @@ void FusionKernelTest::failureDiagnosticsShape()
         const QJsonObject diagnostics = failureDiagnostics(QString::fromLatin1(failure.failure), &s);
         QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure"),
                                                   QStringLiteral("stopping")}));
-        QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v10"));
+        QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v11"));
         QCOMPARE(diagnostics.value("failure").toString(), QString::fromLatin1(failure.failure));
         const QJsonObject stopping = diagnostics.value("stopping").toObject();
         QCOMPARE(stopping.value("rule").toString(), QString::fromLatin1(failure.rule));
@@ -3366,7 +3366,7 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     const Fusion::Result result = runPipeline(toChannels(f), t, Checkpoint(), &trace);
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
     const QJsonObject diagnostics = diagnosticsOf(result);
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v10"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v11"));
     const QJsonObject gyroBias = diagnostics.value("model").toObject().value("gyro_bias").toObject();
     const QJsonArray b1 = gyroBias.value("b1_rad_s_per_degc").toArray();
     QCOMPARE(b1.size(), 3);

@@ -316,7 +316,7 @@ void FusionSessionTest::registrationShape()
 
     // Only the fit declares a result version: its kernel's algorithm string,
     // v10 since the fit publishes the covariance blocks (item 1702)
-    QCOMPARE(fit->descriptor->resultVersion, QStringLiteral("batch-temperature-bias-v10"));
+    QCOMPARE(fit->descriptor->resultVersion, QStringLiteral("batch-temperature-bias-v11"));
     QVERIFY(accH->descriptor->resultVersion.isEmpty());
     QVERIFY(systemTime->descriptor->resultVersion.isEmpty());
 
@@ -1211,7 +1211,7 @@ void FusionSessionTest::restoredFitIsIndistinguishable()
     const std::optional<StoredCalculationResult> snapshot = engineA.exportResult(kFit);
     QVERIFY(snapshot.has_value());
     QCOMPARE(snapshot->calculationId, kFit);
-    QCOMPARE(snapshot->resultVersion, QStringLiteral("batch-temperature-bias-v10"));
+    QCOMPARE(snapshot->resultVersion, QStringLiteral("batch-temperature-bias-v11"));
     const QJsonObject diagnostics = QJsonDocument::fromJson(
         snapshot->bundle.attributeValue(kDiagnostics).toString().toUtf8()).object();
     QCOMPARE(diagnostics.value(QStringLiteral("algorithm")).toString(), snapshot->resultVersion);

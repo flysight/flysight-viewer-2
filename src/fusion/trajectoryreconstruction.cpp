@@ -80,8 +80,12 @@ public:
         J.block<3, 3>(0, 18+kSlopeOffset) = byBias.rightCols<3>()*m_dT;
         J.block<3, 6>(0, 18+kScaleOffset) = attitudeRetraction*m_s.byScale[j]+K*m_endByScale;
 
-        gtsam::Matrix3 attitude = J*m_z*J.transpose()+conditional;
-        attitude = (attitude+attitude.transpose())/2;
+        // Symmetrized from a separate sum, as positionVelocity() does:
+        // assigning (a + a^T) / 2 back to a aliases in Eigen, which reads the
+        // transpose from the half already overwritten and leaves the block
+        // asymmetric where the product is.
+        const gtsam::Matrix3 product = J*m_z*J.transpose()+conditional;
+        const gtsam::Matrix3 attitude = (product+product.transpose())/2;
         const Eigen::Matrix<double, 3, 15> withGlobals = J*m_z.rightCols<15>();
         // The accelerometer's parts of g: the first three of B(0) and of S(0).
         gtsam::Matrix9 joint;
