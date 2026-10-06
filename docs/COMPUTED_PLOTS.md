@@ -16,11 +16,12 @@
 
 Most plots and logbook columns are instant: check a plot and it is drawn for
 every visible track, add a column and it fills in. A few take from seconds to
-several minutes per recording to work out. Today these are the twelve plots of
-the "Sensor fusion" category (Elevation, Horizontal, Vertical, Along-track and
-Cross-track acceleration, Heading, Pitch and Roll, Heading accuracy, Tilt
-accuracy, Horizontal acceleration accuracy and Vertical acceleration accuracy)
-and any logbook column over a Sensor fusion value
+several minutes per recording to work out. Today these are the fifteen plots
+of the "Sensor fusion" category (Elevation, Horizontal, Vertical and Total
+speed, Horizontal, Vertical, Along-track and Cross-track acceleration,
+Heading, Pitch and Roll, Heading accuracy, Tilt accuracy, Horizontal
+acceleration accuracy and Vertical acceleration accuracy) and any logbook
+column over a Sensor fusion value
 ([what they are](SENSOR_FUSION.md)). An accuracy plot is absent for a
 recording whose computation did not produce the accuracy, while that
 computation's other plots are drawn.
@@ -31,6 +32,19 @@ the receiver's own speed accuracy for every recording with GNSS data, and is
 a cautious figure for each of the GNSS accelerations beside it.
 [CALCULATIONS.md](CALCULATIONS.md) section 18 says how it is computed and how
 cautious it was measured to be.
+
+The fused speeds are read beside the GNSS speeds of the same names, which
+they overlay. The fit is pulled onto the GNSS fixes with the weight of the
+receiver's own stated accuracy, so where the receiver is accurate the two
+lines lie together, and the IMU agrees with the receiver. Where it is not,
+with few satellites in the fix, a weak signal or a hole in the fixes, the
+IMU carries more of the weight and the lines separate, as the fused
+elevation does from the GNSS elevation. The separation is the fit's
+compromise between the receiver and the IMU, not an independent measurement
+of speed by the IMU. The receiver's accuracy plots (Horizontal accuracy,
+Vertical accuracy and Speed accuracy) say which line to believe: where they
+show the receiver in doubt, the fused speed, with the IMU's dead reckoning in
+it, is the better figure.
 
 Between two GNSS fixes the Sensor fusion plots follow the IMU at its own rate,
 pulled onto the fitted fixes, so a line no longer runs straight from one fix

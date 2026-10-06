@@ -50,6 +50,8 @@ using ExplicitEvent = CalculationEngine::ExplicitResultEvent;
 namespace {
 
 const QString kFit = QStringLiteral("builtin.fusion.fit");
+const QString kVelH = QStringLiteral("builtin.fusion.velH");
+const QString kVel = QStringLiteral("builtin.fusion.vel");
 const QString kAccH = QStringLiteral("builtin.fusion.accH");
 const QString kSystemTime = QStringLiteral("builtin.fusion.systemTime");
 const QString kDiagnostics = QStringLiteral("_FUSION_DIAGNOSTICS");
@@ -79,7 +81,8 @@ QString availableAmong(const SessionData &session, const QList<DependencyKey> &n
     return available.join(QStringLiteral(", "));
 }
 
-/// The 17 measurements, accH and _system_time: everything but the diagnostics.
+/// The 21 measurements, velH, vel, accH, _system_time and the roll at exit:
+/// everything but the diagnostics.
 QList<DependencyKey> valueNames()
 {
     QList<DependencyKey> names = fusionNames();
@@ -87,8 +90,8 @@ QList<DependencyKey> valueNames()
     return names;
 }
 
-/// The measurement behind each of the twelve "Sensor fusion" plots
-/// (fusionPlots()): the fit's own accD and four accuracies, and the
+/// The measurement behind each of the fifteen "Sensor fusion" plots
+/// (fusionPlots()): the fit's own velD, accD and four accuracies, and the
 /// derivations that wait on it.
 QList<DependencyKey> plotNames()
 {
@@ -231,12 +234,12 @@ void FusionSessionTest::registrationShape()
     // constant defaults first (configurationDefaults), then the fit; the
     // derived values' descriptors, the orientation's constant default and the
     // attitude are tst_fusion_derived's
-    QCOMPARE(registry.registeredIds().mid(registry.registeredIds().size() - 12),
+    QCOMPARE(registry.registeredIds().mid(registry.registeredIds().size() - 14),
              QStringList({QStringLiteral("builtin.default.ACCEL_FS_G"),
                           QStringLiteral("builtin.default.GYRO_FS_DEG_S"),
                           QStringLiteral("builtin.default.ACCEL_ODR_HZ"),
                           QStringLiteral("builtin.default.GYRO_ODR_HZ"),
-                          kFit, kAccH, kSystemTime, QStringLiteral("builtin.fusion.z"),
+                          kFit, kVelH, kVel, kAccH, kSystemTime, QStringLiteral("builtin.fusion.z"),
                           QStringLiteral("builtin.fusion.accAlongTrack"),
                           QStringLiteral("builtin.fusion.accCrossTrack"),
                           QStringLiteral("builtin.default._ORIENTATION"),
@@ -519,10 +522,10 @@ void FusionSessionTest::readsNeverRunTheFit()
     const SessionData session = fixtureSession(QStringLiteral("coarse_linear"));
     CalculationEngine &engine = session.calculationEngine();
     const QList<DependencyKey> names = fusionNames();
-    QCOMPARE(names.size(), 25);
+    QCOMPARE(names.size(), 27);
 
     int runsAfterFirstRound = -1;
-    const int strides[] = {4, 7, 8};        // coprime with 25: every name, scrambled
+    const int strides[] = {4, 7, 8};        // coprime with 27: every name, scrambled
     for (int round = 0; round < 3; ++round) {
         for (int i = 0; i < names.size(); ++i) {
             const DependencyKey &name = names.at((i * strides[round] + round * 3) % names.size());
@@ -562,8 +565,8 @@ void FusionSessionTest::requestRunsOnceAndPublishesTogether_data()
 }
 
 // Acceptance 6: a request runs the fit once and publishes all outputs
-// together; accH and the system-time axis appear without being requested; a
-// second request runs nothing.
+// together; the fused speeds, accH and the system-time axis appear without
+// being requested; a second request runs nothing.
 void FusionSessionTest::requestRunsOnceAndPublishesTogether()
 {
     QFETCH(QString, fixture);
@@ -597,18 +600,30 @@ void FusionSessionTest::requestRunsOnceAndPublishesTogether()
 
     // The derived values, never requested
     const QVector<double> time = fusion(session, QStringLiteral("_time"));
+    const QVector<double> velN = fusion(session, QStringLiteral("velN"));
+    const QVector<double> velE = fusion(session, QStringLiteral("velE"));
+    const QVector<double> velD = fusion(session, QStringLiteral("velD"));
+    const QVector<double> velH = fusion(session, QStringLiteral("velH"));
+    const QVector<double> vel = fusion(session, QStringLiteral("vel"));
     const QVector<double> accN = fusion(session, QStringLiteral("accN"));
     const QVector<double> accE = fusion(session, QStringLiteral("accE"));
     const QVector<double> accH = fusion(session, QStringLiteral("accH"));
     const QVector<double> systemTime = fusion(session, QStringLiteral("_system_time"));
+    QCOMPARE(velH.size(), length);
+    QCOMPARE(vel.size(), length);
     QCOMPARE(accH.size(), length);
     QCOMPARE(systemTime.size(), length);
     for (qsizetype i = 0; i < length; ++i) {
-        // accH is recomputed here from products, which a contracting compiler
-        // (clang on arm64) may fuse differently from the library: bit-exact in
-        // exact mode, within 4 ulp otherwise. The system time is not like
-        // that: with the fixture's fit (a = 1) it is one IEEE subtraction and
-        // a division by one, which no compiler can round differently.
+        // The magnitudes are recomputed here from products, which a
+        // contracting compiler (clang on arm64) may fuse differently from the
+        // library: bit-exact in exact mode, within 4 ulp otherwise. The system
+        // time is not like that: with the fixture's fit (a = 1) it is one IEEE
+        // subtraction and a division by one, which no compiler can round
+        // differently.
+        QVERIFY2(sameRecomputedValue(velH[i], std::sqrt(velN[i] * velN[i] + velE[i] * velE[i])),
+                 qPrintable(QStringLiteral("velH[%1] = %2").arg(i).arg(velH[i], 0, 'g', 17)));
+        QVERIFY2(sameRecomputedValue(vel[i], std::sqrt(velH[i] * velH[i] + velD[i] * velD[i])),
+                 qPrintable(QStringLiteral("vel[%1] = %2").arg(i).arg(vel[i], 0, 'g', 17)));
         QVERIFY2(sameRecomputedValue(accH[i], std::sqrt(accN[i] * accN[i] + accE[i] * accE[i])),
                  qPrintable(QStringLiteral("accH[%1] = %2").arg(i).arg(accH[i], 0, 'g', 17)));
         QVERIFY(sameBits(systemTime[i], time[i] - kFixtureTimeFitB));
@@ -616,6 +631,8 @@ void FusionSessionTest::requestRunsOnceAndPublishesTogether()
     QVERIFY(session.getAttribute(fusionRollAtExit()).isValid());
     QVERIFY(std::isfinite(session.getAttribute(fusionRollAtExit()).toDouble()));
     QCOMPARE(engine.runCount(kFit), 1);
+    QCOMPARE(engine.runCount(kVelH), 1);
+    QCOMPARE(engine.runCount(kVel), 1);
     QCOMPARE(engine.runCount(kAccH), 1);
     QCOMPARE(engine.runCount(kSystemTime), 1);
 

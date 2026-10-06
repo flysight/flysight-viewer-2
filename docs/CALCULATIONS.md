@@ -2197,7 +2197,7 @@ editable, a Choice of `on` "On" and `off` "Off", with the header tooltip
 optional `tooltip` member) and so is its constant default
 (`registerAttributeCalculations()`), so it covers this calculation and every
 requested calculation added later.
-Twelve calculations are registered, in this order:
+Fourteen calculations are registered, in this order:
 
 | Id | Policy | Inputs | Outputs |
 | --- | --- | --- | --- |
@@ -2206,6 +2206,8 @@ Twelve calculations are registered, in this order:
 | `builtin.default.ACCEL_ODR_HZ` | OnDemand | none | `ACCEL_ODR_HZ` (the default's text, a string) |
 | `builtin.default.GYRO_ODR_HZ` | OnDemand | none | `GYRO_ODR_HZ` (the default's text, a string) |
 | `builtin.fusion.fit` (title "Sensor fusion") | Explicit | the 26 below | the 22 below |
+| `builtin.fusion.velH` | OnDemand | `Fusion/velN`, `Fusion/velE` | `Fusion/velH` |
+| `builtin.fusion.vel` | OnDemand | `Fusion/velH`, `Fusion/velD` | `Fusion/vel` |
 | `builtin.fusion.accH` | OnDemand | `Fusion/accN`, `Fusion/accE` | `Fusion/accH` |
 | `builtin.fusion.systemTime` | OnDemand | `Fusion/_time`, `_TIME_FIT_A`, `_TIME_FIT_B` | `Fusion/_system_time` |
 | `builtin.fusion.z` | OnDemand | `Fusion/down`, `_LOCAL_ORIGIN_HMSL`, `_GROUND_ELEV` | `Fusion/z` |
@@ -2292,7 +2294,16 @@ path the facility is `CalculationProgress::none()`, so `request()` and the
 three-step path run the same fit on the same values. The compute function
 holds no state and logs nothing (section 14).
 
-**Derived values.** `Fusion/accH[i] = sqrt(accN[i]*accN[i] + accE[i]*accE[i])`.
+**Derived values.** `Fusion/velH[i] = sqrt(velN[i]*velN[i] + velE[i]*velE[i])`
+and `Fusion/vel[i] = sqrt(velH[i]*velH[i] + velD[i]*velD[i])`: the
+definitions of `GNSS/velH` and `GNSS/vel`
+(`src/calculations/gnsscalculations.cpp`) applied to the fused velocity, with
+`Fusion/velH` an input of `Fusion/vel` as `GNSS/velH` is of `GNSS/vel`. Each
+is spelled in its registration, since the fusion library does not link the
+built-in calculations, and is unavailable when its two inputs differ in
+length. Vertical speed is `Fusion/velD` itself, as vertical acceleration is
+`Fusion/accD`.
+`Fusion/accH[i] = sqrt(accN[i]*accN[i] + accE[i]*accE[i])`.
 `Fusion/_system_time[i] = (Fusion/_time[i] - b) / a` with the time fit's `a`
 and `b`, as `builtin.time.system.GNSS` (both call
 `Calculations::systemTimeFromUtc()`, `src/calculations/timefithelper.h`,
@@ -2345,32 +2356,34 @@ forward +y, up +z, is a constant default registered with
 `_ORIENTATION`, so an orientation edit recomputes the angles and never
 invalidates the fit.
 
-The six derived calculations (`accH`, the system time, `z`, the two track
-accelerations and the attitude's three angles) are on demand, but their
-inputs exist only once the fit has published, so they are blocked by the fit (section 13), appear with
+The eight derived calculations (`velH`, `vel`, `accH`, the system time,
+`z`, the two track accelerations and the attitude's three angles) are on
+demand, but their inputs exist only once the fit has published, so they are blocked by the fit (section 13), appear with
 it through ordinary invalidation, and never start one. Every one has the
 length of its inputs, so together with `Fusion/_time` (an output of the fit)
 they satisfy the time-axis rule of section 16.1.
 
-**Plots.** Twelve plots in the category "Sensor fusion"
+**Plots.** Fifteen plots in the category "Sensor fusion"
 (`MainWindow::registerBuiltInPlots`), in this order: Elevation (`Fusion/z`),
-Horizontal acceleration (`Fusion/accH`), Vertical acceleration
+Horizontal speed (`Fusion/velH`, type `speed`), Vertical speed
+(`Fusion/velD`, type `vertical_speed`), Total speed (`Fusion/vel`, type
+`speed`), Horizontal acceleration (`Fusion/accH`), Vertical acceleration
 (`Fusion/accD`), Along-track and Cross-track acceleration
 (`Fusion/accAlongTrack`, `Fusion/accCrossTrack`), Heading, Pitch and Roll
 (`Fusion/bodyHeading`, `bodyPitch`, `bodyRoll`), Heading accuracy and Tilt
 accuracy (`Fusion/headingAcc`, `tiltAcc`, type `angle`), Horizontal and
 Vertical acceleration accuracy (`Fusion/accHAcc`, `accDAcc`, type
-`acceleration_accuracy`: g, as `acceleration`, at four decimals). `accD` and
-the four accuracies are outputs of the fit; the other seven are the on-demand
-calculations above, blocked by the fit. All twelve are requested (16.3): a
-checked fusion plot has the fit computed for the visible sessions that are
+`acceleration_accuracy`: g, as `acceleration`, at four decimals). `velD`,
+`accD` and the four accuracies are outputs of the fit; the other nine are the
+on-demand calculations above, blocked by the fit. All fifteen are requested
+(16.3): a checked fusion plot has the fit computed for the visible sessions that are
 switched on (16.1), and nothing else about a plot starts one (section 16). An accuracy the fit did
 not set (a rejection, a solver failure, a success whose covariance could not
 be computed) is unavailable like any unset output, and its plot draws
 nothing. The rest of the fit's outputs (`north`, `east`, `down`, `velN`,
-`velE`, `velD`, `accN`, `accE`, `roll`, `pitch`, `yaw`, `qx`, `qy`, `qz`,
-`qw`) have no plot; they remain measurements that a logbook column, a plugin
-input and the stored record read.
+`velE`, `accN`, `accE`, `roll`, `pitch`, `yaw`, `qx`, `qy`, `qz`, `qw`) have
+no plot; they remain measurements that a logbook column, a plugin input and
+the stored record read.
 
 **Stored results.** The fit's result version is `Fusion::Algorithm`
 (`src/fusion/fusion.h`), the same string as the diagnostics' `"algorithm"`. The
@@ -2484,7 +2497,7 @@ vocabulary, the attribute's definition and the Orientation column through
 `ChoiceFixture`),
 `tests/tst_fusion_jobs.cpp` (the executor's worker on a
 real `SessionModel`), `tests/tst_fusion_rows.cpp` (the demand layer of
-section 16 with the twelve real plots and real fits: fits
+section 16 with the fifteen real plots and real fits: fits
 start and are dropped with no gesture, and the accuracy plots are absent
 where the fit did not compute them),
 `tests/tst_fusion_runner.cpp` (the command-line runner against the
@@ -2493,8 +2506,8 @@ result: unload, restart, rejections, invalidation, merges, the session file
 untouched; kept across altitude markers, unrelated registrations, the descent
 pause and another plugin set; dropped at once by a registration that provides
 a name it looked up; deleted when a lookup resolves differently at load; a
-logbook column over roll, and one over each accuracy, filled for sessions
-that are not loaded, and not fitted again after a restart; a stored success
+logbook column over roll, and one over each accuracy and over Total speed,
+filled for sessions that are not loaded, and not fitted again after a restart; a stored success
 without the accuracy restored with the rest, failing nothing); the column rule without GTSAM in
 `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession` (column
 demand), `tst_result_columns::columnWorkerIsUnchangedByDemand`,

@@ -1,4 +1,4 @@
-// The plot-row script with the REAL fusion plots, the twelve rows of the
+// The plot-row script with the REAL fusion plots, the fifteen rows of the
 // application's "Sensor fusion" category (fusionPlots()): PlotModel +
 // CalculationDemand + the executor + SessionModel +
 // Fusion::registerFusionCalculations, with real fits on the executor's 64 MiB
@@ -70,6 +70,8 @@ Q_DECLARE_METATYPE(FlySight::DependencyKey)
 namespace {
 
 const QString kFit = QString::fromLatin1(Fusion::FitCalculationId);     // "builtin.fusion.fit"
+const QString kVelH = QStringLiteral("builtin.fusion.velH");
+const QString kVel = QStringLiteral("builtin.fusion.vel");
 const QString kAccH = QStringLiteral("builtin.fusion.accH");
 const QString kTitle = QStringLiteral("Sensor fusion");
 const QString kRoll = QStringLiteral("bodyRoll");        // the Roll row
@@ -103,6 +105,7 @@ private slots:
     void realRowScript();
     void headingPitchRollShareOneJob();
     void accHRowIsBlockedByFusion();
+    void totalSpeedRowIsBlockedByFusion();
     void noImuSessionIsNeverCounted();
     void rejectedTrackShowsBadge();
     void editsAndVisibilityDuringFit();
@@ -262,8 +265,8 @@ QString FusionRowsTest::offenceInRows(const QString &absent)
     return QString();
 }
 
-// Every one of the twelve fusion plots is requested: its value waits on the
-// fit, which is its only requested calculation. Checking all twelve with one
+// Every one of the fifteen fusion plots is requested: its value waits on the
+// fit, which is its only requested calculation. Checking all fifteen with one
 // visible session (with a ground elevation, which Elevation needs) starts ONE
 // fit, which every value waits on; the computations count that one session.
 // After it every row has a value on the fit's time axis.
@@ -273,6 +276,9 @@ void FusionRowsTest::allFusionPlotsAreExplicitBacked()
     struct Row { const char *name; const char *units; const char *measurement; const char *type; };
     const Row expected[] = {
         {"Elevation",                "m",     "z",             "altitude"},
+        {"Horizontal speed",         "m/s",   "velH",          "speed"},
+        {"Vertical speed",           "m/s",   "velD",          "vertical_speed"},
+        {"Total speed",              "m/s",   "vel",           "speed"},
         {"Horizontal acceleration",  "m/s^2", "accH",          "acceleration"},
         {"Vertical acceleration",    "m/s^2", "accD",          "acceleration"},
         {"Along-track acceleration", "m/s^2", "accAlongTrack", "acceleration"},
@@ -286,7 +292,7 @@ void FusionRowsTest::allFusionPlotsAreExplicitBacked()
         {"Vertical acceleration accuracy",   "m/s^2", "accDAcc",    "acceleration_accuracy"},
     };
     const QVector<PlotValue> plots = fusionPlots();
-    QCOMPARE(plots.size(), 12);
+    QCOMPARE(plots.size(), 15);
     for (int i = 0; i < plots.size(); ++i) {
         const PlotValue &plot = plots.at(i);
         QCOMPARE(plot.category, QStringLiteral("Sensor fusion"));
@@ -357,7 +363,7 @@ void FusionRowsTest::allFusionPlotsAreExplicitBacked()
 // fit did not compute them. Before the fit they merely wait on it; for a
 // recording the model rejects they are not produced, and the recording is
 // listed once, with the fit's reason, however many of the four are checked;
-// for a session without IMU data none of the twelve applies, silently.
+// for a session without IMU data none of the fifteen applies, silently.
 void FusionRowsTest::accuracyPlotsAreAbsentWithoutAFit()
 {
     QVector<PlotValue> accuracies;
@@ -646,7 +652,41 @@ void FusionRowsTest::accHRowIsBlockedByFusion()
     QCOMPARE(engine("s2").runCount(kFit), 1);
 }
 
-// Acceptance 11 on all twelve real rows: a session without IMU data is
+// Fusion/vel is on demand and reads Fusion/velH, also on demand: the Total
+// speed row alone sees through both to the fit, one job is created for it,
+// and after it the speed lies on the fit's time axis, each calculation run
+// once.
+void FusionRowsTest::totalSpeedRowIsBlockedByFusion()
+{
+    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2"))}),
+             QString());
+    show({"s2"});
+    check(QStringLiteral("vel"));
+
+    // In demand: the value waits on the fit
+    QCOMPARE(progressNow().count, 1);
+    QVERIFY(CalculationDemand::isMerelyUncomputed(session("s2"), QStringLiteral("Fusion"), QStringLiteral("vel")));
+
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(m_queue->model()->record(0).calculationTitle, kTitle);
+    QCOMPARE(m_queue->model()->record(0).calculationId, kFit);
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
+    // An on-demand calculation can never be a job
+    QVERIFY(!m_queue->offer("s2", kVel).created());
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+
+    QVERIFY(nothingToShow());
+    const QVector<double> values = fusion("s2", QStringLiteral("vel"));
+    QCOMPARE(values.size(), fusion("s2", QStringLiteral("_time")).size());
+    QVERIFY(!values.isEmpty());
+    QCOMPARE(engine("s2").runCount(kFit), 1);
+    QCOMPARE(engine("s2").runCount(kVelH), 1);
+    QCOMPARE(engine("s2").runCount(kVel), 1);
+}
+
+// Acceptance 11 on all fifteen real rows: a session without IMU data is
 // never counted in progress nor listed among failures, and cannot have a job.
 void FusionRowsTest::noImuSessionIsNeverCounted()
 {
@@ -836,7 +876,8 @@ void FusionRowsTest::editsAndVisibilityDuringFit()
 // local frame): a logbook column kept from before computes, labelled with the
 // measurement's name since no plot names it, while a column over the Roll row
 // takes the row's name; and the fit's stored record, the one place a fit
-// channel leaves the process, carries every channel that has no plot.
+// channel leaves the process, carries every fit channel the fit publishes and
+// no derived calculation produces, plotted (velD) or not.
 void FusionRowsTest::removedPlotMeasurementsStayAvailable()
 {
     const auto restore = qScopeGuard([] { LogbookColumnStore::instance().setColumns({descriptionColumn()}); });
@@ -884,8 +925,9 @@ void FusionRowsTest::removedPlotMeasurementsStayAvailable()
     QVERIFY(rollAtExit.isValid());
     QVERIFY(sameBits(rollCell.toDouble(), rollAtExit.toDouble()));
 
-    // The fit's stored record carries every fit channel that has no plot, with
-    // the samples the session reads
+    // The fit's stored record carries every fit channel the fit publishes and
+    // no derived calculation produces, plotted (velD) or not, with the samples
+    // the session reads
     const CalculationRecordRead read = LogbookManager::instance().readCalculationRecord(QStringLiteral("s2"), kFit);
     QCOMPARE(read.status, CalculationRecordStatus::Ok);
     QVERIFY(read.record.has_value());

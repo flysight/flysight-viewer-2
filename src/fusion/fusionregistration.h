@@ -69,6 +69,10 @@ QList<FitOutputChannel> fitOutputChannels(const Result &result);
 ///    diagnostics attribute and the result's reason say why. A success whose
 ///    covariance could not be computed publishes the seventeen and leaves the
 ///    four accuracies unavailable; its diagnostics say why.
+///  - builtin.fusion.velH (on demand): Fusion/velH, the horizontal magnitude
+///    of velN and velE, as GNSS/velH is of the GNSS components.
+///  - builtin.fusion.vel (on demand): Fusion/vel, the magnitude of velH and
+///    velD, as GNSS/vel is of GNSS/velH and GNSS/velD.
 ///  - builtin.fusion.accH (on demand): Fusion/accH, the horizontal magnitude
 ///    of accN and accE.
 ///  - builtin.fusion.systemTime (on demand): Fusion/_system_time, the inverse
@@ -99,7 +103,9 @@ QList<FitOutputChannel> fitOutputChannels(const Result &result);
 ///
 /// The derived values' inputs exist only once the fit has published, so they
 /// appear with it and never start it. Vertical acceleration is Fusion/accD
-/// itself (positive down, like GNSS/accD) and has no calculation of its own.
+/// itself (positive down, like GNSS/accD) and Vertical speed is Fusion/velD
+/// itself (positive down, like GNSS/velD): neither has a calculation of its
+/// own.
 ///
 /// The application's one entry point into this library: it calls this directly
 /// after Calculations::registerBuiltInCalculations(), and it also registers the

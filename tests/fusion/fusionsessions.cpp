@@ -279,6 +279,9 @@ QVector<PlotValue> fusionPlots()
     struct Row { const char *name; const char *units; const char *measurement; const char *type; };
     static const Row rows[] = {
         {"Elevation",                "m",     "z",             "altitude"},
+        {"Horizontal speed",         "m/s",   "velH",          "speed"},
+        {"Vertical speed",           "m/s",   "velD",          "vertical_speed"},
+        {"Total speed",              "m/s",   "vel",           "speed"},
         {"Horizontal acceleration",  "m/s^2", "accH",          "acceleration"},
         {"Vertical acceleration",    "m/s^2", "accD",          "acceleration"},
         {"Along-track acceleration", "m/s^2", "accAlongTrack", "acceleration"},
@@ -317,6 +320,8 @@ QList<DependencyKey> fusionNames()
     QList<DependencyKey> names;
     for (const QString &name : fusionMeasurementNames())
         names.append(DependencyKey::measurement(QStringLiteral("Fusion"), name));
+    names.append(DependencyKey::measurement(QStringLiteral("Fusion"), QStringLiteral("velH")));
+    names.append(DependencyKey::measurement(QStringLiteral("Fusion"), QStringLiteral("vel")));
     names.append(DependencyKey::measurement(QStringLiteral("Fusion"), QStringLiteral("accH")));
     names.append(DependencyKey::measurement(QStringLiteral("Fusion"), QStringLiteral("_system_time")));
     names.append(DependencyKey::attribute(QStringLiteral("_FUSION_DIAGNOSTICS")));

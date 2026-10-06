@@ -30,6 +30,7 @@ private slots:
     void alongTrackIsAnAcceleration();
     void accelerationAccuracyKeepsItsDigits();
     void gnssAccelerationAccuracyIsAnAcceleration();
+    void speedTypesFormatAsTheConverterDoes();
     void untypedValueHasOneDecimal();
     void xAxisSecondsHaveThreeDecimals();
     void nanIsDashes();
@@ -95,6 +96,27 @@ void PlotFormatTest::gnssAccelerationAccuracyIsAnAcceleration()
         // 1.8633 m/s^2 is 0.19 g, the formula's figure on the reference recording
         QCOMPARE(formatValue(1.8633, type), QStringLiteral("0.19"));
         QCOMPARE(formatValue(1.8633, type), units.formatValue(1.8633, type));
+    }
+    units.setSystem(previous);
+}
+
+// The fused speeds are rows of their GNSS counterparts' types (speed,
+// vertical_speed), so a legend value over one is written as the GNSS row's
+// is: the unit converter's text for the type, in both unit systems, and never
+// the untyped value's one decimal of m/s
+void PlotFormatTest::speedTypesFormatAsTheConverterDoes()
+{
+    UnitConverter &units = UnitConverter::instance();
+    const QString previous = units.currentSystem();
+    const double value = 52.5;
+    const QString untyped = formatValue(value, QString());
+    for (const QString &system : units.availableSystems()) {
+        units.setSystem(system);
+        for (const char *name : {"speed", "vertical_speed"}) {
+            const QString type = QString::fromLatin1(name);
+            QCOMPARE(formatValue(value, type), units.formatValue(value, type));
+            QVERIFY2(formatValue(value, type) != untyped, qPrintable(system + QLatin1Char(' ') + type));
+        }
     }
     units.setSystem(previous);
 }

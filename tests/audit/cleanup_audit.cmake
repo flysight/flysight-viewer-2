@@ -46,7 +46,7 @@
 #   - a default that stands in for a value the user has not set is a
 #     calculation, and every constant one is registered by one helper;
 #     neither the importer nor the legacy backfill writes wind; one type owns
-#     the orientation vocabulary; the sensor fusion category is the twelve
+#     the orientation vocabulary; the sensor fusion category is the fifteen
 #     plots of the tests' mirror, and no removed fusion plot and no
 #     local-frame plot remains in code or documents (items 801-863);
 #   - the fused output is the state at every IMU sample: the step model has
@@ -66,7 +66,7 @@
 #     of it; the accuracy's covariance comes from one factorization in one
 #     unit, never from the library's joint marginals, under one cap; the four
 #     channel names are spelled in the registration and the plot rows alone;
-#     the sensor fusion category has twelve plots, the accuracies in the deep
+#     the sensor fusion category has fifteen plots, the accuracies in the deep
 #     scheme; and the fusion document carries the validation of the model
 #     (items 1001-1065);
 #   - the GNSS acceleration accuracy is the receiver's speed accuracy through
@@ -100,7 +100,11 @@
 #     of the executor's cancel; the cell's word, its tooltip, the cancel's
 #     reason, the index entry and the page's text are spelled once; and the
 #     documents name the context menu's action and the reason (items
-#     1501-1524).
+#     1501-1524);
+#   - the fused speeds are plots: the sensor fusion category is the fifteen
+#     plots of the tests' mirror, the fit's down velocity has a row as its
+#     down acceleration does, and no document counts the fusion plots as
+#     twelve (items 1601-1612).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -452,7 +456,7 @@ expect_none("no dialog or message box for a calculation outcome"
 # by the engine like any other; the registration never catches and stores one.
 expect_none("no hand-cached failure" "catch *\\(" src/fusion/fusionregistration.cpp)
 
-# ─────────────────────────────── naming (items 120, 801, 803, 852, 862, 863, 1037, 1065)
+# ─────────────────────────────── naming (items 120, 801, 803, 852, 862, 863, 1037, 1065, 1602, 1605, 1606, 1610-1612)
 # The algorithm is a batch factor-graph fit and nothing is named after a
 # filter; the branch's sensor and output names are gone.
 # Allow: tests/README.md is excluded because its section 10 spells these
@@ -467,7 +471,7 @@ expect_none("branch output names are gone" "posN|posE|posD|_IMU_GNSS_EKF|ImuGnss
 # Allow: this count pins the application's plot list to the list the tests
 # use (tests/fusion/fusionsessions.cpp, fusionPlots()). Adding a plot means
 # changing both, and the number here.
-expect_count("twelve fusion plots" "^ *\\{\"Sensor fusion\", " 12 src/mainwindow.cpp)
+expect_count("fifteen fusion plots" "^ *\\{\"Sensor fusion\", " 15 src/mainwindow.cpp)
 # A plot row states its default colour as a literal, chosen to reach 3:1 on
 # both plot backgrounds (the comment of the plot table states the rule and
 # what a new plot is coloured by; PLANS/done/plot-colours.md). Allow: none
@@ -481,16 +485,19 @@ expect_none("a plot row's default colour is a literal"
 # code or tests (tests/README.md is excluded as above).
 expect_none("no local-frame plots" "GNSS \\(Local frame\\)|localFramePlots" src tests ":!tests/README.md")
 # A plot row names its measurement and then its type; the fit's own channels
-# have no row. The trailing `, "` matches a row's measurement followed by its
-# type, never a calculation's ("Fusion", "down"). Allow: none expected; a fit
+# have no row, except the two drawn as their GNSS counterparts: accD is
+# Vertical acceleration and velD Vertical speed, so neither is in the list.
+# The trailing `, "` matches a row's measurement followed by its type, never a
+# calculation's ("Fusion", "down"). Allow: none expected; any other fit
 # channel is read as a measurement (a column, a plug-in input), not plotted.
 expect_none("the removed fusion plots stay out of the registry"
-  "\"Fusion\", *\"(north|east|down|velN|velE|velD|accN|accE|roll|pitch|yaw|q[xyzw])\", *\"" src)
+  "\"Fusion\", *\"(north|east|down|velN|velE|accN|accE|roll|pitch|yaw|q[xyzw])\", *\"" src)
 # Allow: describe the fit's outputs as outputs or measurements; name no removed
-# category or plot, and count the fusion plots as twelve ("the same eight"
-# inputs of docs/CALCULATIONS.md do not match).
-expect_none("the documents describe the twelve fusion plots"
-  "[Ss]eventeen( real)? plots|GNSS \\(Local frame\\)|Quaternion [WXYZ]|quaternion plots|[Ee]ight (real )?(fusion )?plots|[Aa]ll eight"
+# category or plot, and count the fusion plots as fifteen ("the same eight"
+# inputs of docs/CALCULATIONS.md do not match). Seventeen, eight and twelve
+# are counts the category had before.
+expect_none("the documents describe the fifteen fusion plots"
+  "[Ss]eventeen( real)? plots|GNSS \\(Local frame\\)|Quaternion [WXYZ]|quaternion plots|[Ee]ight (real )?(fusion )?plots|[Aa]ll eight|[Tt]welve (real )?(fusion )?plots|[Aa]ll twelve"
   docs README.md)
 
 # ─────────────────────────────── solver-confinement
@@ -1620,10 +1627,13 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # the reference recordings, the documents, the slow tail) and 1401-1415 (the
 # scale factors as a refinement: the two stages, the trigger, the fallback,
 # divergence, the boundary, the account, the algorithm string, the tests, the
-# reference recordings, the goldens, the documents) and 1501-1524 (background
+# reference recordings, the goldens, the documents), 1501-1524 (background
 # computation per recording: the attribute, the column, the preference, the
 # exclusion, the cancel, the index entry, the cell, the eleven bullets of the
-# tests, the documents). Four line forms; see the head of the map.
+# tests, the documents) and 1601-1612 (the fused speed plots: the two
+# calculations, the three rows, demand, what is unchanged, the colours, the
+# documents, the six bullets of the tests). Four line forms; see the head of
+# the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -1701,8 +1711,9 @@ else()
             OR (item GREATER_EQUAL 1201 AND item LESS_EQUAL 1213)
             OR (item GREATER_EQUAL 1301 AND item LESS_EQUAL 1313)
             OR (item GREATER_EQUAL 1401 AND item LESS_EQUAL 1415)
-            OR (item GREATER_EQUAL 1501 AND item LESS_EQUAL 1524)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313, 1401-1415 and 1501-1524: ${line}")
+            OR (item GREATER_EQUAL 1501 AND item LESS_EQUAL 1524)
+            OR (item GREATER_EQUAL 1601 AND item LESS_EQUAL 1612)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313, 1401-1415, 1501-1524 and 1601-1612: ${line}")
     endif()
   endforeach()
 
@@ -1798,6 +1809,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 1501 1524)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 1601 1612)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

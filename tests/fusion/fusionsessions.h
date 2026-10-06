@@ -114,18 +114,20 @@ FlySight::SessionData syntheticFitSession(const QString &sessionId,
 
 QStringList fusionMeasurementNames();   ///< the 21 literal names, in output order (the 17 of the state, then the 4 accuracies)
 
-/// The twelve "Sensor fusion" plots as PlotValues, for PlotModel::setPlots(),
-/// in the application's order: Elevation (z), the horizontal, vertical (accD),
+/// The fifteen "Sensor fusion" plots as PlotValues, for PlotModel::setPlots(),
+/// in the application's order: Elevation (z), the horizontal, vertical and
+/// total speeds (velH, velD, vel), the horizontal, vertical (accD),
 /// along-track and cross-track accelerations, Heading, Pitch and Roll
 /// (bodyHeading, bodyPitch, bodyRoll), then the four accuracies (headingAcc,
-/// tiltAcc, accHAcc, accDAcc). Mirrors the application's twelve rows in
+/// tiltAcc, accHAcc, accDAcc). Mirrors the application's fifteen rows in
 /// MainWindow::registerBuiltInPlots(), which is outside the test library
-/// boundary; audit_cleanup pins that list at twelve rows. Colours are
+/// boundary; audit_cleanup pins that list at fifteen rows. Colours are
 /// irrelevant here and left default.
 QVector<FlySight::PlotValue> fusionPlots();
 
-/// "Everything": the 21 measurements, Fusion/accH, Fusion/_system_time,
-/// _FUSION_DIAGNOSTICS, and Fusion/roll interpolated at _EXIT_TIME.
+/// "Everything": the 21 measurements, Fusion/velH, Fusion/vel, Fusion/accH,
+/// Fusion/_system_time, _FUSION_DIAGNOSTICS, and Fusion/roll interpolated at
+/// _EXIT_TIME.
 QList<FlySight::DependencyKey> fusionNames();
 /// The attribute name of Fusion/roll interpolated at _EXIT_TIME.
 QString fusionRollAtExit();

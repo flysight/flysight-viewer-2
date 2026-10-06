@@ -1,6 +1,7 @@
 // What is derived from the fit's published outputs, on real SessionData
-// engines bound to the global registry: fused elevation, the fused
-// along-track and cross-track accelerations, and the attitude of the body
+// engines bound to the global registry: fused elevation, the fused horizontal
+// and total speeds, the fused along-track and cross-track accelerations, and
+// the attitude of the body
 // frame (heading, pitch and roll) that the orientation attribute defines. The
 // solver never runs here. The fit's outputs are stored as data
 // (syntheticFitSession(), fusionsessions.h), so the derivations are held to
@@ -61,6 +62,8 @@ using BlockerState = BlockerReport::State;
 namespace {
 
 const QString kFit = QStringLiteral("builtin.fusion.fit");
+const QString kVelH = QStringLiteral("builtin.fusion.velH");
+const QString kVel = QStringLiteral("builtin.fusion.vel");
 const QString kAccH = QStringLiteral("builtin.fusion.accH");
 const QString kSystemTime = QStringLiteral("builtin.fusion.systemTime");
 const QString kZ = QStringLiteral("builtin.fusion.z");
@@ -130,6 +133,21 @@ QList<TrackSample> calmSamples()
 }
 const QVector<double> kCalmAlong{3, -3, 5, 0};
 const QVector<double> kCalmCross{4, 4, 0, 5};
+
+/// Velocities whose speeds are exact: Pythagorean triples at each step, signs
+/// mixed, a standstill, and two triples halved.
+const QVector<double> kVelN{3, -5, 8, 0, 1.5};
+const QVector<double> kVelE{4, 12, -15, 0, 2};
+const QVector<double> kVelD{12, -84, 144, 0, -6};
+const QVector<double> kSpeedH{5, 13, 17, 0, 2.5};
+const QVector<double> kSpeed{13, 85, 145, 0, 6.5};
+
+/// The three velocity channels as synthetic fit outputs.
+QHash<QString, QVector<double>> velocityChannels(const QVector<double> &velN, const QVector<double> &velE,
+                                                 const QVector<double> &velD)
+{
+    return {{QStringLiteral("velN"), velN}, {QStringLiteral("velE"), velE}, {QStringLiteral("velD"), velD}};
+}
 
 // ---- the attitude's hand-built expectations ---------------------------------------
 
@@ -285,6 +303,8 @@ private slots:
     void elevationIsOriginHeightMinusDownAboveGround();
     void trackAccelerationsKnownAnswers();
     void trackAccelerationsAreTheGnssDefinitions();
+    void fusedSpeedsKnownAnswers();
+    void fusedSpeedsAreTheGnssDefinitions();
 
     void orientationVocabularyHasTwentyFourPairs();
     void orientationRotationIsProper();
@@ -381,9 +401,13 @@ void FusionDerivedTest::derivedRegistrationShape()
 {
     const CalculationRegistry &registry = CalculationRegistry::instance();
 
-    // In this order after the system time; the whole tail is pinned by
+    // The speeds after the fit, velH before vel, which reads it; the rest in
+    // this order after the system time. The whole tail is pinned by
     // tst_fusion_session::registrationShape
     const QStringList ids = registry.registeredIds();
+    const qsizetype fit = ids.indexOf(kFit);
+    QVERIFY(fit >= 0);
+    QCOMPARE(ids.mid(fit + 1, 3), QStringList({kVelH, kVel, kAccH}));
     const qsizetype systemTime = ids.indexOf(kSystemTime);
     QVERIFY(systemTime >= 0);
     QCOMPARE(ids.mid(systemTime + 1, 3), QStringList({kZ, kAlong, kCross}));
@@ -393,6 +417,8 @@ void FusionDerivedTest::derivedRegistrationShape()
         const char *output;
         QList<CalcInput> inputs;
     } expected[] = {
+        {kVelH, "velH", {CalcInput::measurement("Fusion", "velN"), CalcInput::measurement("Fusion", "velE")}},
+        {kVel, "vel", {CalcInput::measurement("Fusion", "velH"), CalcInput::measurement("Fusion", "velD")}},
         {kZ, "z",
          {CalcInput::measurement("Fusion", "down"), CalcInput::attribute("_LOCAL_ORIGIN_HMSL"),
           CalcInput::attribute("_GROUND_ELEV")}},
@@ -428,6 +454,9 @@ void FusionDerivedTest::derivedRegistrationShape()
     // Vertical acceleration is the fit's own accD: no second producer
     QCOMPARE(registry.candidatesFor(fusionKey(QStringLiteral("accD"))).size(), 1);
     QCOMPARE(registry.candidatesFor(fusionKey(QStringLiteral("accD"))).first().instanceId, kFit);
+    // Vertical speed is the fit's own velD: no second producer
+    QCOMPARE(registry.candidatesFor(fusionKey(QStringLiteral("velD"))).size(), 1);
+    QCOMPARE(registry.candidatesFor(fusionKey(QStringLiteral("velD"))).first().instanceId, kFit);
 }
 
 // The session half of criterion 2: with the fit's inputs and no fit, each
@@ -439,7 +468,7 @@ void FusionDerivedTest::derivedValuesWaitOnTheFit()
     session.setAttribute(SessionKeys::GroundElev, 50.0);
     CalculationEngine &engine = session.calculationEngine();
 
-    for (const char *name : {"z", "accAlongTrack", "accCrossTrack"}) {
+    for (const char *name : {"velH", "vel", "z", "accAlongTrack", "accCrossTrack"}) {
         const DependencyKey key = fusionKey(QString::fromLatin1(name));
         const BlockerReport report = engine.blockers(key);
         QVERIFY2(report.state == BlockerState::Blocked, name);
@@ -635,6 +664,95 @@ void FusionDerivedTest::trackAccelerationsAreTheGnssDefinitions()
         QVERIFY2(sameRecomputedValue(fusedCross[i], gnssCross[i]),
                  qPrintable(QStringLiteral("accCrossTrack[%1]: %2 vs %3")
                                 .arg(i).arg(fusedCross[i], 0, 'g', 17).arg(gnssCross[i], 0, 'g', 17)));
+    }
+
+    QCOMPARE(session.calculationEngine().runCount(kFit), 0);
+    QCOMPARE(session.calculationEngine().undeclaredReadCount(), 0);
+}
+
+// The fused speeds: exact answers on chosen velocities, read without the fit,
+// and unavailable when the inputs' lengths differ. A short velE takes velH and
+// with it vel; a short velD takes vel alone.
+void FusionDerivedTest::fusedSpeedsKnownAnswers()
+{
+    {
+        const SessionData session = syntheticFitSession(QStringLiteral("v1"), velocityChannels(kVelN, kVelE, kVelD));
+        QCOMPARE(fusion(session, QStringLiteral("velH")), kSpeedH);
+        QCOMPARE(fusion(session, QStringLiteral("vel")), kSpeed);
+        // Vertical speed is the fit's own channel, served as stored
+        QVERIFY(sameBitsEverywhere(fusion(session, QStringLiteral("velD")), kVelD));
+        QCOMPARE(session.calculationEngine().runCount(kVelH), 1);
+        QCOMPARE(session.calculationEngine().runCount(kVel), 1);
+        QCOMPARE(session.calculationEngine().runCount(kFit), 0);
+        QCOMPARE(session.calculationEngine().undeclaredReadCount(), 0);
+    }
+
+    // A short velE: neither speed
+    {
+        QVector<double> shortE = kVelE;
+        shortE.removeLast();
+        const SessionData session = syntheticFitSession(QStringLiteral("v2"), velocityChannels(kVelN, shortE, kVelD));
+        QVERIFY(fusion(session, QStringLiteral("velH")).isEmpty());
+        QVERIFY(fusion(session, QStringLiteral("vel")).isEmpty());
+        QCOMPARE(session.calculationEngine().runCount(kVelH), 1);
+        QCOMPARE(session.calculationEngine().runCount(kFit), 0);
+    }
+
+    // A short velD: the horizontal speed stands, the total is unavailable
+    {
+        QVector<double> shortD = kVelD;
+        shortD.removeLast();
+        const SessionData session = syntheticFitSession(QStringLiteral("v3"), velocityChannels(kVelN, kVelE, shortD));
+        QCOMPARE(fusion(session, QStringLiteral("velH")), kSpeedH);
+        QVERIFY(fusion(session, QStringLiteral("vel")).isEmpty());
+        QCOMPARE(session.calculationEngine().runCount(kVel), 1);
+        QCOMPARE(session.calculationEngine().runCount(kFit), 0);
+    }
+}
+
+// One definition: the same velocities under GNSS and Fusion give the same
+// horizontal and total speeds. flysight_fusion is compiled without
+// contraction and flysight_core is not, so on a contracting compiler the two
+// copies of sqrt(a*a + b*b) may round the sum differently. Every term is a
+// square, so the sum never cancels and the difference stays within the 4 ulp
+// of sameRecomputedValue(); in exact mode the two are bit for bit.
+void FusionDerivedTest::fusedSpeedsAreTheGnssDefinitions()
+{
+    constexpr int n = 60;
+    QVector<double> velN, velE, velD;
+    for (int i = 0; i < n; ++i) {
+        velN.append(20.0 + 5.0 * std::sin(i * 0.1));
+        velE.append(-3.0 + 2.0 * std::cos(i * 0.13));
+        velD.append(15.0 + 3.0 * std::sin(i * 0.07));
+    }
+    const QHash<QString, QVector<double>> channels = velocityChannels(velN, velE, velD);
+
+    SessionData session = syntheticFitSession(QStringLiteral("g2"), channels);
+    for (const char *name : {"velN", "velE", "velD"})
+        session.setSourceMeasurement("GNSS", name, channels.value(QString::fromLatin1(name)), "m/s");
+
+    // Stored GNSS data is what the GNSS speeds read
+    for (const char *name : {"velN", "velE", "velD"}) {
+        QVERIFY2(sameBitsEverywhere(session.getMeasurement("GNSS", name), channels.value(QString::fromLatin1(name))),
+                 name);
+    }
+
+    const QVector<double> gnssH = session.getMeasurement("GNSS", "velH");
+    const QVector<double> gnssTotal = session.getMeasurement("GNSS", "vel");
+    const QVector<double> fusedH = fusion(session, QStringLiteral("velH"));
+    const QVector<double> fusedTotal = fusion(session, QStringLiteral("vel"));
+    QCOMPARE(gnssH.size(), n);
+    QCOMPARE(gnssTotal.size(), n);
+    QCOMPARE(fusedH.size(), n);
+    QCOMPARE(fusedTotal.size(), n);
+
+    for (int i = 0; i < n; ++i) {
+        QVERIFY2(sameRecomputedValue(fusedH[i], gnssH[i]),
+                 qPrintable(QStringLiteral("velH[%1]: %2 vs %3")
+                                .arg(i).arg(fusedH[i], 0, 'g', 17).arg(gnssH[i], 0, 'g', 17)));
+        QVERIFY2(sameRecomputedValue(fusedTotal[i], gnssTotal[i]),
+                 qPrintable(QStringLiteral("vel[%1]: %2 vs %3")
+                                .arg(i).arg(fusedTotal[i], 0, 'g', 17).arg(gnssTotal[i], 0, 'g', 17)));
     }
 
     QCOMPARE(session.calculationEngine().runCount(kFit), 0);

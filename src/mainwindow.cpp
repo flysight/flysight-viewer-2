@@ -1002,13 +1002,30 @@ void MainWindow::registerBuiltInPlots()
 
         {"IMU", "Temperature", QString::fromUtf8("\302\260C"), QColor(0xc58501), "IMU", "temperature", "temperature"},
 
-        // Category: Sensor fusion. Each of the first eight rows is named,
+        // Category: Sensor fusion. Each of the first eleven rows is named,
         // united and typed as its GNSS counterpart and is its kin: the
         // neighbouring hue at the other edge of the lightness range, so the
         // two can be told apart where they overlay (Elevation, whose
         // counterpart is gray, is a quiet blue). Heading is kin of Course;
         // Pitch and Roll contrast with it and with each other. Every row is
         // computed on request and waits on the one fit.
+        //
+        // The three speeds after Elevation are read with the speeds group
+        // (the three GNSS speeds, Wind-corrected horizontal speed and Speed
+        // accuracy). Horizontal speed is the rose, the cool neighbour of the
+        // GNSS red at the lower edge, since the wind-corrected speed sits on
+        // the red's warm side. Vertical speed is the teal neighbour of the
+        // GNSS green at the lower edge, a near-twin of the fused Vertical
+        // acceleration across groups, which keeps "fused vertical" one hue.
+        // Total speed is the violet neighbour of the GNSS blue at the upper
+        // edge: the lower side has no colour that passes, and a quieter violet
+        // falls within 15 of Speed accuracy. Contrast on #ffffff / #242424:
+        // 5.15 / 3.01, 4.66 / 3.33, 3.43 / 4.52. Separation (OKLab x 100,
+        // PLOT_COLOURS.md section 8) from the twin: 17, 17, 22; from every
+        // other plot of the speeds group at least 17; between the three
+        // fused speeds 28 (rose, teal), 17 (rose, violet), 36 (teal, violet).
+        // Colour-blind: 3 between the rose and the teal and between the
+        // violet and its twin, the figure every kin of the speeds inherits.
         //
         // The four accuracy rows after Roll have no GNSS counterpart; each is
         // the quiet member of the value it qualifies: heading accuracy beside
@@ -1017,6 +1034,9 @@ void MainWindow::registerBuiltInPlots()
         // accuracies have a type of their own, since the acceleration type's
         // two decimals of g would read 0.00 over most of a recording.
         {"Sensor fusion", "Elevation",                "m",             QColor(0x037ac0), "Fusion", "z",             "altitude"},
+        {"Sensor fusion", "Horizontal speed",         "m/s",           QColor(0xbc378e), "Fusion", "velH",          "speed"},
+        {"Sensor fusion", "Vertical speed",           "m/s",           QColor(0x1b8278), "Fusion", "velD",          "vertical_speed"},
+        {"Sensor fusion", "Total speed",              "m/s",           QColor(0xd446ff), "Fusion", "vel",           "speed"},
         {"Sensor fusion", "Horizontal acceleration",  "m/s^2",         QColor(0xab930b), "Fusion", "accH",          "acceleration"},
         {"Sensor fusion", "Vertical acceleration",    "m/s^2",         QColor(0x028481), "Fusion", "accD",          "acceleration"},
         {"Sensor fusion", "Along-track acceleration", "m/s^2",         QColor(0xe76187), "Fusion", "accAlongTrack", "acceleration"},

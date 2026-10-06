@@ -262,6 +262,61 @@ void registerFit(CalculationRegistry &registry)
     Calculations::addCalculation(registry, d);
 }
 
+// Fusion/velH: horizontal speed, the magnitude of velN and velE, as GNSS/velH
+// is of the GNSS components. On demand, but its inputs exist only once the
+// fit has published, so it appears with the fit through ordinary invalidation
+// and never starts one.
+void registerHorizontalSpeed(CalculationRegistry &registry)
+{
+    CalculationDescriptor d;
+    d.id = QStringLiteral("builtin.fusion.velH");
+    d.inputs = {
+        CalcInput::measurement(kSensor, "velN"),
+        CalcInput::measurement(kSensor, "velE")
+    };
+    d.outputs = { DependencyKey::measurement(kSensor, "velH") };
+    d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
+        const QVector<double> velN = ctx.measurement(kSensor, "velN");
+        const QVector<double> velE = ctx.measurement(kSensor, "velE");
+        if (velN.size() != velE.size())
+            return CalculationResult::unavailable();
+
+        QVector<double> velH;
+        velH.reserve(velN.size());
+        for (int i = 0; i < velN.size(); ++i)
+            velH.append(std::sqrt(velN[i]*velN[i] + velE[i]*velE[i]));
+        return CalculationResult().setMeasurement(kSensor, "velH", velH);
+    };
+    Calculations::addCalculation(registry, d);
+}
+
+// Fusion/vel: total speed, the magnitude of velH and velD, as GNSS/vel is of
+// GNSS/velH and GNSS/velD. It reads Fusion/velH, which waits on the fit, so
+// it too appears with the fit and never starts one.
+void registerTotalSpeed(CalculationRegistry &registry)
+{
+    CalculationDescriptor d;
+    d.id = QStringLiteral("builtin.fusion.vel");
+    d.inputs = {
+        CalcInput::measurement(kSensor, "velH"),
+        CalcInput::measurement(kSensor, "velD")
+    };
+    d.outputs = { DependencyKey::measurement(kSensor, "vel") };
+    d.compute = [](const EvaluationContext &ctx) -> CalculationResult {
+        const QVector<double> velH = ctx.measurement(kSensor, "velH");
+        const QVector<double> velD = ctx.measurement(kSensor, "velD");
+        if (velH.size() != velD.size())
+            return CalculationResult::unavailable();
+
+        QVector<double> vel;
+        vel.reserve(velH.size());
+        for (int i = 0; i < velH.size(); ++i)
+            vel.append(std::sqrt(velH[i]*velH[i] + velD[i]*velD[i]));
+        return CalculationResult().setMeasurement(kSensor, "vel", vel);
+    };
+    Calculations::addCalculation(registry, d);
+}
+
 // Fusion/accH: horizontal acceleration. On demand, but its inputs exist only
 // once the fit has published, so it appears with the fit through ordinary
 // invalidation and never starts one.
@@ -541,6 +596,9 @@ void Fusion::registerFusionCalculations(CalculationRegistry &registry)
     // The vocabulary before its reader
     registerConfigurationDefaults(registry);
     registerFit(registry);
+    // The vocabulary before its reader: vel reads velH
+    registerHorizontalSpeed(registry);
+    registerTotalSpeed(registry);
     registerHorizontalAcceleration(registry);
     registerSystemTime(registry);
     registerElevation(registry);

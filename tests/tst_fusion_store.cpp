@@ -216,8 +216,8 @@ private slots:
     void deletedCacheFolderReadsNotRequested();
     void columnOverFusionFillsUnloadedSessions();
     void fusionColumnWithStoredFitsRunsNothing();
-    void accuracyColumnFillsUnloadedSessions_data();
-    void accuracyColumnFillsUnloadedSessions();
+    void fusionColumnFillsUnloadedSessions_data();
+    void fusionColumnFillsUnloadedSessions();
 
 private:
     [[nodiscard]] QString addSessions(const QList<SessionData> &sessions)
@@ -417,7 +417,8 @@ FitValues FusionStoreTest::capture(const QString &id)
 {
     FitValues values;
     QStringList names = fusionMeasurementNames();
-    names << QStringLiteral("accH") << QStringLiteral("_system_time");
+    names << QStringLiteral("velH") << QStringLiteral("vel") << QStringLiteral("accH")
+          << QStringLiteral("_system_time");
     for (const QString &name : std::as_const(names))
         values.channels.insert(name, fusion(id, name));
     values.diagnostics = session(id).getAttribute(kDiagnostics).toString();
@@ -743,6 +744,7 @@ void FusionStoreTest::restoredAfterRestartIsBitIdentical()
 
     restart();
     check(QStringLiteral("bodyRoll"));
+    check(QStringLiteral("vel"));       // a fused speed row draws from the stored fit too
     QObject scope;
     LoadWatch atLoad;
     watchLoad(&scope, "a", &atLoad);
@@ -1755,14 +1757,14 @@ void FusionStoreTest::fusionColumnWithStoredFitsRunsNothing()
              indexed.toDouble());
 }
 
-// A column over each of the four accuracy rows, at the exit marker and typed
-// as its row, works as over any fusion value: enabled with the session not
-// loaded, it is filled by the demand layer (one fit, the record written, the
-// value cached and indexed with the fit's stamp, the session left unloaded);
-// the cached value is the loaded session's interpolated value bit for bit; its
-// text is the unit converter's for the row's type, loaded or not; and its
-// label is the row's name.
-void FusionStoreTest::accuracyColumnFillsUnloadedSessions_data()
+// A column over a fusion row (each of the four accuracy rows and Total speed),
+// at the exit marker and typed as its row, works as over any fusion value:
+// enabled with the session not loaded, it is filled by the demand layer (one
+// fit, the record written, the value cached and indexed with the fit's stamp,
+// the session left unloaded); the cached value is the loaded session's
+// interpolated value bit for bit; its text is the unit converter's for the
+// row's type, loaded or not; and its label is the row's name.
+void FusionStoreTest::fusionColumnFillsUnloadedSessions_data()
 {
     QTest::addColumn<QString>("measurement");
     QTest::addColumn<QString>("type");
@@ -1775,9 +1777,10 @@ void FusionStoreTest::accuracyColumnFillsUnloadedSessions_data()
                              << QStringLiteral("Horizontal acceleration accuracy");
     QTest::newRow("accDAcc") << QStringLiteral("accDAcc") << QStringLiteral("acceleration_accuracy")
                              << QStringLiteral("Vertical acceleration accuracy");
+    QTest::newRow("vel") << QStringLiteral("vel") << QStringLiteral("speed") << QStringLiteral("Total speed");
 }
 
-void FusionStoreTest::accuracyColumnFillsUnloadedSessions()
+void FusionStoreTest::fusionColumnFillsUnloadedSessions()
 {
     QFETCH(QString, measurement);
     QFETCH(QString, type);
@@ -1794,14 +1797,14 @@ void FusionStoreTest::accuracyColumnFillsUnloadedSessions()
     QVERIFY(row != plots.cend());
     QCOMPARE(row->plotName, name);
     QCOMPARE(row->measurementType, type);
-    LogbookColumn accuracy;
-    accuracy.type = ColumnType::MeasurementAtMarker;
-    accuracy.sensorID = row->sensorID;
-    accuracy.measurementID = row->measurementID;
-    accuracy.measurementType = row->measurementType;
-    accuracy.markerAttributeKey = QString::fromLatin1(SessionKeys::ExitTime);
-    QCOMPARE(logbookColumnExplicitCalculations(accuracy, CalculationRegistry::instance()), QStringList({kFit}));
-    const QString label = logbookColumnLabel(accuracy);
+    LogbookColumn fusionColumn;
+    fusionColumn.type = ColumnType::MeasurementAtMarker;
+    fusionColumn.sensorID = row->sensorID;
+    fusionColumn.measurementID = row->measurementID;
+    fusionColumn.measurementType = row->measurementType;
+    fusionColumn.markerAttributeKey = QString::fromLatin1(SessionKeys::ExitTime);
+    QCOMPARE(logbookColumnExplicitCalculations(fusionColumn, CalculationRegistry::instance()), QStringList({kFit}));
+    const QString label = logbookColumnLabel(fusionColumn);
     QVERIFY2(label.startsWith(name + QStringLiteral(" @ ")), qPrintable(label));
 
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_maneuver"), QStringLiteral("a"))}), QString());
@@ -1810,8 +1813,8 @@ void FusionStoreTest::accuracyColumnFillsUnloadedSessions()
     PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
     QVERIFY(!isLoaded("a"));
 
-    LogbookColumnStore::instance().setColumns({descriptionColumn(), accuracy});
-    const QString column = CalculationDemand::columnId(accuracy);
+    LogbookColumnStore::instance().setColumns({descriptionColumn(), fusionColumn});
+    const QString column = CalculationDemand::columnId(fusionColumn);
     m_demand->flush();
     QCOMPARE(m_demand->progress().count, 1);
     QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
@@ -1835,7 +1838,7 @@ void FusionStoreTest::accuracyColumnFillsUnloadedSessions()
     QVERIFY(cached.isValid());
     QVERIFY(std::isfinite(cached.toDouble()));
     m_model->flushDirtySessions();
-    QVERIFY(sameBits(indexValue(QStringLiteral("a"), accuracy).toDouble(), cached.toDouble()));
+    QVERIFY(sameBits(indexValue(QStringLiteral("a"), fusionColumn).toDouble(), cached.toDouble()));
     QVERIFY(indexRecordStamp(QStringLiteral("a")).toObject().contains(kFit));
     const QString expectedText = UnitConverter::instance().formatValue(cached.toDouble(), type);
     QCOMPARE(m_model->data(m_model->index(sessionRow, section), Qt::DisplayRole).toString(), expectedText);

@@ -36,23 +36,27 @@ document describes what is computed, from what, and how far to trust it.
 
 ## 2. Using it
 
-- The plot list has a "Sensor fusion" category with twelve plots: Elevation,
-  Horizontal acceleration, Vertical acceleration, Along-track acceleration,
-  Cross-track acceleration, Heading, Pitch and Roll, then Heading accuracy,
-  Tilt accuracy, Horizontal acceleration accuracy and Vertical acceleration
-  accuracy. Each of the first eight is named, united and
+- The plot list has a "Sensor fusion" category with fifteen plots:
+  Elevation, Horizontal speed, Vertical speed, Total speed, Horizontal
+  acceleration, Vertical acceleration, Along-track acceleration, Cross-track
+  acceleration, Heading, Pitch and Roll, then Heading accuracy, Tilt
+  accuracy, Horizontal acceleration accuracy and Vertical acceleration
+  accuracy. Each of the first eleven is named, united and
   typed as its GNSS counterpart (Heading as the GNSS Course), so that the two
   overlay on one axis, in a colour of its own. Elevation is the origin's
   height less the fused down position above the ground, as the GNSS elevation
-  is; horizontal acceleration is the magnitude of the fused north and east
-  acceleration; vertical acceleration is the fused down acceleration; the
-  along-track and cross-track accelerations are the GNSS definitions applied
-  to the fused velocity and acceleration; heading, pitch and roll are the
-  body's attitude, as below (section 4 has the detail of each). The fit's
-  other outputs (position, velocity, north and east acceleration, the device
-  frame's roll, pitch and yaw, and the quaternion) have no plot and remain
-  measurements: a logbook column kept from an earlier version still shows
-  them, Python plugins read them, and the stored fit keeps them. A profile
+  is; horizontal speed is the magnitude of the fused north and east velocity,
+  vertical speed the fused down velocity (positive down) and total speed the
+  magnitude of the horizontal speed and the down velocity, as the GNSS speeds
+  are, with no wind correction; horizontal acceleration is the magnitude of
+  the fused north and east acceleration; vertical acceleration is the fused
+  down acceleration; the along-track and cross-track accelerations are the
+  GNSS definitions applied to the fused velocity and acceleration; heading,
+  pitch and roll are the body's attitude, as below (section 4 has the detail
+  of each). The fit's other outputs (position, north and east velocity,
+  north and east acceleration, the device frame's roll, pitch and yaw, and
+  the quaternion) have no plot and remain measurements: a logbook column
+  kept from an earlier version still shows them, Python plugins read them, and the stored fit keeps them. A profile
   saved with a plot the list no longer has applies without it, silently.
 - The four accuracy plots show, at every sample, one standard deviation of
   the fused heading, tilt, horizontal acceleration and vertical acceleration
@@ -121,7 +125,7 @@ document describes what is computed, from what, and how far to trust it.
   bullet above) and has no result is fitted, one after another; a logbook
   column over a fusion value (roll at the exit marker, say) fits every such
   recording of the logbook in the background. A fit takes from seconds to
-  several minutes, depending on the length of the recording. All twelve plots and every fusion column of one recording come
+  several minutes, depending on the length of the recording. All fifteen plots and every fusion column of one recording come
   from the same fit, so it runs once.
 - Results are stored with the recording in the logbook (in a file in the
   logbook's `cache/` folder, never in the session file) and come back when the
@@ -756,6 +760,8 @@ and appear with them; none of them starts a fit:
 
 | Measurement | Meaning |
 | --- | --- |
+| `velH` | horizontal speed, m/s: the magnitude of `velN` and `velE`, as `GNSS/velH` is of the GNSS components |
+| `vel` | total speed, m/s: the magnitude of `velH` and `velD`, as `GNSS/vel` |
 | `accH` | horizontal acceleration, m/s^2: the magnitude of `accN` and `accE` |
 | `_system_time` | the device-time axis of `_time` (the inverse time fit) |
 | `z` | elevation above the ground, metres: `_LOCAL_ORIGIN_HMSL - down - _GROUND_ELEV`, the same ground as `GNSS/z`; unavailable when either attribute is not a number |
@@ -763,12 +769,13 @@ and appear with them; none of them starts a fit:
 | `bodyHeading`, `bodyPitch`, `bodyRoll` | heading, pitch and roll of the body frame the `_ORIENTATION` attribute defines, degrees (section 2): the aircraft angles of the quaternion composed with the orientation's body-to-device rotation, published together; heading unwrapped by the course's rule and measured from north, not referenced to the course reference; the three read the quaternion and the orientation only, and are unavailable for a stored orientation that is not one of the 24 |
 
 Vertical acceleration is `accD` itself, positive down like `GNSS/accD`; it has
-no derived measurement of its own. `z` and `GNSS/z` stand on the same ground
-elevation but can differ away from the origin: `down` is measured along the
-origin's vertical, so a point at constant height lies lower in the frame by
-about d^2/2R at a distance d from the origin (R the Earth's radius), some
-0.08 m at 1 km and 2 m at 5 km (the frame is that of
-[LOCAL_COORDINATES.md](LOCAL_COORDINATES.md), section 7).
+no derived measurement of its own. Vertical speed is `velD` itself, positive
+down like `GNSS/velD`; it has no derived measurement of its own either. `z`
+and `GNSS/z` stand on the same ground elevation but can differ away from the
+origin: `down` is measured along the origin's vertical, so a point at
+constant height lies lower in the frame by about d^2/2R at a distance d from
+the origin (R the Earth's radius), some 0.08 m at 1 km and 2 m at 5 km (the
+frame is that of [LOCAL_COORDINATES.md](LOCAL_COORDINATES.md), section 7).
 
 The attribute `_FUSION_DIAGNOSTICS` is compact JSON. After a successful fit
 its top-level keys are, grouped:
@@ -1166,10 +1173,10 @@ demonstrated by tests, all labelled `fusion`:
 | `tst_fusion_golden` | the kernel through its public API reproduces its goldens for fourteen synthetic fixtures (four fits, one of them across a 2.6 s hole in the fixes, and ten rejections; every fixture states its configuration and lies on its lattice), the progress texts at its boundaries, cancellation at each kind of boundary (prefix, segment and full-fit iterations and the release of the scale factors included), determinism and thread independence |
 | `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the stopping rules forced through the tuning (damping saturation short of a minimum a solver failure, a stall at the ceiling at a minimum settled, the damping ceiling changing nothing below it), the datasheet's noise by configuration bit for bit against its formula and the configurations without an entry, the step model (no sampling term on a constant signal, the sampling term against its derivation on a quadratic signal, the rotation remainder against its derivation on a constant turn and against a thousand-fold subdivided integration on a ramp), the lattice and rate checks and their order after every other check, the noise model in the diagnostics, the three temperature cases, the scale factors (the readings divided by the scale, the scale Jacobian against central differences, the scaled factor's seven Jacobians and its agreement with the library's own IMU factor at the interval's bias where the scale is the preintegration's, bit for bit, the graph with them, re-preintegration at the fitted scale, the reconstruction at the fitted scale, a resting recording left at its prior through both stages, a 2 % accelerometer factor recovered through the released stage and the objective falling below the held stage's, the factors in the diagnostics), the scale factors as a refinement (the two stages' account and the boundary between them, the release forced to fail falling back to the held fit with its channels, divergence forced in the held stage, a solver failure, and in the released stage, the fallback), the fit trace iteration by iteration against the goldens; the reconstruction at the IMU samples (the ends are the fitted states, sharing by noise, zero mismatch with and without rotation, consistency, equivalence with a graph with a state at every sample), the channels and diagnostics the fit publishes as that reconstruction bit for bit, and the time axis on the four fits and on a recording whose GNSS rate is above its IMU's; the GNSS holes (every sample inside a 2.6 s hole against the generating trajectory and the growth of the sample covariance's position and velocity through it, a 30 s hole, the longest bridged, under the production tuning, a 60 s hole rejected naming the limit, the cutter's merge of a piece with fewer than three fixes, the holes in the diagnostics); the slow tail refused on each of its bounds, the IMU normalized RMS's alone included; the accuracy (the covariance step against the library's joint marginals and its first node against the heading check, the composition at the samples against a graph with a state at every edge and, on a fix, the fix's own marginal, the accuracy formulas on known answers, the widening's window and factor, one at the model and grown where a sigma is understated, and applied to what is published, accuracies finite and positive that doubling the GNSS accuracies never lowers, the undetermined heading at the cap with tilt and acceleration against a gauge-fixed reference, a failed covariance step changing nothing else, the scale factors' sigmas) |
 | `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, the configuration reaches the kernel (a session stating it fits to the golden, the same session without the keys reads the 12.5 Hz default and is rejected by the rate check, and a recording without keys logged at 12.5 Hz fits under the default), a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
-| `tst_fusion_derived` | what is derived from the outputs, without the solver: the outputs stored as data, elevation and the track accelerations held to exact known answers, the track accelerations equal to the GNSS ones on the same samples, and each derived value waiting on the fit and never starting it; the orientation vocabulary (24 pairs, each a proper rotation, the attribute's choices), heading, pitch and roll held to hand-built known answers, finite with pitch at +90 or -90 where the forward axis is exactly vertical, side mounts, a GNSS track and a course reference that change nothing, and the fit's own angles for the device frame, an invalid or changed orientation without a fit, and the Orientation column's display, edit and bulk edit |
+| `tst_fusion_derived` | what is derived from the outputs, without the solver: the outputs stored as data, elevation, the speeds and the track accelerations held to exact known answers, the speeds and the track accelerations equal to the GNSS ones on the same samples, and each derived value waiting on the fit and never starting it; the orientation vocabulary (24 pairs, each a proper rotation, the attribute's choices), heading, pitch and roll held to hand-built known answers, finite with pitch at +90 or -90 where the forward axis is exactly vertical, side mounts, a GNSS track and a course reference that change nothing, and the fit's own angles for the device frame, an invalid or changed orientation without a fit, and the Orientation column's display, edit and bulk edit |
 | `tst_fusion_jobs` | the real fit through the executor: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result and kept, for an unloaded session, through an altitude marker added at run time or at the next start |
-| `tst_fusion_rows` | the demand layer with the twelve real fusion plots, end to end: each explicit-backed by the fit alone, one fit for all twelve; fits started and dropped by what is checked and visible, with no gesture; progress and failures as each fit ends; the four accuracy plots merely uncomputed before the fit, not produced for a rejected recording (listed once, with its reason) and not applicable without IMU data |
-| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), a rejection and a solver failure listed among the recordings that could not be computed, with their reasons, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a logbook column over roll, and one over each of the four accuracies, filled for recordings that are not loaded (the value the loaded recording reads, bit for bit, shown by the unit converter for the row's type and labelled with the row's name), and nothing fitted again after a restart; a stored success without the accuracy restored with the other seventeen channels and failing nothing |
+| `tst_fusion_rows` | the demand layer with the fifteen real fusion plots, end to end: each explicit-backed by the fit alone, one fit for all fifteen, and one for the Total speed row alone; fits started and dropped by what is checked and visible, with no gesture; progress and failures as each fit ends; the four accuracy plots merely uncomputed before the fit, not produced for a rejected recording (listed once, with its reason) and not applicable without IMU data |
+| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), a rejection and a solver failure listed among the recordings that could not be computed, with their reasons, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a logbook column over roll, and one over each of the four accuracies and over Total speed, filled for recordings that are not loaded (the value the loaded recording reads, bit for bit, shown by the unit converter for the row's type and labelled with the row's name), and nothing fitted again after a restart; a stored success without the accuracy restored with the other seventeen channels and failing nothing |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit on a recording written as `TRACK.CSV` / `SENSOR.CSV`, against a direct kernel run and against the application's own import path |
 
 The goldens live in `tests/data/fusion/`. In exact mode
