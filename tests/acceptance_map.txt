@@ -1,5 +1,5 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Seventeen specifications, seventeen item ranges:
+# (tests/audit/cleanup_audit.cmake). Eighteen specifications, eighteen item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
@@ -25,14 +25,17 @@
 #             alone", which has no items of its own: items 219 and 246 are
 #             stated as amended. It is amended by the specification of
 #             1301-1313: item 244 is stated as amended. It is amended by the
-#             specification of 1401-1415: item 243 is stated as amended.
+#             specification of 1401-1415: item 243 is stated as amended. It is
+#             amended by the specification of 1701-1717: items 230 and 235 are
+#             stated as amended.
 #   301-350   storing requested calculation results with the session (record
 #             files, restore on load, validity, logbook columns over them):
 #             item = 300 + clause number. Stated in full in
 #             tests/README.md, appendix D. It is amended by the specification
 #             of 701-754: items 306, 321, 337 and 339 are stated as amended.
 #             It is amended by the specification of 1001-1065: item 337 is
-#             stated as amended.
+#             stated as amended. It is amended by the specification of
+#             1701-1717: item 337 is stated as amended.
 #   401-442   stored results: validity that mirrors memory (resolutions,
 #             runtime registry drops, the plug-in code identity, unreadable
 #             records, record format 2): item = 400 + clause number. Stated
@@ -94,7 +97,9 @@
 #             900 + clause number. Stated in full in tests/README.md,
 #             appendix J. It amends the specification of 801-863. It is
 #             amended by the specification of 1001-1065: items 901, 910, 912,
-#             914, 915, 921, 925, 930 and 935 are stated as amended.
+#             914, 915, 921, 925, 930 and 935 are stated as amended. It is
+#             amended by the specification of 1701-1717: item 912 is stated as
+#             amended.
 #   1001-1065 the documented noise model and the accuracy, part 1 (the sensor
 #             configuration attributes and their default, the noise model of
 #             the IMU's datasheet by configuration with the derived sampling
@@ -140,7 +145,8 @@
 #             the documents, 1313 the slow tail. Stated in full in
 #             tests/README.md, appendix N. Item 244 is restated as amended.
 #             It is amended by the specification of 1401-1415: item 1313 is
-#             stated as amended.
+#             stated as amended. It is amended by the specification of
+#             1701-1717: item 1302 is stated as amended.
 #   1401-1415 the scale factors as a refinement (the full fit in two stages,
 #             the scale factors held until the fit has converged and then
 #             released from that solution, the fallback to the held fit, the
@@ -175,6 +181,20 @@
 #             appendix Q. It amends the specifications of 101-120 (item 115),
 #             501-563 (item 509) and 801-863 (items 801, 802, 803, 842, 854,
 #             862 and 863): each is stated as amended.
+#   1701-1717 fused position and speed accuracy: the covariance blocks, the
+#             derived accuracies, the plots (the fit publishes the upper
+#             triangles of the position and velocity covariance blocks of
+#             the published state, in the navigation frame, widened by the
+#             squared widening factor, and its algorithm string becomes v10;
+#             Horizontal, Vertical and Speed accuracy derived from them on
+#             demand and drawn as three rows): item = 1700 + item number of
+#             appendix R. 1701-1702 its section 3, 1703-1704 the first two
+#             bullets of its section 8, 1705 its section 7, 1706 the first
+#             clause of its audit bullet; 1707-1717 follow with the derived
+#             accuracies and the plots. Stated in full in tests/README.md,
+#             appendix R. It amends the specifications of 201-247 (items 230
+#             and 235), 301-350 (item 337), 901-940 (item 912) and 1301-1313
+#             (item 1302): each is stated as amended.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -184,12 +204,13 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the seventeen ranges; every item 1-19 needs a
+# Every item must lie in one of the eighteen ranges; every item 1-19 needs a
 # line; every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662,
 # 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313,
-# 1401-1415, 1501-1524 or 1601-1612 needs at least one test or audit line
-# (manual and ci lines never stand alone). The human-readable matrices are
-# tests/README.md sections 9.1 to 9.17; keep them in sync with this file.
+# 1401-1415, 1501-1524, 1601-1612 or 1701-1717 needs at least one test or
+# audit line (manual and ci lines never stand alone). The human-readable
+# matrices are tests/README.md sections 9.1 to 9.18; keep them in sync with
+# this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -670,7 +691,7 @@
 229 tst_fusion_runner legacySchemaScalesTheGyro
 229 tst_fusion_runner outputTableMatchesGolden
 
-# 230 - (as amended) diagnostics JSON on stdout; --csv writes the seventeen channels, since the specification of 1001-1065 the twenty-one, or the seventeen when the accuracy is absent; exit 0 for Succeeded, non-zero otherwise with the outcome and reason on stderr
+# 230 - (as amended) diagnostics JSON on stdout; --csv writes the seventeen channels, since the specification of 1001-1065 the twenty-one and since the specification of 1701-1717 the thirty-three, or the seventeen when the accuracy is absent; exit 0 for Succeeded, non-zero otherwise with the outcome and reason on stderr
 230 tst_fusion_runner successMatchesDirectRun
 230 tst_fusion_runner rejectionExitsOne
 230 tst_fusion_runner usageAndImportFailures
@@ -697,7 +718,7 @@
 234 audit solver-confinement
 234 audit fusion-model
 
-# 235 - (as amended) the result contract (channels, outcomes) unchanged by that specification; the specification of 1001-1065 adds the four accuracy channels (twenty-two outputs); a slow-tail acceptance is Succeeded
+# 235 - (as amended) the result contract (channels, outcomes) unchanged by that specification; the specification of 1001-1065 adds the four accuracy channels and the specification of 1701-1717 the twelve entries of the position and velocity covariance blocks (thirty-four outputs); a slow-tail acceptance is Succeeded
 235 tst_fusion_kernel slowTailAtTheIterationLimit
 235 tst_fusion_session registrationShape
 235 tst_fusion_runner outputTableMatchesGolden
@@ -1016,7 +1037,7 @@
 336 tst_fusion_store sessionFileBytesUnaffectedByRecord
 336 tst_result_records saveSessionIgnoresRecords
 
-# 337 - (8, as amended) test: a fusion fixture fitted, saved, unloaded, reloaded: twenty-one channels (the seventeen of the state and, since the specification of 1001-1065, the four accuracies) and diagnostics bit-identical to the goldens, no job, nothing counted in progress and nothing listed among the failures
+# 337 - (8, as amended) test: a fusion fixture fitted, saved, unloaded, reloaded: thirty-three channels (the seventeen of the state, since the specification of 1001-1065 the four accuracies and since the specification of 1701-1717 the twelve covariance entries) and diagnostics bit-identical to the goldens, no job, nothing counted in progress and nothing listed among the failures
 337 tst_fusion_store restoredAfterEvictionIsBitIdentical
 
 # 338 - (8) test: the same after an application restart
@@ -2906,7 +2927,7 @@
 911 tst_fusion_kernel imuRateZeroMismatchIsForward
 911 tst_fusion_kernel imuRateZeroMismatchUnderRotation
 
-# 912 - (6, as amended) the fit publishes the twenty-one channels of the fusion document's section 4, the uncertainty among them since the specification of 1001-1065, on the same time axis
+# 912 - (6, as amended) the fit publishes the thirty-three channels of the fusion document's section 4, the uncertainty among them since the specification of 1001-1065 and the position and velocity covariance blocks since the specification of 1701-1717, on the same time axis
 912 tst_fusion_session registrationShape
 912 tst_fusion_runner outputTableMatchesGolden
 912 tst_fusion_kernel imuRateIsWhatTheFitPublishes
@@ -3447,7 +3468,7 @@
 1301 tst_fusion_kernel imuGapRuleIsTheContinuityThreshold
 1301 audit gnss-holes
 
-# 1302 - (2, 3) everything is published: every IMU sample inside a hole gets its reconstructed state and its accuracies; the position and velocity of the sample covariance grow through the hole and collapse at the next fix, and the four published accuracies, bounded by global terms, are never below their values at the fixes around the hole (measured false on bridged_hole and not asserted; the numbers are in docs/SENSOR_FUSION.md section 8); the fit and the reconstruction are unchanged in kind (one IMU factor per interval, the per-interval pass, the covariance step and the widening need nothing)
+# 1302 - (2, 3, as amended) everything is published: every IMU sample inside a hole gets its reconstructed state and its accuracies; the position and velocity of the step chain's covariance (P_j, read through the reconstruction's per-interval seam) grow through the hole and collapse at the next fix, and the four published accuracies, bounded by global terms, are never below their values at the fixes around the hole (measured false on bridged_hole and not asserted; the numbers are in docs/SENSOR_FUSION.md section 8); the fit and the reconstruction are unchanged in kind (one IMU factor per interval, the per-interval pass, the covariance step and the widening need nothing)
 1302 tst_fusion_kernel bridgedHoleFollowsTheTruth
 1302 tst_fusion_kernel imuRateIsWhatTheFitPublishes
 1302 tst_fusion_kernel imuRateEndsAreTheFit
@@ -3781,3 +3802,51 @@
 
 # 1612 - (5, sixth bullet) the acceptance items in the next free hundred of tests/acceptance_map.txt, with appendix Q and section 9.17 of tests/README.md; items 115, 509, 801, 802, 842, 854, 862 and 863, which counted the fusion plots, and 803, which listed the fused down velocity among the removed plots, restated "(as amended)"
 1612 audit naming
+
+# ---- Fused position and speed accuracy (PLANS/fused-accuracies.md): seventeen items, 1701-1706 so far ----
+
+# 1701 - (3) the twelve outputs: Fusion/posCovNN, posCovNE, posCovND, posCovEE, posCovED, posCovDD (m^2) and velCovNN, velCovNE, velCovND, velCovEE, velCovED, velCovDD (m^2/s^2), measurement outputs of the fit after the four accuracies, aligned with Fusion/_time: the upper triangles of the position and velocity blocks of the composed sample covariance, turned from the reconstruction's tangent into the navigation frame with the published attitude as the attitude block is, a sample on a fix carrying the fix's own marginal; widened once, by the square of the sample's widening factor; filled for a success whose covariance was computed and empty for every other outcome, exactly when the four accuracies are, the diagnostics' accuracy account unchanged; diagonal finite and non-negative wherever filled
+1701 tst_fusion_kernel sampleCovarianceMatchesTheEdgeGraph
+1701 tst_fusion_kernel sampleOnAFixHasTheFixMarginal
+1701 tst_fusion_kernel wideningGrowsWithAnUnderstatedSigma
+1701 tst_fusion_kernel accuraciesFiniteAndPositive
+1701 tst_fusion_kernel covarianceFailureLeavesTheFitAsItIs
+1701 tst_fusion_kernel imuRateIsWhatTheFitPublishes
+1701 tst_fusion_session registrationShape
+
+# 1702 - (3) v10 and what is unchanged: Fusion::Algorithm is batch-temperature-bias-v10; a record written under v9 is stale at load and computed again once, as a result is needed, shown like any computation; nothing else of the record's format changes; the fit's inputs, its solution, the seventeen state channels, the four accuracies and the diagnostics are unchanged and the goldens' existing channels remain bit for bit; neither Cov(x_j, g) nor the position-velocity cross block is published
+1702 tst_fusion_session registrationShape
+1702 tst_fusion_session restoredFitIsIndistinguishable
+1702 tst_fusion_store recordUnderPreviousAlgorithmIsComputedAgainOnce
+1702 tst_fusion_golden successFixturesMatchGolden
+1702 tst_fusion_golden rejectionFixturesMatchGolden
+1702 tst_fusion_kernel fitTraceMatchesGolden
+1702 audit accuracy-channels
+
+# 1703 - (8, first bullet) test: the kernel: on the fixtures with a computed covariance the published blocks equal the position and velocity marginals of a graph with a state at every edge, on a fix the fix's own marginal; symmetric with a finite, non-negative diagonal wherever filled, empty exactly when the four accuracies are; on bridged_hole the composed velocity covariance before the widening is larger inside the hole than beside the fixes around it and returns at the next fix, the step chain's share of the position and velocity covariance grows across the hole and collapses at the next fix, and the composed position figures are recorded, not asserted (the hole's IMU factor ties the two fix marginals so that the position variance follows them across the hole), the published figures recorded beside them and not asserted, and the error against the generating trajectory in units of the published standard deviation is measured, recorded in section 8 of the fusion document and held below 3; the seventeen and the four of every golden unchanged bit for bit, the goldens gaining the twelve
+1703 tst_fusion_kernel sampleCovarianceMatchesTheEdgeGraph
+1703 tst_fusion_kernel sampleOnAFixHasTheFixMarginal
+1703 tst_fusion_kernel wideningGrowsWithAnUnderstatedSigma
+1703 tst_fusion_kernel accuraciesFiniteAndPositive
+1703 tst_fusion_kernel covarianceFailureLeavesTheFitAsItIs
+1703 tst_fusion_kernel imuRateIsWhatTheFitPublishes
+1703 tst_fusion_kernel bridgedHoleFollowsTheTruth
+1703 tst_fusion_golden successFixturesMatchGolden
+1703 tst_fusion_golden channelsWriterIsTheInverseOfTheLoader
+1703 tst_fusion_golden comparatorHoldsItsBounds
+
+# 1704 - (8, second bullet) test: the registration and the record: thirty-three measurement outputs in order, thirty-four with the diagnostics; the twelve published and stored with the rest and restored bit for bit after a restart; a record written under v9 stale at load and the fit run again once; the stored success without the covariance restores the seventeen and leaves the sixteen accuracy channels unavailable
+1704 tst_fusion_session registrationShape
+1704 tst_fusion_session requestRunsOnceAndPublishesTogether
+1704 tst_fusion_runner outputTableMatchesGolden
+1704 tst_fusion_runner successMatchesDirectRun
+1704 tst_fusion_store restoredAfterRestartIsBitIdentical
+1704 tst_fusion_store recordUnderPreviousAlgorithmIsComputedAgainOnce
+1704 tst_fusion_store restoredFitWithoutAccuracyDrawsTheRest
+1704 tst_fusion_jobs jobPublishesAllOutputsTogether
+
+# 1705 - (7) the documents of the fit's outputs and the record: SENSOR_FUSION.md section 4 (the rows of J_j, the twelve in the outputs table, the squared widening, the growth through a hole), section 7 (thirty-four outputs, v10) and section 8 (the validation with its measured numbers); CALCULATIONS.md's thirty-four outputs; DATA_SCHEMA.md's thirty-three measurements and v10; the contract of registerFusionCalculations; every count of twenty-one or twenty-two channels in the documents, the comments and tests/README.md updated
+1705 audit accuracy-channels
+
+# 1706 - (8, audit bullet, first clause) the audit's accuracy-channels group: the twelve covariance names, quoted, are spelled in src in the registration's output table alone, the kernel holding them as Result members; the rule planted once; the range 1701-1717 declared and items 1701-1706 complete; the audit and the map check green
+1706 audit accuracy-channels

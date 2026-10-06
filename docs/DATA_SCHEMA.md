@@ -448,7 +448,7 @@ a calculation is valid only together with this stamp. For a session with a
 stored sensor fusion result:
 
 ```json
-"records": {"builtin.fusion.fit": "batch-temperature-bias-v9"}
+"records": {"builtin.fusion.fit": "batch-temperature-bias-v10"}
 ```
 
 Each session entry may also have `"recordReasons"`: an object mapping the
@@ -597,10 +597,11 @@ Since the sensor fusion result became the fitted state at every IMU sample,
 its record holds the same seventeen measurements and the diagnostics in the
 same format (version 2) with new values; a record written before that change
 is stale by its result version, deleted at its session's next load and
-computed again the same way. Since the documented noise model it holds
-twenty-one measurements, the four accuracies after the seventeen (the
-seventeen alone for a fit whose covariance could not be computed), in the
-same format.
+computed again the same way. Since the documented noise model it held
+the four accuracies after the seventeen, and since the fused accuracies it
+holds thirty-three measurements, the twelve entries of the position and
+velocity covariance blocks after the four accuracies (the seventeen alone for
+a fit whose covariance could not be computed), in the same format.
 Only a regular file whose name ends exactly in `.fvresult` (lower case) is a
 record: a directory at a record's path is never listed, so neither the
 start-up pass nor deleting its session removes it.
@@ -610,10 +611,11 @@ start-up pass nor deleting its session removes it.
 - **Code.** `CalculationCompatibilityVersion` (section 11) and the
   calculation's result version equal the ones it was written with. For sensor
   fusion the result version is the kernel's algorithm string, the
-  `"algorithm"` of its diagnostics: `batch-temperature-bias-v9` since the
-  scale factors are held at one until the fit has converged and released
-  from that solution (`v8` was the hole in the GNSS fixes fitted across
-  instead of rejected).
+  `"algorithm"` of its diagnostics: `batch-temperature-bias-v10` since the
+  fit publishes the position and velocity covariance blocks, which changes
+  the record's shape and no number of the fit (`v9` was the scale factors
+  held at one until the fit has converged and released from that solution,
+  `v8` the hole in the GNSS fixes fitted across instead of rejected).
 - **Inputs.** The names of the inputs the result reached are the same (source
   measurements with their unit text, attributes and declared preferences,
   directly or through other calculations, including inputs that were looked

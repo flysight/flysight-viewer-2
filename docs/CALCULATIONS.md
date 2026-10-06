@@ -2205,7 +2205,7 @@ Fourteen calculations are registered, in this order:
 | `builtin.default.GYRO_FS_DEG_S` | OnDemand | none | `GYRO_FS_DEG_S` (the default's text, a string) |
 | `builtin.default.ACCEL_ODR_HZ` | OnDemand | none | `ACCEL_ODR_HZ` (the default's text, a string) |
 | `builtin.default.GYRO_ODR_HZ` | OnDemand | none | `GYRO_ODR_HZ` (the default's text, a string) |
-| `builtin.fusion.fit` (title "Sensor fusion") | Explicit | the 26 below | the 22 below |
+| `builtin.fusion.fit` (title "Sensor fusion") | Explicit | the 26 below | the 34 below |
 | `builtin.fusion.velH` | OnDemand | `Fusion/velN`, `Fusion/velE` | `Fusion/velH` |
 | `builtin.fusion.vel` | OnDemand | `Fusion/velH`, `Fusion/velD` | `Fusion/vel` |
 | `builtin.fusion.accH` | OnDemand | `Fusion/accN`, `Fusion/accE` | `Fusion/accH` |
@@ -2254,9 +2254,13 @@ default.
 `north`, `east`, `down`, `velN`, `velE`, `velD`, `accN`, `accE`, `accD`, `roll`,
 `pitch`, `yaw`, `qx`, `qy`, `qz`, `qw`, then the four accuracies
 `headingAcc`, `tiltAcc`, `accHAcc`, `accDAcc` (no unit reported, like every
-derived measurement: degrees, degrees, m/s^2, m/s^2), and the attribute
-`_FUSION_DIAGNOSTICS` (`SessionKeys::FusionDiagnostics`, compact JSON as a
-string; not a logbook attribute): twenty-two outputs, one table
+derived measurement: degrees, degrees, m/s^2, m/s^2), then the upper
+triangles of the position and velocity covariance blocks in the navigation
+frame, widened by the square of the widening factor, `posCovNN`, `posCovNE`,
+`posCovND`, `posCovEE`, `posCovED`, `posCovDD` (m^2) and `velCovNN`,
+`velCovNE`, `velCovND`, `velCovEE`, `velCovED`, `velCovDD` (m^2/s^2), and the
+attribute `_FUSION_DIAGNOSTICS` (`SessionKeys::FusionDiagnostics`, compact
+JSON as a string; not a logbook attribute): thirty-four outputs, one table
 (`kFitOutputs`) for the declaration and the publication. The measurements are
 the fitted state and the model's acceleration at every IMU sample of the
 fitted interval, and the accuracy of each sample
@@ -2276,7 +2280,7 @@ session-level outputs are bit-identical to the kernel's goldens.
 
 | `Fusion::Outcome` | The compute function |
 | --- | --- |
-| `Succeeded` | returns the seventeen measurements of the state, the four accuracies when the covariance was computed, and `_FUSION_DIAGNOSTICS`. A success whose covariance could not be computed leaves the four unset, so unavailable (an available measurement has samples, and the record refuses one without); its diagnostics' `accuracy` says why, and nothing else of the result differs |
+| `Succeeded` | returns the seventeen measurements of the state, the sixteen accuracy channels (the four accuracies and the twelve covariance entries) when the covariance was computed, and `_FUSION_DIAGNOSTICS`. A success whose covariance could not be computed leaves the sixteen unset, so unavailable (an available measurement has samples, and the record refuses one without); its diagnostics' `accuracy` says why, and nothing else of the result differs |
 | `Rejected`, `SolverFailed` | returns **only** `_FUSION_DIAGNOSTICS` and `setReason(reason)`: the measurements are unset, so unavailable. A function of the inputs, cached like any result (`ResultStatus::Ok`): the job ends Succeeded with that reason, `resultDetail()` returns it, blocker inspection reports `NotProduced` with that detail, and a second request runs nothing until a declared input changes. Stored and restored like a success (15.8) |
 | `Cancelled` | throws `CalculationCancelled`: nothing is published, nothing is cached, nothing is stored |
 | `std::bad_alloc` | not handled: it propagates to the engine (`ResourceExhausted` on the asynchronous path; nothing cached, nothing stored) |
@@ -2381,17 +2385,20 @@ switched on (16.1), and nothing else about a plot starts one (section 16). An ac
 not set (a rejection, a solver failure, a success whose covariance could not
 be computed) is unavailable like any unset output, and its plot draws
 nothing. The rest of the fit's outputs (`north`, `east`, `down`, `velN`,
-`velE`, `accN`, `accE`, `roll`, `pitch`, `yaw`, `qx`, `qy`, `qz`, `qw`) have
-no plot; they remain measurements that a logbook column, a plugin input and
-the stored record read.
+`velE`, `accN`, `accE`, `roll`, `pitch`, `yaw`, `qx`, `qy`, `qz`, `qw`, and
+the twelve covariance entries `posCovNN` ... `posCovDD`, `velCovNN` ...
+`velCovDD`) have no plot; they remain measurements that a logbook column, a
+plugin input and the stored record read.
 
 **Stored results.** The fit's result version is `Fusion::Algorithm`
 (`src/fusion/fusion.h`), the same string as the diagnostics' `"algorithm"`. The
 literal exists once in `src/`, in that header. Change it whenever a change can
 alter what the fit returns for the same channels; that drops every stored fit.
-It is `batch-temperature-bias-v9` since the scale factors are held at one
-until the fit has converged and released from that solution, which moves
-every fit's numbers (`v8` was the hole in the GNSS fixes fitted across instead
+It is `batch-temperature-bias-v10` since the fit publishes the position and
+velocity covariance blocks, which changes the record's shape and no number of
+the fit (`v9` was the scale factors held at one until the fit has converged
+and released from that solution, which moved every fit's numbers; `v8` the
+hole in the GNSS fixes fitted across instead
 of rejected, which also carried the continuity rule's threshold that the
 kernel's IMU gap rule adopted under the compatibility marker's bump to 3,
 section 9; `v7` the lattice check that let a few readings off the
@@ -2402,8 +2409,8 @@ accelerometer reading), so the first start after that update
 finds every stored fit stale at its recording's load and fits each again
 once, when something switched on needs it, counted in the status bar like any
 fit. The record holds the measurements the fit set, the seventeen of the
-state and the four accuracies (the seventeen alone when the covariance could
-not be computed), and `_FUSION_DIAGNOSTICS`, or, for
+state and the sixteen accuracy channels (the seventeen alone when the
+covariance could not be computed), and `_FUSION_DIAGNOSTICS`, or, for
 a rejection or solver failure, the diagnostics and the reason. The format is
 unchanged: it writes the outputs that are set, and restores them bit for bit. Its leaves are
 the source data and attributes behind the 26 inputs: the IMU and GNSS source

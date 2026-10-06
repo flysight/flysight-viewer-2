@@ -103,6 +103,16 @@ struct Result {
     /// diagnostics' `accuracy` says (the seventeen arrays above are then
     /// filled as ever).
     QVector<double> headingAcc, tiltAcc, accHAcc, accDAcc;
+    /// The upper triangles of the position (m^2) and velocity (m^2/s^2)
+    /// covariance blocks of the published state at every sample, in the
+    /// navigation frame (north, east, down), aligned with `time`: the blocks
+    /// of the same covariance the four accuracies come from, widened by the
+    /// square of the same widening factor, so that a standard deviation taken
+    /// from them is widened by the factor itself (docs/SENSOR_FUSION.md
+    /// section 4). Filled exactly when the four accuracies are, empty
+    /// otherwise; the diagnostics' `accuracy` account is unchanged by them.
+    QVector<double> posCovNN, posCovNE, posCovND, posCovEE, posCovED, posCovDD,
+                    velCovNN, velCovNE, velCovND, velCovEE, velCovED, velCovDD;
 };
 
 /// Receives a short text describing the stage the fit has reached. Must not throw.
@@ -143,7 +153,7 @@ Result run(const Channels &channels, const ProgressFn &progress = {},
 /// registration (CalculationDescriptor::resultVersion), so changing it drops
 /// every stored fit. Change it whenever a change can alter what run() returns
 /// for the same channels.
-inline constexpr char Algorithm[] = "batch-temperature-bias-v9";
+inline constexpr char Algorithm[] = "batch-temperature-bias-v10";
 
 } // namespace FlySight::Fusion
 

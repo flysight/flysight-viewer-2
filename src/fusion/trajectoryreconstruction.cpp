@@ -38,8 +38,8 @@ gtsam::Matrix9 graphToNavState(const gtsam::Rot3 &attitude)
 }
 
 /// The accuracy composition of one fix interval (reconstructAtImuRate()'s
-/// contract): what every edge of the interval shares, formed once, and the
-/// attitude rows of J_j at an edge.
+/// contract): what every edge of the interval shares, formed once, and at an
+/// edge the attitude rows of J_j and, apart, its position and velocity rows.
 class IntervalComposition {
 public:
     IntervalComposition(const IntervalSensitivity &s, const FitCovariance &covariance, size_t k,
@@ -95,6 +95,33 @@ public:
         joint.block<3, 3>(6, 3) = m_globals.block<3, 3>(kScaleOffset, kBiasOffset);
         joint.block<3, 3>(6, 6) = m_globals.block<3, 3>(kScaleOffset, kScaleOffset);
         return joint;
+    }
+
+    /// The covariance of (p, v) at edge j, both in the body frame (the
+    /// forward state's tangent): rows 3-8 of J_j and of the conditional, the
+    /// same formula as attitudeBiasScale()'s rows 0-2. Its own expressions,
+    /// so that the attitude block above keeps its bits: a nine-row product
+    /// whose top rows were taken is not promised to give the same ones.
+    Eigen::Matrix<double, 6, 6> positionVelocity(size_t j) const
+    {
+        const gtsam::Matrix9 &P = m_s.covariance[j], &M = m_s.retraction[j];
+        const gtsam::Matrix9 G = P*m_chain[j].transpose();
+        const Eigen::Matrix<double, 6, 9> motionRetraction = M.bottomRows<6>();
+        const Eigen::Matrix<double, 6, 9> K = motionRetraction*G*m_share;
+        const Eigen::Matrix<double, 6, 6> conditional = motionRetraction*(P-G*m_endInverse*G.transpose())
+                                                        *motionRetraction.transpose();
+        Eigen::Matrix<double, 6, 33> J;
+        J.block<6, 9>(0, 0) = (m_s.byStart[j].bottomRows<6>()+K*m_endByStart)*m_startToNav;
+        J.block<6, 9>(0, 9) = K*m_s.byFitted*m_endToNav;
+        const Eigen::Matrix<double, 6, 6> byBias = m_s.byBias[j].bottomRows<6>()+K*m_endByBias;
+        J.block<6, 6>(0, 18+kBiasOffset) = byBias;
+        J.block<6, 3>(0, 18+kSlopeOffset) = byBias.rightCols<3>()*m_dT;
+        J.block<6, 6>(0, 18+kScaleOffset) = motionRetraction*m_s.byScale[j]+K*m_endByScale;
+
+        // Symmetrized from a separate sum: assigning (a + a^T) / 2 back to a
+        // aliases in Eigen and leaves it asymmetric where the product is.
+        const Eigen::Matrix<double, 6, 6> motion = J*m_z*J.transpose()+conditional;
+        return (motion+motion.transpose())/2;
     }
 
 private:
@@ -281,6 +308,11 @@ ImuRateTrajectory reconstructAtImuRate(const Samples &window, const FitResult &f
                 const gtsam::Matrix9 joint = composition->attitudeBiasScale(j);
                 const gtsam::Matrix3 R = state.attitude().matrix();
                 out.attitudeCovariance.push_back(R*joint.block<3, 3>(0, 0)*R.transpose());
+                // Turned as the attitude block is: the position and velocity
+                // tangents of the NavState are the body's.
+                const Eigen::Matrix<double, 6, 6> motion = composition->positionVelocity(j);
+                out.positionCovariance.push_back(R*motion.block<3, 3>(0, 0)*R.transpose());
+                out.velocityCovariance.push_back(R*motion.block<3, 3>(3, 3)*R.transpose());
                 const AttitudeAccuracy attitude = attitudeAccuracy(out.attitudeCovariance.back());
                 const AccelerationAccuracy acceleration = accelerationAccuracy(
                     joint, state.attitude(), window.force[sample], accScale, accBias, out.acceleration.back(),

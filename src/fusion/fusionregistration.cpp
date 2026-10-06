@@ -32,10 +32,11 @@ namespace {
 
 constexpr char kSensor[] = "Fusion";
 
-// The twenty-one measurement outputs of the fit and the array of the kernel's
-// result behind each: the seventeen of the state, then the four accuracies.
-// One table serves the declaration and the publication, so the two cannot
-// drift apart.
+// The thirty-three measurement outputs of the fit and the array of the
+// kernel's result behind each: the seventeen of the state, then the four
+// accuracies, then the upper triangles of the position and velocity covariance
+// blocks. One table serves the declaration and the publication, so the two
+// cannot drift apart.
 struct FitOutput {
     const char *name;
     QVector<double> Fusion::Result::*samples;
@@ -62,7 +63,19 @@ constexpr FitOutput kFitOutputs[] = {
     { "headingAcc", &Fusion::Result::headingAcc },
     { "tiltAcc",    &Fusion::Result::tiltAcc },
     { "accHAcc",    &Fusion::Result::accHAcc },
-    { "accDAcc",    &Fusion::Result::accDAcc }
+    { "accDAcc",    &Fusion::Result::accDAcc },
+    { "posCovNN",   &Fusion::Result::posCovNN },
+    { "posCovNE",   &Fusion::Result::posCovNE },
+    { "posCovND",   &Fusion::Result::posCovND },
+    { "posCovEE",   &Fusion::Result::posCovEE },
+    { "posCovED",   &Fusion::Result::posCovED },
+    { "posCovDD",   &Fusion::Result::posCovDD },
+    { "velCovNN",   &Fusion::Result::velCovNN },
+    { "velCovNE",   &Fusion::Result::velCovNE },
+    { "velCovND",   &Fusion::Result::velCovND },
+    { "velCovEE",   &Fusion::Result::velCovEE },
+    { "velCovED",   &Fusion::Result::velCovED },
+    { "velCovDD",   &Fusion::Result::velCovDD }
 };
 
 // The eighteen measurement inputs of the fit and the member of the kernel's
@@ -201,9 +214,10 @@ Fusion::Channels channelsFrom(const EvaluationContext &ctx)
 // recording and a solver failure are functions of the inputs like a success:
 // the measurements stay unset (unavailable), the diagnostics carry the reason,
 // and asking again with the same inputs runs nothing. A success whose
-// covariance could not be computed has no accuracies: those four stay unset
-// too, since an available measurement has samples (the record refuses one
-// without), and the diagnostics say why.
+// covariance could not be computed has no accuracies: those sixteen (the four
+// accuracies and the twelve covariance entries) stay unset too, since an
+// available measurement has samples (the record refuses one without), and the
+// diagnostics say why.
 CalculationResult publish(const Fusion::Result &fit)
 {
     CalculationResult result;

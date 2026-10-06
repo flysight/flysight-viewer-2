@@ -94,11 +94,12 @@ FlySight::SessionData naturalSession(const QString &sessionId);
 /// The opposite premise to the fixture sessions: the fit's OUTPUTS stored as
 /// data, so that what is derived from them can be tested without the solver.
 ///  - Each entry of `channels` becomes source data Fusion/<name>; only the
-///    twenty-one names of fusionMeasurementNames() are allowed (Q_ASSERT).
+///    thirty-three names of fusionMeasurementNames() are allowed (Q_ASSERT).
 ///  - Each is stored with the unit text of that output: _time "s";
 ///    north|east|down "m"; velN|velE|velD "m/s"; accN|accE|accD "m/s^2";
 ///    roll|pitch|yaw "deg"; qx..qw ""; headingAcc|tiltAcc "deg";
-///    accHAcc|accDAcc "m/s^2". The conversion layer passes all of these
+///    accHAcc|accDAcc "m/s^2"; posCovNN..posCovDD "m^2";
+///    velCovNN..velCovDD "m^2/s^2". The conversion layer passes all of these
 ///    through unchanged (no schema row names Fusion).
 ///  - A reader of Fusion/<name> therefore gets exactly these samples, and
 ///    resolution never reaches builtin.fusion.fit: a measurement with source
@@ -112,7 +113,9 @@ FlySight::SessionData naturalSession(const QString &sessionId);
 FlySight::SessionData syntheticFitSession(const QString &sessionId,
                                           const QHash<QString, QVector<double>> &channels);
 
-QStringList fusionMeasurementNames();   ///< the 21 literal names, in output order (the 17 of the state, then the 4 accuracies)
+/// The 33 literal names, in output order: the 17 of the state, the 4
+/// accuracies, then the 12 covariance entries (posCovNN ... velCovDD).
+QStringList fusionMeasurementNames();
 
 /// The fifteen "Sensor fusion" plots as PlotValues, for PlotModel::setPlots(),
 /// in the application's order: Elevation (z), the horizontal, vertical and
@@ -125,7 +128,7 @@ QStringList fusionMeasurementNames();   ///< the 21 literal names, in output ord
 /// irrelevant here and left default.
 QVector<FlySight::PlotValue> fusionPlots();
 
-/// "Everything": the 21 measurements, Fusion/velH, Fusion/vel, Fusion/accH,
+/// "Everything": the 33 measurements, Fusion/velH, Fusion/vel, Fusion/accH,
 /// Fusion/_system_time, _FUSION_DIAGNOSTICS, and Fusion/roll interpolated at
 /// _EXIT_TIME.
 QList<FlySight::DependencyKey> fusionNames();
@@ -134,7 +137,7 @@ QString fusionRollAtExit();
 /// Fusion/<name> as a dependency key.
 FlySight::DependencyKey fusionKey(const QString &name);
 
-/// Empty when the twenty-one published channels of the session match the
+/// Empty when the thirty-three published channels of the session match the
 /// golden (in the mode chosen by FLYSIGHT_FUSION_EXACT), else the first
 /// channel's difference.
 QString goldenDifference(const FlySight::SessionData &session, const FusionGolden &golden);

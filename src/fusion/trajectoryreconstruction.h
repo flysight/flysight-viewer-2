@@ -108,11 +108,14 @@ struct ImuRateTrajectory {
     double maxVelocityMismatch = 0;    ///< largest |velocity part of d| over the intervals, m/s
     /// With a computed covariance only (reconstructAtImuRate()), aligned with
     /// `time`; empty otherwise. The attitude covariance in the navigation
-    /// frame, R Sigma_phi R^T, and the four accuracies before the widening:
-    /// heading and tilt in degrees, capped (attitudeAccuracy()), and the
-    /// horizontal and vertical acceleration accuracies in m/s^2
-    /// (accelerationAccuracy()).
+    /// frame, R Sigma_phi R^T; the position (m^2) and velocity (m^2/s^2)
+    /// blocks of the sample covariance in the navigation frame, R Sigma_p R^T
+    /// and R Sigma_v R^T, unwidened (the output stage widens them); and the
+    /// four accuracies before the widening: heading and tilt in degrees,
+    /// capped (attitudeAccuracy()), and the horizontal and vertical
+    /// acceleration accuracies in m/s^2 (accelerationAccuracy()).
     std::vector<gtsam::Matrix3> attitudeCovariance;
+    std::vector<gtsam::Matrix3> positionCovariance, velocityCovariance;
     std::vector<double> headingAcc, tiltAcc, accHAcc, accDAcc;
 };
 
@@ -146,10 +149,17 @@ struct ImuRateTrajectory {
 /// tangent is the body's) and dT_k = T(fix k) - T_ref; and
 /// Sigma_j = J_j Sigma_z J_j^T + C_j, Cov(x_j, g) = J_j Sigma_z,g (the law of
 /// total variance: given z_k the edge depends on the interval's IMU chain
-/// alone). Only the attitude rows are formed. A sample on a fix has
-/// P_0 = 0, Psi_0 = I: the fix's own marginal. The accuracies are those of
-/// attitudeAccuracy() at the published attitude and accelerationAccuracy() of
-/// the joint of (phi, b_a, s_a), the sample's reading and published
+/// alone). The attitude, position and velocity rows are formed, the attitude
+/// with its cross-covariance with the accelerometer's bias and scale, the
+/// position and velocity rows apart, of which the position block and the
+/// velocity block are kept (not their cross block). Sigma_j is in the
+/// forward state's tangent, where all three are in the body frame, so each
+/// block is published in the navigation frame as R Sigma R^T with R the
+/// published attitude. A sample on a fix has
+/// P_0 = 0, Psi_0 = I: the fix's own marginal (its velocity block is V(k)'s,
+/// which N takes into the body and R back to NED). The accuracies are those
+/// of attitudeAccuracy() at the published attitude and accelerationAccuracy()
+/// of the joint of (phi, b_a, s_a), the sample's reading and published
 /// acceleration and the accelerometer's per-sample sigma of `tuning`.
 ImuRateTrajectory reconstructAtImuRate(const Samples &window, const FitResult &fit, const Tuning &tuning,
                                        const FitCovariance *covariance = nullptr);

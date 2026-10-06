@@ -104,7 +104,13 @@
 #   - the fused speeds are plots: the sensor fusion category is the fifteen
 #     plots of the tests' mirror, the fit's down velocity has a row as its
 #     down acceleration does, and no document counts the fusion plots as
-#     twelve (items 1601-1612).
+#     twelve (items 1601-1612);
+#   - the fused position and speed accuracy (the fit publishes the position
+#     and velocity covariance blocks, the derived accuracies, the three rows):
+#     the twelve covariance names are spelled in src in the registration's
+#     output table alone, no plot row names them, the algorithm string is
+#     batch-temperature-bias-v10, and no document counts the fit's channels
+#     or outputs as they were before the blocks (items 1701-1717).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -485,13 +491,16 @@ expect_none("a plot row's default colour is a literal"
 # code or tests (tests/README.md is excluded as above).
 expect_none("no local-frame plots" "GNSS \\(Local frame\\)|localFramePlots" src tests ":!tests/README.md")
 # A plot row names its measurement and then its type; the fit's own channels
-# have no row, except the two drawn as their GNSS counterparts: accD is
-# Vertical acceleration and velD Vertical speed, so neither is in the list.
+# have no row, except the two drawn as their GNSS counterparts and the four
+# accuracies: accD is Vertical acceleration and velD Vertical speed, so
+# neither is in the list. The twelve covariance entries (posCovNN ...
+# velCovDD) are channels without a row too: what is plotted of them is a
+# calculation derived from them.
 # The trailing `, "` matches a row's measurement followed by its type, never a
 # calculation's ("Fusion", "down"). Allow: none expected; any other fit
 # channel is read as a measurement (a column, a plug-in input), not plotted.
 expect_none("the removed fusion plots stay out of the registry"
-  "\"Fusion\", *\"(north|east|down|velN|velE|accN|accE|roll|pitch|yaw|q[xyzw])\", *\"" src)
+  "\"Fusion\", *\"(north|east|down|velN|velE|accN|accE|roll|pitch|yaw|q[xyzw]|posCov(NN|NE|ND|EE|ED|DD)|velCov(NN|NE|ND|EE|ED|DD))\", *\"" src)
 # Allow: describe the fit's outputs as outputs or measurements; name no removed
 # category or plot, and count the fusion plots as fifteen ("the same eight"
 # inputs of docs/CALCULATIONS.md do not match). Seventeen, eight and twelve
@@ -657,7 +666,7 @@ expect_none("the stationary-window detector is gone"
 expect_none("the silent poll is gone" "pollCancel" src tests)
 expect_none("the anchor-attitude initializer is gone"
   "InitialAttitude|initialAttitude\\(|kInitialHeadingDeg|attitudeFromStationaryWindow" src tests)
-# Allow: none expected. The goldens say batch-temperature-bias-v9; a hit under
+# Allow: none expected. The goldens say batch-temperature-bias-v10; a hit under
 # tests/data/fusion means a stale capture (re-capture, tests/README.md section 11).
 expect_none("the retired algorithm strings are gone" "batch-shared-bias-v[12]"
   src tests docs README.md ":!tests/README.md")
@@ -710,8 +719,10 @@ expect_only("the step model has one author"
 # algorithm, no bias-shift settled test, no branch, twenty-six inputs. Say
 # "the previous initializer", "a resting window", "the coarse attitude at the
 # anchor" when the history must be mentioned. The earlier input counts are
-# banned as input counts only: since the accuracy the fit has twenty-two
-# outputs and twenty-one measurements, which section 7 counts.
+# banned as input counts only: they were the counts of the fit's outputs and
+# measurements once (group accuracy-channels refuses those), and since the
+# fused accuracies it has thirty-four outputs and thirty-three measurements,
+# which section 7 counts.
 expect_none("the fusion document describes the current model"
   "stationary window|candidate window|coarse initializer|frozen|bias shifts below|zero bias shift|sensor-fusion-clean-port|twenty-(one|two) inputs"
   docs/SENSOR_FUSION.md)
@@ -786,15 +797,19 @@ expect_none("the documents describe the fitted scale" "scale factor is not fitte
 expect_count("the fusion document names the scale prior" "scale_prior" 1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document names the scale diagnostics" "model\\.scale" 1 docs/SENSOR_FUSION.md)
 
-# ─────────────────────────────── accuracy-channels (items 1022, 1025, 1030, 1032, 1036, 1037, 1049, 1064, 1065)
+# ─────────────────────────────── accuracy-channels (items 1022, 1025, 1030, 1032, 1036, 1037, 1049, 1064, 1065, 1702, 1705, 1706)
 # The accuracy of a converged fit (docs/SENSOR_FUSION.md section 4): one
 # factorization of the converged graph, in its own unit
 # (src/fusion/fitcovariance.*), whose clique marginals give the covariance,
 # never the library's joint marginals; one cap for every attitude sigma; the
 # four channels named in the registration's output table and the plot rows
-# alone, the plots drawn in the deep scheme of the GNSS accuracies; and the
-# fusion document states the propagation, what it leaves out, the widening
-# and the accuracy's one sentence.
+# alone, the plots drawn in the deep scheme of the GNSS accuracies; the twelve
+# entries of the position and velocity covariance blocks (posCovNN, posCovNE,
+# posCovND, posCovEE, posCovED, posCovDD, velCovNN, velCovNE, velCovND,
+# velCovEE, velCovED, velCovDD) named in the registration's output table
+# alone; no document counting the fit's channels or outputs as they were
+# before the blocks; and the fusion document states the propagation, what it
+# leaves out, the widening and the accuracy's one sentence.
 audit_group(accuracy-channels)
 # Allow: none expected. The library's joint marginals factorize the system
 # again for every query (0.6 s per fix on the longest reference recording);
@@ -817,6 +832,20 @@ expect_count("one cap for every attitude sigma" "constexpr double kYawSigmaCapDe
 expect_only("the accuracy channels are named in the registration and the plot rows"
   "\"(headingAcc|tiltAcc|accHAcc|accDAcc)\""
   "^src/(fusion/fusionregistration\\.cpp|mainwindow\\.cpp)$" src)
+# Allow: none expected. The twelve covariance names, quoted, are spelled in
+# src in the registration's output table alone: the kernel holds them as
+# Result members, unquoted; a calculation derived from them declares them as
+# inputs in the registration, which the rule allows; no plot row names them.
+expect_only("the covariance channels are named in the registration alone"
+  "\"(posCov(NN|NE|ND|EE|ED|DD)|velCov(NN|NE|ND|EE|ED|DD))\""
+  "^src/fusion/fusionregistration\\.cpp$" src)
+# Allow: none expected. Since the position and velocity covariance blocks the
+# fit has thirty-three measurements and thirty-four outputs; a document that
+# counts its channels as twenty-one or its outputs as twenty-two is stale, as
+# the naming group refuses the old counts of the plots. tests/README.md is not
+# searched: its capture history counts what each capture wrote.
+expect_none("the documents count the fit's thirty-three channels"
+  "twenty-one (measurement|channel)|twenty-two outputs" docs README.md)
 # The four accuracy plots are rows of the plot table, each a literal colour:
 # the quiet member of the value it qualifies (the table's comment). Allow:
 # none expected; a fifth accuracy row raises the count with the row.
@@ -962,8 +991,8 @@ expect_none("stored results are widget-free"
 # Fusion's result version is its kernel's algorithm string, spelled once.
 # Allow: none expected. A changed algorithm changes the one literal; a comment
 # or test in src that quotes it names Fusion::Algorithm instead.
-expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v9" 1 src)
-expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v9"
+expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v10" 1 src)
+expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v10"
   "^src/fusion/fusion\\.h$" src)
 # The compatibility rule names the result version, in the code and in the note.
 # Allow: reword the sentence, never duplicate it; the count is 1 in each file.
@@ -1449,7 +1478,7 @@ expect_none("the v7 algorithm string is gone" "batch-temperature-bias-v7"
 # rejections, and the input audit of every fit names its holes. Allow: none
 # expected; a new fixture changes these counts with tests/README.md section 11.
 expect_count("the goldens carry the current algorithm string"
-  "\"algorithm\": \"batch-temperature-bias-v9\"" 14 tests/data/fusion)
+  "\"algorithm\": \"batch-temperature-bias-v10\"" 14 tests/data/fusion)
 expect_count("the goldens hold four fits" "\"outcome\": \"succeeded\"" 4 tests/data/fusion)
 expect_count("the goldens hold ten rejections" "\"outcome\": \"rejected\"" 10 tests/data/fusion)
 expect_count("the fits' goldens name their holes" "\"gnss_holes\"" 4 tests/data/fusion)
@@ -1497,15 +1526,15 @@ expect_count("the fusion document carries the first reference recording" "08-35-
 # 1401-1415): two lines, the case and the row of section 8.
 expect_count("the fusion document carries the second reference recording" "13-35-10" 2
   docs/SENSOR_FUSION.md)
-expect_count("the fusion document names the algorithm string" "batch-temperature-bias-v9" 2
+expect_count("the fusion document names the algorithm string" "batch-temperature-bias-v10" 2
   docs/SENSOR_FUSION.md)
 expect_none("the documents count four fits and ten rejections"
   "three fits|eleven rejections|three golden successes" docs)
 expect_count("the plots document says the fusion plots draw through a GNSS hole"
   "draw through a hole in the GNSS fixes" 1 docs/COMPUTED_PLOTS.md)
-expect_count("the schema document names the algorithm string" "batch-temperature-bias-v9" 2
+expect_count("the schema document names the algorithm string" "batch-temperature-bias-v10" 2
   docs/DATA_SCHEMA.md)
-expect_count("the calculations document names the algorithm string" "batch-temperature-bias-v9" 1
+expect_count("the calculations document names the algorithm string" "batch-temperature-bias-v10" 1
   docs/CALCULATIONS.md)
 
 # ─────────────────────────────── staged-scale (items 1401, 1404-1407, 1412, 1414, 1415)
@@ -1630,10 +1659,13 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # reference recordings, the goldens, the documents), 1501-1524 (background
 # computation per recording: the attribute, the column, the preference, the
 # exclusion, the cancel, the index entry, the cell, the eleven bullets of the
-# tests, the documents) and 1601-1612 (the fused speed plots: the two
+# tests, the documents), 1601-1612 (the fused speed plots: the two
 # calculations, the three rows, demand, what is unchanged, the colours, the
-# documents, the six bullets of the tests). Four line forms; see the head of
-# the map.
+# documents, the six bullets of the tests) and 1701-1717 (the fused position
+# and speed accuracy: the twelve outputs, v10 and what is unchanged, the
+# kernel's tests, the registration and the record, the documents of the
+# fit's outputs, the audit rule; then the derived accuracies and the plots).
+# Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
 if(NOT EXISTS "${map_file}")
@@ -1712,8 +1744,9 @@ else()
             OR (item GREATER_EQUAL 1301 AND item LESS_EQUAL 1313)
             OR (item GREATER_EQUAL 1401 AND item LESS_EQUAL 1415)
             OR (item GREATER_EQUAL 1501 AND item LESS_EQUAL 1524)
-            OR (item GREATER_EQUAL 1601 AND item LESS_EQUAL 1612)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313, 1401-1415, 1501-1524 and 1601-1612: ${line}")
+            OR (item GREATER_EQUAL 1601 AND item LESS_EQUAL 1612)
+            OR (item GREATER_EQUAL 1701 AND item LESS_EQUAL 1717)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313, 1401-1415, 1501-1524, 1601-1612 and 1701-1717: ${line}")
     endif()
   endforeach()
 
@@ -1815,6 +1848,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 1601 1612)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 1701 1706)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

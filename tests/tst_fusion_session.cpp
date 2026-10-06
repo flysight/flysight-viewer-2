@@ -81,7 +81,7 @@ QString availableAmong(const SessionData &session, const QList<DependencyKey> &n
     return available.join(QStringLiteral(", "));
 }
 
-/// The 21 measurements, velH, vel, accH, _system_time and the roll at exit:
+/// The 33 measurements, velH, vel, accH, _system_time and the roll at exit:
 /// everything but the diagnostics.
 QList<DependencyKey> valueNames()
 {
@@ -271,16 +271,19 @@ void FusionSessionTest::registrationShape()
     QCOMPARE(inputs.size(), 26);
     QVERIFY(fit->descriptor->inputs == inputs);
 
-    // Twenty-two outputs: the seventeen measurements of the state, the four
-    // accuracies (clause 33 of the specification of 1001-1065), and the
-    // diagnostics, as literals.
+    // Thirty-four outputs: the seventeen measurements of the state, the four
+    // accuracies (clause 33 of the specification of 1001-1065), the twelve
+    // entries of the position and velocity covariance blocks (item 1701), and
+    // the diagnostics, as literals.
     QList<DependencyKey> outputs;
     for (const char *name : {"_time", "north", "east", "down", "velN", "velE", "velD", "accN", "accE", "accD",
                              "roll", "pitch", "yaw", "qx", "qy", "qz", "qw",
-                             "headingAcc", "tiltAcc", "accHAcc", "accDAcc"})
+                             "headingAcc", "tiltAcc", "accHAcc", "accDAcc",
+                             "posCovNN", "posCovNE", "posCovND", "posCovEE", "posCovED", "posCovDD",
+                             "velCovNN", "velCovNE", "velCovND", "velCovEE", "velCovED", "velCovDD"})
         outputs.append(fusionKey(QString::fromLatin1(name)));
     outputs.append(DependencyKey::attribute(kDiagnostics));
-    QCOMPARE(outputs.size(), 22);
+    QCOMPARE(outputs.size(), 34);
     QVERIFY(fit->descriptor->outputs == outputs);
     QStringList measurements;
     for (const Fusion::FitOutputChannel &channel : Fusion::fitOutputChannels(Fusion::Result()))
@@ -305,8 +308,9 @@ void FusionSessionTest::registrationShape()
                                  CalcInput::attribute("_TIME_FIT_B")}));
     QVERIFY(systemTime->descriptor->outputs == QList<DependencyKey>({fusionKey("_system_time")}));
 
-    // Only the fit declares a result version: its kernel's algorithm string
-    QCOMPARE(fit->descriptor->resultVersion, QStringLiteral("batch-temperature-bias-v9"));
+    // Only the fit declares a result version: its kernel's algorithm string,
+    // v10 since the fit publishes the covariance blocks (item 1702)
+    QCOMPARE(fit->descriptor->resultVersion, QStringLiteral("batch-temperature-bias-v10"));
     QVERIFY(accH->descriptor->resultVersion.isEmpty());
     QVERIFY(systemTime->descriptor->resultVersion.isEmpty());
 
@@ -522,10 +526,10 @@ void FusionSessionTest::readsNeverRunTheFit()
     const SessionData session = fixtureSession(QStringLiteral("coarse_linear"));
     CalculationEngine &engine = session.calculationEngine();
     const QList<DependencyKey> names = fusionNames();
-    QCOMPARE(names.size(), 27);
+    QCOMPARE(names.size(), 39);
 
     int runsAfterFirstRound = -1;
-    const int strides[] = {4, 7, 8};        // coprime with 27: every name, scrambled
+    const int strides[] = {4, 7, 8};        // coprime with 39: every name, scrambled
     for (int round = 0; round < 3; ++round) {
         for (int i = 0; i < names.size(); ++i) {
             const DependencyKey &name = names.at((i * strides[round] + round * 3) % names.size());
@@ -584,7 +588,7 @@ void FusionSessionTest::requestRunsOnceAndPublishesTogether()
         QVERIFY(outcome.invalidated.contains(name));
     QVERIFY(engine.resultDetail(kFit).isEmpty());
 
-    // All twenty-one, aligned, and the golden's
+    // All thirty-three, aligned, and the golden's
     const qsizetype length = fusion(session, QStringLiteral("_time")).size();
     QVERIFY(length > 0);
     for (const QString &name : fusionMeasurementNames())
@@ -1171,7 +1175,7 @@ void FusionSessionTest::restoredFitIsIndistinguishable()
     const std::optional<StoredCalculationResult> snapshot = engineA.exportResult(kFit);
     QVERIFY(snapshot.has_value());
     QCOMPARE(snapshot->calculationId, kFit);
-    QCOMPARE(snapshot->resultVersion, QStringLiteral("batch-temperature-bias-v9"));
+    QCOMPARE(snapshot->resultVersion, QStringLiteral("batch-temperature-bias-v10"));
     const QJsonObject diagnostics = QJsonDocument::fromJson(
         snapshot->bundle.attributeValue(kDiagnostics).toString().toUtf8()).object();
     QCOMPARE(diagnostics.value(QStringLiteral("algorithm")).toString(), snapshot->resultVersion);

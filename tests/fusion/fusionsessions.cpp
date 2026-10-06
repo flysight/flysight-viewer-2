@@ -249,7 +249,13 @@ SessionData syntheticFitSession(const QString &sessionId, const QHash<QString, Q
         {QStringLiteral("qx"), QString()}, {QStringLiteral("qy"), QString()},
         {QStringLiteral("qz"), QString()}, {QStringLiteral("qw"), QString()},
         {QStringLiteral("headingAcc"), QStringLiteral("deg")}, {QStringLiteral("tiltAcc"), QStringLiteral("deg")},
-        {QStringLiteral("accHAcc"), QStringLiteral("m/s^2")}, {QStringLiteral("accDAcc"), QStringLiteral("m/s^2")}};
+        {QStringLiteral("accHAcc"), QStringLiteral("m/s^2")}, {QStringLiteral("accDAcc"), QStringLiteral("m/s^2")},
+        {QStringLiteral("posCovNN"), QStringLiteral("m^2")}, {QStringLiteral("posCovNE"), QStringLiteral("m^2")},
+        {QStringLiteral("posCovND"), QStringLiteral("m^2")}, {QStringLiteral("posCovEE"), QStringLiteral("m^2")},
+        {QStringLiteral("posCovED"), QStringLiteral("m^2")}, {QStringLiteral("posCovDD"), QStringLiteral("m^2")},
+        {QStringLiteral("velCovNN"), QStringLiteral("m^2/s^2")}, {QStringLiteral("velCovNE"), QStringLiteral("m^2/s^2")},
+        {QStringLiteral("velCovND"), QStringLiteral("m^2/s^2")}, {QStringLiteral("velCovEE"), QStringLiteral("m^2/s^2")},
+        {QStringLiteral("velCovED"), QStringLiteral("m^2/s^2")}, {QStringLiteral("velCovDD"), QStringLiteral("m^2/s^2")}};
     Q_ASSERT(units.size() == fusionMeasurementNames().size());
 
     SessionData session;
@@ -270,7 +276,11 @@ QStringList fusionMeasurementNames()
         QStringLiteral("accN"), QStringLiteral("accE"), QStringLiteral("accD"),
         QStringLiteral("roll"), QStringLiteral("pitch"), QStringLiteral("yaw"),
         QStringLiteral("qx"), QStringLiteral("qy"), QStringLiteral("qz"), QStringLiteral("qw"),
-        QStringLiteral("headingAcc"), QStringLiteral("tiltAcc"), QStringLiteral("accHAcc"), QStringLiteral("accDAcc")
+        QStringLiteral("headingAcc"), QStringLiteral("tiltAcc"), QStringLiteral("accHAcc"), QStringLiteral("accDAcc"),
+        QStringLiteral("posCovNN"), QStringLiteral("posCovNE"), QStringLiteral("posCovND"),
+        QStringLiteral("posCovEE"), QStringLiteral("posCovED"), QStringLiteral("posCovDD"),
+        QStringLiteral("velCovNN"), QStringLiteral("velCovNE"), QStringLiteral("velCovND"),
+        QStringLiteral("velCovEE"), QStringLiteral("velCovED"), QStringLiteral("velCovDD")
     };
 }
 

@@ -74,7 +74,7 @@ bool allArraysEmpty(const Fusion::Result &result)
 
 /// Empty when every channel of `result` matches the golden, else the first
 /// channel's difference. Every channel is compared even after a difference,
-/// so that the statistics in the log always cover all twenty-one.
+/// so that the statistics in the log always cover all thirty-three.
 QString channelsDifference(const Fusion::Result &result, const FusionGolden &golden,
                            ParityStatistics *statistics = nullptr)
 {
@@ -232,6 +232,14 @@ void FusionGoldenTest::comparatorHoldsItsBounds()
         for (const char *name : {"accHAcc", "accDAcc"}) {
             QVERIFY2(samplesPass(QString::fromLatin1(name), 9e-8, 0.0), name);
             QVERIFY2(!samplesPass(QString::fromLatin1(name), 2e-7, 0.0), name);
+        }
+        // The twelve covariance entries take the default floor in their own
+        // units, m^2 and m^2/s^2 (Decision 2 of the fused accuracies' first
+        // phase; fusiongolden.h says why): every position and velocity column.
+        QCOMPARE(fusionChannelNames().size(), 33);
+        for (const QString &name : fusionChannelNames().mid(21)) {
+            QVERIFY2(samplesPass(name, 9e-8, 0.0), qPrintable(name));
+            QVERIFY2(!samplesPass(name, 2e-7, 0.0), qPrintable(name));
         }
         for (const char *key : {"acc_sigma", "gyro_sigma", "max_widening"}) {
             QVERIFY2(jsonPasses(key, 1.0 + 1.5e-7, 1.0), key);
@@ -426,7 +434,7 @@ void FusionGoldenTest::channelsWriterIsTheInverseOfTheLoader()
     for (const QString &name : kSuccessFixtures) {
         const FusionGolden golden = loadFusionGolden(name);
         Fusion::Result result;
-        // The twenty-one arrays through the field order fusionChannel() defines
+        // The thirty-three arrays through the field order fusionChannel() defines
         // (the object is not const; only the accessor's view of it is).
         for (const QString &channel : fusionChannelNames())
             const_cast<QVector<double> &>(fusionChannel(result, channel)) = golden.channels.value(channel);

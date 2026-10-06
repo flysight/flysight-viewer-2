@@ -10,7 +10,7 @@
 // the kernel the channels the registered calculation would hand it
 // (Fusion::channelsFrom, the one assembly), and prints the fit's diagnostics
 // JSON on standard output. Progress texts and the outcome go to standard
-// error; --csv writes the output channels (the twenty-one, or the seventeen
+// error; --csv writes the output channels (the thirty-three, or the seventeen
 // of the state when the accuracy is absent); --dump-inputs writes the
 // effective input channels the fit was given. Built in the fusion-tests block
 // of tests/CMakeLists.txt, not installed; run by hand with the Qt,
@@ -91,7 +91,7 @@ const char kUsage[] =
     "\n"
     "Options:\n"
     "  --csv <path>          write the output channels as CSV (Succeeded only): the\n"
-    "                        twenty-one, or the seventeen without the accuracy\n"
+    "                        thirty-three, or the seventeen without the accuracy\n"
     "  --dump-inputs <path>  write the effective input channels the fit is given\n"
     "  -h, --help            this text\n"
     "\n"
@@ -212,8 +212,9 @@ QByteArray inputDump(const SessionData &session)
 
 /// --csv: the derived header line, then one line per output sample with the
 /// channels of Fusion::fitOutputChannels() whose arrays are not empty: all
-/// twenty-one on a normal success, the seventeen of the state when the
-/// covariance could not be computed (the four accuracies are then absent). A
+/// thirty-three on a normal success, the seventeen of the state when the
+/// covariance could not be computed (the four accuracies and the twelve
+/// covariance entries are then absent). A
 /// plain CSV, not a FlySight file: no $ prefixes, no units line. Empty (with
 /// `error` set) when the channels written do not share one length, which the
 /// kernel's contract rules out for a Succeeded result.

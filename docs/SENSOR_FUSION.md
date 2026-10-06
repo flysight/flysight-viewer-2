@@ -74,8 +74,12 @@ document describes what is computed, from what, and how far to trust it.
   and the IMU kept running (in the aircraft during the climb, say), the
   fusion plots draw through: every IMU sample inside the hole has its fused
   state, carried by the IMU from the fix before the hole to the fix after it,
-  and its four accuracies. The uncertainty of the position and velocity grows
-  through the hole and collapses at the next fix; the heading, tilt and
+  and its four accuracies. The step chain's own uncertainty grows through the
+  hole and collapses at the next fix; the composed velocity uncertainty,
+  before the widening, grows inside the hole and returns at the next fix,
+  while the composed position uncertainty follows the fixes' own across the
+  hole (section 4, Position and velocity, which says how the widening of the
+  published figures can move them either way); the heading, tilt and
   acceleration accuracies are bounded by terms of the whole fit (how well the
   heading is determined, the bias priors) and grow through a hole only where
   those allow, as they do on the reference recording of section 8. Over a
@@ -585,8 +589,9 @@ section 8), but not step by step. Where the corrections are negligible, in
 steady flight, the published acceleration is the rotated reading. It has no
 added low-pass filtering and is not a derivative of the GNSS velocity.
 
-**Accuracy.** Every published sample carries four accuracies: heading,
-tilt, horizontal and vertical acceleration (Outputs, below).
+**Accuracy.** Every published sample carries four accuracies, heading,
+tilt, horizontal and vertical acceleration, and the position and velocity
+blocks of its covariance (Outputs, below).
 The accuracy is one standard deviation from the covariance of the converged solution under the documented model, widened where the residuals exceed what the model allows.
 It is first order: the fit's covariance is that of the linearized system at
 the solution.
@@ -625,7 +630,7 @@ everything else to rounding (1e4 rad 8e-9, 1e6 rad 8e-5), a stronger one
 moves a determined heading more (100 rad, 5e-4 at the cap). The step fails
 only when the factorization cannot be completed: linearization or elimination
 raises an error, a block is not finite, or a fix's or the globals' variance
-is not positive. The four channels are then absent, the diagnostics'
+is not positive. The sixteen accuracy channels are then absent, the diagnostics'
 `accuracy` says so with the text `covariance unavailable: the factorization
 of the converged graph failed`, and nothing else of the fit changes. Memory
 exhaustion is never such a failure.
@@ -662,10 +667,17 @@ The sum is the law of total variance: given `z_k`, the state at an interior
 edge depends only on the interval's step chain, so the two terms are
 independent. `Sigma_j` is in the tangent of the forward state, which to first
 order in the correction, a small one, is the published state's. A sample on a
-fix has `P_0 = 0` and `Psi_0 = I`: the fix's own marginal. Only the attitude
-rows of `J_j` are formed, which is all the accuracies read: the attitude's
+fix has `P_0 = 0` and `Psi_0 = I`: the fix's own marginal. The attitude,
+position and velocity rows of `J_j` are formed: the attitude's rows give its
 covariance and its cross-covariance with the accelerometer's bias and scale
-factors.
+factors, which the four accuracies read, and the position's and velocity's
+rows, formed apart, give the position block and the velocity block of
+`Sigma_j` (their cross block is not kept). The tangent of the forward state
+holds the attitude, the position and the velocity in the body frame, so each
+block is turned into the navigation frame with the published attitude `R` as
+`R Sigma R^T`; on a fix the position block is the fix's translation block so
+turned, and the velocity block is `V(k)`'s own, which `N` took into the body
+and `R` takes back to NED.
 
 *Attitude.* With `R` the published attitude, perturbed on the right
 (`R Exp(phi)`, `phi` in the body frame), the attitude's covariance in the
@@ -708,6 +720,27 @@ nodes, that is, the step corrections `c` (whose uncertainty is what the
 per-sample noise stands for) and the linear interpolation of the readings
 between samples.
 
+*Position and velocity.* The position (m^2) and velocity (m^2/s^2) blocks
+in the navigation frame (north, east, down) are published as they are
+composed, their upper triangles, widened (below); a scalar accuracy derived
+from them is a calculation of its own and applies no widening. Inside a hole
+in the fixes the step chain's covariance `P_j` grows across the hole's
+interval and collapses at the next fix, where the chain starts again from the
+fitted state; its share of `Sigma_j`, the chain's covariance given both ends
+`C_j`, is zero at both fixes and largest inside the hole. The four
+accuracies, bounded by the globals' terms, do not grow there. The composed
+velocity covariance, before the widening, grows inside the hole and returns
+at the next fix. The composed position covariance need not: where the hole's
+one IMU factor ties the two fix marginals to within the step chain's
+covariance, the position variance follows the fixes' own marginals across
+the hole (on `bridged_hole` it rises from one fix's level to the other's, the
+two fixes' marginals differing by 0.055 m^2 against the step chain's `P_j` of
+at most 1.8e-5 m^2). The published blocks
+carry the per-window widening as well, which changes from sample to sample
+across a hole as fixes enter and leave the window and can move them either
+way, so the growth is stated of the composition and the published figures
+are recorded beside it (section 8).
+
 *Widening.* The covariance is a statement of the model, and where the
 residuals exceed what the model allows the accuracy widens. For a sample at
 time `t` the window is the fixes within 2.5 s of `t`, and at least the two
@@ -718,7 +751,9 @@ its fixes (the priors are not the window's), divided by its redundancy,
 its states). That is the a-posteriori variance factor of the window, one in
 expectation when every sigma is right; the sample's four accuracies are
 multiplied by its square root where it exceeds one, the heading and the tilt
-before their cap. It assumes every sigma is off by the same ratio, and it
+before their cap, and the entries of its position and velocity blocks by that
+root's square, once, so that a standard deviation taken from them is widened
+as the four are. It assumes every sigma is off by the same ratio, and it
 never tightens: where the residuals are below the model, as on the committed
 fixtures, whose noise is below the accuracies they state, it is one. The
 window's end states take some information from outside it, so at the model
@@ -741,11 +776,24 @@ many samples were widened, and how many headings are at the cap (below).
 | `tiltAcc` | tilt accuracy, degrees: of the attitude about the two horizontal axes together, widened, at most 180 |
 | `accHAcc` | horizontal acceleration accuracy, m/s^2: along the published horizontal acceleration, or its larger principal value where that acceleration is smaller than it, widened |
 | `accDAcc` | vertical acceleration accuracy, m/s^2, widened |
+| `posCovNN` | position covariance, north-north, m^2: the variance of `north`, widened by the square of the widening (Accuracy, above) |
+| `posCovNE` | position covariance, north-east, m^2, widened likewise |
+| `posCovND` | position covariance, north-down, m^2, widened likewise |
+| `posCovEE` | position covariance, east-east, m^2: the variance of `east`, widened likewise |
+| `posCovED` | position covariance, east-down, m^2, widened likewise |
+| `posCovDD` | position covariance, down-down, m^2: the variance of `down`, widened likewise |
+| `velCovNN` | velocity covariance, north-north, m^2/s^2: the variance of `velN`, widened likewise |
+| `velCovNE` | velocity covariance, north-east, m^2/s^2, widened likewise |
+| `velCovND` | velocity covariance, north-down, m^2/s^2, widened likewise |
+| `velCovEE` | velocity covariance, east-east, m^2/s^2: the variance of `velE`, widened likewise |
+| `velCovED` | velocity covariance, east-down, m^2/s^2, widened likewise |
+| `velCovDD` | velocity covariance, down-down, m^2/s^2: the variance of `velD`, widened likewise |
 
 All arrays align with `_time`, which is the IMU's samples whatever the GNSS
 rate, also when the GNSS rate is above the IMU's: no fix time is added and
-nothing is resampled. The four accuracies are absent, like any unavailable
-value, when the covariance step failed; the other seventeen are then as ever. Roll, pitch and yaw unwrap successive angles by
+nothing is resampled. The sixteen accuracy channels, the four accuracies and
+the twelve covariance entries, are absent, like any unavailable value, when
+the covariance step failed; the other seventeen are then as ever. Roll, pitch and yaw unwrap successive angles by
 adding or subtracting 360 degrees, with the same rule as the GNSS course
 (`src/calculations/anglehelper.h`). They keep the first angle and accumulate
 turns over the whole fit, independently of zoom or markers. That removes
@@ -780,7 +828,7 @@ frame is that of [LOCAL_COORDINATES.md](LOCAL_COORDINATES.md), section 7).
 The attribute `_FUSION_DIAGNOSTICS` is compact JSON. After a successful fit
 its top-level keys are, grouped:
 
-- *identity and audit*: `algorithm` (`batch-temperature-bias-v9`), `input`
+- *identity and audit*: `algorithm` (`batch-temperature-bias-v10`), `input`
   (the input audit: `epoch_utc_s`, `imu_count`, `gnss_count`, `origin_index`,
   `origin`, `height_method`, `time_method`, and `gnss_holes`, one object per
   hole in the fitted window's GNSS fixes, in time order, each with `start_s`,
@@ -1012,9 +1060,12 @@ successive fixes with one preintegrated IMU factor whose covariance grows with
 the interval; across a hole it is the same factor over more samples, and the
 fixes around the hole carry their stated sigmas like every fix. Every IMU
 sample inside the hole is published with its state and its accuracies; the
-position and velocity of the sample covariance grow through the hole and
-collapse at the next fix (section 2 says what the four published accuracies
-do), and `input.gnss_holes` of the diagnostics (section 4) names each hole.
+step chain's covariance `P_j` grows through the hole and collapses at the
+next fix, the composed velocity covariance grows inside the hole and returns
+at the next fix, and the composed position covariance follows the fixes' own
+marginals across it (section 4, Position and velocity; section 2 says what
+the four published accuracies do), and `input.gnss_holes` of the diagnostics
+(section 4) names each hole.
 Below the cap the spacing of the fixes is not checked: the IMU gap rule above
 is the one disconnection.
 
@@ -1064,7 +1115,7 @@ no job.
 twenty-six inputs. *Compute* runs on the application's one worker thread, which
 has a 64 MiB stack for GTSAM's deep elimination trees, and sees the captured
 inputs and nothing else: no session, no engine, no preference. *Publish*, back
-on the main thread, installs all twenty-two outputs at once; ordinary
+on the main thread, installs all thirty-four outputs at once; ordinary
 invalidation then repaints the plots, the legend and everything else that had
 read "unavailable". The engine itself refuses a result whose inputs changed
 while it was being computed, and it knows that at the moment of the change: the
@@ -1112,10 +1163,12 @@ not.
 **Stored results.** The fit's result is stored when it is published: a
 success, a rejection or a solver failure. It is restored bit for bit when the
 recording is loaded, and the restored result is indistinguishable from a fresh
-one; the record holds the four accuracies with the state (none when the
+one; the record holds the sixteen accuracy channels with the state (none when the
 covariance could not be computed). Its code stamp is the algorithm string of the diagnostics
-(`batch-temperature-bias-v9` since the scale factors are released from the
-held solution, section 4, which moves every fit's numbers; `v8` having been
+(`batch-temperature-bias-v10` since the fit publishes the position and
+velocity covariance blocks, which changes the record's shape and no number of
+the fit; `v9` having been the scale factors released from the held solution,
+section 4, which moved every fit's numbers, `v8`
 the hole in the GNSS fixes fitted across instead of rejected, which also
 carried the continuity rule's threshold of 1.5 median IMU intervals that the
 kernel adopted under the compatibility marker's bump to 3, `v7` the lattice
@@ -1176,7 +1229,7 @@ demonstrated by tests, all labelled `fusion`:
 | `tst_fusion_derived` | what is derived from the outputs, without the solver: the outputs stored as data, elevation, the speeds and the track accelerations held to exact known answers, the speeds and the track accelerations equal to the GNSS ones on the same samples, and each derived value waiting on the fit and never starting it; the orientation vocabulary (24 pairs, each a proper rotation, the attribute's choices), heading, pitch and roll held to hand-built known answers, finite with pitch at +90 or -90 where the forward axis is exactly vertical, side mounts, a GNSS track and a course reference that change nothing, and the fit's own angles for the device frame, an invalid or changed orientation without a fit, and the Orientation column's display, edit and bulk edit |
 | `tst_fusion_jobs` | the real fit through the executor: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result and kept, for an unloaded session, through an altitude marker added at run time or at the next start |
 | `tst_fusion_rows` | the demand layer with the fifteen real fusion plots, end to end: each explicit-backed by the fit alone, one fit for all fifteen, and one for the Total speed row alone; fits started and dropped by what is checked and visible, with no gesture; progress and failures as each fit ends; the four accuracy plots merely uncomputed before the fit, not produced for a rejected recording (listed once, with its reason) and not applicable without IMU data |
-| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), a rejection and a solver failure listed among the recordings that could not be computed, with their reasons, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a logbook column over roll, and one over each of the four accuracies and over Total speed, filled for recordings that are not loaded (the value the loaded recording reads, bit for bit, shown by the unit converter for the row's type and labelled with the row's name), and nothing fitted again after a restart; a stored success without the accuracy restored with the other seventeen channels and failing nothing |
+| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), a rejection and a solver failure listed among the recordings that could not be computed, with their reasons, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, a record under the previous algorithm string deleted at load and the fit run once more, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a logbook column over roll, and one over each of the four accuracies and over Total speed, filled for recordings that are not loaded (the value the loaded recording reads, bit for bit, shown by the unit converter for the row's type and labelled with the row's name), and nothing fitted again after a restart; a stored success without the accuracy restored with the other seventeen channels and failing nothing |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit on a recording written as `TRACK.CSV` / `SENSOR.CSV`, against a direct kernel run and against the application's own import path |
 
 The goldens live in `tests/data/fusion/`. In exact mode
@@ -1302,8 +1355,14 @@ integration edge of `coarse_maneuver` (568 states, the fixes, biases, slope
 and scale factors free, one-step scaled IMU factors, the fit's priors), at
 every tenth sample through the library's joint marginals: the attitude's
 navigation-frame covariance within 9.1e-8, heading 4.5e-8, tilt 3.7e-8,
-`accHAcc` 4.1e-8 and `accDAcc` 3.9e-9; a sample on a fix (150 of
-`sacc_anchor`'s) has the fix's own marginal bit for bit. On `coarse_linear`,
+`accHAcc` 2.8e-8 and `accDAcc` 2.6e-9, the position block (against the
+translation block of `X(j)`, turned by the solution's attitude) within 3.0e-9
+and the velocity block (against `V(j)`'s, in NED) within 1.4e-7; a sample on
+a fix (150 of `sacc_anchor`'s) has the fix's own marginal, the attitude bit
+for bit, the position block within 1.4e-18 and the velocity block within
+2.9e-13. The published position and velocity blocks are symmetric to 3.2e-16
+(relative, Frobenius) and their diagonal is non-negative on every fit; their
+variances on the fixtures are 0.005-0.48 m^2 and 6.5e-6-0.033 m^2/s^2. On `coarse_linear`,
 whose heading is undetermined, every heading reads 180 and tilt and the
 acceleration accuracies agree with those of a graph whose first heading is
 fixed to 1e-9 rad within 2.3e-10, 2.2e-9 and 3.8e-12. The widening is one on
@@ -1312,8 +1371,9 @@ its GNSS accuracies at its noise's standard deviations the median factor is
 1.010 and the largest widening 1.098; with them understated three times over
 20 s, the samples inside widen by 2.79 to 3.14 (median 2.97) and those more
 than 2.5 s away by at most 1.095, and the published accuracies there are
-those widenings times the unwidened ones, heading and tilt capped, bit for bit
-(1258 of the 1495 samples widened). With every GNSS accuracy doubled no
+those widenings times the unwidened ones, heading and tilt capped, and the
+twelve covariance entries the squares of those widenings times the unwidened
+blocks, bit for bit (1258 of the 1495 samples widened). With every GNSS accuracy doubled no
 published accuracy of the four fits falls: the smallest ratio is 1.0285
 (`stationary_spin`'s `accDAcc`), and `coarse_linear`'s headings stay at the
 cap. The published accuracies of the fixtures: `coarse_linear` tilt
@@ -1323,13 +1383,27 @@ degrees, the sigma of a direction the data barely determine; `motion_start`
 0.4-5.4 degrees and tilt 1.76 degrees. On `bridged_hole`, at the 260 samples
 inside its 2.6 s hole, the error against the generating trajectory is at most
 0.05 of the heading accuracy, 0.16 of the tilt accuracy, 0.56 of `accHAcc`
-along the published horizontal acceleration and 0.75 of `accDAcc`. The
-position and velocity of the sample covariance of the hole's interval (its
-step chain's, read through the reconstruction's per-interval seam) grow from
-zero at the fix before the hole to 4.2 mm and 3.1 mm/s (as sigmas) at the last
-sample inside it, against 0.12 mm and 0.72 mm/s at the end of the interval
-before the hole, and start again from 0.0095 mm and 0.078 mm/s at the first
-sample after the next fix. The four published accuracies inside the hole do
+along the published horizontal acceleration and 0.75 of `accDAcc`; the
+position error is at most 0.16 of the published standard deviation of its
+axis (north 0.14, east 0.16, down 0.019) and the velocity error at most 0.17
+(north 0.11, east 0.077, down 0.17). The step chain's covariance `P_j` of the
+hole's interval (read through the reconstruction's per-interval seam) grows
+from zero at the fix before the hole, never falling from one edge to the
+next, to 4.2 mm and 3.1 mm/s (as sigmas) at the last sample inside it,
+against 0.12 mm and 0.72 mm/s at the end of the interval before the hole,
+and starts again from 0.0095 mm and 0.078 mm/s at the first sample after the
+next fix. The composed blocks the fit publishes,
+as sigmas (the root of each block's trace), before the widening: the velocity
+0.194 m/s beside the fix before the hole, 0.236 m/s at its largest inside it
+(1.22 s into the hole) and 0.192 m/s beside the fix after it, so it grows
+through the hole and returns at the next fix; the position 0.854 m beside the
+fix before the hole, 0.8854 m at its largest inside it (the last sample,
+2.59 s in) and 0.8859 m beside the fix after it, so it rises across the hole
+from the one fix's level to the other's and is not larger inside the hole
+than beside the fix after it: the two fixes' own position marginals differ by
+far more (0.055 m^2 in variance) than the step chain's `P_j` reaches (1.8e-5 m^2). The
+published (widened) figures at the same samples are the same, every widening
+on this fixture being one. The four published accuracies inside the hole do
 not grow: heading and tilt move from their values beside the fix before the
 hole towards those beside the fix after it, and the two acceleration
 accuracies dip below both, following the manoeuvre: heading 14.96-16.32
@@ -1337,7 +1411,11 @@ degrees against 16.32 before and 14.95 after, tilt 3.79-6.92 against 3.78
 and 6.94, `accHAcc` 0.044-0.103 against 0.088 and 0.103, `accDAcc`
 0.039-0.065 against 0.056 and 0.065 m/s^2. Inside the hole they are
 therefore not held at or above their values beside it; the growth through a
-hole is in the sample covariance's position and velocity.
+hole is the step chain's, `P_j` above, whose share given both ends (`C_j`)
+the published blocks (the twelve covariance entries) carry; the published
+velocity block grows inside the hole, and the published position block
+follows the fixes' marginals across the hole, as above, and is not larger
+inside it than beside the fix after it.
 
 **Validating the model.** What follows is the normalized RMS of each factor
 kind, the root mean squared whitened residual per scalar component (section
@@ -1409,7 +1487,7 @@ deg/s, against a corpus median of 0.030 deg/s: the model is below the corpus.
 **The staged scale on the reference recordings.** The two stages of the
 full fit (section 4) on the four recordings of the first table, measured on
 2026-10-03 by M56 of [tests/README.md](../tests/README.md), section 12.13,
-under the current algorithm string, `v9`, at the default configuration. Each stage's
+under `v9` (whose numbers `v10` keeps: it changed only what is published), at the default configuration. Each stage's
 passes, iterations and objective are the release's account in the
 diagnostics; the reported fit is the released stage's when it was kept and the
 held stage's otherwise, and its largest scale departure is that fit's:
@@ -1539,8 +1617,8 @@ on-demand derivation, so a recording without `SCHEMA_VER` gets the legacy gyro
 correction), with the diagnostics JSON on standard output and the progress
 texts on standard error. Command line: `fusion_runner [options] <folder>` or
 `fusion_runner [options] <TRACK.CSV> <SENSOR.CSV>`, with `--csv <path>`
-(the output channels as CSV, on success: the twenty-one, or the seventeen of
-the state when the accuracy is absent) and
+(the output channels as CSV, on success: the thirty-three, or the seventeen
+of the state when the accuracy is absent) and
 `--dump-inputs <path>` (the effective input channels the fit was given). Exit
 codes: 0 Succeeded, 1 Rejected, 2 SolverFailed, 3 the files could not be
 imported, 4 an output file could not be written, 5 an internal error, 64 a

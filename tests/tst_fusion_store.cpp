@@ -5,15 +5,18 @@
 // for a visible session, the demand layer starts the fit; restoring is not
 // requesting.
 //
-//  - a fit survives unload and restart bit for bit (the twenty-one channels,
-//    the derived values, the diagnostics and the detail equal the fresh
-//    publish, and the goldens), with no job, no run and nothing to compute;
+//  - a fit survives unload and restart bit for bit (the thirty-three
+//    channels, the derived values, the diagnostics and the detail equal the
+//    fresh publish, and the goldens), with no job, no run and nothing to
+//    compute;
 //  - a rejection and a solver failure come back listed with their reason; a
-//    success whose accuracy was not computed comes back without the four
-//    accuracies and with the rest, and fails nothing;
+//    success whose accuracy was not computed comes back without the sixteen
+//    accuracy channels (the four accuracies and the twelve covariance
+//    entries) and with the rest, and fails nothing;
 //  - validity follows the inputs (an unrelated edit keeps the record, a
 //    dependency edit or an IMU merge drops it), what the fit looked up and the
-//    code stamps; nothing unrelated to what it reached (altitude markers,
+//    code stamps (a record under the previous algorithm string is deleted at
+//    load and the fit runs once more); nothing unrelated to what it reached (altitude markers,
 //    other registrations, the descent-pause preference, another plug-in set)
 //    makes it stale, in memory or across a restart; a registry change that
 //    changes what a name it looked up resolves to drops it and its record at
@@ -97,14 +100,19 @@ constexpr int kFitTimeoutMs = 120000;
 const QString kSolverFailureReason =
     QStringLiteral("Batch fusion did not converge (iteration limit); sensor fusion unavailable");
 const QString kSolverFailureDiagnostics = QStringLiteral(
-    "{\"algorithm\":\"batch-temperature-bias-v9\","
+    "{\"algorithm\":\"batch-temperature-bias-v10\","
     "\"failure\":\"Batch fusion did not converge (iteration limit); sensor fusion unavailable\"}");
 
-// The four accuracy channels, which a success whose covariance could not be
-// computed leaves unset, and the failure its diagnostics' accuracy object
-// then carries (src/fusion/fitcovariance.cpp).
+// The sixteen accuracy channels, the four accuracies and the twelve entries of
+// the position and velocity covariance blocks, which a success whose
+// covariance could not be computed leaves unset, and the failure its
+// diagnostics' accuracy object then carries (src/fusion/fitcovariance.cpp).
 const QStringList kAccuracies = {QStringLiteral("headingAcc"), QStringLiteral("tiltAcc"),
-                                 QStringLiteral("accHAcc"), QStringLiteral("accDAcc")};
+                                 QStringLiteral("accHAcc"), QStringLiteral("accDAcc"),
+                                 QStringLiteral("posCovNN"), QStringLiteral("posCovNE"), QStringLiteral("posCovND"),
+                                 QStringLiteral("posCovEE"), QStringLiteral("posCovED"), QStringLiteral("posCovDD"),
+                                 QStringLiteral("velCovNN"), QStringLiteral("velCovNE"), QStringLiteral("velCovND"),
+                                 QStringLiteral("velCovEE"), QStringLiteral("velCovED"), QStringLiteral("velCovDD")};
 const QString kCovarianceFailure =
     QStringLiteral("covariance unavailable: the factorization of the converged graph failed");
 
@@ -206,6 +214,7 @@ private slots:
     void mergeIntoUnloadedSession();
     void codeStampChangeDropsRecordOnLoad_data();
     void codeStampChangeDropsRecordOnLoad();
+    void recordUnderPreviousAlgorithmIsComputedAgainOnce();
     void storedFitSurvivesUnrelatedChanges_data();
     void storedFitSurvivesUnrelatedChanges();
     void runtimeRegistryChangeDropsFitAndRecord();
@@ -880,12 +889,13 @@ void FusionStoreTest::restoredSolverFailureShowsBadge()
 }
 
 // A success whose covariance could not be computed: the fit publishes the
-// seventeen channels of the state and leaves the four accuracies unset, with
+// seventeen channels of the state and leaves the sixteen accuracy channels
+// (the four accuracies and the twelve covariance entries) unset, with
 // no reason (a reason on a successful record would read as a failure of every
 // value of the fit), and the diagnostics' accuracy object says why. The
 // registered fit cannot be driven there from a session fixture, so a real
 // record is rewritten to that shape, with the leaves and fingerprint of a real
-// publish. Restored, the four are absent, the rest is the golden's, the Roll
+// publish. Restored, the sixteen are absent, the rest is the golden's, the Roll
 // row is done with nothing failed, and nothing is fitted again. (What an
 // accuracy plot checked over such a record lists is the demand layer's
 // generic entry, and is not asserted here.)
@@ -942,7 +952,7 @@ void FusionStoreTest::restoredFitWithoutAccuracyDrawsTheRest()
     const Quiet quiet(*m_queue);
     QCOMPARE(unloadAndReload("a"), QString());
 
-    // The four are absent; the seventeen are the golden's, bit for bit
+    // The sixteen are absent; the seventeen are the golden's, bit for bit
     for (const QString &name : kAccuracies) {
         QVERIFY2(fusion("a", name).isEmpty(), qPrintable(name));
         QVERIFY2(!isAvailable("a", fusionKey(name)), qPrintable(name));
@@ -1265,6 +1275,69 @@ void FusionStoreTest::codeStampChangeDropsRecordOnLoad()
     QCOMPARE(engine("a").runCount(kFit), 0);
     // The stale record is gone, so the checked plot wants the fit again
     QCOMPARE(offeredFitIsDroppedByUncheck("a", queued, jobs), QString());
+}
+
+// Item 1702: a record written under the previous algorithm string,
+// batch-temperature-bias-v9, which a logbook holds for every fit made before
+// the fit published its position and velocity covariance blocks, is stale at
+// load: deleted, and the fit, still wanted by the checked Roll row, is
+// computed again once, as any computation is, and stored anew under the
+// current string with the golden's channels. codeStampChangeDropsRecordOnLoad
+// stops at the offer (it unchecks the row); this test lets the fit run.
+void FusionStoreTest::recordUnderPreviousAlgorithmIsComputedAgainOnce()
+{
+    const auto restoreCapacity = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    });
+
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"))}), QString());
+    show({"a"});
+    check(QStringLiteral("bodyRoll"));      // the demand layer starts the fit
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QVERIFY(waitForIdle(*m_model));
+    const QString path = recordPath("a");
+    QVERIFY(QFileInfo(path).isFile());
+    show({"a"}, false);
+    session("a");
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
+    QVERIFY(!isLoaded("a"));
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+
+    QCOMPARE(rewriteRecord("a", [](CalculationRecord &r) {
+                 r.result.resultVersion = QStringLiteral("batch-temperature-bias-v9");
+             }), QString());
+    m_model->resetStoredResultStats();
+
+    // Shown again: the record is stale and deleted at load, the row still
+    // wants the fit
+    show({"a"});
+    QVERIFY(isLoaded("a"));
+    QVERIFY(!QFileInfo::exists(path));
+    QCOMPARE(stats().staleRecordsDeleted, 1);
+    QVERIFY2(availableIn("a").isEmpty(), qPrintable(availableIn("a")));
+
+    // One fit, run to its end, and a new record under the current string
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 2);
+    QCOMPARE(m_queue->model()->record(1).state, JobState::Succeeded);
+    QCOMPARE(engine("a").runCount(kFit), 1);
+    QCOMPARE(engine("a").resultStatus(kFit), std::optional<ResultStatus>(ResultStatus::Ok));
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(QFileInfo(path).isFile());
+    const CalculationRecordRead read = LogbookManager::instance().readCalculationRecord(QStringLiteral("a"), kFit);
+    QVERIFY2(read.status == CalculationRecordStatus::Ok, qPrintable(read.error));
+    QCOMPARE(read.record->result.resultVersion, QString::fromLatin1(Fusion::Algorithm));
+    const QString difference = goldenDifference(session("a"), loadFusionGolden(QStringLiteral("coarse_linear")));
+    QVERIFY2(difference.isEmpty(), qPrintable(difference));
+
+    // Further spins run nothing
+    const Quiet quiet(*m_queue);
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(nothingToShow());
+    QCOMPARE(engine("a").runCount(kFit), 1);
+    QVERIFY(quiet.holds());
 }
 
 void FusionStoreTest::storedFitSurvivesUnrelatedChanges_data()

@@ -315,6 +315,28 @@ void fillOutputChannels(const ImuRateTrajectory &trajectory, const std::vector<d
         result.accHAcc.append(w*trajectory.accHAcc[i]);
         result.accDAcc.append(w*trajectory.accDAcc[i]);
     }
+
+    // The position and velocity covariance blocks, widened once by the
+    // square, so that a standard deviation taken from them carries w itself:
+    // a calculation derived from them applies no widening of its own.
+    QVector<double> *const position[] = { &result.posCovNN, &result.posCovNE, &result.posCovND,
+                                          &result.posCovEE, &result.posCovED, &result.posCovDD };
+    QVector<double> *const velocity[] = { &result.velCovNN, &result.velCovNE, &result.velCovND,
+                                          &result.velCovEE, &result.velCovED, &result.velCovDD };
+    // The upper triangle, row by row: NN, NE, ND, EE, ED, DD.
+    const int rows[] = { 0, 0, 0, 1, 1, 2 }, columns[] = { 0, 1, 2, 1, 2, 2 };
+    for (int e = 0; e < 6; ++e) {
+        position[e]->reserve(count);
+        velocity[e]->reserve(count);
+    }
+    for (size_t i = 0; i < trajectory.time.size(); ++i) {
+        const double square = widenings[i]*widenings[i];
+        const gtsam::Matrix3 &p = trajectory.positionCovariance[i], &v = trajectory.velocityCovariance[i];
+        for (int e = 0; e < 6; ++e) {
+            position[e]->append(square*p(rows[e], columns[e]));
+            velocity[e]->append(square*v(rows[e], columns[e]));
+        }
+    }
 }
 
 QJsonObject successDiagnostics(const PreparedInput &prepared, const InitializerAccount &account,

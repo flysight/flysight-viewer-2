@@ -25,9 +25,11 @@ struct FusionGolden {
     QHash<QString, QVector<double>> channels;   ///< by column name (successes only), exact bits
 };
 
-/// The twenty-one output channels in golden column order: "_time", "north",
+/// The thirty-three output channels in golden column order: "_time", "north",
 /// ..., "qw", then the four accuracies "headingAcc", "tiltAcc", "accHAcc",
-/// "accDAcc".
+/// "accDAcc", then the twelve covariance entries "posCovNN", "posCovNE",
+/// "posCovND", "posCovEE", "posCovED", "posCovDD", "velCovNN", "velCovNE",
+/// "velCovND", "velCovEE", "velCovED", "velCovDD".
 const QStringList &fusionChannelNames();
 
 /// The array of `result` that the column `name` of fusionChannelNames() holds.
@@ -35,7 +37,7 @@ const QVector<double> &fusionChannel(const FlySight::Fusion::Result &result, con
 
 /// The channels file of `result`, byte for byte as loadFusionGolden() reads it
 /// back: the v1 header line, the column line, then one line per output sample
-/// with the twenty-one channels of fusionChannelNames() as toHexBits(), space
+/// with the thirty-three channels of fusionChannelNames() as toHexBits(), space
 /// separated; LF line endings, a final LF, nothing else. The writer used by
 /// fusion_golden_capture; channelsWriterIsTheInverseOfTheLoader
 /// (tst_fusion_golden) holds it to the committed files.
@@ -78,8 +80,14 @@ bool exactParityRequested();
 /// (a unit quaternion component moves by at most half the angle), and so does
 /// headingAcc, which on such a recording is the sigma of that flat direction;
 /// tiltAcc takes the degree floor and accHAcc and accDAcc the default. The
-/// relative term serves the large numbers (positions in metres, unwrapped
-/// angles, costs). False for a NaN on either side.
+/// twelve covariance entries (posCovNN ... velCovDD, m^2 and m^2/s^2) take the
+/// default too, by name: a variance is not a sigma, but a sigma s that moves
+/// by the floor moves its variance by 2 s times it, and on the fixtures the
+/// position variances are of order 0.1 m^2 and the velocity variances of order
+/// 5e-3 m^2/s^2, so that shift stays below the floor and the relative term
+/// covers the rest; comparatorHoldsItsBounds pins it. The relative term
+/// serves the large numbers (positions in metres, unwrapped angles, costs).
+/// False for a NaN on either side.
 constexpr double kPortableAbsolute = 1e-7;
 constexpr double kPortableAbsoluteDegrees = kPortableAbsolute * 57.295779513082323;
 constexpr double kPortableAbsoluteHeading = 4e-6;

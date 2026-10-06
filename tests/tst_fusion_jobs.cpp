@@ -299,11 +299,12 @@ void FusionJobsTest::jobPublishesAllOutputsTogether()
                                                loadFusionGolden(QStringLiteral("coarse_maneuver")).diagnostics);
     QVERIFY2(jsonDifference.isEmpty(), qPrintable(jsonDifference));
 
-    // All twenty-two outputs of the fit together: the twenty-one measurements
-    // (the state and the four accuracies), aligned, and the diagnostics
+    // All thirty-four outputs of the fit together: the thirty-three
+    // measurements (the state, the four accuracies and the twelve covariance
+    // entries), aligned, and the diagnostics
     const qsizetype length = fusion("a", "_time").size();
     QVERIFY(length > 0);
-    QCOMPARE(fusionMeasurementNames().size(), 21);
+    QCOMPARE(fusionMeasurementNames().size(), 33);
     for (const QString &name : fusionMeasurementNames())
         QCOMPARE(fusion("a", name).size(), length);
     QVERIFY(session("a").getAttribute(kDiagnostics).isValid());
@@ -619,7 +620,7 @@ void FusionJobsTest::columnOnFusionOutputIsCachedFromRecord()
     QVERIFY(isNear(cachedRoll().value(kRollColumn).toDouble(), liveRoll));
     QVERIFY(indexValue("a", column).isDouble());
     QVERIFY(isNear(indexValue("a", column).toDouble(), liveRoll));
-    const QJsonObject stamp{{QStringLiteral("builtin.fusion.fit"), QStringLiteral("batch-temperature-bias-v9")}};
+    const QJsonObject stamp{{QStringLiteral("builtin.fusion.fit"), QStringLiteral("batch-temperature-bias-v10")}};
     QCOMPARE(indexRecordStamp("a"), QJsonValue(stamp));
     QVERIFY(showsNumber());
 
@@ -857,7 +858,7 @@ void FusionJobsTest::workerRefillsColumnFromStoredFit()
     QVERIFY(waitForIdle(*m_model));
     const QVariant fitted = std::as_const(*m_model).rowAt(m_model->getSessionRow("a")).cachedValues.value(kRollColumn);
     QCOMPARE(fitted.typeId(), int(QMetaType::Double));
-    const QJsonObject stamp{{kFit, QStringLiteral("batch-temperature-bias-v9")}};
+    const QJsonObject stamp{{kFit, QStringLiteral("batch-temperature-bias-v10")}};
     QCOMPARE(indexRecordStamp("a"), QJsonValue(stamp));
     const QString recordPath = TestEnvironment::instance().cacheDir() + QLatin1Char('/')
         + sessionFileStem("a") + QStringLiteral(".builtin%2Efusion%2Efit.fvresult");

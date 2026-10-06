@@ -39,11 +39,13 @@ using AttributeReader   = std::function<QVariant(const QString &key)>;
 /// drift apart.
 Channels channelsFrom(const MeasurementReader &measurement, const AttributeReader &attribute);
 
-/// The twenty-one measurement outputs of the fit in publication order, each
+/// The thirty-three measurement outputs of the fit in publication order, each
 /// named as it is published under the Fusion sensor (_time, north, ..., qw,
-/// then headingAcc, tiltAcc, accHAcc, accDAcc), with the array of `result`
-/// that holds it (empty arrays unless Succeeded; the four accuracies also
-/// empty for a success whose covariance failed).
+/// then headingAcc, tiltAcc, accHAcc, accDAcc, then posCovNN, posCovNE,
+/// posCovND, posCovEE, posCovED, posCovDD, velCovNN, velCovNE, velCovND,
+/// velCovEE, velCovED, velCovDD), with the array of `result` that holds it
+/// (empty arrays unless Succeeded; the sixteen after qw also empty for a
+/// success whose covariance failed).
 struct FitOutputChannel {
     QString name;
     QVector<double> samples;
@@ -60,15 +62,20 @@ QList<FitOutputChannel> fitOutputChannels(const Result &result);
 ///    that states a key reads its own value.
 ///  - builtin.fusion.fit (explicit, title "Sensor fusion"): the batch GNSS/IMU
 ///    fit of fusion.h as one calculation of the twenty-six inputs of
-///    fitInputs(), with twenty-two outputs published
+///    fitInputs(), with thirty-four outputs published
 ///    together: the measurements Fusion/_time, north, east, down, velN, velE,
 ///    velD, accN, accE, accD, roll, pitch, yaw, qx, qy, qz, qw, the
-///    accuracies headingAcc, tiltAcc (deg), accHAcc, accDAcc (m/s^2), and the
-///    attribute _FUSION_DIAGNOSTICS. A recording the model rejects and a
-///    solver failure are results: the measurements are unavailable, the
+///    accuracies headingAcc, tiltAcc (deg), accHAcc, accDAcc (m/s^2), the
+///    upper triangles of the position and velocity covariance blocks in the
+///    navigation frame, widened by the square of the widening factor,
+///    posCovNN, posCovNE, posCovND, posCovEE, posCovED, posCovDD (m^2) and
+///    velCovNN, velCovNE, velCovND, velCovEE, velCovED, velCovDD (m^2/s^2),
+///    and the attribute _FUSION_DIAGNOSTICS. A recording the model rejects
+///    and a solver failure are results: the measurements are unavailable, the
 ///    diagnostics attribute and the result's reason say why. A success whose
 ///    covariance could not be computed publishes the seventeen and leaves the
-///    four accuracies unavailable; its diagnostics say why.
+///    sixteen accuracy channels (the four accuracies and the twelve
+///    covariance entries) unavailable; its diagnostics say why.
 ///  - builtin.fusion.velH (on demand): Fusion/velH, the horizontal magnitude
 ///    of velN and velE, as GNSS/velH is of the GNSS components.
 ///  - builtin.fusion.vel (on demand): Fusion/vel, the magnitude of velH and

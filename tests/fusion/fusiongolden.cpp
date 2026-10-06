@@ -9,6 +9,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QRegularExpression>
 #include <QSet>
 
 namespace FlySightTest {
@@ -208,7 +209,11 @@ const QStringList &fusionChannelNames()
         QStringLiteral("accN"), QStringLiteral("accE"), QStringLiteral("accD"),
         QStringLiteral("roll"), QStringLiteral("pitch"), QStringLiteral("yaw"),
         QStringLiteral("qx"), QStringLiteral("qy"), QStringLiteral("qz"), QStringLiteral("qw"),
-        QStringLiteral("headingAcc"), QStringLiteral("tiltAcc"), QStringLiteral("accHAcc"), QStringLiteral("accDAcc")};
+        QStringLiteral("headingAcc"), QStringLiteral("tiltAcc"), QStringLiteral("accHAcc"), QStringLiteral("accDAcc"),
+        QStringLiteral("posCovNN"), QStringLiteral("posCovNE"), QStringLiteral("posCovND"),
+        QStringLiteral("posCovEE"), QStringLiteral("posCovED"), QStringLiteral("posCovDD"),
+        QStringLiteral("velCovNN"), QStringLiteral("velCovNE"), QStringLiteral("velCovND"),
+        QStringLiteral("velCovEE"), QStringLiteral("velCovED"), QStringLiteral("velCovDD")};
     return names;
 }
 
@@ -217,7 +222,9 @@ const QVector<double> &fusionChannel(const FlySight::Fusion::Result &r, const QS
     const QVector<double> *arrays[] = {
         &r.time, &r.north, &r.east, &r.down, &r.velN, &r.velE, &r.velD, &r.accN, &r.accE, &r.accD,
         &r.roll, &r.pitch, &r.yaw, &r.qx, &r.qy, &r.qz, &r.qw,
-        &r.headingAcc, &r.tiltAcc, &r.accHAcc, &r.accDAcc};
+        &r.headingAcc, &r.tiltAcc, &r.accHAcc, &r.accDAcc,
+        &r.posCovNN, &r.posCovNE, &r.posCovND, &r.posCovEE, &r.posCovED, &r.posCovDD,
+        &r.velCovNN, &r.velCovNE, &r.velCovND, &r.velCovEE, &r.velCovED, &r.velCovDD};
     const qsizetype index = fusionChannelNames().indexOf(name);
     if (index < 0)
         qFatal("Fusion golden: no channel named %s", qPrintable(name));
@@ -300,6 +307,11 @@ double portableFloor(const QString &channelOrKey)
         return kPortableAbsoluteQuaternion;
     const bool degrees = channelOrKey == QStringLiteral("roll") || channelOrKey == QStringLiteral("pitch")
                          || channelOrKey == QStringLiteral("tiltAcc") || channelOrKey.endsWith(QStringLiteral("_deg"));
+    // The twelve covariance entries take the default by choice, not by falling
+    // through to it: the header says why a variance takes a sigma's floor.
+    static const QRegularExpression covariance(QStringLiteral("^(pos|vel)Cov(NN|NE|ND|EE|ED|DD)$"));
+    if (covariance.match(channelOrKey).hasMatch())
+        return kPortableAbsolute;
     return degrees ? kPortableAbsoluteDegrees : kPortableAbsolute;
 }
 

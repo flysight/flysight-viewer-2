@@ -14,8 +14,9 @@
 #include "fusion/trajectoryreconstruction.h"
 
 // Internal to the fusion library: from the fitted trajectory to what run()
-// returns, i.e. the twenty-one channels (the seventeen of the state, and the
-// four accuracies when the covariance was computed) and the diagnostics JSON.
+// returns, i.e. the thirty-three channels (the seventeen of the state, and,
+// when the covariance was computed, the four accuracies and the twelve entries
+// of the position and velocity covariance blocks) and the diagnostics JSON.
 
 namespace FlySight::Fusion::Detail {
 
@@ -27,7 +28,10 @@ namespace FlySight::Fusion::Detail {
 /// carries the accuracies, also the four accuracy arrays, each sample's
 /// multiplied by its widening in `widenings` (aligned with the time):
 /// headingAcc = min(180, w x heading), tiltAcc = min(180, w x tilt), accHAcc
-/// and accDAcc times w, uncapped. Otherwise those four stay empty.
+/// and accDAcc times w, uncapped; and the twelve covariance arrays, the upper
+/// triangles of the trajectory's position and velocity blocks, each entry
+/// times w x w, uncapped: the one place the blocks are widened. Otherwise
+/// those sixteen stay empty: thirty-three arrays filled, or the seventeen.
 void fillOutputChannels(const ImuRateTrajectory &trajectory, const std::vector<double> &widenings, double epoch,
                         Result &result);
 

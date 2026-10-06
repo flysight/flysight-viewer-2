@@ -19,8 +19,10 @@
 // channels the fit publishes as that pass and their time axis, the accuracy
 // (the covariance step against the joint marginals and the heading check,
 // its composition at the samples against a graph with a state at every edge,
-// the accuracy formulas on known answers, the widening, the undetermined
-// heading, a failed covariance step, the scale sigmas), the GNSS holes (a
+// the attitude, position and velocity blocks among it, the accuracy formulas
+// on known answers, the widening, by the factor and by its square, the
+// undetermined heading, a failed covariance step, the scale sigmas), the
+// GNSS holes (a
 // hole bridged, the longest one bridged and a longer one rejected, the
 // cutter's sparse pieces, the holes in the input audit)), with the literal expectations of the reference's own
 // self-test (sensor-fusion-clean-port, tests/fusion_regression.cpp), and the
@@ -308,12 +310,12 @@ bool rejectedWith(const Fusion::Result &result, const QString &reason)
 const QStringList kCompletedPassFailureKeys{QStringLiteral("algorithm"), QStringLiteral("failure"),
                                             QStringLiteral("quality"), QStringLiteral("stopping")};
 
+/// Every one of the thirty-three arrays of `result` is empty.
 bool allChannelsEmpty(const Fusion::Result &result)
 {
-    return result.time.isEmpty() && result.north.isEmpty() && result.accN.isEmpty()
-        && result.roll.isEmpty() && result.yaw.isEmpty() && result.qw.isEmpty()
-        && result.headingAcc.isEmpty() && result.tiltAcc.isEmpty() && result.accHAcc.isEmpty()
-        && result.accDAcc.isEmpty();
+    const QStringList &names = fusionChannelNames();
+    return std::all_of(names.begin(), names.end(),
+                       [&](const QString &name) { return fusionChannel(result, name).isEmpty(); });
 }
 
 /// A golden fixture or one of the initializer's recordings, by name.
@@ -2336,7 +2338,7 @@ void FusionKernelTest::biasSettledByCostTest()
     const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
     QCOMPARE(seed.value("converged").toBool(false), true);
     QCOMPARE(seed.value("iterations").toInt(), int(trace.history.size()));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v9"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v10"));
 
     // The quality metrics recomputed from the residuals array: 28 states, so
     // 28 position and velocity factors of dimension 3 and 27 IMU factors of
@@ -2582,7 +2584,7 @@ void FusionKernelTest::failureDiagnosticsShape()
         const QJsonObject diagnostics = failureDiagnostics(QString::fromLatin1(failure.failure), &s);
         QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure"),
                                                   QStringLiteral("stopping")}));
-        QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v9"));
+        QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v10"));
         QCOMPARE(diagnostics.value("failure").toString(), QString::fromLatin1(failure.failure));
         const QJsonObject stopping = diagnostics.value("stopping").toObject();
         QCOMPARE(stopping.value("rule").toString(), QString::fromLatin1(failure.rule));
@@ -3364,7 +3366,7 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     const Fusion::Result result = runPipeline(toChannels(f), t, Checkpoint(), &trace);
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
     const QJsonObject diagnostics = diagnosticsOf(result);
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v9"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v10"));
     const QJsonObject gyroBias = diagnostics.value("model").toObject().value("gyro_bias").toObject();
     const QJsonArray b1 = gyroBias.value("b1_rad_s_per_degc").toArray();
     QCOMPARE(b1.size(), 3);
@@ -4232,7 +4234,7 @@ void FusionKernelTest::releaseFailureFallsBackToTheHeldFit()
         widenings.push_back(widening(factor));
     Fusion::Result expected;
     fillOutputChannels(out, widenings, prepareInput(channels).epoch, expected);
-    QCOMPARE(fusionChannelNames().size(), 21);
+    QCOMPARE(fusionChannelNames().size(), 33);
     for (const QString &channel : fusionChannelNames()) {
         QVERIFY(!fusionChannel(run.result, channel).isEmpty());
         QVERIFY2(sameBitsEverywhere(fusionChannel(run.result, channel), fusionChannel(expected, channel)),
@@ -4837,12 +4839,13 @@ void FusionKernelTest::imuRateIsWhatTheFitPublishes_data()
 void FusionKernelTest::imuRateIsWhatTheFitPublishes()
 {
     // Spec sections 6, 7 and 9: what the pipeline publishes is the IMU-rate
-    // pass on the fit, bit for bit, not something like it. The twenty-one
+    // pass on the fit, bit for bit, not something like it. The thirty-three
     // channels of runPipeline() against reconstructAtImuRate() on this
     // executable's own fit of the fixture (fixtureFit(), the pipeline's
     // stages in its order), with its own covariance step composed and its
     // own widening, through fillOutputChannels() (clause 33 of the
-    // specification of 1001-1065: the four accuracies are the fit's), and the
+    // specification of 1001-1065: the four accuracies are the fit's; item
+    // 1701: so are the twelve covariance entries, widened by w x w), and the
     // four numbers of the diagnostics against the pass's summaries. Section 6
     // and decision 12: the published time axis is the fixture's IMU samples in
     // [first fix, last fix) of the window, in the number imu_outputs says.
@@ -4862,7 +4865,7 @@ void FusionKernelTest::imuRateIsWhatTheFitPublishes()
         widenings.push_back(widening(factor));
     Fusion::Result expected;
     fillOutputChannels(out, widenings, prepareInput(channels).epoch, expected);
-    QCOMPARE(fusionChannelNames().size(), 21);
+    QCOMPARE(fusionChannelNames().size(), 33);
     for (const QString &channel : fusionChannelNames()) {
         QVERIFY(!fusionChannel(result, channel).isEmpty());
         QVERIFY2(sameBitsEverywhere(fusionChannel(result, channel), fusionChannel(expected, channel)),
@@ -5084,6 +5087,11 @@ void FusionKernelTest::sampleCovarianceMatchesTheEdgeGraph()
     // convergence: the attitude covariance in the navigation frame and the
     // four unwidened accuracies, against the library's joint marginals of
     // (X(j), V(j), B(0), S(0)) at the sample's edge, within 1e-5 relative.
+    // Item 1701 adds the position and velocity blocks: the kernel's
+    // navigation-frame position block against X(j)'s translation block, which
+    // the Pose3 tangent holds in the body frame and the solution's attitude
+    // turns, and its velocity block against V(j)'s, which the graph holds in
+    // NED and nothing turns; within 1e-5 relative (Frobenius).
     using gtsam::imuBias::ConstantBias;
     const QString name = QStringLiteral("coarse_maneuver");
     const WindowFit &f = fixtureFit(name);
@@ -5136,8 +5144,10 @@ void FusionKernelTest::sampleCovarianceMatchesTheEdgeGraph()
     const ConstantBias solvedBias = solution.at<ConstantBias>(B(0));
     const Vector3 solvedScale = solution.at<Vector6>(S(0)).head<3>();
 
-    double worst[5] = {0, 0, 0, 0, 0};
+    double worst[7] = {0, 0, 0, 0, 0, 0, 0};
     size_t compared = 0;
+    QCOMPARE(out.positionCovariance.size(), out.time.size());
+    QCOMPARE(out.velocityCovariance.size(), out.time.size());
     for (size_t i = 0; i < out.time.size(); i += 10, ++compared) {
         const size_t j = edgeAt(w, out.time[i]);
         const size_t sample = size_t(std::lower_bound(f.window.imuTime.begin(), f.window.imuTime.end(), out.time[i])
@@ -5157,13 +5167,17 @@ void FusionKernelTest::sampleCovarianceMatchesTheEdgeGraph()
         const AccelerationAccuracy expectedAcceleration = accelerationAccuracy(
             reference, attitude, f.window.force[sample], solvedScale, solvedBias.accelerometer(), out.acceleration[i],
             f.tuning.noise.accelerometer.sampleSigma);
-        const double differences[5] = {
+        const gtsam::Matrix3 position = attitude.matrix()*joint.block<3, 3>(3, 3)*attitude.matrix().transpose();
+        const gtsam::Matrix3 velocity = joint.block<3, 3>(6, 6);
+        const double differences[7] = {
             frobeniusRelative(out.attitudeCovariance[i], navigation),
             std::abs(out.headingAcc[i]-expectedAttitude.heading)/expectedAttitude.heading,
             std::abs(out.tiltAcc[i]-expectedAttitude.tilt)/expectedAttitude.tilt,
             std::abs(out.accHAcc[i]-expectedAcceleration.horizontal)/expectedAcceleration.horizontal,
-            std::abs(out.accDAcc[i]-expectedAcceleration.vertical)/expectedAcceleration.vertical};
-        for (int d = 0; d < 5; ++d) {
+            std::abs(out.accDAcc[i]-expectedAcceleration.vertical)/expectedAcceleration.vertical,
+            frobeniusRelative(out.positionCovariance[i], position),
+            frobeniusRelative(out.velocityCovariance[i], velocity)};
+        for (int d = 0; d < 7; ++d) {
             worst[d] = std::max(worst[d], differences[d]);
             QVERIFY2(differences[d] <= 1e-5, qPrintable(QStringLiteral("sample %1, quantity %2: %3").arg(i).arg(d)
                                                             .arg(differences[d])));
@@ -5171,7 +5185,8 @@ void FusionKernelTest::sampleCovarianceMatchesTheEdgeGraph()
     }
     qInfo() << name << ": the composition against the edge graph (" << w.edges.size() << "states," << iterations
             << "iterations) at" << compared << "samples: attitude covariance" << worst[0] << ", heading" << worst[1]
-            << ", tilt" << worst[2] << ", accHAcc" << worst[3] << ", accDAcc" << worst[4];
+            << ", tilt" << worst[2] << ", accHAcc" << worst[3] << ", accDAcc" << worst[4] << ", position block"
+            << worst[5] << ", velocity block" << worst[6];
     QVERIFY(compared >= 50);
 }
 
@@ -5182,7 +5197,9 @@ void FusionKernelTest::sampleOnAFixHasTheFixMarginal()
     // sample) has P_0 = 0 and Psi_0 = I: its attitude covariance is the fix's
     // marginal from the covariance step, rotated into the navigation frame,
     // and its accuracies are the formulas' on the fix's joint of attitude,
-    // accelerometer bias and scale, to rounding.
+    // accelerometer bias and scale, to rounding. Item 1701: its position block
+    // is the fix's translation block turned by the fix's attitude, and its
+    // velocity block the fix's V(k) block as it stands (NED), within 1e-9.
     const QString name = QStringLiteral("sacc_anchor");
     const WindowFit &f = fixtureFit(name);
     QVERIFY(f.fit.converged);
@@ -5191,7 +5208,7 @@ void FusionKernelTest::sampleOnAFixHasTheFixMarginal()
     const ImuRateTrajectory &out = fixtureTrajectory(name);
     const Vector3 accBias = f.fit.values.at<gtsam::imuBias::ConstantBias>(B(0)).accelerometer();
     size_t onFixes = 0;
-    double worst = 0;
+    double worst = 0, worstPosition = 0, worstVelocity = 0;
     for (size_t i = 0; i < out.time.size(); ++i) {
         const auto fix = std::lower_bound(f.window.gnssTime.begin(), f.window.gnssTime.end(), out.time[i]);
         if (fix == f.window.gnssTime.end() || *fix != out.time[i])
@@ -5213,9 +5230,16 @@ void FusionKernelTest::sampleOnAFixHasTheFixMarginal()
         QVERIFY2(withinRelative(out.tiltAcc[i], expectedAttitude.tilt, 1e-9), qPrintable(QString::number(k)));
         QVERIFY2(withinRelative(out.accHAcc[i], expectedAcceleration.horizontal, 1e-9), qPrintable(QString::number(k)));
         QVERIFY2(withinRelative(out.accDAcc[i], expectedAcceleration.vertical, 1e-9), qPrintable(QString::number(k)));
+        const double position = frobeniusRelative(
+            out.positionCovariance[i], attitude.matrix()*c.node[k].block<3, 3>(3, 3)*attitude.matrix().transpose());
+        const double velocity = frobeniusRelative(out.velocityCovariance[i], c.node[k].block<3, 3>(6, 6));
+        worstPosition = std::max(worstPosition, position);
+        worstVelocity = std::max(worstVelocity, velocity);
+        QVERIFY2(position <= 1e-9, qPrintable(QStringLiteral("fix %1, position: %2").arg(k).arg(position)));
+        QVERIFY2(velocity <= 1e-9, qPrintable(QStringLiteral("fix %1, velocity: %2").arg(k).arg(velocity)));
     }
     qInfo() << name << ":" << onFixes << "samples on a fix; largest relative difference of the attitude covariance"
-            << worst;
+            << worst << ", of the position block" << worstPosition << ", of the velocity block" << worstVelocity;
     QVERIFY(onFixes > 100);
 }
 
@@ -5445,7 +5469,10 @@ void FusionKernelTest::wideningGrowsWithAnUnderstatedSigma()
     // the reconstruction (reconstructAtImuRate() with the fit's covariance)
     // and headingAcc and tiltAcc equal to min(180, w times it), bit for bit,
     // with w > 1 at hundreds of samples; and `accuracy.max_widening` and
-    // `widened_samples` are those widenings' largest and count.
+    // `widened_samples` are those widenings' largest and count. Item 1701:
+    // the twelve covariance entries are w x w times the reconstruction's
+    // unwidened blocks (the upper triangles of positionCovariance and
+    // velocityCovariance), bit for bit: widened once, by the square.
     const Fusion::Channels channels = scaleRecordingAtItsNoise(3);
     const double epoch = prepareInput(channels).epoch;
     const WindowFit f = fitOfChannels(channels);
@@ -5496,6 +5523,19 @@ void FusionKernelTest::wideningGrowsWithAnUnderstatedSigma()
     QVERIFY(sameBitsEverywhere(result.tiltAcc, tiltAcc));
     QVERIFY(sameBitsEverywhere(result.accHAcc, accHAcc));
     QVERIFY(sameBitsEverywhere(result.accDAcc, accDAcc));
+    const QStringList covarianceNames = fusionChannelNames().mid(21);
+    QCOMPARE(covarianceNames.size(), 12);
+    const int rows[] = {0, 0, 0, 1, 1, 2}, columns[] = {0, 1, 2, 1, 2, 2};
+    for (int e = 0; e < 12; ++e) {
+        const std::vector<gtsam::Matrix3> &blocks = e < 6 ? out.positionCovariance : out.velocityCovariance;
+        QVector<double> expected;
+        for (size_t i = 0; i < times.size(); ++i) {
+            const double w = widening(factors[i]);
+            expected.append(w*w*blocks[i](rows[e%6], columns[e%6]));
+        }
+        QVERIFY2(sameBitsEverywhere(fusionChannel(result, covarianceNames[e]), expected),
+                 qPrintable(covarianceNames[e]));
+    }
     const QJsonObject accuracy = diagnosticsOf(result).value("accuracy").toObject();
     QVERIFY(accuracy.value("computed").toBool(false));
     QVERIFY(accuracy.value("max_widening").toDouble() == largest);
@@ -5511,7 +5551,12 @@ void FusionKernelTest::accuraciesFiniteAndPositive()
     // Clause 56, criterion 6: every sample's four published accuracies are
     // finite and positive on the four success fixtures and the four
     // initializer recordings of the specification; heading and tilt lie in
-    // (0, 180].
+    // (0, 180]. Item 1701: on the same fits the twelve covariance entries
+    // have the length of `time`, every entry finite and the six diagonal
+    // ones (NN, EE, DD of each block) non-negative; and the kernel's
+    // unwidened blocks (fixtureTrajectory()) equal their transposes to
+    // rounding, the turning into the navigation frame (R Sigma R^T) not being
+    // symmetric to the last bit.
     for (const char *name : {"coarse_linear", "coarse_maneuver", "stationary_spin", "bridged_hole", "motion_start",
                              "rest_throughout", "sacc_anchor", "drifting_bias"}) {
         const Fusion::Result &result = publishedRun(QLatin1String(name));
@@ -5528,6 +5573,30 @@ void FusionKernelTest::accuraciesFiniteAndPositive()
             qInfo() << name << channel << ": from" << *std::min_element(values.begin(), values.end()) << "to"
                     << *std::max_element(values.begin(), values.end());
         }
+        for (const QString &channel : fusionChannelNames().mid(21)) {
+            const QVector<double> &values = fusionChannel(result, channel);
+            QCOMPARE(values.size(), result.time.size());
+            QVERIFY2(std::all_of(values.begin(), values.end(), [](double v) { return std::isfinite(v); }),
+                     qPrintable(QStringLiteral("%1 %2").arg(QLatin1String(name), channel)));
+            const bool diagonal = channel.endsWith(QStringLiteral("NN")) || channel.endsWith(QStringLiteral("EE"))
+                                  || channel.endsWith(QStringLiteral("DD"));
+            if (diagonal) {
+                QVERIFY2(std::all_of(values.begin(), values.end(), [](double v) { return v >= 0; }),
+                         qPrintable(QStringLiteral("%1 %2").arg(QLatin1String(name), channel)));
+            }
+            qInfo() << name << channel << ": from" << *std::min_element(values.begin(), values.end()) << "to"
+                    << *std::max_element(values.begin(), values.end());
+        }
+        const ImuRateTrajectory &out = fixtureTrajectory(QLatin1String(name));
+        QCOMPARE(out.positionCovariance.size(), out.time.size());
+        QCOMPARE(out.velocityCovariance.size(), out.time.size());
+        double asymmetry = 0;
+        for (const auto *blocks : {&out.positionCovariance, &out.velocityCovariance}) {
+            for (const gtsam::Matrix3 &block : *blocks)
+                asymmetry = std::max(asymmetry, (block-block.transpose()).norm()/block.norm());
+        }
+        qInfo() << name << ": the kernel's position and velocity blocks, largest relative asymmetry" << asymmetry;
+        QVERIFY2(asymmetry <= 1e-13, name);
     }
 }
 
@@ -5624,9 +5693,10 @@ void FusionKernelTest::covarianceFailureLeavesTheFitAsItIs()
     // thrown error: computed from a copy of the converged fit whose values
     // carry a NaN, it is not computed and has no block. Given to the
     // success assembly (assembleSuccess(), the pipeline's seam after the
-    // covariance step) with the real fit, it leaves the four accuracies
-    // empty (which the registration's publish() leaves unset, and of which
-    // the runner's --csv writes no column), says so in `accuracy`, nulls the
+    // covariance step) with the real fit, it leaves the four accuracies and
+    // the twelve covariance entries empty (which the registration's
+    // publish() leaves unset, and of which the runner's --csv writes no
+    // column), says so in `accuracy`, nulls the
     // scale sigmas, and leaves
     // the seventeen channels and every other diagnostics key bit-identical to
     // the published run (publishedRun(): the same assembly on the same fit
@@ -5653,7 +5723,8 @@ void FusionKernelTest::covarianceFailureLeavesTheFitAsItIs()
         QVERIFY2(sameBitsEverywhere(fusionChannel(without, channel), fusionChannel(computed, channel)),
                  qPrintable(channel));
     }
-    for (const QString &channel : kAccuracyChannels)
+    QCOMPARE(names.size(), 33);
+    for (const QString &channel : names.mid(17))
         QVERIFY2(fusionChannel(without, channel).isEmpty(), qPrintable(channel));
 
     QJsonObject a = diagnosticsOf(computed), b = diagnosticsOf(without);
@@ -5846,13 +5917,35 @@ void FusionKernelTest::bridgedHoleFollowsTheTruth()
     // the two fixes, not asserted.
     //
     // The growth through the hole is in the position and velocity of the
-    // sample covariance. Read through the reconstruction's per-interval seam
-    // (reconstructInterval()), P_j of the hole's interval, the step chain's
-    // covariance, is zero at the fix before the hole, never falls from one
-    // edge to the next, is largest among the interval's published samples at
-    // the last one inside the hole, ends at the IMU factor's own covariance,
-    // and collapses at the fix after the hole, where the next interval's chain
-    // starts again from the fitted state.
+    // sample covariance, which the fit now publishes, widened (item 1703):
+    // the twelve covariance entries. At every sample inside the hole each
+    // axis's position and velocity error against the generating trajectory
+    // (the integrals of that acceleration from v(0) = (20, -5, 3), p(0) = 0)
+    // lies within three published standard deviations of that axis
+    // (sqrt(posCovNN), ...), the largest ratios logged. The growth of the
+    // velocity is asserted on the composition before the widening (the
+    // kernel's velocityCovariance): its trace is larger at its largest sample
+    // inside the hole than at the samples beside the two fixes around it, and
+    // so falls back at the fix after the hole. The position is not asserted
+    // so, because it is not so: the hole's one IMU factor ties the two fix
+    // states to within the step chain's share (millimetres), so the composed
+    // position covariance follows the two fixes' own marginals across the
+    // hole, rising here from the one's level to the other's (they differ by
+    // 0.055 m^2 against the chain's 1.8e-5 m^2), and a weaker assertion
+    // ("above the fix before") would hold of any rising window. What is true
+    // of the position across the hole is the step chain's share, asserted
+    // below; the composed position traces are logged at the three samples.
+    // The published blocks carry w x w besides, and w is a per-window factor
+    // whose window changes from sample to sample across the hole: a percent
+    // of w is more than the composition's rise, so an assertion on the
+    // published traces would decide on the widening, not on the growth. They
+    // are logged at the same three samples. Read through the reconstruction's
+    // per-interval seam (reconstructInterval()), P_j of the hole's interval,
+    // the step chain's covariance, is zero at the fix before the hole, never
+    // falls from one edge to the next, is largest among the interval's
+    // published samples at the last one inside the hole, ends at the IMU
+    // factor's own covariance, and collapses at the fix after the hole, where
+    // the next interval's chain starts again from the fitted state.
     const QString name = QStringLiteral("bridged_hole");
     const Fusion::Result &result = publishedRun(name);
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
@@ -5898,6 +5991,73 @@ void FusionKernelTest::bridgedHoleFollowsTheTruth()
                 << (*channels[c])[before] << "before and" << (*channels[c])[after] << "after";
     }
 
+    // The position and the velocity against the generating trajectory, per
+    // axis (north, east, down), in units of the published standard deviation
+    // of that axis.
+    const QVector<double> *positionVariance[3] = {&result.posCovNN, &result.posCovEE, &result.posCovDD};
+    const QVector<double> *velocityVariance[3] = {&result.velCovNN, &result.velCovEE, &result.velCovDD};
+    double positionRatio[3] = {0, 0, 0}, velocityRatio[3] = {0, 0, 0};
+    for (const qsizetype i : inside) {
+        const double t = result.time[i]-1700000000.;
+        const Vector3 position(20*t+(.75*t*t-.2*t*t*t/3), -5*t+.4*t*t*t/3, 3*t+(-.3*t*t+t*t*t*t/120));
+        const Vector3 velocity(20+(1.5*t-.2*t*t), -5+.4*t*t, 3+(-.6*t+t*t*t/30));
+        const Vector3 positionError = Vector3(result.north[i], result.east[i], result.down[i])-position;
+        const Vector3 velocityError = Vector3(result.velN[i], result.velE[i], result.velD[i])-velocity;
+        for (int a = 0; a < 3; ++a) {
+            const double positionSigma = std::sqrt((*positionVariance[a])[i]);
+            const double velocitySigma = std::sqrt((*velocityVariance[a])[i]);
+            QVERIFY(std::isfinite(positionSigma) && positionSigma > 0);
+            QVERIFY(std::isfinite(velocitySigma) && velocitySigma > 0);
+            positionRatio[a] = std::max(positionRatio[a], std::abs(positionError(a))/positionSigma);
+            velocityRatio[a] = std::max(velocityRatio[a], std::abs(velocityError(a))/velocitySigma);
+        }
+    }
+    const double positionWorst = *std::max_element(positionRatio, positionRatio+3);
+    const double velocityWorst = *std::max_element(velocityRatio, velocityRatio+3);
+    qInfo() << "bridged_hole: inside the hole, largest position error / published sigma" << positionWorst << "(N"
+            << positionRatio[0] << ", E" << positionRatio[1] << ", D" << positionRatio[2]
+            << "), largest velocity error / published sigma" << velocityWorst << "(N" << velocityRatio[0] << ", E"
+            << velocityRatio[1] << ", D" << velocityRatio[2] << ")";
+
+    // The traces of the kernel's unwidened blocks beside the fix before the
+    // hole, at their largest inside it and beside the fix after it, and of
+    // the published blocks at the same three samples. The published run and
+    // fixtureTrajectory() are the same reconstruction of the same fit, sample
+    // for sample.
+    const ImuRateTrajectory &composed = fixtureTrajectory(name);
+    QCOMPARE(qsizetype(composed.time.size()), result.time.size());
+    QCOMPARE(composed.positionCovariance.size(), composed.time.size());
+    const auto composedTraces = [&](qsizetype i) {
+        return std::pair<double, double>{composed.positionCovariance[size_t(i)].trace(),
+                                         composed.velocityCovariance[size_t(i)].trace()};
+    };
+    const auto publishedTraces = [&](qsizetype i) {
+        return std::pair<double, double>{result.posCovNN[i]+result.posCovEE[i]+result.posCovDD[i],
+                                         result.velCovNN[i]+result.velCovEE[i]+result.velCovDD[i]};
+    };
+    qsizetype positionPeak = inside.front(), velocityPeak = inside.front();
+    for (const qsizetype i : inside) {
+        if (composedTraces(i).first > composedTraces(positionPeak).first)
+            positionPeak = i;
+        if (composedTraces(i).second > composedTraces(velocityPeak).second)
+            velocityPeak = i;
+    }
+    const auto [positionBeforeTrace, velocityBeforeTrace] = composedTraces(before);
+    const auto [positionAfterTrace, velocityAfterTrace] = composedTraces(after);
+    const double positionPeakTrace = composedTraces(positionPeak).first;
+    const double velocityPeakTrace = composedTraces(velocityPeak).second;
+    qInfo() << "bridged_hole: composed (unwidened) sigmas, the root of each block's trace: position"
+            << std::sqrt(positionBeforeTrace) << "m beside the fix before the hole," << std::sqrt(positionPeakTrace)
+            << "m at its largest inside (" << result.time[positionPeak]-epoch-hole.start << "s into the hole),"
+            << std::sqrt(positionAfterTrace) << "m beside the fix after it; velocity" << std::sqrt(velocityBeforeTrace)
+            << "," << std::sqrt(velocityPeakTrace) << "(" << result.time[velocityPeak]-epoch-hole.start << "s),"
+            << std::sqrt(velocityAfterTrace) << "m/s";
+    qInfo() << "bridged_hole: published (widened) sigmas at the same samples: position"
+            << std::sqrt(publishedTraces(before).first) << "," << std::sqrt(publishedTraces(positionPeak).first)
+            << "," << std::sqrt(publishedTraces(after).first) << "m; velocity"
+            << std::sqrt(publishedTraces(before).second) << "," << std::sqrt(publishedTraces(velocityPeak).second)
+            << "," << std::sqrt(publishedTraces(after).second) << "m/s";
+
     // The sample covariance of the hole's interval, k the fix before it, the
     // interval before it for comparison and the one after it for the
     // collapse. Measured before the assertions on the accuracies, so that
@@ -5932,6 +6092,9 @@ void FusionKernelTest::bridgedHoleFollowsTheTruth()
 
     for (int c = 0; c < 4; ++c)
         QVERIFY2(ratio[c] <= 3, qPrintable(kAccuracyChannels[c]));
+    QVERIFY(positionWorst < 3);
+    QVERIFY(velocityWorst < 3);
+    QVERIFY(velocityPeakTrace > velocityBeforeTrace && velocityPeakTrace > velocityAfterTrace);
     const auto [position0, velocity0] = positionVelocityTraces(sensitivity.covariance.front());
     QCOMPARE(position0, 0.);
     QCOMPARE(velocity0, 0.);
