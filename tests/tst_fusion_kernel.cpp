@@ -5916,29 +5916,31 @@ void FusionKernelTest::bridgedHoleFollowsTheTruth()
     // each channel's smallest and largest inside against the samples nearest
     // the two fixes, not asserted.
     //
-    // The growth through the hole is in the position and velocity of the
-    // sample covariance, which the fit now publishes, widened (item 1703):
-    // the twelve covariance entries. At every sample inside the hole each
-    // axis's position and velocity error against the generating trajectory
-    // (the integrals of that acceleration from v(0) = (20, -5, 3), p(0) = 0)
-    // lies within three published standard deviations of that axis
-    // (sqrt(posCovNN), ...), the largest ratios logged. The growth of the
-    // velocity is asserted on the composition before the widening (the
-    // kernel's velocityCovariance): its trace is larger at its largest sample
-    // inside the hole than at the samples beside the two fixes around it, and
-    // so falls back at the fix after the hole. The position is not asserted
-    // so, because it is not so: the hole's one IMU factor ties the two fix
-    // states to within the step chain's share (millimetres), so the composed
-    // position covariance follows the two fixes' own marginals across the
-    // hole, rising here from the one's level to the other's (they differ by
-    // 0.055 m^2 against the chain's 1.8e-5 m^2), and a weaker assertion
-    // ("above the fix before") would hold of any rising window. What is true
-    // of the position across the hole is the step chain's share, asserted
-    // below; the composed position traces are logged at the three samples.
-    // The published blocks carry w x w besides, and w is a per-window factor
-    // whose window changes from sample to sample across the hole: a percent
-    // of w is more than the composition's rise, so an assertion on the
-    // published traces would decide on the widening, not on the growth. They
+    // The fit publishes the position and velocity blocks of the sample
+    // covariance, widened (item 1703): the twelve covariance entries. At every
+    // sample inside the hole each axis's position and velocity error against
+    // the generating trajectory (the integrals of that acceleration from
+    // v(0) = (20, -5, 3), p(0) = 0) lies within three published standard
+    // deviations of that axis (sqrt(posCovNN), ...), the largest ratios
+    // logged. The composed velocity covariance grows inside the hole and
+    // returns at the next fix; asserted on the composition before the
+    // widening (the kernel's velocityCovariance), its trace is larger at its
+    // largest sample inside the hole than at the samples beside the two fixes
+    // around it. That growth is the propagated term's, J_j Sigma_z J_j^T (the
+    // fix states and the globals carried into the hole through the chain):
+    // the step chain's own share is millimetric (P_j at most 3.1 mm/s, about
+    // 1e-5 m^2/s^2, against a rise of about 0.018 m^2/s^2). The composed
+    // position covariance is not asserted to grow, because it does not: the
+    // hole's one IMU factor ties the two fix states to within the step
+    // chain's covariance (millimetres), so it follows the two fixes' own
+    // marginals across the hole, rising here from the one's level to the
+    // other's (they differ by 0.055 m^2 against the chain's 1.8e-5 m^2), and a
+    // weaker assertion ("above the fix before") would hold of any rising
+    // window. Its traces are logged at the three samples. The published
+    // blocks carry w x w besides, and w is a per-window factor whose window
+    // changes from sample to sample across the hole: a percent of w is more
+    // than the composition's rise, so an assertion on the published traces
+    // would decide on the widening, not on the growth. They
     // are logged at the same three samples. Read through the reconstruction's
     // per-interval seam (reconstructInterval()), P_j of the hole's interval,
     // the step chain's covariance, is zero at the fix before the hole, never
@@ -6058,10 +6060,10 @@ void FusionKernelTest::bridgedHoleFollowsTheTruth()
             << std::sqrt(publishedTraces(before).second) << "," << std::sqrt(publishedTraces(velocityPeak).second)
             << "," << std::sqrt(publishedTraces(after).second) << "m/s";
 
-    // The sample covariance of the hole's interval, k the fix before it, the
-    // interval before it for comparison and the one after it for the
-    // collapse. Measured before the assertions on the accuracies, so that
-    // the log holds both whatever fails.
+    // The step chain's covariance P_j of the hole's interval, k the fix
+    // before it, the interval before it for comparison and the one after it
+    // for the collapse. Measured before the assertions on the accuracies, so
+    // that the log holds both whatever fails.
     const WindowFit &f = fixtureFit(name);
     const auto fix = std::find(f.window.gnssTime.begin(), f.window.gnssTime.end(), hole.start);
     QVERIFY(fix != f.window.gnssTime.end());

@@ -151,7 +151,7 @@
 #             tests/README.md, appendix N. Item 244 is restated as amended.
 #             It is amended by the specification of 1401-1415: item 1313 is
 #             stated as amended. It is amended by the specification of
-#             1701-1717: item 1302 is stated as amended.
+#             1701-1717: items 1302 and 1307 are stated as amended.
 #   1401-1415 the scale factors as a refinement (the full fit in two stages,
 #             the scale factors held until the fit has converged and then
 #             released from that solution, the fallback to the held fit, the
@@ -207,8 +207,8 @@
 #             It amends the specifications of 101-120 (item 115), 201-247
 #             (items 230 and 235), 301-350 (item 337), 501-563 (item 509),
 #             801-863 (items 801, 802, 842, 854, 862 and 863), 901-940 (item
-#             912), 1301-1313 (item 1302) and 1601-1612 (items 1602, 1608 and
-#             1610): each is stated as amended.
+#             912), 1301-1313 (items 1302 and 1307) and 1601-1612 (items 1602,
+#             1608 and 1610): each is stated as amended.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -3516,7 +3516,7 @@
 1306 audit stored-results
 1306 audit gnss-holes
 
-# 1307 - (4) the bridged fixture: the former GNSS gap rejection's recording (coarse_maneuver with fixes 12 to 23 removed, a 2.6 s hole) becomes the success fixture bridged_hole, its golden captured, the golden suite four fits and ten rejections; the published attitude and accelerations inside the hole within three of their accuracies of the generating trajectory; the four published accuracies inside the hole never below their values at the published samples nearest the two fixes around it (measured false on bridged_hole and not asserted; the numbers are in docs/SENSOR_FUSION.md section 8); the position and velocity of the sample covariance, read through the reconstruction's per-interval seam, growing through the hole and collapsing at the fix after it
+# 1307 - (4, as amended) the bridged fixture: the former GNSS gap rejection's recording (coarse_maneuver with fixes 12 to 23 removed, a 2.6 s hole) becomes the success fixture bridged_hole, its golden captured, the golden suite four fits and ten rejections; the published attitude and accelerations inside the hole within three of their accuracies of the generating trajectory; the four published accuracies inside the hole never below their values at the published samples nearest the two fixes around it (measured false on bridged_hole and not asserted; the numbers are in docs/SENSOR_FUSION.md section 8); the step chain's covariance (P_j, read through the reconstruction's per-interval seam) growing through the hole and collapsing at the fix after it
 1307 tst_fusion_golden fixturesAreDeterministic
 1307 tst_fusion_golden successFixturesMatchGolden
 1307 tst_fusion_golden channelsWriterIsTheInverseOfTheLoader
@@ -3837,7 +3837,7 @@
 1702 tst_fusion_kernel fitTraceMatchesGolden
 1702 audit accuracy-channels
 
-# 1703 - (8, first bullet) test: the kernel: on the fixtures with a computed covariance the published blocks equal the position and velocity marginals of a graph with a state at every edge, on a fix the fix's own marginal; symmetric with a finite, non-negative diagonal wherever filled, empty exactly when the four accuracies are; on bridged_hole the composed velocity covariance before the widening is larger inside the hole than beside the fixes around it and returns at the next fix, the step chain's share of the position and velocity covariance grows across the hole and collapses at the next fix, and the composed position figures are recorded, not asserted (the hole's IMU factor ties the two fix marginals so that the position variance follows them across the hole), the published figures recorded beside them and not asserted, and the error against the generating trajectory in units of the published standard deviation is measured, recorded in section 8 of the fusion document and held below 3; the seventeen and the four of every golden unchanged bit for bit, the goldens gaining the twelve
+# 1703 - (8, first bullet) test: the kernel: on the fixtures with a computed covariance the published blocks equal the position and velocity marginals of a graph with a state at every edge, on a fix the fix's own marginal; symmetric with a finite, non-negative diagonal wherever filled, empty exactly when the four accuracies are; on bridged_hole the composed velocity covariance before the widening is larger inside the hole than beside the fixes around it and returns at the next fix (its growth the propagated term's, the step chain's share being millimetric), the step chain's covariance P_j (read through the reconstruction's per-interval seam) grows across the hole and collapses at the next fix, and the composed position figures are recorded, not asserted (the hole's IMU factor ties the two fix marginals so that the position variance follows them across the hole), the published figures recorded beside them and not asserted, and the error against the generating trajectory in units of the published standard deviation is measured, recorded in section 8 of the fusion document and held below 3; the seventeen and the four of every golden unchanged bit for bit, the goldens gaining the twelve
 1703 tst_fusion_kernel sampleCovarianceMatchesTheEdgeGraph
 1703 tst_fusion_kernel sampleOnAFixHasTheFixMarginal
 1703 tst_fusion_kernel wideningGrowsWithAnUnderstatedSigma
