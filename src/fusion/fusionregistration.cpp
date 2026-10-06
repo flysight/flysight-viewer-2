@@ -358,6 +358,175 @@ void registerHorizontalAcceleration(CalculationRegistry &registry)
     Calculations::addCalculation(registry, d);
 }
 
+// The fused accuracies below read the published covariance blocks, which the
+// fit has already widened, so they present the published facts and widen
+// nothing of their own. The eigenvalues are closed forms in plain arithmetic:
+// this file includes no solver header. Round-off can take a quadratic form a
+// hair below zero and the cosine's argument a hair past one, so every square
+// root reads a negative argument as zero (a NaN stays a NaN) and the cosine's
+// argument is clamped to [-1, 1]; that is the whole treatment. With it the
+// value is finite and non-negative for every finite block, which the fit's
+// contract makes every filled entry.
+
+double rootOf(double x)
+{
+    return std::sqrt(std::max(x, 0.0));
+}
+
+// The larger eigenvalue of the symmetric block [[nn, ne], [ne, ee]]: the
+// expression accelerationAccuracy() (fitcovariance.cpp) spells for the
+// horizontal acceleration, so that the two rules are visibly one. For a
+// non-negative diagonal it is at least the larger diagonal entry.
+double largerEigenvalue(double nn, double ne, double ee)
+{
+    return (nn + ee)/2 + rootOf((nn - ee)*(nn - ee)/4 + ne*ne);
+}
+
+// The upper triangle of a symmetric 3x3 block in the navigation frame.
+struct SymmetricBlock {
+    double nn, ne, nd, ee, ed, dd;
+};
+
+// The largest eigenvalue of `a`, by the trigonometric solution of its
+// characteristic cubic: with q the mean of the diagonal and B = (A - qI)/p,
+// p chosen so that B has unit scale, it is q + 2p cos(acos(det(B)/2)/3). A
+// block without off-diagonal entries is its own eigen-decomposition.
+double largestEigenvalue(const SymmetricBlock &a)
+{
+    const double p1 = a.ne*a.ne + a.nd*a.nd + a.ed*a.ed;
+    if (p1 == 0)
+        return std::max({a.nn, a.ee, a.dd});
+    const double q = (a.nn + a.ee + a.dd)/3;
+    const double p2 = (a.nn - q)*(a.nn - q) + (a.ee - q)*(a.ee - q) + (a.dd - q)*(a.dd - q) + 2*p1;
+    const double p = rootOf(p2/6);
+    const double bnn = (a.nn - q)/p, bee = (a.ee - q)/p, bdd = (a.dd - q)/p;
+    const double bne = a.ne/p, bnd = a.nd/p, bed = a.ed/p;
+    const double det = bnn*(bee*bdd - bed*bed) - bne*(bne*bdd - bed*bnd) + bnd*(bne*bed - bee*bnd);
+    const double r = std::clamp(det/2, -1.0, 1.0);
+    return q + 2*p*std::cos(std::acos(r)/3);
+}
+
+// The rule of the horizontal acceleration accuracy (accelerationAccuracy(),
+// fitcovariance.cpp) applied to the velocity: the standard deviation along
+// the velocity where its magnitude is at least that standard deviation;
+// otherwise, a zero velocity included, the square root of the block's largest
+// eigenvalue, the cautious figure where the direction is not determined.
+double speedAccuracy(const SymmetricBlock &v, double velN, double velE, double velD)
+{
+    const double squared = velN*velN + velE*velE + velD*velD;
+    if (squared > 0) {
+        const double along = rootOf((velN*velN*v.nn + velE*velE*v.ee + velD*velD*v.dd + 2*velN*velE*v.ne
+                                     + 2*velN*velD*v.nd + 2*velE*velD*v.ed)/squared);
+        if (std::sqrt(squared) >= along)
+            return along;
+    }
+    return rootOf(largestEigenvalue(v));
+}
+
+// The declared inputs of a fused accuracy: Fusion/<name> for each name.
+QList<CalcInput> fusionInputs(const QList<const char *> &names)
+{
+    QList<CalcInput> inputs;
+    for (const char *name : names)
+        inputs.append(CalcInput::measurement(kSensor, name));
+    return inputs;
+}
+
+// Fusion/<name> for each name, read through the context in that order;
+// nothing when one is empty (no fit, or a fit whose covariance failed) or
+// their lengths differ.
+std::optional<QList<QVector<double>>> alignedChannels(const EvaluationContext &ctx, const QList<const char *> &names)
+{
+    QList<QVector<double>> channels;
+    for (const char *name : names) {
+        channels.append(ctx.measurement(kSensor, name));
+        if (channels.last().isEmpty() || channels.last().size() != channels.first().size())
+            return std::nullopt;
+    }
+    return channels;
+}
+
+// Fusion/hAcc: horizontal position accuracy, m, the square root of the larger
+// eigenvalue of the horizontal block of the position covariance: one figure
+// for the horizontal plane, as GNSS/hAcc is, and the cautious one. On demand,
+// but its inputs exist only once the fit has published, so it appears with
+// the fit through ordinary invalidation and never starts one.
+void registerHorizontalAccuracy(CalculationRegistry &registry)
+{
+    const QList<const char *> names{"posCovNN", "posCovNE", "posCovEE"};
+
+    CalculationDescriptor d;
+    d.id = QStringLiteral("builtin.fusion.hAcc");
+    d.inputs = fusionInputs(names);
+    d.outputs = { DependencyKey::measurement(kSensor, "hAcc") };
+    d.compute = [names](const EvaluationContext &ctx) -> CalculationResult {
+        const std::optional<QList<QVector<double>>> channels = alignedChannels(ctx, names);
+        if (!channels)
+            return CalculationResult::unavailable();
+        const QVector<double> &nn = channels->at(0), &ne = channels->at(1), &ee = channels->at(2);
+
+        QVector<double> hAcc;
+        hAcc.reserve(nn.size());
+        for (qsizetype i = 0; i < nn.size(); ++i)
+            hAcc.append(rootOf(largerEigenvalue(nn[i], ne[i], ee[i])));
+        return CalculationResult().setMeasurement(kSensor, "hAcc", hAcc);
+    };
+    Calculations::addCalculation(registry, d);
+}
+
+// Fusion/vAcc: vertical position accuracy, m, the square root of the down
+// variance. On demand and waiting on the fit like hAcc.
+void registerVerticalAccuracy(CalculationRegistry &registry)
+{
+    const QList<const char *> names{"posCovDD"};
+
+    CalculationDescriptor d;
+    d.id = QStringLiteral("builtin.fusion.vAcc");
+    d.inputs = fusionInputs(names);
+    d.outputs = { DependencyKey::measurement(kSensor, "vAcc") };
+    d.compute = [names](const EvaluationContext &ctx) -> CalculationResult {
+        const std::optional<QList<QVector<double>>> channels = alignedChannels(ctx, names);
+        if (!channels)
+            return CalculationResult::unavailable();
+
+        QVector<double> vAcc;
+        vAcc.reserve(channels->first().size());
+        for (const double variance : channels->first())
+            vAcc.append(rootOf(variance));
+        return CalculationResult().setMeasurement(kSensor, "vAcc", vAcc);
+    };
+    Calculations::addCalculation(registry, d);
+}
+
+// Fusion/sAcc: speed accuracy, m/s, the accuracy of Fusion/vel by the rule of
+// speedAccuracy(), from the velocity covariance and the published velocity,
+// the block before the vector. On demand and waiting on the fit like hAcc.
+void registerSpeedAccuracy(CalculationRegistry &registry)
+{
+    const QList<const char *> names{"velCovNN", "velCovNE", "velCovND", "velCovEE", "velCovED", "velCovDD",
+                                    "velN", "velE", "velD"};
+
+    CalculationDescriptor d;
+    d.id = QStringLiteral("builtin.fusion.sAcc");
+    d.inputs = fusionInputs(names);
+    d.outputs = { DependencyKey::measurement(kSensor, "sAcc") };
+    d.compute = [names](const EvaluationContext &ctx) -> CalculationResult {
+        const std::optional<QList<QVector<double>>> channels = alignedChannels(ctx, names);
+        if (!channels)
+            return CalculationResult::unavailable();
+        const QList<QVector<double>> &c = *channels;
+
+        QVector<double> sAcc;
+        sAcc.reserve(c.first().size());
+        for (qsizetype i = 0; i < c.first().size(); ++i) {
+            const SymmetricBlock block{c[0][i], c[1][i], c[2][i], c[3][i], c[4][i], c[5][i]};
+            sAcc.append(speedAccuracy(block, c[6][i], c[7][i], c[8][i]));
+        }
+        return CalculationResult().setMeasurement(kSensor, "sAcc", sAcc);
+    };
+    Calculations::addCalculation(registry, d);
+}
+
 // Fusion/_system_time: the inverse time fit of Fusion/_time, as for GNSS
 // (builtin.time.system.GNSS). Not a passthrough of IMU/time: the fused
 // timestamps are a subset of the IMU samples, expressed in UTC.
@@ -614,6 +783,9 @@ void Fusion::registerFusionCalculations(CalculationRegistry &registry)
     registerHorizontalSpeed(registry);
     registerTotalSpeed(registry);
     registerHorizontalAcceleration(registry);
+    registerHorizontalAccuracy(registry);
+    registerVerticalAccuracy(registry);
+    registerSpeedAccuracy(registry);
     registerSystemTime(registry);
     registerElevation(registry);
     registerTrackAcceleration(registry, "accAlongTrack", Calculations::alongTrackAcceleration);

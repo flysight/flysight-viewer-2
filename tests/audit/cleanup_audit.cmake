@@ -108,9 +108,11 @@
 #   - the fused position and speed accuracy (the fit publishes the position
 #     and velocity covariance blocks, the derived accuracies, the three rows):
 #     the twelve covariance names are spelled in src in the registration's
-#     output table alone, no plot row names them, the algorithm string is
-#     batch-temperature-bias-v10, and no document counts the fit's channels
-#     or outputs as they were before the blocks (items 1701-1717).
+#     output table alone, no plot row names them, the three derived names,
+#     sensor-qualified, are spelled in src in the registration and the plot
+#     rows alone, the algorithm string is batch-temperature-bias-v10, and no
+#     document counts the fit's channels or outputs as they were before the
+#     blocks (items 1701-1717).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -797,7 +799,7 @@ expect_none("the documents describe the fitted scale" "scale factor is not fitte
 expect_count("the fusion document names the scale prior" "scale_prior" 1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document names the scale diagnostics" "model\\.scale" 1 docs/SENSOR_FUSION.md)
 
-# ─────────────────────────────── accuracy-channels (items 1022, 1025, 1030, 1032, 1036, 1037, 1049, 1064, 1065, 1702, 1705, 1706)
+# ─────────────────────────────── accuracy-channels (items 1022, 1025, 1030, 1032, 1036, 1037, 1049, 1064, 1065, 1702, 1705, 1706, 1709)
 # The accuracy of a converged fit (docs/SENSOR_FUSION.md section 4): one
 # factorization of the converged graph, in its own unit
 # (src/fusion/fitcovariance.*), whose clique marginals give the covariance,
@@ -807,6 +809,8 @@ expect_count("the fusion document names the scale diagnostics" "model\\.scale" 1
 # entries of the position and velocity covariance blocks (posCovNN, posCovNE,
 # posCovND, posCovEE, posCovED, posCovDD, velCovNN, velCovNE, velCovND,
 # velCovEE, velCovED, velCovDD) named in the registration's output table
+# alone; the three accuracies derived from them (Fusion/hAcc, Fusion/vAcc,
+# Fusion/sAcc) named, sensor-qualified, in the registration and the plot rows
 # alone; no document counting the fit's channels or outputs as they were
 # before the blocks; and the fusion document states the propagation, what it
 # leaves out, the widening and the accuracy's one sentence.
@@ -831,6 +835,16 @@ expect_count("one cap for every attitude sigma" "constexpr double kYawSigmaCapDe
 # plot row or the registration.
 expect_only("the accuracy channels are named in the registration and the plot rows"
   "\"(headingAcc|tiltAcc|accHAcc|accDAcc)\""
+  "^src/(fusion/fusionregistration\\.cpp|mainwindow\\.cpp)$" src)
+# Allow: none expected. The three derived accuracies are spelled in src,
+# qualified by their sensor, in the registration that produces them
+# (kSensor, "hAcc") and in the plot rows that draw them ("Fusion", "hAcc");
+# a reader names the measurement through a plot row or the registration. The
+# bare strings are also the receiver's names (gnsscalculations.cpp, the GNSS
+# rows and Plots-menu items, the fit's input table), so only the qualified
+# form is matched.
+expect_only("the derived accuracies are named in the registration and the plot rows"
+  "(kSensor|\"Fusion\"), *\"(hAcc|vAcc|sAcc)\""
   "^src/(fusion/fusionregistration\\.cpp|mainwindow\\.cpp)$" src)
 # Allow: none expected. The twelve covariance names, quoted, are spelled in
 # src in the registration's output table alone: the kernel holds them as
@@ -1664,7 +1678,8 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # documents, the six bullets of the tests) and 1701-1717 (the fused position
 # and speed accuracy: the twelve outputs, v10 and what is unchanged, the
 # kernel's tests, the registration and the record, the documents of the
-# fit's outputs, the audit rule; then the derived accuracies and the plots).
+# fit's outputs, the audit rule; 1707-1709 the three derived accuracies, their
+# tests, their documents and audit rule; then the plots).
 # Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
@@ -1853,7 +1868,7 @@ else()
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
     endif()
   endforeach()
-  foreach(item RANGE 1701 1706)
+  foreach(item RANGE 1701 1709)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

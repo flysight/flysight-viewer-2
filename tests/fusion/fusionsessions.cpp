@@ -333,6 +333,9 @@ QList<DependencyKey> fusionNames()
     names.append(DependencyKey::measurement(QStringLiteral("Fusion"), QStringLiteral("velH")));
     names.append(DependencyKey::measurement(QStringLiteral("Fusion"), QStringLiteral("vel")));
     names.append(DependencyKey::measurement(QStringLiteral("Fusion"), QStringLiteral("accH")));
+    names.append(DependencyKey::measurement(QStringLiteral("Fusion"), QStringLiteral("hAcc")));
+    names.append(DependencyKey::measurement(QStringLiteral("Fusion"), QStringLiteral("vAcc")));
+    names.append(DependencyKey::measurement(QStringLiteral("Fusion"), QStringLiteral("sAcc")));
     names.append(DependencyKey::measurement(QStringLiteral("Fusion"), QStringLiteral("_system_time")));
     names.append(DependencyKey::attribute(QStringLiteral("_FUSION_DIAGNOSTICS")));
     names.append(DependencyKey::attribute(fusionRollAtExit()));

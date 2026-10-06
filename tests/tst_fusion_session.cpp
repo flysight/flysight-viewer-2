@@ -53,6 +53,9 @@ const QString kFit = QStringLiteral("builtin.fusion.fit");
 const QString kVelH = QStringLiteral("builtin.fusion.velH");
 const QString kVel = QStringLiteral("builtin.fusion.vel");
 const QString kAccH = QStringLiteral("builtin.fusion.accH");
+const QString kHAcc = QStringLiteral("builtin.fusion.hAcc");
+const QString kVAcc = QStringLiteral("builtin.fusion.vAcc");
+const QString kSAcc = QStringLiteral("builtin.fusion.sAcc");
 const QString kSystemTime = QStringLiteral("builtin.fusion.systemTime");
 const QString kDiagnostics = QStringLiteral("_FUSION_DIAGNOSTICS");
 
@@ -81,8 +84,8 @@ QString availableAmong(const SessionData &session, const QList<DependencyKey> &n
     return available.join(QStringLiteral(", "));
 }
 
-/// The 33 measurements, velH, vel, accH, _system_time and the roll at exit:
-/// everything but the diagnostics.
+/// The 33 measurements, velH, vel, accH, the fused accuracies hAcc, vAcc and
+/// sAcc, _system_time and the roll at exit: everything but the diagnostics.
 QList<DependencyKey> valueNames()
 {
     QList<DependencyKey> names = fusionNames();
@@ -230,16 +233,18 @@ void FusionSessionTest::registrationShape()
 {
     const CalculationRegistry &registry = CalculationRegistry::instance();
 
-    // Registered after every built-in, in this order: the configuration's
-    // constant defaults first (configurationDefaults), then the fit; the
-    // derived values' descriptors, the orientation's constant default and the
-    // attitude are tst_fusion_derived's
-    QCOMPARE(registry.registeredIds().mid(registry.registeredIds().size() - 14),
+    // Seventeen registrations after every built-in, in this order: the
+    // configuration's constant defaults first (configurationDefaults), then
+    // the fit; the derived values' descriptors (the fused accuracies among
+    // them), the orientation's constant default and the attitude are
+    // tst_fusion_derived's
+    QCOMPARE(registry.registeredIds().mid(registry.registeredIds().size() - 17),
              QStringList({QStringLiteral("builtin.default.ACCEL_FS_G"),
                           QStringLiteral("builtin.default.GYRO_FS_DEG_S"),
                           QStringLiteral("builtin.default.ACCEL_ODR_HZ"),
                           QStringLiteral("builtin.default.GYRO_ODR_HZ"),
-                          kFit, kVelH, kVel, kAccH, kSystemTime, QStringLiteral("builtin.fusion.z"),
+                          kFit, kVelH, kVel, kAccH, kHAcc, kVAcc, kSAcc, kSystemTime,
+                          QStringLiteral("builtin.fusion.z"),
                           QStringLiteral("builtin.fusion.accAlongTrack"),
                           QStringLiteral("builtin.fusion.accCrossTrack"),
                           QStringLiteral("builtin.default._ORIENTATION"),
@@ -526,10 +531,13 @@ void FusionSessionTest::readsNeverRunTheFit()
     const SessionData session = fixtureSession(QStringLiteral("coarse_linear"));
     CalculationEngine &engine = session.calculationEngine();
     const QList<DependencyKey> names = fusionNames();
-    QCOMPARE(names.size(), 39);
+    QCOMPARE(names.size(), 42);
 
     int runsAfterFirstRound = -1;
-    const int strides[] = {4, 7, 8};        // coprime with 39: every name, scrambled
+    // Each stride coprime with the count, so that every round reads every
+    // name, scrambled; a stride sharing a factor with it would skip names
+    // silently, so the strides change with the count
+    const int strides[] = {5, 11, 13};
     for (int round = 0; round < 3; ++round) {
         for (int i = 0; i < names.size(); ++i) {
             const DependencyKey &name = names.at((i * strides[round] + round * 3) % names.size());
@@ -545,6 +553,9 @@ void FusionSessionTest::readsNeverRunTheFit()
 
     QCOMPARE(engine.runCount(kFit), 0);
     QCOMPARE(engine.runCount(kAccH), 0);
+    QCOMPARE(engine.runCount(kHAcc), 0);
+    QCOMPARE(engine.runCount(kVAcc), 0);
+    QCOMPARE(engine.runCount(kSAcc), 0);
     QCOMPARE(engine.runCount(kSystemTime), 0);
     QCOMPARE(engine.totalRunCount(), runsAfterFirstRound);
     QCOMPARE(engine.preparedCount(), 0);
@@ -569,8 +580,8 @@ void FusionSessionTest::requestRunsOnceAndPublishesTogether_data()
 }
 
 // Acceptance 6: a request runs the fit once and publishes all outputs
-// together; the fused speeds, accH and the system-time axis appear without
-// being requested; a second request runs nothing.
+// together; the fused speeds, accH, the fused accuracies and the system-time
+// axis appear without being requested; a second request runs nothing.
 void FusionSessionTest::requestRunsOnceAndPublishesTogether()
 {
     QFETCH(QString, fixture);
@@ -634,10 +645,34 @@ void FusionSessionTest::requestRunsOnceAndPublishesTogether()
     }
     QVERIFY(session.getAttribute(fusionRollAtExit()).isValid());
     QVERIFY(std::isfinite(session.getAttribute(fusionRollAtExit()).toDouble()));
+
+    // The fused accuracies, never requested (item 1708). The vertical one is
+    // one correctly rounded square root of the published down variance, which
+    // no compiler can round differently; the other two are held to their
+    // known answers in tst_fusion_derived, and here to their contract
+    const QVector<double> posCovDD = fusion(session, QStringLiteral("posCovDD"));
+    const QVector<double> hAcc = fusion(session, QStringLiteral("hAcc"));
+    const QVector<double> vAcc = fusion(session, QStringLiteral("vAcc"));
+    const QVector<double> sAcc = fusion(session, QStringLiteral("sAcc"));
+    QCOMPARE(hAcc.size(), length);
+    QCOMPARE(vAcc.size(), length);
+    QCOMPARE(sAcc.size(), length);
+    for (qsizetype i = 0; i < length; ++i) {
+        QVERIFY2(sameBits(vAcc[i], std::sqrt(posCovDD[i])),
+                 qPrintable(QStringLiteral("vAcc[%1] = %2").arg(i).arg(vAcc[i], 0, 'g', 17)));
+        QVERIFY2(std::isfinite(hAcc[i]) && hAcc[i] >= 0,
+                 qPrintable(QStringLiteral("hAcc[%1] = %2").arg(i).arg(hAcc[i], 0, 'g', 17)));
+        QVERIFY2(std::isfinite(sAcc[i]) && sAcc[i] >= 0,
+                 qPrintable(QStringLiteral("sAcc[%1] = %2").arg(i).arg(sAcc[i], 0, 'g', 17)));
+    }
+
     QCOMPARE(engine.runCount(kFit), 1);
     QCOMPARE(engine.runCount(kVelH), 1);
     QCOMPARE(engine.runCount(kVel), 1);
     QCOMPARE(engine.runCount(kAccH), 1);
+    QCOMPARE(engine.runCount(kHAcc), 1);
+    QCOMPARE(engine.runCount(kVAcc), 1);
+    QCOMPARE(engine.runCount(kSAcc), 1);
     QCOMPARE(engine.runCount(kSystemTime), 1);
 
     // Asking again returns what is cached

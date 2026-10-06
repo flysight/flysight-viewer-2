@@ -129,6 +129,7 @@ QStringList fusionMeasurementNames();
 QVector<FlySight::PlotValue> fusionPlots();
 
 /// "Everything": the 33 measurements, Fusion/velH, Fusion/vel, Fusion/accH,
+/// the fused accuracies Fusion/hAcc, Fusion/vAcc and Fusion/sAcc,
 /// Fusion/_system_time, _FUSION_DIAGNOSTICS, and Fusion/roll interpolated at
 /// _EXIT_TIME.
 QList<FlySight::DependencyKey> fusionNames();

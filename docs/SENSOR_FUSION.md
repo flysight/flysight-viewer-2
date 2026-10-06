@@ -740,6 +740,7 @@ carry the per-window widening as well, which changes from sample to sample
 across a hole as fixes enter and leave the window and can move them either
 way, so the growth is stated of the composition and the published figures
 are recorded beside it (section 8).
+`hAcc`, `vAcc` and `sAcc` (below) are standard deviations of the published, widened blocks, read on demand: they show the published figures, never the composition before the widening.
 
 *Widening.* The covariance is a statement of the model, and where the
 residuals exceed what the model allows the accuracy widens. For a sample at
@@ -811,6 +812,9 @@ and appear with them; none of them starts a fit:
 | `velH` | horizontal speed, m/s: the magnitude of `velN` and `velE`, as `GNSS/velH` is of the GNSS components |
 | `vel` | total speed, m/s: the magnitude of `velH` and `velD`, as `GNSS/vel` |
 | `accH` | horizontal acceleration, m/s^2: the magnitude of `accN` and `accE` |
+| `hAcc` | horizontal accuracy, m: the square root of the larger eigenvalue of the horizontal (north, east) block of the position covariance (`posCovNN`, `posCovNE`, `posCovEE`), one figure for the horizontal plane as `GNSS/hAcc` is, and the cautious one |
+| `vAcc` | vertical accuracy, m: the square root of `posCovDD`, the down variance |
+| `sAcc` | speed accuracy, m/s: the standard deviation along the published velocity (`velN`, `velE`, `velD`), `sqrt(e^T Sigma_v e)` with `e` the unit velocity and `Sigma_v` the velocity covariance (`velCovNN` ... `velCovDD`), where the speed is at least that standard deviation; otherwise, a zero velocity included, the square root of the largest eigenvalue of the velocity covariance: the rule of `accHAcc`, applied to the speed `GNSS/sAcc` qualifies |
 | `_system_time` | the device-time axis of `_time` (the inverse time fit) |
 | `z` | elevation above the ground, metres: `_LOCAL_ORIGIN_HMSL - down - _GROUND_ELEV`, the same ground as `GNSS/z`; unavailable when either attribute is not a number |
 | `accAlongTrack`, `accCrossTrack` | along-track and cross-track acceleration, m/s^2: the GNSS definitions, relative to the wind-corrected velocity (`_WIND_N`, `_WIND_E`), applied to the fused velocity and acceleration |

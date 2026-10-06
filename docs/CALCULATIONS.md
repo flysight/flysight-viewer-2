@@ -2197,7 +2197,7 @@ editable, a Choice of `on` "On" and `off` "Off", with the header tooltip
 optional `tooltip` member) and so is its constant default
 (`registerAttributeCalculations()`), so it covers this calculation and every
 requested calculation added later.
-Fourteen calculations are registered, in this order:
+Seventeen calculations are registered, in this order:
 
 | Id | Policy | Inputs | Outputs |
 | --- | --- | --- | --- |
@@ -2209,6 +2209,9 @@ Fourteen calculations are registered, in this order:
 | `builtin.fusion.velH` | OnDemand | `Fusion/velN`, `Fusion/velE` | `Fusion/velH` |
 | `builtin.fusion.vel` | OnDemand | `Fusion/velH`, `Fusion/velD` | `Fusion/vel` |
 | `builtin.fusion.accH` | OnDemand | `Fusion/accN`, `Fusion/accE` | `Fusion/accH` |
+| `builtin.fusion.hAcc` | OnDemand | `Fusion/posCovNN`, `posCovNE`, `posCovEE` | `Fusion/hAcc` |
+| `builtin.fusion.vAcc` | OnDemand | `Fusion/posCovDD` | `Fusion/vAcc` |
+| `builtin.fusion.sAcc` | OnDemand | `Fusion/velCovNN`, `velCovNE`, `velCovND`, `velCovEE`, `velCovED`, `velCovDD`, `velN`, `velE`, `velD` | `Fusion/sAcc` |
 | `builtin.fusion.systemTime` | OnDemand | `Fusion/_time`, `_TIME_FIT_A`, `_TIME_FIT_B` | `Fusion/_system_time` |
 | `builtin.fusion.z` | OnDemand | `Fusion/down`, `_LOCAL_ORIGIN_HMSL`, `_GROUND_ELEV` | `Fusion/z` |
 | `builtin.fusion.accAlongTrack` | OnDemand | `Fusion/accN`, `accE`, `accD`, `velN`, `velE`, `velD`, `_WIND_N`, `_WIND_E` | `Fusion/accAlongTrack` |
@@ -2308,6 +2311,32 @@ built-in calculations, and is unavailable when its two inputs differ in
 length. Vertical speed is `Fusion/velD` itself, as vertical acceleration is
 `Fusion/accD`.
 `Fusion/accH[i] = sqrt(accN[i]*accN[i] + accE[i]*accE[i])`.
+The fused accuracies read the published position and velocity covariance
+blocks (the upper triangles `NN, NE, ND, EE, ED, DD`, in the navigation
+frame). `Fusion/hAcc[i] = sqrt(lambda)` (m), `lambda` the larger eigenvalue
+of `[[NN, NE], [NE, EE]]` of the position block,
+`(NN + EE)/2 + sqrt((NN - EE)^2/4 + NE^2)`, the expression of the horizontal
+acceleration accuracy (`accelerationAccuracy()`, `src/fusion/fitcovariance.cpp`):
+one figure for the horizontal plane, as `GNSS/hAcc` is, and the cautious one.
+`Fusion/vAcc[i] = sqrt(posCovDD[i])` (m). `Fusion/sAcc` (m/s) is the rule of
+the horizontal acceleration accuracy applied to the speed `GNSS/sAcc`
+qualifies: with `v = (velN, velE, velD)` and `m = |v|`, where `m > 0` the
+standard deviation along the velocity is
+`along = sqrt((vN^2 NN + vE^2 EE + vD^2 DD + 2 vN vE NE + 2 vN vD ND + 2 vE vD ED) / m^2)`
+of the velocity block, and `sAcc = along` where `m >= along`; otherwise (a
+zero velocity included) it is the square root of the block's largest
+eigenvalue, by the trigonometric solution of the characteristic cubic
+(`q` the mean of the diagonal, `p = sqrt(((NN-q)^2 + (EE-q)^2 + (DD-q)^2 +
+2(NE^2 + ND^2 + ED^2))/6)`, `B = (A - qI)/p`, `lambda = q + 2p cos(acos(det(B)/2)/3)`;
+a block with no off-diagonal entry is its own answer). The registration
+includes no solver header (GTSAM and Eigen stay in the kernel), so both eigenvalues
+are written in plain arithmetic; a square root's argument that round-off
+has taken below zero reads as zero and `det(B)/2` is clamped to [-1, 1],
+which keeps every value finite and non-negative for a finite block. Each is
+unavailable when an input is empty (no fit, or a fit whose covariance
+failed) or the inputs differ in length. None widens: the blocks are
+published widened (section 4 of [SENSOR_FUSION.md](SENSOR_FUSION.md)), so
+the three are the published accuracies.
 `Fusion/_system_time[i] = (Fusion/_time[i] - b) / a` with the time fit's `a`
 and `b`, as `builtin.time.system.GNSS` (both call
 `Calculations::systemTimeFromUtc()`, `src/calculations/timefithelper.h`,
@@ -2360,8 +2389,9 @@ forward +y, up +z, is a constant default registered with
 `_ORIENTATION`, so an orientation edit recomputes the angles and never
 invalidates the fit.
 
-The eight derived calculations (`velH`, `vel`, `accH`, the system time,
-`z`, the two track accelerations and the attitude's three angles) are on
+The eleven derived calculations (`velH`, `vel`, `accH`, the fused accuracies
+`hAcc`, `vAcc` and `sAcc`, the system time, `z`, the two track accelerations
+and the attitude's three angles) are on
 demand, but their inputs exist only once the fit has published, so they are blocked by the fit (section 13), appear with
 it through ordinary invalidation, and never start one. Every one has the
 length of its inputs, so together with `Fusion/_time` (an output of the fit)

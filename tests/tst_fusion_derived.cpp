@@ -1,7 +1,8 @@
 // What is derived from the fit's published outputs, on real SessionData
 // engines bound to the global registry: fused elevation, the fused horizontal
-// and total speeds, the fused along-track and cross-track accelerations, and
-// the attitude of the body
+// and total speeds, the fused along-track and cross-track accelerations, the
+// fused accuracies (horizontal, vertical and speed, from the published
+// covariance blocks), and the attitude of the body
 // frame (heading, pitch and roll) that the orientation attribute defines. The
 // solver never runs here. The fit's outputs are stored as data
 // (syntheticFitSession(), fusionsessions.h), so the derivations are held to
@@ -65,6 +66,9 @@ const QString kFit = QStringLiteral("builtin.fusion.fit");
 const QString kVelH = QStringLiteral("builtin.fusion.velH");
 const QString kVel = QStringLiteral("builtin.fusion.vel");
 const QString kAccH = QStringLiteral("builtin.fusion.accH");
+const QString kHAcc = QStringLiteral("builtin.fusion.hAcc");
+const QString kVAcc = QStringLiteral("builtin.fusion.vAcc");
+const QString kSAcc = QStringLiteral("builtin.fusion.sAcc");
 const QString kSystemTime = QStringLiteral("builtin.fusion.systemTime");
 const QString kZ = QStringLiteral("builtin.fusion.z");
 const QString kAlong = QStringLiteral("builtin.fusion.accAlongTrack");
@@ -147,6 +151,86 @@ QHash<QString, QVector<double>> velocityChannels(const QVector<double> &velN, co
                                                  const QVector<double> &velD)
 {
     return {{QStringLiteral("velN"), velN}, {QStringLiteral("velE"), velE}, {QStringLiteral("velD"), velD}};
+}
+
+/// The upper triangle of a symmetric 3x3 block in the navigation frame, in
+/// the order of the published names: NN, NE, ND, EE, ED, DD.
+using Block = std::array<double, 6>;
+
+/// The six entries of each block spread over the six channels
+/// <prefix>NN ... <prefix>DD ("posCov" or "velCov"), one sample per block, as
+/// synthetic fit outputs.
+QHash<QString, QVector<double>> blockChannels(const char *prefix, const QList<Block> &blocks)
+{
+    const char *const entries[] = {"NN", "NE", "ND", "EE", "ED", "DD"};
+    QHash<QString, QVector<double>> channels;
+    for (const Block &block : blocks) {
+        for (std::size_t k = 0; k < block.size(); ++k)
+            channels[QString::fromLatin1(prefix) + QString::fromLatin1(entries[k])].append(block[k]);
+    }
+    return channels;
+}
+
+/// Position blocks whose horizontal eigenvalues are exact: diagonal (9, 4)
+/// and (4, 9), rotated (8, 2, 5) with eigenvalues 9 and 4, (5, +-4, 5) with
+/// eigenvalues 9 and 1, the zero block, and the first four again with down
+/// entries the horizontal accuracy does not read. Each down variance is 6.25
+/// or 0.
+const QList<Block> kPositionBlocks{{9, 0, 0, 4, 0, 6.25},       {4, 0, 0, 9, 0, 0},
+                                   {8, 2, 0, 5, 0, 6.25},       {5, 4, 0, 5, 0, 0},
+                                   {5, -4, 0, 5, 0, 6.25},      {0, 0, 0, 0, 0, 0},
+                                   {9, 0, 1.5, 4, -1, 6.25},    {8, 2, -0.5, 5, 0.75, 0},
+                                   {5, 4, 0.25, 5, 0.5, 6.25},  {4, 0, 0.5, 9, 0.25, 6.25}};
+const QVector<double> kHAccAnswers{3, 3, 3, 3, 3, 0, 3, 3, 3, 3};
+const QVector<double> kVAccAnswers{2.5, 0, 2.5, 0, 2.5, 0, 2.5, 0, 2.5, 2.5};
+
+/// Velocity blocks and velocities with exact answers. Under diag(4, 9, 16):
+/// along north at 10 m/s, its sigma 2 (not the largest, 4); along east at
+/// 3 m/s, exactly its sigma 3, which takes the along branch; down at 10 m/s,
+/// 4; north at 1 m/s, below its sigma 2, and at rest, both the largest, 4.
+/// Under the full block (5, 2, 2, 5, 2, 5), eigenvalues 9, 3 and 3: along
+/// (3, 3, 3), quadratic form 243/27 = 9 below a speed of 3 sqrt 3, so 3; north
+/// at 1 m/s, below its sigma sqrt 5, the largest by the 3x3 form, 3 (q = 5,
+/// p = 2, det(B) = 2, r = 1). Under (5, 4, 0, 5, 0, 2), eigenvalues 9, 2 and
+/// 1, at rest: 3 within 1e-12 (q = 4, p = sqrt(19/3), not dyadic). The zero
+/// block at rest and in motion: 0.
+const QList<Block> kVelocityBlocks{{4, 0, 0, 9, 0, 16}, {4, 0, 0, 9, 0, 16}, {4, 0, 0, 9, 0, 16},
+                                   {4, 0, 0, 9, 0, 16}, {4, 0, 0, 9, 0, 16}, {5, 2, 2, 5, 2, 5},
+                                   {5, 2, 2, 5, 2, 5},  {5, 4, 0, 5, 0, 2},  {0, 0, 0, 0, 0, 0},
+                                   {0, 0, 0, 0, 0, 0}};
+const QVector<double> kAccuracyVelN{10, 0, 0, 1, 0, 3, 1, 0, 0, 10};
+const QVector<double> kAccuracyVelE{0, 3, 0, 0, 0, 3, 0, 0, 0, 0};
+const QVector<double> kAccuracyVelD{0, 0, -10, 0, 0, 3, 0, 0, 0, 0};
+const QVector<double> kSAccAnswers{2, 3, 4, 4, 4, 3, 3, 3, 0, 0};
+/// The sample of kSAccAnswers that is exact only within 1e-12.
+constexpr qsizetype kSAccInexact = 7;
+
+/// The fit's outputs every fused accuracy reads: the two blocks and the
+/// velocity, ten samples each.
+QHash<QString, QVector<double>> accuracyChannels()
+{
+    QHash<QString, QVector<double>> channels = blockChannels("posCov", kPositionBlocks);
+    channels.insert(blockChannels("velCov", kVelocityBlocks));
+    channels.insert(velocityChannels(kAccuracyVelN, kAccuracyVelE, kAccuracyVelD));
+    return channels;
+}
+
+/// Every sample of `actual` equals `expected` exactly, apart from the samples
+/// in `within`, which may differ by 1e-12. Empty when they do, else the first
+/// difference.
+QString exactAnswers(const char *name, const QVector<double> &actual, const QVector<double> &expected,
+                     const QList<qsizetype> &within = {})
+{
+    if (actual.size() != expected.size())
+        return QStringLiteral("%1: %2 samples, expected %3").arg(name).arg(actual.size()).arg(expected.size());
+    for (qsizetype i = 0; i < actual.size(); ++i) {
+        const bool equal = within.contains(i) ? std::abs(actual[i] - expected[i]) <= 1e-12 : actual[i] == expected[i];
+        if (!equal) {
+            return QStringLiteral("%1[%2] = %3, expected %4")
+                .arg(name).arg(i).arg(actual[i], 0, 'g', 17).arg(expected[i], 0, 'g', 17);
+        }
+    }
+    return QString();
 }
 
 // ---- the attitude's hand-built expectations ---------------------------------------
@@ -305,6 +389,7 @@ private slots:
     void trackAccelerationsAreTheGnssDefinitions();
     void fusedSpeedsKnownAnswers();
     void fusedSpeedsAreTheGnssDefinitions();
+    void fusedAccuraciesKnownAnswers();
 
     void orientationVocabularyHasTwentyFourPairs();
     void orientationRotationIsProper();
@@ -401,13 +486,13 @@ void FusionDerivedTest::derivedRegistrationShape()
 {
     const CalculationRegistry &registry = CalculationRegistry::instance();
 
-    // The speeds after the fit, velH before vel, which reads it; the rest in
-    // this order after the system time. The whole tail is pinned by
-    // tst_fusion_session::registrationShape
+    // The speeds after the fit, velH before vel, which reads it, then accH
+    // and the fused accuracies; the rest in this order after the system time.
+    // The whole tail is pinned by tst_fusion_session::registrationShape
     const QStringList ids = registry.registeredIds();
     const qsizetype fit = ids.indexOf(kFit);
     QVERIFY(fit >= 0);
-    QCOMPARE(ids.mid(fit + 1, 3), QStringList({kVelH, kVel, kAccH}));
+    QCOMPARE(ids.mid(fit + 1, 6), QStringList({kVelH, kVel, kAccH, kHAcc, kVAcc, kSAcc}));
     const qsizetype systemTime = ids.indexOf(kSystemTime);
     QVERIFY(systemTime >= 0);
     QCOMPARE(ids.mid(systemTime + 1, 3), QStringList({kZ, kAlong, kCross}));
@@ -419,6 +504,16 @@ void FusionDerivedTest::derivedRegistrationShape()
     } expected[] = {
         {kVelH, "velH", {CalcInput::measurement("Fusion", "velN"), CalcInput::measurement("Fusion", "velE")}},
         {kVel, "vel", {CalcInput::measurement("Fusion", "velH"), CalcInput::measurement("Fusion", "velD")}},
+        {kHAcc, "hAcc",
+         {CalcInput::measurement("Fusion", "posCovNN"), CalcInput::measurement("Fusion", "posCovNE"),
+          CalcInput::measurement("Fusion", "posCovEE")}},
+        {kVAcc, "vAcc", {CalcInput::measurement("Fusion", "posCovDD")}},
+        {kSAcc, "sAcc",
+         {CalcInput::measurement("Fusion", "velCovNN"), CalcInput::measurement("Fusion", "velCovNE"),
+          CalcInput::measurement("Fusion", "velCovND"), CalcInput::measurement("Fusion", "velCovEE"),
+          CalcInput::measurement("Fusion", "velCovED"), CalcInput::measurement("Fusion", "velCovDD"),
+          CalcInput::measurement("Fusion", "velN"), CalcInput::measurement("Fusion", "velE"),
+          CalcInput::measurement("Fusion", "velD")}},
         {kZ, "z",
          {CalcInput::measurement("Fusion", "down"), CalcInput::attribute("_LOCAL_ORIGIN_HMSL"),
           CalcInput::attribute("_GROUND_ELEV")}},
@@ -468,7 +563,7 @@ void FusionDerivedTest::derivedValuesWaitOnTheFit()
     session.setAttribute(SessionKeys::GroundElev, 50.0);
     CalculationEngine &engine = session.calculationEngine();
 
-    for (const char *name : {"velH", "vel", "z", "accAlongTrack", "accCrossTrack"}) {
+    for (const char *name : {"velH", "vel", "hAcc", "vAcc", "sAcc", "z", "accAlongTrack", "accCrossTrack"}) {
         const DependencyKey key = fusionKey(QString::fromLatin1(name));
         const BlockerReport report = engine.blockers(key);
         QVERIFY2(report.state == BlockerState::Blocked, name);
@@ -757,6 +852,93 @@ void FusionDerivedTest::fusedSpeedsAreTheGnssDefinitions()
 
     QCOMPARE(session.calculationEngine().runCount(kFit), 0);
     QCOMPARE(session.calculationEngine().undeclaredReadCount(), 0);
+}
+
+// The fused accuracies (item 1708): exact answers on chosen blocks, read
+// without the fit, and unavailable without the blocks and on unequal lengths.
+// The speed accuracy's rule is the horizontal acceleration accuracy's: a
+// velocity at or above its along-track sigma gives that sigma, one below it
+// and a zero velocity give the largest eigenvalue, and a full block exercises
+// the 3x3 form on both branches. The rule lives in fitcovariance.cpp too, which
+// this executable may not include, so the known answers are what hold it.
+void FusionDerivedTest::fusedAccuraciesKnownAnswers()
+{
+    const auto hAcc = [](const SessionData &s) { return fusion(s, QStringLiteral("hAcc")); };
+    const auto vAcc = [](const SessionData &s) { return fusion(s, QStringLiteral("vAcc")); };
+    const auto sAcc = [](const SessionData &s) { return fusion(s, QStringLiteral("sAcc")); };
+
+    {
+        const SessionData session = syntheticFitSession(QStringLiteral("a1"), accuracyChannels());
+        QString difference = exactAnswers("hAcc", hAcc(session), kHAccAnswers);
+        QVERIFY2(difference.isEmpty(), qPrintable(difference));
+        difference = exactAnswers("vAcc", vAcc(session), kVAccAnswers);
+        QVERIFY2(difference.isEmpty(), qPrintable(difference));
+        difference = exactAnswers("sAcc", sAcc(session), kSAccAnswers, {kSAccInexact});
+        QVERIFY2(difference.isEmpty(), qPrintable(difference));
+        CalculationEngine &engine = session.calculationEngine();
+        QCOMPARE(engine.runCount(kHAcc), 1);
+        QCOMPARE(engine.runCount(kVAcc), 1);
+        QCOMPARE(engine.runCount(kSAcc), 1);
+        QCOMPARE(engine.runCount(kFit), 0);
+        QCOMPARE(engine.undeclaredReadCount(), 0);
+    }
+
+    // The velocity without its covariance (no fit, or a fit whose covariance
+    // failed): no speed accuracy, and nothing starts the fit
+    {
+        const SessionData session = syntheticFitSession(
+            QStringLiteral("a2"), velocityChannels(kAccuracyVelN, kAccuracyVelE, kAccuracyVelD));
+        QVERIFY(sAcc(session).isEmpty());
+        QVERIFY(hAcc(session).isEmpty());
+        QVERIFY(vAcc(session).isEmpty());
+        QCOMPARE(session.calculationEngine().runCount(kFit), 0);
+        QCOMPARE(session.calculationEngine().undeclaredReadCount(), 0);
+    }
+
+    // The down variance alone: the vertical accuracy and no horizontal one
+    {
+        const SessionData session = syntheticFitSession(
+            QStringLiteral("a3"), {{QStringLiteral("posCovDD"), blockChannels("posCov", kPositionBlocks)
+                                                                     .value(QStringLiteral("posCovDD"))}});
+        QString difference = exactAnswers("vAcc", vAcc(session), kVAccAnswers);
+        QVERIFY2(difference.isEmpty(), qPrintable(difference));
+        QVERIFY(hAcc(session).isEmpty());
+        QVERIFY(sAcc(session).isEmpty());
+        QCOMPARE(session.calculationEngine().runCount(kFit), 0);
+    }
+
+    // One entry one sample short: the calculation that reads it is
+    // unavailable, and the others are as they were
+    const struct {
+        const char *shortened;
+        bool hAccServed, sAccServed;
+    } shortCases[] = {
+        {"posCovEE", false, true},
+        {"posCovNE", false, true},
+        {"velCovED", true, false},
+        {"velCovNN", true, false},
+        {"velD", true, false},
+    };
+    for (const auto &c : shortCases) {
+        QHash<QString, QVector<double>> channels = accuracyChannels();
+        channels[QString::fromLatin1(c.shortened)].removeLast();
+        const SessionData session = syntheticFitSession(QStringLiteral("a4"), channels);
+
+        QVERIFY2(hAcc(session).isEmpty() != c.hAccServed, c.shortened);
+        if (c.hAccServed) {
+            const QString difference = exactAnswers("hAcc", hAcc(session), kHAccAnswers);
+            QVERIFY2(difference.isEmpty(), qPrintable(difference));
+        }
+        QVERIFY2(sAcc(session).isEmpty() != c.sAccServed, c.shortened);
+        if (c.sAccServed) {
+            const QString difference = exactAnswers("sAcc", sAcc(session), kSAccAnswers, {kSAccInexact});
+            QVERIFY2(difference.isEmpty(), qPrintable(difference));
+        }
+        const QString difference = exactAnswers("vAcc", vAcc(session), kVAccAnswers);
+        QVERIFY2(difference.isEmpty(), qPrintable(difference + QLatin1Char(' ') + QLatin1String(c.shortened)));
+        QCOMPARE(session.calculationEngine().runCount(kFit), 0);
+        QCOMPARE(session.calculationEngine().undeclaredReadCount(), 0);
+    }
 }
 
 // ---- The orientation vocabulary --------------------------------------------------------

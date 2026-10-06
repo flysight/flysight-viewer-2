@@ -82,6 +82,21 @@ QList<FitOutputChannel> fitOutputChannels(const Result &result);
 ///    velD, as GNSS/vel is of GNSS/velH and GNSS/velD.
 ///  - builtin.fusion.accH (on demand): Fusion/accH, the horizontal magnitude
 ///    of accN and accE.
+///  - builtin.fusion.hAcc (on demand): Fusion/hAcc (m), from posCovNN,
+///    posCovNE and posCovEE: the square root of the larger eigenvalue of the
+///    horizontal block of the position covariance, one figure for the
+///    horizontal plane as GNSS/hAcc is, and the cautious one.
+///  - builtin.fusion.vAcc (on demand): Fusion/vAcc (m), from posCovDD: its
+///    square root.
+///  - builtin.fusion.sAcc (on demand): Fusion/sAcc (m/s), from velCovNN,
+///    velCovNE, velCovND, velCovEE, velCovED, velCovDD, velN, velE and velD:
+///    the standard deviation along the published velocity where the speed is
+///    at least that standard deviation, otherwise (a zero velocity included)
+///    the square root of the largest eigenvalue of the velocity covariance;
+///    the rule of the horizontal acceleration accuracy, applied to the speed.
+///    Each of the three is unavailable when an input is empty or the inputs
+///    differ in length, finite and non-negative otherwise, and widens nothing
+///    (the blocks are widened).
 ///  - builtin.fusion.systemTime (on demand): Fusion/_system_time, the inverse
 ///    time fit of Fusion/_time.
 ///  - builtin.fusion.z (on demand): Fusion/z, the elevation above the ground,

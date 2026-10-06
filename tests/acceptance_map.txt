@@ -190,11 +190,13 @@
 #             demand and drawn as three rows): item = 1700 + item number of
 #             appendix R. 1701-1702 its section 3, 1703-1704 the first two
 #             bullets of its section 8, 1705 its section 7, 1706 the first
-#             clause of its audit bullet; 1707-1717 follow with the derived
-#             accuracies and the plots. Stated in full in tests/README.md,
-#             appendix R. It amends the specifications of 201-247 (items 230
-#             and 235), 301-350 (item 337), 901-940 (item 912) and 1301-1313
-#             (item 1302): each is stated as amended.
+#             clause of its audit bullet, 1707 its section 4, 1708 the third
+#             bullet of its section 8, 1709 its section 7 for the derived
+#             accuracies and the second clause of its audit bullet;
+#             1710-1717 follow with the plots. Stated in full in
+#             tests/README.md, appendix R. It amends the specifications of
+#             201-247 (items 230 and 235), 301-350 (item 337), 901-940 (item
+#             912) and 1301-1313 (item 1302): each is stated as amended.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -3803,7 +3805,7 @@
 # 1612 - (5, sixth bullet) the acceptance items in the next free hundred of tests/acceptance_map.txt, with appendix Q and section 9.17 of tests/README.md; items 115, 509, 801, 802, 842, 854, 862 and 863, which counted the fusion plots, and 803, which listed the fused down velocity among the removed plots, restated "(as amended)"
 1612 audit naming
 
-# ---- Fused position and speed accuracy (PLANS/fused-accuracies.md): seventeen items, 1701-1706 so far ----
+# ---- Fused position and speed accuracy (PLANS/fused-accuracies.md): seventeen items, 1701-1709 so far ----
 
 # 1701 - (3) the twelve outputs: Fusion/posCovNN, posCovNE, posCovND, posCovEE, posCovED, posCovDD (m^2) and velCovNN, velCovNE, velCovND, velCovEE, velCovED, velCovDD (m^2/s^2), measurement outputs of the fit after the four accuracies, aligned with Fusion/_time: the upper triangles of the position and velocity blocks of the composed sample covariance, turned from the reconstruction's tangent into the navigation frame with the published attitude as the attitude block is, a sample on a fix carrying the fix's own marginal; widened once, by the square of the sample's widening factor; filled for a success whose covariance was computed and empty for every other outcome, exactly when the four accuracies are, the diagnostics' accuracy account unchanged; diagonal finite and non-negative wherever filled
 1701 tst_fusion_kernel sampleCovarianceMatchesTheEdgeGraph
@@ -3850,3 +3852,17 @@
 
 # 1706 - (8, audit bullet, first clause) the audit's accuracy-channels group: the twelve covariance names, quoted, are spelled in src in the registration's output table alone, the kernel holding them as Result members; the rule planted once; the range 1701-1717 declared and items 1701-1706 complete; the audit and the map check green
 1706 audit accuracy-channels
+
+# 1707 - (4) the derived accuracies: builtin.fusion.hAcc (Fusion/hAcc, m, from Fusion/posCovNN, posCovNE and posCovEE: the square root of the larger eigenvalue of the horizontal block, one figure for the horizontal plane as GNSS/hAcc is, and the cautious one), builtin.fusion.vAcc (Fusion/vAcc, m, from Fusion/posCovDD: the square root of the down variance) and builtin.fusion.sAcc (Fusion/sAcc, m/s, from the six velCov channels, then velN, velE and velD: the standard deviation along the published velocity where the speed is at least that standard deviation, otherwise, a zero velocity included, the square root of the largest eigenvalue of the block, the rule of the horizontal acceleration accuracy); on demand under the Fusion sensor, no title, no result version, registered after accH and before the system time in that order; one candidate each with the fit alone behind it, so they appear with the fit and never start it; unavailable when an input is absent or the inputs differ in length, finite and non-negative otherwise; no widening of their own
+1707 tst_fusion_derived derivedRegistrationShape
+1707 tst_fusion_derived fusedAccuraciesKnownAnswers
+1707 tst_fusion_session registrationShape
+
+# 1708 - (8, third bullet) test: known answers on chosen blocks (a diagonal block, a rotated one whose larger eigenvalue is exact, a velocity along one axis and one below its standard deviation, a full 3x3 block); unavailable without the blocks and on unequal lengths; waiting on the fit and never starting it; appearing with the fit
+1708 tst_fusion_derived fusedAccuraciesKnownAnswers
+1708 tst_fusion_derived derivedValuesWaitOnTheFit
+1708 tst_fusion_session requestRunsOnceAndPublishesTogether
+1708 tst_fusion_session readsNeverRunTheFit
+
+# 1709 - (7; 8, audit bullet, second clause) the documents and the audit: the derived table of SENSOR_FUSION.md section 4, the registration table and derived values of CALCULATIONS.md section 17 (seventeen calculations, eleven derived), the contract of registerFusionCalculations; the accuracy-channels rule that the three derived names, sensor-qualified, are spelled in src in the registration and the plot rows alone, planted once; the range's completeness check at 1701-1709; the audit and the map check green
+1709 audit accuracy-channels
