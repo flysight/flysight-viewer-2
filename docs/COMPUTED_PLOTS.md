@@ -16,14 +16,14 @@
 
 Most plots and logbook columns are instant: check a plot and it is drawn for
 every visible track, add a column and it fills in. A few take from seconds to
-several minutes per recording to work out. Today these are the fifteen plots
+several minutes per recording to work out. Today these are the eighteen plots
 of the "Sensor fusion" category (Elevation, Horizontal, Vertical and Total
 speed, Horizontal, Vertical, Along-track and Cross-track acceleration,
 Heading, Pitch and Roll, Heading accuracy, Tilt accuracy, Horizontal
-acceleration accuracy and Vertical acceleration accuracy) and any logbook
-column over a Sensor fusion value
-([what they are](SENSOR_FUSION.md)). An accuracy plot is absent for a
-recording whose computation did not produce the accuracy, while that
+acceleration accuracy, Vertical acceleration accuracy, Horizontal accuracy,
+Vertical accuracy and Speed accuracy) and any logbook column over a Sensor
+fusion value ([what they are](SENSOR_FUSION.md)). An accuracy plot is absent
+for a recording whose computation did not produce the accuracy, while that
 computation's other plots are drawn.
 
 Not every accuracy plot is computed in the background. "Acceleration
@@ -44,7 +44,9 @@ compromise between the receiver and the IMU, not an independent measurement
 of speed by the IMU. The receiver's Speed accuracy plot says how far to
 trust its side of the compromise: where it shows the receiver in doubt, the
 fused speed carries the IMU's dead reckoning, and that is what to read the
-separation by.
+separation by. The fused Speed accuracy plot is the fit's figure for its own
+side: set beside the receiver's Speed accuracy, which it overlays, the two
+say how far each side of the compromise is trusted.
 
 Between two GNSS fixes the Sensor fusion plots follow the IMU at its own rate,
 pulled onto the fitted fixes, so a line no longer runs straight from one fix
@@ -85,7 +87,7 @@ exactly as any other row. A track whose result is still to come is absent
 from the plot until it arrives, and appears by itself when it does.
 
 One computation per recording can serve several plots. Heading, pitch and
-roll and the four accuracies, for example, come from one and the same
+roll and the seven accuracies, for example, come from one and the same
 computation, so one computation fills them all in, and the recording is
 counted once.
 

@@ -2397,7 +2397,7 @@ it through ordinary invalidation, and never start one. Every one has the
 length of its inputs, so together with `Fusion/_time` (an output of the fit)
 they satisfy the time-axis rule of section 16.1.
 
-**Plots.** Fifteen plots in the category "Sensor fusion"
+**Plots.** Eighteen plots in the category "Sensor fusion"
 (`MainWindow::registerBuiltInPlots`), in this order: Elevation (`Fusion/z`),
 Horizontal speed (`Fusion/velH`, type `speed`), Vertical speed
 (`Fusion/velD`, type `vertical_speed`), Total speed (`Fusion/vel`, type
@@ -2407,14 +2407,20 @@ Horizontal speed (`Fusion/velH`, type `speed`), Vertical speed
 (`Fusion/bodyHeading`, `bodyPitch`, `bodyRoll`), Heading accuracy and Tilt
 accuracy (`Fusion/headingAcc`, `tiltAcc`, type `angle`), Horizontal and
 Vertical acceleration accuracy (`Fusion/accHAcc`, `accDAcc`, type
-`acceleration_accuracy`: g, as `acceleration`, at four decimals). `velD`,
-`accD` and the four accuracies are outputs of the fit; the other nine are the
-on-demand calculations above, blocked by the fit. All fifteen are requested
+`acceleration_accuracy`: g, as `acceleration`, at four decimals), Horizontal
+accuracy (`Fusion/hAcc`, type `distance`), Vertical accuracy (`Fusion/vAcc`,
+type `distance`) and Speed accuracy (`Fusion/sAcc`, type `speed`), the last
+three named, united and typed as the GNSS accuracies so that each overlays
+its counterpart. `velD`, `accD` and the four accuracies are outputs of the
+fit; the other twelve are the on-demand calculations above, blocked by the
+fit. All eighteen are requested
 (16.3): a checked fusion plot has the fit computed for the visible sessions that are
 switched on (16.1), and nothing else about a plot starts one (section 16). An accuracy the fit did
 not set (a rejection, a solver failure, a success whose covariance could not
 be computed) is unavailable like any unset output, and its plot draws
-nothing. The rest of the fit's outputs (`north`, `east`, `down`, `velN`,
+nothing; `hAcc`, `vAcc` and `sAcc` are unavailable there too, since the fit
+did not set their inputs, the covariance entries. The rest of the fit's
+outputs (`north`, `east`, `down`, `velN`,
 `velE`, `accN`, `accE`, `roll`, `pitch`, `yaw`, `qx`, `qy`, `qz`, `qw`, and
 the twelve covariance entries `posCovNN` ... `posCovDD`, `velCovNN` ...
 `velCovDD`) have no plot; they remain measurements that a logbook column, a
@@ -2534,7 +2540,7 @@ vocabulary, the attribute's definition and the Orientation column through
 `ChoiceFixture`),
 `tests/tst_fusion_jobs.cpp` (the executor's worker on a
 real `SessionModel`), `tests/tst_fusion_rows.cpp` (the demand layer of
-section 16 with the fifteen real plots and real fits: fits
+section 16 with the eighteen real plots and real fits: fits
 start and are dropped with no gesture, and the accuracy plots are absent
 where the fit did not compute them),
 `tests/tst_fusion_runner.cpp` (the command-line runner against the

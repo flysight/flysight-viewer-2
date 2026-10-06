@@ -150,11 +150,11 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | `tst_fusion_kernel` | The kernel's internals through the seams of `src/fusion/` (the only test that includes those headers), with the literal expectations of the reference's self-test: the shared unwrap rule, preintegration across exact boundaries, every validation defect, backward attitude propagation, the propagation refusing an IMU interval above the threshold its caller gives it (`propagationRefusesIntervalAboveItsThreshold`), the IMU gap limit as the continuity rule's threshold, an interval of 1.55 nominal intervals rejected and one of 1.45 not (`imuGapRuleIsTheContinuityThreshold`; sample-continuity item 1211), heading freedom, the reconstruction's timing and its yaw share between two states at rest, an exact constant-velocity fit published exactly by the reconstruction, TBB really on. In spec order: the segmented initializer (segment cutting on fixes and the merges of a short final piece and of any piece with fewer than three fixes, a window shorter than one segment, the smallest-sAcc anchor and the carried-back start, prefix growth on the marginal yaw sigma about the vertical, the growth stop when a doubling gains nothing, the prefix budget of one pass and 50 iterations and starts that end on the limit, the fallback when every prefix start fails, its progress texts and diagnostics keys, the four synthetic initializer recordings of the specification and `coarse_maneuver`); the stopping rule (the bias-settled cost test, the slow tail accepted and refused on each bound, the IMU normalized RMS's alone included (a fit that satisfies its fixes while it ignores the IMU), non-convergence and a never-settling bias as solver failures with their failure shapes, damping saturated at a forced ceiling of 1e5 as the solver failure `damping saturated` where the linearization still predicts a decrease, a stall at the ceiling where it predicts none settled (the exact constant-velocity recording from its exact start under a ceiling at the library's initial damping) and the predicted decrease on a hand-built graph (`saturationAtAMinimumIsSettled`), and the four fits and their prefix fits bit for bit the same under a ceiling of 1e5 and of 1e12); the noise model by configuration (the datasheet's per-sample sigma and integration density against the formula for the fixtures' configurations, bit for bit in exact mode, an entry for every listed value of every key, the configurations without one rejected naming the key; the lattice check finding the coarsest range, a legacy-style truncated reading, the tolerance's edges and every fixture's range; the rate check's 10 % either side; the configuration's checks after every other check; `configuration` and `model.noise` in the diagnostics) and the step model (no sampling term on a constant signal, the sampling term against its derivation for whole and part steps of an unevenly sampled quadratic and against the integration's own departure from the exact integral, the rotation remainder against its derivation on a constant turn and against a thousand-fold subdivided integration on a ramp, the covariances read through the observer); the temperature-dependent gyro bias (the graph shape with `T_ref`, the scaled IMU factor and the slope and scale priors last, the reconstruction at each interval's own bias (the attitude part of the mismatch), a recording without the temperature channel rejected by name, a constant temperature leaving `b1` at its prior and the full fit's held stage, whose prior a thousand times tighter than the datasheet's holds the scale at one, agreeing with the constant-bias fit, the drifting-bias recording recovering `b1` within 20 % in at most 30 iterations of the full fit); the scale state (preintegrating the readings at a scale against preintegrating the divided readings at unit scale, and at any scale the same bits with or without the scale Jacobian and the observer, whose transition is the library's update of the step (`preintegrationDividesByTheScale`); the scale Jacobian against central differences, which it would miss without the half-step turn's term (`scaleJacobianMatchesCentralDifferences`); the scaled IMU factor's seven Jacobians against numerical derivatives, and its equality, bit for bit, with the stock `ImuFactor` at the interval bias at its linearization scale and at the bias itself at zero slope and unit scale (`scaleFactorJacobians`); the graph with the state, the scale prior last, and the constant model's without it (`scaleGraphShape`); every factor of a converged fit's graph preintegrated at the fitted scale (`fitRepreintegratesAtTheFittedScale`); the reconstruction at the fitted scale (`reconstructionUsesTheFittedScale`); `rest_throughout` leaving every factor at one within its prior through both stages, its released stage settled (`restLeavesTheScaleAtItsPrior`); `scale_recording` recovering a 2 % accelerometer factor through the released stage, kept, its objective below the held stage's read from the fit's account (`scaleRecordingRecoversTheFactor`); `model.scale` and the `scale_prior` residual in the diagnostics (`diagnosticsReportTheScale`)). The scale factors as a refinement: the held and the released stage's account in the diagnostics and in the fit's result, its counts adding up to the history, the passes numbered on across the stages and `Releasing the scale factors` reported once between them (`scaleReleaseIsAccountedFor`); the released stage forced to fail at its boundary falling back to the held fit, converged, its factors at one with the held stage's sigmas and its channels the held fit's bit for bit (`releaseFailureFallsBackToTheHeldFit`); divergence forced in the held stage by a zero IMU bound or an empty scale range, a solver failure of the completed-pass shape (`divergenceEndsTheHeldStage`), and in the released stage of `scale_recording` by a range that excludes the recovered factor, the fallback (`divergenceEndsTheReleasedStage`); a slow tail accepted in the held stage followed by the released stage (`slowTailAtTheIterationLimit`). The accuracy: the covariance step's joint covariance of every adjacent pair of fix states with the globals against the library's joint marginals (`covarianceMatchesJointMarginals`), its first node's heading against the heading check on every fit and recording (`firstNodeHeadingIsTheHeadingCheck`), the composition at every tenth sample of `coarse_maneuver` against a graph with a state at every integration edge, the attitude block, the four accuracies and the position and velocity blocks (`sampleCovarianceMatchesTheEdgeGraph`) and, on a fix, the fix's own marginal (`sampleOnAFixHasTheFixMarginal`), the attitude and acceleration formulas on known answers (`attitudeAccuracyFollowsTheNavigationFrame`, `accelerationAccuracyFollowsItsPropagation`), the widening's window and factor on hand-built residuals, one at the model and grown where a sigma is understated three times, and the published accuracies widened by it and the twelve covariance entries by its square, bit for bit (`wideningWindowAndFactor`, `wideningIsOneAtTheModel`, `wideningGrowsWithAnUnderstatedSigma`), the published accuracies finite and positive, the covariance entries finite with a non-negative diagonal and the kernel's blocks symmetric to rounding, and the accuracies never lowered by doubling the GNSS accuracies (`accuraciesFiniteAndPositive`, `gnssAccuracyScalingNeverLowersThem`), the undetermined heading of `coarse_linear` at the cap with tilt and acceleration against a gauge-fixed reference (`undeterminedHeadingIsCapped`), a failed covariance step leaving the sixteen accuracy channels empty and changing nothing else, through the success assembly's seam (`covarianceFailureLeavesTheFitAsItIs`), and the scale factors' sigmas against the library's marginal (`diagnosticsReportTheScaleSigma`). The IMU-rate reconstruction pass (`reconstructAtImuRate()` and its per-interval seam `reconstructInterval()`): equivalence with the held-ends dense graph on `coarse_maneuver` and on a rotating recording (whose published acceleration is also measured against the truth at 13, 25 and 100 Hz), exact ends and P_n equal to the factor covariance, the published time axis with a sample on a fix published once, the summaries equal to the seam's maxima, sharing by noise, zero mismatch (the step corrections zero without rotation, and minus the integration's rotation lag under it), and consistency of the published acceleration with the published velocity. The publication: the thirty-three channels the pipeline publishes are, bit for bit, the reconstruction on the test's own fit of each success fixture with its own covariance step composed and its own widening, and the four numbers of the diagnostics its summaries (`imuRateIsWhatTheFitPublishes`); the success diagnostics' key set with `accuracy`, `dense_output`, `max_step_correction_m_s2`, `max_step_correction_time_s` and `max_velocity_mismatch_m_s`, and limitations that no longer disclaim the reconstruction; the time axis is the IMU samples in `[first fix, last fix)` of the window, in the number `imu_outputs` says, on the four fits and on a recording whose GNSS (25 Hz) is faster than its IMU (12.5 Hz) (`imuRateAxisWhenGnssIsFasterThanImu`). The GNSS holes: on `bridged_hole`, every sample inside its 2.6 s hole published, its heading, tilt and accelerations within three of their own accuracies of the generating trajectory, the position and velocity of the sample covariance of the hole's interval, read through `reconstructInterval()`, growing through the hole and collapsing at the fix after it, the position and velocity within three published standard deviations (`posCovNN`, ...) of the generating trajectory, axis by axis, the composed (unwidened) velocity block larger at its largest inside the hole than beside the two fixes around it, the composed position block, which follows the two fixes' marginals across the hole, logged, the published (widened) blocks logged at the same samples, and the four published accuracies inside the hole logged against the samples nearest the two fixes around it (`bridgedHoleFollowsTheTruth`); the 30 s hole of `long_hole`, the longest the fit bridges, fitted under the production tuning, its iterations per pass, the accuracies inside the hole and the residuals at the fix after it logged, one IMU factor per interval (`longHoleConverges`); the same recording with a 60 s and a 31 s hole rejected by the cap, the reason naming the length and the limit, and with a 30 s hole passing the plan (`holeAboveTheCapIsRejected`); the cutter merging any piece with fewer than three fixes, on hand-built axes and on `long_hole` under 29.57 s segments, whose two fixes after a cut end the first segment (`sparsePiecesAreMerged`); and `input.gnss_holes` on the four fits and `long_hole` against the continuity authority and the fixtures' construction, in time order on a recording with two holes, absent from a rejection (`gnssHolesInTheAudit`); `bridged_hole` is in every list of the success fixtures' properties. The golden comparison: the fit trace (the segment account and the cost before and after every optimizer iteration) against the goldens, which localizes a golden failure to a stage, and the chosen prefix fit's iteration count against the golden's (acceptance 4; section 11; fusion-reconstruction items 901-919, 923-927, 931-937; noise-model items 1008-1011, 1013-1015, 1017-1023, 1025, 1026, 1028, 1029, 1031, 1033-1035, 1040, 1044, 1046-1048, 1051-1054, 1056-1060; GNSS-holes items 1301-1309 and 1313; staged-scale items 1401-1411, 1413; fused-accuracy items 1701-1703). Label `fusion` |
 | `tst_fusion_session` | Sensor fusion as a registered calculation (`src/fusion/fusionregistration.cpp`) on real `SessionData` engines bound to the global registry, with the real fit on the test's main thread. What it reaches: the engine's request, prepare / compute / publish and blocker paths on fixture sessions whose effective inputs are bit-identical to the kernel's fixtures, and a natural session through the real input chain. The registration's shape: seventeen registrations, the four configuration defaults first, the fit with 26 inputs (all required, `IMU/temperature` the last measurement, the four configuration attributes last) and 34 outputs (the seventeen measurements of the state, the four accuracies, the twelve covariance entries and the diagnostics, as a literal list, and the result version `batch-temperature-bias-v10`; noise-model item 1033; fused-accuracy items 1701, 1702, 1704), explicit, title "Sensor fusion", then the fused speeds `velH` and `vel` (fused-speed items 1601, 1604), `accH` and the fused accuracies `hAcc`, `vAcc` and `sAcc` before the system time (fused-accuracy item 1707). The configuration: the four constant defaults (no inputs, one output each, the default's text), a stored value winning and its removal returning to the default (`configurationDefaults`); the configuration reaching the kernel as numbers for a stated and a defaulted session and as NaN for a stored value that is not a number, a fixture session (which stores its fixture's configuration) fitted to the golden, channels and diagnostics, and the same session without the keys, reading the 12.5 Hz default, rejected by the rate check (`configurationReachesTheKernel`); a recording without keys, logged at 12.5 Hz, fitted under the default (`naturalSessionEndToEnd`) (noise-model items 1004, 1006, 1007, 1010, 1043, 1045, 1050, 1061). In spec order: cancellation at each kind of boundary through the engine's facility publishes and caches nothing (sensor-fusion-jobs acceptance 10); a session with the temperature column carries it to the kernel bit for bit and matches the kernel's direct run, and a session without `IMU/temperature` is `MissingInput` / `NotApplicable` like one without IMU data, a local origin or a time fit (11). The lifecycle: reads of every fusion value, the fused speeds, `accH`, the fused accuracies, the system-time axis, the diagnostics and an interpolated logbook value never run the fit, in any order (forty-two names, read in three orders whose strides are coprime with the count), nor does the exporter (5; fused-speed item 1607; fused-accuracy item 1708); a request runs once, publishes all outputs together, and brings the fused speeds, `accH`, the fused accuracies and `_system_time` with it, each run once: `vAcc` the square root of the published `posCovDD` bit for bit, `hAcc` and `sAcc` finite and non-negative at every sample (6; fused-speed item 1607; fused-accuracy item 1708); prepare / compute / publish equals `request()` bit for bit (7); an input change after publication drops everything while markers do not (8); a rejection is a cached result with its reason, `NotProduced` for inspection, and requestable again after an input change (9); blocker inspection reports the fit through on-demand intermediates and never starts it (12); two sessions are independent. The fit declares its kernel's algorithm string as its result version, no output of an explicit built-in has another candidate (`explicitOutputsHaveOneCandidate`), and a fit exported from one session and restored into another is indistinguishable from the fresh one: every channel bit for bit, the diagnostics byte for byte, status, detail, dependency edges (`SCHEMA_VER` among its leaves), blockers and invalidation, and the fit's snapshot lists what provided each name it looked up (`restoredFitIsIndistinguishable`) (fusion-reconstruction items 912, 921, 930). The golden comparison: every published result equals the kernel's goldens. Label `fusion` |
 | `tst_fusion_derived` | What is derived on demand from the fit's published outputs (`src/fusion/fusionregistration.cpp`), without the solver: the fit's outputs are stored as data on real `SessionData` engines bound to the global registry (`syntheticFitSession()`, section 11), and every expected value is an exactly representable literal or, for "one definition", the GNSS calculation on the same samples. The seam's premise: stored `Fusion/<name>` reads back bit for bit and the fit never runs. The registrations of `builtin.fusion.velH` and `vel` (after the fit, `velH` first), of the fused accuracies `builtin.fusion.hAcc`, `vAcc` and `sAcc` (after `accH`, in that order) and of `builtin.fusion.z`, `accAlongTrack` and `accCrossTrack`: on demand, no title or result version, their inputs in order (the track accelerations those of the GNSS ones), one candidate each, the fit their one explicit dependency, and `Fusion/velD` and `Fusion/accD` with no second producer (vertical speed and vertical acceleration). On a fixture session that has the fit's inputs and no fit, each waits on the fit alone: `Blocked` by it, merely uncomputed, unavailable, and nothing runs it. Elevation is `_LOCAL_ORIGIN_HMSL` less `down` less `_GROUND_ELEV`, recomputed from an attribute edit without the fit and unavailable when either attribute is not a number. The track accelerations' known answers: along north, reversed, a vertical descent, a wind that turns a skewed ground velocity north, no motion through the air, a wind that is not a number (zero), no stored wind (the constant zero default) and unequal lengths (unavailable). The fused and the GNSS track accelerations agree on the same samples and wind (bit-exact in exact mode, within 4 ulp otherwise). The fused speeds' known answers (Pythagorean triples with mixed signs, a standstill, two triples halved), read without the fit, and unequal lengths (a short `velE` takes both speeds, a short `velD` the total alone); the fused and the GNSS speeds agree on the same samples (bit-exact in exact mode, within 4 ulp otherwise) (`fusedSpeedsKnownAnswers`, `fusedSpeedsAreTheGnssDefinitions`, `derivedValuesWaitOnTheFit`; fused-speed items 1601, 1607). The fused accuracies' known answers on the covariance blocks stored as data, exact except one sample within 1e-12: the horizontal accuracy on diagonal, rotated and (5, +-4, 5) horizontal blocks and the zero block, whatever the down entries; the vertical accuracy on down variances 6.25 and 0; the speed accuracy's rule (the horizontal acceleration accuracy's) under a diagonal block, a velocity at or above its along-track sigma giving that sigma, one below it and a zero velocity the largest eigenvalue, under a full block both branches of the 3x3 form, and the zero block 0; unavailable without the blocks (the velocity alone gives no speed accuracy, the down variance alone a vertical and no horizontal one) and with one entry one sample short (the calculation that reads it unavailable, the others as they were); the fit never runs (`fusedAccuraciesKnownAnswers`, `derivedRegistrationShape`, `derivedValuesWaitOnTheFit`; fused-accuracy items 1707, 1708). The orientation vocabulary (`src/fusion/orientation.h`): exactly 24 pairs in the enumeration order, the default first, distinct tokens and labels, each token parsing back and nothing else parsing, every body-to-device rotation exact and proper with the columns forward, forward x up and -up; the attribute's one definition, its choices the enumeration, also after the entry point registers on a private registry. The attitude (`builtin.fusion.attitude`, after the orientation's constant default `builtin.default._ORIENTATION`): its registration, waiting on the fit on a fixture session, and on the quaternion stored as data (expected values built by hand from Euler angles and a hand-written default mount, within 1e-9 degrees): a level north-facing body, known heading, pitch and roll, two turns of heading unwrapped and measured from north (unchanged by a GNSS track or a course reference of any kind, and available without GNSS data), roll and pitch in their ranges through a barrel roll and a loop, the forward axis exactly vertical (the body pitched straight up and down between ordinary samples under the default orientation, and a level device under the mounts forward +z and forward -z, the sample whose pitch argument rounds past 1): all three angles published and finite, pitch at +90 or -90, roll in range and the later samples still reading their own angles, side mounts, the fit's own yaw, pitch and roll from a success golden's quaternion under forward +x, up -z (within 1e-6 degrees), an invalid stored orientation (unavailable) and a stored one recomputed without a fit. The Orientation column's model and bulk edit through `ChoiceFixture` on fixture sessions, loaded and as stubs: the default's label with nothing written and its token cached, a token stored and written verbatim, a token outside the list, a label, an empty and an invalid value refused, and the bulk edit setting and refusing (fusion-plots items 806-827, 831, 835, 843, 844, 849, 850, 856-858). Nothing is held to a golden bit for bit (the one golden it reads, `coarse_maneuver`'s, is compared within 1e-6 degrees), so no `_exact` run. Label `fusion` |
-| `tst_fusion_jobs` | The real fit through the executor on a real `SessionModel`, on the executor's 64 MiB worker: one job publishes all thirty-four outputs together, the thirty-three measurements aligned, and announces them through the session model (acceptance 6; noise-model item 1042; fused-accuracy item 1704); the executor gives the bits a synchronous request gives (7); the solver's oneTBB helper threads run at the worker's below-normal priority while they help a fit (`solverThreadsRunAtWorkerPriority`); an input edit during the fit asks the fit to stop at once, ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job, and every one of the fifteen fusion plots is `NotApplicable` for it (11; noise-model item 1063; fused-speed item 1603); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before the fit, from the published result after it (with the `"records"` stamp in `index.json`), shown by the unloaded row after a restart without a load, and dropped with the record by an input change (`columnOnFusionOutputIsCachedFromRecord`); an altitude marker added at run time and registered again after a restart keeps that column's and the description's cached values of an unloaded session - no load, nothing pending (`altitudeMarkerKeepsColumnsOfUnloadedSession`); once that value of an unloaded session is gone from `index.json` (cleared, or dropped by an exit-marker move made while the application was closed: `_EXIT_TIME` is not bulk-editable, so the test repeats the `LogbookManager` calls of the bulk edit's stub path - temporary load, column marked unsaved, save), the column worker refills it after a restart from the stored fit restored into its temporary copy: the roll at the marker's time, bit-identical to the loaded session's, with no load of the row, no job, no fit and the record's bytes unchanged (`workerRefillsColumnFromStoredFit`); while the loaded row's cell shows the golden's number the moment the job publishes (`dataChanged` for that row only, and the number already there when the view is told); shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the executor delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 11 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
+| `tst_fusion_jobs` | The real fit through the executor on a real `SessionModel`, on the executor's 64 MiB worker: one job publishes all thirty-four outputs together, the thirty-three measurements aligned, and announces them through the session model (acceptance 6; noise-model item 1042; fused-accuracy item 1704); the executor gives the bits a synchronous request gives (7); the solver's oneTBB helper threads run at the worker's below-normal priority while they help a fit (`solverThreadsRunAtWorkerPriority`); an input edit during the fit asks the fit to stop at once, ends the job Superseded, publishes nothing, and leaves it requestable (8); a rejected recording is a Succeeded job carrying the reason, with nothing to do on re-request and a fresh run after an input change (9); cancel during the fit publishes nothing and the next job starts afterwards (10); a session without IMU data cannot have a job, and every one of the eighteen fusion plots is `NotApplicable` for it (11; noise-model item 1063; fused-speed item 1603; fused-accuracy item 1711); the logbook column over `Fusion/roll`, the column worker and the saver never start a fit (5), and that column is cached as unavailable before the fit, from the published result after it (with the `"records"` stamp in `index.json`), shown by the unloaded row after a restart without a load, and dropped with the record by an input change (`columnOnFusionOutputIsCachedFromRecord`); an altitude marker added at run time and registered again after a restart keeps that column's and the description's cached values of an unloaded session - no load, nothing pending (`altitudeMarkerKeepsColumnsOfUnloadedSession`); once that value of an unloaded session is gone from `index.json` (cleared, or dropped by an exit-marker move made while the application was closed: `_EXIT_TIME` is not bulk-editable, so the test repeats the `LogbookManager` calls of the bulk edit's stub path - temporary load, column marked unsaved, save), the column worker refills it after a restart from the stored fit restored into its temporary copy: the roll at the marker's time, bit-identical to the loaded session's, with no load of the row, no job, no fit and the record's bytes unchanged (`workerRefillsColumnFromStoredFit`); while the loaded row's cell shows the golden's number the moment the job publishes (`dataChanged` for that row only, and the number already there when the view is told); shutdown during a fit. Mid-run actions are taken in a slot on the job's first progress text, which the executor delivers before the job's end: no gate, no sleeps. `realRecordingCheck` is the optional local check of section 11 and skips unless `FLYSIGHT_FUSION_RECORDING` is set. Label `fusion` |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit, driven as a child process on fixtures written out as `TRACK.CSV` / `SENSOR.CSV`: its diagnostics equal a direct `Fusion::run()` on the fixture and equal the application's own import-and-fit path (`SessionImport` on a `SessionModel`); the CSV output reloads bit for bit; `--dump-inputs` shows the twenty-six effective inputs, including the legacy gyro scale of a file without `SCHEMA_VER` and the default text of the configuration a recording does not state (noise-model items 1007, 1050, 1061); a rejection exits 1 with the failure JSON and writes no CSV; usage and import failures exit 64 and 3; no calculation on the fit's input path declares a preference (the premise of the model-free import); and the thirty-three output channels of `fitOutputChannels()` are the golden's columns in order, which the CSV's header lists (fusion-reconstruction items 912, 923; fused-accuracy item 1704). Label `fusion` |
 | `tst_fusion_golden_exact`, `tst_fusion_kernel_exact`, `tst_fusion_session_exact`, `tst_fusion_jobs_exact`, `tst_fusion_rows_exact`, `tst_fusion_store_exact`, `tst_fusion_runner_exact` | Not executables: the seven tests above that compare with the goldens, run a second time with `FLYSIGHT_FUSION_EXACT=1` and otherwise the same environment, so that every golden comparison is bit equality (section 11, "Tolerance policy"). Registered only where that is a fair demand, the compiler the goldens were captured with (`FLYSIGHT_FUSION_EXACT_TESTS`, section 3). The first two decide bit-identity; the next four show that the bits survive the engine, the executor's worker thread, the demand layer's plot demand and a stored and restored record; the last is bit identity across the process boundary (the runner's output against an in-process run). Labels `fusion` and `exact` |
-| `tst_fusion_rows` | The plot-row script with the **real** fusion plots: `PlotModel` + `CalculationDemand` + the executor + `SessionModel` + the fusion registration, with real fits on the executor's 64 MiB worker and the fifteen plots of `fusionPlots()` (`tests/fusion/fusionsessions.h`, which mirrors `MainWindow::registerBuiltInPlots()`; `audit_cleanup` pins the application's list at fifteen rows). All fifteen plots are explicit-backed (the fit their one requested calculation) and every one is drawn after the one fit, on the fit's time axis (`allFusionPlotsAreExplicitBacked`, named without a count; noise-model items 1037, 1063; fused-speed items 1602, 1603, 1608); the four accuracy plots are merely uncomputed before the fit, not produced for a rejected recording, which is listed once with the fit's reason, and not applicable to a session without IMU data, like every fusion plot (`accuracyPlotsAreAbsentWithoutAFit`; noise-model item 1038); the row script of acceptance 15 on three real tracks (checking fits them one after another with no other action, the sessions still to compute falling as each publishes; unchecking mid-way drops the waiting one and lets the running one finish; checking again resumes; a fourth track shown is fitted with no other action), with every published track held to the kernel's goldens and the job history as a literal; Heading, Pitch and Roll share one job and one progress text (`headingPitchRollShareOneJob`); `accH` is blocked by the fit and never has a job of its own; the Total speed row alone sees through `vel` and `velH` to the fit, creates one job, the fit, and is drawn after it on the fit's time axis, neither speed ever a job (`totalSpeedRowIsBlockedByFusion`; fused-speed items 1603, 1609); a session without IMU data is never counted and never listed among failures before, during and after a fit (11); a rejected recording is listed among failures with the reason, offers no retry, and is fitted again after its input changes and settles (9); sessions are edited, tracks hidden and shown and other values read while a real fit runs, without disturbing it, and are fitted afterwards with no other action (19, the half that needs no widget); the demand layer's items on demand, failures and chains unchanged in what they assert with real fits (status-bar item 753); the measurements of the removed plots still serve a logbook column kept from before (the fit's roll and the local frame's north at the exit marker, labelled with the measurement's name, `Fusion/roll @ ...`, beside a column over the Roll row labelled `Roll @ ...`) and the fit's stored record carries every channel whose plot the fusion-plots specification removed, `velD` among them though it is drawn again as Vertical speed (`removedPlotMeasurementsStayAvailable`) (fusion-plots items 801-804, 806, 808, 842, 853, 854, 856; fusion-reconstruction item 930). Steered by the first progress text of a job and by `jobFinished`: no gate, no sleeps. Label `fusion` |
-| `tst_fusion_store` | The fit's stored result: bit-identical after unload and restart (the thirty-three channels, the four accuracies and the twelve covariance entries among them, and the fused speeds `velH` and `vel` derived from them, with the Total speed row checked after the restart and nothing run; noise-model item 1042; fused-speed items 1603, 1609; also when fitted before the first save), rejection / solver failure listed with its reason, dependency (a declared input, a configuration attribute stored over its default, `SCHEMA_VER`) and code-stamp invalidation (the fit's result version stamped as `batch-temperature-bias-v5`, the algorithm string the documented noise model retired, the one users' logbooks hold; noise-model items 1041, 1062), a record rewritten to `batch-temperature-bias-v9`, the string before the covariance blocks, deleted at load and the fit, still wanted by the checked Roll row, run once more to its end and stored under the current string with the golden's channels, nothing run after (`recordUnderPreviousAlgorithmIsComputedAgainOnce`; fused-accuracy items 1702, 1704), merges, session file untouched, not requested after the `cache/` folder was deleted while closed (one fit offered while the Roll plot is checked, dropped when unchecked, nothing run); kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a provider's result version in the record; a logbook column over roll filled for sessions that are not loaded, and nothing fitted again after a restart (`columnOverFusionFillsUnloadedSessions`, `fusionColumnWithStoredFitsRunsNothing`); a column over a fusion row (each of the four accuracies, and Total speed, typed `speed`), at the exit marker and typed as its row, filled for a session that is not loaded by one fit, its record written and its value cached and indexed with the fit's stamp, the value the loaded session reads bit for bit, its text the unit converter's for the row's type and its label the row's name (`fusionColumnFillsUnloadedSessions`; noise-model items 1039, 1063; fused-speed items 1603, 1609); a stored success whose accuracy was not computed (the record rewritten without the sixteen accuracy channels, the four accuracies and the twelve covariance entries, no reason, the diagnostics' `accuracy.computed` false) restored without the sixteen and with the seventeen of the golden, the Roll row done with nothing failed and nothing fitted again (`restoredFitWithoutAccuracyDrawsTheRest`; noise-model item 1038; fused-accuracy item 1704); also run as `_exact` (fusion-reconstruction items 920-922, 938) |
+| `tst_fusion_rows` | The plot-row script with the **real** fusion plots: `PlotModel` + `CalculationDemand` + the executor + `SessionModel` + the fusion registration, with real fits on the executor's 64 MiB worker and the eighteen plots of `fusionPlots()` (`tests/fusion/fusionsessions.h`, which mirrors `MainWindow::registerBuiltInPlots()`; `audit_cleanup` pins the application's list at eighteen rows). All eighteen plots are explicit-backed (the fit their one requested calculation) and every one is drawn after the one fit, on the fit's time axis (`allFusionPlotsAreExplicitBacked`, named without a count; noise-model items 1037, 1063; fused-speed items 1602, 1603, 1608; fused-accuracy items 1710, 1711, 1714); the seven accuracy plots (the fit's four, and the horizontal, vertical and speed accuracies derived from its covariance blocks) are merely uncomputed before the fit, not produced for a rejected recording, which is listed once with the fit's reason, and not applicable to a session without IMU data, like every fusion plot (`accuracyPlotsAreAbsentWithoutAFit`; noise-model item 1038; fused-accuracy items 1711, 1714); the row script of acceptance 15 on three real tracks (checking fits them one after another with no other action, the sessions still to compute falling as each publishes; unchecking mid-way drops the waiting one and lets the running one finish; checking again resumes; a fourth track shown is fitted with no other action), with every published track held to the kernel's goldens and the job history as a literal; Heading, Pitch and Roll share one job and one progress text (`headingPitchRollShareOneJob`); `accH` is blocked by the fit and never has a job of its own; the Total speed row alone sees through `vel` and `velH` to the fit, creates one job, the fit, and is drawn after it on the fit's time axis, neither speed ever a job (`totalSpeedRowIsBlockedByFusion`; fused-speed items 1603, 1609); the Speed accuracy row alone sees through `sAcc` to the fit likewise, creates one job, the fit, and is drawn after it on the fit's time axis, the fit and `sAcc` each run once and `sAcc` never a job (`speedAccuracyRowIsBlockedByFusion`; fused-accuracy items 1711, 1714); a session without IMU data is never counted and never listed among failures before, during and after a fit (11); a rejected recording is listed among failures with the reason, offers no retry, and is fitted again after its input changes and settles (9); sessions are edited, tracks hidden and shown and other values read while a real fit runs, without disturbing it, and are fitted afterwards with no other action (19, the half that needs no widget); the demand layer's items on demand, failures and chains unchanged in what they assert with real fits (status-bar item 753); the measurements of the removed plots still serve a logbook column kept from before (the fit's roll and the local frame's north at the exit marker, labelled with the measurement's name, `Fusion/roll @ ...`, beside a column over the Roll row labelled `Roll @ ...`) and the fit's stored record carries every channel whose plot the fusion-plots specification removed, `velD` among them though it is drawn again as Vertical speed (`removedPlotMeasurementsStayAvailable`) (fusion-plots items 801-804, 806, 808, 842, 853, 854, 856; fusion-reconstruction item 930). Steered by the first progress text of a job and by `jobFinished`: no gate, no sleeps. Label `fusion` |
+| `tst_fusion_store` | The fit's stored result: bit-identical after unload and restart (the thirty-three channels, the four accuracies and the twelve covariance entries among them, and the fused speeds `velH` and `vel` and the fused accuracies `hAcc`, `vAcc` and `sAcc` derived from them, with the Total speed and Speed accuracy rows checked after the restart and nothing run; noise-model item 1042; fused-speed items 1603, 1609; fused-accuracy item 1711; also when fitted before the first save), rejection / solver failure listed with its reason, dependency (a declared input, a configuration attribute stored over its default, `SCHEMA_VER`) and code-stamp invalidation (the fit's result version stamped as `batch-temperature-bias-v5`, the algorithm string the documented noise model retired, the one users' logbooks hold; noise-model items 1041, 1062), a record rewritten to `batch-temperature-bias-v9`, the string before the covariance blocks, deleted at load and the fit, still wanted by the checked Roll row, run once more to its end and stored under the current string with the golden's channels, nothing run after (`recordUnderPreviousAlgorithmIsComputedAgainOnce`; fused-accuracy items 1702, 1704), merges, session file untouched, not requested after the `cache/` folder was deleted while closed (one fit offered while the Roll plot is checked, dropped when unchecked, nothing run); kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a provider's result version in the record; a logbook column over roll filled for sessions that are not loaded, and nothing fitted again after a restart (`columnOverFusionFillsUnloadedSessions`, `fusionColumnWithStoredFitsRunsNothing`); a column over a fusion row (each of the four accuracies, and Total speed and Speed accuracy, typed `speed`), at the exit marker and typed as its row, filled for a session that is not loaded by one fit, its record written and its value cached and indexed with the fit's stamp, the value the loaded session reads bit for bit, its text the unit converter's for the row's type and its label the row's name (`fusionColumnFillsUnloadedSessions`; noise-model items 1039, 1063; fused-speed items 1603, 1609; fused-accuracy items 1711, 1714); a stored success whose accuracy was not computed (the record rewritten without the sixteen accuracy channels, the four accuracies and the twelve covariance entries, no reason, the diagnostics' `accuracy.computed` false) restored without the sixteen and with the seventeen of the golden, the three accuracies derived from the blocks (`hAcc`, `vAcc`, `sAcc`) empty, unavailable and not produced, the Roll row done with nothing failed and nothing fitted again (`restoredFitWithoutAccuracyDrawsTheRest`; noise-model item 1038; fused-accuracy items 1704, 1711, 1714); also run as `_exact` (fusion-reconstruction items 920-922, 938) |
 
 Three executables are built with these but are not tests and are not counted
 above. `solver_deploy_probe` is a plain executable (no Qt) around the same
@@ -181,7 +181,7 @@ comparison (section 12.2).
 
 | Test | Covers |
 |------|--------|
-| `audit_cleanup` | No old mechanism remains, each fact has one authority, none of the mechanisms of `sensor-fusion-clean-port` that have no successor exists, the structural rules of background work hold (one worker, no locks, GTSAM confined, work started only by the demand layer through the executor, views that only read the demand layer, a model and scheduler that know no jobs, a widget-free core), stored results live in the logbook's `cache/` folder, never in the session file, and are named, written, read, restored and deleted in one place each, and a stored result goes stale only when its in-memory twin would be dropped or its code changed (no environment fingerprint in a record, the plug-in code identity computed in one place, teardown removals at shutdown only), and no refresh, cancel, queue or plot-request logic remains in code or documents, background work is shown in one place, the status bar, and a failure once per recording, on its logbook row (the per-source presentation, its indicators, its clock and the logbook's progress line gone from code and documents), a default standing in for a value the user has not set is a calculation, a constant one registered by one helper, one type owns the mount vocabulary, the plot list has its fifteen fusion plots, the four accuracies in the deep scheme of the GNSS accuracy plots, the fit's down velocity and down acceleration the only fit channels with a row, and no local-frame or removed fusion plot remains in code or documents, nor a document that counts the fusion plots as twelve, the noise model's configuration, datasheet table, scale state and covariance each have one authority, the fusion document carries the validation of the model, and every line of `tests/acceptance_map.txt` resolves (section 10) |
+| `audit_cleanup` | No old mechanism remains, each fact has one authority, none of the mechanisms of `sensor-fusion-clean-port` that have no successor exists, the structural rules of background work hold (one worker, no locks, GTSAM confined, work started only by the demand layer through the executor, views that only read the demand layer, a model and scheduler that know no jobs, a widget-free core), stored results live in the logbook's `cache/` folder, never in the session file, and are named, written, read, restored and deleted in one place each, and a stored result goes stale only when its in-memory twin would be dropped or its code changed (no environment fingerprint in a record, the plug-in code identity computed in one place, teardown removals at shutdown only), and no refresh, cancel, queue or plot-request logic remains in code or documents, background work is shown in one place, the status bar, and a failure once per recording, on its logbook row (the per-source presentation, its indicators, its clock and the logbook's progress line gone from code and documents), a default standing in for a value the user has not set is a calculation, a constant one registered by one helper, one type owns the mount vocabulary, the plot list has its eighteen fusion plots, the seven accuracy rows each a literal colour, the fit's down velocity and down acceleration the only fit channels with a row, and no local-frame or removed fusion plot remains in code or documents, nor a document that counts the fusion plots as twelve or fifteen, the noise model's configuration, datasheet table, scale state and covariance each have one authority, the fusion document carries the validation of the model, and every line of `tests/acceptance_map.txt` resolves (section 10) |
 
 The `tst_calc*` tests drive `src/engine/` with synthetic calculations against
 `FakeSessionState` / `FakePreferenceProvider` (`support/fakesessionstate.h`).
@@ -782,8 +782,9 @@ specification "One status bar for background work" (9.8), and item 115 again
 by the specification "Sensor fusion plots, attitude and the orientation
 attribute" (9.9), by the specification "The documented noise model and the
 accuracy, part 1" (9.11), whose four accuracy plots made the real fusion plots
-twelve, and by the specification "Fused speed plots" (9.17), whose three fused
-speeds make them fifteen.
+twelve, by the specification "Fused speed plots" (9.17), whose three fused
+speeds made them fifteen, and by the specification "Fused position and speed
+accuracy" (9.18), whose three accuracies make them eighteen.
 
 A line of the map has one of four forms, one per kind of evidence:
 
@@ -821,12 +822,12 @@ never stand alone.
 | 8 | change after publication drops the result and dependents | `tst_calcengine_async::changeAfterPublicationDropsDependents`; `tst_fusion_session::changeAfterPublicationDropsEverything` |
 | 9 | rejection: unavailable, diagnostics reason, succeeded job with the reason, no second run, fresh run after an input change | `tst_fusion_session::rejectionIsACachedResult`; `tst_fusion_jobs::rejectedRecordingIsSucceededJob`; (synthetic) `tst_jobqueue::rejectionSucceedsWithReason`; (listed among the failures) `tst_fusion_rows::rejectedTrackShowsBadge` |
 | 10 | (as amended) cancel through the executor stops at the next boundary, publishes nothing, requestable; the chosen next job starts | `tst_fusion_golden::cancelAtEachKindOfBoundary`, `cancelDuringPreparation`; `tst_fusion_session::cancelStopsAtNextBoundary`; `tst_jobqueue::cancelRunningThenNextStarts`; `tst_fusion_jobs::cancelDuringFitThenNextJobStarts` |
-| 11 | (as amended) no-IMU session: never counted in progress nor listed among the failures; no job possible | `tst_jobqueue::refusesMissingInput`; `tst_calculation_demand::sessionWithoutInputIsNeverListed`; `tst_fusion_session::missingInputsAreNotApplicable`; `tst_fusion_jobs::noImuSessionCannotHaveAJob`; `tst_fusion_rows::noImuSessionIsNeverCounted` (all fifteen real rows) |
+| 11 | (as amended) no-IMU session: never counted in progress nor listed among the failures; no job possible | `tst_jobqueue::refusesMissingInput`; `tst_calculation_demand::sessionWithoutInputIsNeverListed`; `tst_fusion_session::missingInputsAreNotApplicable`; `tst_fusion_jobs::noImuSessionCannotHaveAJob`; `tst_fusion_rows::noImuSessionIsNeverCounted` (all eighteen real rows) |
 | 12 | blockers report fusion for `accH`, nothing after publication, never a fit | `tst_calcengine_blockers::derivedNameReportsExplicitBlocker`, `inspectionNeverRunsExplicit`; `tst_fusion_session::blockersReportFusion` |
 | 13 | (as amended) B consumes A: checking the plot runs A then B | `tst_calcengine_blockers::chainedBlockers`; `tst_calculation_demand::chainedBlockersContinue` |
 | 14 | (as amended) one job at a time; at most the running and one chosen next job; no duplicates | `tst_jobqueue::oneAtATimeInOfferOrder`, `duplicateOffersCreateNoDuplicates`, `holdsAtMostRunningAndChosenNext` |
 | 15 | (as amended) row script, without widgets, synthetic: checking computes the visible tracks one after another, the sessions still to compute falling; unchecking drops the waiting ones, a track shown is computed | `tst_calculation_demand::rowScript`, `showingASessionStartsIt`, `uncheckingDropsWaitingPairsKeepsRunning` |
-| 15 | (as amended) row script with the real fusion plots (the fifteen, the four accuracies since the specification of 1001-1065, the three fused speeds after Elevation since the specification of 1601-1612); heading / pitch / roll share one job; `accH` blocked by fusion | `tst_fusion_rows::realRowScript`, `headingPitchRollShareOneJob`, `accHRowIsBlockedByFusion`, `rejectedTrackShowsBadge`, `allFusionPlotsAreExplicitBacked` |
+| 15 | (as amended) row script with the real fusion plots (the eighteen, the four accuracies since the specification of 1001-1065, the three fused speeds after Elevation since the specification of 1601-1612, the horizontal, vertical and speed accuracies after Vertical acceleration accuracy since the specification of 1701-1717); heading / pitch / roll share one job; `accH` blocked by fusion | `tst_fusion_rows::realRowScript`, `headingPitchRollShareOneJob`, `accHRowIsBlockedByFusion`, `rejectedTrackShowsBadge`, `allFusionPlotsAreExplicitBacked` |
 | 15 | what the user sees | `manual M3`, `M4`, `M6`, `M7` |
 | 16 | (as amended) start-up restore with hidden tracks starts nothing; a profile or a programmatic check creates demand like a click (logic) | `tst_calculation_demand::startupRestoreWithHiddenSessionsStartsNothing`, `profileStyleApplyCreatesDemand`, `programmaticCheckCreatesDemand` |
 | 16 | ... and the plot widget does not warn "No data available" about a checked plot that is merely uncomputed (the predicate; the widget's one call of it is M1) | `tst_calculation_demand::merelyUncomputedIsNotWorthAWarning` |
@@ -1074,9 +1075,11 @@ work" (9.8), which restates them again where 9.7 had. Clause 9 is stated as
 amended by the specification "Sensor fusion plots, attitude and the
 orientation attribute" (9.9), again by the specification "The documented
 noise model and the accuracy, part 1" (9.11), which made the fusion plots
-twelve, five of them outputs of the fit, and again by the specification
-"Fused speed plots" (9.17): the fusion plots are fifteen, six of them outputs
-of the fit.
+twelve, five of them outputs of the fit, again by the specification "Fused
+speed plots" (9.17), which made them fifteen, six of them outputs of the fit,
+and again by the specification "Fused position and speed accuracy" (9.18):
+the fusion plots are eighteen, six of them outputs of the fit and twelve
+derived from its outputs.
 
 | # | Section | Clause | Evidence |
 |---|---|---|---|
@@ -1088,7 +1091,7 @@ of the fit.
 | 506 | 2 | each component's contract can be stated without naming the others (section 12 gives the contracts) | `tst_calculation_demand::nullCollaborators`; `tst_result_columns::columnWorkerIsUnchangedByDemand`; `tst_session_model_engine::schedulerTaskCanBeUnregistered`; `audit demand` |
 | 507 | 3 | the fusion kernel, its outputs and the record format are unchanged; the job history the jobs dock will read stays as it is | `tst_fusion_golden::successFixturesMatchGolden`; `tst_result_records::layoutIsPinned`; `tst_jobmodel::historyFromSignalsAlone`; `tst_fusion_store::restoredAfterRestartIsBitIdentical` |
 | 508 | 3 | nothing about demand or the job history is persisted across restarts, and no user-facing switch pauses or throttles background work | `tst_jobmodel::nothingIsPersisted`; `tst_calculation_demand::jobLevelFailureIsBadgedNotRerunUntilRestart`, `fillTaskIsLowestAndNotCancellable`; `audit demand` |
-| 509 | 5, as amended | plot demand: for every checked plot whose value is a requested output, every visible session needs the requested calculations that block that output; the fifteen plots of the "Sensor fusion" category are such plots: six are outputs of the fit (vertical acceleration, the four accuracies since the specification of 1001-1065, and vertical speed since the specification of 1601-1612), and the nine derived from its outputs are blocked by it | `tst_calculation_demand::rowScript`, `ordinaryPlotsAreNeverInspected`, `hiddenAndStubRowsAreNotTracks`, `failedLoadPlaceholderIsNotATrack`, `plotIdMatchesPlotModelRole`, `uncheckedPlotsAreNeverInspected`; `tst_fusion_rows::allFusionPlotsAreExplicitBacked` |
+| 509 | 5, as amended | plot demand: for every checked plot whose value is a requested output, every visible session needs the requested calculations that block that output; the eighteen plots of the "Sensor fusion" category are such plots: six are outputs of the fit (vertical acceleration, the four accuracies since the specification of 1001-1065, and vertical speed since the specification of 1601-1612), and the twelve derived from its outputs are blocked by it (the horizontal, vertical and speed accuracies after Vertical acceleration accuracy since the specification of 1701-1717) | `tst_calculation_demand::rowScript`, `ordinaryPlotsAreNeverInspected`, `hiddenAndStubRowsAreNotTracks`, `failedLoadPlaceholderIsNotATrack`, `plotIdMatchesPlotModelRole`, `uncheckedPlotsAreNeverInspected`; `tst_fusion_rows::allFusionPlotsAreExplicitBacked` |
 | 510 | 5 | column demand: for every enabled logbook column whose value depends on a requested output, every session in the logbook needs the requested calculations that block that value | `tst_calculation_demand::enablingColumnFillsEveryUnloadedSession`, `loadedHiddenSessionsNeedNoLoad`, `ordinaryColumnsCreateNoDemand`, `columnIdIsTheDefinitionKey`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions`; `manual M24` |
 | 511 | 5 | a pair is in demand only while it has no result; a result counts whether published in this run or restored, success or input-determined failure | `tst_calculation_demand::onlyRequestableCalculationsAreOffered`, `storedResultsCreateNoJob`, `inputDeterminedFailureIsStoredBadgedNeverRerun`, `columnFailuresAreBadgedNotReloaded`; `tst_fusion_store::restoredRejectionShowsBadge`, `restoredAfterRestartIsBitIdentical` |
 | 512 | 5 | a pair whose calculation cannot apply (a declared input missing) is never in demand and is not reported anywhere | `tst_calculation_demand::sessionWithoutInputIsNeverListed`, `notApplicableSessionIsSettledWithoutAJob`; `tst_jobqueue::refusesMissingInput`; `tst_fusion_rows::noImuSessionIsNeverCounted`; `tst_fusion_store::columnOverFusionFillsUnloadedSessions` |
@@ -1346,18 +1349,23 @@ and then Heading accuracy, Tilt accuracy, Horizontal acceleration accuracy and
 Vertical acceleration accuracy, which have no GNSS counterpart and are named
 as the GNSS accuracy plots are. Items 801, 802, 842, 854, 862 and 863 are
 stated as amended again by the specification "Fused speed plots" (9.17): the
-category holds fifteen plots, Horizontal speed, Vertical speed and Total speed
+category held fifteen plots, Horizontal speed, Vertical speed and Total speed
 after Elevation, named, united and typed as the GNSS speeds, so that item 802
-speaks of the first eleven. Item 803 is stated as amended by the same
+spoke of the first eleven. Item 803 is stated as amended by the same
 specification: the fused down velocity is drawn as Vertical speed, and the
-north and east velocity plots stay removed. The test that held the eight rows
+north and east velocity plots stay removed. Items 801, 802, 842, 854, 862 and
+863 are stated as amended again by the specification "Fused position and
+speed accuracy" (9.18): the category holds eighteen plots, Horizontal
+accuracy, Vertical accuracy and Speed accuracy after Vertical acceleration
+accuracy, named, united and typed as the GNSS accuracies, so that item 802
+speaks of the first eleven and the last three. The test that held the eight rows
 is `allFusionPlotsAreExplicitBacked`, named without a count; items 806, 808,
 853 and 856 cite it under that name and hold as they are.
 
 | # | Section | Clause | Evidence |
 |---|---|---|---|
-| 801 | 5, as amended | the "Sensor fusion" category holds exactly fifteen plots, in this order: Elevation, Horizontal speed, Vertical speed, Total speed, Horizontal acceleration, Vertical acceleration, Along-track acceleration, Cross-track acceleration, Heading, Pitch, Roll, Heading accuracy, Tilt accuracy, Horizontal acceleration accuracy, Vertical acceleration accuracy (the three speeds since the specification of 1601-1612, the last four since the specification of 1001-1065) | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`; `audit naming`; `manual M39`, `M51` |
-| 802 | 5, as settled, as amended | each of the first eleven is named, united and typed as its GNSS counterpart (Elevation, the three speeds since the specification of 1601-1612, the four accelerations, Heading as Course), Pitch and Roll as angles, so that the two overlay; a fused plot's colour differs from its counterpart's; the four accuracy plots have no GNSS counterpart and are named as the GNSS accuracy plots are | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`; `manual M39`, `M51`, `M58` |
+| 801 | 5, as amended | the "Sensor fusion" category holds exactly eighteen plots, in this order: Elevation, Horizontal speed, Vertical speed, Total speed, Horizontal acceleration, Vertical acceleration, Along-track acceleration, Cross-track acceleration, Heading, Pitch, Roll, Heading accuracy, Tilt accuracy, Horizontal acceleration accuracy, Vertical acceleration accuracy, Horizontal accuracy, Vertical accuracy, Speed accuracy (the three speeds since the specification of 1601-1612, the four after Roll since the specification of 1001-1065, the last three since the specification of 1701-1717) | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`; `audit naming`; `manual M39`, `M51` |
+| 802 | 5, as settled, as amended | each of the first eleven and the last three is named, united and typed as its GNSS counterpart (Elevation, the three speeds since the specification of 1601-1612, the four accelerations, Heading as Course; Horizontal accuracy, Vertical accuracy and Speed accuracy since the specification of 1701-1717), Pitch and Roll as angles, so that the two overlay; a fused plot's colour differs from its counterpart's; the four accuracy plots after Roll have no GNSS counterpart and are named as the GNSS accuracy plots are | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`; `manual M39`, `M51`, `M58` |
 | 803 | 5, as amended | the fused north, east and down position, north and east velocity, north and east acceleration, roll, pitch, yaw and quaternion plots are removed, and the "GNSS (Local frame)" category with them; the fused down velocity is drawn as Vertical speed since the specification of 1601-1612 | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`; `audit naming`; `manual M39` |
 | 804 | 5 | every measurement behind a removed plot still exists and is computed as before: the local frame feeds the fit and a column, and the fit's channels are its record, read by a column kept from before, the stored result and plug-ins | `tst_fusion_rows::removedPlotMeasurementsStayAvailable`; `tst_fusion_jobs::columnOnFusionOutputIsCachedFromRecord`; `manual M44` |
 | 805 | 5 | applying a profile enables the listed plots the application has and ignores the rest silently (no message, no log, no failure); nothing rewrites a profile | `tst_calculation_demand::profileNamingRemovedPlotsAppliesWithoutThem`; `manual M43` |
@@ -1397,7 +1405,7 @@ is `allFusionPlotsAreExplicitBacked`, named without a count; items 806, 808,
 | 839 | 10, as settled | the logbook's legacy backfill no longer writes wind either; it adds jumper mass and planform area only | `tst_persistence_roundtrip::releasedLogbookBackfillIsAdditive`; `tst_logbook_index::rawLoadSkipsBackfill`; `audit constant-defaults` |
 | 840 | 10 | jumper mass, planform area and the fixed ground elevation stay creation defaults of the importer (section 3) | `tst_importer::creationDefaultsOnlyFillAbsent`, `fixedGroundElevationOnlyInFixedMode`; `tst_smoke::importAppliesCreationDefaults` |
 | 841 | 10, as amended | a stored attribute wins even when invalid or empty, so no edit path stores a blank as a way back to a default; the engine's removal of a stored value falls back to the calculation | `tst_calcengine::storedInvalidValueStillWins`, `removingStoredFallsBackToCalc`; `tst_choice_attribute::choiceEditRefusesATokenOutsideTheList`, `bulkEditRefusesATokenOutsideTheList` |
-| 842 | 11, as amended | the plot list shows "Sensor fusion" with fifteen plots, the eleven named as the GNSS plots (the three fused speeds after Elevation since the specification of 1601-1612) and the four accuracies (since the specification of 1001-1065) named as the GNSS accuracy plots, and no local-frame category; checking a fusion plot starts the fit as before, the status bar shows it, and a stored fit draws at once | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`, `realRowScript`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`; `manual M39`, `M51` |
+| 842 | 11, as amended | the plot list shows "Sensor fusion" with eighteen plots, the eleven named as the GNSS plots (the three fused speeds after Elevation since the specification of 1601-1612), the four accuracies (since the specification of 1001-1065) named as the GNSS accuracy plots, and the three accuracies after them named as the GNSS accuracies they overlay (since the specification of 1701-1717), and no local-frame category; checking a fusion plot starts the fit as before, the status bar shows it, and a stored fit draws at once | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`, `realRowScript`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`; `manual M39`, `M51` |
 | 843 | 11 | the attitude plots are in the aircraft convention for the mount the orientation describes, heading continuous through turns | `tst_fusion_derived::sideMountPermutesTheAngles`, `headingUnwrapsThroughAFullTurn`; `manual M40` |
 | 844 | 11, as amended | the orientation column, once added, shows "forward +y, up +z" for every recording not set and the chosen label for one that is; editing offers the 24 orientations; changing it redraws the attitude plots without a fit; the Import preferences page offers the same list for new imports | `tst_fusion_derived::orientationColumnShowsTheDefaultWithoutAWrite`, `orientationEditStoresATokenAndRefusesOthers`, `storedOrientationRecomputesWithoutAFit`; `tst_choice_attribute::cellEditorOffersTheList`; `manual M41` |
 | 845 | 11 | profiles that name removed plots apply without complaint | `tst_calculation_demand::profileNamingRemovedPlotsAppliesWithoutThem`; `manual M43` |
@@ -1409,7 +1417,7 @@ is `allFusionPlotsAreExplicitBacked`, named without a count; items 806, 808,
 | 851 | 12 | the attribute calculations hold the constant-default helper and the wind defaults; the importer holds neither | `tst_builtins_engine::constantDefaults`; `audit constant-defaults` |
 | 852 | 12 | the plot registry loses the removed plots and the local-frame category; the profile rule is the plot model's, one function the profile bridge calls | `tst_calculation_demand::profileNamingRemovedPlotsAppliesWithoutThem`, `profileStyleApplyCreatesDemand`; `audit naming` |
 | 853 | 12 | the demand layer is untouched: a derived plot's blockers lead to the fit through the chain it already follows, and heading, pitch and roll are filled by one job | `tst_fusion_rows::accHRowIsBlockedByFusion`, `headingPitchRollShareOneJob`, `allFusionPlotsAreExplicitBacked`; `audit demand` |
-| 854 | 13, as amended | test: the plot list has the fifteen fusion plots (the four accuracies since the specification of 1001-1065, the three fused speeds after Elevation since the specification of 1601-1612) and no local-frame plots; every fusion plot is explicit-backed (waits on the fit) as the seventeen were; an existing column over a removed plot's measurement still computes, and the export of the fit, its stored record, still holds the measurement | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`, `removedPlotMeasurementsStayAvailable`, `noImuSessionIsNeverCounted`; `tst_fusion_session::missingInputsAreNotApplicable`; `tst_fusion_jobs::noImuSessionCannotHaveAJob` |
+| 854 | 13, as amended | test: the plot list has the eighteen fusion plots (the four accuracies since the specification of 1001-1065, the three fused speeds after Elevation since the specification of 1601-1612, the horizontal, vertical and speed accuracies after Vertical acceleration accuracy since the specification of 1701-1717) and no local-frame plots; every fusion plot is explicit-backed (waits on the fit) as the seventeen were; an existing column over a removed plot's measurement still computes, and the export of the fit, its stored record, still holds the measurement | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`, `removedPlotMeasurementsStayAvailable`, `noImuSessionIsNeverCounted`; `tst_fusion_session::missingInputsAreNotApplicable`; `tst_fusion_jobs::noImuSessionCannotHaveAJob` |
 | 855 | 13 | test: applying a profile that names a removed plot enables its other plots and ignores that one, silently | `tst_calculation_demand::profileNamingRemovedPlotsAppliesWithoutThem` |
 | 856 | 13 | test: elevation equals the origin height minus down minus the ground elevation, and is unavailable without a ground elevation; vertical acceleration is the down acceleration; along-track and cross-track equal the GNSS definitions applied to the fused velocity and acceleration, on synthetic data with known answers | `tst_fusion_derived::syntheticOutputsAreServedWithoutAFit`, `elevationIsOriginHeightMinusDownAboveGround`, `trackAccelerationsKnownAnswers`, `trackAccelerationsAreTheGnssDefinitions`, `derivedRegistrationShape`; `tst_fusion_rows::allFusionPlotsAreExplicitBacked` |
 | 857 | 13 | test: attitude, on synthetic quaternions with known answers: for the default orientation, heading, pitch and roll of a level, north-facing body are zero; a known heading, pitch and roll come back; heading unwraps through a full turn and is measured from north, unchanged by a GNSS track or a stored course reference of any kind and available without GNSS data; a different orientation (a side mount) changes the angles as the axis permutation predicts; the rotation is proper for all 24 pairs | `tst_fusion_derived::levelNorthFacingBodyReadsZero`, `knownAnglesComeBack`, `headingUnwrapsThroughAFullTurn`, `sideMountPermutesTheAngles`, `orientationRotationIsProper` |
@@ -1417,8 +1425,8 @@ is `allFusionPlotsAreExplicitBacked`, named without a count; items 806, 808,
 | 859 | 13 | test: the choice type: display and sort by label; the in-place editor and the context menu offer the list; the bulk edit sets the token for the selected sessions | `tst_choice_attribute::choiceShowsTheLabelOfTheEffectiveToken`, `choiceSortsByLabel`, `cellEditorOffersTheList`, `setDialogOffersTheList`, `bulkEditSetsAToken` |
 | 860 | 13 | test: constant defaults: the helper registers a calculation that the engine serves as a default (the existing engine test covers the mechanism); wind north and east read zero for a recording without stored wind, keep a stored value, and the importer no longer writes them | `tst_builtins_engine::constantDefaults`; `tst_calcengine::constantCalculationIsADefault`; `tst_smoke::importAppliesCreationDefaults`; `tst_importer::creationDefaultsOnlyFillAbsent`; `tst_import_merge::newSessionGetsDefaults` |
 | 861 | 13, as amended | test: the fusion plots leave the fit as the golden fixtures and the stored-result tests hold it, against the goldens and the algorithm string of the specification of 1001-1065 | `tst_fusion_golden::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`, `codeStampChangeDropsRecordOnLoad`; `tst_fusion_session::registrationShape` |
-| 862 | 13, as amended | test: the audit keeps the removed plot names out of the registry, and the documents describe the fifteen plots (the four accuracies since the specification of 1001-1065, the three fused speeds after Elevation since the specification of 1601-1612), the attitude convention, the orientation attribute and the rule for defaults | `audit naming` |
-| 863 | 14, as amended | `docs/` describes the fifteen fusion plots (the four accuracies since the specification of 1001-1065, the three fused speeds after Elevation since the specification of 1601-1612) and the derived quantities, the attitude convention with the orientation attribute, its default and its limits (it describes the mount, not the wearer's posture; a forward axis pointing straight up or down makes heading and roll meaningless), the choice type and the orientation in the session file, the rule for defaults and its helper, and that wind is no longer written at import; no document describes a removed plot or the "GNSS (Local frame)" category | `audit naming` |
+| 862 | 13, as amended | test: the audit keeps the removed plot names out of the registry, and the documents describe the eighteen plots (the four accuracies since the specification of 1001-1065, the three fused speeds after Elevation since the specification of 1601-1612, the horizontal, vertical and speed accuracies after Vertical acceleration accuracy since the specification of 1701-1717), the attitude convention, the orientation attribute and the rule for defaults | `audit naming` |
+| 863 | 14, as amended | `docs/` describes the eighteen fusion plots (the four accuracies since the specification of 1001-1065, the three fused speeds after Elevation since the specification of 1601-1612, the horizontal, vertical and speed accuracies after Vertical acceleration accuracy since the specification of 1701-1717) and the derived quantities, the attitude convention with the orientation attribute, its default and its limits (it describes the mount, not the wearer's posture; a forward axis pointing straight up or down makes heading and roll meaningless), the choice type and the orientation in the session file, the rule for defaults and its helper, and that wind is no longer written at import; no document describes a removed plot or the "GNSS (Local frame)" category | `audit naming` |
 
 ### 9.10 The fused state at every IMU sample (items 901-940)
 
@@ -1643,9 +1651,10 @@ four accuracy plots); the test that held the eight rows is renamed
 the plots: 803, 804, 806, 808, 853 and 856 (their citations change with the
 rename only), 111 (its statement names no count), and the manual steps M39
 and M44, which hold as steps (M39 continues with the four accuracy plots of
-M51; the measurement tree of M44 listed twelve). The specification "Fused
-speed plots" (9.17) has since made the category fifteen; items 1037 and 1063
-stand, and their evidence below counts fifteen rows.
+M51; the measurement tree of M44 listed twelve). The specifications "Fused
+speed plots" (9.17) and "Fused position and speed accuracy" (9.18) have since
+made the category fifteen and then eighteen; items 1037 and 1063 stand, and
+their evidence below counts eighteen rows.
 
 The specification "The scaled IMU factor stands alone", which has no items of
 its own, removes the temperature factor and the switch of the scale state:
@@ -1699,7 +1708,7 @@ objective from the fit's account instead of making a second fit.
 | 1034 | 7 | they are absent for a rejected or failed fit and for a successful fit whose factorization failed, which the diagnostics say; nothing else about that fit changes | `tst_fusion_kernel::covarianceFailureLeavesTheFitAsItIs` (and the failure-shape tests: the four arrays empty); `tst_fusion_golden::rejectionFixturesMatchGolden` |
 | 1035 | 7, as settled | an undetermined heading does not fail the computation: the cap applies, the heading's variance enters the acceleration's propagation at most at the cap's, and the acceleration accuracies use the horizontal magnitude's direction, which a heading error does not move | `tst_fusion_kernel::undeterminedHeadingIsCapped`, `accelerationAccuracyFollowsItsPropagation` (the heading under a horizontal force, the cap inside the propagation) |
 | 1036 | 2, 7 | the documentation says in one sentence that the accuracy is one standard deviation from the covariance of the converged solution under the documented model, widened where the residuals exceed what the model allows | `audit accuracy-channels` |
-| 1037 | 8, as settled, as amended | the "Sensor fusion" category gains four plots after Roll: Heading accuracy and Tilt accuracy in degrees, Horizontal acceleration accuracy and Vertical acceleration accuracy in the acceleration unit, each drawn as the quiet member of the value it qualifies, in a colour that reaches 3:1 on both plot backgrounds; the acceleration accuracies in g at four decimals, a type of their own | `tst_fusion_rows::allFusionPlotsAreExplicitBacked` (the fifteen rows as a literal: names, units, measurements, types); `tst_plot_format::accelerationAccuracyKeepsItsDigits`; `audit naming` (fifteen rows); `audit accuracy-channels` (four accuracy rows); `manual M51` (the colours, the axes, the menu) |
+| 1037 | 8, as settled, as amended | the "Sensor fusion" category gains four plots after Roll: Heading accuracy and Tilt accuracy in degrees, Horizontal acceleration accuracy and Vertical acceleration accuracy in the acceleration unit, each drawn as the quiet member of the value it qualifies, in a colour that reaches 3:1 on both plot backgrounds; the acceleration accuracies in g at four decimals, a type of their own | `tst_fusion_rows::allFusionPlotsAreExplicitBacked` (the eighteen rows as a literal: names, units, measurements, types); `tst_plot_format::accelerationAccuracyKeepsItsDigits`; `audit naming` (eighteen rows); `audit accuracy-channels` (seven accuracy rows); `manual M51` (the colours, the axes, the menu) |
 | 1038 | 8 | the four plots are absent, like any unavailable value, where the fit did not compute them | `tst_fusion_rows::accuracyPlotsAreAbsentWithoutAFit` (before the fit, a rejection listed once, no IMU data), `noImuSessionIsNeverCounted`; `tst_fusion_store::restoredFitWithoutAccuracyDrawsTheRest` (a stored success without the accuracy); `manual M51` |
 | 1039 | 8 | a logbook column over any of the four works as over any fusion value | `tst_fusion_store::fusionColumnFillsUnloadedSessions` (a row per accuracy); `manual M51` |
 | 1040 | 8 | the diagnostics show the configuration the fit ran under | `tst_fusion_kernel::diagnosticsReportTheNoiseModel`; `tst_fusion_golden::successFixturesMatchGolden`; `manual M47` |
@@ -1725,7 +1734,7 @@ objective from the fit's account instead of making a second fit.
 | 1060 | 11 | test: the cap holds on a fixture whose heading is undetermined | `tst_fusion_kernel::undeterminedHeadingIsCapped` (`coarse_linear`: 180 at every sample, tilt and acceleration against a gauge-fixed reference within 1e-6) |
 | 1061 | 11, as settled | test: on a build where the configuration is carried and defaulted and the noise model is the previous one (the end of phase 1), the existing channels and diagnostics of every fixture are bit-identical to the goldens | `tst_fusion_golden::successFixturesMatchGolden`, `rejectionFixturesMatchGolden`; `tst_fusion_kernel::fitTraceMatchesGolden`; `tst_fusion_session::configurationReachesTheKernel`; `tst_fusion_runner::successMatchesDirectRun` (at the end of phase 1; the goldens have been captured again since) |
 | 1062 | 11 | test: a stored fit from before the change is stale | `tst_fusion_store::codeStampChangeDropsRecordOnLoad` |
-| 1063 | 11 | test: the four plots are explicit-backed like the other fusion plots, and a column over one works | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`; `tst_fusion_store::fusionColumnFillsUnloadedSessions` (a row per accuracy); `tst_fusion_jobs::noImuSessionCannotHaveAJob` (fifteen plots, all `NotApplicable`) |
+| 1063 | 11 | test: the four plots are explicit-backed like the other fusion plots, and a column over one works | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`; `tst_fusion_store::fusionColumnFillsUnloadedSessions` (a row per accuracy); `tst_fusion_jobs::noImuSessionCannotHaveAJob` (eighteen plots, all `NotApplicable`) |
 | 1064 | 11 | test: the audit's confinement rules hold, and the documents carry the table, the derivations and the validation | `audit solver-confinement`; `audit fusion-tooling`; `audit noise-model`; `audit scale-state`; `audit accuracy-channels`; `audit model-validation` |
 | 1065 | 12 | `docs/` describe the change: `DATA_SCHEMA.md` (section 2, the keys; section 11, the algorithm string; section 12, the record), `SENSOR_FUSION.md` (section 3, the configuration inputs and the lattice check; section 4, the noise model with its table and derivations, the scale state, the covariance and its propagation, the widening, the outputs and diagnostics; section 8, the validation results and what is and is not validated), `CALCULATIONS.md` section 17, `COMPUTED_PLOTS.md` (the four plots); `tests/README.md` section 11 records the goldens captured again and why; the map gives the specification its range, with the amended items restated | `audit sensor-configuration`; `audit noise-model`; `audit scale-state`; `audit accuracy-channels`; `audit model-validation`; `audit naming`; section 11's history paragraphs |
 
@@ -1875,12 +1884,15 @@ has twelve acceptance items, 1601-1612; the same four line forms as 9.2.
 no item, items 1601-1604 are its section 2, 1605 its section 3, 1606 its
 section 4, and 1607-1612 the six bullets of its section 5 in order. Items 115
 (section 9.2, appendix B), 509 (section 9.6, appendix F), 801, 802, 842, 854,
-862 and 863 (section 9.9, appendix I) count the fusion plots and are restated
-as amended: fifteen, the three fused speeds after Elevation (in 802, the first
-eleven). Item 803 (section 9.9, appendix I) listed the fused down velocity
-among the removed plots and is restated as amended: the down velocity is drawn
-as Vertical speed. Items 1037 and 1063 (section 9.11) stand as they are; their
-evidence counts fifteen rows. The `audit naming` line of 1606 and 1611 is a
+862 and 863 (section 9.9, appendix I) counted the fusion plots and were
+restated as amended: fifteen, the three fused speeds after Elevation (in 802,
+the first eleven); the specification "Fused position and speed accuracy"
+(9.18) restates them again, with items 1602, 1608 and 1610 of this section:
+eighteen, the three accuracies after Vertical acceleration accuracy. Item 803
+(section 9.9, appendix I) listed the fused down velocity among the removed
+plots and is restated as amended: the down velocity is drawn as Vertical
+speed. Items 1037 and 1063 (section 9.11) stand as they are; their evidence
+counts eighteen rows. The `audit naming` line of 1606 and 1611 is a
 floor, not a proof: the rule shows that no stale count of the plots survives
 in `docs/` and the root README, not that the new paragraph of
 `COMPUTED_PLOTS.md` or the rows of `SENSOR_FUSION.md`'s table exist; those are
@@ -1889,15 +1901,15 @@ read by the reviewer, and M58 is the real check of 1611.
 | Item | Section | Statement | Evidence |
 | --- | --- | --- | --- |
 | 1601 | 2 | the calculations: `builtin.fusion.velH` (`Fusion/velH` from `Fusion/velN` and `Fusion/velE`, the magnitude of the two, as `GNSS/velH` is of the GNSS components) and `builtin.fusion.vel` (`Fusion/vel` from `Fusion/velH` and `Fusion/velD`, as `GNSS/vel`), on demand under the Fusion sensor, no title, no result version, `velH` registered before `vel`; each output has one candidate and the fit alone behind it, so they appear with the fit and never start it; Vertical speed is the fit's own `Fusion/velD`, whose one producer is the fit | `tst_fusion_derived::derivedRegistrationShape`; `tst_fusion_session::registrationShape` |
-| 1602 | 2 | the rows: Horizontal speed (`Fusion/velH`), Vertical speed (`Fusion/velD`) and Total speed (`Fusion/vel`) in the "Sensor fusion" category after Elevation and before Horizontal acceleration, each named, united (m/s) and typed (`speed`, `vertical_speed`, `speed`) as its GNSS counterpart so that the two overlay; the category holds fifteen plots, in this order: Elevation, Horizontal speed, Vertical speed, Total speed, Horizontal acceleration, Vertical acceleration, Along-track acceleration, Cross-track acceleration, Heading, Pitch, Roll, Heading accuracy, Tilt accuracy, Horizontal acceleration accuracy, Vertical acceleration accuracy | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`; `audit naming` (fifteen rows); `manual M58` |
+| 1602 | 2, as amended | the rows: Horizontal speed (`Fusion/velH`), Vertical speed (`Fusion/velD`) and Total speed (`Fusion/vel`) in the "Sensor fusion" category after Elevation and before Horizontal acceleration, each named, united (m/s) and typed (`speed`, `vertical_speed`, `speed`) as its GNSS counterpart so that the two overlay; the category holds eighteen plots, in this order: Elevation, Horizontal speed, Vertical speed, Total speed, Horizontal acceleration, Vertical acceleration, Along-track acceleration, Cross-track acceleration, Heading, Pitch, Roll, Heading accuracy, Tilt accuracy, Horizontal acceleration accuracy, Vertical acceleration accuracy, Horizontal accuracy, Vertical accuracy, Speed accuracy (the last three since the specification of 1701-1717) | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`; `audit naming` (eighteen rows); `manual M58` |
 | 1603 | 2 | demand: checking any of the three creates demand for the fit exactly as checking a fused acceleration does, one row alone one fit; a stored fit draws them at once, without computing; a logbook column over any of the three works as over any fusion value, loaded and unloaded; none applies to a session without IMU data | `tst_fusion_rows::totalSpeedRowIsBlockedByFusion`, `allFusionPlotsAreExplicitBacked`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`, `fusionColumnFillsUnloadedSessions`; `tst_fusion_jobs::noImuSessionCannotHaveAJob`; `manual M58` |
-| 1604 | 2 | the fit is unchanged: its outputs, its algorithm string, its stored results and the goldens; no wind correction (`GNSS/velH` and `GNSS/vel` have none) and no speed accuracy; a profile that named the plots before this change is applied as before | `tst_fusion_session::registrationShape`; `tst_fusion_golden::successFixturesMatchGolden`; `tst_calculation_demand::profileNamingRemovedPlotsAppliesWithoutThem`; `audit accuracy-channels` (four accuracy rows) |
+| 1604 | 2 | the fit is unchanged: its outputs, its algorithm string, its stored results and the goldens; no wind correction (`GNSS/velH` and `GNSS/vel` have none) and no speed accuracy; a profile that named the plots before this change is applied as before | `tst_fusion_session::registrationShape`; `tst_fusion_golden::successFixturesMatchGolden`; `tst_calculation_demand::profileNamingRemovedPlotsAppliesWithoutThem`; `audit accuracy-channels` (the accuracy rows, seven since 9.18) |
 | 1605 | 3 | the colours, chosen by `docs/PLOT_COLOURS.md`: each row is kin of its GNSS counterpart, the neighbouring hue at the other edge of the lightness band, admissible within the speeds group (the three GNSS speeds, Wind-corrected horizontal speed, Speed accuracy and the three fused speeds); Horizontal speed `#bc378e`, Vertical speed `#1b8278`, Total speed `#d446ff`, literals in the plot table with a comment that says what each is coloured by and its figures; each fused line is told from its twin and from the rest of the group on both backgrounds | `audit naming` (a literal colour per row); `manual M58` |
 | 1606 | 4 | the documents: COMPUTED_PLOTS.md (the category's count and list, and reading a fused speed beside its GNSS speed: together where the receiver is accurate, apart where it is not, the separation the fit's compromise between the receiver and the IMU, the receiver's Speed accuracy plot saying how far to trust its side of it), SENSOR_FUSION.md section 4 (`velH` and `vel` among the values derived from the outputs; Vertical speed is `velD` itself), CALCULATIONS.md (the two calculations with their inputs and outputs, their definitions, the category's list in its new order), the contract of `registerFusionCalculations` (the two calculations; Vertical speed is `velD` itself); every count of twelve fusion plots in the documents and tests/README.md becomes fifteen | `audit naming` (no count of twelve in `docs/` or the root README) |
 | 1607 | 5, first bullet | test: known answers on a fit result with chosen `velN`, `velE` and `velD`, every sample of `Fusion/velH` and `Fusion/vel` the GNSS definition applied to the fused components; both unavailable before the fit has published and when the inputs' lengths differ; both appear with the fit and start none | `tst_fusion_derived::fusedSpeedsKnownAnswers`, `fusedSpeedsAreTheGnssDefinitions`, `derivedValuesWaitOnTheFit`; `tst_fusion_session::requestRunsOnceAndPublishesTogether`, `readsNeverRunTheFit` |
-| 1608 | 5, second bullet | test: the category holds the fifteen in the order of 1602; the three new rows are named, united and typed as their GNSS counterparts and backed by the explicit calculation; a legend value over each formats as its GNSS counterpart's does | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`; `tst_plot_format::speedTypesFormatAsTheConverterDoes` |
+| 1608 | 5, second bullet, as amended | test: the category holds the eighteen in the order of 1602 (the horizontal, vertical and speed accuracies after Vertical acceleration accuracy since the specification of 1701-1717); the three new rows are named, united and typed as their GNSS counterparts and backed by the explicit calculation; a legend value over each formats as its GNSS counterpart's does | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`; `tst_plot_format::speedTypesFormatAsTheConverterDoes` |
 | 1609 | 5, third bullet | test: checking Total speed alone on a fusable recording without a stored fit starts one fit; a stored fit draws the three without computing | `tst_fusion_rows::totalSpeedRowIsBlockedByFusion`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`, `fusionColumnFillsUnloadedSessions` |
-| 1610 | 5, fourth bullet | the audit's `naming` group: the pinned count of fusion plots is fifteen, with `fusionPlots()` of `tests/fusion/fusionsessions.cpp`; the rule that keeps the fit's own channels out of the plot registry drops `velD`, as it already omits `accD`, and its comment says why; the documents' pattern refuses a count of twelve; the comments and documents that counted twelve are updated; the audit and the acceptance-map check stay green | `audit naming` |
+| 1610 | 5, fourth bullet, as amended | the audit's `naming` group: the pinned count of fusion plots is eighteen (fifteen before the specification of 1701-1717), with `fusionPlots()` of `tests/fusion/fusionsessions.cpp`; the rule that keeps the fit's own channels out of the plot registry drops `velD`, as it already omits `accD`, and its comment says why; the documents' pattern refuses a count of twelve, and of fifteen since the specification of 1701-1717; the comments and documents that counted twelve are updated; the audit and the acceptance-map check stay green | `audit naming` |
 | 1611 | 5, fifth bullet | the manual step M58: the three plots in the list in their place; one fit for the three; the three drawn beside the GNSS speeds, Wind-corrected horizontal speed and Speed accuracy, in the light and the dark theme, each fused line told from its twin and from the rest; the legend and the measure tool format each as its counterpart; a column over Total speed fills loaded and unloaded rows | `audit naming`; `manual M58` |
 | 1612 | 5, sixth bullet | the acceptance items in the next free hundred of `tests/acceptance_map.txt`, with appendix Q and section 9.17 of `tests/README.md`; items 115, 509, 801, 802, 842, 854, 862 and 863, which counted the fusion plots, and 803, which listed the fused down velocity among the removed plots, restated "(as amended)" | `audit naming` |
 
@@ -1913,15 +1925,25 @@ has seventeen acceptance items, 1701-1717; the same four line forms as 9.2.
 as it concerns the fit's outputs and the record, and 1706 the first clause of
 its audit bullet; 1707 is its section 4, 1708 the third bullet of its section
 8, and 1709 its section 7 as it concerns the derived accuracies with the
-second clause of its audit bullet; 1710-1717 follow with the plots (sections
-5 and 6 and the rest of sections 7 and 8), and are written with them. Items
+second clause of its audit bullet; 1710 and 1711 are its section 5, 1712 its
+section 6, 1713 its section 7 as it concerns the plots, 1714 the fourth
+bullet of its section 8, 1715 the third clause of its audit bullet, 1716 its
+manual bullet and 1717 its last bullet. Items
 230 and 235 (section 9.3, appendix C), 337 (section 9.4,
 appendix D) and 912 (section 9.10, appendix J), which count the fit's
 channels or outputs, are restated as amended: thirty-three channels,
 thirty-four outputs; item 1302 (section 9.14, appendix N), whose growth
 through a hole read as the sample covariance's, is restated as amended: the
 step chain's covariance `P_j`; items 1033, 1042 and 1044 (section 9.11), whose evidence
-alone counts them, have their evidence text updated. The `audit
+alone counts them, have their evidence text updated. Items 115 (section 9.2,
+appendix B), 509 (section 9.6, appendix F), 801, 802, 842, 854, 862 and 863
+(section 9.9, appendix I) and 1602, 1608 and 1610 (section 9.17, appendix Q)
+count the fusion plots and are restated as amended: eighteen, the three
+accuracies after Vertical acceleration accuracy (in 509, twelve derived from
+the fit's outputs; in 802, the first eleven and the last three). Items 1606
+and 1611 stand: 1606 says what the fused speed plots did to the documents,
+and 1611 counts no plots. Items 1037 and 1063 (section 9.11) stand as they
+are; their evidence counts eighteen rows. The `audit
 accuracy-channels` line of 1705 is a floor, not a proof: the rule shows that
 no document counts the fit's channels as twenty-one or its outputs as
 twenty-two, not that the paragraphs of `SENSOR_FUSION.md` sections 4, 7 and 8
@@ -1929,7 +1951,13 @@ say what 1705 lists; those are read by the reviewer. Likewise for 1709: the
 rule shows that the derived names are spelled in `src` where they should be,
 not that the derived table of `SENSOR_FUSION.md`, the registration table and
 derived values of `CALCULATIONS.md` and the header's contract describe the
-three; those are read by the reviewer.
+three; those are read by the reviewer. The `audit naming` line of 1713, 1716
+and 1717 is a floor in the same way, as 1606's and 1611's are (9.17): the
+rule shows that no stale count of the plots survives in `docs/` and the root
+README, not that the paragraphs of `COMPUTED_PLOTS.md`, `SENSOR_FUSION.md`
+section 2 and `PLOT_COLOURS.md` section 5 say what 1713 lists, that M59
+checks what 1716 lists, or that the items 1717 names are restated; those are
+read by the reviewer, and M59 is the real check of 1716.
 
 | Item | Section | Statement | Evidence |
 | --- | --- | --- | --- |
@@ -1942,6 +1970,14 @@ three; those are read by the reviewer.
 | 1707 | 4 | the derived accuracies: `builtin.fusion.hAcc` (`Fusion/hAcc`, m, from `Fusion/posCovNN`, `posCovNE` and `posCovEE`: the square root of the larger eigenvalue of the horizontal block, one figure for the horizontal plane as `GNSS/hAcc` is, and the cautious one), `builtin.fusion.vAcc` (`Fusion/vAcc`, m, from `Fusion/posCovDD`: the square root of the down variance) and `builtin.fusion.sAcc` (`Fusion/sAcc`, m/s, from the six `velCov` channels, then `velN`, `velE` and `velD`: the standard deviation along the published velocity where the speed is at least that standard deviation, otherwise, a zero velocity included, the square root of the largest eigenvalue of the block, the rule of the horizontal acceleration accuracy); on demand under the Fusion sensor, no title, no result version, registered after `accH` and before the system time in that order; one candidate each with the fit alone behind it, so they appear with the fit and never start it; unavailable when an input is absent or the inputs differ in length, finite and non-negative otherwise; no widening of their own | `tst_fusion_derived::derivedRegistrationShape`, `fusedAccuraciesKnownAnswers`; `tst_fusion_session::registrationShape` |
 | 1708 | 8, third bullet | test: known answers on chosen blocks (a diagonal block, a rotated one whose larger eigenvalue is exact, a velocity along one axis and one below its standard deviation, a full 3x3 block); unavailable without the blocks and on unequal lengths; waiting on the fit and never starting it; appearing with the fit | `tst_fusion_derived::fusedAccuraciesKnownAnswers`, `derivedValuesWaitOnTheFit`; `tst_fusion_session::requestRunsOnceAndPublishesTogether`, `readsNeverRunTheFit` |
 | 1709 | 7; 8, audit bullet, second clause | the documents and the audit: the derived table of `SENSOR_FUSION.md` section 4, the registration table and derived values of `CALCULATIONS.md` section 17 (seventeen calculations, eleven derived), the contract of `registerFusionCalculations`; the `accuracy-channels` rule that the three derived names, sensor-qualified, are spelled in `src` in the registration and the plot rows alone, planted once; the range's completeness check at 1701-1709; the audit and the map check green | `audit accuracy-channels` (a floor for the documents; the reviewer reads the rest) |
+| 1710 | 5 | the rows: Horizontal accuracy (`Fusion/hAcc`, m, `distance`), Vertical accuracy (`Fusion/vAcc`, m, `distance`) and Speed accuracy (`Fusion/sAcc`, m/s, `speed`) at the end of the "Sensor fusion" category, after Vertical acceleration accuracy, in the order of GNSS (Basic), each named, united and typed as its GNSS counterpart so that the two overlay; the category holds eighteen plots, in this order: Elevation, Horizontal speed, Vertical speed, Total speed, Horizontal acceleration, Vertical acceleration, Along-track acceleration, Cross-track acceleration, Heading, Pitch, Roll, Heading accuracy, Tilt accuracy, Horizontal acceleration accuracy, Vertical acceleration accuracy, Horizontal accuracy, Vertical accuracy, Speed accuracy | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`; `audit naming`; `audit accuracy-channels`; `manual M59` |
+| 1711 | 5 | demand: each of the three is requested as every fusion plot is: checking one creates demand for the fit, one row alone one fit; a stored fit draws it at once, without computing; a logbook column over it works as over any fusion value, loaded and unloaded; it is absent, like the four accuracies, for a recording whose fit did not compute the covariance, while the fit's other plots are drawn; none applies to a session without IMU data | `tst_fusion_rows::speedAccuracyRowIsBlockedByFusion`, `allFusionPlotsAreExplicitBacked`, `accuracyPlotsAreAbsentWithoutAFit`; `tst_fusion_store::restoredAfterRestartIsBitIdentical`, `fusionColumnFillsUnloadedSessions`, `restoredFitWithoutAccuracyDrawsTheRest`; `tst_fusion_jobs::noImuSessionCannotHaveAJob`; `manual M59` |
+| 1712 | 6 | the colours, chosen by `docs/PLOT_COLOURS.md`: each row the quiet member of the fused value it qualifies (the same hue, less saturated, at the other edge of the lightness band) and kin of its GNSS counterpart, read in the GNSS quality group of its section 5 (the three GNSS accuracies, the satellite count and the three); no trio reaches the kin floor of 15 against every other plot of the group and every fused value, so the three sit at the floor of 11, where the set's own accuracy pairs sit (fused Vertical acceleration accuracy against fused Vertical acceleration), keeping each row's story; Horizontal accuracy `#c57fa6`, Vertical accuracy `#08a2af`, Speed accuracy `#8c619b`, literals in the plot table with a comment that says what each is coloured by and its figures; a colour that looks wrong moves within the rule, its new figures recorded in that comment | `audit naming`; `audit accuracy-channels`; `manual M59` |
+| 1713 | 7 | the documents: COMPUTED_PLOTS.md (the category's count and list, and the fused Speed accuracy read beside the receiver's: the two say how far each side of the compromise is trusted), PLOT_COLOURS.md section 5 (the GNSS quality group names the three), SENSOR_FUSION.md section 2 (the list, seven accuracy plots, the three named with their units, each overlaying its GNSS counterpart, absent where the covariance was not computed) and its test rows, CALCULATIONS.md's eighteen in order; every count of fifteen fusion plots in the documents and `tests/README.md` becomes eighteen; the documents' pattern of stale counts gains fifteen | `audit naming` (a floor; the reviewer reads the rest) |
+| 1714 | 8, fourth bullet | test: the category holds the eighteen in order; the three typed and backed by the fit; absent where the covariance failed, with the fit's other plots drawn; one row alone starts one fit; a column over Speed accuracy fills loaded and unloaded rows, formatted by its type | `tst_fusion_rows::allFusionPlotsAreExplicitBacked`, `accuracyPlotsAreAbsentWithoutAFit`, `speedAccuracyRowIsBlockedByFusion`; `tst_fusion_store::restoredFitWithoutAccuracyDrawsTheRest`, `fusionColumnFillsUnloadedSessions` |
+| 1715 | 8, audit bullet, third clause | the audit: the `naming` group pins eighteen fusion plots, with `fusionPlots()` of `tests/fusion/fusionsessions.cpp`, and its documents' pattern refuses a count of fifteen; the `accuracy-channels` group counts seven accuracy rows; each rule planted once; the audit and the acceptance-map check green | `audit naming`; `audit accuracy-channels` |
+| 1716 | 8, manual bullet | the manual step M59: the three rows in their place; one fit for the three; each absent for a rejected recording and for a recording whose covariance fails, where one is at hand, with the fit's other plots drawn; the colours beside the GNSS quality rows and beside the fused speeds and Elevation, in both themes; the legend and the measure tool; a Speed accuracy column; after the update a stored `v9` fit computed again once, shown in the status bar | `audit naming` (a floor; M59 is the real check); `manual M59` |
+| 1717 | 8, last bullet | the acceptance items 1701-1717 in the next free hundred of `tests/acceptance_map.txt`, with appendix R and section 9.18 of `tests/README.md`; items 115, 509, 801, 802, 842, 854, 862, 863, 1602, 1608 and 1610, which counted the fusion plots, restated "(as amended)" | `audit naming` (a floor; the reviewer reads the rest) |
 
 ## 10. Cleanup audit
 
@@ -1999,10 +2035,10 @@ takes about a second. It fails, listing **all** violations, when
   appears. `m_pendingRebuildLevel` in the plot widget is `master`'s own and is
   not part of the rule;
 - **group `naming`** (items 120, 801, 803, 852, 862, 863, 1037, 1065, 1602,
-  1605, 1606, 1610-1612): something is named
+  1605, 1606, 1610-1612, 1710, 1712, 1713, 1715-1717): something is named
   after a filter (the case-sensitive pattern `EKF|[Ee]kf`), a branch output
   name (`posN` ...) or the branch's sensor key reappears; `MainWindow` does not
-  register exactly fifteen "Sensor fusion" plots (the count pins the
+  register exactly eighteen "Sensor fusion" plots (the count pins the
   application's list to `fusionPlots()`, the tests' mirror); a plot row of
   `MainWindow` computes its default colour from a scheme (`QColor::fromHsl`)
   or names a Qt colour instead of stating a literal; the "GNSS (Local
@@ -2013,11 +2049,12 @@ takes about a second. It fails, listing **all** violations, when
   velocity covariance blocks; the down velocity and the down acceleration
   have rows, Vertical speed and Vertical acceleration); or `docs`
   or the root `README.md` describe an old count of fusion plots (seventeen,
-  eight or twelve: `[Ee]ight (real )?(fusion )?plots`, `[Aa]ll eight`,
-  `[Tt]welve (real )?(fusion )?plots`, `[Aa]ll twelve`; "the same eight"
-  inputs of `CALCULATIONS.md` do not match), the local-frame category or a
-  quaternion plot. This file is excluded: this section spells the patterns.
-  The fifteen and the document patterns were planted once when they changed;
+  eight, twelve or fifteen: `[Ee]ight (real )?(fusion )?plots`, `[Aa]ll
+  eight($|[^e])` (so that "all eighteen" passes), `[Tt]welve (real )?(fusion )?plots`, `[Aa]ll twelve`, `[Ff]ifteen
+  (real )?(fusion )?plots`, `[Aa]ll fifteen`; "the same eight" inputs of
+  `CALCULATIONS.md` do not match), the local-frame category or a quaternion
+  plot. This file is excluded: this section spells the patterns.
+  The eighteen and the document patterns were planted once when they changed;
 - **group `solver-confinement`** (items 101, 234, 236, 848, 850, 928, 939,
   1007): a
   GTSAM header is included outside `src/fusion/` and the five GTSAM test and tool
@@ -2121,7 +2158,7 @@ takes about a second. It fails, listing **all** violations, when
   `model.scale` (one line each). Each rule was planted once when it was
   written;
 - **group `accuracy-channels`** (items 1022, 1025, 1030, 1032, 1036, 1037, 1049,
-  1064, 1065, 1702, 1705, 1706, 1709):
+  1064, 1065, 1702, 1705, 1706, 1709, 1710, 1712, 1715):
   `jointMarginalCovariance`, the library's joint marginals, appears in `src`
   (the covariance comes from one factorization; the tests use them as a
   reference); an elimination call (`eliminateMultifrontal`,
@@ -2144,7 +2181,7 @@ takes about a second. It fails, listing **all** violations, when
   channels or outputs as they were before the covariance blocks
   (`twenty-one (measurement|channel)|twenty-two outputs`; this file is not
   searched, since section 11's capture history counts what each capture
-  wrote); `src/mainwindow.cpp` has other than four "Sensor fusion" rows whose name
+  wrote); `src/mainwindow.cpp` has other than seven "Sensor fusion" rows whose name
   ends in " accuracy", each with a literal colour (`QColor(0x...)`); `no
   uncertainty` appears in `src` or `docs`; or `docs/SENSOR_FUSION.md` stops
   writing, on one line each, the propagation `a = R (f / s - b) + g`,
@@ -3190,7 +3227,7 @@ objectives, are in section 12.2.
 
 ## 12. Manual verification
 
-Fifteen scripts. Each step opens with its bold id and, in parentheses, the items
+Sixteen scripts. Each step opens with its bold id and, in parentheses, the items
 of `tests/acceptance_map.txt` it is evidence for; the map cites the ids
 (`manual M<k>`) and `audit_cleanup` checks that they exist here.
 
@@ -3413,7 +3450,7 @@ kept from an earlier build. Use the preamble of 12.1 (a COPY of a logbook,
 never the real one) and the recordings of 12.4, plus one recording with
 several turns.
 
-**M39 The fusion plots (801, 802, 803, 842).** The plot list has "Sensor fusion" with Elevation, the three fused speeds (M58), Horizontal acceleration, Vertical acceleration, Along-track acceleration, Cross-track acceleration, Heading, Pitch and Roll, in that order, then the four accuracy plots (M51), and no "GNSS (Local frame)" category. With two fusable tracks without stored fits visible, check the eight that are neither M58's speeds nor M51's accuracies (Elevation, the four accelerations, Heading, Pitch and Roll): the status bar shows "Computing results: 0 / 2", and one fit per track fills the eight. Check each GNSS counterpart as well (Elevation; the four accelerations; Course): each pair shares one axis and unit, and the two lines are told apart by colour. Pitch and Roll share the angle axis with Heading. Hide and show a track: its plots draw at once, with no computation. Check this in the light and the dark theme.
+**M39 The fusion plots (801, 802, 803, 842).** The plot list has "Sensor fusion" with Elevation, the three fused speeds (M58), Horizontal acceleration, Vertical acceleration, Along-track acceleration, Cross-track acceleration, Heading, Pitch and Roll, in that order, then the four accuracy plots (M51) and the three accuracy plots with GNSS counterparts (M59), and no "GNSS (Local frame)" category. With two fusable tracks without stored fits visible, check the eight that are neither M58's speeds nor M51's accuracies (Elevation, the four accelerations, Heading, Pitch and Roll): the status bar shows "Computing results: 0 / 2", and one fit per track fills the eight. Check each GNSS counterpart as well (Elevation; the four accelerations; Course): each pair shares one axis and unit, and the two lines are told apart by colour. Pitch and Roll share the angle axis with Heading. Hide and show a track: its plots draw at once, with no computation. Check this in the light and the dark theme.
 
 **M40 Attitude through turns (812, 814, 843).** On the recording with several turns, with the default orientation and a unit on the back of a helmet, label up: Heading shows no jump of 360 degrees at north, and reads the compass heading of the helmet's forward axis; with the Course reference marker moved, Course shifts and Heading does not. Heading turns with Course through every turn in flight; before exit and under canopy it goes where the head looks. In straight flight Roll is near zero; it is positive in a right turn and negative in a left one.
 
@@ -3423,7 +3460,7 @@ several turns.
 
 **M43 An old profile (805, 845).** With the application closed, add `Fusion/qx`, `Fusion/roll` and `Local/north` to the `enabledPlots` list of a copy of a profile file in `Documents/FlySight Viewer/profiles/`, beside a GNSS plot it already lists, and note the file's modification time. Start and apply the profile: the GNSS plot is checked, and Sensor fusion > Roll is not. No message box appears, and the debug output has no line about the three ids. The file keeps its bytes and modification time.
 
-**M44 A column kept from before (804).** Set up a logbook copy with a build from before this change, with a column over Sensor fusion > Roll at the exit marker, filled. Start this build: the column still shows its values, labelled "Fusion/roll @ <marker>", with no fit. The Add Column dialog's measurement tree lists fifteen Sensor fusion measurements and no local-frame group.
+**M44 A column kept from before (804).** Set up a logbook copy with a build from before this change, with a column over Sensor fusion > Roll at the exit marker, filled. Start this build: the column still shows its values, labelled "Fusion/roll @ <marker>", with no fit. The Add Column dialog's measurement tree lists eighteen Sensor fusion measurements and no local-frame group.
 
 Pass / fail and a note per step go in the phase report. A step that fails is
 reported as it failed, not adjusted.
@@ -3488,7 +3525,7 @@ python -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('failure
 python -c "import json,sys,csv,statistics as s; d=json.load(open(sys.argv[1])); r=list(csv.reader(open(sys.argv[2]))); h=r[0]; print(len(h), len(r)-1, d['imu_outputs'], d['accuracy'], d['model']['scale']['acc_sigma'], d['model']['scale']['gyro_sigma'], [(c, min(v), s.median(v), max(v)) for c in h[17:] for v in [[float(x[h.index(c)]) for x in r[1:]]]])" TEMP/runs/m50-<name>.json TEMP/runs/m50-<name>.csv
 ```
 
-**M51 The accuracy plots (1037, 1038, 1039).** Use 12.1's preamble and a fusable recording without a stored fit. The plot list: "Sensor fusion" ends Heading accuracy, Tilt accuracy, Horizontal acceleration accuracy, Vertical acceleration accuracy, after Roll; their axes read "(deg)", "(deg)", "(g)", "(g)". One fit: show the recording and check Heading accuracy alone: the status bar shows "Computing results: 0 / 1" and one fit runs; then check the other fourteen: they draw at once, with no computation. Colours: in the light and the dark theme, with Heading, Pitch, Roll, the two fused accelerations and the three GNSS accuracies (Horizontal, Vertical and Speed accuracy) checked beside the four, each accuracy line is told apart from all of them. Values: heading and tilt accuracy stay within 0-180 with no 360-degree jump; the legend and the measure tool show one decimal for them and four decimals of g for the two acceleration accuracies. The menu: the Plots menu is unchanged (it lists GNSS plots only). A rejected recording: the hand-edited `SCHEMA_VER,2` legacy file of section 11, which the lattice rejects: the four draw nothing for it and the status bar's warning lists it once. A column: the Add Column dialog's Sensor fusion group lists fifteen; add "Horizontal acceleration accuracy" at the exit marker: loaded and unloaded rows fill, at four decimals; the label is "Horizontal acceleration accuracy @ <exit marker>"; after a restart the values show without a load.
+**M51 The accuracy plots (1037, 1038, 1039).** Use 12.1's preamble and a fusable recording without a stored fit. The plot list: "Sensor fusion" has Heading accuracy, Tilt accuracy, Horizontal acceleration accuracy, Vertical acceleration accuracy after Roll, and M59's three after them; their axes read "(deg)", "(deg)", "(g)", "(g)". One fit: show the recording and check Heading accuracy alone: the status bar shows "Computing results: 0 / 1" and one fit runs; then check the other seventeen: they draw at once, with no computation. Colours: in the light and the dark theme, with Heading, Pitch, Roll, the two fused accelerations and the three GNSS accuracies (Horizontal, Vertical and Speed accuracy) checked beside the four, each accuracy line is told apart from all of them. Values: heading and tilt accuracy stay within 0-180 with no 360-degree jump; the legend and the measure tool show one decimal for them and four decimals of g for the two acceleration accuracies. The menu: the Plots menu is unchanged (it lists GNSS plots only). A rejected recording: the hand-edited `SCHEMA_VER,2` legacy file of section 11, which the lattice rejects: the four draw nothing for it and the status bar's warning lists it once. A column: the Add Column dialog's Sensor fusion group lists eighteen; add "Horizontal acceleration accuracy" at the exit marker: loaded and unloaded rows fill, at four decimals; the label is "Horizontal acceleration accuracy @ <exit marker>"; after a restart the values show without a load.
 
 **M52 The validation of the model (1024, 1055).** Use 12.2's preamble. First write the step's script to `TEMP/m52.py` (untracked):
 
@@ -3736,10 +3773,65 @@ stored fit.
 4. Values: the legend and the measure tool show each fused speed with the
    unit and the decimals of its GNSS counterpart, in both unit systems
    (Preferences > General).
-5. A column: the Add Column dialog's Sensor fusion group lists fifteen; add
+5. A column: the Add Column dialog's Sensor fusion group lists eighteen; add
    "Total speed" at the exit marker. Loaded and unloaded rows fill, in the
    speed unit; the label is "Total speed @ <exit marker>"; after a restart
    the values show without a load.
+
+A colour that looks wrong is moved within the rule of `docs/PLOT_COLOURS.md`,
+its new figures written into the comment of the plot table, and the step is
+run again.
+
+Pass / fail per step goes in the phase report.
+
+### 12.16 Fused position and speed accuracy
+
+What the automated tests cannot show: the three fused accuracies in the real
+plot list, their colours as thin lines on both plot backgrounds beside the
+plots they are read with, the legend and the measure tool, a column over one
+made in the Add Column dialog, and the first start of this build over fits a
+build from before it stored.
+
+**M59 The fused accuracies (1710, 1711, 1712, 1716).** Use 12.1's preamble (a
+COPY of a logbook, never the real one) and a fusable recording without a
+stored fit.
+
+1. The plot list: "Sensor fusion" ends Horizontal accuracy, Vertical accuracy
+   and Speed accuracy, after Vertical acceleration accuracy. Their axes read
+   the units of the GNSS accuracies of the same names (GNSS (Basic)).
+2. One fit: show the recording and check Speed accuracy alone. The status bar
+   shows "Computing results: 0 / 1" and one fit runs; when it ends, Speed
+   accuracy draws. Check Horizontal accuracy and Vertical accuracy: they draw
+   at once, with no computation.
+3. Colours: check the GNSS quality rows (GNSS (Basic): Horizontal accuracy,
+   Vertical accuracy, Speed accuracy and Number of satellites) beside the
+   three, then the fused speeds (Horizontal, Vertical and Total speed) and the
+   fused Elevation beside the three, in the light and the dark theme. Each
+   fused accuracy is told apart from its GNSS counterpart where the two
+   overlay and from every other line checked, and its tick labels read on
+   both backgrounds.
+4. Values: the legend and the measure tool show each fused accuracy with the
+   unit and the decimals of its GNSS counterpart, in both unit systems
+   (Preferences > General).
+5. Absent: M51's rejected recording (the hand-edited `SCHEMA_VER,2` legacy
+   file of section 11) draws nothing for the three, and the status bar's
+   warning lists it once. A recording whose covariance was not computed
+   (`fusion_runner` reporting `accuracy.computed` false), if one is at hand,
+   draws the three absent with the fit's other plots drawn. No reference
+   recording is one (M50 finds `accuracy.computed` true on each), so where
+   none is at hand the step records that none was found;
+   `tst_fusion_store::restoredFitWithoutAccuracyDrawsTheRest` is the evidence
+   for that case.
+6. A column: the Add Column dialog's Sensor fusion group lists eighteen; add
+   "Speed accuracy" at the exit marker. Loaded and unloaded rows fill, in the
+   speed unit; the label is "Speed accuracy @ <exit marker>"; after a restart
+   the values show without a load.
+7. The update: set up a logbook copy whose fits a build from before this
+   change stored (as M44 sets one up: run the earlier build on the copy, check
+   a fusion plot and let the shown recordings' fits finish). Start this build
+   and check a fusion plot: each shown recording is computed again once, shown
+   in the status bar, and not again after a hide and a show, or after a
+   restart.
 
 A colour that looks wrong is moved within the rule of `docs/PLOT_COLOURS.md`,
 its new figures written into the comment of the plot table, and the step is
@@ -3835,9 +3927,10 @@ amended by the specification "Demand-driven requested calculations"
 for background work" (appendix H), and clause 15 again by the specification
 "Sensor fusion plots, attitude and the orientation attribute" (appendix I), by
 the specification "The documented noise model and the accuracy, part 1"
-(appendix K), whose four accuracy plots made the real fusion plots twelve, and
-by the specification "Fused speed plots" (appendix Q), whose three fused
-speeds make them fifteen.
+(appendix K), whose four accuracy plots made the real fusion plots twelve, by
+the specification "Fused speed plots" (appendix Q), whose three fused speeds
+made them fifteen, and by the specification "Fused position and speed
+accuracy" (appendix R), whose three accuracies make them eighteen.
 "The branch" is `sensor-fusion-clean-port`, the behavioural reference the
 fusion kernel was ported from.
 
@@ -3892,10 +3985,12 @@ fusion kernel was ported from.
     sessions still to compute falling as each publishes; unchecking mid-way
     drops the tracks that are waiting and lets the running one finish; checking
     again resumes; a fourth track shown afterwards is computed with no other
-    action. The real fusion plots are the fifteen of the "Sensor fusion"
+    action. The real fusion plots are the eighteen of the "Sensor fusion"
     category (the four accuracies since the specification of 1001-1065, the
-    three fused speeds after Elevation since the specification of
-    1601-1612), and heading, pitch and roll share one job.
+    three fused speeds after Elevation since the specification of 1601-1612,
+    the horizontal, vertical and speed accuracies after Vertical acceleration
+    accuracy since the specification of 1701-1717), and heading, pitch and roll
+    share one job.
 16. (as amended) Starting the application with fusion plots checked starts no
     job, because every track starts hidden. Applying a profile that checks
     fusion plots, the Plots menu and any other programmatic check create
@@ -4445,8 +4540,11 @@ restates them again where appendix G had. Clause 9 is stated as amended by the
 specification "Sensor fusion plots, attitude and the orientation attribute"
 (appendix I), again by the specification "The documented noise model and the
 accuracy, part 1" (appendix K), which made the fusion plots twelve, five of
-them outputs of the fit, and again by the specification "Fused speed plots"
-(appendix Q): the fusion plots are fifteen, six of them outputs of the fit.
+them outputs of the fit, again by the specification "Fused speed plots"
+(appendix Q), which made them fifteen, six of them outputs of the fit, and
+again by the specification "Fused position and speed accuracy" (appendix R):
+the fusion plots are eighteen, six of them outputs of the fit and twelve
+derived from its outputs.
 
 1. (2) The user expresses intent through plots and logbook columns, never
    through calculations: what is switched on is the request.
@@ -4463,11 +4561,12 @@ them outputs of the fit, and again by the specification "Fused speed plots"
    and no user-facing switch pauses or throttles background work.
 9. (5, as amended) Plot demand: for every checked plot whose value is a
    requested output, every visible session needs the requested calculations
-   that block that output. The fifteen plots of the "Sensor fusion" category
+   that block that output. The eighteen plots of the "Sensor fusion" category
    are such plots: six are outputs of the fit (vertical acceleration, the four
    accuracies since the specification of 1001-1065, and vertical speed since
-   the specification of 1601-1612), and the nine derived from its outputs are
-   blocked by it.
+   the specification of 1601-1612), and the twelve derived from its outputs are
+   blocked by it (the horizontal, vertical and speed accuracies after Vertical
+   acceleration accuracy since the specification of 1701-1717).
 10. (5) Column demand: for every enabled logbook column whose value depends on
     a requested output, every session in the logbook needs the requested
     calculations that block that value.
@@ -5128,23 +5227,32 @@ specification's plots: the category held twelve plots, the eight and then
 the four accuracy plots, which have no GNSS counterpart and are named as the
 GNSS accuracy plots are. Clauses 1, 2, 42, 54, 62 and 63 are stated as
 amended again by the specification "Fused speed plots" (appendix Q): the
-category holds fifteen plots, the three fused speeds after Elevation, named,
+category held fifteen plots, the three fused speeds after Elevation, named,
 united and typed as the GNSS speeds. Clause 3 is stated as amended by the
 same specification: the fused down velocity is drawn as Vertical speed.
+Clauses 1, 2, 42, 54, 62 and 63 are stated as amended again by the
+specification "Fused position and speed accuracy" (appendix R): the category
+holds eighteen plots, Horizontal accuracy, Vertical accuracy and Speed
+accuracy after Vertical acceleration accuracy, named, united and typed as the
+GNSS accuracies.
 
-1. (5, as amended) The "Sensor fusion" category holds exactly fifteen plots,
+1. (5, as amended) The "Sensor fusion" category holds exactly eighteen plots,
    in this order: Elevation, Horizontal speed, Vertical speed, Total speed,
    Horizontal acceleration, Vertical acceleration, Along-track acceleration,
    Cross-track acceleration, Heading, Pitch, Roll, Heading accuracy, Tilt
-   accuracy, Horizontal acceleration accuracy, Vertical acceleration accuracy
-   (the three speeds since the specification of 1601-1612, the last four
-   since the specification of 1001-1065).
-2. (5, as settled, as amended) Each of the first eleven is named, united and
-   typed as its GNSS counterpart (Elevation, the three speeds since the
-   specification of 1601-1612, the four accelerations, Heading as Course),
-   Pitch and Roll as angles, so that the two overlay; a fused plot's colour
-   differs from its counterpart's; the four accuracy plots have no GNSS
-   counterpart and are named as the GNSS accuracy plots are.
+   accuracy, Horizontal acceleration accuracy, Vertical acceleration accuracy,
+   Horizontal accuracy, Vertical accuracy, Speed accuracy (the three speeds
+   since the specification of 1601-1612, the four after Roll since the
+   specification of 1001-1065, the last three since the specification of
+   1701-1717).
+2. (5, as settled, as amended) Each of the first eleven and the last three is
+   named, united and typed as its GNSS counterpart (Elevation, the three speeds
+   since the specification of 1601-1612, the four accelerations, Heading as
+   Course; Horizontal accuracy, Vertical accuracy and Speed accuracy since the
+   specification of 1701-1717), Pitch and Roll as angles, so that the two
+   overlay; a fused plot's colour differs from its counterpart's; the four
+   accuracy plots after Roll have no GNSS counterpart and are named as the GNSS
+   accuracy plots are.
 3. (5, as amended) The fused north, east and down position, north and east
    velocity, north and east acceleration, roll, pitch, yaw and quaternion
    plots are removed, and the "GNSS (Local frame)" category with them; the
@@ -5260,12 +5368,14 @@ same specification: the fused down velocity is drawn as Vertical speed.
 41. (10, as amended) A stored attribute wins even when invalid or empty, so no
     edit path stores a blank as a way back to a default; the engine's removal
     of a stored value falls back to the calculation.
-42. (11, as amended) The plot list shows "Sensor fusion" with fifteen plots,
-    the eleven named as the GNSS plots (the three fused speeds after
-    Elevation since the specification of 1601-1612) and the four accuracies
-    (since the specification of 1001-1065) named as the GNSS accuracy plots,
-    and no local-frame category; checking a fusion plot starts the fit as
-    before, the status bar shows it, and a stored fit draws at once.
+42. (11, as amended) The plot list shows "Sensor fusion" with eighteen plots,
+    the eleven named as the GNSS plots (the three fused speeds after Elevation
+    since the specification of 1601-1612), the four accuracies (since the
+    specification of 1001-1065) named as the GNSS accuracy plots, and the three
+    accuracies after them named as the GNSS accuracies they overlay (since the
+    specification of 1701-1717), and no local-frame category; checking a fusion
+    plot starts the fit as before, the status bar shows it, and a stored fit
+    draws at once.
 43. (11) The attitude plots are in the aircraft convention for the mount the
     orientation describes, heading continuous through turns.
 44. (11, as amended) The orientation column, once added, shows "forward +y, up
@@ -5299,13 +5409,14 @@ same specification: the fused down velocity is drawn as Vertical speed.
 53. (12) The demand layer is untouched: a derived plot's blockers lead to the
     fit through the chain it already follows, and heading, pitch and roll are
     filled by one job.
-54. (13, as amended) Test: the plot list has the fifteen fusion plots (the
+54. (13, as amended) Test: the plot list has the eighteen fusion plots (the
     four accuracies since the specification of 1001-1065, the three fused
-    speeds after Elevation since the specification of 1601-1612) and no
-    local-frame plots; every fusion plot is explicit-backed (waits on the fit) as the
-    seventeen were; an existing column over a removed plot's measurement still
-    computes, and the export of the fit, its stored record, still holds the
-    measurement.
+    speeds after Elevation since the specification of 1601-1612, the
+    horizontal, vertical and speed accuracies after Vertical acceleration
+    accuracy since the specification of 1701-1717) and no local-frame plots;
+    every fusion plot is explicit-backed (waits on the fit) as the seventeen
+    were; an existing column over a removed plot's measurement still computes,
+    and the export of the fit, its stored record, still holds the measurement.
 55. (13) Test: applying a profile that names a removed plot enables its other
     plots and ignores that one, silently.
 56. (13) Test: elevation equals the origin height minus down minus the ground
@@ -5337,20 +5448,23 @@ same specification: the fused down velocity is drawn as Vertical speed.
     fixtures and the stored-result tests hold it, against the goldens and the
     algorithm string of the specification of 1001-1065.
 62. (13, as amended) Test: the audit keeps the removed plot names out of the
-    registry, and the documents describe the fifteen plots (the four
+    registry, and the documents describe the eighteen plots (the four
     accuracies since the specification of 1001-1065, the three fused speeds
-    after Elevation since the specification of 1601-1612), the attitude
-    convention, the orientation attribute and the rule for defaults.
-63. (14, as amended) `docs/` describes the fifteen fusion plots (the four
+    after Elevation since the specification of 1601-1612, the horizontal,
+    vertical and speed accuracies after Vertical acceleration accuracy since
+    the specification of 1701-1717), the attitude convention, the orientation
+    attribute and the rule for defaults.
+63. (14, as amended) `docs/` describes the eighteen fusion plots (the four
     accuracies since the specification of 1001-1065, the three fused speeds
-    after Elevation since the specification of 1601-1612) and the derived
-    quantities, the attitude convention with the orientation attribute, its
-    default and its limits (it describes the mount, not the wearer's posture;
-    a forward axis pointing straight up or down makes heading and roll
-    meaningless), the choice type and the orientation in the session file,
-    the rule for defaults and its helper, and that wind is no longer written
-    at import; no document describes a removed plot or the "GNSS (Local
-    frame)" category.
+    after Elevation since the specification of 1601-1612, the horizontal,
+    vertical and speed accuracies after Vertical acceleration accuracy since
+    the specification of 1701-1717) and the derived quantities, the attitude
+    convention with the orientation attribute, its default and its limits (it
+    describes the mount, not the wearer's posture; a forward axis pointing
+    straight up or down makes heading and roll meaningless), the choice type
+    and the orientation in the session file, the rule for defaults and its
+    helper, and that wind is no longer written at import; no document describes
+    a removed plot or the "GNSS (Local frame)" category.
 
 ## Appendix J. The acceptance items of the fused state at every IMU sample (901-940)
 
@@ -5567,7 +5681,11 @@ the earlier items
 (appendix C); 337 (appendix D); 509 (appendix F); 801, 802, 842, 847, 854,
 861, 862 and 863 (appendix I); and 901, 910, 912, 914, 915, 921, 925, 930
 and 935 (appendix J): each is restated "(as amended)" in its appendix, its
-row of section 9 and the map.
+row of section 9 and the map. The specifications "Fused speed plots"
+(appendix Q) and "Fused position and speed accuracy" (appendix R) have since
+made the category fifteen and then eighteen plots; clauses 37 and 63 stand as
+they are, and neither specification restates a clause of this appendix for
+the plots.
 
 1. (5) The configuration keys, with actual values and the unit in the name:
    in `SENSOR.CSV` `ACCEL_FS_G` (2, 4, 8, 16), `GYRO_FS_DEG_S` (250, 500,
@@ -6251,7 +6369,10 @@ section 2 (the calculations, the rows, demand, what is unchanged), item 5 its
 section 3 (the colours), item 6 its section 4 (the documents), and items 7-12
 the six bullets of its section 5 in order. Its section 1 (motivation) has no
 item. It restates item 15 of appendix B, item 9 of appendix F and items 1, 2,
-3, 42, 54, 62 and 63 of appendix I as amended.
+3, 42, 54, 62 and 63 of appendix I as amended. Items 2, 8 and 10 are stated
+as amended by the specification "Fused position and speed accuracy"
+(appendix R): eighteen plots, Horizontal accuracy, Vertical accuracy and
+Speed accuracy after Vertical acceleration accuracy.
 
 1. (2) The calculations: `builtin.fusion.velH` (`Fusion/velH` from
    `Fusion/velN` and `Fusion/velE`, the magnitude of the two, as `GNSS/velH`
@@ -6261,15 +6382,17 @@ item. It restates item 15 of appendix B, item 9 of appendix F and items 1, 2,
    output has one candidate and the fit alone behind it, so they appear with
    the fit and never start it; Vertical speed is the fit's own `Fusion/velD`,
    whose one producer is the fit.
-2. (2) The rows: Horizontal speed (`Fusion/velH`), Vertical speed
+2. (2, as amended) The rows: Horizontal speed (`Fusion/velH`), Vertical speed
    (`Fusion/velD`) and Total speed (`Fusion/vel`) in the "Sensor fusion"
    category after Elevation and before Horizontal acceleration, each named,
    united (m/s) and typed (`speed`, `vertical_speed`, `speed`) as its GNSS
-   counterpart so that the two overlay; the category holds fifteen plots, in
+   counterpart so that the two overlay; the category holds eighteen plots, in
    this order: Elevation, Horizontal speed, Vertical speed, Total speed,
    Horizontal acceleration, Vertical acceleration, Along-track acceleration,
    Cross-track acceleration, Heading, Pitch, Roll, Heading accuracy, Tilt
-   accuracy, Horizontal acceleration accuracy, Vertical acceleration accuracy.
+   accuracy, Horizontal acceleration accuracy, Vertical acceleration accuracy,
+   Horizontal accuracy, Vertical accuracy, Speed accuracy (the last three since
+   the specification of 1701-1717).
 3. (2) Demand: checking any of the three creates demand for the fit exactly as
    checking a fused acceleration does, one row alone one fit; a stored fit
    draws them at once, without computing; a logbook column over any of the
@@ -6303,20 +6426,23 @@ item. It restates item 15 of appendix B, item 9 of appendix F and items 1, 2,
    definition applied to the fused components; both unavailable before the fit
    has published and when the inputs' lengths differ; both appear with the fit
    and start none.
-8. (5, second bullet) Test: the category holds the fifteen in the order of
-   1602; the three new rows are named, united and typed as their GNSS
-   counterparts and backed by the explicit calculation; a legend value over
-   each formats as its GNSS counterpart's does.
+8. (5, second bullet, as amended) Test: the category holds the eighteen in the
+   order of 1602 (the horizontal, vertical and speed accuracies after Vertical
+   acceleration accuracy since the specification of 1701-1717); the three new
+   rows are named, united and typed as their GNSS counterparts and backed by
+   the explicit calculation; a legend value over each formats as its GNSS
+   counterpart's does.
 9. (5, third bullet) Test: checking Total speed alone on a fusable recording
    without a stored fit starts one fit; a stored fit draws the three without
    computing.
-10. (5, fourth bullet) The audit's `naming` group: the pinned count of fusion
-    plots is fifteen, with `fusionPlots()` of
-    `tests/fusion/fusionsessions.cpp`; the rule that keeps the fit's own
-    channels out of the plot registry drops `velD`, as it already omits
-    `accD`, and its comment says why; the documents' pattern refuses a count
-    of twelve; the comments and documents that counted twelve are updated; the
-    audit and the acceptance-map check stay green.
+10. (5, fourth bullet, as amended) The audit's `naming` group: the pinned count
+    of fusion plots is eighteen (fifteen before the specification of
+    1701-1717), with `fusionPlots()` of `tests/fusion/fusionsessions.cpp`; the
+    rule that keeps the fit's own channels out of the plot registry drops
+    `velD`, as it already omits `accD`, and its comment says why; the
+    documents' pattern refuses a count of twelve, and of fifteen since the
+    specification of 1701-1717; the comments and documents that counted twelve
+    are updated; the audit and the acceptance-map check stay green.
 11. (5, fifth bullet) The manual step M58: the three plots in the list in
     their place; one fit for the three; the three drawn beside the GNSS
     speeds, Wind-corrected horizontal speed and Speed accuracy, in the light
@@ -6339,7 +6465,11 @@ and 2 (motivation, principles) have no item. It amends the specifications of
 the sensor fusion improvements (appendix C, clauses 30 and 35), of stored
 requested results (appendix D, clause 37), of the fused state at every IMU
 sample (appendix J, clause 12) and of GNSS holes bridged by the IMU (appendix
-N, item 2): each is stated as amended.
+N, item 2), and, for the plots, of sensor fusion and plot-driven jobs
+(appendix B, clause 15), of demand-driven requested calculations (appendix F,
+clause 9), of sensor fusion plots, attitude and the orientation attribute
+(appendix I, clauses 1, 2, 42, 54, 62 and 63) and of the fused speed plots
+(appendix Q, items 2, 8 and 10): each is stated as amended.
 
 1. (3) The twelve outputs: `Fusion/posCovNN`, `posCovNE`, `posCovND`,
    `posCovEE`, `posCovED`, `posCovDD` (m^2) and `velCovNN`, `velCovNE`,
@@ -6427,7 +6557,63 @@ N, item 2): each is stated as amended.
    names, sensor-qualified, to the registration and the plot rows in `src`,
    and the rule is planted once; the range's completeness check covers
    1701-1709; the audit and the map check are green.
-
-Items 10-17 follow with the plots (the specification's sections 5 and 6,
-the three rows, their colours and demand, the manual step and the restated
-items).
+10. (5) The rows: Horizontal accuracy (`Fusion/hAcc`, m, `distance`), Vertical
+    accuracy (`Fusion/vAcc`, m, `distance`) and Speed accuracy (`Fusion/sAcc`,
+    m/s, `speed`) at the end of the "Sensor fusion" category, after Vertical
+    acceleration accuracy, in the order of GNSS (Basic), each named, united and
+    typed as its GNSS counterpart so that the two overlay; the category holds
+    eighteen plots, in this order: Elevation, Horizontal speed, Vertical speed,
+    Total speed, Horizontal acceleration, Vertical acceleration, Along-track
+    acceleration, Cross-track acceleration, Heading, Pitch, Roll, Heading
+    accuracy, Tilt accuracy, Horizontal acceleration accuracy, Vertical
+    acceleration accuracy, Horizontal accuracy, Vertical accuracy, Speed
+    accuracy.
+11. (5) Demand: each of the three is requested as every fusion plot is:
+    checking one creates demand for the fit, one row alone one fit; a stored
+    fit draws it at once, without computing; a logbook column over it works as
+    over any fusion value, loaded and unloaded; it is absent, like the four
+    accuracies, for a recording whose fit did not compute the covariance, while
+    the fit's other plots are drawn; none applies to a session without IMU
+    data.
+12. (6) The colours, chosen by `docs/PLOT_COLOURS.md`: each row is the quiet
+    member of the fused value it qualifies (the same hue, less saturated, at
+    the other edge of the lightness band) and kin of its GNSS counterpart, read
+    in the GNSS quality group of its section 5 (the three GNSS accuracies, the
+    satellite count and the three); no trio reaches the kin floor of 15 against
+    every other plot of the group and every fused value, so the three sit at
+    the floor of 11, where the set's own accuracy pairs sit (fused Vertical
+    acceleration accuracy against fused Vertical acceleration), keeping each
+    row's story; Horizontal accuracy `#c57fa6`, Vertical accuracy `#08a2af`,
+    Speed accuracy `#8c619b`, literals in the plot table with a comment that
+    says what each is coloured by and its figures; a colour that looks wrong
+    moves within the rule, its new figures recorded in that comment.
+13. (7) The documents: `COMPUTED_PLOTS.md` (the category's count and list, and
+    the fused Speed accuracy read beside the receiver's: the two say how far
+    each side of the compromise is trusted), `PLOT_COLOURS.md` section 5 (the
+    GNSS quality group names the three), `SENSOR_FUSION.md` section 2 (the
+    list, seven accuracy plots, the three named with their units, each
+    overlaying its GNSS counterpart, absent where the covariance was not
+    computed) and its test rows, and `CALCULATIONS.md`'s eighteen in order;
+    every count of fifteen fusion plots in the documents and this file becomes
+    eighteen; the documents' pattern of stale counts gains fifteen.
+14. (8, fourth bullet) Test: the category holds the eighteen in order; the
+    three are typed and backed by the fit; they are absent where the covariance
+    failed, with the fit's other plots drawn; one row alone starts one fit; a
+    column over Speed accuracy fills loaded and unloaded rows, formatted by its
+    type.
+15. (8, audit bullet, third clause) The audit: the `naming` group pins eighteen
+    fusion plots, with `fusionPlots()` of `tests/fusion/fusionsessions.cpp`,
+    and its documents' pattern refuses a count of fifteen; the
+    `accuracy-channels` group counts seven accuracy rows; each rule is planted
+    once; the audit and the acceptance-map check are green.
+16. (8, manual bullet) The manual step M59: the three rows in their place; one
+    fit for the three; each absent for a rejected recording and for a recording
+    whose covariance fails, where one is at hand, with the fit's other plots
+    drawn; the colours beside the GNSS quality rows and beside the fused speeds
+    and Elevation, in both themes; the legend and the measure tool; a Speed
+    accuracy column; after the update a stored `v9` fit computed again once,
+    shown in the status bar.
+17. (8, last bullet) The acceptance items 1701-1717 in the next free hundred of
+    `tests/acceptance_map.txt`, with this appendix and section 9.18; items 115,
+    509, 801, 802, 842, 854, 862, 863, 1602, 1608 and 1610, which counted the
+    fusion plots, restated "(as amended)".

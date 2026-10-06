@@ -46,7 +46,7 @@
 #   - a default that stands in for a value the user has not set is a
 #     calculation, and every constant one is registered by one helper;
 #     neither the importer nor the legacy backfill writes wind; one type owns
-#     the orientation vocabulary; the sensor fusion category is the fifteen
+#     the orientation vocabulary; the sensor fusion category is the eighteen
 #     plots of the tests' mirror, and no removed fusion plot and no
 #     local-frame plot remains in code or documents (items 801-863);
 #   - the fused output is the state at every IMU sample: the step model has
@@ -66,7 +66,7 @@
 #     of it; the accuracy's covariance comes from one factorization in one
 #     unit, never from the library's joint marginals, under one cap; the four
 #     channel names are spelled in the registration and the plot rows alone;
-#     the sensor fusion category has fifteen plots, the accuracies in the deep
+#     the sensor fusion category has eighteen plots, the accuracies in the deep
 #     scheme; and the fusion document carries the validation of the model
 #     (items 1001-1065);
 #   - the GNSS acceleration accuracy is the receiver's speed accuracy through
@@ -101,7 +101,7 @@
 #     reason, the index entry and the page's text are spelled once; and the
 #     documents name the context menu's action and the reason (items
 #     1501-1524);
-#   - the fused speeds are plots: the sensor fusion category is the fifteen
+#   - the fused speeds are plots: the sensor fusion category is the eighteen
 #     plots of the tests' mirror, the fit's down velocity has a row as its
 #     down acceleration does, and no document counts the fusion plots as
 #     twelve (items 1601-1612);
@@ -110,9 +110,11 @@
 #     the twelve covariance names are spelled in src in the registration's
 #     output table alone, no plot row names them, the three derived names,
 #     sensor-qualified, are spelled in src in the registration and the plot
-#     rows alone, the algorithm string is batch-temperature-bias-v10, and no
+#     rows alone, the algorithm string is batch-temperature-bias-v10, no
 #     document counts the fit's channels or outputs as they were before the
-#     blocks (items 1701-1717).
+#     blocks, the sensor fusion category is the eighteen plots of the tests'
+#     mirror with seven accuracy rows, each a literal colour, and no document
+#     counts the fusion plots as fifteen (items 1701-1717).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -464,7 +466,7 @@ expect_none("no dialog or message box for a calculation outcome"
 # by the engine like any other; the registration never catches and stores one.
 expect_none("no hand-cached failure" "catch *\\(" src/fusion/fusionregistration.cpp)
 
-# ─────────────────────────────── naming (items 120, 801, 803, 852, 862, 863, 1037, 1065, 1602, 1605, 1606, 1610-1612)
+# ─────────────────────────────── naming (items 120, 801, 803, 852, 862, 863, 1037, 1065, 1602, 1605, 1606, 1610-1612, 1710, 1712, 1713, 1715-1717)
 # The algorithm is a batch factor-graph fit and nothing is named after a
 # filter; the branch's sensor and output names are gone.
 # Allow: tests/README.md is excluded because its section 10 spells these
@@ -479,7 +481,7 @@ expect_none("branch output names are gone" "posN|posE|posD|_IMU_GNSS_EKF|ImuGnss
 # Allow: this count pins the application's plot list to the list the tests
 # use (tests/fusion/fusionsessions.cpp, fusionPlots()). Adding a plot means
 # changing both, and the number here.
-expect_count("fifteen fusion plots" "^ *\\{\"Sensor fusion\", " 15 src/mainwindow.cpp)
+expect_count("eighteen fusion plots" "^ *\\{\"Sensor fusion\", " 18 src/mainwindow.cpp)
 # A plot row states its default colour as a literal, chosen to reach 3:1 on
 # both plot backgrounds (the comment of the plot table states the rule and
 # what a new plot is coloured by; PLANS/done/plot-colours.md). Allow: none
@@ -504,11 +506,12 @@ expect_none("no local-frame plots" "GNSS \\(Local frame\\)|localFramePlots" src 
 expect_none("the removed fusion plots stay out of the registry"
   "\"Fusion\", *\"(north|east|down|velN|velE|accN|accE|roll|pitch|yaw|q[xyzw]|posCov(NN|NE|ND|EE|ED|DD)|velCov(NN|NE|ND|EE|ED|DD))\", *\"" src)
 # Allow: describe the fit's outputs as outputs or measurements; name no removed
-# category or plot, and count the fusion plots as fifteen ("the same eight"
-# inputs of docs/CALCULATIONS.md do not match). Seventeen, eight and twelve
-# are counts the category had before.
-expect_none("the documents describe the fifteen fusion plots"
-  "[Ss]eventeen( real)? plots|GNSS \\(Local frame\\)|Quaternion [WXYZ]|quaternion plots|[Ee]ight (real )?(fusion )?plots|[Aa]ll eight|[Tt]welve (real )?(fusion )?plots|[Aa]ll twelve"
+# category or plot, and count the fusion plots as eighteen ("the same eight"
+# inputs of docs/CALCULATIONS.md do not match, and "all eight" is not
+# followed by "een", so that "all eighteen" passes). Seventeen, eight, twelve
+# and fifteen are counts the category had before.
+expect_none("the documents describe the eighteen fusion plots"
+  "[Ss]eventeen( real)? plots|GNSS \\(Local frame\\)|Quaternion [WXYZ]|quaternion plots|[Ee]ight (real )?(fusion )?plots|[Aa]ll eight($|[^e])|[Tt]welve (real )?(fusion )?plots|[Aa]ll twelve|[Ff]ifteen (real )?(fusion )?plots|[Aa]ll fifteen"
   docs README.md)
 
 # ─────────────────────────────── solver-confinement
@@ -799,7 +802,7 @@ expect_none("the documents describe the fitted scale" "scale factor is not fitte
 expect_count("the fusion document names the scale prior" "scale_prior" 1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document names the scale diagnostics" "model\\.scale" 1 docs/SENSOR_FUSION.md)
 
-# ─────────────────────────────── accuracy-channels (items 1022, 1025, 1030, 1032, 1036, 1037, 1049, 1064, 1065, 1702, 1705, 1706, 1709)
+# ─────────────────────────────── accuracy-channels (items 1022, 1025, 1030, 1032, 1036, 1037, 1049, 1064, 1065, 1702, 1705, 1706, 1709, 1710, 1712, 1715)
 # The accuracy of a converged fit (docs/SENSOR_FUSION.md section 4): one
 # factorization of the converged graph, in its own unit
 # (src/fusion/fitcovariance.*), whose clique marginals give the covariance,
@@ -811,8 +814,9 @@ expect_count("the fusion document names the scale diagnostics" "model\\.scale" 1
 # velCovEE, velCovED, velCovDD) named in the registration's output table
 # alone; the three accuracies derived from them (Fusion/hAcc, Fusion/vAcc,
 # Fusion/sAcc) named, sensor-qualified, in the registration and the plot rows
-# alone; no document counting the fit's channels or outputs as they were
-# before the blocks; and the fusion document states the propagation, what it
+# alone; the seven accuracy rows of the plot table, each a literal colour; no
+# document counting the fit's channels or outputs as they were before the
+# blocks; and the fusion document states the propagation, what it
 # leaves out, the widening and the accuracy's one sentence.
 audit_group(accuracy-channels)
 # Allow: none expected. The library's joint marginals factorize the system
@@ -860,12 +864,18 @@ expect_only("the covariance channels are named in the registration alone"
 # searched: its capture history counts what each capture wrote.
 expect_none("the documents count the fit's thirty-three channels"
   "twenty-one (measurement|channel)|twenty-two outputs" docs README.md)
-# The four accuracy plots are rows of the plot table, each a literal colour:
-# the quiet member of the value it qualifies (the table's comment). Allow:
-# none expected; a fifth accuracy row raises the count with the row.
-expect_count("the four fusion accuracy rows"
+# The seven accuracy plots are rows of the plot table, each a literal colour
+# (the table's comment says what each is coloured by). The four without a
+# GNSS counterpart (heading, tilt and the two acceleration accuracies) are
+# each the quiet member of the value it qualifies; the three with one
+# (Horizontal, Vertical and Speed accuracy) are each the quiet member of the
+# fused value it qualifies and kin of its counterpart. Both kinds are a
+# figure of the fit's covariance drawn beside what it qualifies, so one count
+# holds them. Allow: none expected; an eighth accuracy row raises the count
+# with the row.
+expect_count("the seven fusion accuracy rows"
   "^ *\\{\"Sensor fusion\", +\"[A-Za-z ]+ accuracy\", +\"[^\"]*\", +QColor\\(0x[0-9a-f]+\\)"
-  4 src/mainwindow.cpp)
+  7 src/mainwindow.cpp)
 # Allow: none expected. The fit publishes its accuracy; say what it is and
 # what it leaves out instead.
 expect_none("nothing says that no uncertainty is published" "no uncertainty" src docs)
@@ -1679,7 +1689,8 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # and speed accuracy: the twelve outputs, v10 and what is unchanged, the
 # kernel's tests, the registration and the record, the documents of the
 # fit's outputs, the audit rule; 1707-1709 the three derived accuracies, their
-# tests, their documents and audit rule; then the plots).
+# tests, their documents and audit rule; 1710-1717 the rows, demand, the
+# colours, the documents, the tests, the counts, the manual step, the map).
 # Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
@@ -1868,7 +1879,7 @@ else()
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
     endif()
   endforeach()
-  foreach(item RANGE 1701 1709)
+  foreach(item RANGE 1701 1717)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

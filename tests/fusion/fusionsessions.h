@@ -117,14 +117,15 @@ FlySight::SessionData syntheticFitSession(const QString &sessionId,
 /// accuracies, then the 12 covariance entries (posCovNN ... velCovDD).
 QStringList fusionMeasurementNames();
 
-/// The fifteen "Sensor fusion" plots as PlotValues, for PlotModel::setPlots(),
+/// The eighteen "Sensor fusion" plots as PlotValues, for PlotModel::setPlots(),
 /// in the application's order: Elevation (z), the horizontal, vertical and
 /// total speeds (velH, velD, vel), the horizontal, vertical (accD),
 /// along-track and cross-track accelerations, Heading, Pitch and Roll
-/// (bodyHeading, bodyPitch, bodyRoll), then the four accuracies (headingAcc,
-/// tiltAcc, accHAcc, accDAcc). Mirrors the application's fifteen rows in
+/// (bodyHeading, bodyPitch, bodyRoll), the four accuracies (headingAcc,
+/// tiltAcc, accHAcc, accDAcc), then the horizontal, vertical and speed
+/// accuracies (hAcc, vAcc, sAcc). Mirrors the application's eighteen rows in
 /// MainWindow::registerBuiltInPlots(), which is outside the test library
-/// boundary; audit_cleanup pins that list at fifteen rows. Colours are
+/// boundary; audit_cleanup pins that list at eighteen rows. Colours are
 /// irrelevant here and left default.
 QVector<FlySight::PlotValue> fusionPlots();
 

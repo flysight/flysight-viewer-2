@@ -303,6 +303,9 @@ QVector<PlotValue> fusionPlots()
         {"Tilt accuracy",                    "deg",   "tiltAcc",    "angle"},
         {"Horizontal acceleration accuracy", "m/s^2", "accHAcc",    "acceleration_accuracy"},
         {"Vertical acceleration accuracy",   "m/s^2", "accDAcc",    "acceleration_accuracy"},
+        {"Horizontal accuracy",              "m",     "hAcc",       "distance"},
+        {"Vertical accuracy",                "m",     "vAcc",       "distance"},
+        {"Speed accuracy",                   "m/s",   "sAcc",       "speed"},
     };
 
     QVector<PlotValue> plots;

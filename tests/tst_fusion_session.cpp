@@ -93,9 +93,10 @@ QList<DependencyKey> valueNames()
     return names;
 }
 
-/// The measurement behind each of the fifteen "Sensor fusion" plots
+/// The measurement behind each of the eighteen "Sensor fusion" plots
 /// (fusionPlots()): the fit's own velD, accD and four accuracies, and the
-/// derivations that wait on it.
+/// derivations that wait on it, the horizontal, vertical and speed
+/// accuracies derived from its covariance blocks among them.
 QList<DependencyKey> plotNames()
 {
     QList<DependencyKey> names;

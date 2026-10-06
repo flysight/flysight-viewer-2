@@ -12,7 +12,8 @@
 //  - a rejection and a solver failure come back listed with their reason; a
 //    success whose accuracy was not computed comes back without the sixteen
 //    accuracy channels (the four accuracies and the twelve covariance
-//    entries) and with the rest, and fails nothing;
+//    entries) and the three accuracies derived from them, and with the rest,
+//    and fails nothing;
 //  - validity follows the inputs (an unrelated edit keeps the record, a
 //    dependency edit or an IMU merge drops it), what the fit looked up and the
 //    code stamps (a record under the previous algorithm string is deleted at
@@ -27,9 +28,9 @@
 //  - the logbook's cache/ folder deleted while the application is closed: the
 //    fit reads not requested at the next start, and nothing runs until the
 //    demand layer offers it;
-//  - a logbook column over a fusion output ("roll @ exit", and each of the
-//    four accuracies) is filled for sessions that are not loaded, stored, and
-//    not fitted again at the next start.
+//  - a logbook column over a fusion output ("roll @ exit", each of the four
+//    accuracies, Total speed and Speed accuracy) is filled for sessions that
+//    are not loaded, stored, and not fitted again at the next start.
 //
 // The oracle (verifyAgainstFresh / evaluateFresh) is never used on a session
 // with the fit installed: it would run the fit again. Expected values are
@@ -113,12 +114,16 @@ const QStringList kAccuracies = {QStringLiteral("headingAcc"), QStringLiteral("t
                                  QStringLiteral("posCovEE"), QStringLiteral("posCovED"), QStringLiteral("posCovDD"),
                                  QStringLiteral("velCovNN"), QStringLiteral("velCovNE"), QStringLiteral("velCovND"),
                                  QStringLiteral("velCovEE"), QStringLiteral("velCovED"), QStringLiteral("velCovDD")};
+// The three accuracies derived from the covariance blocks on demand: without
+// the blocks they have no value, and the engine reports them not produced, as
+// it reports the fit's own.
+const QStringList kDerivedAccuracies = {QStringLiteral("hAcc"), QStringLiteral("vAcc"), QStringLiteral("sAcc")};
 const QString kCovarianceFailure =
     QStringLiteral("covariance unavailable: the factorization of the converged graph failed");
 
 /// What a fresh publish showed, for the bit-for-bit comparison with a restore.
 struct FitValues {
-    QHash<QString, QVector<double>> channels;   ///< fusionMeasurementNames(), velH, vel, accH, _system_time
+    QHash<QString, QVector<double>> channels;   ///< fusionMeasurementNames(), velH, vel, accH, hAcc, vAcc, sAcc, _system_time
     QString diagnostics;
     QString detail;
 };
@@ -427,6 +432,7 @@ FitValues FusionStoreTest::capture(const QString &id)
     FitValues values;
     QStringList names = fusionMeasurementNames();
     names << QStringLiteral("velH") << QStringLiteral("vel") << QStringLiteral("accH")
+          << QStringLiteral("hAcc") << QStringLiteral("vAcc") << QStringLiteral("sAcc")
           << QStringLiteral("_system_time");
     for (const QString &name : std::as_const(names))
         values.channels.insert(name, fusion(id, name));
@@ -754,6 +760,7 @@ void FusionStoreTest::restoredAfterRestartIsBitIdentical()
     restart();
     check(QStringLiteral("bodyRoll"));
     check(QStringLiteral("vel"));       // a fused speed row draws from the stored fit too
+    check(QStringLiteral("sAcc"));      // and a fused accuracy row derived from its covariance
     QObject scope;
     LoadWatch atLoad;
     watchLoad(&scope, "a", &atLoad);
@@ -895,8 +902,10 @@ void FusionStoreTest::restoredSolverFailureShowsBadge()
 // value of the fit), and the diagnostics' accuracy object says why. The
 // registered fit cannot be driven there from a session fixture, so a real
 // record is rewritten to that shape, with the leaves and fingerprint of a real
-// publish. Restored, the sixteen are absent, the rest is the golden's, the Roll
-// row is done with nothing failed, and nothing is fitted again. (What an
+// publish. Restored, the sixteen are absent and so are the horizontal,
+// vertical and speed accuracies derived from them, not produced; the rest is
+// the golden's, the Roll row is done with nothing failed, and nothing is
+// fitted again. (What an
 // accuracy plot checked over such a record lists is the demand layer's
 // generic entry, and is not asserted here.)
 void FusionStoreTest::restoredFitWithoutAccuracyDrawsTheRest()
@@ -956,6 +965,14 @@ void FusionStoreTest::restoredFitWithoutAccuracyDrawsTheRest()
     for (const QString &name : kAccuracies) {
         QVERIFY2(fusion("a", name).isEmpty(), qPrintable(name));
         QVERIFY2(!isAvailable("a", fusionKey(name)), qPrintable(name));
+    }
+    // The three derived from the blocks are absent with them: not produced,
+    // not waiting on anything
+    for (const QString &name : kDerivedAccuracies) {
+        QVERIFY2(fusion("a", name).isEmpty(), qPrintable(name));
+        QVERIFY2(!isAvailable("a", fusionKey(name)), qPrintable(name));
+        QVERIFY2(engine("a").blockers(fusionKey(name)).state == BlockerReport::State::NotProduced,
+                 qPrintable(name));
     }
     const FusionGolden golden = loadFusionGolden(QStringLiteral("coarse_maneuver"));
     int compared = 0;
@@ -1830,7 +1847,8 @@ void FusionStoreTest::fusionColumnWithStoredFitsRunsNothing()
              indexed.toDouble());
 }
 
-// A column over a fusion row (each of the four accuracy rows and Total speed),
+// A column over a fusion row (each of the four accuracy rows, Total speed and
+// Speed accuracy),
 // at the exit marker and typed as its row, works as over any fusion value:
 // enabled with the session not loaded, it is filled by the demand layer (one
 // fit, the record written, the value cached and indexed with the fit's stamp,
@@ -1851,6 +1869,7 @@ void FusionStoreTest::fusionColumnFillsUnloadedSessions_data()
     QTest::newRow("accDAcc") << QStringLiteral("accDAcc") << QStringLiteral("acceleration_accuracy")
                              << QStringLiteral("Vertical acceleration accuracy");
     QTest::newRow("vel") << QStringLiteral("vel") << QStringLiteral("speed") << QStringLiteral("Total speed");
+    QTest::newRow("sAcc") << QStringLiteral("sAcc") << QStringLiteral("speed") << QStringLiteral("Speed accuracy");
 }
 
 void FusionStoreTest::fusionColumnFillsUnloadedSessions()

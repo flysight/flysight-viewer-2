@@ -101,7 +101,8 @@ of plots that are. Near-twins across groups are accepted and expected.
 
 The groups that count as "read together", as judged when the set was made:
 elevation (GNSS and fused); the speeds, GNSS and fused; GNSS quality (the three accuracies
-and the satellite count); the accelerations, GNSS and fused, with their
+and the satellite count, with the fused Horizontal, Vertical and Speed accuracy, each
+read beside the receiver's of the same name); the accelerations, GNSS and fused, with their
 accuracies; the accelerometer triad; the rotation rates (the gyro triad and
 the menu's course rate and dive angle rate); the angles (course, dive angle,
 heading, pitch, roll and the heading and tilt accuracies); the magnetometer

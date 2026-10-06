@@ -1,4 +1,4 @@
-// The plot-row script with the REAL fusion plots, the fifteen rows of the
+// The plot-row script with the REAL fusion plots, the eighteen rows of the
 // application's "Sensor fusion" category (fusionPlots()): PlotModel +
 // CalculationDemand + the executor + SessionModel +
 // Fusion::registerFusionCalculations, with real fits on the executor's 64 MiB
@@ -72,6 +72,7 @@ namespace {
 const QString kFit = QString::fromLatin1(Fusion::FitCalculationId);     // "builtin.fusion.fit"
 const QString kVelH = QStringLiteral("builtin.fusion.velH");
 const QString kVel = QStringLiteral("builtin.fusion.vel");
+const QString kSAcc = QStringLiteral("builtin.fusion.sAcc");
 const QString kAccH = QStringLiteral("builtin.fusion.accH");
 const QString kTitle = QStringLiteral("Sensor fusion");
 const QString kRoll = QStringLiteral("bodyRoll");        // the Roll row
@@ -106,6 +107,7 @@ private slots:
     void headingPitchRollShareOneJob();
     void accHRowIsBlockedByFusion();
     void totalSpeedRowIsBlockedByFusion();
+    void speedAccuracyRowIsBlockedByFusion();
     void noImuSessionIsNeverCounted();
     void rejectedTrackShowsBadge();
     void editsAndVisibilityDuringFit();
@@ -265,8 +267,8 @@ QString FusionRowsTest::offenceInRows(const QString &absent)
     return QString();
 }
 
-// Every one of the fifteen fusion plots is requested: its value waits on the
-// fit, which is its only requested calculation. Checking all fifteen with one
+// Every one of the eighteen fusion plots is requested: its value waits on the
+// fit, which is its only requested calculation. Checking all eighteen with one
 // visible session (with a ground elevation, which Elevation needs) starts ONE
 // fit, which every value waits on; the computations count that one session.
 // After it every row has a value on the fit's time axis.
@@ -290,9 +292,12 @@ void FusionRowsTest::allFusionPlotsAreExplicitBacked()
         {"Tilt accuracy",                    "deg",   "tiltAcc",    "angle"},
         {"Horizontal acceleration accuracy", "m/s^2", "accHAcc",    "acceleration_accuracy"},
         {"Vertical acceleration accuracy",   "m/s^2", "accDAcc",    "acceleration_accuracy"},
+        {"Horizontal accuracy",              "m",     "hAcc",       "distance"},
+        {"Vertical accuracy",                "m",     "vAcc",       "distance"},
+        {"Speed accuracy",                   "m/s",   "sAcc",       "speed"},
     };
     const QVector<PlotValue> plots = fusionPlots();
-    QCOMPARE(plots.size(), 15);
+    QCOMPARE(plots.size(), 18);
     for (int i = 0; i < plots.size(); ++i) {
         const PlotValue &plot = plots.at(i);
         QCOMPARE(plot.category, QStringLiteral("Sensor fusion"));
@@ -359,11 +364,14 @@ void FusionRowsTest::allFusionPlotsAreExplicitBacked()
     QCOMPARE(engine("s2").runCount(kFit), 1);
 }
 
-// The four accuracy plots are absent, like any unavailable value, where the
-// fit did not compute them. Before the fit they merely wait on it; for a
-// recording the model rejects they are not produced, and the recording is
-// listed once, with the fit's reason, however many of the four are checked;
-// for a session without IMU data none of the fifteen applies, silently.
+// The seven accuracy plots (the fit's four, and the horizontal, vertical and
+// speed accuracies derived from its covariance blocks) are absent, like any
+// unavailable value, where the fit did not compute them. Before the fit they
+// merely wait on it; for a recording the model rejects they are not produced
+// (a value derived from a rejected fit is NotProduced, as the fit's own are),
+// and the recording is listed once, with the fit's reason, however many of
+// the seven are checked; for a session without IMU data none of the eighteen
+// applies, silently.
 void FusionRowsTest::accuracyPlotsAreAbsentWithoutAFit()
 {
     QVector<PlotValue> accuracies;
@@ -371,7 +379,7 @@ void FusionRowsTest::accuracyPlotsAreAbsentWithoutAFit()
         if (plot.plotName.endsWith(QStringLiteral(" accuracy")))
             accuracies.append(plot);
     }
-    QCOMPARE(accuracies.size(), 4);
+    QCOMPARE(accuracies.size(), 7);
 
     QCOMPARE(addSessions({fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("s2")),
                           fixtureSession(QStringLiteral("reject_origin"), QStringLiteral("r1")),
@@ -686,7 +694,40 @@ void FusionRowsTest::totalSpeedRowIsBlockedByFusion()
     QCOMPARE(engine("s2").runCount(kVel), 1);
 }
 
-// Acceptance 11 on all fifteen real rows: a session without IMU data is
+// Fusion/sAcc is on demand and reads the fit's velocity covariance block and
+// velocity: the Speed accuracy row alone sees through it to the fit, one job
+// is created for it, and after it the accuracy lies on the fit's time axis,
+// the fit and the accuracy each run once.
+void FusionRowsTest::speedAccuracyRowIsBlockedByFusion()
+{
+    QCOMPARE(addSessions({sessionFromFixture(fusionFixture(QStringLiteral("coarse_linear")), QStringLiteral("s2"))}),
+             QString());
+    show({"s2"});
+    check(QStringLiteral("sAcc"));
+
+    // In demand: the value waits on the fit
+    QCOMPARE(progressNow().count, 1);
+    QVERIFY(CalculationDemand::isMerelyUncomputed(session("s2"), QStringLiteral("Fusion"), QStringLiteral("sAcc")));
+
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(m_queue->model()->record(0).calculationTitle, kTitle);
+    QCOMPARE(m_queue->model()->record(0).calculationId, kFit);
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
+    // An on-demand calculation can never be a job
+    QVERIFY(!m_queue->offer("s2", kSAcc).created());
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+
+    QVERIFY(nothingToShow());
+    const QVector<double> values = fusion("s2", QStringLiteral("sAcc"));
+    QCOMPARE(values.size(), fusion("s2", QStringLiteral("_time")).size());
+    QVERIFY(!values.isEmpty());
+    QCOMPARE(engine("s2").runCount(kFit), 1);
+    QCOMPARE(engine("s2").runCount(kSAcc), 1);
+}
+
+// Acceptance 11 on all eighteen real rows: a session without IMU data is
 // never counted in progress nor listed among failures, and cannot have a job.
 void FusionRowsTest::noImuSessionIsNeverCounted()
 {

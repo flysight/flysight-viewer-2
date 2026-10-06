@@ -1002,10 +1002,11 @@ void MainWindow::registerBuiltInPlots()
 
         {"IMU", "Temperature", QString::fromUtf8("\302\260C"), QColor(0xc58501), "IMU", "temperature", "temperature"},
 
-        // Category: Sensor fusion. Each of the first eleven rows is named,
-        // united and typed as its GNSS counterpart and is its kin: the
-        // neighbouring hue at the other edge of the lightness range, so the
-        // two can be told apart where they overlay (Elevation, whose
+        // Category: Sensor fusion. Each of the first eleven rows and of the
+        // last three is named, united and typed as its GNSS counterpart, so
+        // that the two overlay. Each of the first eleven is its counterpart's
+        // kin: the neighbouring hue at the other edge of the lightness range,
+        // so the two can be told apart where they overlay (Elevation, whose
         // counterpart is gray, is a quiet blue). Heading is kin of Course;
         // Pitch and Roll contrast with it and with each other. Every row is
         // computed on request and waits on the one fit.
@@ -1033,6 +1034,39 @@ void MainWindow::registerBuiltInPlots()
         // accuracies beside the fused accelerations. The acceleration
         // accuracies have a type of their own, since the acceleration type's
         // two decimals of g would read 0.00 over most of a recording.
+        //
+        // The last three rows, Horizontal, Vertical and Speed accuracy, are
+        // the fit's own figures for what the receiver's three accuracies
+        // qualify. Each is the quiet member of the fused value it qualifies
+        // (the same hue, less saturated, at the other edge of the lightness
+        // band) and kin of its GNSS counterpart, read in the GNSS quality
+        // group (the three GNSS accuracies, Number of satellites and these
+        // three). The group's quiet colours cluster near grey, so no trio
+        // reaches the kin floor of 15 against every other plot of the group
+        // and every fused value; the three sit at the floor of 11, where the
+        // set's own accuracy pairs sit (Vertical acceleration accuracy
+        // against Vertical acceleration, 11), which keeps each row's story:
+        // a trio one point better abandons the hues. Horizontal accuracy is
+        // the quiet rose at the upper edge: the quiet member of the fused
+        // Horizontal speed (15), kin of the GNSS Horizontal accuracy (15).
+        // Vertical accuracy is the quiet cyan-teal at the upper edge: the
+        // quiet member of the fused Vertical speed (11), kin of the GNSS
+        // Vertical accuracy (15), and 13 from the fused Elevation, whose
+        // vertical it also qualifies. Speed accuracy is the quiet violet at
+        // the lower edge: the quiet member of the fused Total speed (20), kin
+        // of the GNSS Speed accuracy (12). OKLCH (L, C, H): 0.68, 0.10, 346;
+        // 0.65, 0.11, 205; 0.56, 0.10, 317. Contrast on #ffffff / #242424:
+        // 3.02 / 5.15, 3.09 / 5.02, 4.89 / 3.18. Separation (OKLab x 100,
+        // PLOT_COLOURS.md section 8) from the GNSS quality rows 12 to 25, the
+        // closest Horizontal accuracy and Speed accuracy against the GNSS
+        // Speed accuracy at 12; between the three 13, 20 and 20; from the
+        // fused values other than their own 13 to 33, the closest Speed
+        // accuracy against the fused Horizontal speed at 11. Colour-blind: 3
+        // to 16, the lowest where the inherited hues already collapse
+        // (Horizontal accuracy against Vertical accuracy 4, Speed accuracy
+        // against the fused Horizontal speed 3). A colour moved after a look
+        // on both backgrounds stays within the rule, and its new figures
+        // replace these.
         {"Sensor fusion", "Elevation",                "m",             QColor(0x037ac0), "Fusion", "z",             "altitude"},
         {"Sensor fusion", "Horizontal speed",         "m/s",           QColor(0xbc378e), "Fusion", "velH",          "speed"},
         {"Sensor fusion", "Vertical speed",           "m/s",           QColor(0x1b8278), "Fusion", "velD",          "vertical_speed"},
@@ -1048,6 +1082,9 @@ void MainWindow::registerBuiltInPlots()
         {"Sensor fusion", "Tilt accuracy",                    "deg",   QColor(0x846e40), "Fusion", "tiltAcc",    "angle"},
         {"Sensor fusion", "Horizontal acceleration accuracy", "m/s^2", QColor(0x776f4d), "Fusion", "accHAcc",    "acceleration_accuracy"},
         {"Sensor fusion", "Vertical acceleration accuracy",   "m/s^2", QColor(0x5ba09d), "Fusion", "accDAcc",    "acceleration_accuracy"},
+        {"Sensor fusion", "Horizontal accuracy",              "m",     QColor(0xc57fa6), "Fusion", "hAcc",       "distance"},
+        {"Sensor fusion", "Vertical accuracy",                "m",     QColor(0x08a2af), "Fusion", "vAcc",       "distance"},
+        {"Sensor fusion", "Speed accuracy",                   "m/s",   QColor(0x8c619b), "Fusion", "sAcc",       "speed"},
 
         // Category: Magnetometer: one blue family, the total its quiet member
         {"Magnetometer", "Magnetic field X",     "gauss", QColor(0x0aa0d2), "MAG", "x",     "magnetic_field"},
