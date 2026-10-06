@@ -107,10 +107,11 @@
 #     twelve (items 1601-1612);
 #   - the fused position and speed accuracy (the fit publishes the position
 #     and velocity covariance blocks, the derived accuracies, the three rows):
-#     the twelve covariance names are spelled in src in the registration's
-#     output table alone, no plot row names them, the three derived names,
-#     sensor-qualified, are spelled in src in the registration and the plot
-#     rows alone, the algorithm string is batch-temperature-bias-v10, no
+#     the twelve covariance names are spelled in src in the registration
+#     alone (its output table and the derived accuracies' input lists), no
+#     plot row names them, the three derived names, sensor-qualified, are
+#     spelled in src in the registration and the plot rows alone, the
+#     algorithm string is batch-temperature-bias-v10, no
 #     document counts the fit's channels or outputs as they were before the
 #     blocks, the sensor fusion category is the eighteen plots of the tests'
 #     mirror with seven accuracy rows, each a literal colour, and no document
@@ -811,10 +812,11 @@ expect_count("the fusion document names the scale diagnostics" "model\\.scale" 1
 # alone, the plots drawn in the deep scheme of the GNSS accuracies; the twelve
 # entries of the position and velocity covariance blocks (posCovNN, posCovNE,
 # posCovND, posCovEE, posCovED, posCovDD, velCovNN, velCovNE, velCovND,
-# velCovEE, velCovED, velCovDD) named in the registration's output table
-# alone; the three accuracies derived from them (Fusion/hAcc, Fusion/vAcc,
-# Fusion/sAcc) named, sensor-qualified, in the registration and the plot rows
-# alone; the seven accuracy rows of the plot table, each a literal colour; no
+# velCovEE, velCovED, velCovDD) named in the registration alone (its output
+# table and the derived accuracies' input lists); the three accuracies
+# derived from them (Fusion/hAcc, Fusion/vAcc, Fusion/sAcc) named,
+# sensor-qualified, in the registration and the plot rows alone; the seven
+# accuracy rows of the plot table, each a literal colour; no
 # document counting the fit's channels or outputs as they were before the
 # blocks; and the fusion document states the propagation, what it
 # leaves out, the widening and the accuracy's one sentence.
@@ -851,9 +853,9 @@ expect_only("the derived accuracies are named in the registration and the plot r
   "(kSensor|\"Fusion\"), *\"(hAcc|vAcc|sAcc)\""
   "^src/(fusion/fusionregistration\\.cpp|mainwindow\\.cpp)$" src)
 # Allow: none expected. The twelve covariance names, quoted, are spelled in
-# src in the registration's output table alone: the kernel holds them as
-# Result members, unquoted; a calculation derived from them declares them as
-# inputs in the registration, which the rule allows; no plot row names them.
+# src in the registration alone (its output table and the derived
+# accuracies' input lists): the kernel holds them as Result members,
+# unquoted, and no plot row names them.
 expect_only("the covariance channels are named in the registration alone"
   "\"(posCov(NN|NE|ND|EE|ED|DD)|velCov(NN|NE|ND|EE|ED|DD))\""
   "^src/fusion/fusionregistration\\.cpp$" src)

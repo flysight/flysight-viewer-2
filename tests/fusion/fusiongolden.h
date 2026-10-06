@@ -81,7 +81,7 @@ bool exactParityRequested();
 /// headingAcc, which on such a recording is the sigma of that flat direction;
 /// tiltAcc takes the degree floor and accHAcc and accDAcc the default. The
 /// twelve covariance entries (posCovNN ... velCovDD, m^2 and m^2/s^2) take the
-/// default too, by name: a variance is not a sigma, but a sigma s that moves
+/// default too: a variance is not a sigma, but a sigma s that moves
 /// by the floor moves its variance by 2 s times it, and on the fixtures the
 /// position variances are of order 0.1 m^2 and the velocity variances of order
 /// 5e-3 m^2/s^2, so that shift stays below the floor and the relative term

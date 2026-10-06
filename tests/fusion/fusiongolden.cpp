@@ -9,7 +9,6 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
-#include <QRegularExpression>
 #include <QSet>
 
 namespace FlySightTest {
@@ -307,11 +306,8 @@ double portableFloor(const QString &channelOrKey)
         return kPortableAbsoluteQuaternion;
     const bool degrees = channelOrKey == QStringLiteral("roll") || channelOrKey == QStringLiteral("pitch")
                          || channelOrKey == QStringLiteral("tiltAcc") || channelOrKey.endsWith(QStringLiteral("_deg"));
-    // The twelve covariance entries take the default by choice, not by falling
-    // through to it: the header says why a variance takes a sigma's floor.
-    static const QRegularExpression covariance(QStringLiteral("^(pos|vel)Cov(NN|NE|ND|EE|ED|DD)$"));
-    if (covariance.match(channelOrKey).hasMatch())
-        return kPortableAbsolute;
+    // Everything else, the twelve covariance entries included, takes the
+    // default: the header says why a variance takes a sigma's floor.
     return degrees ? kPortableAbsoluteDegrees : kPortableAbsolute;
 }
 
