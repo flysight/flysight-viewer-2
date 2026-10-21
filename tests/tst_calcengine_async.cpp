@@ -148,6 +148,30 @@ CalculationDescriptor capture(const std::shared_ptr<Seen> &seen)
     return d;
 }
 
+// What the provenance query answered, per world. Atomics, as for Seen.
+struct StoredSeen {
+    std::atomic<int> in{-1};    // 1 stored, 0 a candidate's
+    std::atomic<int> x{-1};
+};
+
+// provenance: Explicit; inputs attr EA_IN (stored), attr X (on demand: sum,
+// unless stored); output PV = EA_IN + X. Records what attributeIsStored()
+// answers for each input.
+CalculationDescriptor provenance(const std::shared_ptr<StoredSeen> &seen)
+{
+    CalculationDescriptor d;
+    d.id = QStringLiteral("provenance");
+    d.policy = EvaluationPolicy::Explicit;
+    d.inputs = {CalcInput::attribute("EA_IN"), CalcInput::attribute("X")};
+    d.outputs = {attr("PV")};
+    d.compute = [seen](const EvaluationContext &ctx) {
+        seen->in = ctx.attributeIsStored("EA_IN") ? 1 : 0;
+        seen->x = ctx.attributeIsStored("X") ? 1 : 0;
+        return CalculationResult().setAttribute("PV", ctx.attribute("EA_IN").toInt() + ctx.attribute("X").toInt());
+    };
+    return d;
+}
+
 // trans: Explicit; inputs attr X (on demand, with fallbacks), pref p; TR = X + p.
 CalculationDescriptor trans()
 {
@@ -252,6 +276,8 @@ private slots:
     void ordinaryExceptionIsCachedFailure();
     void undeclaredReadAndInvalidOutputMatchSync_data() { addComputeModeRows(); }
     void undeclaredReadAndInvalidOutputMatchSync();
+    void attributeIsStoredMatchesSync_data() { addComputeModeRows(); }
+    void attributeIsStoredMatchesSync();
     void missingInputPreparesNothing();
     void cycleThroughOwnOutputMatchesSync_data();
     void cycleThroughOwnOutputMatchesSync();
@@ -1102,6 +1128,105 @@ void CalcEngineAsyncTest::undeclaredReadAndInvalidOutputMatchSync()
     QVERIFY(!async.engine.isAvailable(attr("SN")));
     QVERIFY(!async.engine.isAvailable(attr("RG")));
     QVERIFY(async.engine.verifyAgainstFresh({attr("SN"), attr("RG")}).isEmpty());
+}
+
+// Inferred IMU configuration item 1801: the provenance of an attribute input is
+// captured with its value at prepare, so a prepared run sees what a request on
+// an identical world sees, and asking about an undeclared key is the same
+// undeclared read on both paths.
+void CalcEngineAsyncTest::attributeIsStoredMatchesSync()
+{
+    QFETCH(int, mode);
+    const auto syncSeen = std::make_shared<StoredSeen>();
+    const auto asyncSeen = std::make_shared<StoredSeen>();
+
+    CalculationDescriptor sneaky;
+    sneaky.id = QStringLiteral("sneakyStored");
+    sneaky.policy = EvaluationPolicy::Explicit;
+    sneaky.inputs = {CalcInput::attribute("EA_IN")};
+    sneaky.outputs = {attr("SS")};
+    sneaky.compute = [](const EvaluationContext &ctx) {
+        return CalculationResult().setAttribute("SS", ctx.attribute("EA_IN").toInt()
+                                                          + (ctx.attributeIsStored("EB_IN") ? 1 : 0));
+    };
+
+    World sync, async;
+    QVERIFY(sync.registry.registerCalculation(provenance(syncSeen)));
+    QVERIFY(async.registry.registerCalculation(provenance(asyncSeen)));
+    for (World *w : {&sync, &async})
+        QVERIFY(w->registry.registerCalculation(sneaky));
+
+    // EA_IN is stored, X is sum's output.
+    QCOMPARE(sync.engine.request("provenance").status, ResultStatus::Ok);
+    const PublishOutcome first = runAsync(async.engine, "provenance", ComputeMode(mode));
+    QCOMPARE(first.kind, PublishOutcome::Kind::Published);
+    QCOMPARE(first.status, ResultStatus::Ok);
+    for (const auto &seen : {syncSeen, asyncSeen}) {
+        QCOMPARE(seen->in.load(), 1);
+        QCOMPARE(seen->x.load(), 0);
+    }
+    QCOMPARE(async.engine.attribute("PV"), QVariant(7));
+    QCOMPARE(async.engine.attribute("PV"), sync.engine.attribute("PV"));
+
+    // Stored over the candidate: the result drops, and the next run sees X stored.
+    for (World *w : {&sync, &async}) {
+        QVERIFY(w->state.setAttribute(w->engine, "X", 7).contains(attr("PV")));
+        QVERIFY(!w->engine.isAvailable(attr("PV")));
+    }
+    QCOMPARE(sync.engine.request("provenance").status, ResultStatus::Ok);
+    QCOMPARE(runAsync(async.engine, "provenance", ComputeMode(mode)).kind, PublishOutcome::Kind::Published);
+    for (const auto &seen : {syncSeen, asyncSeen}) {
+        QCOMPARE(seen->in.load(), 1);
+        QCOMPARE(seen->x.load(), 1);
+    }
+    QCOMPARE(async.engine.attribute("PV"), QVariant(11));
+
+    // The capture: prepared while X is a candidate's, stored before compute.
+    // Compute sees what prepare captured, and publish refuses the result.
+    QVERIFY(async.state.removeAttribute(async.engine, "X").contains(attr("PV")));
+    Prepare prepared = async.engine.prepare("provenance");
+    QCOMPARE(prepared.kind, Prepare::Kind::Ready);
+    async.state.setAttribute(async.engine, "X", 8);
+    ComputedCalculation computed = computeOn(ComputeMode(mode), *prepared.ticket);
+    QCOMPARE(computed.kind, ComputedCalculation::Kind::Completed);
+    QCOMPARE(asyncSeen->x.load(), 0);
+    const PublishOutcome refused = prepared.ticket->publish(std::move(computed));
+    QCOMPARE(refused.kind, PublishOutcome::Kind::RefusedStale);
+    QCOMPARE(refused.reason, PublishOutcome::Reason::InputsChanged);
+    QVERIFY(!async.engine.isAvailable(attr("PV")));
+
+    // The same world through request(), and both run again.
+    sync.state.removeAttribute(sync.engine, "X");
+    sync.state.setAttribute(sync.engine, "X", 8);
+    QCOMPARE(sync.engine.request("provenance").status, ResultStatus::Ok);
+    QCOMPARE(runAsync(async.engine, "provenance", ComputeMode(mode)).kind, PublishOutcome::Kind::Published);
+    for (const auto &seen : {syncSeen, asyncSeen})
+        QCOMPARE(seen->x.load(), 1);
+    QCOMPARE(async.engine.attribute("PV"), QVariant(12));
+    QCOMPARE(async.engine.attribute("PV"), sync.engine.attribute("PV"));
+    QCOMPARE(async.engine.runCount("provenance"), 3);       // the refused run is not counted
+    QCOMPARE(async.engine.runCount("provenance"), sync.engine.runCount("provenance"));
+    QCOMPARE(async.engine.undeclaredReadCount(), 0);
+    QCOMPARE(sync.engine.undeclaredReadCount(), 0);
+
+    // An undeclared key: UndeclaredRead on both paths, with the same warning.
+    WarningCapture warnings;
+    QCOMPARE(sync.engine.request("sneakyStored").status, ResultStatus::UndeclaredRead);
+    const QStringList syncWarnings = warnings.messages();
+    QCOMPARE(syncWarnings,
+             QStringList({"Calculation sneakyStored read an undeclared input: attribute(EB_IN) - its result is discarded"}));
+    const PublishOutcome sn = runAsync(async.engine, "sneakyStored", ComputeMode(mode));
+    QCOMPARE(sn.kind, PublishOutcome::Kind::Published);
+    QCOMPARE(sn.status, ResultStatus::UndeclaredRead);
+    QCOMPARE(warnings.messages(), syncWarnings + syncWarnings);     // the same text, from publish()
+    QCOMPARE(async.engine.undeclaredReadCount(), 1);
+    QCOMPARE(async.engine.undeclaredReadCount(), sync.engine.undeclaredReadCount());
+    QVERIFY(async.engine.lastUndeclaredRead().second == CalcInput::attribute("EB_IN"));
+    QVERIFY(async.engine.lastUndeclaredRead() == sync.engine.lastUndeclaredRead());
+    QCOMPARE(async.engine.resultStatus("sneakyStored"), sync.engine.resultStatus("sneakyStored"));
+    QVERIFY(!async.engine.isAvailable(attr("SS")));
+    QVERIFY(async.engine.verifyAgainstFresh({attr("SS"), attr("PV")}).isEmpty());
+    QVERIFY(sync.engine.verifyAgainstFresh({attr("SS"), attr("PV")}).isEmpty());
 }
 
 // Spec 7.1 step 1: an unavailable input means "missing input" and nothing to

@@ -66,6 +66,7 @@ private slots:
     void preferredCandidateReplacesFallback();
     void rejectedCandidatesAreDependencies();
     void removingStoredFallsBackToCalc();
+    void attributeIsStoredFollowsTheProvider();
     void storedInvalidValueStillWins();
     void partialResultNextCandidate();
     void unavailableIsCached();
@@ -88,6 +89,7 @@ private slots:
     void derivedMeasurementAndUnit();
     void sourceConversionHook();
     void undeclaredReadDetected();
+    void attributeIsStoredOfAnUndeclaredKeyIsARead();
     void invalidOutputRejected();
     void clearDropsEverything();
     void rebindKeepsCaches();
@@ -321,6 +323,80 @@ void CalcEngineTest::removingStoredFallsBackToCalc()
     QVERIFY(w.state.setAttribute(w.engine, "X", 8).contains(attr("X")));
     QCOMPARE(w.engine.attribute("X"), QVariant(8));
     QCOMPARE(w.engine.runCount("sum"), 1);
+}
+
+// Inferred IMU configuration item 1801: the context tells a calculation, for a
+// declared attribute input, whether the session's stored attribute served it
+// or a candidate did, and follows the resolution as values are stored and
+// removed. A constant default is a candidate like any other.
+void CalcEngineTest::attributeIsStoredFollowsTheProvider()
+{
+    World w;
+    w.setAbp();
+    std::optional<bool> aStored;
+    std::optional<bool> xStored;
+
+    CalculationDescriptor asks;
+    asks.id = QStringLiteral("asksProvenance");
+    asks.inputs = {CalcInput::attribute("A"), CalcInput::attribute("X")};
+    asks.outputs = {attr("PROV")};
+    asks.compute = [&](const EvaluationContext &ctx) {
+        aStored = ctx.attributeIsStored("A");
+        xStored = ctx.attributeIsStored("X");
+        return CalculationResult().setAttribute("PROV", ctx.attribute("A").toInt() + ctx.attribute("X").toInt());
+    };
+    QVERIFY(w.registry.registerCalculation(asks));
+
+    // A is stored; X is sum's output.
+    QCOMPARE(w.engine.attribute("PROV"), QVariant(4));
+    QCOMPARE(aStored, std::optional<bool>(true));
+    QCOMPARE(xStored, std::optional<bool>(false));
+    QCOMPARE(w.engine.runCount("sum"), 1);
+    QCOMPARE(w.engine.runCount("asksProvenance"), 1);
+
+    // Storing X over the candidate invalidates the reader, which sees it stored.
+    QVERIFY(w.state.setAttribute(w.engine, "X", 7).contains(attr("PROV")));
+    QCOMPARE(w.engine.attribute("PROV"), QVariant(8));
+    QCOMPARE(xStored, std::optional<bool>(true));
+    QCOMPARE(aStored, std::optional<bool>(true));
+    QCOMPARE(w.engine.runCount("asksProvenance"), 2);
+    QCOMPARE(w.engine.runCount("sum"), 1);
+
+    // Removing it falls back to the candidate again.
+    QVERIFY(w.state.removeAttribute(w.engine, "X").contains(attr("PROV")));
+    QCOMPARE(w.engine.attribute("PROV"), QVariant(4));
+    QCOMPARE(xStored, std::optional<bool>(false));
+    QCOMPARE(w.engine.runCount("asksProvenance"), 3);
+    QCOMPARE(w.engine.runCount("sum"), 1);
+    QCOMPARE(w.engine.undeclaredReadCount(), 0);
+
+    // A constant default is a candidate: not stored until a value is stored over it.
+    World p(false);
+    std::optional<bool> kStored;
+    CalculationDescriptor constant;
+    constant.id = QStringLiteral("constant");
+    constant.outputs = {attr("K")};
+    constant.compute = [](const EvaluationContext &) -> CalculationResult {
+        return CalculationResult().setAttribute("K", QStringLiteral("+y,+z"));
+    };
+    QVERIFY(p.registry.registerCalculation(constant));
+    CalculationDescriptor dependent;
+    dependent.id = QStringLiteral("dependent");
+    dependent.inputs = {CalcInput::attribute("K")};
+    dependent.outputs = {attr("L")};
+    dependent.compute = [&](const EvaluationContext &ctx) -> CalculationResult {
+        kStored = ctx.attributeIsStored("K");
+        return CalculationResult().setAttribute("L", ctx.attribute("K").toString() + QStringLiteral("!"));
+    };
+    QVERIFY(p.registry.registerCalculation(dependent));
+
+    QCOMPARE(p.engine.attribute("L"), QVariant(QStringLiteral("+y,+z!")));
+    QCOMPARE(kStored, std::optional<bool>(false));
+    QVERIFY(p.state.setAttribute(p.engine, "K", QStringLiteral("+x,+z")).contains(attr("L")));
+    QCOMPARE(p.engine.attribute("L"), QVariant(QStringLiteral("+x,+z!")));
+    QCOMPARE(kStored, std::optional<bool>(true));
+    QCOMPARE(p.engine.runCount("dependent"), 2);
+    QCOMPARE(p.engine.undeclaredReadCount(), 0);
 }
 
 void CalcEngineTest::storedInvalidValueStillWins()
@@ -1026,6 +1102,59 @@ void CalcEngineTest::undeclaredReadDetected()
     QVERIFY(!w.engine.attribute("K").isValid());
     QCOMPARE(w.engine.undeclaredReadCount(), 2);
     QCOMPARE(w.engine.lastUndeclaredRead().second, CalcInput::preference("A"));
+}
+
+// Inferred IMU configuration item 1801: asking whether an undeclared key is
+// stored is an undeclared read, exactly as reading it is; the calculation
+// learns nothing, and the key is never resolved on its behalf. Contrast
+// isDeclaredIsSilent.
+void CalcEngineTest::attributeIsStoredOfAnUndeclaredKeyIsARead()
+{
+    World w(false);
+    std::optional<bool> otherStored;
+
+    CalculationDescriptor nosy;
+    nosy.id = QStringLiteral("nosyProvenance");
+    nosy.inputs = {CalcInput::attribute("A")};
+    nosy.outputs = {attr("N1")};
+    nosy.compute = [&](const EvaluationContext &ctx) {
+        otherStored = ctx.attributeIsStored("other");     // not declared
+        return CalculationResult().setAttribute("N1", ctx.attribute("A").toInt());
+    };
+    QVERIFY(w.registry.registerCalculation(nosy));
+    w.state.setAttribute("A", 1);
+    w.state.setAttribute("other", 5);
+
+    QVERIFY(!w.engine.attribute("N1").isValid());
+    QVERIFY(!w.engine.attribute("N1").isValid());
+    QCOMPARE(otherStored, std::optional<bool>(false));      // although the session stores it
+    QCOMPARE(w.engine.resultStatus("nosyProvenance"), std::optional<ResultStatus>(ResultStatus::UndeclaredRead));
+    QCOMPARE(w.engine.undeclaredReadCount(), 1);
+    QCOMPARE(w.engine.lastUndeclaredRead().first, QStringLiteral("nosyProvenance"));
+    QCOMPARE(w.engine.lastUndeclaredRead().second, CalcInput::attribute("other"));
+    QCOMPARE(w.engine.runCount("nosyProvenance"), 1);       // negatively cached: both reads, one run
+    QCOMPARE(w.engine.cachedState(attr("other")), CalculationEngine::CachedState::NotCached);
+
+    // Kind matters: a declared preference does not license the query of the same key.
+    std::optional<bool> pStored;
+    CalculationDescriptor wrongKind;
+    wrongKind.id = QStringLiteral("wrongKindProvenance");
+    wrongKind.inputs = {CalcInput::preference("p")};
+    wrongKind.outputs = {attr("K")};
+    wrongKind.compute = [&](const EvaluationContext &ctx) {
+        pStored = ctx.attributeIsStored("p");
+        return CalculationResult().setAttribute("K", ctx.preference("p").toInt() + 1);
+    };
+    QVERIFY(w.registry.registerCalculation(wrongKind));
+    w.prefs.set("p", 5);
+    w.state.setAttribute("p", 6);
+
+    QVERIFY(!w.engine.attribute("K").isValid());
+    QCOMPARE(pStored, std::optional<bool>(false));
+    QCOMPARE(w.engine.resultStatus("wrongKindProvenance"), std::optional<ResultStatus>(ResultStatus::UndeclaredRead));
+    QCOMPARE(w.engine.undeclaredReadCount(), 2);
+    QCOMPARE(w.engine.lastUndeclaredRead().second, CalcInput::attribute("p"));
+    QCOMPARE(w.engine.cachedState(attr("p")), CalculationEngine::CachedState::NotCached);
 }
 
 void CalcEngineTest::invalidOutputRejected()

@@ -47,6 +47,7 @@
 [Appendix P. The acceptance items of background computation per recording (1501-1524)](#appendix-p-the-acceptance-items-of-background-computation-per-recording-1501-1524)
 [Appendix Q. The acceptance items of the fused speed plots (1601-1612)](#appendix-q-the-acceptance-items-of-the-fused-speed-plots-1601-1612)
 [Appendix R. The acceptance items of the fused position and speed accuracy (1701-1717)](#appendix-r-the-acceptance-items-of-the-fused-position-and-speed-accuracy-1701-1717)
+[Appendix S. The acceptance items of the inferred IMU configuration (1801-1802)](#appendix-s-the-acceptance-items-of-the-inferred-imu-configuration-1801-1802)
 
 ## 1. What this is
 
@@ -87,10 +88,10 @@ Release only; sections 3 and 11). `solver_deploy_probe`,
 | Test | Covers |
 |------|--------|
 | `tst_calcregistry` | Calculation engine: value types, registration order and validation, family instances, private registries, registration-derived static dependencies (followed through source conversions), `explicitDependencies()` (which explicit calculations stand behind a name) and its non-emptiness `dependsOnExplicit()`, the one authority for "explicit-backed", source inputs refused outside source conversions |
-| `tst_calcengine` | Calculation engine: resolution, caching, dependency recording, invalidation across sessions, explicit policy, preferences, families, measurement layers |
+| `tst_calcengine` | Calculation engine: resolution, caching, dependency recording, invalidation across sessions, explicit policy, preferences, families, measurement layers, the provenance query of an attribute input (the stored attribute or a candidate's; an undeclared key is an undeclared read) |
 | `tst_calcengine_safety` | Calculation engine: nested scopes, cycles (single and overlapping rings: the same literal answers for every read order), exceptions, re-entrancy guards |
 | `tst_calcengine_oracle` | Calculation engine: randomized (seeded) sequences, and randomized (seeded) topologies full of overlapping rings, compared against a fresh evaluation; the same with explicit calculations in play (blocker inspection, synchronous and asynchronous requests, requests refused because an input changed, registry changes of candidates they look up), where an explicit calculation may run only in a request or publish step; which cached answers a registry change keeps (a candidate behind the provider or behind the session's own data, a removed candidate that was passed over or never tried) and which it drops (a provider removed, a new candidate for a name that resolved to nothing, a change of the conversion layer under recorded data), a kept answer served without a run (`registryChangePrecision`) |
-| `tst_calcengine_async` | Calculation engine: the asynchronous request (prepare / compute / publish) with compute inline, on a `std::thread` and on a `QThread`: identical to `request()` in every observable, captured inputs, engine-decided staleness (an input changing while compute is running, transitive changes, registration removed, engine destroyed, a synchronous request in between), `willBeRefused()` / `refusalReason()` reporting the engine's mark for every cause of a refusal that can be known before publish (false for a healthy ticket, false again once published or refused), cancellation, progress text, resource exhaustion never cached, an ordinary exception cached as `Failed`, abandoned tickets leaving nothing behind |
+| `tst_calcengine_async` | Calculation engine: the asynchronous request (prepare / compute / publish) with compute inline, on a `std::thread` and on a `QThread`: identical to `request()` in every observable, the provenance query identical on both paths, captured inputs, engine-decided staleness (an input changing while compute is running, transitive changes, registration removed, engine destroyed, a synchronous request in between), `willBeRefused()` / `refusalReason()` reporting the engine's mark for every cause of a refusal that can be known before publish (false for a healthy ticket, false again once published or refused), cancellation, progress text, resource exhaustion never cached, an ordinary exception cached as `Failed`, abandoned tickets leaving nothing behind |
 | `tst_calcengine_blockers` | Calculation engine: blocker inspection: an explicit calculation reported through on-demand intermediates, missing input is never a blocker, chained explicit calculations (A then B), "ran and did not produce" with the reason or failure text, fallbacks, stored and unknown names, an explicit family instance, rings, `readiness()`; inspection never runs an explicit calculation and never changes a later read |
 | `tst_calcengine_restore` | Calculation engine: stored results. Snapshot export (the leaf closure through on-demand and explicit results, absent leaves included, the fingerprint's canonical forms and a known answer), restore into a fresh engine (identical edges, status, detail, blockers and invalidation; no run, no ticket), the resolutions (what provided each name the result looked up, their pinned codes and order; a result that met a dependency ring is never exported), every stale check (result version, bundle, inputs unavailable, resolutions, leaves, fingerprint), restore across registries (the same or unrelated registrations, a losing candidate and a family-instance provider (`<family>#<key>`, the instance's result version) restore; a new winning candidate with the same inputs, a provider's or a family instance's result version, a source conversion, or a provider removed between runs is stale), and the explicit-result listener (installed on both request paths for every status, never on restore; dropped by input changes and by registry changes made while the application runs that alter what a name it looked up resolves to (a provider removed, a new candidate for a name that resolved to nothing, a source conversion over recorded data) or, for a result with a stored copy, that remove a passed-over candidate through which alone its lookups reached something (a requested MissingInput result is kept); never by a candidate behind the session's data or behind the provider, unrelated registrations, a teardown removal, `clear()`, or the destruction of the registry or the engine), and that a runtime registry change drops a result if and only if restoring its snapshot across the same change is not a restore, with the one documented conservative exception (`registryChangeMirrorsRestore`), also for a result published from a ticket that was outstanding during the change (`publishAcrossPassedOverRemovalMirrorsRestore`) |
 
@@ -721,8 +722,8 @@ missing invalidation in the code under test.
 
 ## 9. Acceptance traceability
 
-Eighteen specifications, eighteen ranges of items in
-`tests/acceptance_map.txt`, the machine-checked form of the eighteen tables
+Nineteen specifications, nineteen ranges of items in
+`tests/acceptance_map.txt`, the machine-checked form of the nineteen tables
 below (section 10); keep them in sync.
 
 ### 9.1 Schema and calculation engine (items 1-19)
@@ -1996,6 +1997,31 @@ read by the reviewer, and M59 is the real check of 1716.
 | 1716 | 8, manual bullet | the manual step M59: the three rows in their place; one fit for the three; each absent for a rejected recording and for a recording whose covariance fails, where one is at hand, with the fit's other plots drawn; the colours beside the GNSS quality rows and beside the fused speeds and Elevation, in both themes; the legend and the measure tool; a Speed accuracy column; after the update a stored `v9` fit computed again once, shown in the status bar | `audit naming` (a floor; M59 is the real check); `manual M59` |
 | 1717 | 8, last bullet | the acceptance items 1701-1717 in the next free hundred of `tests/acceptance_map.txt`, with appendix R and section 9.18 of `tests/README.md`; items 115, 509, 801, 802, 842, 854, 862, 863, 1602, 1608 and 1610, which counted the fusion plots, restated "(as amended)" | `audit naming` (a floor; the reviewer reads the rest) |
 
+### 9.19 Inferred IMU configuration (items 1801-1802)
+
+The specification "Inferred IMU configuration"
+(`PLANS/inferred-imu-configuration.md`), stated in
+[appendix S](#appendix-s-the-acceptance-items-of-the-inferred-imu-configuration-1801-1802),
+has the acceptance items 1801-1802; the same four line forms as 9.2.
+"Section" is the section of the specification; its sections 1 and 2
+(motivation, principles) have no item. Item 1801 is the engine's half of the
+first bullet of its section 4 (the provenance query, its paths, the
+undeclared read) and 1802 the engine's sentence of its section 5 (the
+engine's section of `docs/CALCULATIONS.md`). No item of an earlier
+specification is restated by these two. The restore path's evidence for
+1801 is `tst_calcengine_restore::restoreStaleChecks`, whose row "stored
+instead of calculated" makes a stored result stale (`StaleCheck::Resolutions`)
+when its attribute input is now provided otherwise; it is cited rather than
+proved again. The `audit inferred-configuration` line of 1802 is a floor, not
+a proof: the rule shows that `docs/CALCULATIONS.md` names the query once, not
+that the bullet of its section 3 says what 1802 lists; that is read by the
+reviewer.
+
+| Item | Section | Statement | Evidence |
+| --- | --- | --- | --- |
+| 1801 | 4, first bullet, the engine's half | the provenance query: `EvaluationContext::attributeIsStored(key)` tells a calculation, for a declared attribute input, whether the value is the session's stored attribute (true: the first step of the resolution served it) or came from a candidate (false); for a key the calculation did not declare it returns false and records an undeclared read exactly as `attribute(key)` does, so the result is discarded (`UndeclaredRead`) and the key is never resolved on the calculation's behalf; the fact travels in the context beside the value, filled once where the inputs are gathered, so the synchronous, prepared and restore paths cannot differ: a prepared run sees what a request sees in every compute mode, and a stored result whose attribute input is provided otherwise at restore is stale; it is not exposed to Python plugins, and no built-in asks it yet | `tst_calcengine::attributeIsStoredFollowsTheProvider`, `attributeIsStoredOfAnUndeclaredKeyIsARead`; `tst_calcengine_async::attributeIsStoredMatchesSync`; `tst_calcengine_restore::restoreStaleChecks` (row "stored instead of calculated"); `audit inferred-configuration` |
+| 1802 | 5, the engine's section | `docs/CALCULATIONS.md` section 3 describes the provenance query: what it answers, that an undeclared key is an undeclared read, that it is served alike on both paths; the audit's `inferred-configuration` group holds the query's name in `src` to the engine and the fusion registration (its reader to come), never the plugin bridge, declared once in the context's contract and named in the calculations document; the range 1801-1802 declared and complete, the map's header at nineteen specifications, section 9.19 and appendix S of `tests/README.md` | `audit inferred-configuration` (a floor; the reviewer reads the rest) |
+
 ## 10. Cleanup audit
 
 `audit_cleanup` runs `tests/audit/cleanup_audit.cmake`, a CMake script over
@@ -2206,6 +2232,15 @@ takes about a second. It fails, listing **all** violations, when
   tightens" and the accuracy's one sentence, or "cross-axis sensitivity" on
   two (the accuracy's omissions and section 5's limitations). Each rule was
   planted once when it was written;
+- **group `inferred-configuration`** (items 1801, 1802): `attributeIsStored`,
+  the evaluation context's provenance query, is spelled in `src` outside the
+  engine (`src/engine/`) and the fusion registration
+  (`src/fusion/fusionregistration.cpp`), its one reader, so that the plugin
+  bridge never offers it; `src/engine/evaluationcontext.h` declares
+  `bool attributeIsStored(const QString &key) const` other than once; or
+  `docs/CALCULATIONS.md` names `EvaluationContext::attributeIsStored` on other
+  than one line (its section 3). Each rule was planted once when it was
+  written;
 - **group `model-validation`** (items 1024, 1055, 1064, 1065):
   `docs/SENSOR_FUSION.md` has other than one line with the sentence "...
   measures what the model does not yet describe", or other than one of each
@@ -6669,3 +6704,35 @@ clause 9), of sensor fusion plots, attitude and the orientation attribute
     `tests/acceptance_map.txt`, with this appendix and section 9.18; items 115,
     509, 801, 802, 842, 854, 862, 863, 1602, 1608 and 1610, which counted the
     fusion plots, restated "(as amended)".
+
+## Appendix S. The acceptance items of the inferred IMU configuration (1801-1802)
+
+The acceptance items of the specification "Inferred IMU configuration"
+(`PLANS/inferred-imu-configuration.md`), one sentence each, with the
+specification's section in front. These are items 1801-1802 of
+`tests/acceptance_map.txt` (item = 1800 + the number below) and the rows of
+section 9.19. Its sections 1 and 2 (motivation, principles) have no item. No
+item of an earlier specification is restated by these two.
+
+1. (4, first bullet, the engine's half) The provenance query:
+   `EvaluationContext::attributeIsStored(key)` tells a calculation, for a
+   declared attribute input, whether the value is the session's stored
+   attribute (true: the first step of the resolution served it) or came from
+   a candidate (false); for a key the calculation did not declare it returns
+   false and records an undeclared read exactly as `attribute(key)` does, so
+   the result is discarded (`UndeclaredRead`) and the key is never resolved
+   on the calculation's behalf; the fact travels in the context beside the
+   value, filled once where the inputs are gathered, so the synchronous,
+   prepared and restore paths cannot differ: a prepared run sees what a
+   request sees in every compute mode, and a stored result whose attribute
+   input is provided otherwise at restore is stale; it is not exposed to
+   Python plugins, and no built-in asks it yet.
+2. (5, the engine's section) `docs/CALCULATIONS.md` section 3 describes the
+   provenance query: what it answers, that an undeclared key is an
+   undeclared read, that it is served alike on both paths; the audit's
+   `inferred-configuration` group holds the query's name in `src` to the
+   engine and the fusion registration (its reader to come), never the plugin
+   bridge, declared once in the context's contract and named in the
+   calculations document; the range 1801-1802 is declared and complete, the
+   map's header counts nineteen specifications, and section 9.19 and this
+   appendix exist.

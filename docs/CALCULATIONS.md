@@ -69,6 +69,16 @@ accepted the descriptor.
   dependency.
 - Reads go only through the `EvaluationContext`. Measurements read there are
   *effective* values (see DATA_SCHEMA.md, section 5).
+- A calculation may ask `EvaluationContext::attributeIsStored(key)` whether a
+  declared attribute input is the session's stored attribute, which wins over
+  every candidate (section 5; true), or a candidate's output (false), so that
+  it can word a message or a record by where the value came from. It is a
+  read of the declared input, not a silent query like `isDeclared()`: for a
+  key the calculation did not declare it returns false and counts as an
+  undeclared read, exactly as `attribute(key)` does. The answer is captured
+  with the value when the inputs are gathered, at prepare on the asynchronous
+  path (section 12), so both paths serve it alike. No such query exists for a
+  preference or a measurement.
 - An undeclared read makes every output unavailable
   (`ResultStatus::UndeclaredRead`) and is caught by
   `tst_builtins_engine::noUndeclaredReads`.

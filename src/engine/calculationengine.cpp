@@ -566,6 +566,8 @@ ResultStatus CalculationEngine::gatherInputs(const CalculationInstance &instance
             const ResolutionEntry r = resolve(DependencyKey::attribute(input.key));   // may nest
             available = r.available;
             value.value = r.attribute;
+            // The one fill site of the provenance: every path gathers here.
+            value.stored = r.provider == Provider::Stored;
             break;
         }
         case CalcInput::Kind::Measurement: {

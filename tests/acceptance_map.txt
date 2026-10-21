@@ -1,5 +1,5 @@
 # Acceptance traceability, machine-checked by the audit_cleanup test
-# (tests/audit/cleanup_audit.cmake). Eighteen specifications, eighteen item ranges:
+# (tests/audit/cleanup_audit.cmake). Nineteen specifications, nineteen item ranges:
 #
 #   1-19      the schema / calculation-engine items, stated in full in
 #             tests/README.md, appendix A. (The rule "only SCHEMA_VER decides",
@@ -209,6 +209,13 @@
 #             801-863 (items 801, 802, 842, 854, 862 and 863), 901-940 (item
 #             912), 1301-1313 (items 1302 and 1307) and 1601-1612 (items 1602,
 #             1608 and 1610): each is stated as amended.
+#   1801-1802 inferred IMU configuration (the configuration inferred where a
+#             key is absent, the firmware default its fallback; the engine's
+#             query that says whether an attribute input was stated): item =
+#             1800 + item number of appendix S. 1801 the engine's half of the
+#             first bullet of its section 4, 1802 the engine's sentence of its
+#             section 5. Stated in full in tests/README.md, appendix S. No item
+#             of an earlier specification is restated by these two.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -218,13 +225,13 @@
 #   <item> ci <token>                <token> occurs in .github/workflows/build.yml
 #   <item> audit <group>             rule group <group> of cleanup_audit.cmake
 #
-# Every item must lie in one of the eighteen ranges; every item 1-19 needs a
+# Every item must lie in one of the nineteen ranges; every item 1-19 needs a
 # line; every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662,
 # 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313,
-# 1401-1415, 1501-1524, 1601-1612 or 1701-1717 needs at least one test or
-# audit line (manual and ci lines never stand alone). The human-readable
-# matrices are tests/README.md sections 9.1 to 9.18; keep them in sync with
-# this file.
+# 1401-1415, 1501-1524, 1601-1612, 1701-1717 or 1801-1802 needs at least one
+# test or audit line (manual and ci lines never stand alone). The
+# human-readable matrices are tests/README.md sections 9.1 to 9.19; keep them
+# in sync with this file.
 
 # 1 - unmarked file: effective 71.68 / -143.36 / 0, source values and unit text, no SCHEMA_VER
 1 tst_source_layer unmarkedFileIsCorrected
@@ -3920,3 +3927,13 @@
 
 # 1717 - (8, last bullet) the acceptance items 1701-1717 in the next free hundred of tests/acceptance_map.txt, with appendix R and section 9.18 of tests/README.md; items 115, 509, 801, 802, 842, 854, 862, 863, 1602, 1608 and 1610, which counted the fusion plots, restated "(as amended)"
 1717 audit naming
+
+# 1801 - (4, first bullet, the engine's half) the provenance query: EvaluationContext::attributeIsStored(key) tells a calculation, for a declared attribute input, whether the value is the session's stored attribute (true: the first step of the resolution served it) or came from a candidate (false); for a key the calculation did not declare it returns false and records an undeclared read exactly as attribute(key) does, so the result is discarded (UndeclaredRead) and the key is never resolved on the calculation's behalf; the fact travels in the context beside the value, filled once where the inputs are gathered, so the synchronous, prepared and restore paths cannot differ: a prepared run sees what a request sees in every compute mode, and a stored result whose attribute input is provided otherwise at restore is stale; it is not exposed to Python plugins, and no built-in asks it yet
+1801 tst_calcengine attributeIsStoredFollowsTheProvider
+1801 tst_calcengine attributeIsStoredOfAnUndeclaredKeyIsARead
+1801 tst_calcengine_async attributeIsStoredMatchesSync
+1801 tst_calcengine_restore restoreStaleChecks
+1801 audit inferred-configuration
+
+# 1802 - (5, the engine's section) docs/CALCULATIONS.md section 3 describes the provenance query: what it answers, that an undeclared key is an undeclared read, that it is served alike on both paths; the audit's inferred-configuration group holds the query's name in src to the engine and the fusion registration (its reader to come), never the plugin bridge, declared once in the context's contract and named in the calculations document; the range 1801-1802 declared and complete, the map's header at nineteen specifications, section 9.19 and appendix S of tests/README.md
+1802 audit inferred-configuration

@@ -27,6 +27,13 @@ namespace FlySight {
 /// the clock, and random numbers. A calculation is a pure function of its
 /// declared inputs.
 ///
+/// How an input was resolved is absent too, with one exception: whether a
+/// declared attribute input is the session's stored attribute or a
+/// candidate's output (attributeIsStored()), so that a calculation can word a
+/// message or a record by where the value came from. That fact is part of the
+/// input: it is captured with the value, at prepare on the asynchronous path,
+/// so the synchronous and asynchronous paths cannot differ.
+///
 /// progress() is the one thing here that is not an input: a place to report
 /// progress text and to observe a cancellation request. It cannot influence the
 /// result except by abandoning it (throwing CalculationCancelled). It is live
@@ -40,6 +47,14 @@ namespace FlySight {
 class EvaluationContext {
 public:
     QVariant        attribute(const QString &key) const;
+    /// Whether the declared attribute input `key` was served by the session's
+    /// stored attribute (true: the first step of the resolution) or by a
+    /// candidate's output (false). A read, not a silent query like
+    /// isDeclared(): for a key the calculation did not declare it returns
+    /// false and records an undeclared read exactly as attribute(key) does, so
+    /// a calculation cannot learn whether an input it did not declare is
+    /// stored.
+    bool            attributeIsStored(const QString &key) const;
     QVector<double> measurement(const QString &sensor, const QString &name) const;
     /// Unit of a declared Measurement input.
     QString         measurementUnit(const QString &sensor, const QString &name) const;
@@ -65,6 +80,7 @@ private:
         QVariant value;             // Attribute / Preference
         QVector<double> samples;    // Measurement / SourceMeasurement
         QString unit;               // Measurement / SourceUnit
+        bool stored = false;        // Attribute: served by the session's stored attribute
     };
 
     EvaluationContext(const QString &instanceId, bool quiet);

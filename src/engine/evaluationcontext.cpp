@@ -37,6 +37,13 @@ QVariant EvaluationContext::attribute(const QString &key) const
     return v ? v->value : QVariant();
 }
 
+bool EvaluationContext::attributeIsStored(const QString &key) const
+{
+    // Through declared(): an undeclared key is an undeclared read, as for attribute().
+    const InputValue *v = declared(CalcInput::attribute(key));
+    return v && v->stored;
+}
+
 QVector<double> EvaluationContext::measurement(const QString &sensor, const QString &name) const
 {
     const InputValue *v = declared(CalcInput::measurement(sensor, name));

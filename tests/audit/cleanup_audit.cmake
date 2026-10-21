@@ -115,7 +115,13 @@
 #     document counts the fit's channels or outputs as they were before the
 #     blocks, the sensor fusion category is the eighteen plots of the tests'
 #     mirror with seven accuracy rows, each a literal colour, and no document
-#     counts the fusion plots as fifteen (items 1701-1717).
+#     counts the fusion plots as fifteen (items 1701-1717);
+#   - the IMU configuration is inferred where a key is absent: the engine tells
+#     a calculation, for a declared attribute input, whether the session
+#     stated it, through one query of the evaluation context, spelled in src
+#     in the engine and the fusion registration alone, never in the plugin
+#     bridge, declared once in the context's contract and described by the
+#     calculations document (items 1801-1802).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -1660,6 +1666,29 @@ expect_count("the calculations document names the cancel's reason" "Switched off
   docs/CALCULATIONS.md)
 expect_count("the manual step of the switch is written" "\\*\\*M57 " 1 tests/README.md)
 
+# ─────────────────────────────── inferred-configuration (items 1801, 1802)
+# The IMU configuration inferred where a key is absent
+# (PLANS/inferred-imu-configuration.md): the engine tells a calculation, for a
+# declared attribute input, whether the session's stored attribute served it
+# (EvaluationContext::attributeIsStored), so that the fit can word its
+# rejections and record its diagnostics by how each value came about. The
+# query is the engine's, its one reader the fusion registration; Python
+# plugins are not offered it.
+audit_group(inferred-configuration)
+# Allow: none; a second reader is a design change. The registration is
+# allowed before it asks, as the query's one intended reader; the plugin
+# bridge (pluginsessionview.h, pluginadapters.cpp, sessiondata_bindings.cpp)
+# lies outside the allowed set, which is the check that plugins never see it.
+expect_only("the provenance query is spelled in the engine and the fusion registration alone"
+  "attributeIsStored" "^src/(engine/|fusion/fusionregistration\\.cpp)" src)
+# One authority for the contract. Allow: none expected.
+expect_count("the provenance query is declared once"
+  "bool +attributeIsStored\\(const QString &key\\) const" 1 src/engine/evaluationcontext.h)
+# Allow: this counts lines; a later section naming the query in its
+# qualified form raises the count here.
+expect_count("the calculations document describes the provenance query"
+  "EvaluationContext::attributeIsStored" 1 docs/CALCULATIONS.md)
+
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 
@@ -1694,7 +1723,9 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # kernel's tests, the registration and the record, the documents of the
 # fit's outputs, the audit rule; 1707-1709 the three derived accuracies, their
 # tests, their documents and audit rule; 1710-1717 the rows, demand, the
-# colours, the documents, the tests, the counts, the manual step, the map).
+# colours, the documents, the tests, the counts, the manual step, the map)
+# and 1801-1802 (inferred IMU configuration: the engine's provenance query,
+# its document and the audit rule).
 # Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
@@ -1775,8 +1806,9 @@ else()
             OR (item GREATER_EQUAL 1401 AND item LESS_EQUAL 1415)
             OR (item GREATER_EQUAL 1501 AND item LESS_EQUAL 1524)
             OR (item GREATER_EQUAL 1601 AND item LESS_EQUAL 1612)
-            OR (item GREATER_EQUAL 1701 AND item LESS_EQUAL 1717)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313, 1401-1415, 1501-1524, 1601-1612 and 1701-1717: ${line}")
+            OR (item GREATER_EQUAL 1701 AND item LESS_EQUAL 1717)
+            OR (item GREATER_EQUAL 1801 AND item LESS_EQUAL 1802)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313, 1401-1415, 1501-1524, 1601-1612, 1701-1717 and 1801-1802: ${line}")
     endif()
   endforeach()
 
@@ -1884,6 +1916,12 @@ else()
     endif()
   endforeach()
   foreach(item RANGE 1701 1717)
+    list(FIND items_automated "${item}" index)
+    if(index EQUAL -1)
+      _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
+    endif()
+  endforeach()
+  foreach(item RANGE 1801 1802)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
