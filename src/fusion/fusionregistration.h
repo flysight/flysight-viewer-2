@@ -28,16 +28,25 @@ QList<CalcInput> fitInputs();
 /// Effective values, as any reader serves them.
 using MeasurementReader = std::function<QVector<double>(const QString &sensor, const QString &name)>;
 using AttributeReader   = std::function<QVariant(const QString &key)>;
+/// Whether the session states the attribute `key`: its stored attribute, the
+/// first step of the resolution, serves it (the evaluation context's
+/// provenance query for the registered calculation,
+/// SessionData::hasStoredAttribute for the tooling).
+using StoredAttributeReader = std::function<bool(const QString &key)>;
 
 /// The kernel's input assembled from effective values: every measurement of
 /// fitInputs() into its Channels member, the origin attributes (an origin
 /// index that is not a number becomes -1, the kernel's "outside the GNSS
 /// samples"), and the configuration attributes into
-/// Channels::imuConfiguration (a value that is not a number stays NaN).
-/// Field-by-field copies of implicitly shared vectors. The
-/// registered calculation and fusion_runner both call this, so the two cannot
-/// drift apart.
-Channels channelsFrom(const MeasurementReader &measurement, const AttributeReader &attribute);
+/// Channels::imuConfiguration (a value that is not a number stays NaN), each
+/// with its source: Stated when `stored` says the session states the key,
+/// Inferred otherwise (the value then came from the inference below). The
+/// origin attributes have no source. The fact is not a fifth attribute and is
+/// written nowhere; the kernel reads no session. Field-by-field copies of
+/// implicitly shared vectors. The registered calculation and fusion_runner
+/// both call this, so the two cannot drift apart.
+Channels channelsFrom(const MeasurementReader &measurement, const AttributeReader &attribute,
+                      const StoredAttributeReader &stored);
 
 /// The thirty-three measurement outputs of the fit in publication order, each
 /// named as it is published under the Fusion sensor (_time, north, ..., qw,
@@ -55,11 +64,22 @@ QList<FitOutputChannel> fitOutputChannels(const Result &result);
 /// Register sensor fusion with the calculation engine:
 ///
 ///  - builtin.default.ACCEL_FS_G, builtin.default.GYRO_FS_DEG_S,
-///    builtin.default.ACCEL_ODR_HZ and builtin.default.GYRO_ODR_HZ
-///    (Calculations::addConstantDefault), in that order: the constant defaults
-///    of the four configuration inputs of the fit, as text, from
-///    SensorConfiguration::defaultValue (sensorconfiguration.h). A recording
-///    that states a key reads its own value.
+///    builtin.default.ACCEL_ODR_HZ and builtin.default.GYRO_ODR_HZ (on
+///    demand), in that order: the four configuration inputs of the fit,
+///    inferred from the IMU data where the recording does not state them (a
+///    recording that states a key reads its own value), each the attribute as
+///    its one output, the text of an entry of
+///    SensorConfiguration::listedValues (sensorconfiguration.h). ACCEL_FS_G
+///    from IMU/ax, ay, az and GYRO_FS_DEG_S from IMU/wx, wy, wz: the entry of
+///    the range the readings show (Detail::rangeShownByReadings,
+///    fusion/sensornoise.h, the kernel's lattice rule). ACCEL_ODR_HZ and
+///    GYRO_ODR_HZ from IMU/_time: the entry nearest, by rate, to one over the
+///    median logged interval (SampleContinuity::nominalInterval), the lower
+///    on a tie. Where the data cannot decide (readings on no range's lattice,
+///    an axis without a nominal interval) the value is
+///    SensorConfiguration::defaultValue, the firmware default. A recording
+///    with the IMU inputs always has a value; one without has a missing
+///    input.
 ///  - builtin.fusion.fit (explicit, title "Sensor fusion"): the batch GNSS/IMU
 ///    fit of fusion.h as one calculation of the twenty-six inputs of
 ///    fitInputs(), with thirty-four outputs published

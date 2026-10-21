@@ -100,25 +100,36 @@ whichever file declares it: the importer does not identify files by name. An
 absent key is not an error and stays absent.
 
 The four IMU keys are inputs of sensor fusion
-([SENSOR_FUSION.md](SENSOR_FUSION.md), section 3): its noise model is the
-IMU datasheet's at the stated ranges and rates (section 4 there), and it
-rejects a recording whose readings do not lie on the stated ranges' lattices
-or whose IMU is not logged at the stated rates (section 6 there). The
-receiver's dynamic model and rate and the barometer's, humidity sensor's and
-magnetometer's rates are read and stored so that recordings carry them;
-nothing uses them.
+([SENSOR_FUSION.md](SENSOR_FUSION.md), section 3), stated or inferred: its
+noise model is the IMU datasheet's at the configured ranges and rates
+(section 4 there), and it rejects a recording whose readings do not lie on
+the configured ranges' lattices or whose IMU is not logged at the configured
+rates (section 6 there). The receiver's dynamic model and rate and the
+barometer's, humidity sensor's and magnetometer's rates are read and stored
+so that recordings carry them; nothing uses them.
 
-**The default.** A recording that lacks a key takes the configuration of
-firmware v2023.09.22, the firmware of the recordings on disk: +/-16 g,
-+/-2000 deg/s, and 12.5 Hz for both the accelerometer and the gyro; no dynamic
-model and no rate (the other five keys have no default). The IMU's low-pass
-filters are not configurable in that firmware and have no key; it fixes them
-as the gyro's LPF2 at the cutoff of its 12.5 Hz rate, 4.2 Hz (LSM6DSO
-datasheet DS12140, Table 18), with no LPF1, and the accelerometer at its ODR
-bandwidth. The default is a calculation (`docs/CALCULATIONS.md` section 5,
-`builtin.default.<key>`), so it is never stored in a session and never
-written to a file. The keys are written by the firmware; every recording on
-disk lacks them, and reads this default.
+**An absent key is inferred.** A recording that lacks one of the four IMU
+keys takes the value its own data show, chosen among the key's allowed values
+in the table above and spelled as the table spells it: a range is the one
+whose lattice the sensor's readings lie on, a rate the listed one nearest to
+the rate the IMU is logged at, one over its median logged interval
+([SENSOR_FUSION.md](SENSOR_FUSION.md), section 3, gives the rules). A key the
+recording states wins, whatever the data. The inference is a calculation
+(`docs/CALCULATIONS.md` section 5, `builtin.default.<key>`), so its value is
+never stored in a session and never written to a file.
+
+**The default.** Where the data cannot decide (readings on no range's
+lattice, an IMU time axis of fewer than three samples), the inference falls
+back to the configuration of firmware v2023.09.22, the firmware of the
+recordings on disk: +/-16 g, +/-2000 deg/s, and 12.5 Hz for both the
+accelerometer and the gyro; no dynamic model and no rate (the other five keys
+have neither a default nor an inference). The IMU's low-pass filters are not
+configurable in that firmware and have no key; it fixes them as the gyro's
+LPF2 at the cutoff of its 12.5 Hz rate, 4.2 Hz (LSM6DSO datasheet DS12140,
+Table 18), with no LPF1, and the accelerometer at its ODR bandwidth. The
+filters are not configurable in any firmware to date, so they stay as
+described whatever the keys say. The keys are written by the firmware; every
+recording on disk lacks them, and its data infer exactly this default.
 
 ## 3. `SCHEMA_VER`
 
@@ -611,15 +622,18 @@ start-up pass nor deleting its session removes it.
 - **Code.** `CalculationCompatibilityVersion` (section 11) and the
   calculation's result version equal the ones it was written with. For sensor
   fusion the result version is the kernel's algorithm string, the
-  `"algorithm"` of its diagnostics: `batch-temperature-bias-v12` since the
-  kernel records the configuration's provenance (stated or inferred) in the
-  diagnostics and words its rejections by it, which changes the diagnostics
-  and no number (`v11` was the attitude covariance block symmetrized from a
-  separate sum, which moved the four accuracies by rounding, `v10` the
-  position and velocity covariance blocks published, which changed the record's shape and no number
-  of the fit, `v9` the scale factors held at one until the fit has converged
-  and released from that solution, `v8` the hole in the GNSS fixes fitted
-  across instead of rejected).
+  `"algorithm"` of its diagnostics: `batch-temperature-bias-v12` since a
+  configuration key a recording lacks is inferred from its data (section 2)
+  and the kernel records the configuration's provenance (stated or inferred)
+  in the diagnostics and words its rejections by it, which changes the
+  diagnostics of every recording on disk and no number, and lets a recording
+  from a firmware that logs faster fit where it was rejected (`v11` was the
+  attitude covariance block symmetrized from a separate sum, which moved the
+  four accuracies by rounding, `v10` the position and velocity covariance
+  blocks published, which changed the record's shape and no number of the
+  fit, `v9` the scale factors held at one until the fit has converged and
+  released from that solution, `v8` the hole in the GNSS fixes fitted across
+  instead of rejected).
 - **Inputs.** The names of the inputs the result reached are the same (source
   measurements with their unit text, attributes and declared preferences,
   directly or through other calculations, including inputs that were looked

@@ -17,14 +17,19 @@
 #include "engine/calculationprogress.h"
 #include "fusion/fusion.h"
 #include "fusion/orientation.h"
+#include "fusion/sensornoise.h"
 #include "fusion/solverthreads.h"
+#include "samplecontinuity.h"
 #include "sensorconfiguration.h"
 #include "sessiondata.h"
 
 // Sensor fusion as registered calculations: a thin adapter between the engine
 // and the kernel (fusion.h). The adapter copies values and nothing else: every
 // validation rule, unit conversion and message belongs to the kernel, where
-// the golden tests hold it to the reference.
+// the golden tests hold it to the reference. The inference of an absent
+// configuration attribute only chooses among the vocabulary's values, through
+// the kernel's own lattice function and the continuity authority; the kernel
+// still judges the choice.
 
 using namespace FlySight;
 
@@ -108,23 +113,45 @@ constexpr FitInput kFitInputs[] = {
     { "IMU",   "temperature", &Fusion::Channels::imuTemperature }
 };
 
-// The four configuration attributes the fit reads and the member of the
-// kernel's ImuConfiguration each one fills, in input order. One table serves
-// the declaration, the hand-over and the constant defaults. The receiver's
-// model and rate and the other sensors' rates are not inputs: nothing in the
-// fit uses them, and declaring them would make a stored fit stale when one
-// changed.
+// How an absent configuration attribute is inferred from the recording: a
+// range from the lattice its sensor's readings show, a rate from the logged
+// IMU interval.
+enum class Inference { Range, Rate };
+
+// The four configuration attributes the fit reads, the members of the
+// kernel's ImuConfiguration each one fills (its value and whether the
+// recording stated it), and what its inference reads, in input order. One
+// table serves the declaration, the hand-over and the inferences. The
+// receiver's model and rate and the other sensors' rates are not inputs:
+// nothing in the fit uses them, and declaring them would make a stored fit
+// stale when one changed.
 struct ConfigurationInput {
     const char *key;
     double Fusion::ImuConfiguration::*value;
+    Fusion::ConfigurationSource Fusion::ImuConfiguration::*source;
+    Inference inference;
+    // A range only: whose lattice, and the three axes of its readings under
+    // the names kFitInputs hands them to the kernel by
+    Fusion::Detail::ImuSensor sensor;
+    const char *axes[3];
 };
 
 constexpr ConfigurationInput kConfigurationInputs[] = {
-    { SensorConfiguration::AccelFsG,   &Fusion::ImuConfiguration::accelFsG },
-    { SensorConfiguration::GyroFsDegS, &Fusion::ImuConfiguration::gyroFsDegS },
-    { SensorConfiguration::AccelOdrHz, &Fusion::ImuConfiguration::accelOdrHz },
-    { SensorConfiguration::GyroOdrHz,  &Fusion::ImuConfiguration::gyroOdrHz }
+    { SensorConfiguration::AccelFsG, &Fusion::ImuConfiguration::accelFsG,
+      &Fusion::ImuConfiguration::accelFsGSource, Inference::Range,
+      Fusion::Detail::ImuSensor::Accelerometer, { "ax", "ay", "az" } },
+    { SensorConfiguration::GyroFsDegS, &Fusion::ImuConfiguration::gyroFsDegS,
+      &Fusion::ImuConfiguration::gyroFsDegSSource, Inference::Range,
+      Fusion::Detail::ImuSensor::Gyroscope, { "wx", "wy", "wz" } },
+    { SensorConfiguration::AccelOdrHz, &Fusion::ImuConfiguration::accelOdrHz,
+      &Fusion::ImuConfiguration::accelOdrHzSource, Inference::Rate,
+      Fusion::Detail::ImuSensor::Accelerometer, {} },
+    { SensorConfiguration::GyroOdrHz, &Fusion::ImuConfiguration::gyroOdrHz,
+      &Fusion::ImuConfiguration::gyroOdrHzSource, Inference::Rate,
+      Fusion::Detail::ImuSensor::Gyroscope, {} }
 };
+
+constexpr char kImuSensor[] = "IMU";
 
 } // namespace
 
@@ -155,7 +182,8 @@ QList<CalcInput> Fusion::fitInputs()
 
 // The effective input values as the kernel takes them. Field-by-field copies
 // of implicitly shared vectors: no sample is copied and none is touched.
-Fusion::Channels Fusion::channelsFrom(const MeasurementReader &measurement, const AttributeReader &attribute)
+Fusion::Channels Fusion::channelsFrom(const MeasurementReader &measurement, const AttributeReader &attribute,
+                                      const StoredAttributeReader &stored)
 {
     Fusion::Channels channels;
     for (const FitInput &input : kFitInputs)
@@ -170,13 +198,18 @@ Fusion::Channels Fusion::channelsFrom(const MeasurementReader &measurement, cons
     channels.originLon = attribute(SessionKeys::LocalOriginLon).toDouble();
     channels.originHMSL = attribute(SessionKeys::LocalOriginHmsl).toDouble();
 
-    // The configuration as numbers. A stored, hand-edited value that is not a
-    // number must not silently mean 0: it stays the kernel's NaN.
+    // The configuration as numbers, each with whether the recording stated it
+    // (the kernel words a rejection and records its diagnostics by it). A
+    // stored, hand-edited value that is not a number must not silently mean 0:
+    // it stays the kernel's NaN, and stated, so the datasheet check names it.
     for (const ConfigurationInput &input : kConfigurationInputs) {
+        const QString key = QString::fromLatin1(input.key);
         bool ok = false;
-        const double value = attribute(QString::fromLatin1(input.key)).toDouble(&ok);
+        const double value = attribute(key).toDouble(&ok);
         if (ok)
             channels.imuConfiguration.*(input.value) = value;
+        channels.imuConfiguration.*(input.source) =
+            stored(key) ? Fusion::ConfigurationSource::Stated : Fusion::ConfigurationSource::Inferred;
     }
     return channels;
 }
@@ -202,12 +235,15 @@ QList<DependencyKey> fitOutputs()
     return outputs;
 }
 
-// The engine's context as the two readers of the public assembly.
+// The engine's context as the three readers of the public assembly. The
+// configuration keys are declared inputs of the fit, so asking whether the
+// session stores one is never an undeclared read.
 Fusion::Channels channelsFrom(const EvaluationContext &ctx)
 {
     return Fusion::channelsFrom(
         [&ctx](const QString &sensor, const QString &name) { return ctx.measurement(sensor, name); },
-        [&ctx](const QString &key) { return ctx.attribute(key); });
+        [&ctx](const QString &key) { return ctx.attribute(key); },
+        [&ctx](const QString &key) { return ctx.attributeIsStored(key); });
 }
 
 // A fit that ended with a result, as the bundle the engine caches. A rejected
@@ -643,18 +679,73 @@ void registerOrientation(CalculationRegistry &registry)
     Calculations::addConstantDefault(registry, key, Fusion::Orientation::defaultOrientation().token());
 }
 
-// The constant defaults of the four configuration attributes the fit reads,
-// in input order: the text of the vocabulary, a QString like the value the
-// importer stores, so that a stored value and a default of the same text read
-// the same. A
-// recording that states a key reads its own value; the defaults are what
-// every recording on disk reads, since the firmware that wrote them states
-// none. Nothing here spells a key or a value.
+// The value of an absent configuration attribute, inferred from the
+// recording: an entry of the key's list in the vocabulary, a QString like the
+// value the importer stores, so that a stated and an inferred value of the
+// same text read the same. A range is the entry whose number is the range the
+// readings show, through the kernel's own function on the same effective
+// readings channelsFrom() hands the kernel, so an inferred range always passes
+// the lattice check. A rate is the entry nearest, by rate, to one over the
+// median logged IMU interval, the continuity authority's, which the rate
+// check measures on the same axis (the kernel's epoch-relative copy has the
+// same differences), the lower entry on an exact tie; it fails the check only
+// where the logged rate is far from every listed one. Where the data cannot
+// decide (readings on no range's lattice; an axis without a nominal interval,
+// fewer than three samples among them) the value is the firmware default,
+// which the checks then judge as they judge a stated one. Nothing here spells
+// a key or a value.
+QString inferredConfiguration(const ConfigurationInput &input, const EvaluationContext &ctx)
+{
+    const QString key = QString::fromLatin1(input.key);
+    const QStringList listed = SensorConfiguration::listedValues(key);
+    if (input.inference == Inference::Range) {
+        const double shown = Fusion::Detail::rangeShownByReadings(
+            input.sensor, ctx.measurement(kImuSensor, input.axes[0]), ctx.measurement(kImuSensor, input.axes[1]),
+            ctx.measurement(kImuSensor, input.axes[2]));
+        for (const QString &entry : listed) {
+            if (entry.toDouble() == shown)
+                return entry;
+        }
+    } else {
+        const double interval = SampleContinuity::nominalInterval(ctx.measurement(kImuSensor, SessionKeys::Time));
+        if (!std::isnan(interval)) {
+            const double logged = 1 / interval;
+            const QString *nearest = nullptr;
+            for (const QString &entry : listed) {
+                if (!nearest || std::abs(entry.toDouble() - logged) < std::abs(nearest->toDouble() - logged))
+                    nearest = &entry;
+            }
+            if (nearest)
+                return *nearest;
+        }
+    }
+    return SensorConfiguration::defaultValue(key).value();
+}
+
+// The four configuration attributes the fit reads, in input order: on demand,
+// each the attribute as its one output, inferred from the IMU data where the
+// recording does not state it (a stored attribute wins, as every stored
+// attribute does). Every recording on disk states none, and its data infer
+// the firmware default. The engine withholds a value only when an input is
+// missing (no IMU data, no IMU/_time); the data never make it unavailable.
 void registerConfigurationDefaults(CalculationRegistry &registry)
 {
     for (const ConfigurationInput &input : kConfigurationInputs) {
         const QString key = QString::fromLatin1(input.key);
-        Calculations::addConstantDefault(registry, key, SensorConfiguration::defaultValue(key).value());
+        CalculationDescriptor d;
+        d.id = QStringLiteral("builtin.default.") + key;
+        if (input.inference == Inference::Range) {
+            for (const char *axis : input.axes)
+                d.inputs.append(CalcInput::measurement(kImuSensor, axis));
+        } else {
+            d.inputs = { CalcInput::measurement(kImuSensor, SessionKeys::Time) };
+        }
+        d.outputs = { DependencyKey::attribute(key) };
+        const ConfigurationInput *entry = &input;
+        d.compute = [entry, key](const EvaluationContext &ctx) -> CalculationResult {
+            return CalculationResult().setAttribute(key, inferredConfiguration(*entry, ctx));
+        };
+        Calculations::addCalculation(registry, d);
     }
 }
 

@@ -161,18 +161,64 @@ ACCEL_FS_G  GYRO_FS_DEG_S  ACCEL_ODR_HZ  GYRO_ODR_HZ
 
 **Configuration.** The last four are the IMU's configuration: the
 accelerometer's and the gyro's full-scale range and output data rate, as
-`SENSOR.CSV` states them, or their constant defaults where it does not
-([DATA_SCHEMA.md](DATA_SCHEMA.md), section 2, gives the keys, their values and
-the default). They are therefore always available: a recording never lacks
-them. They reach the kernel as numbers in `Channels::imuConfiguration`, as the
-origin does, and the model is built from them: the noise of every reading is
+`SENSOR.CSV` states them or, where it does not, inferred from the
+recording's own IMU data ([DATA_SCHEMA.md](DATA_SCHEMA.md), section 2, gives
+the keys, their values and the default). A stated key is the fact: the
+recording's value wins, whatever the data, and is checked as below. An
+absent key is chosen among the values its key allows, never outside them,
+through the functions the checks use:
+
+- `ACCEL_FS_G`, from `IMU/ax`, `ay` and `az`: the range the readings show,
+  the coarsest whose lattice all but one in a thousand of the readings of the
+  three axes fit ("The lattice", below);
+- `GYRO_FS_DEG_S`, from `IMU/wx`, `wy` and `wz`: the same rule for the gyro;
+- `ACCEL_ODR_HZ`, from `IMU/_time`: the listed rate nearest to one over the
+  recording's median logged IMU interval ("The rate", below), nearest by rate
+  and not by interval (70 Hz is nearer 52 than 104), the lower of two on an
+  exact tie;
+- `GYRO_ODR_HZ`, from `IMU/_time`: the same rule over the gyro's list, which
+  lacks the accelerometer's low-power 1.6 Hz.
+
+The readings are the effective values the fit receives, after the conversion
+layer and the legacy gyro correction, and the interval is the continuity
+authority's median over the whole recording (`src/samplecontinuity.h`),
+which the rate check reads too. So an inferred range always passes the
+lattice check, and an inferred rate fails the rate check only where the
+logged rate is far from every listed one. Where the data cannot decide, the
+inference takes the firmware default: readings on no range's lattice, or an
+IMU time axis without a nominal interval (fewer than three samples). The
+checks then judge the default as they judge a stated value and name what the
+data show (section 6). A recording with IMU data therefore always has a
+configuration; one without has a missing input, as it has for the fit.
+
+The listed rates are a factor of two apart, so the nearest is never in doubt,
+and the firmware's oscillator runs a few percent fast while timestamps are
+logged to the millisecond: a recording from firmware v2024.02.07, logged at
+104 Hz, shows a median interval of 10 ms, 100 Hz, infers 104 and passes the
+rate check at 4 %. Every recording on disk, logged at 13.2-13.3 Hz on the
++/-16 g and +/-2000 deg/s lattices, infers exactly the firmware default, and
+its fit's numbers are bit for bit what they were when the default was read
+for it.
+
+*Equal rates.* The sensor file logs one `$IMU` row per sample, so a recording
+has one IMU interval: its two inferred rates are the same listed value, but
+near 1.6 Hz, which only the accelerometer lists (the gyro's nearest there is
+12.5), and its two inferred ranges are each their own sensor's. A firmware
+that configured the two sensors at different rates and still logged one row
+would state two keys that the single logged interval cannot both satisfy.
+That is a question for the firmware's format and is not resolved here: the
+rate check keeps its rule and judges `ACCEL_ODR_HZ` before `GYRO_ODR_HZ`.
+
+The four reach the kernel as numbers in `Channels::imuConfiguration`, as the
+origin does, each with whether the recording stated it (the kernel reads no
+session), and the model is built from them: the noise of every reading is
 the datasheet's at the configured range and rate (section 4), and the
-diagnostics report the configuration the fit ran under. The kernel also checks
-the recording against its configuration, stated or defaulted, after every
-other check (section 6): the readings must lie on the lattice of the
-configured ranges, and the IMU must be logged at the configured rates. The
-receiver's dynamic model and rate and the other sensors' rates are stored with
-the recording and are not inputs.
+diagnostics report the configuration the fit ran under and how each value
+came about. The kernel also checks the recording against its configuration,
+stated or inferred, after every other check (section 6): the readings must
+lie on the lattice of the configured ranges, and the IMU must be logged at
+the configured rates. The receiver's dynamic model and rate and the other
+sensors' rates are stored with the recording and are not inputs.
 
 **The lattice.** A FlySight writes a reading as a count times its sensor's
 step at the configured range: the range over 32768 counts for the
@@ -183,7 +229,9 @@ readings of a range therefore lie on a lattice of multiples of its step, and
 the coarsest range whose lattice all but one in a thousand of the readings of
 the three axes fit is the range the recording shows; it must be the
 configured one, or the fit rejects
-the recording naming both, and does not guess. The check reads every reading
+the recording naming both, and does not guess. The inference of an absent
+range reads the same readings through the same function, so it is the range
+this check finds. The check reads every reading
 as the kernel receives it (effective values in m/s^2 and deg/s, inside the
 fitted window or not), before any correction of the kernel's own. A reading
 fits when it is within one unit of the file's last decimal, carried through
@@ -205,7 +253,9 @@ within 10 % of the nominal interval, one over the rate, of each of
 `ACCEL_ODR_HZ` and `GYRO_ODR_HZ`. The datasheet states no tolerance for its
 oscillator; the recordings on disk log at 13.2-13.3 Hz against their 12.5 Hz
 (5-7 % fast), and the listed rates are a factor of two apart, so 10 % neither
-rejects a healthy unit nor mistakes one rate for another.
+rejects a healthy unit nor mistakes one rate for another. The inference of an
+absent rate reads the same median, through the same function, and chooses
+the listed rate nearest one over it.
 
 **Effective values only.** Like every calculation, the fit reads effective
 values: the recorded data after the conversion layer. Accelerations arrive in
@@ -1057,14 +1107,21 @@ Then, after every check above, the configuration (section 3), in this order:
   is rejected ([DATA_SCHEMA.md](DATA_SCHEMA.md), section 7);
 - a median logged IMU interval more than 10 % from a configured rate's,
   `ACCEL_ODR_HZ` before `GYRO_ODR_HZ`: `ACCEL_ODR_HZ states 12.5 Hz but the IMU
-  is logged at 100.0 Hz; sensor fusion unavailable`, the realistic case of a
-  file without keys from a firmware that logs faster than the default.
+  is logged at 100.0 Hz; sensor fusion unavailable` for a recording that
+  states 12.5 Hz and is logged faster. A recording from such a firmware that
+  states nothing is not rejected for it: firmware v2024.02.07 logs at 104 Hz
+  without keys, and its recording infers 104 Hz from its 100 Hz median
+  interval and fits (4 %, section 3). The realistic rejection of a recording
+  without keys is one logged at 70 Hz, which fits no listed rate: it infers
+  52 Hz, the nearest, and the rate check rejects it at 25 % with the inferred
+  wording below.
 
 The kernel is told, beside each of the four values, whether the recording
 stated it or it was inferred from the recording's data; it reads no session.
 The two checks judge an inferred value by the same rule, tolerance and order
 as a stated one, and the reason says how the value came about. A stated value
-is worded as above. An inferred rate that fails says so: `ACCEL_ODR_HZ
+is worded as above. An inferred rate that fails says so, as the 70 Hz
+recording above does: `ACCEL_ODR_HZ
 inferred as 52 Hz but the IMU is logged at 70.0 Hz; sensor fusion
 unavailable`. An inferred range is the range the same readings show through
 the same function, so it fails only where the readings show none and the
@@ -1191,9 +1248,12 @@ success, a rejection or a solver failure. It is restored bit for bit when the
 recording is loaded, and the restored result is indistinguishable from a fresh
 one; the record holds the sixteen accuracy channels with the state (none when the
 covariance could not be computed). Its code stamp is the algorithm string of the diagnostics
-(`batch-temperature-bias-v12` since the kernel records the configuration's
-provenance in the diagnostics and words its rejections by it, which changes
-the diagnostics and no number; `v11` having been the attitude covariance block
+(`batch-temperature-bias-v12` since a configuration key a recording lacks is
+inferred from its data (section 3) and the kernel records the configuration's
+provenance in the diagnostics and words its rejections by it: the
+diagnostics of every recording on disk change and no number does, and a
+stored rejection of a recording from a firmware that logs faster, read under
+the 12.5 Hz default, is computed again and fits; `v11` having been the attitude covariance block
 symmetrized from a separate sum, as the position and velocity blocks are,
 which moved the four accuracies by rounding and nothing else, `v10` the
 position and velocity covariance blocks published, which changed the
@@ -1255,11 +1315,11 @@ demonstrated by tests, all labelled `fusion`:
 | --- | --- |
 | `tst_fusion_golden` | the kernel through its public API reproduces its goldens for fourteen synthetic fixtures (four fits, one of them across a 2.6 s hole in the fixes, and ten rejections; every fixture states its configuration and lies on its lattice), the progress texts at its boundaries, cancellation at each kind of boundary (prefix, segment and full-fit iterations and the release of the scale factors included), determinism and thread independence |
 | `tst_fusion_kernel` | the kernel's stages: the segmented initializer on the five synthetic recordings of the specification, the stopping rules forced through the tuning (damping saturation short of a minimum a solver failure, a stall at the ceiling at a minimum settled, the damping ceiling changing nothing below it), the datasheet's noise by configuration bit for bit against its formula and the configurations without an entry, the step model (no sampling term on a constant signal, the sampling term against its derivation on a quadratic signal, the rotation remainder against its derivation on a constant turn and against a thousand-fold subdivided integration on a ramp), the lattice and rate checks and their order after every other check, the noise model in the diagnostics, the three temperature cases, the scale factors (the readings divided by the scale, the scale Jacobian against central differences, the scaled factor's seven Jacobians and its agreement with the library's own IMU factor at the interval's bias where the scale is the preintegration's, bit for bit, the graph with them, re-preintegration at the fitted scale, the reconstruction at the fitted scale, a resting recording left at its prior through both stages, a 2 % accelerometer factor recovered through the released stage and the objective falling below the held stage's, the factors in the diagnostics), the scale factors as a refinement (the two stages' account and the boundary between them, the release forced to fail falling back to the held fit with its channels, divergence forced in the held stage, a solver failure, and in the released stage, the fallback), the fit trace iteration by iteration against the goldens; the reconstruction at the IMU samples (the ends are the fitted states, sharing by noise, zero mismatch with and without rotation, consistency, equivalence with a graph with a state at every sample), the channels and diagnostics the fit publishes as that reconstruction bit for bit, and the time axis on the four fits and on a recording whose GNSS rate is above its IMU's; the GNSS holes (every sample inside a 2.6 s hole against the generating trajectory, its attitude and accelerations within three of their accuracies and its position and velocity, axis by axis, within three published standard deviations, the largest ratios logged, the step chain's covariance `P_j` growing through the hole and collapsing at the next fix, the composed velocity covariance larger inside the hole than beside the fixes around it, the composed position covariance and the published blocks logged, a 30 s hole, the longest bridged, under the production tuning, a 60 s hole rejected naming the limit, the cutter's merge of a piece with fewer than three fixes, the holes in the diagnostics); the slow tail refused on each of its bounds, the IMU normalized RMS's alone included; the accuracy (the covariance step against the library's joint marginals and its first node against the heading check, the composition at the samples against a graph with a state at every edge and, on a fix, the fix's own marginal, the accuracy formulas on known answers, the widening's window and factor, one at the model and grown where a sigma is understated, and applied to what is published, accuracies finite and positive that doubling the GNSS accuracies never lowers, the undetermined heading at the cap with tilt and acceleration against a gauge-fixed reference, a failed covariance step changing nothing else, the scale factors' sigmas) |
-| `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, the configuration reaches the kernel (a session stating it fits to the golden, the same session without the keys reads the 12.5 Hz default and is rejected by the rate check, and a recording without keys logged at 12.5 Hz fits under the default), a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
+| `tst_fusion_session` | the registered calculation on real sessions: reads never run it, one request publishes everything, rejections are cached results, a session without `IMU/temperature` has a missing input, the configuration reaches the kernel with how each value came about (a session stating it fits to the golden, a session stating 12.5 Hz for a recording logged at 100 Hz is rejected by the rate check, and a recording without keys logged at 12.5 Hz infers the firmware default and fits under it), the configuration inferred where the session states none (the range the readings show, the listed rate nearest the logged one, the default where the data cannot decide, a stated key winning, a recording without IMU data a missing input) and fitted under it (a fixture without its keys fits to its golden with every provenance entry `inferred`, one logged at 70 Hz is rejected for the inferred 52 Hz, one off every lattice for the default range), a fit exported and restored into another session is indistinguishable, with what provided each name it looked up |
 | `tst_fusion_derived` | what is derived from the outputs, without the solver: the outputs stored as data, elevation, the speeds and the track accelerations held to exact known answers, the speeds and the track accelerations equal to the GNSS ones on the same samples, the fused accuracies (horizontal, vertical and speed) held to known answers on chosen blocks and unavailable without the blocks or on unequal lengths, and each derived value waiting on the fit and never starting it; the orientation vocabulary (24 pairs, each a proper rotation, the attribute's choices), heading, pitch and roll held to hand-built known answers, finite with pitch at +90 or -90 where the forward axis is exactly vertical, side mounts, a GNSS track and a course reference that change nothing, and the fit's own angles for the device frame, an invalid or changed orientation without a fit, and the Orientation column's display, edit and bulk edit |
 | `tst_fusion_jobs` | the real fit through the executor: supersede, cancel, rejection, shutdown, the logbook column cached from the stored result and kept, for an unloaded session, through an altitude marker added at run time or at the next start |
 | `tst_fusion_rows` | the demand layer with the eighteen real fusion plots, end to end: each explicit-backed by the fit alone, one fit for all eighteen, one for the Total speed row alone and one for the Speed accuracy row alone; fits started and dropped by what is checked and visible, with no gesture; progress and failures as each fit ends; the seven accuracy plots merely uncomputed before the fit, not produced for a rejected recording (listed once, with its reason) and not applicable without IMU data |
-| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), a rejection and a solver failure listed among the recordings that could not be computed, with their reasons, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, a record under the previous algorithm string deleted at load and the fit run once more, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a logbook column over roll, and one over each of the four accuracies, over Total speed and over Speed accuracy, filled for recordings that are not loaded (the value the loaded recording reads, bit for bit, shown by the unit converter for the row's type and labelled with the row's name), and nothing fitted again after a restart; the derived Horizontal, Vertical and Speed accuracy drawn from a stored fit after a restart bit for bit; a stored success without the accuracy restored with the other seventeen channels, the Horizontal, Vertical and Speed accuracy absent and not produced, and failing nothing |
+| `tst_fusion_store` | the fit's stored result: bit for bit after unloading and after a restart (also when fitted before the first save), a rejection and a solver failure listed among the recordings that could not be computed, with their reasons, dropped by a dependency edit, a merge or a code-stamp change and kept by an unrelated edit, a record under the previous algorithm string deleted at load and the fit run once more, a stored rejection of a recording without keys under the previous string (which read the 12.5 Hz default) deleted at load and fitted once under the inferred configuration, the session file untouched, not requested after the logbook's `cache/` folder was deleted; kept across altitude-marker, registration, descent-pause and plugin-set changes, in memory and after a restart; dropped at once, with its record, by a registry change that changes what a name it looked up resolves to (the removal of its provider), kept by a candidate registered behind the provider; deleted when a lookup resolves differently at load; a logbook column over roll, and one over each of the four accuracies, over Total speed and over Speed accuracy, filled for recordings that are not loaded (the value the loaded recording reads, bit for bit, shown by the unit converter for the row's type and labelled with the row's name), and nothing fitted again after a restart; the derived Horizontal, Vertical and Speed accuracy drawn from a stored fit after a restart bit for bit; a stored success without the accuracy restored with the other seventeen channels, the Horizontal, Vertical and Speed accuracy absent and not produced, and failing nothing |
 | `tst_fusion_runner` | `fusion_runner`, the command-line fit on a recording written as `TRACK.CSV` / `SENSOR.CSV`, against a direct kernel run and against the application's own import path |
 
 The goldens live in `tests/data/fusion/`. In exact mode
@@ -1464,7 +1524,8 @@ datasheet's noise and the derived step terms. Above one, the data hold
 something the model does not describe.
 
 The reference recordings of [tests/README.md](../tests/README.md), section
-12.2, at the default configuration (none states one):
+12.2, at the default configuration (none states one, and each infers the
+firmware default):
 
 | Recording (unit) | Fixes | IMU samples | Outcome (rule) | Iterations (passes) | Objective | Position | Velocity | IMU | Largest scale departure, accelerometer / gyro |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -1642,7 +1703,9 @@ Not validated:
   independent fixes;
 - the widening's assumption that every sigma is off by one ratio;
 - any configuration but the default on real data: no recording on disk
-  states one (the fixtures do).
+  states one or infers another (the fixtures state theirs); a recording from
+  firmware v2024.02.07, logged at 104 Hz, is the first, checked by hand
+  ([tests/README.md](../tests/README.md), M60).
 
 **The runner.** `fusion_runner` is a test/tooling target, built with the
 fusion tests and never installed: the fit on one recording, imported exactly

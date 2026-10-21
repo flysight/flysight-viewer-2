@@ -438,6 +438,9 @@ void FusionRunnerTest::successMatchesDirectRun()
 // and the time fit are calculated), the tool's diagnostics and channels equal
 // what SessionImport + SessionModel (creation defaults, logbook, column worker
 // and all) + the engine's explicit request produce for the same two files.
+// The files state no configuration key, so both paths infer it: the
+// diagnostics' four provenance entries read inferred on both, which the
+// comparison holds the tool's hand-over to (items 1050, 1813, 1814, 1816).
 void FusionRunnerTest::matchesTheApplicationImportPath()
 {
     const QString dir = TestEnvironment::instance().newTempDir(QStringLiteral("recording"));
@@ -455,6 +458,10 @@ void FusionRunnerTest::matchesTheApplicationImportPath()
     QStringList header;
     QHash<QString, QVector<double>> columns;
     QVERIFY2(readCsv(csvPath, header, columns), qPrintable(csvPath));
+    const QJsonObject configuration = diagnostics.value(QStringLiteral("configuration")).toObject();
+    for (const char *entry : {"accel_fs_g_provenance", "gyro_fs_deg_s_provenance", "accel_odr_hz_provenance",
+                              "gyro_odr_hz_provenance"})
+        QCOMPARE(configuration.value(QString::fromLatin1(entry)).toString(), QStringLiteral("inferred"));
 
     // The application's path, in this process
     {

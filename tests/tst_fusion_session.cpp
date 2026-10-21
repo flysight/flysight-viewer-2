@@ -32,6 +32,7 @@
 #include "fusionfixtures.h"
 #include "fusiongolden.h"
 #include "fusionsessions.h"
+#include "sensorconfiguration.h"
 #include "sessiondata.h"
 #include "storedresults.h"
 #include "testenvironment.h"
@@ -159,6 +160,77 @@ QStringList eventTexts(const QList<ExplicitEvent> &events)
     return text;
 }
 
+/// The four configuration keys the fit reads, in input order.
+const QStringList kConfigurationKeys{QStringLiteral("ACCEL_FS_G"), QStringLiteral("GYRO_FS_DEG_S"),
+                                     QStringLiteral("ACCEL_ODR_HZ"), QStringLiteral("GYRO_ODR_HZ")};
+
+/// The provenance entries of the diagnostics' configuration object, in the
+/// same order.
+const QStringList kProvenanceEntries{QStringLiteral("accel_fs_g_provenance"),
+                                     QStringLiteral("gyro_fs_deg_s_provenance"),
+                                     QStringLiteral("accel_odr_hz_provenance"),
+                                     QStringLiteral("gyro_odr_hz_provenance")};
+
+/// What a session reads for the four configuration attributes, as text.
+QStringList configurationOf(const SessionData &session)
+{
+    QStringList texts;
+    for (const QString &key : kConfigurationKeys)
+        texts.append(session.getAttribute(key).toString());
+    return texts;
+}
+
+/// `fixtureName` as a session without its four configuration keys, its IMU
+/// logged at `rate` Hz when one is given: IMU/_time respaced to i / rate from
+/// the fixture's first sample (the column is stored source data in "s",
+/// served unchanged).
+SessionData keylessSession(const QString &fixtureName, const QString &sessionId,
+                           std::optional<double> rate = std::nullopt)
+{
+    const FusionFixture f = fusionFixture(fixtureName);
+    SessionData session = fixtureSession(fixtureName, sessionId);
+    for (const QString &key : kConfigurationKeys)
+        session.removeAttribute(key);
+    if (rate) {
+        QVector<double> axis;
+        for (qsizetype i = 0; i < f.imuTime.size(); ++i)
+            axis.append(f.imuTime.first() + double(i) / *rate);
+        session.setMeasurement("IMU", "_time", axis);
+    }
+    return session;
+}
+
+/// One count at +/-8 g in m/s^2 and at +/-500 deg/s in deg/s: an odd multiple
+/// of either lies on that lattice and a whole fine step off every coarser one,
+/// far above the lattice check's tolerances (9.8e-5 m/s^2, 1.15e-3 deg/s).
+constexpr double kCountAt8G = 8. / 32768 * 9.80665;
+constexpr double kCountAt500DegS = 17.5e-3;
+
+/// coarse_linear's readings moved onto the +/-8 g and +/-500 deg/s lattices:
+/// every IMU/ax and IMU/wx sample an odd multiple of that range's count (az,
+/// -2048 counts of +/-16 g, lies on both lattices; the other axes are zero).
+void moveOntoFinerLattices(SessionData &session)
+{
+    QVector<double> ax = session.getMeasurement("IMU", "ax");
+    QVector<double> wx = session.getMeasurement("IMU", "wx");
+    for (qsizetype i = 0; i < ax.size(); ++i)
+        ax[i] = double(2 * i + 1) * kCountAt8G;
+    for (qsizetype i = 0; i < wx.size(); ++i)
+        wx[i] = double(2 * i + 1) * kCountAt500DegS;
+    session.setMeasurement("IMU", "ax", ax);
+    session.setMeasurement("IMU", "wx", wx);
+}
+
+/// One accelerometer reading off every range's lattice (more than one in a
+/// thousand of the 603 readings of the three axes): 1.5 units of the file's
+/// last decimal, carried through the conversion layer.
+void moveOneAccelerometerReadingOffEveryLattice(SessionData &session)
+{
+    QVector<double> ax = session.getMeasurement("IMU", "ax");
+    ax[5] = 1.5 * 9.80665e-5;
+    session.setMeasurement("IMU", "ax", ax);
+}
+
 /// Cancels from its n-th isCancelled() call on, and records the texts.
 class CancelAtCall : public CalculationProgress {
 public:
@@ -187,7 +259,9 @@ private slots:
     void explicitOutputsHaveOneCandidate();
     void inputsAreBitIdenticalToFixture();
     void configurationDefaults();
+    void configurationIsInferred();
     void configurationReachesTheKernel();
+    void inferredConfigurationFits();
     void readsNeverRunTheFit();
     void requestRunsOnceAndPublishesTogether_data();
     void requestRunsOnceAndPublishesTogether();
@@ -235,8 +309,7 @@ void FusionSessionTest::registrationShape()
     const CalculationRegistry &registry = CalculationRegistry::instance();
 
     // Seventeen registrations after every built-in, in this order: the
-    // configuration's constant defaults first (configurationDefaults), then
-    // the fit; the derived values' descriptors (the fused accuracies among
+    // configuration's inferences first (configurationDefaults), then the fit; the derived values' descriptors (the fused accuracies among
     // them), the orientation's constant default and the attitude are
     // tst_fusion_derived's
     QCOMPARE(registry.registeredIds().mid(registry.registeredIds().size() - 17),
@@ -399,24 +472,35 @@ void FusionSessionTest::inputsAreBitIdenticalToFixture()
     QCOMPARE(session.calculationEngine().runCount(kFit), 0);
 }
 
-// Items 1004, 1050: the four configuration attributes the fit reads have
-// constant defaults, firmware v2023.09.22's, as text: calculations with no
-// inputs and the attribute as their one output, which a session without the
-// keys reads and a stored value overrides. The other five keys have none.
+// Items 1004, 1050 (as amended), 1810: the four configuration attributes the
+// fit reads are on-demand calculations under the ids of the former constant
+// defaults, each the attribute as its one output, inferred from the IMU
+// readings or the IMU time axis where the session states no value, which a
+// stored value overrides. A recording without the keys logged at 12.5 Hz on
+// the default lattices reads firmware v2023.09.22's configuration, the
+// default's text bit for bit, as a string. The other five keys have no
+// candidate.
 void FusionSessionTest::configurationDefaults()
 {
     const CalculationRegistry &registry = CalculationRegistry::instance();
-    const struct { const char *key; const char *value; } defaults[] = {
-        {"ACCEL_FS_G", "16"}, {"GYRO_FS_DEG_S", "2000"}, {"ACCEL_ODR_HZ", "12.5"}, {"GYRO_ODR_HZ", "12.5"}};
+    const QList<CalcInput> accelerometer{CalcInput::measurement("IMU", "ax"), CalcInput::measurement("IMU", "ay"),
+                                         CalcInput::measurement("IMU", "az")};
+    const QList<CalcInput> gyro{CalcInput::measurement("IMU", "wx"), CalcInput::measurement("IMU", "wy"),
+                                CalcInput::measurement("IMU", "wz")};
+    const QList<CalcInput> time{CalcInput::measurement("IMU", "_time")};
+    const struct { const char *key; const QList<CalcInput> *inputs; const char *value; } defaults[] = {
+        {"ACCEL_FS_G", &accelerometer, "16"}, {"GYRO_FS_DEG_S", &gyro, "2000"},
+        {"ACCEL_ODR_HZ", &time, "12.5"}, {"GYRO_ODR_HZ", &time, "12.5"}};
     for (const auto &entry : defaults) {
         const QString key = QString::fromLatin1(entry.key);
         const std::optional<CalculationInstance> instance =
             registry.instance(QStringLiteral("builtin.default.") + key);
         QVERIFY2(instance.has_value(), entry.key);
-        QVERIFY(instance->descriptor->inputs.isEmpty());
+        QVERIFY2(instance->descriptor->inputs == *entry.inputs, entry.key);
         QVERIFY(instance->descriptor->outputs == QList<DependencyKey>({DependencyKey::attribute(key)}));
         QVERIFY(instance->descriptor->policy == EvaluationPolicy::OnDemand);
         QVERIFY(instance->descriptor->resultVersion.isEmpty());
+        QVERIFY(instance->descriptor->title.isEmpty());
         const QList<CalculationInstance> candidates = registry.candidatesFor(DependencyKey::attribute(key));
         QCOMPARE(candidates.size(), 1);
         QCOMPARE(candidates.first().instanceId, QStringLiteral("builtin.default.") + key);
@@ -424,49 +508,173 @@ void FusionSessionTest::configurationDefaults()
     for (const char *key : {"BARO_ODR_HZ", "HUM_ODR_HZ", "MAG_ODR_HZ", "GNSS_MODEL", "GNSS_RATE_HZ"})
         QVERIFY2(registry.candidatesFor(DependencyKey::attribute(QString::fromLatin1(key))).isEmpty(), key);
 
-    // A fixture session states its configuration; without the keys it reads
-    // the defaults
-    SessionData session = fixtureSession(QStringLiteral("coarse_linear"));
-    for (const auto &entry : defaults)
-        session.removeAttribute(QString::fromLatin1(entry.key));
+    // A recording as the importer leaves it, logged at 12.5 Hz on the
+    // default lattices, states nothing and infers the firmware default
+    SessionData session = naturalSession(QStringLiteral("n1"));
     for (const auto &entry : defaults) {
         const QString key = QString::fromLatin1(entry.key);
         QVERIFY(!session.hasStoredAttribute(key));
         QCOMPARE(session.getAttribute(key).userType(), int(QMetaType::QString));
         QCOMPARE(session.getAttribute(key).toString(), QString::fromLatin1(entry.value));
+        QCOMPARE(session.getAttribute(key).toString(), SensorConfiguration::defaultValue(key).value());
     }
     for (const char *key : {"BARO_ODR_HZ", "HUM_ODR_HZ", "MAG_ODR_HZ", "GNSS_MODEL", "GNSS_RATE_HZ"})
         QVERIFY2(!session.getAttribute(QString::fromLatin1(key)).isValid(), key);
 
     // A stored value wins, also one that is not a value of the key; removing
-    // it returns to the default
+    // it returns to the inferred text
     session.setAttribute("ACCEL_FS_G", QStringLiteral("8"));
     QCOMPARE(session.getAttribute("ACCEL_FS_G"), QVariant(QStringLiteral("8")));
     session.setAttribute("GYRO_ODR_HZ", QStringLiteral("abc"));
     QCOMPARE(session.getAttribute("GYRO_ODR_HZ"), QVariant(QStringLiteral("abc")));
     session.removeAttribute("ACCEL_FS_G");
     QCOMPARE(session.getAttribute("ACCEL_FS_G"), QVariant(QStringLiteral("16")));
+    session.removeAttribute("GYRO_ODR_HZ");
+    QCOMPARE(session.getAttribute("GYRO_ODR_HZ"), QVariant(QStringLiteral("12.5")));
     QCOMPARE(session.calculationEngine().runCount(kFit), 0);
 }
 
-// Items 1007, 1010, 1045: the configuration reaches the kernel in
-// Channels::imuConfiguration, as numbers, for a stated and a defaulted
-// session, and as NaN for a stored value that is not a number. The stated
-// path: a fixture session, which stores its fixture's configuration, is
-// fitted to the golden, channels and diagnostics (whose `configuration` is
-// the stated one). The default path: the same session with the four keys
-// removed reads firmware v2023.09.22's 12.5 Hz, which its 100 Hz logging
-// disagrees with, and is rejected with the rate text naming both.
+// Items 1811, 1812, 1815: the inference, case by case, on sessions without
+// keys built from coarse_linear (201 IMU samples logged at 100 Hz, readings
+// on the +/-16 g and +/-2000 deg/s lattices). A range is the one the readings
+// show; a rate the listed one nearest one over the median logged interval;
+// where the data cannot decide, the firmware default; a stated key reads its
+// own text whatever the data; a recording without IMU data has a missing
+// input. Reading never runs the fit, reads only what is declared, runs each
+// inference once, and a second read runs nothing.
+void FusionSessionTest::configurationIsInferred()
+{
+    const QString coarseLinear = QStringLiteral("coarse_linear");
+
+    // Empty when `session` reads `expected` (in key order, each a string),
+    // each key not in `stated` inferred by one run of its calculation, a
+    // second read running nothing, the fit never run and nothing undeclared
+    // read; else what differs.
+    const auto inferred = [](const SessionData &session, const QStringList &expected,
+                             const QStringList &stated = {}) -> QString {
+        CalculationEngine &engine = session.calculationEngine();
+        for (int round = 0; round < 2; ++round) {
+            const int runsBefore = engine.totalRunCount();
+            for (qsizetype k = 0; k < kConfigurationKeys.size(); ++k) {
+                const QVariant value = session.getAttribute(kConfigurationKeys.at(k));
+                if (value.userType() != QMetaType::QString || value.toString() != expected.at(k))
+                    return QStringLiteral("%1 reads '%2' (type %3), not '%4'")
+                        .arg(kConfigurationKeys.at(k), value.toString(), QString::number(value.userType()),
+                             expected.at(k));
+            }
+            if (round == 1 && engine.totalRunCount() != runsBefore)
+                return QStringLiteral("a second read ran %1").arg(engine.totalRunCount() - runsBefore);
+        }
+        for (const QString &key : kConfigurationKeys) {
+            const int runs = engine.runCount(QStringLiteral("builtin.default.") + key);
+            if (runs != (stated.contains(key) ? 0 : 1))
+                return QStringLiteral("builtin.default.%1 ran %2 times").arg(key).arg(runs);
+        }
+        if (engine.runCount(kFit) != 0)
+            return QStringLiteral("the fit ran");
+        if (engine.undeclaredReadCount() != 0)
+            return QStringLiteral("an undeclared read");
+        return QString();
+    };
+    const QStringList fallback{QStringLiteral("16"), QStringLiteral("2000"), QStringLiteral("12.5"),
+                               QStringLiteral("12.5")};
+
+    // (a) 104 Hz on the +/-8 g and +/-500 deg/s lattices
+    SessionData fine = keylessSession(coarseLinear, QStringLiteral("a1"), 104.0);
+    moveOntoFinerLattices(fine);
+    QString difference = inferred(fine, {QStringLiteral("8"), QStringLiteral("500"), QStringLiteral("104"),
+                                         QStringLiteral("104")});
+    QVERIFY2(difference.isEmpty(), qPrintable(QStringLiteral("(a) ") + difference));
+
+    // (b) 13.3 Hz, the rate the recordings on disk log at, on the fixture's
+    // own lattices: the firmware default, the default's text bit for bit
+    const SessionData slow = keylessSession(coarseLinear, QStringLiteral("b1"), 13.3);
+    difference = inferred(slow, fallback);
+    QVERIFY2(difference.isEmpty(), qPrintable(QStringLiteral("(b) ") + difference));
+    for (qsizetype k = 0; k < kConfigurationKeys.size(); ++k)
+        QCOMPARE(slow.getAttribute(kConfigurationKeys.at(k)).toString(),
+                 SensorConfiguration::defaultValue(kConfigurationKeys.at(k)).value());
+
+    // (c) The readings of (a) at 100 Hz, with one accelerometer and one gyro
+    // reading off every lattice: no range decides, so both ranges fall back
+    // to the default while the rates are still inferred (100.0 Hz logged is
+    // nearest 104)
+    SessionData offLattice = keylessSession(coarseLinear, QStringLiteral("c1"));
+    moveOntoFinerLattices(offLattice);
+    moveOneAccelerometerReadingOffEveryLattice(offLattice);
+    QVector<double> wz = offLattice.getMeasurement("IMU", "wz");
+    wz[7] = 1.5 * 1.14688e-3;
+    offLattice.setMeasurement("IMU", "wz", wz);
+    difference = inferred(offLattice, {QStringLiteral("16"), QStringLiteral("2000"), QStringLiteral("104"),
+                                       QStringLiteral("104")});
+    QVERIFY2(difference.isEmpty(), qPrintable(QStringLiteral("(c) ") + difference));
+
+    // (d) A stated key reads its own text whatever the data: ACCEL_FS_G 8
+    // over the +/-16 g readings, ACCEL_ODR_HZ 12.5 at 100 Hz
+    SessionData stated = keylessSession(coarseLinear, QStringLiteral("d1"));
+    stated.setAttribute("ACCEL_FS_G", QStringLiteral("8"));
+    stated.setAttribute("ACCEL_ODR_HZ", QStringLiteral("12.5"));
+    difference = inferred(stated,
+                          {QStringLiteral("8"), QStringLiteral("2000"), QStringLiteral("12.5"),
+                           QStringLiteral("104")},
+                          {QStringLiteral("ACCEL_FS_G"), QStringLiteral("ACCEL_ODR_HZ")});
+    QVERIFY2(difference.isEmpty(), qPrintable(QStringLiteral("(d) ") + difference));
+
+    // (e) Near 1.6 Hz: the accelerometer's list holds its low-power 1.6, the
+    // gyro's does not (the datasheet check rejects 1.6 as it rejects a stated
+    // one)
+    const SessionData lowPower = keylessSession(coarseLinear, QStringLiteral("e1"), 1.6);
+    difference = inferred(lowPower, {QStringLiteral("16"), QStringLiteral("2000"), QStringLiteral("1.6"),
+                                     QStringLiteral("12.5")});
+    QVERIFY2(difference.isEmpty(), qPrintable(QStringLiteral("(e) ") + difference));
+
+    // (f) An IMU time axis of two samples has no nominal interval: the
+    // default rate for both sensors
+    SessionData twoSamples = keylessSession(coarseLinear, QStringLiteral("f1"));
+    twoSamples.setMeasurement("IMU", "_time", twoSamples.getMeasurement("IMU", "_time").mid(0, 2));
+    difference = inferred(twoSamples, fallback);
+    QVERIFY2(difference.isEmpty(), qPrintable(QStringLiteral("(f) ") + difference));
+
+    // (g) Where both rates are inferred they are one listed value, the
+    // accelerometer's low-power 1.6 of (e) the one exception
+    const QList<const SessionData *> bothInferred{&fine, &slow, &offLattice, &twoSamples};
+    for (const SessionData *session : bothInferred)
+        QCOMPARE(session->getAttribute("ACCEL_ODR_HZ").toString(), session->getAttribute("GYRO_ODR_HZ").toString());
+
+    // (h) Without IMU data the four are missing inputs: unavailable, and
+    // nothing ran
+    const SessionData withoutImu = sessionWithoutImu(fusionFixture(coarseLinear), QStringLiteral("h1"));
+    for (const QString &key : kConfigurationKeys) {
+        QVERIFY2(!withoutImu.getAttribute(key).isValid(), qPrintable(key));
+        QCOMPARE(withoutImu.calculationEngine().runCount(QStringLiteral("builtin.default.") + key), 0);
+    }
+    QCOMPARE(withoutImu.calculationEngine().runCount(kFit), 0);
+    QCOMPARE(withoutImu.calculationEngine().undeclaredReadCount(), 0);
+}
+
+// Items 1007, 1010, 1045 (as amended), 1814: the configuration reaches the
+// kernel in Channels::imuConfiguration, as numbers, for a stated and an
+// inferred session, and as NaN for a stored value that is not a number, each
+// value with its source: Stated where the session stores the key, Inferred
+// otherwise, through the third reader of the one assembly. The stated path: a
+// fixture session, which stores its fixture's configuration, is fitted to the
+// golden, channels and diagnostics (whose `configuration` is the stated one).
+// A session that states 12.5 Hz for both sensors of a recording logged at
+// 100 Hz is rejected with the rate text naming both, worded "states".
 void FusionSessionTest::configurationReachesTheKernel()
 {
+    using Source = Fusion::ConfigurationSource;
     const QString fixture = QStringLiteral("coarse_maneuver");
     const auto channelsOf = [](const SessionData &session) {
         return Fusion::channelsFrom(
             [&session](const QString &sensor, const QString &name) { return session.getMeasurement(sensor, name); },
-            [&session](const QString &key) { return session.getAttribute(key); });
+            [&session](const QString &key) { return session.getAttribute(key); },
+            [&session](const QString &key) { return session.hasStoredAttribute(key); });
     };
-    const QStringList keys{QStringLiteral("ACCEL_FS_G"), QStringLiteral("GYRO_FS_DEG_S"),
-                           QStringLiteral("ACCEL_ODR_HZ"), QStringLiteral("GYRO_ODR_HZ")};
+    const auto sourcesOf = [](const Fusion::ImuConfiguration &configuration) {
+        return QList<Source>{configuration.accelFsGSource, configuration.gyroFsDegSSource,
+                             configuration.accelOdrHzSource, configuration.gyroOdrHzSource};
+    };
 
     // Stated: the fixture session carries the direct kernel run's
     // configuration
@@ -479,25 +687,29 @@ void FusionSessionTest::configurationReachesTheKernel()
     QCOMPARE(fromStated.gyroOdrHz, 104.0);
     QVERIFY(fromStated.accelFsG == direct.accelFsG && fromStated.gyroFsDegS == direct.gyroFsDegS);
     QVERIFY(fromStated.accelOdrHz == direct.accelOdrHz && fromStated.gyroOdrHz == direct.gyroOdrHz);
+    QVERIFY(sourcesOf(fromStated) == QList<Source>(4, Source::Stated));
 
-    // Defaulted: no key stored
-    SessionData defaulted = fixtureSession(fixture, QStringLiteral("d1"));
-    for (const QString &key : keys)
-        defaulted.removeAttribute(key);
-    const Fusion::ImuConfiguration fromDefaults = channelsOf(defaulted).imuConfiguration;
-    QCOMPARE(fromDefaults.accelFsG, 16.0);
-    QCOMPARE(fromDefaults.gyroFsDegS, 2000.0);
-    QCOMPARE(fromDefaults.accelOdrHz, 12.5);
-    QCOMPARE(fromDefaults.gyroOdrHz, 12.5);
+    // Inferred: no key stored; the readings and the 100 Hz logging infer what
+    // the fixture states
+    const SessionData keyless = keylessSession(fixture, QStringLiteral("d1"));
+    const Fusion::ImuConfiguration fromInference = channelsOf(keyless).imuConfiguration;
+    QCOMPARE(fromInference.accelFsG, 16.0);
+    QCOMPARE(fromInference.gyroFsDegS, 2000.0);
+    QCOMPARE(fromInference.accelOdrHz, 104.0);
+    QCOMPARE(fromInference.gyroOdrHz, 104.0);
+    QVERIFY(sourcesOf(fromInference) == QList<Source>(4, Source::Inferred));
 
     // Stored as the importer stores it (text, whitespace kept); a stored value
-    // that is not a number is NaN, never 0, and the others are kept
+    // that is not a number is NaN, never 0, and still stated; the others are
+    // kept
     SessionData edited = fixtureSession(fixture, QStringLiteral("e1"));
     edited.setAttribute("GYRO_FS_DEG_S", QStringLiteral(" 500"));
     edited.setAttribute("GYRO_ODR_HZ", QStringLiteral("fast"));
     const Fusion::ImuConfiguration fromEdited = channelsOf(edited).imuConfiguration;
     QCOMPARE(fromEdited.gyroFsDegS, 500.0);
+    QVERIFY(fromEdited.gyroFsDegSSource == Source::Stated);
     QVERIFY(std::isnan(fromEdited.gyroOdrHz));
+    QVERIFY(fromEdited.gyroOdrHzSource == Source::Stated);
     QCOMPARE(fromEdited.accelFsG, 16.0);
     QCOMPARE(fromEdited.accelOdrHz, 104.0);
 
@@ -515,14 +727,84 @@ void FusionSessionTest::configurationReachesTheKernel()
     }
     const QJsonObject configuration = diagnosticsOf(stated).value(QStringLiteral("configuration")).toObject();
     QCOMPARE(configuration.value(QStringLiteral("accel_odr_hz")).toDouble(), 104.);
+    for (const QString &entry : kProvenanceEntries)
+        QCOMPARE(configuration.value(entry).toString(), QStringLiteral("stated"));
 
-    // The default path: rejected, a cached result with the rate's reason
+    // Stated rates the logging disagrees with: rejected, a cached result with
+    // the rate's reason
+    SessionData statedSlow = fixtureSession(fixture, QStringLiteral("r1"));
+    statedSlow.setAttribute("ACCEL_ODR_HZ", QStringLiteral("12.5"));
+    statedSlow.setAttribute("GYRO_ODR_HZ", QStringLiteral("12.5"));
     const QString rate =
         QStringLiteral("ACCEL_ODR_HZ states 12.5 Hz but the IMU is logged at 100.0 Hz; sensor fusion unavailable");
-    QCOMPARE(defaulted.calculationEngine().request(kFit).status, ResultStatus::Ok);
-    QCOMPARE(defaulted.calculationEngine().resultDetail(kFit), rate);
-    QCOMPARE(diagnosticsOf(defaulted).value(QStringLiteral("failure")).toString(), rate);
-    QVERIFY2(availableAmong(defaulted, valueNames()).isEmpty(), qPrintable(availableAmong(defaulted, valueNames())));
+    QCOMPARE(statedSlow.calculationEngine().request(kFit).status, ResultStatus::Ok);
+    QCOMPARE(statedSlow.calculationEngine().resultDetail(kFit), rate);
+    QCOMPARE(diagnosticsOf(statedSlow).value(QStringLiteral("failure")).toString(), rate);
+    QVERIFY2(availableAmong(statedSlow, valueNames()).isEmpty(),
+             qPrintable(availableAmong(statedSlow, valueNames())));
+}
+
+// Items 1811, 1813, 1816: what the session-level fit does with an inferred
+// configuration. coarse_maneuver without its keys infers what it states
+// (+/-16 g, +/-2000 deg/s, 104 Hz from its 100 Hz logging) and fits to its
+// golden bit for bit, its diagnostics the golden's but for the four
+// provenance entries, inferred. coarse_linear without keys logged at 70 Hz
+// infers 52 Hz, the nearest listed rate, which the rate check rejects at
+// 25 %, naming both; with one accelerometer reading off every lattice its
+// range falls back to the default, which the lattice check rejects naming
+// what the readings show. Each rejection is a cached result.
+void FusionSessionTest::inferredConfigurationFits()
+{
+    const QString fixture = QStringLiteral("coarse_maneuver");
+    const FusionGolden golden = loadFusionGolden(fixture);
+    const SessionData maneuver = keylessSession(fixture, QStringLiteral("i1"));
+    QCOMPARE(configurationOf(maneuver), QStringList({QStringLiteral("16"), QStringLiteral("2000"),
+                                                      QStringLiteral("104"), QStringLiteral("104")}));
+    CalculationEngine &engine = maneuver.calculationEngine();
+    QCOMPARE(engine.request(kFit).status, ResultStatus::Ok);
+    QVERIFY2(engine.resultDetail(kFit).isEmpty(), qPrintable(engine.resultDetail(kFit)));
+    const QString difference = goldenDifference(maneuver, golden);
+    QVERIFY2(difference.isEmpty(), qPrintable(difference));
+
+    QJsonObject diagnostics = diagnosticsOf(maneuver);
+    QJsonObject configuration = diagnostics.value(QStringLiteral("configuration")).toObject();
+    for (const QString &entry : kProvenanceEntries) {
+        QCOMPARE(configuration.value(entry).toString(), QStringLiteral("inferred"));
+        configuration.insert(entry, QStringLiteral("stated"));
+    }
+    diagnostics.insert(QStringLiteral("configuration"), configuration);
+    const QString jsonDifference = compareJson(QStringLiteral("diagnostics"), diagnostics, golden.diagnostics);
+    QVERIFY2(jsonDifference.isEmpty(), qPrintable(jsonDifference));
+    if (exactParityRequested()) {
+        QCOMPARE(QJsonDocument(diagnostics).toJson(QJsonDocument::Compact),
+                 QJsonDocument(golden.diagnostics).toJson(QJsonDocument::Compact));
+    }
+    QCOMPARE(engine.runCount(kFit), 1);
+    QCOMPARE(engine.undeclaredReadCount(), 0);
+
+    const QString coarseLinear = QStringLiteral("coarse_linear");
+    SessionData offLattice = keylessSession(coarseLinear, QStringLiteral("r2"));
+    moveOneAccelerometerReadingOffEveryLattice(offLattice);
+    const struct { const char *name; const SessionData *session; QString reason; } rejections[] = {
+        {"70 Hz", nullptr,
+         QStringLiteral("ACCEL_ODR_HZ inferred as 52 Hz but the IMU is logged at 70.0 Hz; sensor fusion unavailable")},
+        {"no lattice", &offLattice,
+         QStringLiteral("ACCEL_FS_G defaulted to +/-16 g but the accelerometer readings lie on no range's lattice; "
+                        "sensor fusion unavailable")}};
+    const SessionData at70Hz = keylessSession(coarseLinear, QStringLiteral("r1"), 70.0);
+    for (const auto &rejection : rejections) {
+        const SessionData &session = rejection.session ? *rejection.session : at70Hz;
+        CalculationEngine &rejected = session.calculationEngine();
+        QVERIFY2(rejected.request(kFit).status == ResultStatus::Ok, rejection.name);
+        QCOMPARE(rejected.resultDetail(kFit), rejection.reason);
+        QCOMPARE(diagnosticsOf(session).value(QStringLiteral("failure")).toString(), rejection.reason);
+        QVERIFY2(availableAmong(session, valueNames()).isEmpty(), qPrintable(availableAmong(session, valueNames())));
+        // A result: asking again runs nothing
+        QVERIFY2(rejected.request(kFit).status == ResultStatus::Ok, rejection.name);
+        QCOMPARE(rejected.runCount(kFit), 1);
+    }
+    QCOMPARE(configurationOf(at70Hz).at(2), QStringLiteral("52"));
+    QCOMPARE(configurationOf(offLattice).at(0), QStringLiteral("16"));
 }
 
 // Acceptance 5: reads of any fusion value on a session where fusion has not
@@ -1069,10 +1351,11 @@ void FusionSessionTest::blockersReportFusion()
 // The real input chain: GNSS/lat..velD -> Local and the origin, TIME -> the
 // time fit -> IMU/_time. Expectations are structural; the numbers are the
 // kernel's and are under golden test elsewhere.
-// Item 1045, the default path: a recording as the importer would leave it,
-// without any configuration key, logged at 12.5 Hz with readings on the
-// +/-16 g and +/-2000 deg/s lattices, is fitted under the defaults, which the
-// diagnostics report.
+// Items 1045 (as amended), 1812, 1813, the inferred path: a recording as the
+// importer would leave it, without any configuration key, logged at 12.5 Hz
+// with readings on the +/-16 g and +/-2000 deg/s lattices, infers the
+// firmware default and is fitted under it, which the diagnostics report,
+// every value inferred.
 void FusionSessionTest::naturalSessionEndToEnd()
 {
     SessionData session = naturalSession(QStringLiteral("n1"));
@@ -1132,6 +1415,8 @@ void FusionSessionTest::naturalSessionEndToEnd()
     QCOMPARE(configuration.value(QStringLiteral("gyro_fs_deg_s")).toDouble(), 2000.);
     QCOMPARE(configuration.value(QStringLiteral("accel_odr_hz")).toDouble(), 12.5);
     QCOMPARE(configuration.value(QStringLiteral("gyro_odr_hz")).toDouble(), 12.5);
+    for (const QString &entry : kProvenanceEntries)
+        QCOMPARE(configuration.value(entry).toString(), QStringLiteral("inferred"));
     QCOMPARE(diagnostics.value(QStringLiteral("imu_outputs")).toInt(), int(time.size()));
 
     // A transitive input (TIME/tow -> the time fit -> IMU/_time) reaches the result

@@ -13,30 +13,6 @@ const char *const kImuRates[] = {
     "12.5", "26", "52", "104", "208", "416", "833", "1666", "3333", "6666"
 };
 
-// The values a key with a list accepts, in the order its message prints them;
-// empty for a key without a list (a positive decimal).
-QStringList listedValues(const QString &key)
-{
-    if (key == QLatin1String(AccelFsG))
-        return {QStringLiteral("2"), QStringLiteral("4"), QStringLiteral("8"), QStringLiteral("16")};
-    if (key == QLatin1String(GyroFsDegS))
-        return {QStringLiteral("250"), QStringLiteral("500"), QStringLiteral("1000"), QStringLiteral("2000")};
-    if (key == QLatin1String(AccelOdrHz) || key == QLatin1String(GyroOdrHz)) {
-        QStringList rates;
-        if (key == QLatin1String(AccelOdrHz))
-            rates.append(QStringLiteral("1.6"));
-        for (const char *rate : kImuRates)
-            rates.append(QString::fromLatin1(rate));
-        return rates;
-    }
-    if (key == QLatin1String(GnssModel)) {
-        return {QStringLiteral("portable"), QStringLiteral("stationary"), QStringLiteral("pedestrian"),
-                QStringLiteral("automotive"), QStringLiteral("sea"), QStringLiteral("airborne_1g"),
-                QStringLiteral("airborne_2g"), QStringLiteral("airborne_4g")};
-    }
-    return {};
-}
-
 // Digits with an optional fraction ("12.5", "7"), no sign, no exponent, and
 // above zero: "0", "0.0", "-1", "+1", "1e2", ".5", "5." and "nan" are not.
 bool isPositiveDecimal(const QString &text)
@@ -77,6 +53,28 @@ QStringList keys()
 bool isKey(const QString &key)
 {
     return keys().contains(key);
+}
+
+QStringList listedValues(const QString &key)
+{
+    if (key == QLatin1String(AccelFsG))
+        return {QStringLiteral("2"), QStringLiteral("4"), QStringLiteral("8"), QStringLiteral("16")};
+    if (key == QLatin1String(GyroFsDegS))
+        return {QStringLiteral("250"), QStringLiteral("500"), QStringLiteral("1000"), QStringLiteral("2000")};
+    if (key == QLatin1String(AccelOdrHz) || key == QLatin1String(GyroOdrHz)) {
+        QStringList rates;
+        if (key == QLatin1String(AccelOdrHz))
+            rates.append(QStringLiteral("1.6"));
+        for (const char *rate : kImuRates)
+            rates.append(QString::fromLatin1(rate));
+        return rates;
+    }
+    if (key == QLatin1String(GnssModel)) {
+        return {QStringLiteral("portable"), QStringLiteral("stationary"), QStringLiteral("pedestrian"),
+                QStringLiteral("automotive"), QStringLiteral("sea"), QStringLiteral("airborne_1g"),
+                QStringLiteral("airborne_2g"), QStringLiteral("airborne_4g")};
+    }
+    return {};
 }
 
 bool isValidValue(const QString &key, const QVariant &recorded)

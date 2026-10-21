@@ -126,7 +126,11 @@
 #     file, and records it beside each value of the diagnostics'
 #     configuration, the four entries and their two texts written once, the
 #     goldens stated throughout, and the fusion document names both wordings
-#     and the entries (items 1801-1809).
+#     and the entries; the four configuration calculations infer an absent
+#     key from the recording's data through the kernel's own lattice function
+#     and the continuity authority, the registration seeing no other kernel
+#     header, the firmware default their fallback and still spelled once, and
+#     no document or comment calls them constant defaults (items 1801-1819).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -1453,12 +1457,12 @@ expect_only("one median of a time axis"
 # (graphData, interpolateSessionMeasurement, sensorTimeAxis) is not listed.
 expect_count("the readers consult the authority"
   "#include \"(\\.\\./)?samplecontinuity\\.h\""
-  10
+  11
   src/plotutils.cpp src/calculations/interpolationcalculations.cpp
   src/calculations/derivativehelper.cpp src/calculations/attributecalculations.cpp
   src/calculations/simplificationcalculations.cpp src/ui/docks/map/TrackMapModel.cpp
   src/ui/docks/map/MapCursorDotModel.cpp src/fusion/fusion.cpp src/fusion/fusionsamples.cpp
-  src/fusion/imuintegration.cpp)
+  src/fusion/imuintegration.cpp src/fusion/fusionregistration.cpp)
 # Allow: none expected. The plot builds every graph with graphData() (which
 # breaks it at each hole) and reads a graph with interpolateGraphAt() (which
 # does not read across a break); the Set Ground tool reads the elevation with
@@ -1671,7 +1675,7 @@ expect_count("the calculations document names the cancel's reason" "Switched off
   docs/CALCULATIONS.md)
 expect_count("the manual step of the switch is written" "\\*\\*M57 " 1 tests/README.md)
 
-# ─────────────────────────────── inferred-configuration (items 1801-1809)
+# ─────────────────────────────── inferred-configuration (items 1801-1819)
 # The IMU configuration inferred where a key is absent
 # (PLANS/inferred-imu-configuration.md): the engine tells a calculation, for a
 # declared attribute input, whether the session's stored attribute served it
@@ -1680,7 +1684,10 @@ expect_count("the manual step of the switch is written" "\\*\\*M57 " 1 tests/REA
 # query is the engine's, its one reader the fusion registration; Python
 # plugins are not offered it. The kernel is told the provenance beside each
 # value (Fusion::ConfigurationSource), words the lattice and rate rejections
-# by it and records it in the diagnostics' configuration object.
+# by it and records it in the diagnostics' configuration object. The fusion
+# registration infers an absent key: a range through the kernel's own lattice
+# function (fusion/sensornoise.h, solver-free), a rate through the continuity
+# authority's nominal interval, the vocabulary's default the fallback.
 audit_group(inferred-configuration)
 # Allow: none; a second reader is a design change. The registration is
 # allowed before it asks, as the query's one intended reader; the plugin
@@ -1718,6 +1725,24 @@ expect_none("no golden configuration is inferred" "\"inferred\"" tests/data/fusi
 expect_count("the fusion document names the inferred rate's wording" "inferred as" 1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document names the defaulted range's wording" "defaulted to" 1 docs/SENSOR_FUSION.md)
 expect_count("the fusion document names the provenance entries" "accel_fs_g_provenance" 1 docs/SENSOR_FUSION.md)
+# The inference reads the kernel through its solver-free datasheet unit alone.
+# Allow: none; the registration needs no other kernel header, and one with
+# GTSAM behind it would break solver-confinement's rule as well. The public
+# header (fusion/fusion.h), the orientation type and the solver-threads
+# adapter are not in the pattern.
+expect_none("the registration includes no internal kernel header but the datasheet unit"
+  "#include \"fusion/(factorgraphfit|initializer|imuintegration|inputadapter|fusionsamples|fusionoutput|fusionprogress|fusionpipeline|trajectoryreconstruction|scaledimufactor|fitcovariance)\\.h\""
+  src/fusion/fusionregistration.cpp src/fusion/fusionregistration.h)
+# One authority for the range the readings show: the lattice check and the
+# inference call the same function. Allow: none expected; a second caller is
+# a second judge of the lattice.
+expect_only("one authority for the range the readings show" "rangeShownByReadings\\("
+  "^src/fusion/(sensornoise\\.(h|cpp)|fusionsamples\\.cpp|fusionregistration\\.cpp)$" src)
+# The four are inferences now, with the default as their fallback. Allow:
+# none; a document or comment that means the fallback says so.
+expect_none("no document calls the configuration's calculations constant defaults"
+  "four constant defaults|configuration's constant defaults|their constant defaults"
+  docs tests/README.md src)
 
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
@@ -1754,10 +1779,13 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # fit's outputs, the audit rule; 1707-1709 the three derived accuracies, their
 # tests, their documents and audit rule; 1710-1717 the rows, demand, the
 # colours, the documents, the tests, the counts, the manual step, the map)
-# and 1801-1809 (inferred IMU configuration: the engine's provenance query,
+# and 1801-1819 (inferred IMU configuration: the engine's provenance query,
 # its document and the audit rule; the kernel's wording of the rejections,
 # the diagnostics' provenance entries, v12 and the stale records, the
-# kernel's tests, the audit rules, the kernel's documents).
+# kernel's tests, the audit rules, the kernel's documents; the four
+# inferences, their fallback, nearest not exact, the recordings on disk, the
+# fit's hand-over of the provenance, the inference's and the session's tests,
+# the manual step, the remaining documents, the map).
 # Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
@@ -1839,8 +1867,8 @@ else()
             OR (item GREATER_EQUAL 1501 AND item LESS_EQUAL 1524)
             OR (item GREATER_EQUAL 1601 AND item LESS_EQUAL 1612)
             OR (item GREATER_EQUAL 1701 AND item LESS_EQUAL 1717)
-            OR (item GREATER_EQUAL 1801 AND item LESS_EQUAL 1809)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313, 1401-1415, 1501-1524, 1601-1612, 1701-1717 and 1801-1809: ${line}")
+            OR (item GREATER_EQUAL 1801 AND item LESS_EQUAL 1819)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313, 1401-1415, 1501-1524, 1601-1612, 1701-1717 and 1801-1819: ${line}")
     endif()
   endforeach()
 
@@ -1953,7 +1981,7 @@ else()
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
     endif()
   endforeach()
-  foreach(item RANGE 1801 1809)
+  foreach(item RANGE 1801 1819)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

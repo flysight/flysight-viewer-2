@@ -104,7 +104,8 @@
 #             amended by the specification of 1001-1065: items 901, 910, 912,
 #             914, 915, 921, 925, 930 and 935 are stated as amended. It is
 #             amended by the specification of 1701-1717: item 912 is stated as
-#             amended.
+#             amended. It is amended by the specification of 1801-1819: item
+#             930 is stated as amended.
 #   1001-1065 the documented noise model and the accuracy, part 1 (the sensor
 #             configuration attributes and their default, the noise model of
 #             the IMU's datasheet by configuration with the derived sampling
@@ -125,7 +126,9 @@
 #             specification of 1401-1415: item 1054 is stated as amended.
 #             It is amended by the specification "Plot colours: one colour
 #             per plot, readable on both backgrounds", which has no items of
-#             its own: item 1037 is stated as amended.
+#             its own: item 1037 is stated as amended. It is amended by the
+#             specification of 1801-1819: items 1004, 1008, 1010, 1045 and
+#             1050 are stated as amended.
 #   1101      the GNSS acceleration accuracy (GNSS/accAcc, its plot and what
 #             the documentation says of it): one item. Stated in full in
 #             tests/README.md, appendix L. It is amended by the specification
@@ -209,7 +212,7 @@
 #             801-863 (items 801, 802, 842, 854, 862 and 863), 901-940 (item
 #             912), 1301-1313 (items 1302 and 1307) and 1601-1612 (items 1602,
 #             1608 and 1610): each is stated as amended.
-#   1801-1809 inferred IMU configuration (the configuration inferred where a
+#   1801-1819 inferred IMU configuration (the configuration inferred where a
 #             key is absent, the firmware default its fallback; the engine's
 #             query that says whether an attribute input was stated; the
 #             kernel told how each value came about): item = 1800 + item
@@ -218,9 +221,16 @@
 #             1803-1805 the kernel's second, third and fourth bullets of its
 #             section 4, 1806 the kernel's half of the fit bullet of its
 #             section 6, 1807 its record bullet, 1808 its audit bullet, 1809
-#             the kernel's documents of its section 5. Stated in full in
-#             tests/README.md, appendix S. No item of an earlier
-#             specification is restated by these.
+#             the kernel's documents of its section 5; 1810-1813 its section
+#             3 (the table and its first bullet, the fallback, nearest not
+#             exact and equal rates, on disk), 1814 the fit's half of the
+#             first bullet of its section 4, 1815 the inference bullet of its
+#             section 6, 1816 the session's half of its fit bullet, 1817 its
+#             manual bullet, 1818 the remaining documents of its section 5,
+#             1819 the last bullet of its section 6. Stated in full in
+#             tests/README.md, appendix S. Items 930 (section 9.10, appendix
+#             J), 1004, 1008, 1010, 1045 and 1050 (section 9.11, appendix K)
+#             are restated as amended.
 #
 # One line per piece of evidence, in one of four forms:
 #
@@ -233,7 +243,7 @@
 # Every item must lie in one of the nineteen ranges; every item 1-19 needs a
 # line; every item 101-120, 201-247, 301-350, 401-442, 501-563, 601-662,
 # 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313,
-# 1401-1415, 1501-1524, 1601-1612, 1701-1717 or 1801-1809 needs at least one
+# 1401-1415, 1501-1524, 1601-1612, 1701-1717 or 1801-1819 needs at least one
 # test or audit line (manual and ci lines never stand alone). The
 # human-readable matrices are tests/README.md sections 9.1 to 9.19; keep them
 # in sync with this file.
@@ -3052,7 +3062,7 @@
 929 tst_fusion_golden cancelAtEachKindOfBoundary
 929 tst_fusion_golden progressMatchesGoldenBoundaries
 
-# 930 - (9, as amended) the fit calculation publishes the same channels and its result version follows the algorithm string; the registration, the plot registry and everything above them are unchanged by the reconstruction; since the specification of 1001-1065 the registration also declares the four configuration inputs and registers their constant defaults, and the plot registry gains the four accuracy plots
+# 930 - (9, as amended) the fit calculation publishes the same channels and its result version follows the algorithm string; the registration, the plot registry and everything above them are unchanged by the reconstruction; since the specification of 1001-1065 the registration also declares the four configuration inputs, and the plot registry gains the four accuracy plots; since the specification of 1801-1819 the registration registers the inferences of the four from the IMU data, the firmware default their fallback
 930 tst_fusion_session registrationShape
 930 audit stored-results
 930 tst_fusion_rows allFusionPlotsAreExplicitBacked
@@ -3117,11 +3127,12 @@
 1003 tst_sensor_configuration unsupportedMessage
 1003 tst_persistence_roundtrip malformedConfigurationIsNotSaved
 
-# 1004 - (5) a recording that lacks a key takes the value of the firmware of the recordings on disk, v2023.09.22: +/-16 g, +/-2000 deg/s, 12.5 Hz for both sensors; no dynamic model and no rate; the default is written once in the documentation and once in the code, with the firmware version it describes
+# 1004 - (5, as amended) a recording that lacks a key infers it from its IMU data among the key's allowed values; where the data cannot decide it takes the value of the firmware of the recordings on disk, v2023.09.22: +/-16 g, +/-2000 deg/s, 12.5 Hz for both sensors; no dynamic model and no rate; the default is written once in the documentation and once in the code, as the inference's fallback, with the firmware version it describes
 1004 tst_sensor_configuration defaultIsTheFirmwareConfiguration
 1004 tst_fusion_session configurationDefaults
 1004 tst_importer neverStampsConfiguration
 1004 audit sensor-configuration
+1004 tst_fusion_session configurationIsInferred
 
 # 1005 - (5) the IMU's low-pass filters have no key: that firmware's fixed setting (the gyro's LPF2 at the cutoff of its 12.5 Hz rate and no LPF1, the accelerometer at its ODR bandwidth) is documented as part of the default, with the firmware version
 1005 tst_sensor_configuration keysAndValueForms
@@ -3139,19 +3150,21 @@
 1007 tst_fusion_store dependencyEditDropsRecord
 1007 audit solver-confinement
 
-# 1008 - (5, as settled) whether stated or defaulted, each IMU sensor's range is checked against the lattice of its readings (the gyro's sensitivity at the range, 70 mdps at +/-2000 deg/s, 1.14688 times the range over 32768; the accelerometer's range over 32768, which the printed sensitivity rounds; in effective units, within the rounding of the file's decimals): the coarsest range whose lattice all but one in a thousand of the readings fit must be the configured one (a few readings off the lattice do not decide); otherwise the fit rejects the recording with a reason that names the range stated and the range the values show, and does not guess
+# 1008 - (5, as settled, as amended) whether stated or inferred, each IMU sensor's range is checked against the lattice of its readings (the gyro's sensitivity at the range, 70 mdps at +/-2000 deg/s, 1.14688 times the range over 32768; the accelerometer's range over 32768, which the printed sensitivity rounds; in effective units, within the rounding of the file's decimals): the coarsest range whose lattice all but one in a thousand of the readings fit must be the configured one (a few readings off the lattice do not decide); otherwise the fit rejects the recording with a reason that names the range stated, or defaulted to, and the range the values show, and does not guess
 1008 tst_fusion_kernel latticeCheckFindsTheCoarsestRange
 1008 tst_fusion_golden rejectionFixturesMatchGolden
 1008 manual M47
+1008 tst_fusion_session inferredConfigurationFits
 
 # 1009 - (10, as settled) the lattice check is a kernel validation rule, one of the rules that decide whether a recording can be fitted, and reads the readings as the kernel receives them, before any correction of its own
 1009 tst_fusion_kernel latticeCheckFindsTheCoarsestRange
 1009 tst_fusion_kernel configurationChecksComeAfterTheOthers
 
-# 1010 - (5, as settled) a logged IMU interval that disagrees with a stated rate by more than the oscillator's tolerance (10 %) is a rejection that names both
+# 1010 - (5, as settled, as amended) a logged IMU interval that disagrees with a stated or an inferred rate by more than the oscillator's tolerance (10 %) is a rejection that names both and says which
 1010 tst_fusion_kernel rateCheckToleratesTenPercent
 1010 tst_fusion_golden rejectionFixturesMatchGolden
 1010 tst_fusion_session configurationReachesTheKernel
+1010 tst_fusion_session inferredConfigurationFits
 
 # 1011 - (6, as settled) the per-sample noise of each sensor and axis is sqrt(density^2 x bandwidth + step^2 / 12): the datasheet's density at the configured range, the datasheet's bandwidth for the configured rate and filter, and the quantization step at the range (the gyro's sensitivity, 70 mdps at +/-2000 deg/s, 1.14688 times the range over 32768; the accelerometer's range over 32768, which the printed sensitivity rounds)
 1011 tst_fusion_kernel noiseFollowsTheTable
@@ -3297,11 +3310,12 @@
 1044 tst_fusion_golden rejectionFixturesMatchGolden
 1044 tst_fusion_kernel fitTraceMatchesGolden
 
-# 1045 - (9) the fixtures state their configuration explicitly, so that the stated path (the kernel's and the sessions' fixtures) and the default path (a session without the keys) are both exercised
+# 1045 - (9, as amended) the fixtures state their configuration explicitly, so that the stated path (the kernel's and the sessions' fixtures) and the inferred path (a session without the keys) are both exercised
 1045 tst_fusion_session configurationReachesTheKernel
 1045 tst_fusion_session naturalSessionEndToEnd
 1045 tst_fusion_session inputsAreBitIdenticalToFixture
 1045 tst_fusion_golden successFixturesMatchGolden
+1045 tst_fusion_session inferredConfigurationFits
 
 # 1046 - (10) the kernel derives its noise from the configuration in one unit, the only place the datasheet table exists in code
 1046 tst_fusion_kernel noiseFollowsTheTable
@@ -3321,7 +3335,7 @@
 1049 audit accuracy-channels
 1049 audit fusion-tooling
 
-# 1050 - (11) test: a file with every key imports them; a malformed one is an import error naming the key; a file without them takes the default
+# 1050 - (11, as amended) test: a file with every key imports them; a malformed one is an import error naming the key; a file without them infers its configuration, the firmware default where the data cannot decide
 1050 tst_importer configurationStoredAsRecorded
 1050 tst_importer rejectsMalformedConfiguration
 1050 tst_fusion_session configurationDefaults
@@ -3991,3 +4005,63 @@
 # 1809 - (5, the kernel's documents) the kernel's documents: docs/SENSOR_FUSION.md section 4 lists the provenance entries beside the four values, section 6 words the configuration rejections stated, inferred and defaulted as the kernel says them when told how a value came about, section 7 says v12 and why with v11 in the history, and section 8's sentence names v12 among the strings that keep v9's numbers; the v12 mentions of docs/DATA_SCHEMA.md and docs/CALCULATIONS.md section 17; the test guide's capture note, re-capture bullet, rows, section 10 texts and item 1043's evidence; the three documents' v12 counts the audit's
 1809 audit gnss-holes
 1809 audit inferred-configuration
+
+# 1810 - (3, the table and its first bullet) the four calculations builtin.default.ACCEL_FS_G, GYRO_FS_DEG_S, ACCEL_ODR_HZ and GYRO_ODR_HZ are on demand under the same ids, in the same place and order, each the attribute as its one output, its text an entry of the key's list as the importer stores it; ACCEL_FS_G from IMU/ax, ay, az and GYRO_FS_DEG_S from IMU/wx, wy, wz through Detail::rangeShownByReadings() on the effective readings the fit receives, the two rates from IMU/_time through SampleContinuity::nominalInterval(), the allowed rate nearest by rate; the registration includes fusion/sensornoise.h and samplecontinuity.h, never fusionsamples.h or another internal kernel header, and stays free of GTSAM and Eigen; the vocabulary exposes each key's list (SensorConfiguration::listedValues); the firmware default is spelled once, in SensorConfiguration::defaultValue, which the fallback reads
+1810 tst_fusion_session registrationShape
+1810 tst_fusion_session configurationDefaults
+1810 tst_sensor_configuration listedValuesAreExposed
+1810 audit inferred-configuration
+1810 audit sample-continuity
+1810 audit solver-confinement
+1810 audit sensor-configuration
+1810 audit constant-defaults
+
+# 1811 - (3, the fallback) where the data cannot decide, the calculation yields the firmware default's text bit for bit: readings on no allowed range's lattice, or an IMU time axis without a nominal interval (fewer than three samples included); a recording with IMU data always has a configuration, the data never making it unavailable, and one without IMU data has a missing input; the check then rejects defaulted to, naming what the data show, or passes
+1811 tst_fusion_session configurationIsInferred
+1811 tst_fusion_session inferredConfigurationFits
+1811 tst_fusion_session missingInputsAreNotApplicable
+
+# 1812 - (3, nearest not exact, and equal rates in practice) 100.0 Hz logged infers 104 and passes the rate check at 4 %; 13.2-13.3 Hz infers 12.5; 70 Hz infers 52 and is rejected at 25 %; near 1.6 Hz the accelerometer infers 1.6 (which the datasheet check rejects as it rejects a stated 1.6) and the gyro 12.5; elsewhere the two inferred rates are one allowed value; the inference and the checks read the same readings and the same interval through the same functions
+1812 tst_fusion_session configurationIsInferred
+1812 tst_fusion_session inferredConfigurationFits
+1812 tst_fusion_session naturalSessionEndToEnd
+
+# 1813 - (3, on disk) every recording on disk (firmware v2023.09.22, logged at 13.2-13.3 Hz on the +/-16 g and +/-2000 deg/s lattices) infers the firmware default and fits bit for bit; a 104 Hz fixture session without its keys infers its stated configuration, its channels bit for bit the golden's and its diagnostics the golden's but for the four provenance entries, inferred; nothing is re-captured
+1813 tst_fusion_session inferredConfigurationFits
+1813 tst_fusion_session naturalSessionEndToEnd
+1813 tst_fusion_runner matchesTheApplicationImportPath
+1813 tst_fusion_golden successFixturesMatchGolden
+1813 manual M60
+
+# 1814 - (4, first bullet, the fit's half) the fit's twenty-six inputs are unchanged by name and order; the fit asks attributeIsStored for each configuration input and hands the kernel Stated or Inferred through the third reader of channelsFrom() (Fusion::StoredAttributeReader); fusion_runner passes SessionData::hasStoredAttribute, and the session test's local assembly follows; the fact is no fifth attribute, is written nowhere, and the kernel reads no session
+1814 tst_fusion_session registrationShape
+1814 tst_fusion_session configurationReachesTheKernel
+1814 tst_fusion_session inferredConfigurationFits
+1814 tst_fusion_session missingInputsAreNotApplicable
+1814 tst_fusion_runner matchesTheApplicationImportPath
+1814 tst_fusion_jobs noImuSessionCannotHaveAJob
+1814 audit inferred-configuration
+
+# 1815 - (6, the inference bullet) the inference, case by case, on recordings without keys: one logged at 104 Hz with readings on the +/-8 g and +/-500 deg/s lattices reads 8, 500, 104 and 104; one logged at 13.3 Hz on the default lattices reads the firmware default's text, bit for bit; one whose readings fit no lattice reads the default ranges, 16 and 2000, its rates still inferred; a stated key reads the stated text whatever the data (ACCEL_FS_G 8 over +/-16 g readings, ACCEL_ODR_HZ 12.5 at 100 Hz); one logged near 1.6 Hz reads 1.6 for ACCEL_ODR_HZ and 12.5 for GYRO_ODR_HZ; an IMU time axis of two samples reads 12.5 for both; where both rates are inferred they read the same text, but near 1.6 Hz; a recording without IMU data leaves each attribute unavailable as a missing input; each value is a string; reading an attribute never runs the fit, reads nothing undeclared, runs each inference once and a second read nothing; the four declare their inputs, a recording as the importer leaves it reads the default's text, and a stored value wins
+1815 tst_fusion_session configurationIsInferred
+1815 tst_fusion_session configurationDefaults
+1815 tst_fusion_session missingInputsAreNotApplicable
+1815 tst_fusion_session readsNeverRunTheFit
+
+# 1816 - (6, the fit bullet, the session's half) the fit at session level: coarse_maneuver without its keys (logged at 100 Hz) fits, its channels the golden's and its diagnostics the golden's but for the four provenance entries, inferred; coarse_linear without keys logged at 70 Hz is rejected ACCEL_ODR_HZ inferred as 52 Hz but the IMU is logged at 70.0 Hz; sensor fusion unavailable; a session that states ACCEL_ODR_HZ and GYRO_ODR_HZ 12.5 over a recording logged at 100 Hz is rejected ACCEL_ODR_HZ states 12.5 Hz but the IMU is logged at 100.0 Hz; sensor fusion unavailable; coarse_linear without keys with one reading off every lattice is rejected ACCEL_FS_G defaulted to +/-16 g but the accelerometer readings lie on no range's lattice; sensor fusion unavailable; each rejection a cached result; a stored v11 rejection of a 104 Hz recording without keys (the states 12.5 Hz text the default gave it) is stale at load, and the fit runs once and succeeds, stored anew with its entries inferred; fusion_runner and the application's import path agree on a recording without keys, the entries inferred on both
+1816 tst_fusion_session inferredConfigurationFits
+1816 tst_fusion_session configurationReachesTheKernel
+1816 tst_fusion_store staleRejectionWithoutKeysIsFittedAtLoad
+1816 tst_fusion_runner matchesTheApplicationImportPath
+1816 manual M60
+
+# 1817 - (6, the manual bullet) M60 in section 12.17 of tests/README.md, which counts seventeen scripts: a TRACK.CSV and SENSOR.CSV pair from firmware v2024.02.07 (logged at 104 Hz, no keys) loaded and fitted, the fit succeeding, the details showing the inferred configuration, and the stale v11 rejection computed again once after the update
+1817 tst_fusion_store staleRejectionWithoutKeysIsFittedAtLoad
+1817 manual M60
+
+# 1818 - (5, the remaining documents and the two contracts) docs/DATA_SCHEMA.md section 2 says an absent key is inferred among its allowed values, the firmware default the fallback; docs/SENSOR_FUSION.md section 3 says stated or inferred, the rule per key, the fallback and the equal-rates note, and "The lattice" and "The rate" that the inference reads what the checks read; its section 6 the 104 Hz recording that fits and the 70 Hz one rejected, section 7 v12 with the inference, section 8 each reference recording inferring the default; docs/CALCULATIONS.md section 5 moves the four to the defaults derived from the data, and section 17 gives their inputs, the inference, the provenance handed to the kernel and the record's resolutions; the contracts of src/sensorconfiguration.h and src/fusion/fusionregistration.h; the test guide's rows; the audit's reader count at eleven
+1818 audit inferred-configuration
+1818 audit sample-continuity
+
+# 1819 - (6, the last bullet) items 1801-1819 complete in the map, appendix S and section 9.19; items 930, 1004, 1008, 1010, 1045 and 1050 restated "(as amended)" in the map, their appendices and their rows; every upper bound 1809 of the audit at 1819; the audit and the map check green
+1819 audit inferred-configuration

@@ -57,7 +57,7 @@ QList<std::pair<const char *, double>> statedConfiguration(const FusionFixture &
 
 /// The configuration as header attributes, stored as the importer stores
 /// them: the recorded text. A member that is not set is not stored, so the
-/// session reads that key's constant default.
+/// session infers that key from its data.
 void addConfiguration(SessionData &session, const FusionFixture &f)
 {
     for (const auto &[key, value] : statedConfiguration(f)) {
@@ -209,8 +209,9 @@ SessionData naturalSession(const QString &sessionId)
     session.setSourceMeasurement("GNSS", "sAcc", QVector<double>(fixes, .1), "m/s");
 
     // 12.5 Hz, the rate of the default configuration, which the session
-    // reads: it stores no configuration attribute. Its readings are on the
-    // default's lattice (-9.80665 m/s^2 is -2048 counts at +/-16 g).
+    // infers: it stores no configuration attribute. Its readings are on the
+    // default's lattices (-9.80665 m/s^2 is -2048 counts at +/-16 g, the
+    // zeros on every lattice, the coarsest of which is inferred).
     QVector<double> imuTime;
     for (int i = 0; i <= lastImuSample; ++i)
         imuTime.append(100 + i * .08);

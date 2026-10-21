@@ -12,8 +12,9 @@
 // the values each accepts, the message for a value it does not, and the
 // default of the four keys the fit reads. Shared by the importer and the
 // exporter (which reject a malformed value) and the fusion registration (which
-// declares the four as inputs of the fit and registers their defaults), so it
-// lives in flysight_model, which both reach.
+// declares the four as inputs of the fit and infers an absent one from the
+// recording's data, choosing among the key's listedValues()), so it lives in
+// flysight_model, which both reach.
 //
 // Seven keys are written in SENSOR.CSV: the accelerometer's and the gyro's
 // full-scale range and output data rate, and the barometer's, the humidity
@@ -32,8 +33,10 @@
 // The default is that of the firmware of the recordings on disk, which writes
 // none of these keys: FirmwareVersion names it. Only the four IMU keys have
 // one; the receiver's model and rate and the other sensors' rates have none.
-// The importer never writes it: a default is a calculation
-// (docs/CALCULATIONS.md section 5), registered by the fusion registration.
+// It is the fallback of the inference the fusion registration makes where a
+// recording lacks one of the four, used where the data cannot decide. The
+// importer never writes it: a default is a calculation (docs/CALCULATIONS.md
+// section 5), and the inference is one.
 //
 // Pure: Qt Core only, no logging, no state. Safe to use from any thread.
 
@@ -62,6 +65,13 @@ bool isKey(const QString &key);
 /// True iff `recorded`, with surrounding whitespace trimmed, is a value `key`
 /// accepts. False for a key that is not one of the nine.
 bool isValidValue(const QString &key, const QVariant &recorded);
+
+/// The values a key with a list accepts, exactly as spelled, in the order
+/// unsupportedMessage() prints them (ascending for the ranges and rates, the
+/// accelerometer's 1.6 first); empty for a key without a list (a positive
+/// decimal) and for a key that is not one of the nine. An inferred value is
+/// one of these texts, so it reads as the same value stated would.
+QStringList listedValues(const QString &key);
 
 /// The error for a value `key` does not accept, with the recorded text as it
 /// is: "Unsupported ACCEL_FS_G '16.0' (supported: 2, 4, 8, 16)" for a key with

@@ -23,6 +23,10 @@
 //    changes what a name it looked up resolves to drops it and its record at
 //    once, a candidate registered behind the provider does not; a lookup
 //    that resolves differently at load deletes it;
+//  - a rejection stored under the previous algorithm string for a recording
+//    without configuration keys (which that string read as the 12.5 Hz
+//    default) is deleted at load and fitted once under the inferred
+//    configuration;
 //  - a fit published before the session's first save is stored and restored;
 //  - the session file's bytes never depend on a record;
 //  - the logbook's cache/ folder deleted while the application is closed: the
@@ -222,6 +226,7 @@ private slots:
     void recordUnderPreviousAlgorithmIsComputedAgainOnce_data();
     void recordUnderPreviousAlgorithmIsComputedAgainOnce();
     void rejectionUnderPreviousAlgorithmIsComputedAgainOnce();
+    void staleRejectionWithoutKeysIsFittedAtLoad();
     void storedFitSurvivesUnrelatedChanges_data();
     void storedFitSurvivesUnrelatedChanges();
     void runtimeRegistryChangeDropsFitAndRecord();
@@ -1054,8 +1059,8 @@ void FusionStoreTest::dependencyEditDropsRecord_data()
     // Reached only through the schema conversion of the gyro (the fixture
     // records "2"; "1" is the other supported schema)
     QTest::newRow("SCHEMA_VER") << QStringLiteral("SCHEMA_VER") << QVariant(QStringLiteral("1"));
-    // A configuration attribute the fixture does not state: its constant
-    // default, "16", is replaced by a stored value (item 1007)
+    // A configuration attribute: the fixture's stated "16" is replaced by
+    // another stored value (item 1007)
     QTest::newRow("ACCEL_FS_G") << QStringLiteral("ACCEL_FS_G") << QVariant(QStringLiteral("8"));
 }
 
@@ -1425,6 +1430,103 @@ void FusionStoreTest::rejectionUnderPreviousAlgorithmIsComputedAgainOnce()
     listed = listedFailure(rejection);
     QVERIFY2(listed.isEmpty(), qPrintable(listed));
     QCOMPARE(engine("r1").runCount(kFit), 1);
+}
+
+// Items 1816, 1817: a recording without configuration keys logged at 100 Hz,
+// which batch-temperature-bias-v11 read under the 12.5 Hz default and
+// rejected, is fitted once the record is stale. A real record of this build
+// is rewritten into the rejection v11 stored for it (its stamp, its reason,
+// its diagnostics: algorithm and failure only), with the leaves and
+// fingerprint of a real publish, as restoredSolverFailureShowsBadge rewrites
+// one. Shown again, the record is deleted at load, the fit, still wanted by
+// the checked Roll row, runs once and succeeds under the inferred
+// configuration, its channels the golden's and its four provenance entries
+// inferred, and is stored anew under the current string; nothing is listed
+// as failed and nothing further runs.
+void FusionStoreTest::staleRejectionWithoutKeysIsFittedAtLoad()
+{
+    const auto restoreCapacity = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    });
+    const QStringList keys{QStringLiteral("ACCEL_FS_G"), QStringLiteral("GYRO_FS_DEG_S"),
+                           QStringLiteral("ACCEL_ODR_HZ"), QStringLiteral("GYRO_ODR_HZ")};
+    SessionData keyless = fixtureSession(QStringLiteral("coarse_linear"), QStringLiteral("a"));
+    for (const QString &key : keys)
+        keyless.removeAttribute(key);
+    QCOMPARE(addSessions({keyless}), QString());
+    show({"a"});
+    check(QStringLiteral("bodyRoll"));      // the demand layer starts the fit
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);
+    QCOMPARE(engine("a").resultStatus(kFit), std::optional<ResultStatus>(ResultStatus::Ok));
+    QVERIFY(engine("a").resultDetail(kFit).isEmpty());
+    QVERIFY(waitForIdle(*m_model));
+    const QString path = recordPath("a");
+    QVERIFY(QFileInfo(path).isFile());
+    show({"a"}, false);
+    session("a");
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
+    QVERIFY(!isLoaded("a"));
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+
+    // What v11 stored for this recording
+    const QString v11Reason =
+        QStringLiteral("ACCEL_ODR_HZ states 12.5 Hz but the IMU is logged at 100.0 Hz; sensor fusion unavailable");
+    const QString v11Diagnostics = QStringLiteral(
+        "{\"algorithm\":\"batch-temperature-bias-v11\","
+        "\"failure\":\"ACCEL_ODR_HZ states 12.5 Hz but the IMU is logged at 100.0 Hz; sensor fusion unavailable\"}");
+    QCOMPARE(rewriteRecord("a", [&](CalculationRecord &record) {
+                 CalculationResult bundle;
+                 bundle.setAttribute(kDiagnostics, v11Diagnostics);
+                 bundle.setReason(v11Reason);
+                 record.result.bundle = bundle;
+                 record.result.detail = v11Reason;
+                 record.result.resultVersion = QStringLiteral("batch-temperature-bias-v11");
+             }), QString());
+    m_model->resetStoredResultStats();
+
+    // Shown again: the record is stale and deleted at load, the row still
+    // wants the fit
+    show({"a"});
+    QVERIFY(isLoaded("a"));
+    QVERIFY(!QFileInfo::exists(path));
+    QCOMPARE(stats().staleRecordsDeleted, 1);
+    QVERIFY2(availableIn("a").isEmpty(), qPrintable(availableIn("a")));
+
+    // One fit, a success under the inferred configuration, stored anew
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 2);
+    QCOMPARE(m_queue->model()->record(1).state, JobState::Succeeded);
+    QCOMPARE(engine("a").runCount(kFit), 1);
+    QCOMPARE(engine("a").resultStatus(kFit), std::optional<ResultStatus>(ResultStatus::Ok));
+    QVERIFY2(engine("a").resultDetail(kFit).isEmpty(), qPrintable(engine("a").resultDetail(kFit)));
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(QFileInfo(path).isFile());
+    const CalculationRecordRead read = LogbookManager::instance().readCalculationRecord(QStringLiteral("a"), kFit);
+    QVERIFY2(read.status == CalculationRecordStatus::Ok, qPrintable(read.error));
+    QCOMPARE(read.record->result.resultVersion, QString::fromLatin1(Fusion::Algorithm));
+    const QString difference = goldenDifference(session("a"), loadFusionGolden(QStringLiteral("coarse_linear")));
+    QVERIFY2(difference.isEmpty(), qPrintable(difference));
+    const QJsonObject configuration = QJsonDocument::fromJson(session("a").getAttribute(kDiagnostics).toString().toUtf8())
+                                          .object().value(QStringLiteral("configuration")).toObject();
+    for (const char *entry : {"accel_fs_g_provenance", "gyro_fs_deg_s_provenance", "accel_odr_hz_provenance",
+                              "gyro_odr_hz_provenance"})
+        QCOMPARE(configuration.value(QString::fromLatin1(entry)).toString(), QStringLiteral("inferred"));
+    QCOMPARE(configuration.value(QStringLiteral("accel_odr_hz")).toDouble(), 104.);
+    for (const QString &key : keys)
+        QVERIFY2(!session("a").hasStoredAttribute(key), qPrintable(key));
+
+    // Nothing failed, and further spins run nothing
+    const Quiet quiet(*m_queue);
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QVERIFY(waitForIdle(*m_model));
+    QVERIFY(nothingToShow());
+    for (int i = 0; i < 3; ++i)
+        PlotFixture::spin(m_demand.get());
+    QVERIFY(nothingToShow());
+    QCOMPARE(engine("a").runCount(kFit), 1);
+    QVERIFY(quiet.holds());
 }
 
 void FusionStoreTest::storedFitSurvivesUnrelatedChanges_data()

@@ -24,8 +24,8 @@
 // layer passes through unchanged, so the eighteen measurements, the four
 // origin attributes and the four configuration attributes are the fixture's
 // (the stated path), and the session-level results can be held to the goldens
-// of the kernel. naturalSession() stores no configuration and reads the
-// constant defaults (the default path).
+// of the kernel. naturalSession() stores no configuration and infers the
+// firmware default from its data (the inferred path).
 
 namespace FlySight {
 class SessionModel;
@@ -50,7 +50,7 @@ void registerFusionOnce();
 ///   stored attributes _LOCAL_ORIGIN_INDEX (qlonglong), _LOCAL_ORIGIN_LAT|LON|HMSL (double),
 ///   ACCEL_FS_G, GYRO_FS_DEG_S, ACCEL_ODR_HZ, GYRO_ODR_HZ as the text
 ///   QString::number makes of the fixture's value ("16", "2000", "104", "26",
-///   "12.5"; a NaN member is not stored, and its key reads the default),
+///   "12.5"; a NaN member is not stored, and its key is inferred from the data),
 ///   _TIME_FIT_A = "1", _TIME_FIT_B = "1699999900", SCHEMA_VER = 2 (the gyro
 ///   channels are read literally), SESSION_ID = sessionId, DEVICE_ID = "fusion-test"
 /// Only fixtures whose columns have equal lengths per sensor may go into a
@@ -87,8 +87,8 @@ FlySight::SessionData sessionWithoutImu(const FusionFixture &fixture, const QStr
 /// hMSL = 100, zero velocity, hAcc = vAcc = 1, sAcc = .1; IMU system time
 /// 100 + i*.08 (12.5 Hz), i = 0..500, az = -9.80665 m/s^2, temperature 25 degC, the rest 0; TIME pulses
 /// {100, 120, 140} with tow / tow+20 / tow+40. SCHEMA_VER = 2. No configuration
-/// attribute: the fit runs on the default configuration, whose rate and
-/// lattice the recording matches.
+/// attribute: the recording's rate and lattices infer the firmware default,
+/// and the fit runs on it.
 FlySight::SessionData naturalSession(const QString &sessionId);
 
 /// The opposite premise to the fixture sessions: the fit's OUTPUTS stored as

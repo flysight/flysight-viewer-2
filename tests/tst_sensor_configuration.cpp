@@ -41,6 +41,7 @@ private slots:
     void malformedValues();
     void unsupportedMessage();
     void defaultIsTheFirmwareConfiguration();
+    void listedValuesAreExposed();
 };
 
 // Clauses 1 and 5: exactly nine keys, with the unit in the name; every listed
@@ -202,6 +203,31 @@ void SensorConfigurationTest::defaultIsTheFirmwareConfiguration()
     for (const char *key : {"BARO_ODR_HZ", "HUM_ODR_HZ", "MAG_ODR_HZ", "GNSS_MODEL", "GNSS_RATE_HZ"})
         QVERIFY2(!SensorConfiguration::defaultValue(QString::fromLatin1(key)).has_value(), key);
     QVERIFY(!SensorConfiguration::defaultValue(QStringLiteral("SCHEMA_VER")).has_value());
+}
+
+// Item 1810: the vocabulary exposes each key's list, which the inference of
+// an absent IMU key chooses from: the spellings of the specification in its
+// order (the order the unsupported message prints), empty for the four keys
+// without a list and for a key that is not one of the nine; each IMU key's
+// default is an entry of its list, so the inference's fallback is a value the
+// key accepts.
+void SensorConfigurationTest::listedValuesAreExposed()
+{
+    for (const char *key : {"ACCEL_FS_G", "GYRO_FS_DEG_S", "ACCEL_ODR_HZ", "GYRO_ODR_HZ", "GNSS_MODEL"}) {
+        const QStringList values = SensorConfiguration::listedValues(QString::fromLatin1(key));
+        QVERIFY2(!values.isEmpty(), key);
+        QCOMPARE(values, listed(QString::fromLatin1(key)));
+    }
+    QCOMPARE(SensorConfiguration::listedValues(QStringLiteral("ACCEL_ODR_HZ")).first(), QStringLiteral("1.6"));
+    for (const char *key : {"BARO_ODR_HZ", "HUM_ODR_HZ", "MAG_ODR_HZ", "GNSS_RATE_HZ"})
+        QVERIFY2(SensorConfiguration::listedValues(QString::fromLatin1(key)).isEmpty(), key);
+    QVERIFY(SensorConfiguration::listedValues(QStringLiteral("SCHEMA_VER")).isEmpty());
+
+    for (const char *key : {"ACCEL_FS_G", "GYRO_FS_DEG_S", "ACCEL_ODR_HZ", "GYRO_ODR_HZ"}) {
+        const QString name = QString::fromLatin1(key);
+        QVERIFY2(SensorConfiguration::listedValues(name).contains(SensorConfiguration::defaultValue(name).value()),
+                 key);
+    }
 }
 
 FLYSIGHT_TEST_MAIN(SensorConfigurationTest)
