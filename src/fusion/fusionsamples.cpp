@@ -18,11 +18,15 @@ const gtsam::Vector3 kGravity(0, 0, kStandardGravity);
 namespace {
 
 // The largest relative difference between the logged IMU interval and the
-// nominal one of a stated rate. The datasheet states no oscillator tolerance;
-// the recordings on disk log 5-7 % fast, and the listed rates are a factor of
-// two apart, so this neither rejects a healthy unit nor mistakes one rate for
-// another.
+// nominal one of a configured rate. The datasheet states no oscillator
+// tolerance; the recordings on disk log 5-7 % fast, and the listed rates are a
+// factor of two apart, so this neither rejects a healthy unit nor mistakes one
+// rate for another.
 constexpr double kRateTolerance = .10;
+
+// The verb of a configuration rejection for a value the recording stated. An
+// inferred value has its own verb per check, below.
+const char kStatedVerb[] = "states";
 
 // Rejection reasons that more than one check reports. The whole recording
 // and the fitted window are checked for the same defects in different words;
@@ -252,42 +256,59 @@ std::vector<GnssHole> gnssHoles(const Samples &window)
 
 void requireReadingsOnLattice(const Channels &channels)
 {
-    const ImuConfiguration &stated = channels.imuConfiguration;
+    const ImuConfiguration &configured = channels.imuConfiguration;
     const struct {
         const char *key, *unit, *sensor;
-        double stated, shown;
+        double configured, shown;
+        ConfigurationSource source;
     } sensors[] = {
-        {SensorConfiguration::AccelFsG, "g", "accelerometer", stated.accelFsG,
-         rangeShownByReadings(ImuSensor::Accelerometer, channels.ax, channels.ay, channels.az)},
-        {SensorConfiguration::GyroFsDegS, "deg/s", "gyro", stated.gyroFsDegS,
-         rangeShownByReadings(ImuSensor::Gyroscope, channels.wx, channels.wy, channels.wz)}};
+        {SensorConfiguration::AccelFsG, "g", "accelerometer", configured.accelFsG,
+         rangeShownByReadings(ImuSensor::Accelerometer, channels.ax, channels.ay, channels.az),
+         configured.accelFsGSource},
+        {SensorConfiguration::GyroFsDegS, "deg/s", "gyro", configured.gyroFsDegS,
+         rangeShownByReadings(ImuSensor::Gyroscope, channels.wx, channels.wy, channels.wz),
+         configured.gyroFsDegSSource}};
     for (const auto &s : sensors) {
-        if (s.shown == s.stated)
+        if (s.shown == s.configured)
             continue;
         // The fit does not guess: a range the readings do not show, or none,
-        // is a rejection naming both.
+        // is a rejection naming both. An inferred range is the range the same
+        // readings show through the same function, so it can fail only where
+        // they show none and the inference fell back to the firmware default:
+        // the reason calls it defaulted, whatever the readings show.
         const QString shown = std::isnan(s.shown)
             ? QStringLiteral("no range's lattice")
             : QStringLiteral("the +/-%1 %2 lattice").arg(QString::number(s.shown), QLatin1String(s.unit));
+        const QString verb = s.source == ConfigurationSource::Stated ? QLatin1String(kStatedVerb)
+                                                                     : QLatin1String("defaulted to");
         throw std::invalid_argument(
-            QStringLiteral("%1 states +/-%2 %3 but the %4 readings lie on %5; sensor fusion unavailable")
-                .arg(QLatin1String(s.key), QString::number(s.stated), QLatin1String(s.unit),
+            QStringLiteral("%1 %2 +/-%3 %4 but the %5 readings lie on %6; sensor fusion unavailable")
+                .arg(QLatin1String(s.key), verb, QString::number(s.configured), QLatin1String(s.unit),
                      QLatin1String(s.sensor), shown)
                 .toStdString());
     }
 }
 
-void requireStatedRates(double medianImuInterval, const ImuConfiguration &configuration)
+void requireConfiguredRates(double medianImuInterval, const ImuConfiguration &configuration)
 {
-    for (const auto &[key, rate] : { std::pair<const char *, double>{SensorConfiguration::AccelOdrHz,
-                                                                     configuration.accelOdrHz},
-                                     std::pair<const char *, double>{SensorConfiguration::GyroOdrHz,
-                                                                     configuration.gyroOdrHz} }) {
-        const double nominal = 1/rate;
+    const struct {
+        const char *key;
+        double rate;
+        ConfigurationSource source;
+    } rates[] = {
+        {SensorConfiguration::AccelOdrHz, configuration.accelOdrHz, configuration.accelOdrHzSource},
+        {SensorConfiguration::GyroOdrHz, configuration.gyroOdrHz, configuration.gyroOdrHzSource}};
+    for (const auto &r : rates) {
+        const double nominal = 1/r.rate;
         if (std::abs(medianImuInterval-nominal)/nominal > kRateTolerance) {
+            // An inferred rate is the listed rate nearest the logged one, so
+            // its failure says the data fit no listed rate.
+            const QString verb = r.source == ConfigurationSource::Stated ? QLatin1String(kStatedVerb)
+                                                                         : QLatin1String("inferred as");
             throw std::invalid_argument(
-                QStringLiteral("%1 states %2 Hz but the IMU is logged at %3 Hz; sensor fusion unavailable")
-                    .arg(QLatin1String(key), QString::number(rate), QString::number(1/medianImuInterval, 'f', 1))
+                QStringLiteral("%1 %2 %3 Hz but the IMU is logged at %4 Hz; sensor fusion unavailable")
+                    .arg(QLatin1String(r.key), verb, QString::number(r.rate),
+                         QString::number(1/medianImuInterval, 'f', 1))
                     .toStdString());
         }
     }

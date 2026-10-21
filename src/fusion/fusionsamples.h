@@ -133,17 +133,23 @@ struct GnssHole {
 std::vector<GnssHole> gnssHoles(const Samples &window);
 
 /// Throws unless every reading of `channels` (all of them, inside the fitted
-/// window or not, as the kernel received them) shows the stated range of its
-/// sensor: the coarsest range whose lattice the three axes fit
-/// (rangeShownByReadings) must be the configured one. The accelerometer is
-/// checked first. The configuration must have a datasheet entry.
+/// window or not, as the kernel received them) shows the configured range of
+/// its sensor, stated or inferred alike: the coarsest range whose lattice the
+/// three axes fit (rangeShownByReadings) must be the configured one. The
+/// accelerometer is checked first. The configuration must have a datasheet
+/// entry. The rejection of a stated range says the key states it; that of
+/// an inferred range calls it defaulted: the inference reads the same
+/// readings through the same function, so an inferred range fails only where
+/// the readings showed none and the inference fell back to the firmware
+/// default.
 void requireReadingsOnLattice(const Channels &channels);
 
 /// Throws unless the recording's median IMU interval (the nominal interval of
 /// its IMU axis, SampleContinuity::nominalInterval) is within 10 % of the
-/// interval, 1 / rate, of each stated rate: ACCEL_ODR_HZ first, then
-/// GYRO_ODR_HZ.
-void requireStatedRates(double medianImuInterval, const ImuConfiguration &configuration);
+/// interval, 1 / rate, of each configured rate, stated or inferred alike:
+/// ACCEL_ODR_HZ first, then GYRO_ODR_HZ. The rejection of a stated rate says
+/// the key states it; that of an inferred rate says it was inferred.
+void requireConfiguredRates(double medianImuInterval, const ImuConfiguration &configuration);
 
 } // namespace FlySight::Fusion::Detail
 

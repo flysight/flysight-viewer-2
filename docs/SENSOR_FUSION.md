@@ -835,7 +835,7 @@ frame is that of [LOCAL_COORDINATES.md](LOCAL_COORDINATES.md), section 7).
 The attribute `_FUSION_DIAGNOSTICS` is compact JSON. After a successful fit
 its top-level keys are, grouped:
 
-- *identity and audit*: `algorithm` (`batch-temperature-bias-v11`), `input`
+- *identity and audit*: `algorithm` (`batch-temperature-bias-v12`), `input`
   (the input audit: `epoch_utc_s`, `imu_count`, `gnss_count`, `origin_index`,
   `origin`, `height_method`, `time_method`, and `gnss_holes`, one object per
   hole in the fitted window's GNSS fixes, in time order, each with `start_s`,
@@ -844,7 +844,12 @@ its top-level keys are, grouped:
   hole is the continuity rule's ([COMPUTED_PLOTS.md](COMPUTED_PLOTS.md),
   section 10) on the window's own fixes) and `configuration` (the
   configuration the fit ran under: `accel_fs_g`, `gyro_fs_deg_s`,
-  `accel_odr_hz`, `gyro_odr_hz`);
+  `accel_odr_hz`, `gyro_odr_hz`, and beside each its provenance,
+  `accel_fs_g_provenance`, `gyro_fs_deg_s_provenance`,
+  `accel_odr_hz_provenance` and `gyro_odr_hz_provenance`, each `stated` when
+  the recording stated the value and `inferred` when it was inferred from the
+  recording's data: the kernel is told which beside each value, never works
+  it out, and no number of the fit depends on it);
 - *the initializer*: `initialization` (`segmented initialization; heading
   from segment fits`); `stationary_interval_s`, `anchor_time_s` and
   `selected_heading_deg`, all `null` (the keys remain for readers of older
@@ -1050,10 +1055,23 @@ Then, after every check above, the configuration (section 3), in this order:
   (`GYRO_FS_DEG_S states +/-2000 deg/s but the gyro readings ...` for the
   gyro), which is also how a legacy file given `$VAR,SCHEMA_VER,2` by hand
   is rejected ([DATA_SCHEMA.md](DATA_SCHEMA.md), section 7);
-- a median logged IMU interval more than 10 % from a stated rate's,
+- a median logged IMU interval more than 10 % from a configured rate's,
   `ACCEL_ODR_HZ` before `GYRO_ODR_HZ`: `ACCEL_ODR_HZ states 12.5 Hz but the IMU
   is logged at 100.0 Hz; sensor fusion unavailable`, the realistic case of a
   file without keys from a firmware that logs faster than the default.
+
+The kernel is told, beside each of the four values, whether the recording
+stated it or it was inferred from the recording's data; it reads no session.
+The two checks judge an inferred value by the same rule, tolerance and order
+as a stated one, and the reason says how the value came about. A stated value
+is worded as above. An inferred rate that fails says so: `ACCEL_ODR_HZ
+inferred as 52 Hz but the IMU is logged at 70.0 Hz; sensor fusion
+unavailable`. An inferred range is the range the same readings show through
+the same function, so it fails only where the readings show none and the
+value is the firmware default the inference falls back to, and the reason
+calls it that, whatever the readings show: `ACCEL_FS_G defaulted to +/-16 g
+but the accelerometer readings lie on no range's lattice; sensor fusion
+unavailable`. The datasheet entry's rejection is worded the same either way.
 
 A solver that does not converge is reported the same way, with the stopping
 rule that ended it in the reason (`Batch fusion did not converge (iteration
@@ -1173,10 +1191,12 @@ success, a rejection or a solver failure. It is restored bit for bit when the
 recording is loaded, and the restored result is indistinguishable from a fresh
 one; the record holds the sixteen accuracy channels with the state (none when the
 covariance could not be computed). Its code stamp is the algorithm string of the diagnostics
-(`batch-temperature-bias-v11` since the attitude covariance block is
+(`batch-temperature-bias-v12` since the kernel records the configuration's
+provenance in the diagnostics and words its rejections by it, which changes
+the diagnostics and no number; `v11` having been the attitude covariance block
 symmetrized from a separate sum, as the position and velocity blocks are,
-which moves the four accuracies by rounding and nothing else; `v10` having
-been the position and velocity covariance blocks published, which changed the
+which moved the four accuracies by rounding and nothing else, `v10` the
+position and velocity covariance blocks published, which changed the
 record's shape and no number of the fit, `v9` the scale factors released from
 the held solution, section 4, which moved every fit's numbers, `v8`
 the hole in the GNSS fixes fitted across instead of rejected, which also
@@ -1501,7 +1521,7 @@ deg/s, against a corpus median of 0.030 deg/s: the model is below the corpus.
 **The staged scale on the reference recordings.** The two stages of the
 full fit (section 4) on the four recordings of the first table, measured on
 2026-10-03 by M56 of [tests/README.md](../tests/README.md), section 12.13,
-under `v9` (whose numbers `v10` and `v11` keep: the one changed only what is published, the other the last bits of the four accuracies), at the default configuration. Each stage's
+under `v9` (whose numbers `v10`, `v11` and `v12` keep: the first changed only what is published, the second the last bits of the four accuracies, the third only the diagnostics' configuration and the rejections' words), at the default configuration. Each stage's
 passes, iterations and objective are the release's account in the
 diagnostics; the reported fit is the released stage's when it was kept and the
 held stage's otherwise, and its largest scale departure is that fit's:

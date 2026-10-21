@@ -101,7 +101,7 @@ constexpr int kFitTimeoutMs = 120000;
 const QString kSolverFailureReason =
     QStringLiteral("Batch fusion did not converge (iteration limit); sensor fusion unavailable");
 const QString kSolverFailureDiagnostics = QStringLiteral(
-    "{\"algorithm\":\"batch-temperature-bias-v11\","
+    "{\"algorithm\":\"batch-temperature-bias-v12\","
     "\"failure\":\"Batch fusion did not converge (iteration limit); sensor fusion unavailable\"}");
 
 // The sixteen accuracy channels, the four accuracies and the twelve entries of
@@ -219,7 +219,9 @@ private slots:
     void mergeIntoUnloadedSession();
     void codeStampChangeDropsRecordOnLoad_data();
     void codeStampChangeDropsRecordOnLoad();
+    void recordUnderPreviousAlgorithmIsComputedAgainOnce_data();
     void recordUnderPreviousAlgorithmIsComputedAgainOnce();
+    void rejectionUnderPreviousAlgorithmIsComputedAgainOnce();
     void storedFitSurvivesUnrelatedChanges_data();
     void storedFitSurvivesUnrelatedChanges();
     void runtimeRegistryChangeDropsFitAndRecord();
@@ -1294,15 +1296,25 @@ void FusionStoreTest::codeStampChangeDropsRecordOnLoad()
     QCOMPARE(offeredFitIsDroppedByUncheck("a", queued, jobs), QString());
 }
 
-// Item 1702: a record written under an earlier algorithm string, here
+void FusionStoreTest::recordUnderPreviousAlgorithmIsComputedAgainOnce_data()
+{
+    QTest::addColumn<QString>("stamp");
+    QTest::newRow("v9") << QStringLiteral("batch-temperature-bias-v9");
+    QTest::newRow("v11") << QStringLiteral("batch-temperature-bias-v11");
+}
+
+// Items 1702 and 1807: a record written under an earlier algorithm string,
 // batch-temperature-bias-v9, which a logbook holds for every fit made before
-// the fit published its position and velocity covariance blocks, is stale at
-// load: deleted, and the fit, still wanted by the checked Roll row, is
-// computed again once, as any computation is, and stored anew under the
-// current string with the golden's channels. codeStampChangeDropsRecordOnLoad
-// stops at the offer (it unchecks the row); this test lets the fit run.
+// the fit published its position and velocity covariance blocks, or
+// batch-temperature-bias-v11, which it holds for every fit made before the
+// diagnostics recorded the configuration's provenance, is stale at load:
+// deleted, and the fit, still wanted by the checked Roll row, is computed
+// again once, as any computation is, and stored anew under the current string
+// with the golden's channels. codeStampChangeDropsRecordOnLoad stops at the
+// offer (it unchecks the row); this test lets the fit run.
 void FusionStoreTest::recordUnderPreviousAlgorithmIsComputedAgainOnce()
 {
+    QFETCH(QString, stamp);
     const auto restoreCapacity = qScopeGuard([] {
         PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
     });
@@ -1321,9 +1333,7 @@ void FusionStoreTest::recordUnderPreviousAlgorithmIsComputedAgainOnce()
     QVERIFY(!isLoaded("a"));
     PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
 
-    QCOMPARE(rewriteRecord("a", [](CalculationRecord &r) {
-                 r.result.resultVersion = QStringLiteral("batch-temperature-bias-v9");
-             }), QString());
+    QCOMPARE(rewriteRecord("a", [&](CalculationRecord &r) { r.result.resultVersion = stamp; }), QString());
     m_model->resetStoredResultStats();
 
     // Shown again: the record is stale and deleted at load, the row still
@@ -1355,6 +1365,66 @@ void FusionStoreTest::recordUnderPreviousAlgorithmIsComputedAgainOnce()
     QVERIFY(nothingToShow());
     QCOMPARE(engine("a").runCount(kFit), 1);
     QVERIFY(quiet.holds());
+}
+
+// Item 1807: a stored rejection under batch-temperature-bias-v11 is stale at
+// load like a stored success: deleted, the fit, still wanted by the checked
+// Roll row, run again once, the rejection listed again with its reason and
+// stored anew under the current string; nothing further runs.
+void FusionStoreTest::rejectionUnderPreviousAlgorithmIsComputedAgainOnce()
+{
+    const auto restoreCapacity = qScopeGuard([] {
+        PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+    });
+    QCOMPARE(addSessions({fixtureSession(QStringLiteral("reject_origin"), QStringLiteral("r1"))}), QString());
+    show({"r1"});
+    check(QStringLiteral("bodyRoll"));      // the demand layer starts the fit
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 1);
+    QCOMPARE(m_queue->model()->record(0).state, JobState::Succeeded);    // a rejection is a result
+    QVERIFY(waitForIdle(*m_model));
+    const QString path = recordPath("r1");
+    QVERIFY(QFileInfo(path).isFile());
+    show({"r1"}, false);
+    session("r1");
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 0);
+    QVERIFY(!isLoaded("r1"));
+    PreferencesManager::instance().setValue(PreferenceKeys::LogbookCacheSize, 50);
+
+    QCOMPARE(rewriteRecord("r1", [](CalculationRecord &r) {
+                 r.result.resultVersion = QStringLiteral("batch-temperature-bias-v11");
+             }), QString());
+    m_model->resetStoredResultStats();
+
+    // Shown again: the record is stale and deleted at load, the row still
+    // wants the fit
+    show({"r1"});
+    QVERIFY(isLoaded("r1"));
+    QVERIFY(!QFileInfo::exists(path));
+    QCOMPARE(stats().staleRecordsDeleted, 1);
+
+    // One fit, the same rejection, and a new record under the current string
+    QVERIFY(waitDemandIdle(*m_queue, *m_demand, kFitTimeoutMs));
+    QCOMPARE(m_queue->model()->rowCount(), 2);
+    QCOMPARE(m_queue->model()->record(1).state, JobState::Succeeded);
+    QCOMPARE(engine("r1").runCount(kFit), 1);
+    QVERIFY(waitForIdle(*m_model));
+    const QString rejection = QStringLiteral("Local origin index outside GNSS samples");
+    QString listed = listedFailure(rejection);
+    QVERIFY2(listed.isEmpty(), qPrintable(listed));
+    QVERIFY(QFileInfo(path).isFile());
+    const CalculationRecordRead read = LogbookManager::instance().readCalculationRecord(QStringLiteral("r1"), kFit);
+    QVERIFY2(read.status == CalculationRecordStatus::Ok, qPrintable(read.error));
+    QCOMPARE(read.record->result.resultVersion, QString::fromLatin1(Fusion::Algorithm));
+
+    // Further spins run nothing
+    const Quiet quiet(*m_queue);
+    for (int i = 0; i < 3; ++i)
+        PlotFixture::spin(m_demand.get());
+    QVERIFY(quiet.holds());
+    listed = listedFailure(rejection);
+    QVERIFY2(listed.isEmpty(), qPrintable(listed));
+    QCOMPARE(engine("r1").runCount(kFit), 1);
 }
 
 void FusionStoreTest::storedFitSurvivesUnrelatedChanges_data()

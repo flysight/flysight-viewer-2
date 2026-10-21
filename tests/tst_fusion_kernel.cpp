@@ -6,8 +6,9 @@
 // progress texts and the synthetic recordings of the specification; exact
 // integration boundaries, heading freedom, the stopping rules forced through
 // the tuning, the datasheet's noise by configuration, the lattice and rate
-// checks, the step model (the sampling term and the mid-step remainder against
-// their derivations), the temperature-dependent gyro
+// checks and their wording by the configuration's provenance, the step
+// model (the sampling term and the mid-step remainder against their
+// derivations), the temperature-dependent gyro
 // bias (the section 6 cases), the scale state
 // (the divided readings, the scale Jacobian against central differences, the
 // scaled factor's Jacobians, the graph, the re-preintegration, the
@@ -85,6 +86,7 @@
 using namespace FlySight;
 using namespace FlySight::Fusion::Detail;
 using namespace FlySightTest;
+using FlySight::Fusion::ConfigurationSource;
 using FlySight::Fusion::ImuConfiguration;
 using gtsam::Rot3;
 using gtsam::Vector3;
@@ -881,6 +883,7 @@ private slots:
     void rateCheckToleratesTenPercent();
     void configurationChecksComeAfterTheOthers();
     void diagnosticsReportTheNoiseModel();
+    void provenanceEntriesFollowTheSources();
     void validationRejectsEachDefect();
     void backwardPropagationUndoesForward();
     void propagationRefusesIntervalAboveItsThreshold();
@@ -1138,6 +1141,12 @@ void FusionKernelTest::configurationWithoutEntryIsRejected()
     channels.imuConfiguration.accelOdrHz = 1.6;
     QVERIFY(rejectedWith(rejectedBy(channels), noEntry(SensorConfiguration::AccelOdrHz, "1.6")));
     channels.imuConfiguration = ImuConfiguration{};
+    QVERIFY(rejectedWith(rejectedBy(channels), noEntry(SensorConfiguration::AccelFsG, "nan")));
+    // The datasheet's rejection does not depend on how the value came about:
+    // every source inferred, the same text.
+    channels.imuConfiguration.accelFsGSource = channels.imuConfiguration.gyroFsDegSSource =
+        channels.imuConfiguration.accelOdrHzSource = channels.imuConfiguration.gyroOdrHzSource =
+            ConfigurationSource::Inferred;
     QVERIFY(rejectedWith(rejectedBy(channels), noEntry(SensorConfiguration::AccelFsG, "nan")));
 
     // The integration refuses a noise that was never derived.
@@ -1419,6 +1428,28 @@ void FusionKernelTest::latticeCheckFindsTheCoarsestRange()
     c.ay.last() = 8./32768*g;
     QVERIFY(c.imuTime.last() > c.gnssTime.last());
     QVERIFY(rejectedBy(c).outcome == Fusion::Outcome::Rejected);
+
+    // Item 1803: the same rule for an inferred range, worded by the source.
+    // The inference reads these readings through rangeShownByReadings(), so
+    // an inferred range fails only through its fallback, the firmware
+    // default: "defaulted to", whatever the readings show.
+    c = linear;
+    c.imuConfiguration.accelFsGSource = ConfigurationSource::Inferred;
+    c.ax[5] = 1.5*accelerometerTolerance;
+    QVERIFY(rejectedWith(rejectedBy(c), QStringLiteral(
+        "ACCEL_FS_G defaulted to +/-16 g but the accelerometer readings lie on no range's lattice; sensor fusion unavailable")));
+    c.ax[5] = 8./32768*g;
+    QVERIFY(rejectedWith(rejectedBy(c), QStringLiteral(
+        "ACCEL_FS_G defaulted to +/-16 g but the accelerometer readings lie on the +/-8 g lattice; sensor fusion unavailable")));
+    c = linear;
+    c.imuConfiguration.gyroFsDegSSource = ConfigurationSource::Inferred;
+    c.wz[7] = 35e-3;
+    QVERIFY(rejectedWith(rejectedBy(c), QStringLiteral(
+        "GYRO_FS_DEG_S defaulted to +/-2000 deg/s but the gyro readings lie on the +/-1000 deg/s lattice; sensor fusion unavailable")));
+    // Readings that show the inferred ranges pass, as they do when stated.
+    c = linear;
+    c.imuConfiguration.accelFsGSource = c.imuConfiguration.gyroFsDegSSource = ConfigurationSource::Inferred;
+    requireReadingsOnLattice(c);
 }
 
 void FusionKernelTest::latticeCheckIdentifiesEveryFixture()
@@ -1460,7 +1491,7 @@ void FusionKernelTest::rateCheckToleratesTenPercent()
     const ImuConfiguration stated = fixtureNoise(12.5).configuration;
     const auto reasonFor = [](double median, const ImuConfiguration &configuration) {
         try {
-            requireStatedRates(median, configuration);
+            requireConfiguredRates(median, configuration);
         } catch (const std::invalid_argument &e) {
             return QString::fromUtf8(e.what());
         }
@@ -1489,6 +1520,32 @@ void FusionKernelTest::rateCheckToleratesTenPercent()
     c.imuConfiguration.gyroOdrHz = 52;
     QVERIFY(rejectedWith(rejectedBy(c), QStringLiteral(
         "GYRO_ODR_HZ states 52 Hz but the IMU is logged at 100.0 Hz; sensor fusion unavailable")));
+
+    // Items 1803 and 1806: the same rule and tolerance for an inferred rate,
+    // worded "inferred as". 70 Hz is 25 % from 52 Hz, the listed rate nearest
+    // it: the data fit no listed rate.
+    ImuConfiguration inferred = stated;
+    inferred.accelOdrHz = inferred.gyroOdrHz = 52;
+    inferred.accelOdrHzSource = inferred.gyroOdrHzSource = ConfigurationSource::Inferred;
+    QCOMPARE(reasonFor(1/70., inferred),
+             QStringLiteral("ACCEL_ODR_HZ inferred as 52 Hz but the IMU is logged at 70.0 Hz; sensor fusion unavailable"));
+    // Each key is worded by its own source: a stated accelerometer rate that
+    // passes and an inferred gyro rate that does not.
+    ImuConfiguration mixed = stated;
+    mixed.gyroOdrHz = 52;
+    mixed.gyroOdrHzSource = ConfigurationSource::Inferred;
+    QCOMPARE(reasonFor(nominal, mixed),
+             QStringLiteral("GYRO_ODR_HZ inferred as 52 Hz but the IMU is logged at 12.5 Hz; sensor fusion unavailable"));
+    // Through the pipeline: coarse_linear logged at 70 Hz instead of 100 Hz.
+    // Its IMU coverage grows, so the fixes stay inside it, and the axis has no
+    // hole: every other check passes and the rate is the reason.
+    c = toChannels(fusionFixture(QStringLiteral("coarse_linear")));
+    for (qsizetype i = 1; i < c.imuTime.size(); ++i)
+        c.imuTime[i] = c.imuTime[0]+i/70.;
+    c.imuConfiguration.accelOdrHz = c.imuConfiguration.gyroOdrHz = 52;
+    c.imuConfiguration.accelOdrHzSource = c.imuConfiguration.gyroOdrHzSource = ConfigurationSource::Inferred;
+    QVERIFY(rejectedWith(rejectedBy(c), QStringLiteral(
+        "ACCEL_ODR_HZ inferred as 52 Hz but the IMU is logged at 70.0 Hz; sensor fusion unavailable")));
 }
 
 void FusionKernelTest::configurationChecksComeAfterTheOthers()
@@ -1523,6 +1580,11 @@ void FusionKernelTest::configurationChecksComeAfterTheOthers()
     // A wrong rate alone: the rate.
     c.ax[10] = 0;
     QVERIFY(rejectedBy(c).reason.startsWith(QStringLiteral("ACCEL_ODR_HZ states 12.5 Hz")));
+    // The source changes the wording, not the order: a wrong inferred rate and
+    // readings off the stated range's lattice report the lattice, "states".
+    c.ax[10] = 1e-3;
+    c.imuConfiguration.accelOdrHzSource = ConfigurationSource::Inferred;
+    QVERIFY(rejectedBy(c).reason.startsWith(QStringLiteral("ACCEL_FS_G states +/-16 g")));
 }
 
 void FusionKernelTest::diagnosticsReportTheNoiseModel()
@@ -1539,11 +1601,19 @@ void FusionKernelTest::diagnosticsReportTheNoiseModel()
     const QJsonObject diagnostics = diagnosticsOf(result);
 
     const QJsonObject configuration = diagnostics.value("configuration").toObject();
-    QCOMPARE(configuration.keys(), QStringList({"accel_fs_g", "accel_odr_hz", "gyro_fs_deg_s", "gyro_odr_hz"}));
+    // Item 1804: beside each value, how it came about; a fixture states its
+    // configuration, so every entry reads "stated".
+    QCOMPARE(configuration.keys(), QStringList({"accel_fs_g", "accel_fs_g_provenance", "accel_odr_hz",
+                                                "accel_odr_hz_provenance", "gyro_fs_deg_s",
+                                                "gyro_fs_deg_s_provenance", "gyro_odr_hz",
+                                                "gyro_odr_hz_provenance"}));
     QCOMPARE(configuration.value("accel_fs_g").toDouble(), fixture.accelFsG);
     QCOMPARE(configuration.value("gyro_fs_deg_s").toDouble(), fixture.gyroFsDegS);
     QCOMPARE(configuration.value("accel_odr_hz").toDouble(), fixture.accelOdrHz);
     QCOMPARE(configuration.value("gyro_odr_hz").toDouble(), fixture.gyroOdrHz);
+    for (const char *entry : {"accel_fs_g_provenance", "gyro_fs_deg_s_provenance", "accel_odr_hz_provenance",
+                              "gyro_odr_hz_provenance"})
+        QCOMPARE(configuration.value(QLatin1String(entry)).toString(), QStringLiteral("stated"));
 
     const QJsonObject model = diagnostics.value("model").toObject();
     QCOMPARE(model.keys(), QStringList({QStringLiteral("gyro_bias"), QStringLiteral("noise"), QStringLiteral("scale")}));
@@ -1571,6 +1641,50 @@ void FusionKernelTest::diagnosticsReportTheNoiseModel()
 
     QCOMPARE(diagnostics.value("stopping").toObject().value("lambda_upper_bound").toDouble(), 1e12);
     QCOMPARE(Tuning{}.lambdaUpperBound, 1e12);
+}
+
+void FusionKernelTest::provenanceEntriesFollowTheSources()
+{
+    // Items 1804, 1805 and 1806: a source enters the diagnostics' four entries
+    // and no number. coarse_linear with every value inferred fits; its entries
+    // read "inferred", its thirty-three channels are bit for bit the stated
+    // run's and match the golden's, and the rest of its diagnostics is the
+    // golden's.
+    const QString name = QStringLiteral("coarse_linear");
+    const Fusion::Channels stated = toChannels(fusionFixture(name));
+    Fusion::Channels inferred = stated;
+    inferred.imuConfiguration.accelFsGSource = inferred.imuConfiguration.gyroFsDegSSource =
+        inferred.imuConfiguration.accelOdrHzSource = inferred.imuConfiguration.gyroOdrHzSource =
+            ConfigurationSource::Inferred;
+    const Fusion::Result statedResult = runPipeline(stated, Tuning{}, Checkpoint());
+    const Fusion::Result inferredResult = runPipeline(inferred, Tuning{}, Checkpoint());
+    QVERIFY2(statedResult.outcome == Fusion::Outcome::Succeeded, qPrintable(statedResult.reason));
+    QVERIFY2(inferredResult.outcome == Fusion::Outcome::Succeeded, qPrintable(inferredResult.reason));
+
+    const FusionGolden golden = loadFusionGolden(name);
+    QCOMPARE(fusionChannelNames().size(), 33);
+    for (const QString &channel : fusionChannelNames()) {
+        QVERIFY(!fusionChannel(inferredResult, channel).isEmpty());
+        QVERIFY2(sameBitsEverywhere(fusionChannel(inferredResult, channel), fusionChannel(statedResult, channel)),
+                 qPrintable(channel));
+        const QString difference =
+            compareSamples(channel, fusionChannel(inferredResult, channel), golden.channels.value(channel));
+        QVERIFY2(difference.isEmpty(), qPrintable(difference));
+    }
+
+    const char *const entries[] = {"accel_fs_g_provenance", "gyro_fs_deg_s_provenance", "accel_odr_hz_provenance",
+                                   "gyro_odr_hz_provenance"};
+    QJsonObject diagnostics = diagnosticsOf(inferredResult);
+    QJsonObject configuration = diagnostics.value("configuration").toObject();
+    for (const char *entry : entries) {
+        QCOMPARE(configuration.value(QLatin1String(entry)).toString(), QStringLiteral("inferred"));
+        QCOMPARE(golden.diagnostics.value("configuration").toObject().value(QLatin1String(entry)).toString(),
+                 QStringLiteral("stated"));
+        configuration.insert(QLatin1String(entry), QStringLiteral("stated"));
+    }
+    diagnostics.insert(QStringLiteral("configuration"), configuration);
+    const QString difference = compareJson(QStringLiteral("diagnostics"), diagnostics, golden.diagnostics);
+    QVERIFY2(difference.isEmpty(), qPrintable(difference));
 }
 
 void FusionKernelTest::validationRejectsEachDefect()
@@ -2338,7 +2452,7 @@ void FusionKernelTest::biasSettledByCostTest()
     const QJsonObject seed = diagnostics.value("seeds").toArray().first().toObject();
     QCOMPARE(seed.value("converged").toBool(false), true);
     QCOMPARE(seed.value("iterations").toInt(), int(trace.history.size()));
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v11"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v12"));
 
     // The quality metrics recomputed from the residuals array: 28 states, so
     // 28 position and velocity factors of dimension 3 and 27 IMU factors of
@@ -2584,7 +2698,7 @@ void FusionKernelTest::failureDiagnosticsShape()
         const QJsonObject diagnostics = failureDiagnostics(QString::fromLatin1(failure.failure), &s);
         QCOMPARE(diagnostics.keys(), QStringList({QStringLiteral("algorithm"), QStringLiteral("failure"),
                                                   QStringLiteral("stopping")}));
-        QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v11"));
+        QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v12"));
         QCOMPARE(diagnostics.value("failure").toString(), QString::fromLatin1(failure.failure));
         const QJsonObject stopping = diagnostics.value("stopping").toObject();
         QCOMPARE(stopping.value("rule").toString(), QString::fromLatin1(failure.rule));
@@ -3366,7 +3480,7 @@ void FusionKernelTest::constantTemperatureKeepsSlopeAtPrior()
     const Fusion::Result result = runPipeline(toChannels(f), t, Checkpoint(), &trace);
     QVERIFY2(result.outcome == Fusion::Outcome::Succeeded, qPrintable(result.reason));
     const QJsonObject diagnostics = diagnosticsOf(result);
-    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v11"));
+    QCOMPARE(diagnostics.value("algorithm").toString(), QStringLiteral("batch-temperature-bias-v12"));
     const QJsonObject gyroBias = diagnostics.value("model").toObject().value("gyro_bias").toObject();
     const QJsonArray b1 = gyroBias.value("b1_rad_s_per_degc").toArray();
     QCOMPARE(b1.size(), 3);

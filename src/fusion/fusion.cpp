@@ -84,7 +84,7 @@ FitPlan planFit(const Channels &channels, const Tuning &baseTuning)
     // datasheet entry, then the lattice of every reading, then the rates.
     const ImuNoise noise = imuNoise(channels.imuConfiguration);
     requireReadingsOnLattice(channels);
-    requireStatedRates(imuInterval, channels.imuConfiguration);
+    requireConfiguredRates(imuInterval, channels.imuConfiguration);
     plan.tuning.noise = noise;
     // T_ref is a property of the fitted window (the mean of its IMU samples'
     // temperature), decided before the fit starts. The temperature model

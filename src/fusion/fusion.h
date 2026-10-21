@@ -10,16 +10,30 @@
 
 namespace FlySight::Fusion {
 
-/// How the IMU was configured, as the recording's configuration attributes
-/// state it or their constant defaults supply it (docs/DATA_SCHEMA.md section
-/// 2): the full-scale ranges in g and deg/s and the output data rates in Hz,
-/// the keys' own values as numbers. A member is a quiet NaN when its attribute
-/// is not a number, and stays one unless set.
+/// Where a configuration value came from: the recording stated it, or it was
+/// inferred from the recording's data. The kernel is told which and never
+/// works it out; it words a rejection and records its diagnostics by it, and
+/// no number of the fit depends on it.
+enum class ConfigurationSource {
+    Stated,     ///< the recording's own configuration attribute
+    Inferred    ///< not stated by the recording; derived from its data
+};
+
+/// How the IMU was configured, as the recording's four configuration
+/// attributes give it (docs/DATA_SCHEMA.md section 2): the full-scale ranges
+/// in g and deg/s and the output data rates in Hz, the keys' own values as
+/// numbers. A value member is a quiet NaN when its attribute is not a number,
+/// and stays one unless set. Beside each value, its source records whether the
+/// recording stated it or it was inferred, Stated unless set.
 struct ImuConfiguration {
     double accelFsG = std::numeric_limits<double>::quiet_NaN();     ///< ACCEL_FS_G, g
     double gyroFsDegS = std::numeric_limits<double>::quiet_NaN();   ///< GYRO_FS_DEG_S, deg/s
     double accelOdrHz = std::numeric_limits<double>::quiet_NaN();   ///< ACCEL_ODR_HZ, Hz
     double gyroOdrHz = std::numeric_limits<double>::quiet_NaN();    ///< GYRO_ODR_HZ, Hz
+    ConfigurationSource accelFsGSource = ConfigurationSource::Stated;    ///< how accelFsG came about
+    ConfigurationSource gyroFsDegSSource = ConfigurationSource::Stated;  ///< how gyroFsDegS came about
+    ConfigurationSource accelOdrHzSource = ConfigurationSource::Stated;  ///< how accelOdrHz came about
+    ConfigurationSource gyroOdrHzSource = ConfigurationSource::Stated;   ///< how gyroOdrHz came about
 };
 
 /// Effective values of the fit's inputs, exactly as the engine supplies them.
@@ -41,8 +55,8 @@ struct Channels {
     double originLat = 0, originLon = 0, originHMSL = 0;
     /// The four IMU configuration attributes: the fit's noise model comes from
     /// them (docs/SENSOR_FUSION.md section 4), the readings must lie on the
-    /// lattice of the stated ranges and be logged at the stated rates, and the
-    /// diagnostics report them.
+    /// lattice of the configured ranges and be logged at the configured rates,
+    /// and the diagnostics report them, each with its source.
     ImuConfiguration imuConfiguration;
 };
 
@@ -62,7 +76,8 @@ struct Result {
     /// diagnostics' "failure". Empty otherwise.
     QString reason;
     /// Compact JSON. On success: input audit, the configuration the fit ran
-    /// under (`configuration`), initializer, objective, biases, the model
+    /// under (`configuration`: the four values and, beside each, whether it
+    /// was stated or inferred), initializer, objective, biases, the model
     /// (`model.noise`: each sensor's datasheet density, bandwidth, step,
     /// per-sample sigma and integration density; `model.gyro_bias`: `b0`,
     /// `b1`, the reference temperature; `model.scale`: the fitted scale
@@ -153,7 +168,7 @@ Result run(const Channels &channels, const ProgressFn &progress = {},
 /// registration (CalculationDescriptor::resultVersion), so changing it drops
 /// every stored fit. Change it whenever a change can alter what run() returns
 /// for the same channels.
-inline constexpr char Algorithm[] = "batch-temperature-bias-v11";
+inline constexpr char Algorithm[] = "batch-temperature-bias-v12";
 
 } // namespace FlySight::Fusion
 

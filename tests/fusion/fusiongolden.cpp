@@ -400,6 +400,7 @@ FlySight::Fusion::Channels toChannels(const FusionFixture &f)
     c.imuConfiguration.gyroFsDegS = f.gyroFsDegS;
     c.imuConfiguration.accelOdrHz = f.accelOdrHz;
     c.imuConfiguration.gyroOdrHz = f.gyroOdrHz;
+    // The sources stay Stated: every fixture states its configuration.
     return c;
 }
 

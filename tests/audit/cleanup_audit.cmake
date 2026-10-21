@@ -111,7 +111,7 @@
 #     alone (its output table and the derived accuracies' input lists), no
 #     plot row names them, the three derived names, sensor-qualified, are
 #     spelled in src in the registration and the plot rows alone, the
-#     algorithm string is batch-temperature-bias-v11, no
+#     algorithm string is batch-temperature-bias-v12, no
 #     document counts the fit's channels or outputs as they were before the
 #     blocks, the sensor fusion category is the eighteen plots of the tests'
 #     mirror with seven accuracy rows, each a literal colour, and no document
@@ -121,7 +121,12 @@
 #     stated it, through one query of the evaluation context, spelled in src
 #     in the engine and the fusion registration alone, never in the plugin
 #     bridge, declared once in the context's contract and described by the
-#     calculations document (items 1801-1802).
+#     calculations document; the kernel words its configuration rejections
+#     by how each value came about, the verbs spelled once in the checks'
+#     file, and records it beside each value of the diagnostics'
+#     configuration, the four entries and their two texts written once, the
+#     goldens stated throughout, and the fusion document names both wordings
+#     and the entries (items 1801-1809).
 #
 #   cmake -DREPO=<repository root> [-DGIT=<git executable>] -P cleanup_audit.cmake
 #
@@ -678,7 +683,7 @@ expect_none("the stationary-window detector is gone"
 expect_none("the silent poll is gone" "pollCancel" src tests)
 expect_none("the anchor-attitude initializer is gone"
   "InitialAttitude|initialAttitude\\(|kInitialHeadingDeg|attitudeFromStationaryWindow" src tests)
-# Allow: none expected. The goldens say batch-temperature-bias-v11; a hit under
+# Allow: none expected. The goldens say batch-temperature-bias-v12; a hit under
 # tests/data/fusion means a stale capture (re-capture, tests/README.md section 11).
 expect_none("the retired algorithm strings are gone" "batch-shared-bias-v[12]"
   src tests docs README.md ":!tests/README.md")
@@ -1024,8 +1029,8 @@ expect_none("stored results are widget-free"
 # Fusion's result version is its kernel's algorithm string, spelled once.
 # Allow: none expected. A changed algorithm changes the one literal; a comment
 # or test in src that quotes it names Fusion::Algorithm instead.
-expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v11" 1 src)
-expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v11"
+expect_count("one authority: the fusion algorithm string" "batch-temperature-bias-v12" 1 src)
+expect_only("one authority: the fusion algorithm string" "batch-temperature-bias-v12"
   "^src/fusion/fusion\\.h$" src)
 # The compatibility rule names the result version, in the code and in the note.
 # Allow: reword the sentence, never duplicate it; the count is 1 in each file.
@@ -1512,7 +1517,7 @@ expect_none("the v7 algorithm string is gone" "batch-temperature-bias-v7"
 # rejections, and the input audit of every fit names its holes. Allow: none
 # expected; a new fixture changes these counts with tests/README.md section 11.
 expect_count("the goldens carry the current algorithm string"
-  "\"algorithm\": \"batch-temperature-bias-v11\"" 14 tests/data/fusion)
+  "\"algorithm\": \"batch-temperature-bias-v12\"" 14 tests/data/fusion)
 expect_count("the goldens hold four fits" "\"outcome\": \"succeeded\"" 4 tests/data/fusion)
 expect_count("the goldens hold ten rejections" "\"outcome\": \"rejected\"" 10 tests/data/fusion)
 expect_count("the fits' goldens name their holes" "\"gnss_holes\"" 4 tests/data/fusion)
@@ -1560,15 +1565,15 @@ expect_count("the fusion document carries the first reference recording" "08-35-
 # 1401-1415): two lines, the case and the row of section 8.
 expect_count("the fusion document carries the second reference recording" "13-35-10" 2
   docs/SENSOR_FUSION.md)
-expect_count("the fusion document names the algorithm string" "batch-temperature-bias-v11" 2
+expect_count("the fusion document names the algorithm string" "batch-temperature-bias-v12" 2
   docs/SENSOR_FUSION.md)
 expect_none("the documents count four fits and ten rejections"
   "three fits|eleven rejections|three golden successes" docs)
 expect_count("the plots document says the fusion plots draw through a GNSS hole"
   "draw through a hole in the GNSS fixes" 1 docs/COMPUTED_PLOTS.md)
-expect_count("the schema document names the algorithm string" "batch-temperature-bias-v11" 2
+expect_count("the schema document names the algorithm string" "batch-temperature-bias-v12" 2
   docs/DATA_SCHEMA.md)
-expect_count("the calculations document names the algorithm string" "batch-temperature-bias-v11" 1
+expect_count("the calculations document names the algorithm string" "batch-temperature-bias-v12" 1
   docs/CALCULATIONS.md)
 
 # ─────────────────────────────── staged-scale (items 1401, 1404-1407, 1412, 1414, 1415)
@@ -1666,14 +1671,16 @@ expect_count("the calculations document names the cancel's reason" "Switched off
   docs/CALCULATIONS.md)
 expect_count("the manual step of the switch is written" "\\*\\*M57 " 1 tests/README.md)
 
-# ─────────────────────────────── inferred-configuration (items 1801, 1802)
+# ─────────────────────────────── inferred-configuration (items 1801-1809)
 # The IMU configuration inferred where a key is absent
 # (PLANS/inferred-imu-configuration.md): the engine tells a calculation, for a
 # declared attribute input, whether the session's stored attribute served it
 # (EvaluationContext::attributeIsStored), so that the fit can word its
 # rejections and record its diagnostics by how each value came about. The
 # query is the engine's, its one reader the fusion registration; Python
-# plugins are not offered it.
+# plugins are not offered it. The kernel is told the provenance beside each
+# value (Fusion::ConfigurationSource), words the lattice and rate rejections
+# by it and records it in the diagnostics' configuration object.
 audit_group(inferred-configuration)
 # Allow: none; a second reader is a design change. The registration is
 # allowed before it asks, as the query's one intended reader; the plugin
@@ -1688,6 +1695,29 @@ expect_count("the provenance query is declared once"
 # qualified form raises the count here.
 expect_count("the calculations document describes the provenance query"
   "EvaluationContext::attributeIsStored" 1 docs/CALCULATIONS.md)
+# The verbs of an inferred value's rejections are spelled once each, in the
+# checks' file; the stated verb is that file's one constant. Allow: none
+# expected; a second spelling is a second writer of the reason.
+expect_count("the inferred rate's verb is spelled once" "\"inferred as\"" 1 src)
+expect_count("the defaulted range's verb is spelled once" "\"defaulted to\"" 1 src)
+expect_only("the verbs are spelled in the checks alone" "\"(inferred as|defaulted to)\""
+  "^src/fusion/fusionsamples\\.cpp$" src)
+# The diagnostics' four provenance entries and their two texts are written
+# once, where the configuration object is assembled. Allow: none expected.
+expect_count("the provenance entries have one writer" "_provenance\"" 4 src)
+expect_only("the provenance entries have one writer" "_provenance\"" "^src/fusion/fusionoutput\\.cpp$" src)
+expect_count("the provenance texts have one writer" "\"stated\".*\"inferred\"" 1 src)
+expect_only("the provenance texts have one writer" "\"(stated|inferred)\"" "^src/fusion/fusionoutput\\.cpp$" src)
+# The goldens: every fixture states its configuration, so each of the four
+# fits carries four entries, stated. Allow: none expected; a fixture that
+# leaves a source inferred changes these with tests/README.md section 11.
+expect_count("the goldens' configurations are stated" "_provenance\": \"stated\"" 16 tests/data/fusion)
+expect_none("no golden configuration is inferred" "\"inferred\"" tests/data/fusion)
+# The documents. Allow: these count LINES; rewrap so that each phrase stays
+# on one line.
+expect_count("the fusion document names the inferred rate's wording" "inferred as" 1 docs/SENSOR_FUSION.md)
+expect_count("the fusion document names the defaulted range's wording" "defaulted to" 1 docs/SENSOR_FUSION.md)
+expect_count("the fusion document names the provenance entries" "accel_fs_g_provenance" 1 docs/SENSOR_FUSION.md)
 
 # ─────────────────────────────── leftover markers
 expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
@@ -1724,8 +1754,10 @@ expect_none("leftover markers" "BASELINE:|PHASE4-SWITCH" tests src)
 # fit's outputs, the audit rule; 1707-1709 the three derived accuracies, their
 # tests, their documents and audit rule; 1710-1717 the rows, demand, the
 # colours, the documents, the tests, the counts, the manual step, the map)
-# and 1801-1802 (inferred IMU configuration: the engine's provenance query,
-# its document and the audit rule).
+# and 1801-1809 (inferred IMU configuration: the engine's provenance query,
+# its document and the audit rule; the kernel's wording of the rejections,
+# the diagnostics' provenance entries, v12 and the stale records, the
+# kernel's tests, the audit rules, the kernel's documents).
 # Four line forms; see the head of the map.
 math(EXPR RULES "${RULES} + 1")
 set(map_file "${REPO}/tests/acceptance_map.txt")
@@ -1807,8 +1839,8 @@ else()
             OR (item GREATER_EQUAL 1501 AND item LESS_EQUAL 1524)
             OR (item GREATER_EQUAL 1601 AND item LESS_EQUAL 1612)
             OR (item GREATER_EQUAL 1701 AND item LESS_EQUAL 1717)
-            OR (item GREATER_EQUAL 1801 AND item LESS_EQUAL 1802)))
-      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313, 1401-1415, 1501-1524, 1601-1612, 1701-1717 and 1801-1802: ${line}")
+            OR (item GREATER_EQUAL 1801 AND item LESS_EQUAL 1809)))
+      _violation("[traceability] item ${item} is outside 1-19, 101-120, 201-247, 301-350, 401-442, 501-563, 601-662, 701-754, 801-863, 901-940, 1001-1065, 1101, 1201-1213, 1301-1313, 1401-1415, 1501-1524, 1601-1612, 1701-1717 and 1801-1809: ${line}")
     endif()
   endforeach()
 
@@ -1921,7 +1953,7 @@ else()
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")
     endif()
   endforeach()
-  foreach(item RANGE 1801 1802)
+  foreach(item RANGE 1801 1809)
     list(FIND items_automated "${item}" index)
     if(index EQUAL -1)
       _violation("[traceability] acceptance item ${item} has no resolving test or audit line in tests/acceptance_map.txt")

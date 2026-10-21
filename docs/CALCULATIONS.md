@@ -2440,10 +2440,12 @@ plugin input and the stored record read.
 (`src/fusion/fusion.h`), the same string as the diagnostics' `"algorithm"`. The
 literal exists once in `src/`, in that header. Change it whenever a change can
 alter what the fit returns for the same channels; that drops every stored fit.
-It is `batch-temperature-bias-v11` since the attitude covariance block is
-symmetrized from a separate sum, which moves the four accuracies by rounding
-and nothing else (`v10` was the position and velocity covariance blocks
-published, which changed the record's shape and no number of the fit; `v9`
+It is `batch-temperature-bias-v12` since the kernel records the
+configuration's provenance (stated or inferred) in the diagnostics and words
+its rejections by it, which changes the diagnostics and no number (`v11` was
+the attitude covariance block symmetrized from a separate sum, which moved the
+four accuracies by rounding and nothing else; `v10` the position and velocity
+covariance blocks published, which changed the record's shape and no number of the fit; `v9`
 the scale factors held at one until the fit has converged and released from
 that solution, which moved every fit's numbers; `v8` the
 hole in the GNSS fixes fitted across instead

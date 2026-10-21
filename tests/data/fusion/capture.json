@@ -1,5 +1,5 @@
 {
-    "capture_date": "2026-10-06",
+    "capture_date": "2026-10-21",
     "captured_by": "fusion_golden_capture",
     "compiler": {
         "cl_version": "19.44.35220.0",
@@ -26,26 +26,26 @@
         "os": "Windows 11 Version 26H2"
     },
     "qt": "6.9.3",
-    "repository_revision": "2d8d3a35d082db35d109726214be7b2065106e9f",
+    "repository_revision": "c7df9700dbb65d0fe454627612c6e67b4dd57e4f",
     "sha256_lf": {
         "bridged_hole.channels.txt": "285cdc3abd8d40acbdcffff270b5c676fb4fdf2e38812306edd1e9b253999680",
-        "bridged_hole.json": "4dc88091f73547a25c134d5128aba0790e312ef7740361f9f73598e18155090d",
+        "bridged_hole.json": "e0eb586719b0536595352a40ca6eb8dcc31e9764badaf7abfd60b86853070ac2",
         "coarse_linear.channels.txt": "6a3e487c04ca6d019c1cef5d8443d2bac6f36755192d31ee02354ae38a12ab6b",
-        "coarse_linear.json": "d41fd6281e198319960264c8b9aefb1259ca1d40059eeacc1c9f037f449d3006",
+        "coarse_linear.json": "5abb3564092eb1f72a89dc127b4da64cad57f5e4dffa75fb2c9c4ccfdd983a69",
         "coarse_maneuver.channels.txt": "789cf7fe64cfb4f474c2d565bdeb04523eb62f12998d5c7b34947d62e25e41ca",
-        "coarse_maneuver.json": "8958085234a8a03750720e2585029689af80fc3c0d7a1f44dae5d02f37470267",
-        "reject_coverage.json": "8f38a4347e511196e200e9b6279adb9f235493d7e46cc66b750cbacf69d1347f",
-        "reject_imu_gap.json": "2ebe972334393c671d203a0b4425eabbba4edd279289ba1bc0d29c9d7f73a18a",
-        "reject_lattice.json": "d05a2983c5653e7fcbd987a01fd95f30db46406deb520dd7f34942b5f13252fa",
-        "reject_length.json": "5853873e6ffcfe116e040756c22ed068c7b9a5133440ecc2a5bdd87235407831",
-        "reject_nonfinite.json": "742052f1b32193ac1cb05e63ff6e04101a3a546d5c68c695db5216474be9c831",
-        "reject_origin.json": "bdd85e7288ca851d7a803b7a21424f60641edbc788fd16cd65c31daada1a981d",
-        "reject_rate.json": "5f0e9303114bccbb4956bc33cb72576d0511a472c17a47b19c9e8c0ad1a92533",
-        "reject_sigma.json": "3b1b1c85f3830765555523a561c31f80f063d49815153eba1b8f8d9d48e0213f",
-        "reject_time_order.json": "464540b0b25cd6231f2ae7d7365c7a803323790ddbe8543af97477a535eca8e8",
-        "reject_too_few_fixes.json": "485acf9a9a371b7cb70141e54779828223ce5779a7d6b5a08f40b8f8a605772c",
+        "coarse_maneuver.json": "eb82c17d3235aa457b784f378c784c6eb3954bc5a89c0b520a2816de35583b3d",
+        "reject_coverage.json": "fb633132044f2107fdd7283f9e795a48d44260c6594a23dda59a9e5a55938f21",
+        "reject_imu_gap.json": "543f8f6f5c2f14da38d3f03bc0df2beb1ec8b507d45548c5cf796b2e64164fb3",
+        "reject_lattice.json": "37834299110ca5733f7547038fc36025a796944f42928e73a4b13c74b2c3b730",
+        "reject_length.json": "22784618e49f21b2eb3a27ee58b6a2f7ca7cb7848e0ca17a5b719ec7df0c3644",
+        "reject_nonfinite.json": "9083352fc1a6af6550c90b2d66d32554ea834b4295dee37118f6b92635135b39",
+        "reject_origin.json": "12887c7a5e370a2327568c52cb9177592fdcbc64ea00e600df253ea0650900e2",
+        "reject_rate.json": "d1e69b12a59947be1c14b1153f5b694dcccee92d6b50b867384346e30e4da877",
+        "reject_sigma.json": "314b4e2d5ad2fbe1b21a96c005fe000fbfa31eb0678fb17ebcb0fea309a255ca",
+        "reject_time_order.json": "3c3ccb8f7bcbc652c3ac7fb6eb2789ba4b210eb060fd7c6bb827b21f0aa4272f",
+        "reject_too_few_fixes.json": "7edcf6ca97ea2010c5094a4c53632d1e814175b62e0394249a4dad121ee97f1b",
         "stationary_spin.channels.txt": "6eb5c83aab77d0d64d813f2c442cd4332ba2c592aec67e1c2657baeb98870471",
-        "stationary_spin.json": "9b3ec2f4a5f1488720b3e66043baf939369c4e694daead5962867016852bcbc9"
+        "stationary_spin.json": "37a86cbd2c7d0a271f738165be1a9d327a1ef555709f369f75b4cc014cba26ca"
     },
     "sha256_note": "Hashes of the files as written (LF line endings). A checkout with core.autocrlf=true has CRLF in the working tree; the loader accepts both.",
     "solver": {

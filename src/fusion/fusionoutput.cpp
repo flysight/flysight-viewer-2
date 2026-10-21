@@ -155,14 +155,26 @@ QJsonObject gyroBiasObject(const FitResult &fit)
         {"t_ref_degc", fit.biasModel.tRef}};
 }
 
-/// The configuration the fit ran under: the four values of the attributes.
+/// How a configuration value came about, as the diagnostics write it.
+QString provenanceText(ConfigurationSource source)
+{
+    return source == ConfigurationSource::Stated ? QStringLiteral("stated") : QStringLiteral("inferred");
+}
+
+/// The configuration the fit ran under: the four values of the attributes
+/// and, beside each, whether the recording stated it or it was inferred, as
+/// the kernel was told.
 QJsonObject configurationObject(const ImuConfiguration &c)
 {
     return QJsonObject{
         {"accel_fs_g", c.accelFsG},
+        {"accel_fs_g_provenance", provenanceText(c.accelFsGSource)},
         {"gyro_fs_deg_s", c.gyroFsDegS},
+        {"gyro_fs_deg_s_provenance", provenanceText(c.gyroFsDegSSource)},
         {"accel_odr_hz", c.accelOdrHz},
-        {"gyro_odr_hz", c.gyroOdrHz}};
+        {"accel_odr_hz_provenance", provenanceText(c.accelOdrHzSource)},
+        {"gyro_odr_hz", c.gyroOdrHz},
+        {"gyro_odr_hz_provenance", provenanceText(c.gyroOdrHzSource)}};
 }
 
 /// The fitted scale factors, the factors themselves (one is the datasheet's
