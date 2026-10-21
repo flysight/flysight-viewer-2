@@ -26,7 +26,9 @@
 // datasheet's or derived from it here; nothing is fitted to recordings.
 //
 // Qt Core and the standard library only, no GTSAM and no Eigen: the checks
-// and the integration read it, and so may a test without the solver.
+// and the integration read it, so does the fusion registration's inference
+// of an absent range, which must stay solver-free, and so may a test without
+// the solver.
 
 namespace FlySight::Fusion::Detail {
 

@@ -119,8 +119,10 @@ recording states wins, whatever the data. The inference is a calculation
 never stored in a session and never written to a file.
 
 **The default.** Where the data cannot decide (readings on no range's
-lattice, an IMU time axis of fewer than three samples), the inference falls
-back to the configuration of firmware v2023.09.22, the firmware of the
+lattice, an IMU time axis of fewer than three samples or one that is not
+finite and strictly increasing, which sensor fusion rejects for its own
+defect first), the inference falls back to the configuration of firmware
+v2023.09.22, the firmware of the
 recordings on disk: +/-16 g, +/-2000 deg/s, and 12.5 Hz for both the
 accelerometer and the gyro; no dynamic model and no rate (the other five keys
 have neither a default nor an inference). The IMU's low-pass filters are not
@@ -270,9 +272,12 @@ The hatch is for files whose values are already correct. A legacy FlySight
 file given `$VAR,SCHEMA_VER,2` by hand is read without the correction of
 section 4, so its gyro readings are counts times `2000 / 32768` deg/s rather
 than counts times the sensitivity, `0.070` deg/s: they lie on the lattice of
-no gyro range, and sensor fusion rejects the recording, naming the range
-stated and the lattice the readings show
-([SENSOR_FUSION.md](SENSOR_FUSION.md), sections 3 and 6).
+no gyro range. The file states no key, so its gyro range is inferred; the
+inference finds no lattice and falls back to the firmware default, and sensor
+fusion rejects the recording as it rejects any defaulted range: `GYRO_FS_DEG_S
+defaulted to +/-2000 deg/s but the gyro readings lie on no range's lattice;
+sensor fusion unavailable` ([SENSOR_FUSION.md](SENSOR_FUSION.md), sections 3
+and 6).
 
 Caveat: matching needs a recorded `SESSION_ID`. A file without one is matched
 by a hash of its contents, so an edited copy imports as a new session.

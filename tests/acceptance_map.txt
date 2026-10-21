@@ -3064,6 +3064,7 @@
 
 # 930 - (9, as amended) the fit calculation publishes the same channels and its result version follows the algorithm string; the registration, the plot registry and everything above them are unchanged by the reconstruction; since the specification of 1001-1065 the registration also declares the four configuration inputs, and the plot registry gains the four accuracy plots; since the specification of 1801-1819 the registration registers the inferences of the four from the IMU data, the firmware default their fallback
 930 tst_fusion_session registrationShape
+930 tst_fusion_session configurationDefaults
 930 audit stored-results
 930 tst_fusion_rows allFusionPlotsAreExplicitBacked
 
@@ -3339,6 +3340,7 @@
 1050 tst_importer configurationStoredAsRecorded
 1050 tst_importer rejectsMalformedConfiguration
 1050 tst_fusion_session configurationDefaults
+1050 tst_fusion_session configurationIsInferred
 1050 tst_fusion_runner matchesTheApplicationImportPath
 
 # 1051 - (11) test: a fixture whose readings sit on the +/-8 g lattice with a header stating +/-16 g is rejected naming both; the lattice check identifies the range of every committed fixture and of the reference recordings
@@ -4016,7 +4018,7 @@
 1810 audit sensor-configuration
 1810 audit constant-defaults
 
-# 1811 - (3, the fallback) where the data cannot decide, the calculation yields the firmware default's text bit for bit: readings on no allowed range's lattice, or an IMU time axis without a nominal interval (fewer than three samples included); a recording with IMU data always has a configuration, the data never making it unavailable, and one without IMU data has a missing input; the check then rejects defaulted to, naming what the data show, or passes
+# 1811 - (3, the fallback) where the data cannot decide, the calculation yields the firmware default's text bit for bit: readings on no allowed range's lattice, or an IMU time axis without a nominal interval (fewer than three samples included); the data never make it unavailable, but the ranges need the IMU readings and the rates the readings' UTC time axis (IMU/_time), and a recording lacking them has the attribute unavailable as a missing input; the check then rejects defaulted to, naming what the data show, or passes
 1811 tst_fusion_session configurationIsInferred
 1811 tst_fusion_session inferredConfigurationFits
 1811 tst_fusion_session missingInputsAreNotApplicable

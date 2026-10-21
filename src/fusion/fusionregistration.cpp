@@ -130,8 +130,10 @@ struct ConfigurationInput {
     double Fusion::ImuConfiguration::*value;
     Fusion::ConfigurationSource Fusion::ImuConfiguration::*source;
     Inference inference;
-    // A range only: whose lattice, and the three axes of its readings under
-    // the names kFitInputs hands them to the kernel by
+    // Read by the range rows alone: whose lattice, and the three axes of its
+    // readings under the names kFitInputs hands them to the kernel by. A rate
+    // row reads the IMU time axis only; its sensor names whose rate it is and
+    // nothing reads it, and it has no axes.
     Fusion::Detail::ImuSensor sensor;
     const char *axes[3];
 };

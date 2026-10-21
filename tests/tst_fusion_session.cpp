@@ -309,9 +309,9 @@ void FusionSessionTest::registrationShape()
     const CalculationRegistry &registry = CalculationRegistry::instance();
 
     // Seventeen registrations after every built-in, in this order: the
-    // configuration's inferences first (configurationDefaults), then the fit; the derived values' descriptors (the fused accuracies among
-    // them), the orientation's constant default and the attitude are
-    // tst_fusion_derived's
+    // configuration's inferences first (configurationDefaults), then the fit;
+    // the derived values' descriptors (the fused accuracies among them), the
+    // orientation's constant default and the attitude are tst_fusion_derived's
     QCOMPARE(registry.registeredIds().mid(registry.registeredIds().size() - 17),
              QStringList({QStringLiteral("builtin.default.ACCEL_FS_G"),
                           QStringLiteral("builtin.default.GYRO_FS_DEG_S"),

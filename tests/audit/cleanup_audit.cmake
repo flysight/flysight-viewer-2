@@ -1689,10 +1689,10 @@ expect_count("the manual step of the switch is written" "\\*\\*M57 " 1 tests/REA
 # function (fusion/sensornoise.h, solver-free), a rate through the continuity
 # authority's nominal interval, the vocabulary's default the fallback.
 audit_group(inferred-configuration)
-# Allow: none; a second reader is a design change. The registration is
-# allowed before it asks, as the query's one intended reader; the plugin
-# bridge (pluginsessionview.h, pluginadapters.cpp, sessiondata_bindings.cpp)
-# lies outside the allowed set, which is the check that plugins never see it.
+# Allow: none; a second reader is a design change. The registration is the
+# query's one reader; the plugin bridge (pluginsessionview.h,
+# pluginadapters.cpp, sessiondata_bindings.cpp) lies outside the allowed set,
+# which is the check that plugins never see it.
 expect_only("the provenance query is spelled in the engine and the fusion registration alone"
   "attributeIsStored" "^src/(engine/|fusion/fusionregistration\\.cpp)" src)
 # One authority for the contract. Allow: none expected.

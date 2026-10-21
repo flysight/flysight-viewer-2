@@ -339,9 +339,9 @@ int main(int argc, char **argv)
     // the engine's resolution: what an EvaluationContext is filled from, so
     // this is what computeFit() gets; hasStoredAttribute is the resolution's
     // first step, what EvaluationContext::attributeIsStored answers, so a key
-    // the files do not state reaches the kernel as inferred. A missing sensor gives empty channels
-    // and the kernel's own rejection; the engine's availability gate is not
-    // reproduced here.
+    // the files do not state reaches the kernel as inferred. A missing sensor
+    // gives empty channels and the kernel's own rejection; the engine's
+    // availability gate is not reproduced here.
     const Fusion::Channels channels = Fusion::channelsFrom(
         [&session](const QString &sensor, const QString &name) { return session.getMeasurement(sensor, name); },
         [&session](const QString &key) { return session.getAttribute(key); },

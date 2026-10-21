@@ -2272,12 +2272,14 @@ dragging the exit marker does not drop a fit. A recording without IMU data,
 without `IMU/temperature`, without a local origin (no fix under 10 m), or
 without a time fit has a **missing input**: there is
 nothing to compute, no job can be created, and blocker inspection reports
-`NotApplicable`, never "not requested". A recording with IMU data never lacks
-the four configuration attributes: a key it does not state is inferred, and
-the data never make the inference unavailable. A recording without IMU data
-lacks them, as missing inputs of their calculations, together with the fit's
-own IMU inputs, which are declared before them, so the fit's readiness and
-blockers report what they report for any recording without IMU data.
+`NotApplicable`, never "not requested". A recording with IMU data and its UTC
+time axis (`IMU/_time`) never lacks the four configuration attributes: a key
+it does not state is inferred, and the data never make the inference
+unavailable. A recording without IMU data lacks them, and one whose IMU
+readings have no UTC time axis lacks the two rates, as missing inputs of
+their calculations, together with the fit's own IMU inputs, which are
+declared before them, so the fit's readiness and blockers report what they
+report for any recording without those inputs.
 
 **Outputs of the fit**, published together: the measurements `Fusion/_time`,
 `north`, `east`, `down`, `velN`, `velE`, `velD`, `accN`, `accE`, `accD`, `roll`,

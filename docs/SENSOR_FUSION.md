@@ -186,10 +186,14 @@ which the rate check reads too. So an inferred range always passes the
 lattice check, and an inferred rate fails the rate check only where the
 logged rate is far from every listed one. Where the data cannot decide, the
 inference takes the firmware default: readings on no range's lattice, or an
-IMU time axis without a nominal interval (fewer than three samples). The
-checks then judge the default as they judge a stated value and name what the
-data show (section 6). A recording with IMU data therefore always has a
-configuration; one without has a missing input, as it has for the fit.
+IMU time axis without a nominal interval (fewer than three samples, or an
+axis not finite and strictly increasing, which the kernel rejects for itself
+first). The checks then judge the default as they judge a stated value and
+name what the data show (section 6). The ranges need the IMU readings and
+the rates their UTC time axis, `IMU/_time`, so a recording with both always
+has a configuration. One without IMU data has a missing input, as it has for
+the fit, and one whose readings have no UTC time axis lacks the two rates,
+as the fit lacks `IMU/_time`.
 
 The listed rates are a factor of two apart, so the nearest is never in doubt,
 and the firmware's oscillator runs a few percent fast while timestamps are
@@ -1103,8 +1107,12 @@ Then, after every check above, the configuration (section 3), in this order:
   accelerometer readings lie on the +/-8 g lattice; sensor fusion
   unavailable`, or `... lie on no range's lattice; ...` when none fits
   (`GYRO_FS_DEG_S states +/-2000 deg/s but the gyro readings ...` for the
-  gyro), which is also how a legacy file given `$VAR,SCHEMA_VER,2` by hand
-  is rejected ([DATA_SCHEMA.md](DATA_SCHEMA.md), section 7);
+  gyro). A legacy file given `$VAR,SCHEMA_VER,2` by hand
+  ([DATA_SCHEMA.md](DATA_SCHEMA.md), section 7) states no key, so its gyro
+  range is inferred; its uncorrected readings lie on no range's lattice, the
+  inference falls back to the firmware default's +/-2000 deg/s, and the gyro
+  check rejects it in the defaulted range's wording below, naming no range's
+  lattice;
 - a median logged IMU interval more than 10 % from a configured rate's,
   `ACCEL_ODR_HZ` before `GYRO_ODR_HZ`: `ACCEL_ODR_HZ states 12.5 Hz but the IMU
   is logged at 100.0 Hz; sensor fusion unavailable` for a recording that
