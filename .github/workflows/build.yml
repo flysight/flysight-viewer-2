@@ -244,7 +244,77 @@ jobs:
       # =========================================================================
       # Task 4.4: Configure Qt Installation
       # =========================================================================
+      # Qt is downloaded from download.qt.io and its mirrors on every run
+      # whose cache misses (a tag run can read only the default branch's
+      # caches). The mirrors stall now and then, and aqtinstall's shipped
+      # settings give up after 3.5 s of silence and five quick retries. A
+      # settings file read through AQT_CONFIG waits longer and retries
+      # more; it replaces the shipped file wholesale, so it carries the
+      # shipped mirror lists too (fallbacks default to none otherwise).
+      - name: Write aqtinstall settings
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/aqt-settings.ini" <<'EOF'
+          [aqt]
+          concurrency : 4
+          baseurl : https://download.qt.io
+          7zcmd : 7z
+          print_stacktrace_on_error : False
+          always_keep_archives : False
+          archive_download_location : .
+          min_module_size : 41
+
+          [requests]
+          connection_timeout : 15
+          response_timeout : 60
+          max_retries_on_connection_error : 8
+          retry_backoff : 0.5
+          max_retries_on_checksum_error : 5
+          max_retries_to_retrieve_hash : 5
+          hash_algorithm : sha256
+          INSECURE_NOT_FOR_PRODUCTION_ignore_hash : False
+
+          [mirrors]
+          trusted_mirrors :
+              https://download.qt.io
+          blacklist :
+              http://mirrors.ocf.berkeley.edu
+              http://mirrors.tuna.tsinghua.edu.cn
+              http://mirrors.geekpie.club
+          fallbacks :
+              https://qtproject.mirror.liquidtelecom.com/
+              https://mirrors.aliyun.com/qt/
+              https://mirrors.ustc.edu.cn/qtproject/
+              https://ftp.jaist.ac.jp/pub/qtproject/
+              https://ftp.yz.yamagata-u.ac.jp/pub/qtproject/
+              https://qt-mirror.dannhauer.de/
+              https://ftp.fau.de/qtproject/
+              https://mirror.netcologne.de/qtproject/
+              https://mirrors.dotsrc.org/qtproject/
+              https://www.nic.funet.fi/pub/mirrors/download.qt-project.org/
+              https://master.qt.io/
+              https://mirrors.ukfast.co.uk/sites/qt.io/
+              https://ftp2.nluug.nl/languages/qt/
+              https://ftp1.nluug.nl/languages/qt/
+              https://qt.mirror.constant.com/
+          EOF
+          echo "AQT_CONFIG=$RUNNER_TEMP/aqt-settings.ini" >> "$GITHUB_ENV"
+
+      # Even so a bad hour at the mirrors can exhaust the retries, so the
+      # install gets a second attempt. The action saves its cache only
+      # after a successful install, so a failed first attempt leaves no
+      # partial cache behind.
       - name: Install Qt
+        id: install-qt
+        uses: jurplel/install-qt-action@v4
+        continue-on-error: true
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: qtwebengine qtwebchannel qtmultimedia qtpositioning qtserialport qtquick3d qtvirtualkeyboard
+          cache: true
+
+      - name: Install Qt (second attempt)
+        if: steps.install-qt.outcome == 'failure'
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}
