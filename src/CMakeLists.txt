@@ -995,9 +995,16 @@ if(APPLE)
     string(REPLACE \"\\n\" \";\" _all_files \"\${_all_files}\")
 
     # Step 1: Sign each Mach-O binary (detected by content, not extension)
-    # Individual binaries get the base signing command (no entitlements)
+    # Individual binaries get the base signing command (no entitlements).
+    # A bundle's main executable (anything under a Contents/MacOS/) is
+    # skipped: codesign treats that path as the bundle itself and refuses
+    # while the bundle's frameworks are still unsigned. Steps 2 and 4 sign
+    # those bundles, executables included, once their contents are signed.
     set(_signed_count 0)
     foreach(_file \${_all_files})
+      if(_file MATCHES \"/Contents/MacOS/\")
+        continue()
+      endif()
       execute_process(
         COMMAND file \"\${_file}\"
         OUTPUT_VARIABLE _file_type
