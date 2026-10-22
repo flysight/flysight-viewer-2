@@ -1080,7 +1080,10 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: build
         run: |
-          cpack -G DragNDrop -C Release
+          # CPack re-runs the install code on its own copy of the bundle,
+          # signing included; -V shows that code's messages, which CPack
+          # otherwise swallows.
+          cpack -V -G DragNDrop -C Release
           echo "=== CPack output ==="
           ls -la *.dmg || true
 
@@ -1115,6 +1118,15 @@ jobs:
           echo "=== Notarizing app bundle ==="
           echo "App bundle: $APP_BUNDLE"
           echo "Staging dir: $STAGING_DIR"
+
+          # This is CPack's copy of the bundle, signed by CPack's own install
+          # pass, not the copy the signing step verified. Check it here, so
+          # that a broken signature fails in a second instead of after the
+          # notary service's round trip.
+          echo ""
+          echo "--- Verifying the bundle's signature before submission ---"
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          echo "Signature valid"
 
           # Create zip for notarization submission (ditto required by Apple)
           APP_ZIP="$RUNNER_TEMP/FlySightViewer-app.zip"

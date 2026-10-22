@@ -958,6 +958,34 @@ if(APPLE)
       endif()
     endif()
 
+    # Every codesign call goes through this function. A distribution
+    # signature needs Apple's timestamp server, and the CI runner's
+    # connection to Apple drops now and then; a dropped call leaves the
+    # binary with its old, now invalid, signature, which only the notary
+    # service reports, ten minutes later. So each call is checked, retried
+    # a few times, and fatal when it keeps failing. The leading arguments
+    # are the codesign command and its flags; the last is the path.
+    function(_flysight_codesign)
+      foreach(_attempt RANGE 1 3)
+        execute_process(
+          COMMAND \${ARGV}
+          RESULT_VARIABLE _result
+          ERROR_VARIABLE _stderr
+          OUTPUT_QUIET
+        )
+        if(_result EQUAL 0)
+          return()
+        endif()
+        string(STRIP \"\${_stderr}\" _stderr)
+        message(STATUS \"codesign failed (attempt \${_attempt} of 3): \${_stderr}\")
+        if(NOT _attempt EQUAL 3)
+          execute_process(COMMAND sleep 15)
+        endif()
+      endforeach()
+      list(GET ARGV -1 _path)
+      message(FATAL_ERROR \"codesign failed three times on \${_path}; the bundle is not signed\")
+    endfunction()
+
     # Find all regular files in the bundle
     execute_process(
       COMMAND find \"\${_bundle}/Contents\" -type f
@@ -976,10 +1004,7 @@ if(APPLE)
         OUTPUT_STRIP_TRAILING_WHITESPACE
       )
       if(_file_type MATCHES \"Mach-O\")
-        execute_process(
-          COMMAND \${_sign_cmd} \"\${_file}\"
-          ERROR_QUIET
-        )
+        _flysight_codesign(\${_sign_cmd} \"\${_file}\")
         math(EXPR _signed_count \"\${_signed_count} + 1\")
       endif()
     endforeach()
@@ -990,13 +1015,10 @@ if(APPLE)
     set(_qtwe_entitlements \"\${_qtwe_helper}/Contents/Resources/QtWebEngineProcess.entitlements\")
     if(EXISTS \"\${_qtwe_helper}\" AND EXISTS \"\${_qtwe_entitlements}\")
       if(NOT _identity STREQUAL \"-\")
-        execute_process(
-          COMMAND codesign --force --sign \"\${_identity}\" --timestamp --options runtime --entitlements \"\${_qtwe_entitlements}\" \"\${_qtwe_helper}\"
-          ERROR_QUIET
-        )
+        _flysight_codesign(codesign --force --sign \"\${_identity}\" --timestamp --options runtime --entitlements \"\${_qtwe_entitlements}\" \"\${_qtwe_helper}\")
         message(STATUS \"Signed QtWebEngineProcess.app with its own entitlements\")
       else()
-        execute_process(COMMAND codesign --force --sign - \"\${_qtwe_helper}\" ERROR_QUIET)
+        _flysight_codesign(codesign --force --sign - \"\${_qtwe_helper}\")
       endif()
     endif()
 
@@ -1004,14 +1026,28 @@ if(APPLE)
     file(GLOB _frameworks \"\${_bundle}/Contents/Frameworks/*.framework\")
     list(LENGTH _frameworks _fw_count)
     foreach(_fw \${_frameworks})
-      execute_process(COMMAND \${_sign_cmd} \"\${_fw}\" ERROR_QUIET)
+      _flysight_codesign(\${_sign_cmd} \"\${_fw}\")
     endforeach()
 
     # Step 4: Sign the top-level app bundle last (inside-out order)
     # The top-level bundle signing uses entitlements (for the main executable)
-    execute_process(COMMAND \${_sign_cmd_with_entitlements} \"\${_bundle}\" ERROR_QUIET)
+    _flysight_codesign(\${_sign_cmd_with_entitlements} \"\${_bundle}\")
 
     message(STATUS \"Signed \${_signed_count} Mach-O binaries, \${_fw_count} frameworks, and the app bundle\")
+
+    # Step 5: Verify the whole bundle, offline, so that a bundle the notary
+    # service would reject fails here, in whichever install pass built it
+    # (cmake --install and CPack each run this code on their own copy).
+    execute_process(
+      COMMAND codesign --verify --deep --strict --verbose=2 \"\${_bundle}\"
+      RESULT_VARIABLE _verify_result
+      ERROR_VARIABLE _verify_stderr
+      OUTPUT_QUIET
+    )
+    if(NOT _verify_result EQUAL 0)
+      message(FATAL_ERROR \"Signature verification failed for \${_bundle}:\\n\${_verify_stderr}\")
+    endif()
+    message(STATUS \"Signature verified: \${_bundle}\")
   ")
 
   # Rename bundle for user-facing display: FlySightViewer.app -> FlySight Viewer.app
