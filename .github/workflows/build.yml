@@ -1096,10 +1096,22 @@ jobs:
             sleep 30
           done
 
-          # Validate
+          # Validate. stapler validate looks the ticket up online, and the
+          # runner's connection to Apple's ticket service drops now and
+          # then, so retry it as the staple is retried.
           echo ""
           echo "--- Validating stapled ticket ---"
-          xcrun stapler validate "$APP_BUNDLE"
+          for attempt in 1 2 3; do
+            if xcrun stapler validate "$APP_BUNDLE"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "ERROR: validation failed after $attempt attempts"
+              exit 1
+            fi
+            echo "Validation failed (attempt $attempt), retrying in 30s..."
+            sleep 30
+          done
           spctl --assess --type execute --verbose=4 "$APP_BUNDLE"
 
           # Clean up zip
@@ -1211,9 +1223,22 @@ jobs:
             sleep 30
           done
 
+          # stapler validate looks the ticket up online, and the runner's
+          # connection to Apple's ticket service drops now and then, so
+          # retry it as the staple is retried.
           echo ""
           echo "=== Verifying notarization ==="
-          xcrun stapler validate "$DMG"
+          for attempt in 1 2 3; do
+            if xcrun stapler validate "$DMG"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "ERROR: validation failed after $attempt attempts"
+              exit 1
+            fi
+            echo "Validation failed (attempt $attempt), retrying in 30s..."
+            sleep 30
+          done
           spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG" || true
 
           echo ""
@@ -1292,10 +1317,22 @@ jobs:
           spctl --assess --type execute --verbose=4 "$SMOKE_DIR/$APP_NAME"
           echo "PASSED: Gatekeeper accepts the app"
 
-          # Verify stapled ticket survived DMG round-trip
+          # Verify stapled ticket survived DMG round-trip. stapler validate
+          # looks the ticket up online, and the runner's connection to
+          # Apple's ticket service drops now and then, so retry it.
           echo ""
           echo "--- Verifying stapled notarization ticket ---"
-          xcrun stapler validate "$SMOKE_DIR/$APP_NAME"
+          for attempt in 1 2 3; do
+            if xcrun stapler validate "$SMOKE_DIR/$APP_NAME"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "ERROR: validation failed after $attempt attempts"
+              exit 1
+            fi
+            echo "Validation failed (attempt $attempt), retrying in 30s..."
+            sleep 30
+          done
           echo "PASSED: Stapled ticket is present"
 
           # Real app launch test (exercises full Gatekeeper flow)
